@@ -3,6 +3,8 @@ import packageJson from "../package.json";
 import { runAuth } from "./commands/auth";
 import { runBuildPrompt } from "./commands/build-prompt";
 import { runConfig } from "./commands/config";
+import { runReview } from "./commands/review";
+import { runRun } from "./commands/run";
 import { runUpgrade } from "./commands/upgrade";
 import { runVersion } from "./commands/version";
 import type { CommandResult } from "./types";
@@ -18,6 +20,8 @@ Usage: chunk [command] [options]
 
 Commands:
   help           Show help (default)
+  review         Review code changes
+  run            Trigger CircleCI chunk tasks
   auth           Manage authentication
   config         Manage configuration
   upgrade        Update to latest version
@@ -49,6 +53,12 @@ async function main(): Promise<void> {
 		case "help":
 			showMainHelp();
 			result = { exitCode: 0 };
+			break;
+		case "review":
+			result = await runReview(parsed);
+			break;
+		case "run":
+			result = await runRun(parsed);
 			break;
 		case "auth":
 			result = await runAuth(parsed);

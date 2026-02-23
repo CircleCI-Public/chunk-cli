@@ -74,6 +74,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 			const commands = [
 				"help",
 				"review",
+				"run",
 				"auth",
 				"history",
 				"config",
