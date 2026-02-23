@@ -60,7 +60,11 @@ describe("CircleCI API Client", () => {
 		});
 
 		it("should return parsed response on success", async () => {
-			const mockResponseData = { runId: "run-123", pipelineId: "pipeline-456", messageId: "msg-789" };
+			const mockResponseData = {
+				runId: "run-123",
+				pipelineId: "pipeline-456",
+				messageId: "msg-789",
+			};
 			const mockResponse = {
 				ok: true,
 				status: 200,
