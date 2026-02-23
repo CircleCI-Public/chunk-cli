@@ -158,6 +158,7 @@ describe("Run Config File System Operations", () => {
 			const config: RunConfig = {
 				org_id: "a37b44de-e4f8-4d09-956a-9c1148f3adf5",
 				project_id: "f4e4a365-da1d-408f-8f9c-0d4cc87d01cb",
+			org_type: "github",
 				definitions: {
 					dev: {
 						definition_id: "e2016e4e-0172-47b3-a4ea-a3ee1a592dba",
