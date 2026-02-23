@@ -160,7 +160,10 @@ async function runRunInit(): Promise<CommandResult> {
 	// Prompt for required configuration values
 	console.log("Enter your CircleCI organization and project details:\n");
 
-	const orgType = (await promptInput("Organization type (github/circleci, default: github): ")).trim().toLowerCase() || "github";
+	const orgType =
+		(await promptInput("Organization type (github/circleci, default: github): "))
+			.trim()
+			.toLowerCase() || "github";
 	if (orgType !== "github" && orgType !== "circleci") {
 		console.log("");
 		printError(
@@ -231,7 +234,9 @@ async function runRunInit(): Promise<CommandResult> {
 	}
 
 	console.log(green(`\n✓ Configuration saved to: ${configPath}\n`));
-	console.log(`You can now trigger a run with:\n  chunk run ${definitionName} --prompt "your task"\n`);
+	console.log(
+		`You can now trigger a run with:\n  chunk run ${definitionName} --prompt "your task"\n`,
+	);
 
 	return { exitCode: 0 };
 }
