@@ -1,8 +1,5 @@
 version: 2.1
 
-orbs:
-  shellcheck: circleci/shellcheck@3.4.0
-
 executors:
   releaser:
     docker:
@@ -25,34 +22,20 @@ commands:
             - node_modules
 
 jobs:
-  lint:
+  release:
     executor: releaser
     resource_class: medium
     steps:
       - checkout
       - install-deps
-      - run: bun run lint
-      - run: bun run typecheck
 
-  test:
-    executor: releaser
-    resource_class: medium
-    steps:
-      - checkout
-      - install-deps
-      - run:
-          name: Run unit tests
-          command: bun run test:unit
-          no_output_timeout: 90s
+      - run: task tag
+      - run: goreleaser release --clean
+      - run: task nur:publish
 
 workflows:
-  ci:
+  release:
     jobs:
-      - shellcheck/check
-      - lint
-      - test:
+      - release:
           context:
-            - chunk-cli-test
-          requires:
-            - shellcheck/check
-            - lint
+            - chunk-cli-deploy
