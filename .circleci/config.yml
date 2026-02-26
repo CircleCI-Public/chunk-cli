@@ -154,19 +154,30 @@ jobs:
 workflows:
   ci:
     jobs:
-      - shellcheck/check
-      - lint
+      - shellcheck/check:
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+.*$/
+      - lint:
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+.*$/
       - test:
           context:
             - chunk-cli
           requires:
             - shellcheck/check
             - lint
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+.*$/
       - release:
           context:
             - chunk-cli
           requires:
             - test
           filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+.*$/
             branches:
-              only: /^z00b\/releaser$/
+              ignore: /.*/
