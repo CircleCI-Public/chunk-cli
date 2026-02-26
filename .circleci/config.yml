@@ -95,7 +95,6 @@ jobs:
       - run:
           name: Run GoReleaser
           command: |
-            source ~/.bunenv
             goreleaser release --clean
 
       - run:
