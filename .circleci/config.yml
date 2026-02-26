@@ -95,7 +95,7 @@ jobs:
       - run:
           name: Fetch all git tags
           command: |
-            git fetch --unshallow || true
+            # git fetch --unshallow || true
             git fetch --force --tags
 
       - run:
