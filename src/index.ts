@@ -49,6 +49,16 @@ function threeMonthsAgo(): Date {
 async function main(): Promise<void> {
 	program
 		.command("build-prompt")
+		.addHelpText("after", `
+Environment Variables:
+  GITHUB_TOKEN             Required: GitHub personal access token with repo scope
+  ANTHROPIC_API_KEY        Required: Anthropic API key
+
+  -h, --help               Show this help message
+
+Examples:
+  chunk build-prompt --org myorg --repos myrepo
+  chunk build-prompt --org myorg --repos repo1,repo2 --top 5 --output ./my-prompt.md`)
 		.requiredOption("--org <org>", "GitHub organization to analyze")
 		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
 		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
@@ -83,6 +93,9 @@ async function main(): Promise<void> {
 		.action(() => process.exit(runConfigShow().exitCode));
 	config
 		.command("set")
+		.addHelpText("after", `
+Examples:
+  chunk config set model opus`)
 		.description("Set a configuration value")
 		.argument("<key>", "config key (model, apiKey)")
 		.argument("<value>", "value to set")
