@@ -67,7 +67,7 @@ brews:
   - name: chunk
     repository:
       owner: CircleCI-Public
-      name: homebrew-tap
+      name: homebrew-circleci
     directory: Formula
     homepage: https://github.com/CircleCI-Public/chunk-cli
     description: "Chunk CLI by CircleCI"
