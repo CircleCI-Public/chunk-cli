@@ -266,9 +266,6 @@ export async function extractCommentsAndBuildPrompt(options: BuildPromptOptions)
 	};
 
 	await mkdir(dirname(analysisPath), { recursive: true });
-	if (!analysis) {
-		throw new Error("Analysis did not complete");
-	}
 	await Bun.write(analysisPath, formatMarkdownReport(analysis, step2Metadata));
 	console.log(formatSuccess(`Analysis written to ${analysisPath}`));
 	console.log("");
