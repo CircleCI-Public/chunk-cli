@@ -1,26 +1,7 @@
 import { performUpgrade } from "../core/upgrade";
-import type { CommandResult, ParsedArgs } from "../types";
+import type { CommandResult } from "../types";
 
-export function showUpgradeHelp(): void {
-	console.log(`
-Usage: chunk upgrade [options]
-
-Update to the latest version
-
-Options:
-  -h, --help    Show this help message
-
-Examples:
-  chunk upgrade    Update to latest version
-`);
-}
-
-export async function runUpgrade(parsed: ParsedArgs): Promise<CommandResult> {
-	if (parsed.flags.help) {
-		showUpgradeHelp();
-		return { exitCode: 0 };
-	}
-
+export async function runUpgrade(): Promise<CommandResult> {
 	try {
 		await performUpgrade();
 	} catch (err: unknown) {

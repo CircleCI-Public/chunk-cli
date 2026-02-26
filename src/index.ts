@@ -1,90 +1,110 @@
 #!/usr/bin/env bun
+import { Command } from "@commander-js/extra-typings";
 import packageJson from "../package.json";
-import { runAuth } from "./commands/auth";
-import { runBuildPrompt } from "./commands/build-prompt";
-import { runConfig } from "./commands/config";
+import { runAuthLogin, runAuthLogout, runAuthStatus } from "./commands/auth";
+import {
+	DEFAULT_ANALYZE_MODEL,
+	DEFAULT_PROMPT_MODEL,
+	type ParsedBuildPromptFlags,
+	runBuildPrompt,
+} from "./commands/build-prompt";
+import { runConfigSet, runConfigShow } from "./commands/config";
 import { runUpgrade } from "./commands/upgrade";
 import { runVersion } from "./commands/version";
-import type { CommandResult } from "./types";
-import { parseArgs } from "./utils/args";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
-function showMainHelp(): void {
-	console.log(`chunk ${packageJson.version}
+const program = new Command();
+program
+	.name("chunk")
+	.version(packageJson.version as string)
+	.description("AI code review CLI")
+	.helpOption("-h, --help");
 
-Context generation CLI — mines real reviewer patterns to build AI agent prompts
+function parsePositiveInt(value: string, _dummyPrevious: unknown): number {
+	const n = parseInt(value, 10);
+	if (Number.isNaN(n) || n < 1) {
+		throw new Error("Not a number.");
+	}
+	return n;
+}
 
-Usage: chunk [command] [options]
+function parseCommaSeparatedList(value: string, _dummyPrevious: unknown): string[] {
+	return value.split(",");
+}
 
-Commands:
-  help           Show help (default)
-  auth           Manage authentication
-  config         Manage configuration
-  upgrade        Update to latest version
-  version        Show version information
-  build-prompt   Discover top reviewers and generate a PR review agent prompt
+function parseDate(value: string, _dummyPrevious: unknown): Date {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) {
+		throw new Error(`Invalid date: ${value}`);
+	}
+	return date;
+}
 
-Options:
-  -h, --help       Show help for a command
-  -v, --version    Show version number
-
-Examples:
-  chunk                      Show help
-  chunk auth login           Configure API key
-
-Run 'chunk' for more information on a command.
-`);
+function threeMonthsAgo(): Date {
+	const date = new Date();
+	date.setMonth(date.getMonth() - 3);
+	return date;
 }
 
 async function main(): Promise<void> {
-	const parsed = parseArgs(process.argv);
-	let result: CommandResult;
+	program
+		.command("build-prompt")
+		.requiredOption("--org <org>", "GitHub organization to analyze")
+		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
+		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
+		.option("--since <date>", "Start date YYYY-MM-DD", parseDate, threeMonthsAgo())
+		.option("--output <path>", "Output path for the generated prompt", "./pr-review-prompt.md")
+		.option("--max-comments <number>", "Max comments per reviewer for analysis", parsePositiveInt)
+		.option("--analyze-model <model>", "Claude model for the analysis step", DEFAULT_ANALYZE_MODEL)
+		.option("--prompt-model <model>", "Claude model for prompt generation", DEFAULT_PROMPT_MODEL)
+		.option("--include-attribution", "Include reviewer attribution in the generated prompt", false)
+		.action(async (options: ParsedBuildPromptFlags) => {
+			process.exit((await runBuildPrompt(options)).exitCode);
+		});
 
-	if (parsed.flags.version) {
-		result = await runVersion();
-		process.exit(result.exitCode);
-	}
+	const auth = program.command("auth").description("Manage authentication");
+	auth
+		.command("login")
+		.description("Store API key for authentication")
+		.action(async () => process.exit((await runAuthLogin()).exitCode));
+	auth
+		.command("status")
+		.description("Check authentication status")
+		.action(async () => process.exit((await runAuthStatus()).exitCode));
+	auth
+		.command("logout")
+		.description("Remove stored credentials")
+		.action(async () => process.exit((await runAuthLogout()).exitCode));
 
-	switch (parsed.command) {
-		case "help":
-			showMainHelp();
-			result = { exitCode: 0 };
-			break;
-		case "auth":
-			result = await runAuth(parsed);
-			break;
-		case "config":
-			result = await runConfig(parsed);
-			break;
-		case "upgrade":
-			result = await runUpgrade(parsed);
-			break;
-		case "version":
-			result = await runVersion();
-			break;
-		case "build-prompt":
-			result = await runBuildPrompt(parsed);
-			break;
-		default:
-			if (parsed.flags.help) {
-				showMainHelp();
-				result = { exitCode: 0 };
-			} else {
-				printError(
-					`Unknown command: ${parsed.command}`,
-					"The command you entered is not recognized.",
-					"Run `chunk --help` to see available commands.",
-				);
-				result = { exitCode: 2 };
-			}
-	}
+	const config = program.command("config").description("Manage configuration");
+	config
+		.command("show")
+		.description("Display current configuration")
+		.action(() => process.exit(runConfigShow().exitCode));
+	config
+		.command("set")
+		.description("Set a configuration value")
+		.argument("<key>", "config key (model, apiKey)")
+		.argument("<value>", "value to set")
+		.action((key: string, value: string) => process.exit(runConfigSet(key, value).exitCode));
 
-	process.exit(result.exitCode);
+	program
+		.command("upgrade")
+		.description("Update to the latest version")
+		.action(async () => process.exit((await runUpgrade()).exitCode));
+
+	program.command("version").action(async () => process.exit((await runVersion()).exitCode));
+
+	program.action(() => {
+		program.outputHelp();
+		process.exit(0);
+	});
+
+	await program.parseAsync(process.argv);
 }
 
 main().catch((error) => {
 	const err = error instanceof Error ? error : new Error(String(error));
-
 	let suggestion: string;
 	if (isNetworkError(err)) {
 		suggestion = "Check your internet connection and try again.";
@@ -93,7 +113,6 @@ main().catch((error) => {
 	} else {
 		suggestion = "If this problem persists, please report an issue.";
 	}
-
 	printError(err.message, undefined, suggestion);
 	process.exit(2);
 });
