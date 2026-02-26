@@ -1,0 +1,33 @@
+.env
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Binaries (never commit these - breaks git with large files)
+bin/
+chunk
+chunk-*
+*.backup
+
+# npm (using bun.lock instead)
+package-lock.json
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# Execution plans (working documents)
+execplans/
+PLANS.md
+
+# git
+.worktrees
