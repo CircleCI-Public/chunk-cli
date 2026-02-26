@@ -93,6 +93,10 @@ jobs:
             goreleaser --version
 
       - run:
+          name: Fetch all git tags
+          command: git fetch --tags
+
+      - run:
           name: Run GoReleaser
           command: |
             goreleaser release --clean
@@ -153,6 +157,7 @@ workflows:
           context:
             - chunk-cli
           requires:
+            - shellcheck/check
             - lint
       - release:
           context:
