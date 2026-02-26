@@ -1,0 +1,41 @@
+{
+  "name": "chunk",
+  "version": "0.4.0",
+  "description": "Chunk CLI by CircleCI",
+  "module": "src/index.ts",
+  "type": "module",
+  "bin": {
+    "chunk": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun run scripts/build.ts",
+    "build:darwin-arm64": "bun build src/index.ts --compile --target=bun-darwin-arm64 --outfile dist/chunk-darwin-arm64",
+    "build:darwin-x64": "bun build src/index.ts --compile --target=bun-darwin-x64 --outfile dist/chunk-darwin-x64",
+    "build:linux-arm64": "bun build src/index.ts --compile --target=bun-linux-arm64 --outfile dist/chunk-linux-arm64",
+    "build:linux-x64": "bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/chunk-linux-x64",
+    "release": "bun run scripts/release.ts",
+    "test": "bun test src/**/*.unit.test.ts",
+    "test:unit": "bun test src/**/*.unit.test.ts",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --fix src/",
+    "format": "biome format --write src/",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "private": true,
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.14",
+    "@types/bun": "latest",
+    "@types/react": "^19.2.10",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "@inkjs/ui": "^2.0.0",
+    "@octokit/graphql": "^9.0.3",
+    "cli-table3": "^0.6.5",
+    "ink": "^6.6.0",
+    "react": "^19.2.4",
+    "zod": "^4.3.6"
+  }
+}
