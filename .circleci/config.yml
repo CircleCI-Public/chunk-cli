@@ -84,6 +84,7 @@ jobs:
     steps:
       - setup
       - flox/install
+      - run: rm -f flox.*.deb
 
       - run:
           name: Install GoReleaser
