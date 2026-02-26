@@ -1,0 +1,102 @@
+# GoReleaser configuration for chunk
+# Documentation: https://goreleaser.com
+
+version: 2
+
+before:
+  hooks:
+    # Ensure dependencies are installed
+    - bun install
+
+builds:
+  - id: chunk
+    builder: bun
+    binary: chunk
+    main: ./src/index.ts
+
+    # Targets for cross-platform builds
+    # Format: os-arch[-variant]
+    targets:
+      - linux-x64-modern
+      - linux-arm64
+      - darwin-x64
+      - darwin-arm64
+
+    # Additional flags for bun build --compile
+    flags:
+      - --compile
+
+    # Environment variables for the build
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    builds_info:
+      group: root
+      owner: root
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - Merge pull request
+      - Merge branch
+
+# Homebrew formula
+brews:
+  - name: chunk
+    repository:
+      owner: CircleCI-Public
+      name: homebrew-tap
+    directory: Formula
+    homepage: https://github.com/CircleCI-Public/chunk-cli
+    description: "Chunk CLI by CircleCI"
+    license: "MIT"
+    test: |
+      system "#{bin}/chunk"
+    install: |
+      bin.install "chunk"
+
+# Nix package (for NUR - Nix User Repository)
+nix:
+  - name: chunk
+    repository:
+      owner: CircleCI-Public
+      name: nur-packages
+    # Generate locally, push manually in CircleCI
+    skip_upload: true
+    homepage: https://github.com/CircleCI-Public/chunk-cli
+    description: "Chunk CLI by CircleCI"
+    license: "mit"
+    path: pkgs/chunk/default.nix
+    install: |
+      mkdir -p $out/bin
+      cp chunk $out/bin/
+
+# Metadata for the release
+release:
+  github:
+    owner: CircleCI-Public
+    name: chunk-cli
+  draft: false
+  prerelease: auto

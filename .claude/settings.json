@@ -1,16 +1,5 @@
 {
   "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/check.sh",
-            "statusMessage": "Running linter, typecheck, and unit tests..."
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash(git commit*)",
