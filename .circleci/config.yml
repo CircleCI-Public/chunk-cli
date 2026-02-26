@@ -95,8 +95,8 @@ jobs:
       - run:
           name: Fetch all git tags
           command: |
+            git fetch --unshallow || true
             git fetch --force --tags
-            git fetch --force --prune --tags
 
       - run:
           name: Run GoReleaser
