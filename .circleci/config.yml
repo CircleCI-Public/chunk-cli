@@ -106,7 +106,7 @@ jobs:
 
       - run:
           name: Install Task
-          command: sudo apt-get install -y task
+          command: sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 
       - run:
           name: Publish Nix package to NUR
