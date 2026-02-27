@@ -125,7 +125,7 @@ workflows:
               only: /^v\d+\.\d+\.\d+.*$/
       - test:
           context:
-            - chunk-cli
+            - chunk-cli-test
           requires:
             - shellcheck/check
             - lint
@@ -134,7 +134,7 @@ workflows:
               only: /^v\d+\.\d+\.\d+.*$/
       - release:
           context:
-            - chunk-cli
+            - chunk-cli-deploy
           requires:
             - test
           filters:
