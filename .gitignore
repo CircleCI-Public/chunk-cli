@@ -4,6 +4,8 @@ node_modules/
 
 # Build output
 dist/
+*.bun-build
+.*.bun-build
 
 # Binaries (never commit these - breaks git with large files)
 bin/
