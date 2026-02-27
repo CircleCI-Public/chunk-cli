@@ -159,6 +159,20 @@ Cache tokens: writes 1.25x, reads 0.1x base input price.
 
 ## Development
 
+### Prerequisites
+
+This repo uses [mise](https://mise.jdx.dev/) to manage tool versions.
+`.mise.toml` at the repo root pins the required versions of Bun and Node.
+
+Install mise (if you haven't already), then run:
+
+```bash
+mise install
+```
+
+With mise active, `bun` and `node` will resolve to the correct versions
+automatically when you're inside this directory.
+
 ### Building
 
 ```bash
