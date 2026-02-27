@@ -9,6 +9,7 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
+import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runUpgrade } from "./commands/upgrade";
 import { runVersion } from "./commands/version";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
@@ -87,6 +88,20 @@ async function main(): Promise<void> {
 		.argument("<key>", "config key (model, apiKey)")
 		.argument("<value>", "value to set")
 		.action((key: string, value: string) => process.exit(runConfigSet(key, value).exitCode));
+
+	const skills = program.command("skills").description("Install and manage AI agent skills");
+	skills
+		.command("install")
+		.description("Install or update all skills into agent config directories")
+		.action(() => process.exit(runSkillsInstall().exitCode));
+	skills
+		.command("status")
+		.description("Show current installation status without making changes")
+		.action(() => process.exit(runSkillsStatus().exitCode));
+	skills
+		.command("list")
+		.description("List skills bundled in this binary")
+		.action(() => process.exit(runSkillsList().exitCode));
 
 	program
 		.command("upgrade")
