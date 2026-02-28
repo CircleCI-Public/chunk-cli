@@ -1,0 +1,144 @@
+version: 2.1
+
+orbs:
+  shellcheck: circleci/shellcheck@3.4.0
+  flox: flox/orb@1.0.0
+
+executors:
+  bun:
+    docker:
+      - image: cimg/go:1.26.0
+    environment:
+      BUN_INSTALL: /home/circleci/.bun
+      PATH: /home/circleci/.bun/bin:/home/circleci/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+commands:
+  install-bun:
+    description: "Install Bun 1.3 with caching"
+    steps:
+      - restore_cache:
+          keys:
+            - bun-v1.3-{{ arch }}
+      - run:
+          name: Install Bun
+          command: |
+            if command -v bun &>/dev/null && bun --version | grep -q "^1\.3\."; then
+              echo "Bun already installed: $(bun --version)"
+            else
+              curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.0"
+              echo "Bun installed: $($BUN_INSTALL/bin/bun --version)"
+            fi
+      - save_cache:
+          key: bun-v1.3-{{ arch }}
+          paths:
+            - ~/.bun
+
+  install-deps:
+    description: "Install Node dependencies with caching"
+    steps:
+      - restore_cache:
+          keys:
+            - deps-v1-{{ checksum "bun.lock" }}
+            - deps-v1-
+      - run:
+          name: Install dependencies
+          command: bun install --frozen-lockfile
+      - save_cache:
+          key: deps-v1-{{ checksum "bun.lock" }}
+          paths:
+            - node_modules
+
+  setup:
+    description: "Full setup: checkout, install Bun, install dependencies"
+    steps:
+      - checkout
+      - install-bun
+      - install-deps
+
+jobs:
+  lint:
+    executor: bun
+    resource_class: medium
+    steps:
+      - setup
+      - run:
+          name: Biome lint & format check
+          command: bun run lint
+      - run:
+          name: TypeScript type check
+          command: bun run typecheck
+
+  test:
+    executor: bun
+    resource_class: medium
+    steps:
+      - setup
+      - run:
+          name: Run unit tests
+          command: bun run test:unit
+          no_output_timeout: 90s
+
+  release:
+    executor: bun
+    resource_class: medium
+    steps:
+      - setup
+      - flox/install
+      - run: rm -f flox.*.deb
+
+      - run:
+          name: Install GoReleaser
+          command: |
+            # Download and install GoReleaser
+            curl -sL https://github.com/goreleaser/goreleaser/releases/download/v2.6.1/goreleaser_Linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin goreleaser
+            goreleaser --version
+
+      - run:
+          name: Fetch all git tags
+          command: |
+            # git fetch --unshallow || true
+            git fetch --force --tags
+
+      - run:
+          name: Run GoReleaser
+          command: |
+            goreleaser release --clean
+
+      - run:
+          name: Install Task
+          command: sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      - run:
+          name: Publish Nix package to NUR
+          command: task nur:publish
+
+workflows:
+  ci:
+    jobs:
+      - shellcheck/check:
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+.*$/
+      - lint:
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+.*$/
+      - test:
+          context:
+            - chunk-cli-test
+          requires:
+            - shellcheck/check
+            - lint
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+.*$/
+      - release:
+          context:
+            - chunk-cli-deploy
+          requires:
+            - test
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+.*$/
+            branches:
+              ignore: /.*/
