@@ -1,5 +1,8 @@
 version: 2.1
 
+orbs:
+  docker: circleci/docker@2.8.0
+
 jobs:
   dockerbuild:
     docker:
@@ -8,9 +11,19 @@ jobs:
     steps:
       - checkout
       - setup_remote_docker
-      - run: docker build --file Dockerfile.ci .
+      - docker/check:
+          docker-username: DOCKERHUB_USERNAME
+          docker-password: DOCKERHUB_PASSWORD
+      - run:
+          name: Build image
+          command: docker build --file Dockerfile.ci -t circleci/cli-releaser:0.1.0 -t circleci/cli-releaser:latest .
+      - docker/push:
+          image: circleci/cli-releaser
+          tag: "0.1.0,latest"
 
 workflows:
   docker:
     jobs:
-      - dockerbuild
+      - dockerbuild:
+          context:
+            - chunk-cli-deploy
