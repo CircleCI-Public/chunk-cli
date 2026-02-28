@@ -14,12 +14,9 @@ jobs:
     resource_class: medium
     steps:
       - checkout
-      - run:
-          name: Biome lint & format check
-          command: bun run lint
-      - run:
-          name: TypeScript type check
-          command: bun run typecheck
+      - run: bun install
+      - run: bun run lint
+      - run: bun run typecheck
 
   test:
     executor: releaser
