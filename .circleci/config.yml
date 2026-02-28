@@ -2,10 +2,12 @@ version: 2.1
 
 jobs:
   dockerbuild:
-    executor: cimg/base:current
+    docker:
+      - image: cimg/base:current
     resource_class: medium
     steps:
       - checkout
+      - setup_remote_docker
       - run: docker build --file Dockerfile.ci .
 
 workflows:
