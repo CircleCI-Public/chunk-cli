@@ -16,7 +16,7 @@ jobs:
     executor: releaser
     resource_class: medium
     steps:
-      - setup
+      - checkout
       - run:
           name: Biome lint & format check
           command: bun run lint
@@ -28,7 +28,7 @@ jobs:
     executor: releaser
     resource_class: medium
     steps:
-      - setup
+      - checkout
       - run:
           name: Run unit tests
           command: bun run test:unit
