@@ -12,4 +12,3 @@ workflows:
           image: circleci/cli-releaser
           tag: "0.1.0,latest"
           dockerfile: Dockerfile.ci
-
