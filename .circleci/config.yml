@@ -6,10 +6,7 @@ orbs:
 executors:
   releaser:
     docker:
-      - image: circleci/cli-releaser:0.1.0
-    environment:
-      BUN_INSTALL: /home/circleci/.bun
-      PATH: /home/circleci/.bun/bin:/home/circleci/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      - image: circleci/cli-releaser:0.2.0
 
 jobs:
   lint:
