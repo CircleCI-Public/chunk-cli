@@ -6,7 +6,7 @@ jobs:
     resource_class: medium
     steps:
       - checkout
-      - docker build --file Dockerfile.ci .
+      - run: docker build --file Dockerfile.ci .
 
 workflows:
   docker:
