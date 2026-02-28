@@ -1,0 +1,16 @@
+FROM cimg/go:1.26.0
+
+ENV BUN_INSTALL=/home/circleci/.bun
+ENV PATH=/home/circleci/.bun/bin:/home/circleci/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Install GoReleaser, Task, and Flox as root
+USER root
+RUN curl -sL https://github.com/goreleaser/goreleaser/releases/download/v2.6.1/goreleaser_Linux_x86_64.tar.gz \
+      | tar -xz -C /usr/local/bin goreleaser
+RUN sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+RUN curl -L --remote-name https://downloads.flox.dev/by-env/stable/deb/flox.x86_64-linux.deb
+RUN dpkg -i flox.x86_64-linux.deb
+
+# Install Bun as the circleci user
+USER circleci
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.0"

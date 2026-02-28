@@ -1,132 +1,14 @@
 version: 2.1
 
-orbs:
-  shellcheck: circleci/shellcheck@3.4.0
-  gh: circleci/github-cli@2.7.2
-
-executors:
-  bun:
-    docker:
-      - image: cimg/base:current
-    environment:
-      BUN_INSTALL: /home/circleci/.bun
-      PATH: /home/circleci/.bun/bin:/home/circleci/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-commands:
-  install-bun:
-    description: "Install Bun 1.3 with caching"
-    steps:
-      - restore_cache:
-          keys:
-            - bun-v1.3-{{ arch }}
-      - run:
-          name: Install Bun
-          command: |
-            if command -v bun &>/dev/null && bun --version | grep -q "^1\.3\."; then
-              echo "Bun already installed: $(bun --version)"
-            else
-              curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.0"
-              echo "Bun installed: $($BUN_INSTALL/bin/bun --version)"
-            fi
-      - save_cache:
-          key: bun-v1.3-{{ arch }}
-          paths:
-            - ~/.bun
-
-  install-deps:
-    description: "Install Node dependencies with caching"
-    steps:
-      - restore_cache:
-          keys:
-            - deps-v1-{{ checksum "bun.lock" }}
-            - deps-v1-
-      - run:
-          name: Install dependencies
-          command: bun install --frozen-lockfile
-      - save_cache:
-          key: deps-v1-{{ checksum "bun.lock" }}
-          paths:
-            - node_modules
-
-  setup:
-    description: "Full setup: checkout, install Bun, install dependencies"
-    steps:
-      - checkout
-      - install-bun
-      - install-deps
-
 jobs:
-  lint:
-    executor: bun
-    resource_class: medium
-    steps:
-      - setup
-      - run:
-          name: Biome lint & format check
-          command: bun run lint
-      - run:
-          name: TypeScript type check
-          command: bun run typecheck
-
-  build:
-    executor: bun
-    resource_class: large
-    steps:
-      - setup
-      - run:
-          name: Build all platform binaries
-          command: bun run build
-      - run:
-          name: Verify build artifacts
-          command: |
-            echo "Build artifacts:"
-            ls -lh dist/
-            test -f dist/chunk-darwin-arm64
-            test -f dist/chunk-darwin-x64
-            test -f dist/chunk-linux-arm64
-            test -f dist/chunk-linux-x64
-      - store_artifacts:
-          path: dist
-          destination: binaries
-
-  test:
-    executor: bun
-    resource_class: medium
-    steps:
-      - setup
-      - gh/install
-      - run:
-          name: Run unit tests
-          command: bun run test:unit
-          no_output_timeout: 90s
-
-  install-upgrade:
-    executor: bun
+  dockerbuild:
+    executor: cimg/base:current
     resource_class: medium
     steps:
       - checkout
-      - install-bun
-      - gh/install
-      - run:
-          name: Install via install-local.sh (current branch)
-          command: bash install-local.sh --branch "$CIRCLE_BRANCH"
-      - run:
-          name: Verify installation
-          command: chunk --version
-      - run:
-          name: Run ccicr upgrade
-          command: chunk upgrade
+      - docker build --file Dockerfile.ci .
 
 workflows:
-  ci:
+  docker:
     jobs:
-      - shellcheck/check
-      - lint
-      - build:
-          requires:
-            - lint
-      - test:
-          context:
-            - chunk-cli
-          requires:
-            - lint
+      - dockerbuild
