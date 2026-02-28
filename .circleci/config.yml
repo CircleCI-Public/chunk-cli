@@ -78,67 +78,14 @@ jobs:
           command: bun run test:unit
           no_output_timeout: 90s
 
-  release:
-    executor: bun
-    resource_class: medium
-    steps:
-      - setup
-      - flox/install
-      - run: rm -f flox.*.deb
-
-      - run:
-          name: Install GoReleaser
-          command: |
-            # Download and install GoReleaser
-            curl -sL https://github.com/goreleaser/goreleaser/releases/download/v2.6.1/goreleaser_Linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin goreleaser
-            goreleaser --version
-
-      - run:
-          name: Fetch all git tags
-          command: |
-            # git fetch --unshallow || true
-            git fetch --force --tags
-
-      - run:
-          name: Run GoReleaser
-          command: |
-            goreleaser release --clean
-
-      - run:
-          name: Install Task
-          command: sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
-
-      - run:
-          name: Publish Nix package to NUR
-          command: task nur:publish
-
 workflows:
   ci:
     jobs:
-      - shellcheck/check:
-          filters:
-            tags:
-              only: /^v\d+\.\d+\.\d+.*$/
-      - lint:
-          filters:
-            tags:
-              only: /^v\d+\.\d+\.\d+.*$/
+      - shellcheck/check
+      - lint
       - test:
           context:
             - chunk-cli-test
           requires:
             - shellcheck/check
             - lint
-          filters:
-            tags:
-              only: /^v\d+\.\d+\.\d+.*$/
-      - release:
-          context:
-            - chunk-cli-deploy
-          requires:
-            - test
-          filters:
-            tags:
-              only: /^v\d+\.\d+\.\d+.*$/
-            branches:
-              ignore: /.*/
