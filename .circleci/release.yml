@@ -69,9 +69,7 @@ jobs:
             curl -sL https://github.com/goreleaser/goreleaser/releases/download/v2.6.1/goreleaser_Linux_x86_64.tar.gz | sudo tar -xz -C /usr/local/bin goreleaser
             goreleaser --version
 
-      - run:
-          name: Fetch all git tags
-          command: git fetch --force --tags
+      - run: task tag
 
       - run:
           name: Run GoReleaser
