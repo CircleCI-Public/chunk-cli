@@ -8,7 +8,7 @@ workflows:
     jobs:
       - docker/publish:
           context:
-            - chunk-cli-deploy
+            - chunk-cli-docker-temp
           image: circleci/cli-releaser
           tag: "0.1.0,latest"
           dockerfile: Dockerfile.ci
