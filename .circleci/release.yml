@@ -89,6 +89,3 @@ workflows:
       - release:
           context:
             - chunk-cli-deploy
-          filters:
-            branches:
-              only: main
