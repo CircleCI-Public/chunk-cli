@@ -1,29 +1,14 @@
 version: 2.1
 
 orbs:
-  docker: circleci/docker@2.8.0
-
-jobs:
-  dockerbuild:
-    docker:
-      - image: cimg/base:current
-    resource_class: medium
-    steps:
-      - checkout
-      - setup_remote_docker
-      - docker/check:
-          docker-username: DOCKERHUB_USERNAME
-          docker-password: DOCKERHUB_PASSWORD
-      - run:
-          name: Build image
-          command: docker build --file Dockerfile.ci -t circleci/cli-releaser:0.1.0 -t circleci/cli-releaser:latest .
-      - docker/push:
-          image: circleci/cli-releaser
-          tag: "0.1.0,latest"
+  docker: circleci/docker@3.0.1
 
 workflows:
   docker:
     jobs:
-      - dockerbuild:
+      - docker/publish:
           context:
             - chunk-cli-deploy
+          image: circleci/cli-releaser
+          tag: "0.1.0,latest"
+          dockerfile: Dockerfile.ci
