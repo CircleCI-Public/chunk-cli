@@ -8,13 +8,29 @@ executors:
     docker:
       - image: circleci/cli-releaser:0.2.0
 
+commands:
+  install-deps:
+    description: "Install Node dependencies with caching"
+    steps:
+      - restore_cache:
+          keys:
+            - deps-v1-{{ checksum "bun.lock" }}
+            - deps-v1-
+      - run:
+          name: Install dependencies
+          command: bun install --frozen-lockfile
+      - save_cache:
+          key: deps-v1-{{ checksum "bun.lock" }}
+          paths:
+            - node_modules
+
 jobs:
   lint:
     executor: releaser
     resource_class: medium
     steps:
       - checkout
-      - run: bun install
+      - install-deps
       - run: bun run lint
       - run: bun run typecheck
 
@@ -23,6 +39,7 @@ jobs:
     resource_class: medium
     steps:
       - checkout
+      - install-deps
       - run:
           name: Run unit tests
           command: bun run test:unit
