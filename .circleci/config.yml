@@ -10,5 +10,5 @@ workflows:
           context:
             - chunk-cli-docker-temp
           image: circleci/cli-releaser
-          tag: "0.1.0,latest"
+          tag: "0.2.0"
           dockerfile: Dockerfile.ci

@@ -10,6 +10,7 @@ RUN curl -sL https://github.com/goreleaser/goreleaser/releases/download/v2.6.1/g
 RUN sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 RUN curl -L --remote-name https://downloads.flox.dev/by-env/stable/deb/flox.x86_64-linux.deb
 RUN dpkg -i flox.x86_64-linux.deb
+RUN rm -f flox.x86_64-linux.deb
 
 # Install Bun as the circleci user
 USER circleci
