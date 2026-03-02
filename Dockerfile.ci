@@ -5,7 +5,7 @@ ENV PATH=/home/circleci/.bun/bin:/home/circleci/.local/bin:/usr/local/sbin:/usr/
 
 # Install GoReleaser, Task, and Flox as root
 USER root
-RUN curl -sL https://github.com/goreleaser/goreleaser/releases/download/v2.6.1/goreleaser_Linux_x86_64.tar.gz \
+RUN curl -sL https://github.com/goreleaser/goreleaser/releases/download/v2.14.1/goreleaser_Linux_x86_64.tar.gz \
       | tar -xz -C /usr/local/bin goreleaser
 RUN sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
 RUN curl -L --remote-name https://downloads.flox.dev/by-env/stable/deb/flox.x86_64-linux.deb
