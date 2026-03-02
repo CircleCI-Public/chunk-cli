@@ -1,5 +1,11 @@
 version: 2.1
 
+parameters:
+  version:
+    type: string
+    default: ""
+    description: "Version to release (e.g. 1.2.3). Omit to auto-increment patch."
+
 executors:
   releaser:
     docker:
@@ -29,7 +35,7 @@ jobs:
       - checkout
       - install-deps
 
-      - run: task release
+      - run: task release VERSION=<< pipeline.parameters.version >>
 
 workflows:
   release:
