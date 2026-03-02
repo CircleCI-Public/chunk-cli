@@ -8,7 +8,7 @@ dist/
 # Binaries (never commit these - breaks git with large files)
 bin/
 chunk
-chunk-*
+/chunk-*
 *.backup
 
 # npm (using bun.lock instead)

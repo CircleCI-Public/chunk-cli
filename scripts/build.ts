@@ -44,6 +44,7 @@ async function build(): Promise<void> {
         '--compile',
         '--minify',
         `--target=${target}`,
+        '--loader', '.md:text',
         `--outfile=${outputPath}`,
       ], {
         cwd: rootDir,

@@ -1,33 +1,12 @@
 import { validateApiKeyWithServer } from "../core/agent";
 import { clearApiKey, loadUserConfig, saveUserConfig } from "../storage/config";
-import type { CommandResult, ParsedArgs } from "../types";
+import type { CommandResult } from "../types";
 import { bold, dim, yellow } from "../ui/colors";
 import { label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput } from "../ui/prompt";
 import { printError } from "../utils/errors";
 
-export function showAuthHelp(): void {
-	console.log(`
-Usage: chunk auth <command>
-
-Manage authentication
-
-Commands:
-  login     Store API key for authentication
-  status    Check authentication status
-  logout    Remove stored credentials
-
-Options:
-  -h, --help    Show this help message
-
-Examples:
-  chunk auth login     Interactive API key setup
-  chunk auth status    Check if authenticated
-  chunk auth logout    Remove credentials
-`);
-}
-
-async function runAuthLogin(): Promise<CommandResult> {
+export async function runAuthLogin(): Promise<CommandResult> {
 	console.log(`\n${bold("Chunk CLI - API Key Setup")}\n`);
 	console.log("Enter your Anthropic API key (starts with sk-ant-).");
 	console.log("The key will be stored securely and never displayed.\n");
@@ -80,7 +59,7 @@ async function runAuthLogin(): Promise<CommandResult> {
 	return { exitCode: 0 };
 }
 
-async function runAuthStatus(): Promise<CommandResult> {
+export async function runAuthStatus(): Promise<CommandResult> {
 	const userConfig = loadUserConfig();
 	const envApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -137,7 +116,7 @@ async function runAuthStatus(): Promise<CommandResult> {
 	}
 }
 
-async function runAuthLogout(): Promise<CommandResult> {
+export async function runAuthLogout(): Promise<CommandResult> {
 	// Check if there's an API key stored in config
 	const userConfig = loadUserConfig();
 
@@ -174,35 +153,5 @@ async function runAuthLogout(): Promise<CommandResult> {
 			"Check file permissions on ~/.config/chunk/config.json",
 		);
 		return { exitCode: 2 };
-	}
-}
-
-export async function runAuth(parsed: ParsedArgs): Promise<CommandResult> {
-	if (parsed.flags.help) {
-		showAuthHelp();
-		return { exitCode: 0 };
-	}
-
-	if (!parsed.subcommand) {
-		showAuthHelp();
-		return { exitCode: 2 };
-	}
-
-	const subcommand = parsed.subcommand;
-
-	switch (subcommand) {
-		case "login":
-			return runAuthLogin();
-		case "status":
-			return runAuthStatus();
-		case "logout":
-			return runAuthLogout();
-		default:
-			printError(
-				`Unknown auth command: ${subcommand}`,
-				`'${subcommand}' is not a valid auth subcommand.`,
-				"Run `chunk auth --help` for available commands.",
-			);
-			return { exitCode: 2 };
 	}
 }

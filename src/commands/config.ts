@@ -1,5 +1,5 @@
 import { resolveConfig, saveUserConfig } from "../storage/config";
-import type { CommandResult, ParsedArgs } from "../types";
+import type { CommandResult } from "../types";
 import { bold, cyan, dim, gray, green, yellow } from "../ui/colors";
 import { label, printSuccess } from "../ui/format";
 import { printError } from "../utils/errors";
@@ -7,25 +7,6 @@ import { printError } from "../utils/errors";
 /** Known configuration keys that can be set */
 const VALID_CONFIG_KEYS = ["model", "apiKey"] as const;
 type ConfigKey = (typeof VALID_CONFIG_KEYS)[number];
-
-export function showConfigHelp(): void {
-	console.log(`
-Usage: chunk config <command> [options]
-
-Manage configuration
-
-Commands:
-  show              Display current configuration
-  set <key> <value> Set a configuration value
-
-Options:
-  -h, --help    Show this help message
-
-Examples:
-  chunk config show              Show all config values
-  chunk config set model opus    Set default model to opus
-`);
-}
 
 /**
  * Mask API key, showing only last 4 characters
@@ -66,7 +47,7 @@ function isValidConfigKey(key: string): key is ConfigKey {
 /**
  * Display current configuration with sources
  */
-function runConfigShow(): CommandResult {
+export function runConfigShow(): CommandResult {
 	const config = resolveConfig();
 
 	console.log(`\n${bold("Configuration:")}\n`);
@@ -93,10 +74,7 @@ function runConfigShow(): CommandResult {
 /**
  * Set a configuration value
  */
-function runConfigSet(args: string[]): CommandResult {
-	const key = args[0];
-	const value = args[1];
-
+export function runConfigSet(key: string, value: string): CommandResult {
 	if (!key) {
 		printError(
 			"Missing config key",
@@ -136,33 +114,5 @@ function runConfigSet(args: string[]): CommandResult {
 			"Check file permissions on ~/.config/chunk/config.json",
 		);
 		return { exitCode: 2 };
-	}
-}
-
-export async function runConfig(parsed: ParsedArgs): Promise<CommandResult> {
-	if (parsed.flags.help) {
-		showConfigHelp();
-		return { exitCode: 0 };
-	}
-
-	if (!parsed.subcommand) {
-		showConfigHelp();
-		return { exitCode: 2 };
-	}
-
-	const subcommand = parsed.subcommand;
-
-	switch (subcommand) {
-		case "show":
-			return runConfigShow();
-		case "set":
-			return runConfigSet(parsed.args);
-		default:
-			printError(
-				`Unknown config command: ${subcommand}`,
-				`'${subcommand}' is not a valid config subcommand.`,
-				"Run `chunk config --help` for available commands.",
-			);
-			return { exitCode: 2 };
 	}
 }
