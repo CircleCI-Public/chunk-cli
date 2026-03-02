@@ -3,8 +3,11 @@ version: '3'
 tasks:
   release:
     desc: Tag, build, and publish a release (tag → goreleaser → NUR)
+    vars:
+      VERSION: '{{.VERSION | default ""}}'
     cmds:
       - task: tag
+        vars: { VERSION: '{{.VERSION}}' }
       - goreleaser release --clean
       - CHUNK_TAG=$(cat /tmp/chunk-release-tag) task nur:publish
 
