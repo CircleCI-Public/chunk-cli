@@ -1,4 +1,3 @@
-import packageJson from "../../package.json";
 import { dim } from "../ui/colors";
 import { formatSuccess, label, printSuccess } from "../ui/format";
 
@@ -58,7 +57,7 @@ export async function performUpgrade(): Promise<boolean> {
 		throw new UpgradeError("Error: gh CLI not authenticated.\n\n" + "Run: gh auth login");
 	}
 
-	const beforeVersion = packageJson.version;
+	const beforeVersion = VERSION;
 	const W = 9; // align to "Platform:"
 	console.log(`  ${label("Version:", W, dim)} ${beforeVersion}`);
 	console.log(`  ${label("Platform:", W, dim)} ${platform}`);
