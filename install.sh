@@ -47,8 +47,12 @@ fi
 
 if command -v sha256sum >/dev/null 2>&1; then
 	ACTUAL_CHECKSUM="$(sha256sum "$ARCHIVE_DEST" | awk '{print $1}')"
-else
+elif command -v shasum >/dev/null 2>&1; then
 	ACTUAL_CHECKSUM="$(shasum -a 256 "$ARCHIVE_DEST" | awk '{print $1}')"
+else
+	echo "Error: cannot verify checksum: neither sha256sum nor shasum is available." >&2
+	rm -f "$ARCHIVE_DEST" "$CHECKSUMS_FILE"
+	exit 1
 fi
 
 if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then

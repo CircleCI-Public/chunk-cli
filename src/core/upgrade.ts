@@ -97,7 +97,7 @@ export async function performUpgrade(): Promise<boolean> {
 
 	const archive = `chunk-cli_${platform}.tar.gz`;
 	const archivePath = `/tmp/${archive}`;
-	const checksumsPath = "/tmp/chunk-cli-checksums.txt";
+	const checksumsPath = "/tmp/chunk-checksums.txt";
 	const tmpPath = `${binPath}.tmp`;
 
 	try {
@@ -146,7 +146,12 @@ export async function performUpgrade(): Promise<boolean> {
 		if (!expectedChecksum) {
 			throw new UpgradeError(`Checksum for ${archive} not found in checksums.txt`);
 		}
-		const shaCmd = process.platform === "darwin" ? ["shasum", "-a", "256"] : ["sha256sum"];
+		const hasSha256sum = (await exec(["sh", "-c", "command -v sha256sum"])).exitCode === 0;
+		const hasShasum = (await exec(["sh", "-c", "command -v shasum"])).exitCode === 0;
+		if (!hasSha256sum && !hasShasum) {
+			throw new UpgradeError("Cannot verify checksum: neither sha256sum nor shasum is available.");
+		}
+		const shaCmd = hasSha256sum ? ["sha256sum"] : ["shasum", "-a", "256"];
 		const shaResult = await exec([...shaCmd, archivePath]);
 		const actualChecksum = shaResult.stdout.split(/\s+/)[0];
 		if (actualChecksum !== expectedChecksum) {

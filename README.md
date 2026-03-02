@@ -17,7 +17,18 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 
 ## Installation
 
-### Homebrew (recommended)
+### Flox
+
+Add to `~/.flox/env/manifest.toml` under `[packages]`:
+
+```toml
+[packages]
+chunk.flake = "github:CircleCI-Public/nur-packages#packages.aarch64-linux.chunk"
+```
+
+Replace `aarch64-linux` with `x86_64-linux` if you're on an x86_64 machine.
+
+### Homebrew
 
 ```bash
 brew install CircleCI-Public/circleci/chunk
