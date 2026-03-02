@@ -116,6 +116,78 @@ chunk build-prompt --org myorg --repos myrepo --max-comments 50 --output ./promp
 
 Once generated, place the output file in `.chunk/context/` so AI coding agents (e.g., Claude Code) automatically pick it up as context.
 
+### run
+
+Triggers a chunk run against a CircleCI pipeline definition.
+
+#### Prerequisites
+
+You will need three identifiers from CircleCI before running setup:
+
+| Identifier | Where to find it |
+|------------|-----------------|
+| **Organization ID** | CircleCI app → Organization Settings → Overview |
+| **Project ID** | CircleCI app → Project Settings → Overview |
+| **Definition ID** | CircleCI app → the chunk pipeline definition page (UUID in the URL or settings) |
+
+You will also need a CircleCI personal API token set as `CIRCLECI_TOKEN`:
+
+```bash
+export CIRCLECI_TOKEN=your-token-here
+```
+
+#### Setup
+
+Run the interactive setup wizard from your repository root to create `.chunk/run.json`:
+
+```bash
+chunk run setup
+```
+
+The wizard will prompt you for your org ID, project ID, and at least one named pipeline definition. You can add multiple definitions (e.g. `dev`, `prod`) pointing to different CircleCI pipeline definitions.
+
+The resulting `.chunk/run.json` looks like:
+
+```json
+{
+  "org_id": "<circleci-org-uuid>",
+  "project_id": "<circleci-project-uuid>",
+  "org_type": "github",
+  "definitions": {
+    "dev": {
+      "definition_id": "<pipeline-definition-uuid>",
+      "default_branch": "main"
+    }
+  }
+}
+```
+
+#### Usage
+
+```bash
+# Trigger a run using a named definition from .chunk/run.json
+chunk run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
+
+# Override the branch
+chunk run --definition dev --prompt "Refactor the payment module" --branch my-feature-branch
+
+# Create a new branch for the run
+chunk run --definition dev --prompt "Add type annotations" --new-branch
+
+# Use a raw definition UUID directly (no .chunk/run.json needed)
+chunk run --definition 550e8400-e29b-41d4-a716-446655440000 --prompt "Fix the flaky test"
+```
+
+**Options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--definition <name\|uuid>` | required | Named definition from `.chunk/run.json`, or a raw definition UUID |
+| `--prompt <text>` | required | Prompt to send to the agent |
+| `--branch <branch>` | definition default | Branch to check out |
+| `--new-branch` | `false` | Create a new branch for the run |
+| `--no-pipeline-as-tool` | — | Disable running the pipeline as a tool call |
+
 ### Other Commands
 
 ```bash

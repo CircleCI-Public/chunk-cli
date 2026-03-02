@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "@commander-js/extra-typings";
+import { z } from "zod";
 import { runAuthLogin, runAuthLogout, runAuthStatus } from "./commands/auth";
 import {
 	DEFAULT_ANALYZE_MODEL,
@@ -8,6 +9,7 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
+import { runRun, runRunSetup } from "./commands/run";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runUpgrade } from "./commands/upgrade";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
@@ -115,6 +117,51 @@ Examples:
 		.command("list")
 		.description("List skills bundled in this binary")
 		.action(() => process.exit(runSkillsList().exitCode));
+
+	const runCmd = program
+		.command("run")
+		.description("Trigger a chunk run against a CircleCI pipeline definition")
+		.addHelpText(
+			"after",
+			`
+Environment Variables:
+  CIRCLECI_TOKEN           Required: CircleCI personal API token
+
+Examples:
+  chunk run setup
+  chunk run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
+  chunk run --definition prod --prompt "Refactor the payment module" --branch main --new-branch
+  chunk run --definition dev --prompt "Add type annotations" --no-pipeline-as-tool
+  chunk run --definition 550e8400-e29b-41d4-a716-446655440000 --prompt "Fix the flaky test"`,
+		)
+		.option("--definition <name>", "Definition name from .chunk/run.json, or a definition UUID")
+		.option("--prompt <text>", "Prompt to send to the agent")
+		.option("--branch <branch>", "Branch to check out (overrides definition default)")
+		.option("--new-branch", "Create a new branch for the run", false)
+		.option("--pipeline-as-tool", "Run the pipeline as a tool call", true)
+		.action(async (options) => {
+			const parsed = z
+				.object({
+					definition: z.string({ error: "required option '--definition <name>' not specified" }),
+					prompt: z.string({ error: "required option '--prompt <text>' not specified" }),
+					branch: z.string().optional(),
+					newBranch: z.boolean(),
+					pipelineAsTool: z.boolean(),
+				})
+				.safeParse(options);
+
+			if (!parsed.success) {
+				runCmd.error(parsed.error.issues[0]?.message ?? "Invalid options");
+				return;
+			}
+
+			process.exit((await runRun(parsed.data)).exitCode);
+		});
+
+	runCmd
+		.command("setup")
+		.description("Initialize .chunk/run.json for this repository")
+		.action(async () => process.exit((await runRunSetup()).exitCode));
 
 	program
 		.command("upgrade")
