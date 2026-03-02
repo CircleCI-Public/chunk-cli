@@ -83,9 +83,13 @@ describe("CircleCI API Client", () => {
 				throw new Error("Network error");
 			});
 
-			await expect(
-				triggerChunkRun(mockToken, mockOrgId, mockProjectId, mockRequest),
-			).rejects.toThrow(/Failed to connect to CircleCI API/);
+			try {
+				await triggerChunkRun(mockToken, mockOrgId, mockProjectId, mockRequest);
+				expect.unreachable("Should have thrown an error");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				expect((error as CircleCIError).message).toMatch(/Failed to connect to CircleCI API/);
+			}
 		});
 
 		it("should throw CircleCIError for 401 Unauthorized", async () => {
@@ -169,7 +173,27 @@ describe("CircleCI API Client", () => {
 
 			await expect(
 				triggerChunkRun(mockToken, mockOrgId, mockProjectId, mockRequest),
-			).rejects.toThrow(/CircleCI server error/);
+			).rejects.toThrow(/CircleCI server error \(502\)/);
+		});
+
+		it("should throw CircleCIError for unmapped non-5xx status (418)", async () => {
+			const mockResponse = {
+				ok: false,
+				status: 418,
+				text: async () => "I'm a teapot",
+			} as Response;
+
+			mockFetch.mockImplementation(async () => mockResponse);
+
+			try {
+				await triggerChunkRun(mockToken, mockOrgId, mockProjectId, mockRequest);
+				expect.unreachable("Should have thrown an error");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				const circleCIError = error as CircleCIError;
+				expect(circleCIError.message).toMatch(/CircleCI API request failed with status 418/);
+				expect(circleCIError.statusCode).toBe(418);
+			}
 		});
 
 		it("should throw CircleCIError for invalid JSON response", async () => {
@@ -181,9 +205,16 @@ describe("CircleCI API Client", () => {
 
 			mockFetch.mockImplementation(async () => mockResponse);
 
-			await expect(
-				triggerChunkRun(mockToken, mockOrgId, mockProjectId, mockRequest),
-			).rejects.toThrow(/Invalid JSON response/);
+			try {
+				await triggerChunkRun(mockToken, mockOrgId, mockProjectId, mockRequest);
+				expect.unreachable("Should have thrown an error");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				const circleCIError = error as CircleCIError;
+				expect(circleCIError.message).toMatch(/Invalid JSON response/);
+				expect(circleCIError.statusCode).toBe(200);
+				expect(circleCIError.responseBody).toBe("invalid json");
+			}
 		});
 
 		it("should include status code and response body in CircleCIError", async () => {
