@@ -27,7 +27,7 @@ tasks:
         for platform in "Linux_x86_64:x86_64-linux" "Linux_arm64:aarch64-linux" "Darwin_x86_64:x86_64-darwin" "Darwin_arm64:aarch64-darwin"; do
           archive=$(echo $platform | cut -d: -f1)
           nixname=$(echo $platform | cut -d: -f2)
-          archive_path="dist/chunk_${archive}.tar.gz"
+          archive_path="dist/chunk-cli_${archive}.tar.gz"
           echo "Hashing $archive_path..."
           sha=$(nix-hash --type sha256 --flat --base32 "$archive_path")
           sed -i "/shaMap = {/,/^  };/s|${nixname} = \"[^\"]*\"|${nixname} = \"${sha}\"|" {{.NUR_DIR}}/pkgs/chunk/default.nix
