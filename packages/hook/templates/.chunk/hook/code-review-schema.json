@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "required": ["decision"],
+  "properties": {
+    "decision": {
+      "enum": ["allow", "block"],
+      "description": "allow if no issues found, block if issues require fixing"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Short summary of the review outcome"
+    },
+    "issues": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["severity", "message"],
+        "properties": {
+          "severity": {
+            "enum": ["CRITICAL", "HIGH"]
+          },
+          "file": {
+            "type": "string",
+            "description": "path:line"
+          },
+          "message": {
+            "type": "string",
+            "description": "What is wrong (1-2 sentences)"
+          }
+        }
+      }
+    }
+  }
+}
