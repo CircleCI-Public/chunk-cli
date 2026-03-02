@@ -17,14 +17,21 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 
 ## Installation
 
-To install the `chunk` CLI, ensure that `gh` (the Github CLI) is installed and auth is set up,
-then run the following:
+### Homebrew (recommended)
 
 ```bash
-gh api -H "Accept: application/vnd.github.v3.raw" "/repos/circleci/code-review-cli/contents/install.sh"| bash
+brew install CircleCI-Public/circleci/chunk
 ```
 
-This will check that `~/.local/bin` is in your `$PATH` and will warn you if you need to add it manually.
+### Install script
+
+Requires `gh` (the GitHub CLI) installed and authenticated (`gh auth login`):
+
+```bash
+gh api -H "Accept: application/vnd.github.v3.raw" "/repos/CircleCI-Public/chunk-cli/contents/install.sh" | bash
+```
+
+This installs the binary to `~/.local/bin` and will warn you if that directory is not in your `$PATH`.
 
 You can confirm the tool is installed by running:
 
