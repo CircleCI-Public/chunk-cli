@@ -22,9 +22,10 @@ builds:
       - darwin-x64
       - darwin-arm64
 
-    # Additional flags for bun build --compile
+    # Additional flags passed to bun build (--compile is added automatically by GoReleaser)
     flags:
-      - --compile
+      - --define
+      - '__CHUNK_VERSION__="{{ .Version }}"'
 
     # Environment variables for the build
     env:
