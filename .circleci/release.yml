@@ -29,9 +29,7 @@ jobs:
       - checkout
       - install-deps
 
-      - run: task tag
-      - run: goreleaser release --clean
-      - run: task nur:publish
+      - run: task release
 
 workflows:
   release:
