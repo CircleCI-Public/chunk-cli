@@ -79,6 +79,7 @@ export type ResolvedConfig = {
 const DEFAULT_SENTINEL_DIR = join(process.env.TMPDIR ?? "/tmp", "chunk-hook", "sentinels");
 
 const DEFAULT_TIMEOUT = 300;
+const DEFAULT_TASK_TIMEOUT = 600;
 
 /** Built-in trigger groups shipped with the CLI. */
 const BUILTIN_TRIGGERS: Record<string, string[]> = {
@@ -147,8 +148,6 @@ function resolveExec(name: string, cfg: ExecConfig): ResolvedExec {
 }
 
 /** Resolve a single task config with defaults. */
-const DEFAULT_TASK_TIMEOUT = 600;
-
 function resolveTask(cfg: TaskConfig): Required<TaskConfig> {
 	return {
 		instructions: cfg.instructions ?? "",
