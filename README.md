@@ -7,6 +7,7 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 - **Pattern Mining** - Discovers top reviewers in your GitHub org and fetches their review comments
 - **AI Analysis** - Uses Claude (Sonnet, Opus, or Haiku) to identify recurring patterns and team standards
 - **Context Generation** - Produces a markdown prompt file ready to use with AI coding agents
+- **Hook Automation** - Wires tests, lint, and AI code review into your agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
 - **Self-Updating** - Built-in upgrade command for binary updates
 
 ## Requirements
@@ -133,6 +134,70 @@ chunk build-prompt --org myorg --repos myrepo --max-comments 50 --output ./promp
 ```
 
 Once generated, place the output file in `.chunk/context/` so AI coding agents (e.g., Claude Code) automatically pick it up as context.
+
+### Hook Automation
+
+`chunk hook` automates test, lint, and code-review tasks by wiring them into your AI coding agent's lifecycle events (Claude Code, Cursor, VS Code Copilot). Hooks fire at the right moments — blocking commits when tests fail, running lint before the agent stops, and triggering an AI review pass at session end.
+
+#### 1. Configure your shell environment
+
+Run once to write `CHUNK_HOOK_*` exports to a dedicated env file and source it from your shell startup files:
+
+```bash
+chunk hook env update --profile tests-lint
+```
+
+Available profiles:
+
+| Profile | What it enables |
+|---------|-----------------|
+| `disable` | All hooks disabled |
+| `enable` | All hooks enabled |
+| `tests-lint` | Tests and lint only |
+| `review` | AI code review only |
+
+Restart your shell (or `source ~/.zprofile`) after running for the first time.
+
+#### 2. Initialize your repository
+
+Run in your project root to scaffold the config files and wire up `.claude/settings.json`:
+
+```bash
+chunk hook repo init
+```
+
+This creates:
+
+| File | Purpose |
+|------|---------|
+| `.chunk/hook/config.yml` | Per-repo hook configuration (commands, timeouts, triggers) |
+| `.chunk/hook/code-review-instructions.md` | AI reviewer prompt |
+| `.chunk/hook/code-review-schema.json` | Structured output schema for the review agent |
+| `.chunk/hook/.gitignore` | Excludes runtime state files from git |
+| `.claude/settings.json` | Hook wiring for Claude Code (and compatible IDEs) |
+
+If any of these files already exist, the template is saved as a `.example` variant alongside the original so nothing is overwritten.
+
+#### 3. Configure your commands
+
+Edit `.chunk/hook/config.yml` to set the test and lint commands for your repo:
+
+```yaml
+execs:
+  tests:
+    command: "go test ./..."   # your test command
+    fileExt: ".go"             # skip if no matching files changed
+  lint:
+    command: "golangci-lint run"
+    timeout: 60
+```
+
+#### Other hook commands
+
+```bash
+chunk hook env update --profile <name>   # Update shell environment profile
+chunk hook repo init --force             # Re-scaffold, overwriting existing files
+```
 
 ### Other Commands
 
