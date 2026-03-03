@@ -202,8 +202,9 @@ By default, sync evaluates all specs and combines non-pass results into a single
 giving the agent a complete picture of everything that needs attention in one round-trip.
 With `--bail`, sync stops at the first non-pass spec and blocks immediately.
 
-All flags (`--on`, `--trigger`, `--matcher`, `--limit`, `--staged`, `--always`, `--instructions`,
-`--schema`, `--on-fail`, `--bail`) are parsed once and passed through to all specs.
+All flags (`--on`, `--trigger`, `--matcher`, `--limit`, `--staged`, `--always`, `--on-fail`,
+`--bail`) are parsed once and passed through to all specs. Per-task `instructions` and `schema`
+are read from `config.yml` — they cannot be overridden per-spec via CLI flags on `sync check`.
 
 ### `state save`
 

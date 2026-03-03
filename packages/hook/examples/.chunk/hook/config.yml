@@ -18,7 +18,6 @@
 #   check <name>  Deferred check on a saved result (from run --no-check)
 #
 # Task subcommands:
-#   run <name>    One-shot task request (blocks with instructions)
 #   check <name>  Deferred check on a saved task result
 
 # --- Named trigger groups — reusable across execs ---
