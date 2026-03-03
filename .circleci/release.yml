@@ -9,7 +9,7 @@ parameters:
 executors:
   releaser:
     docker:
-      - image: circleci/cli-releaser:0.2.0
+      - image: circleci/cli-releaser:0.3.0
 
 commands:
   install-deps:
