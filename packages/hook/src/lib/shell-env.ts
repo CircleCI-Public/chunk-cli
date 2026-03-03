@@ -18,7 +18,7 @@ import { basename, dirname } from "node:path";
  * Single-quoted strings are fully literal except for the single quote itself,
  * which is handled by ending the string, escaping the quote, and reopening.
  */
-function shellQuote(s: string): string {
+export function shellQuote(s: string): string {
 	return s.replace(/'/g, "'\\''");
 }
 
