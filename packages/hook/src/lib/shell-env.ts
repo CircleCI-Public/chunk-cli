@@ -22,7 +22,6 @@ function shellQuote(s: string): string {
 	return s.replace(/'/g, "'\\''");
 }
 
-
 /** Detect the current operating system. */
 export function detectOS(): "macos" | "linux" {
 	return platform() === "darwin" ? "macos" : "linux";
