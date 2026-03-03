@@ -13,6 +13,15 @@ import { basename, dirname } from "node:path";
 // Platform detection
 // ---------------------------------------------------------------------------
 
+/**
+ * Escape a string for safe embedding inside single quotes in POSIX shell.
+ * Single-quoted strings are fully literal except for the single quote itself,
+ * which is handled by ending the string, escaping the quote, and reopening.
+ */
+function shellQuote(s: string): string {
+	return s.replace(/'/g, "'\\''");
+}
+
 /** Detect the current operating system. */
 export function detectOS(): "macos" | "linux" {
 	return platform() === "darwin" ? "macos" : "linux";
@@ -131,7 +140,7 @@ export function generateEnvContent(opts: EnvContentOptions): string {
 
 	lines.push("");
 	lines.push("# Logging");
-	lines.push(`export CHUNK_HOOK_LOG_DIR="${opts.logDir}"`);
+	lines.push(`export CHUNK_HOOK_LOG_DIR='${shellQuote(opts.logDir)}'`);
 	if (opts.verbose) {
 		lines.push("export CHUNK_HOOK_VERBOSE=1");
 	} else {
@@ -142,7 +151,7 @@ export function generateEnvContent(opts: EnvContentOptions): string {
 	lines.push("# Multi-repo: parent directory for --project name resolution");
 	lines.push("# Set this to the directory containing your repo checkouts.");
 	if (opts.projectRoot) {
-		lines.push(`export CHUNK_HOOK_PROJECT_ROOT="${opts.projectRoot}"`);
+		lines.push(`export CHUNK_HOOK_PROJECT_ROOT='${shellQuote(opts.projectRoot)}'`);
 	} else {
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: this is shell code, not JS template literal
 		lines.push('# export CHUNK_HOOK_PROJECT_ROOT="${HOME}/workspace"');
@@ -225,7 +234,7 @@ const ENV_MARKER = "# chunk-hook env";
  */
 export function ensureLoginSourcing(envFile: string, overrideFiles?: string[]): string[] {
 	const startupFiles = overrideFiles ?? defaultShellStartupFiles();
-	const sourceLine = `if [ -f "${envFile}" ]; then . "${envFile}"; fi`;
+	const sourceLine = `if [ -f '${shellQuote(envFile)}' ]; then . '${shellQuote(envFile)}'; fi`;
 	const updated: string[] = [];
 
 	for (const file of startupFiles) {
