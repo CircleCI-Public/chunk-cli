@@ -14,15 +14,16 @@ commands:
     steps:
       - restore_cache:
           keys:
-            - deps-v1-{{ checksum "bun.lock" }}
-            - deps-v1-
+            - deps-v2-{{ checksum "bun.lock" }}
+            - deps-v2-
       - run:
           name: Install dependencies
           command: bun install --frozen-lockfile
       - save_cache:
-          key: deps-v1-{{ checksum "bun.lock" }}
+          key: deps-v2-{{ checksum "bun.lock" }}
           paths:
             - node_modules
+            - packages/hook/node_modules
 
 jobs:
   lint:
@@ -32,6 +33,13 @@ jobs:
       - checkout
       - install-deps
       - run: bun run lint
+
+  typecheck:
+    executor: releaser
+    resource_class: medium
+    steps:
+      - checkout
+      - install-deps
       - run: bun run typecheck
 
   test:
@@ -44,15 +52,17 @@ jobs:
           name: Run unit tests
           command: bun run test:unit
           no_output_timeout: 90s
+      - run:
+          name: Run hook package tests
+          command: bun test packages/hook/src/__tests__/
+          no_output_timeout: 90s
 
 workflows:
   ci:
     jobs:
       - shellcheck/check
       - lint
+      - typecheck
       - test:
           context:
             - chunk-cli-test
-          requires:
-            - shellcheck/check
-            - lint
