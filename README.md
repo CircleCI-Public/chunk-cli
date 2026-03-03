@@ -116,9 +116,9 @@ chunk build-prompt --org myorg --repos myrepo --max-comments 50 --output ./promp
 
 Once generated, place the output file in `.chunk/context/` so AI coding agents (e.g., Claude Code) automatically pick it up as context.
 
-### run
+### task
 
-Triggers a chunk run against a CircleCI pipeline definition.
+Triggers and configures chunk pipeline runs.
 
 #### Prerequisites
 
@@ -141,7 +141,7 @@ export CIRCLECI_TOKEN=your-token-here
 Run the interactive setup wizard from your repository root to create `.chunk/run.json`:
 
 ```bash
-chunk run setup
+chunk task config
 ```
 
 The wizard will prompt you for your org ID, project ID, and at least one named pipeline definition. You can add multiple definitions (e.g. `dev`, `prod`) pointing to different CircleCI pipeline definitions.
@@ -166,16 +166,16 @@ The resulting `.chunk/run.json` looks like:
 
 ```bash
 # Trigger a run using a named definition from .chunk/run.json
-chunk run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
+chunk task run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
 
 # Override the branch
-chunk run --definition dev --prompt "Refactor the payment module" --branch my-feature-branch
+chunk task run --definition dev --prompt "Refactor the payment module" --branch my-feature-branch
 
 # Create a new branch for the run
-chunk run --definition dev --prompt "Add type annotations" --new-branch
+chunk task run --definition dev --prompt "Add type annotations" --new-branch
 
 # Use a raw definition UUID directly (no .chunk/run.json needed)
-chunk run --definition 550e8400-e29b-41d4-a716-446655440000 --prompt "Fix the flaky test"
+chunk task run --definition 550e8400-e29b-41d4-a716-446655440000 --prompt "Fix the flaky test"
 ```
 
 **Options:**
