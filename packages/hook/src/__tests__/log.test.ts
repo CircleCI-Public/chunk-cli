@@ -28,10 +28,12 @@ describe("log", () => {
 		}
 	});
 
-	it("initLog creates a log directory", () => {
+	it("initLog creates a hash-based subdirectory", () => {
 		initLog({ baseDir: testDir });
-		// The directory should exist (contains a hash-based subdirectory)
-		expect(existsSync(testDir)).toBe(true);
+		const dirs = readdirSync(testDir);
+		expect(dirs.length).toBe(1);
+		// Subdirectory name is a 16-char hex hash
+		expect(dirs[0]).toMatch(/^[0-9a-f]{16}$/);
 	});
 
 	it("log writes a timestamped entry to the log file", () => {
