@@ -16,7 +16,7 @@ import {
 } from "../storage/run-config";
 import type { CommandResult } from "../types";
 import { bold, cyan, dim, yellow } from "../ui/colors";
-import { label, printSuccess, printWarning } from "../ui/format";
+import { formatStep, label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput } from "../ui/prompt";
 import { handleError, printError } from "../utils/errors";
 
@@ -28,7 +28,7 @@ export interface RunCommandOptions {
 	pipelineAsTool: boolean;
 }
 
-export async function runRun(options: RunCommandOptions): Promise<CommandResult> {
+export async function runTaskRun(options: RunCommandOptions): Promise<CommandResult> {
 	const definition = options.definition;
 	const token = process.env.CIRCLECI_TOKEN;
 	if (!token) {
@@ -68,14 +68,14 @@ export async function runRun(options: RunCommandOptions): Promise<CommandResult>
 	}
 
 	const branch = options.branch ?? resolved.branch;
-	const W = 18;
+	const labelWidth = 18;
 
 	console.log(`\n${bold("Triggering chunk run")}\n`);
-	console.log(`${label("Definition:", W)} ${definition}`);
-	console.log(`${label("Branch:", W)} ${branch}`);
-	console.log(`${label("New branch:", W)} ${options.newBranch ? "yes" : "no"}`);
-	console.log(`${label("Pipeline as tool:", W)} ${options.pipelineAsTool ? "yes" : "no"}`);
-	console.log(`${label("Prompt:", W)} ${options.prompt}\n`);
+	console.log(`${label("Definition:", labelWidth)} ${definition}`);
+	console.log(`${label("Branch:", labelWidth)} ${branch}`);
+	console.log(`${label("New branch:", labelWidth)} ${options.newBranch ? "yes" : "no"}`);
+	console.log(`${label("Pipeline as tool:", labelWidth)} ${options.pipelineAsTool ? "yes" : "no"}`);
+	console.log(`${label("Prompt:", labelWidth)} ${options.prompt}\n`);
 
 	const request: CircleCIRunRequest = {
 		agent_type: "prompt",
@@ -173,7 +173,7 @@ async function collectDefinition(): Promise<{ name: string; definition: RunDefin
 
 	return { name, definition };
 }
-export async function runRunSetup(): Promise<CommandResult> {
+export async function runTaskConfig(): Promise<CommandResult> {
 	console.log(`\n${bold("Chunk Run Setup")}\n`);
 	console.log(`This wizard creates ${cyan(".chunk/run.json")} in your repository root.`);
 	console.log(
@@ -205,7 +205,7 @@ export async function runRunSetup(): Promise<CommandResult> {
 	}
 
 	// Collect org and project info
-	console.log(`${bold("Step 1/3")}  ${dim("Organization & project")}\n`);
+	console.log(`${formatStep(1, 3, "Organization & project")}\n`);
 	console.log(dim("  Find these in CircleCI → Organization Settings → Overview\n"));
 
 	const orgId = await promptRequiredInput("Organization ID: ");
@@ -228,7 +228,7 @@ export async function runRunSetup(): Promise<CommandResult> {
 	}
 
 	// Collect definitions
-	console.log(`\n${bold("Step 2/3")}  ${dim("Pipeline definitions")}\n`);
+	console.log(`\n${formatStep(2, 3, "Pipeline definitions")}\n`);
 	console.log(
 		dim(
 			"  A definition maps a short name (e.g. dev, prod) to a CircleCI chunk pipeline definition.\n" +
@@ -248,7 +248,7 @@ export async function runRunSetup(): Promise<CommandResult> {
 	} while (await promptConfirm("Add another definition?"));
 
 	// Validate and save
-	console.log(`\n${bold("Step 3/3")}  ${dim("Saving configuration")}\n`);
+	console.log(`\n${formatStep(3, 3, "Saving configuration")}\n`);
 
 	const rawConfig = { org_id: orgId, project_id: projectId, org_type: orgType, definitions };
 

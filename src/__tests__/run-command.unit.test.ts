@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { type RunCommandOptions, runRun } from "../commands/run";
+import { type RunCommandOptions, runTaskRun } from "../commands/run";
 import { saveRunConfig } from "../storage/run-config";
 
 const mockFetch = mock();
@@ -39,7 +39,7 @@ function lastRequestBody() {
 	return JSON.parse(mockFetch.mock.calls[0]![1].body);
 }
 
-describe("runRun", () => {
+describe("runTaskRun", () => {
 	beforeEach(() => {
 		fs.mkdirSync(path.join(testDir, ".git"), { recursive: true });
 		process.chdir(testDir);
@@ -68,7 +68,7 @@ describe("runRun", () => {
 	it("returns exitCode 2 when CIRCLECI_TOKEN is not set", async () => {
 		delete process.env.CIRCLECI_TOKEN;
 
-		const result = await runRun(baseOptions);
+		const result = await runTaskRun(baseOptions);
 
 		expect(result.exitCode).toBe(2);
 		expect(mockFetch).not.toHaveBeenCalled();
@@ -77,14 +77,14 @@ describe("runRun", () => {
 	it("returns exitCode 2 when run.json does not exist", async () => {
 		fs.rmSync(path.join(testDir, ".chunk", "run.json"));
 
-		const result = await runRun(baseOptions);
+		const result = await runTaskRun(baseOptions);
 
 		expect(result.exitCode).toBe(2);
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
 	it("returns exitCode 2 for unknown definition name", async () => {
-		const result = await runRun({ ...baseOptions, definition: "staging" });
+		const result = await runTaskRun({ ...baseOptions, definition: "staging" });
 
 		expect(result.exitCode).toBe(2);
 		expect(mockFetch).not.toHaveBeenCalled();
@@ -93,7 +93,7 @@ describe("runRun", () => {
 	it("resolves a named definition to its definition_id", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runRun({ ...baseOptions, definition: "dev" });
+		await runTaskRun({ ...baseOptions, definition: "dev" });
 
 		expect(lastRequestBody().definition_id).toBe("e2016e4e-0172-47b3-a4ea-a3ee1a592dba");
 	});
@@ -101,7 +101,7 @@ describe("runRun", () => {
 	it("uses the definition's default branch when --branch is not specified", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runRun({ ...baseOptions, definition: "dev" });
+		await runTaskRun({ ...baseOptions, definition: "dev" });
 
 		expect(lastRequestBody().checkout_branch).toBe("develop");
 	});
@@ -109,7 +109,7 @@ describe("runRun", () => {
 	it("overrides branch with --branch flag", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runRun({ ...baseOptions, branch: "feature/my-branch" });
+		await runTaskRun({ ...baseOptions, branch: "feature/my-branch" });
 
 		expect(lastRequestBody().checkout_branch).toBe("feature/my-branch");
 	});
@@ -118,7 +118,7 @@ describe("runRun", () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 		const uuid = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
 
-		await runRun({ ...baseOptions, definition: uuid });
+		await runTaskRun({ ...baseOptions, definition: uuid });
 
 		expect(lastRequestBody().definition_id).toBe(uuid);
 	});
@@ -127,7 +127,7 @@ describe("runRun", () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 		const uuid = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
 
-		await runRun({ ...baseOptions, definition: uuid });
+		await runTaskRun({ ...baseOptions, definition: uuid });
 
 		expect(lastRequestBody().checkout_branch).toBe("main");
 	});
@@ -135,7 +135,7 @@ describe("runRun", () => {
 	it("passes prompt, newBranch, and pipelineAsTool through to the API", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runRun({
+		await runTaskRun({
 			definition: "dev",
 			prompt: "refactor the auth module",
 			newBranch: true,
@@ -151,7 +151,7 @@ describe("runRun", () => {
 	it("includes environment ID from named definition", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runRun({ ...baseOptions, definition: "dev" });
+		await runTaskRun({ ...baseOptions, definition: "dev" });
 
 		expect(lastRequestBody().chunk_environment_id).toBe("b3c27e5f-1234-5678-9abc-def012345678");
 	});
@@ -159,7 +159,7 @@ describe("runRun", () => {
 	it("sends null environment ID when definition has no environment", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runRun({ ...baseOptions, definition: "prod" });
+		await runTaskRun({ ...baseOptions, definition: "prod" });
 
 		expect(lastRequestBody().chunk_environment_id).toBeNull();
 	});
@@ -167,7 +167,7 @@ describe("runRun", () => {
 	it("returns exitCode 0 on success", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		const result = await runRun(baseOptions);
+		const result = await runTaskRun(baseOptions);
 
 		expect(result.exitCode).toBe(0);
 	});
@@ -179,7 +179,7 @@ describe("runRun", () => {
 			text: async () => "Unauthorized",
 		}));
 
-		const result = await runRun(baseOptions);
+		const result = await runTaskRun(baseOptions);
 
 		expect(result.exitCode).toBe(2);
 	});
