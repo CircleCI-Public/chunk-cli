@@ -150,6 +150,12 @@ Examples:
 	task
 		.command("config")
 		.description("Initialize .chunk/run.json for this repository")
+		.addHelpText(
+			"after",
+			`
+Environment Variables:
+  CIRCLECI_TOKEN           Required: CircleCI personal API token`,
+		)
 		.action(async () => process.exit((await runTaskConfig()).exitCode));
 
 	program
