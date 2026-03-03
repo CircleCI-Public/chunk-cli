@@ -17,6 +17,7 @@ import {
 	defaultLogDir,
 	ensureLoginSourcing,
 	generateEnvContent,
+	PROFILES,
 	type Profile,
 	writeEnvFile,
 } from "../lib/shell-env";
@@ -59,8 +60,12 @@ export function buildEnvUpdateOptions(flags: {
 	verbose?: boolean;
 	projectRoot?: string;
 }): EnvUpdateOptions {
+	const profile = (flags.profile ?? "enable") as Profile;
+	if (!PROFILES.includes(profile)) {
+		throw new Error(`Unknown profile: "${profile}". Valid profiles: ${PROFILES.join(", ")}`);
+	}
 	return {
-		profile: (flags.profile ?? "enable") as Profile,
+		profile,
 		envFile: flags.envFile ?? defaultEnvFile(),
 		logDir: flags.logDir ?? defaultLogDir(),
 		verbose: flags.verbose ?? false,

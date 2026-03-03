@@ -82,7 +82,7 @@ function copyTemplateFile(
  */
 export function runRepoInit(opts: RepoInitOptions): CopyResult[] {
 	const targetDir = resolve(opts.targetDir);
-	const projectName = basename(targetDir);
+	const projectName = basename(targetDir).replace(/[^a-zA-Z0-9._-]/g, "_");
 	const results: CopyResult[] = [];
 
 	for (const template of TEMPLATE_FILES) {
