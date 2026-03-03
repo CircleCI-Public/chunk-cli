@@ -308,6 +308,12 @@ describe("env-update", () => {
 			expect(opts.verbose).toBe(true);
 			expect(opts.projectRoot).toBe("/workspace");
 		});
+
+		it("throws on unknown profile", () => {
+			expect(() => buildEnvUpdateOptions({ profile: "foo" })).toThrow(
+				'Unknown profile: "foo"',
+			);
+		});
 	});
 
 	// -----------------------------------------------------------------------
