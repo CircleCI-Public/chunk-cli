@@ -95,7 +95,7 @@ describe("shell-env", () => {
 				verbose: false,
 				envFile: "/tmp/env",
 			});
-			expect(content).toContain('export CHUNK_HOOK_LOG_DIR="/custom/logs"');
+			expect(content).toContain("export CHUNK_HOOK_LOG_DIR='/custom/logs'");
 		});
 
 		it("includes verbose when enabled", () => {
@@ -126,7 +126,7 @@ describe("shell-env", () => {
 				projectRoot: "/home/user/workspace",
 				envFile: "/tmp/env",
 			});
-			expect(content).toContain('export CHUNK_HOOK_PROJECT_ROOT="/home/user/workspace"');
+			expect(content).toContain("export CHUNK_HOOK_PROJECT_ROOT='/home/user/workspace'");
 		});
 
 		it("comments out project root when not set", () => {
@@ -387,7 +387,7 @@ describe("env-update", () => {
 			});
 
 			const content = readFileSync(envFile, "utf-8");
-			expect(content).toContain('export CHUNK_HOOK_PROJECT_ROOT="/home/user/workspace"');
+			expect(content).toContain("export CHUNK_HOOK_PROJECT_ROOT='/home/user/workspace'");
 		});
 	});
 });
