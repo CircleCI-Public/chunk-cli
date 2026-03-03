@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { Command } from "@commander-js/extra-typings";
-import packageJson from "../package.json";
 import { runAuthLogin, runAuthLogout, runAuthStatus } from "./commands/auth";
 import {
 	DEFAULT_ANALYZE_MODEL,
@@ -11,15 +10,10 @@ import {
 import { runConfigSet, runConfigShow } from "./commands/config";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runUpgrade } from "./commands/upgrade";
-import { runVersion } from "./commands/version";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
 const program = new Command();
-program
-	.name("chunk")
-	.version(packageJson.version as string)
-	.description("AI code review CLI")
-	.helpOption("-h, --help");
+program.name("chunk").version(VERSION).description("AI code review CLI").helpOption("-h, --help");
 
 function parsePositiveInt(value: string, _dummyPrevious: unknown): number {
 	const n = parseInt(value, 10);
@@ -126,8 +120,6 @@ Examples:
 		.command("upgrade")
 		.description("Update to the latest version")
 		.action(async () => process.exit((await runUpgrade()).exitCode));
-
-	program.command("version").action(async () => process.exit((await runVersion()).exitCode));
 
 	program.action(() => {
 		program.outputHelp();
