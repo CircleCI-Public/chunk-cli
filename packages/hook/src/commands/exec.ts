@@ -30,6 +30,7 @@ import { log } from "../lib/log";
 import { runCommand } from "../lib/proc";
 import type { SentinelData } from "../lib/sentinel";
 import { readSentinel, removeSentinel, resetBlockCount, writeSentinel } from "../lib/sentinel";
+import { shellQuote } from "../lib/shell-env";
 import { readMarker } from "./scope";
 
 /** Build a name-qualified tag for log messages. */
@@ -144,7 +145,7 @@ async function runCheck(
 }
 
 /**
- * Evaluate a sentinel and emit the check result (self-consuming).
+ * Evaluate a consumed sentinel and emit the check result (self-consuming).
  */
 function emitCheckResult(
 	config: ResolvedConfig,
@@ -436,18 +437,18 @@ async function buildCommand(
 /**
  * Build the `run --no-check` command string for the "missing" block message.
  */
-function buildRunnerCommand(flags: ExecFlags): string {
+export function buildRunnerCommand(flags: ExecFlags): string {
 	const parts = ["chunk hook exec run", flags.name, "--no-check"];
-	if (flags.cmd) parts.push(`--cmd '${flags.cmd}'`);
+	if (flags.cmd) parts.push(`--cmd '${shellQuote(flags.cmd)}'`);
 	if (flags.timeout !== undefined) parts.push(`--timeout ${flags.timeout}`);
-	if (flags.fileExt) parts.push(`--file-ext '${flags.fileExt}'`);
+	if (flags.fileExt) parts.push(`--file-ext '${shellQuote(flags.fileExt)}'`);
 	if (flags.staged) parts.push("--staged");
 	if (flags.always) parts.push("--always");
 	return parts.join(" ");
 }
 
 /** Format a concise failure reason for the agent. */
-function formatFailureReason(
+export function formatFailureReason(
 	name: string,
 	command: string,
 	exitCode: number,

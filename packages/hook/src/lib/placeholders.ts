@@ -19,11 +19,6 @@ import { resolveFieldPath } from "./state";
 
 const TAG = "placeholders";
 
-/**
- * Matches `{{Key}}` patterns including dot-separated paths.
- */
-const PLACEHOLDER_RE = /\{\{([A-Za-z_][A-Za-z0-9_.]*)\}\}/g;
-
 /** Options for placeholder expansion. */
 export type ExpandOptions = {
 	/** Event-namespaced state (from state.ts). */
@@ -50,17 +45,21 @@ export type ExpandOptions = {
  * placeholders are replaced with empty string.
  */
 export async function expandPlaceholders(template: string, opts: ExpandOptions): Promise<string> {
+	// Use a local regex to avoid shared lastIndex state across sequential or concurrent calls.
+	const re = /\{\{([A-Za-z_][A-Za-z0-9_.]*)\}\}/g;
+
 	// Quick check: any placeholders at all?
-	if (!PLACEHOLDER_RE.test(template)) return template;
-	PLACEHOLDER_RE.lastIndex = 0;
+	if (!re.test(template)) return template;
+	re.lastIndex = 0;
 
 	// Collect all unique placeholder keys
 	const placeholders = new Set<string>();
-	let match: RegExpExecArray | null = PLACEHOLDER_RE.exec(template);
+	let match: RegExpExecArray | null = re.exec(template);
 	while (match !== null) {
 		if (match[1]) placeholders.add(match[1]);
-		match = PLACEHOLDER_RE.exec(template);
+		match = re.exec(template);
 	}
+	// re.lastIndex is automatically reset to 0 when exec() returns null
 
 	// Build the replacement map
 	const replacements = new Map<string, string>();
@@ -110,9 +109,8 @@ export async function expandPlaceholders(template: string, opts: ExpandOptions):
 		}
 	}
 
-	// Apply replacements
-	PLACEHOLDER_RE.lastIndex = 0;
-	return template.replace(PLACEHOLDER_RE, (_full, key: string) => {
+	// Apply replacements (re.lastIndex is 0 here after exec() exhausted the loop above)
+	return template.replace(re, (_full, key: string) => {
 		return replacements.get(key) ?? "";
 	});
 }
