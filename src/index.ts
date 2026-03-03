@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { registerHookCommands } from "@chunk/hook";
 import { Command } from "@commander-js/extra-typings";
 import { runAuthLogin, runAuthLogout, runAuthStatus } from "./commands/auth";
 import {
@@ -155,6 +156,12 @@ Examples:
 		.command("upgrade")
 		.description("Update to the latest version")
 		.action(async () => process.exit((await runUpgrade()).exitCode));
+
+	// Hook commands — exec, task, sync, state, scope for AI agent hooks
+	const hook = program
+		.command("hook")
+		.description("Manage AI coding agent hooks (exec, task, sync, state, scope)");
+	registerHookCommands(hook);
 
 	program.action(() => {
 		program.outputHelp();

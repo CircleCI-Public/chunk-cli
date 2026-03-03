@@ -1,0 +1,111 @@
+# .chunk/hook/config.yml — Per-repo configuration for chunk hook.
+#
+# Place this file at `.chunk/hook/config.yml` in your project root.
+# All values are optional — sensible defaults are provided.
+#
+# Environment variable overrides (always win over this file):
+#   CHUNK_HOOK_ENABLE=1              Enable all commands
+#   CHUNK_HOOK_ENABLE_TESTS=1        Enable a specific exec by name
+#   CHUNK_HOOK_ENABLE_REVIEW=1       Enable a specific task by name
+#   CHUNK_HOOK_TIMEOUT_TESTS=120     Override timeout for an exec (seconds)
+#   CHUNK_HOOK_SENTINELS_DIR=/tmp/s  Override result-file directory
+#   CHUNK_HOOK_CONFIG=/path/to.yml   Use a different config file
+#   CHUNK_HOOK_VERBOSE=1             Verbose logging to stderr
+#
+# Exec subcommands:
+#   run <name>    Run command, save result, check → fails on failure
+#                 --no-check: save result, skip the check (deferred)
+#   check <name>  Deferred check on a saved result (from run --no-check)
+#
+# Task subcommands:
+#   check <name>  Deferred check on a saved task result
+
+# --- Named trigger groups — reusable across execs ---
+# Built-in trigger groups (always available, can be overridden):
+#   pre-commit: ["git commit", "git push"]
+#
+# Add custom trigger groups:
+triggers:
+  pre-commit:
+    - "git commit"
+    - "git push"
+  # pre-deploy:
+  #   - "git push"
+  #   - "deploy"
+
+# --- Exec definitions ---
+# Each exec has a name (used as `<name>` in CLI commands) and a config.
+execs:
+  # Full test suite — used on Stop / pre-push for a complete run.
+  tests:
+    # Shell command to run. Supports placeholders:
+    #   {{CHANGED_FILES}}    — Space-separated list of changed file paths
+    #   {{CHANGED_PACKAGES}} — Deduplicated parent directories (Go-style)
+    command: "go test ./..."
+
+    # File extension filter — only consider changes to these files
+    # when deciding whether to skip. Leave empty for all files.
+    fileExt: ".go"
+
+    # When false (default), skip if no files matching fileExt have changed.
+    # Set to true to always run regardless of file changes.
+    always: false
+
+    # Timeout in seconds.
+    timeout: 300
+
+    # Max consecutive check-blocks before auto-allowing. 0 = unlimited (default).
+    # When limit > 0, Stop events follow the same N-block limit as other events.
+    # When limit = 0, Stop events auto-allow after 1 block (infinite-loop prevention).
+    limit: 3
+
+  # Incremental tests — runs only packages with changed .go files.
+  # Use with --staged in hook config for pre-commit (staged-only) checks.
+  tests-changed:
+    # Supported placeholders:
+    #   {{CHANGED_FILES}}    — space-separated list of changed files
+    #   {{CHANGED_PACKAGES}} — space-separated list of changed workspace packages
+    #   {{<State.field>}}    — any dot-path into event-namespaced state
+    command: "go test {{CHANGED_PACKAGES}}"
+    fileExt: ".go"
+    always: false
+    timeout: 300
+    limit: 3
+
+  lint:
+    command: "golangci-lint run"
+    always: false
+    timeout: 60
+    limit: 3
+
+# --- Task definitions ---
+# Each task has a name (used as `<name>` in CLI commands) and a config.
+# Shares flags with exec: --always, --staged, --on, --trigger, --limit.
+# Task-only: --instructions, --schema.
+# Exec-only (not available for task): --cmd, --timeout, --file-ext.
+tasks:
+  review:
+    # Path to the task instructions markdown file (relative to project root).
+    instructions: ".chunk/hook/code-review-instructions.md"
+
+    # Path to a custom result schema file (relative to project root).
+    # If omitted, a built-in default schema is used.
+    schema: ".chunk/hook/code-review-schema.json"
+
+    # When false (default), skip if no uncommitted changes exist.
+    # With --staged, checks only staged changes instead.
+    always: false
+
+    # Max consecutive check-blocks before auto-allowing. Default: 3.
+    # When limit > 0, Stop events follow the same N-block limit as other events.
+    # When limit = 0, Stop events auto-allow after 1 block (infinite-loop prevention).
+    limit: 3
+
+    # Placeholders ({{EventName.field}}) expand automatically in instructions.
+    # Example: {{UserPromptSubmit.prompt}} resolves to the saved user prompt.
+    # Git placeholders ({{CHANGED_FILES}}, {{CHANGED_PACKAGES}}) also available.
+
+# --- Result-file directory ---
+# Where to store result JSON files. Defaults to $TMPDIR/chunk-hook/sentinels/
+# sentinels:
+#   dir: /tmp/chunk-hook/sentinels

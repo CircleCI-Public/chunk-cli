@@ -24,9 +24,6 @@
  *   1 — Infra error (missing instructions, cannot write file, etc.)
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-
 import type { AgentEvent, HookAdapter } from "../lib/adapter";
 import {
 	blockNoCount,
@@ -41,11 +38,9 @@ import { getTask } from "../lib/config";
 import type { Subcommand } from "../lib/env";
 import { hasStagedChanges, hasUncommittedChanges } from "../lib/git";
 import { log } from "../lib/log";
-import { expandPlaceholders } from "../lib/placeholders";
 import type { SentinelData } from "../lib/sentinel";
 import { removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
-import { readState } from "../lib/state";
-import { readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
+import { loadInstructions, readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
 import { readMarker } from "./scope";
 
 /** Build a name-qualified tag for log messages. */
@@ -89,9 +84,8 @@ export async function runTask(
 	// Resolve task config (from YAML or CLI flags)
 	const task = resolveTaskFromFlags(config, flags);
 
-	switch (flags.subcommand) {
-		case "check":
-			return runCheck(t, config, adapter, event, flags, task);
+	if (flags.subcommand === "check") {
+		return runCheck(t, config, adapter, event, flags, task);
 	}
 }
 
@@ -99,8 +93,8 @@ export async function runTask(
 // Resolve task config from flags + YAML
 // ---------------------------------------------------------------------------
 
-function resolveTaskFromFlags(_config: ResolvedConfig, flags: TaskFlags): Required<TaskConfig> {
-	const yamlTask = getTask(_config, flags.name);
+function resolveTaskFromFlags(config: ResolvedConfig, flags: TaskFlags): Required<TaskConfig> {
+	const yamlTask = getTask(config, flags.name);
 	return {
 		instructions: flags.instructions ?? yamlTask?.instructions ?? "",
 		schema: flags.schema ?? yamlTask?.schema ?? "",
@@ -172,7 +166,7 @@ async function emitCheckResult(
 	currentSessionId?: string,
 ): Promise<never> {
 	const result = evaluateSentinel(sentinel, currentSessionId);
-	const limit = flags.limit ?? task.limit;
+	const limit = task.limit;
 
 	// Emit allow/block based on the evaluation
 	switch (result.kind) {
@@ -235,20 +229,6 @@ async function emitCheckResult(
 	}
 }
 
-function resolveInstructionsPath(
-	config: ResolvedConfig,
-	task: Required<TaskConfig>,
-): string | undefined {
-	const raw = task.instructions || undefined;
-	if (!raw) return undefined;
-
-	// Absolute path
-	if (raw.startsWith("/")) return raw;
-
-	// Relative to project dir
-	return join(config.projectDir, raw);
-}
-
 /**
  * Build the block message for the "missing" state.
  *
@@ -261,20 +241,13 @@ async function buildCheckBlockMessage(
 	task: Required<TaskConfig>,
 ): Promise<string> {
 	// Load instructions (best-effort; if missing, fall back to generic prompt)
-	const instructionsPath = resolveInstructionsPath(config, task);
-	let instructions: string | undefined;
-	if (instructionsPath && existsSync(instructionsPath)) {
-		instructions = readFileSync(instructionsPath, "utf-8");
-
-		// Expand placeholders (state keys + git placeholders + triggering event)
-		const state = readState(config.sentinelDir, config.projectDir);
-		instructions = await expandPlaceholders(instructions, {
-			state,
-			projectDir: config.projectDir,
-			staged: flags.staged,
-			event,
-		});
-	}
+	const instructions = await loadInstructions(
+		task.instructions || undefined,
+		config.projectDir,
+		config.sentinelDir,
+		flags.staged,
+		event,
+	);
 
 	// Load schema (custom from config/flag, or built-in default)
 	const schema = resolveTaskSchemaContent(config.projectDir, task.schema);

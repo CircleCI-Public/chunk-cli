@@ -52,8 +52,8 @@ export type SentinelData = {
 /** Compute a deterministic sentinel ID for a project + command combination. */
 export function sentinelId(projectDir: string, name: CommandName): string {
 	const hash = createHash("sha256").update(`${projectDir}:${name}`).digest("hex").slice(0, 16);
-	// Replace slashes with dashes to avoid creating subdirectories
-	const safeName = name.replace(/\//g, "-");
+	// Whitelist to alphanumerics, underscores, and dashes to prevent path traversal
+	const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "-");
 	return `${safeName}-${hash}`;
 }
 

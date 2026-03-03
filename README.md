@@ -279,6 +279,26 @@ chunk config show     # Display current configuration
 chunk upgrade         # Update to latest version
 ```
 
+### Hook Commands
+
+The `chunk hook` subcommand provides configurable quality checks for
+[Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code) — tests, lint, code review,
+and more. See [packages/hook/README.md](packages/hook/README.md) for full documentation.
+
+```bash
+# Configure shell environment (PATH, CHUNK_HOOK_* vars):
+chunk hook env update
+
+# Initialize a repo with hook config templates:
+chunk hook repo init
+
+# Run a named shell command (tests, lint, etc.):
+CHUNK_HOOK_ENABLE=1 echo '{}' | chunk hook exec run tests --cmd "go test ./..."
+
+# Grouped checks (tests + review on the same event):
+chunk hook sync check exec:tests task:review --on pre-commit
+```
+
 ## Configuration
 
 ### Environment Variables

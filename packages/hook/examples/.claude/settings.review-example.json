@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "_comment": "Delegated task with cross-event state: save prompt on submit, review on stop via {{UserPromptSubmit.prompt}}, clean up on exit.",
+  "permissions": {
+    "allow": [
+      "Bash(chunk:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "chunk hook scope deactivate --project __PROJECT__",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "chunk hook state save --project __PROJECT__",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "chunk hook task check review --project __PROJECT__",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "chunk hook scope deactivate --project __PROJECT__",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "chunk hook state clear --project __PROJECT__",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
