@@ -45,7 +45,7 @@ import { expandPlaceholders } from "../lib/placeholders";
 import type { SentinelData } from "../lib/sentinel";
 import { removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
 import { readState } from "../lib/state";
-import { DEFAULT_TASK_SCHEMA, readTaskResult } from "../lib/task-result";
+import { readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
 import { readMarker } from "./scope";
 
 /** Build a name-qualified tag for log messages. */
@@ -122,7 +122,7 @@ async function runCheck(
 	flags: TaskFlags,
 	task: Required<TaskConfig>,
 ): Promise<void> {
-	const limit = flags.limit ?? task.limit;
+	const limit = task.limit;
 	guardStopEvent(t, adapter, event, limit);
 
 	// Trigger matching — only fire for matching commands
@@ -249,14 +249,6 @@ function resolveInstructionsPath(
 	return join(config.projectDir, raw);
 }
 
-/** Resolve the schema path from CLI flags or config. */
-function resolveSchemaPath(config: ResolvedConfig, task: Required<TaskConfig>): string | undefined {
-	const raw = task.schema || undefined;
-	if (!raw) return undefined;
-	if (raw.startsWith("/")) return raw;
-	return join(config.projectDir, raw);
-}
-
 /**
  * Build the block message for the "missing" state.
  *
@@ -285,7 +277,7 @@ async function buildCheckBlockMessage(
 	}
 
 	// Load schema (custom from config/flag, or built-in default)
-	const schema = resolveSchema(config, task);
+	const schema = resolveTaskSchemaContent(config.projectDir, task.schema);
 	const resultPath = sentinelPath(config.sentinelDir, config.projectDir, flags.name);
 
 	const parts: string[] = [
@@ -308,15 +300,4 @@ async function buildCheckBlockMessage(
 	parts.push("Retry after the subagent completes.");
 
 	return parts.join("\n\n");
-}
-
-/**
- * Resolve the result schema string.
- */
-function resolveSchema(config: ResolvedConfig, task: Required<TaskConfig>): string {
-	const schemaPath = resolveSchemaPath(config, task);
-	if (schemaPath && existsSync(schemaPath)) {
-		return readFileSync(schemaPath, "utf-8").trim();
-	}
-	return DEFAULT_TASK_SCHEMA;
 }
