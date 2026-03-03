@@ -163,9 +163,6 @@ Examples:
 		.description("Manage AI coding agent hooks (exec, task, sync, state, scope)");
 	registerHookCommands(hook);
 
-	program.command("version").action(async () => process.exit((await runVersion()).exitCode));
-
-
 	program.action(() => {
 		program.outputHelp();
 		process.exit(0);
