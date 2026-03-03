@@ -9,6 +9,7 @@ import {
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
+import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
@@ -115,6 +116,40 @@ Examples:
 		.command("list")
 		.description("List skills bundled in this binary")
 		.action(() => process.exit(runSkillsList().exitCode));
+
+	const task = program.command("task").description("Trigger and configure chunk pipeline runs");
+
+	task
+		.command("run")
+		.description("Trigger a chunk run against a CircleCI pipeline definition")
+		.addHelpText(
+			"after",
+			`
+Environment Variables:
+  CIRCLECI_TOKEN           Required: CircleCI personal API token
+
+Examples:
+  chunk task run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
+  chunk task run --definition prod --prompt "Refactor the payment module" --branch main --new-branch
+  chunk task run --definition dev --prompt "Add type annotations" --no-pipeline-as-tool
+  chunk task run --definition 550e8400-e29b-41d4-a716-446655440000 --prompt "Fix the flaky test"`,
+		)
+		.requiredOption(
+			"--definition <name>",
+			"Definition name from .chunk/run.json, or a definition UUID",
+		)
+		.requiredOption("--prompt <text>", "Prompt to send to the agent")
+		.option("--branch <branch>", "Branch to check out (overrides definition default)")
+		.option("--new-branch", "Create a new branch for the run", false)
+		.option("--pipeline-as-tool", "Run the pipeline as a tool call", true)
+		.action(async (options) => {
+			process.exit((await runTaskRun(options)).exitCode);
+		});
+
+	task
+		.command("config")
+		.description("Initialize .chunk/run.json for this repository")
+		.action(async () => process.exit((await runTaskConfig()).exitCode));
 
 	program
 		.command("upgrade")
