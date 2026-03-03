@@ -16,12 +16,13 @@
     "release": "bun run scripts/release.ts",
     "test": "bun test src/**/*.unit.test.ts",
     "test:unit": "bun test src/**/*.unit.test.ts",
-    "lint": "biome check src/",
-    "lint:fix": "biome check --fix src/",
-    "format": "biome format --write src/",
+    "lint": "biome check src/ packages/hook/src/",
+    "lint:fix": "biome check --fix src/ packages/hook/src/",
+    "format": "biome format --write src/ packages/hook/src/",
     "typecheck": "bunx tsc --noEmit"
   },
   "private": true,
+  "workspaces": ["packages/hook"],
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",
     "@types/bun": "latest",

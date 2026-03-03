@@ -21,9 +21,10 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@chunk/hook": ["packages/hook/src/index.ts"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "packages/hook/src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

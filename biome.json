@@ -19,6 +19,6 @@
 		"lineWidth": 100
 	},
 	"files": {
-		"includes": ["src/**"]
+		"includes": ["src/**", "packages/hook/src/**"]
 	}
 }
