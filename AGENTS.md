@@ -115,30 +115,6 @@ bun run build
 bun test                                    # All tests
 ```
 
-### Releasing
-```bash
-# 1. Bump version in package.json
-# 2. Build all platform binaries
-bun run build
-
-# 3. Validate everything (no side effects)
-bun run release --dry-run
-
-# 4. Create release (tag + upload to GitHub Releases)
-bun run release
-
-# Or create as draft first for review
-bun run release --draft
-```
-
-The release script (`scripts/release.ts`):
-- Reads version from `package.json`, derives tag `v{version}`
-- Preflight checks: `gh` authenticated, clean working dir, on `main`, tag doesn't exist
-- Validates all 4 platform binaries exist in `dist/` with reasonable sizes
-- Generates SHA-256 checksums → `dist/checksums.txt`
-- Creates annotated git tag, pushes it
-- Runs `gh release create` with binaries, checksums, and release notes
-
 ## Code Conventions
 
 ### TypeScript

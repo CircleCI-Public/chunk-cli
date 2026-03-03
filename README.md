@@ -335,27 +335,6 @@ bun run typecheck      # Type check without building
 bun test               # Run test suite
 ```
 
-### Releasing
-
-Requires `gh` CLI authenticated (`gh auth login`).
-
-```bash
-# 1. Bump version in package.json
-# 2. Build all platform binaries
-bun run build
-
-# 3. Validate (no side effects)
-bun run release --dry-run
-
-# 4. Tag + upload to GitHub Releases
-bun run release
-
-# Or create as draft for review first
-bun run release --draft
-```
-
-The release script validates preflight checks (clean working dir, on `main`, tag available), generates SHA-256 checksums, creates an annotated git tag, and uploads all binaries to GitHub Releases.
-
 ---
 
 See [AGENTS.md](AGENTS.md) for architecture and development documentation.

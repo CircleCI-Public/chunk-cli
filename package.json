@@ -13,7 +13,6 @@
     "build:darwin-x64": "bun build src/index.ts --compile --target=bun-darwin-x64 --loader .md:text --outfile dist/chunk-darwin-x64",
     "build:linux-arm64": "bun build src/index.ts --compile --target=bun-linux-arm64 --loader .md:text --outfile dist/chunk-linux-arm64",
     "build:linux-x64": "bun build src/index.ts --compile --target=bun-linux-x64 --loader .md:text --outfile dist/chunk-linux-x64",
-    "release": "bun run scripts/release.ts",
     "test": "bun test src/**/*.unit.test.ts",
     "test:unit": "bun test src/**/*.unit.test.ts",
     "lint": "biome check src/ packages/hook/src/",
