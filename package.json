@@ -15,6 +15,7 @@
     "build:linux-x64": "bun build src/index.ts --compile --target=bun-linux-x64 --loader .md:text --outfile dist/chunk-linux-x64",
     "test": "bun test src/**/*.unit.test.ts",
     "test:unit": "bun test src/**/*.unit.test.ts",
+    "test:e2e": "bun test src/__tests__/*.e2e.test.ts",
     "lint": "biome check src/ packages/hook/src/",
     "lint:fix": "biome check --fix src/ packages/hook/src/",
     "format": "biome format --write src/ packages/hook/src/",
