@@ -8,9 +8,12 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AgentEvent } from "./adapter";
 import type { CommandName } from "./env";
+import { expandPlaceholders } from "./placeholders";
 import type { SentinelData } from "./sentinel";
 import { sentinelPath } from "./sentinel";
+import { readState } from "./state";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -110,6 +113,45 @@ export function taskResultToSentinel(result: TaskResult, rawJson?: string): Sent
 		details: result.reason ?? "(no reason provided)",
 		rawResult: rawJson,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Instructions loading (shared by task.ts and sync.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve, read, and expand placeholders in a task instructions file.
+ *
+ * Returns `undefined` if the path is absent, the file doesn't exist,
+ * or any error occurs — instructions are always treated as optional.
+ */
+export async function loadInstructions(
+	instructionsRaw: string | undefined,
+	projectDir: string,
+	sentinelDir: string,
+	staged: boolean | undefined,
+	event: AgentEvent,
+): Promise<string | undefined> {
+	if (!instructionsRaw) return undefined;
+
+	const resolved = instructionsRaw.startsWith("/")
+		? instructionsRaw
+		: join(projectDir, instructionsRaw);
+
+	try {
+		if (!existsSync(resolved)) return undefined;
+		let instructions = readFileSync(resolved, "utf-8");
+		const state = readState(sentinelDir, projectDir);
+		instructions = await expandPlaceholders(instructions, {
+			state,
+			projectDir,
+			staged,
+			event,
+		});
+		return instructions;
+	} catch {
+		return undefined;
+	}
 }
 
 // ---------------------------------------------------------------------------

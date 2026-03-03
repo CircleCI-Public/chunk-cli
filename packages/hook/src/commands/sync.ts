@@ -53,11 +53,9 @@ import type { ResolvedConfig } from "../lib/config";
 import { getExec, getTask } from "../lib/config";
 import { detectChanges } from "../lib/git";
 import { log } from "../lib/log";
-import { expandPlaceholders } from "../lib/placeholders";
 import type { SentinelData } from "../lib/sentinel";
 import { readSentinel, removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
-import { readState } from "../lib/state";
-import { readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
+import { loadInstructions, readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
 import { readMarker } from "./scope";
 
 const TAG = "sync";
@@ -523,27 +521,13 @@ async function buildTaskMissingMessage(
 	const resultPath = sentinelPath(config.sentinelDir, config.projectDir, spec.name);
 
 	// Load instructions if available.
-	let instructions = "";
-	const instructionsPath = task.instructions || undefined;
-	if (instructionsPath) {
-		const resolved = instructionsPath.startsWith("/")
-			? instructionsPath
-			: join(config.projectDir, instructionsPath);
-		try {
-			if (existsSync(resolved)) {
-				instructions = readFileSync(resolved, "utf-8");
-				const state = readState(config.sentinelDir, config.projectDir);
-				instructions = await expandPlaceholders(instructions, {
-					state,
-					projectDir: config.projectDir,
-					staged: flags.staged,
-					event,
-				});
-			}
-		} catch {
-			// Ignore — instructions are optional.
-		}
-	}
+	const instructions = await loadInstructions(
+		task.instructions || undefined,
+		config.projectDir,
+		config.sentinelDir,
+		flags.staged,
+		event,
+	);
 
 	// Load schema.
 	const schema = resolveTaskSchemaContent(config.projectDir, task.schema);
