@@ -8,10 +8,11 @@ export class UpgradeError extends Error {
 	}
 }
 
+// Returns the platform suffix used in goreleaser archive names, e.g. "Darwin_arm64" or "Linux_x86_64"
 function detectPlatform(): string {
-	const arch = process.arch === "arm64" ? "arm64" : "x64";
-	const os = process.platform === "darwin" ? "darwin" : "linux";
-	return `${os}-${arch}`;
+	const arch = process.arch === "arm64" ? "arm64" : "x86_64";
+	const os = process.platform === "darwin" ? "Darwin" : "Linux";
+	return `${os}_${arch}`;
 }
 
 async function exec(cmd: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -23,10 +24,12 @@ async function exec(cmd: string[]): Promise<{ stdout: string; stderr: string; ex
 }
 
 function manualFallbackHint(platform: string): string {
+	const archive = `chunk-cli_${platform}.tar.gz`;
 	return (
 		"Manual fallback:\n" +
-		`  gh release download --repo circleci/code-review-cli -p 'chunk-${platform}' -D /tmp\n` +
-		`  install /tmp/chunk-${platform} ~/.local/bin/chunk`
+		`  gh release download --repo CircleCI-Public/chunk-cli -p '${archive}' -D /tmp\n` +
+		`  tar -xzf /tmp/${archive} -C /tmp chunk\n` +
+		`  install /tmp/chunk ~/.local/bin/chunk`
 	);
 }
 
@@ -72,7 +75,7 @@ export async function performUpgrade(): Promise<boolean> {
 		"--exclude-pre-releases",
 		"--exclude-drafts",
 		"--repo",
-		"circleci/code-review-cli",
+		"CircleCI-Public/chunk-cli",
 		"--json",
 		"tagName",
 		"--jq",
@@ -92,21 +95,38 @@ export async function performUpgrade(): Promise<boolean> {
 
 	console.log(dim(`Downloading release with tag ${latestVersion}...`));
 
+	const archive = `chunk-cli_${platform}.tar.gz`;
+	const archivePath = `/tmp/${archive}`;
+	const checksumsPath = "/tmp/chunk-checksums.txt";
 	const tmpPath = `${binPath}.tmp`;
 
 	try {
-		// Download latest binary
-		const downloadResult = await exec([
-			"gh",
-			"release",
-			"download",
-			"--repo",
-			"circleci/code-review-cli",
-			"--pattern",
-			`chunk-${platform}`,
-			"--output",
-			tmpPath,
-			"--clobber",
+		// Download release archive and checksums in parallel
+		const [downloadResult, checksumsResult] = await Promise.all([
+			exec([
+				"gh",
+				"release",
+				"download",
+				"--repo",
+				"CircleCI-Public/chunk-cli",
+				"--pattern",
+				archive,
+				"--output",
+				archivePath,
+				"--clobber",
+			]),
+			exec([
+				"gh",
+				"release",
+				"download",
+				"--repo",
+				"CircleCI-Public/chunk-cli",
+				"--pattern",
+				"checksums.txt",
+				"--output",
+				checksumsPath,
+				"--clobber",
+			]),
 		]);
 
 		if (downloadResult.exitCode !== 0) {
@@ -114,6 +134,41 @@ export async function performUpgrade(): Promise<boolean> {
 				`Download failed: ${downloadResult.stderr}\n\n${manualFallbackHint(platform)}`,
 			);
 		}
+		if (checksumsResult.exitCode !== 0) {
+			throw new UpgradeError(`Failed to download checksums.txt: ${checksumsResult.stderr}`);
+		}
+
+		// Verify checksum
+		const checksums = await Bun.file(checksumsPath).text();
+		await exec(["rm", "-f", checksumsPath]);
+		const line = checksums.split("\n").find((l) => l.includes(archive));
+		const expectedChecksum = line?.split(/\s+/)[0];
+		if (!expectedChecksum) {
+			throw new UpgradeError(`Checksum for ${archive} not found in checksums.txt`);
+		}
+		const hasSha256sum = (await exec(["sh", "-c", "command -v sha256sum"])).exitCode === 0;
+		const hasShasum = (await exec(["sh", "-c", "command -v shasum"])).exitCode === 0;
+		if (!hasSha256sum && !hasShasum) {
+			throw new UpgradeError("Cannot verify checksum: neither sha256sum nor shasum is available.");
+		}
+		const shaCmd = hasSha256sum ? ["sha256sum"] : ["shasum", "-a", "256"];
+		const shaResult = await exec([...shaCmd, archivePath]);
+		const actualChecksum = shaResult.stdout.split(/\s+/)[0];
+		if (actualChecksum !== expectedChecksum) {
+			throw new UpgradeError(
+				`Checksum mismatch for ${archive}\n  expected: ${expectedChecksum}\n  actual:   ${actualChecksum}`,
+			);
+		}
+
+		// Extract the binary from the archive
+		const extractResult = await exec(["tar", "-xzf", archivePath, "-C", "/tmp", "chunk"]);
+		await exec(["rm", "-f", archivePath]);
+		if (extractResult.exitCode !== 0) {
+			throw new UpgradeError(
+				`Extraction failed: ${extractResult.stderr}\n\n${manualFallbackHint(platform)}`,
+			);
+		}
+		await exec(["mv", "/tmp/chunk", tmpPath]);
 
 		// Make executable
 		const chmodResult = await exec(["chmod", "+x", tmpPath]);
@@ -142,8 +197,8 @@ export async function performUpgrade(): Promise<boolean> {
 
 		return true;
 	} catch (error) {
-		// Clean up temp file on error
-		await exec(["rm", "-f", tmpPath]);
+		// Clean up temp files on error
+		await exec(["rm", "-f", tmpPath, archivePath, checksumsPath]);
 		const message = error instanceof Error ? error.message : String(error);
 		throw new UpgradeError(`Upgrade failed: ${message}`);
 	}
