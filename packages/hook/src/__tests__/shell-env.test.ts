@@ -310,9 +310,7 @@ describe("env-update", () => {
 		});
 
 		it("throws on unknown profile", () => {
-			expect(() => buildEnvUpdateOptions({ profile: "foo" })).toThrow(
-				'Unknown profile: "foo"',
-			);
+			expect(() => buildEnvUpdateOptions({ profile: "foo" })).toThrow('Unknown profile: "foo"');
 		});
 	});
 

@@ -17,8 +17,8 @@ import {
 	defaultLogDir,
 	ensureLoginSourcing,
 	generateEnvContent,
-	type Profile,
 	PROFILES,
+	type Profile,
 	writeEnvFile,
 } from "../lib/shell-env";
 
