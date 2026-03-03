@@ -8,8 +8,8 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
-import { runTaskConfig, runTaskRun } from "./commands/run";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
+import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
