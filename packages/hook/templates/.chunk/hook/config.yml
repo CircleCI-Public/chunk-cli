@@ -1,0 +1,54 @@
+# .chunk/hook/config.yml — Per-repo configuration for chunk hook.
+#
+# Place this file at `.chunk/hook/config.yml` in your project root.
+# Edit the `command:` fields below to match your repo's tooling.
+#
+# Environment variable overrides (always win over this file):
+#   CHUNK_HOOK_ENABLE=1              Enable all commands
+#   CHUNK_HOOK_ENABLE_TESTS=1        Enable a specific exec by name
+#   CHUNK_HOOK_ENABLE_REVIEW=1       Enable a specific task by name
+#   CHUNK_HOOK_TIMEOUT_TESTS=120     Override timeout for an exec (seconds)
+#   CHUNK_HOOK_SENTINELS_DIR=/tmp/s  Override result-file directory
+#   CHUNK_HOOK_CONFIG=/path/to.yml   Use a different config file
+#   CHUNK_HOOK_VERBOSE=1             Verbose logging to stderr
+
+# --- Named trigger groups ---
+triggers:
+  pre-commit:
+    - "git commit"
+    - "git push"
+
+# --- Exec definitions ---
+# TODO: Set the `command:` fields to match your repo's test/lint commands.
+execs:
+  tests:
+    command: ""          # e.g. "go test ./...", "npm test", "pytest"
+    fileExt: ""          # e.g. ".go", ".ts", ".py" — skip if no matching files changed
+    always: false
+    timeout: 300
+    limit: 3
+
+  tests-changed:
+    # Supported placeholders:
+    #   {{CHANGED_FILES}}    — space-separated list of changed files
+    #   {{CHANGED_PACKAGES}} — space-separated list of changed workspace packages
+    #   {{<State.field>}}    — any dot-path into event-namespaced state
+    command: ""          # e.g. "go test {{CHANGED_PACKAGES}}", "npm test -- {{CHANGED_FILES}}"
+    fileExt: ""          # e.g. ".go", ".ts", ".py"
+    always: false
+    timeout: 300
+    limit: 3
+
+  lint:
+    command: ""          # e.g. "golangci-lint run", "npm run lint", "ruff check"
+    always: false
+    timeout: 60
+    limit: 3
+
+# --- Task definitions ---
+tasks:
+  review:
+    instructions: ".chunk/hook/code-review-instructions.md"
+    schema: ".chunk/hook/code-review-schema.json"
+    always: false
+    limit: 3
