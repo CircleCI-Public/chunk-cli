@@ -45,6 +45,17 @@ jobs:
           command: bun run test:unit
           no_output_timeout: 90s
 
+  test-e2e:
+    executor: releaser
+    resource_class: medium
+    steps:
+      - checkout
+      - install-deps
+      - run:
+          name: Run e2e tests
+          command: bun run test:e2e
+          no_output_timeout: 120s
+
 workflows:
   ci:
     jobs:
@@ -53,6 +64,10 @@ workflows:
       - test:
           context:
             - chunk-cli-test
+          requires:
+            - shellcheck/check
+            - lint
+      - test-e2e:
           requires:
             - shellcheck/check
             - lint
