@@ -261,13 +261,6 @@ describe("shell-env", () => {
 
 describe("env-update", () => {
 	const testDir = join(tmpdir(), "chunk-hook-test-env-update", String(Date.now()));
-	const saved: Record<string, string | undefined> = {};
-
-	function setEnv(key: string, val: string | undefined) {
-		saved[key] = process.env[key];
-		if (val === undefined) delete process.env[key];
-		else process.env[key] = val;
-	}
 
 	beforeEach(() => {
 		mkdirSync(testDir, { recursive: true });
@@ -275,10 +268,6 @@ describe("env-update", () => {
 
 	afterEach(() => {
 		rmSync(testDir, { recursive: true, force: true });
-		for (const [k, v] of Object.entries(saved)) {
-			if (v === undefined) delete process.env[k];
-			else process.env[k] = v;
-		}
 	});
 
 	// -----------------------------------------------------------------------
