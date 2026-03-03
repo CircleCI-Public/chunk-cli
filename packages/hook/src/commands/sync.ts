@@ -57,7 +57,7 @@ import { expandPlaceholders } from "../lib/placeholders";
 import type { SentinelData } from "../lib/sentinel";
 import { readSentinel, removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
 import { readState } from "../lib/state";
-import { DEFAULT_TASK_SCHEMA, readTaskResult } from "../lib/task-result";
+import { readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
 import { readMarker } from "./scope";
 
 const TAG = "sync";
@@ -546,19 +546,7 @@ async function buildTaskMissingMessage(
 	}
 
 	// Load schema.
-	let schema = DEFAULT_TASK_SCHEMA;
-	if (task.schema) {
-		const schemaPath = task.schema.startsWith("/")
-			? task.schema
-			: join(config.projectDir, task.schema);
-		try {
-			if (existsSync(schemaPath)) {
-				schema = readFileSync(schemaPath, "utf-8");
-			}
-		} catch {
-			// Ignore — use default schema.
-		}
-	}
+	const schema = resolveTaskSchemaContent(config.projectDir, task.schema);
 
 	const parts = [`Task "${spec.name}" has no result. Spawn a subagent to complete the task.`, ""];
 

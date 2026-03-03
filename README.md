@@ -7,6 +7,7 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 - **Pattern Mining** - Discovers top reviewers in your GitHub org and fetches their review comments
 - **AI Analysis** - Uses Claude (Sonnet, Opus, or Haiku) to identify recurring patterns and team standards
 - **Context Generation** - Produces a markdown prompt file ready to use with AI coding agents
+- **Hook Automation** - Wires tests, lint, and AI code review into your agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
 - **Self-Updating** - Built-in upgrade command for binary updates
 
 ## Requirements
@@ -17,14 +18,32 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 
 ## Installation
 
-To install the `chunk` CLI, ensure that `gh` (the Github CLI) is installed and auth is set up,
-then run the following:
+### Flox
 
-```bash
-gh api -H "Accept: application/vnd.github.v3.raw" "/repos/circleci/code-review-cli/contents/install.sh"| bash
+Add to `~/.flox/env/manifest.toml` under `[packages]`:
+
+```toml
+[packages]
+chunk.flake = "github:CircleCI-Public/nur-packages#packages.aarch64-linux.chunk"
 ```
 
-This will check that `~/.local/bin` is in your `$PATH` and will warn you if you need to add it manually.
+Replace `aarch64-linux` with `x86_64-linux` if you're on an x86_64 machine.
+
+### Homebrew
+
+```bash
+brew install CircleCI-Public/circleci/chunk
+```
+
+### Install script
+
+Requires `gh` (the GitHub CLI) installed and authenticated (`gh auth login`):
+
+```bash
+gh api -H "Accept: application/vnd.github.v3.raw" "/repos/CircleCI-Public/chunk-cli/contents/install.sh" | bash
+```
+
+This installs the binary to `~/.local/bin` and will warn you if that directory is not in your `$PATH`.
 
 You can confirm the tool is installed by running:
 
@@ -116,6 +135,141 @@ chunk build-prompt --org myorg --repos myrepo --max-comments 50 --output ./promp
 
 Once generated, place the output file in `.chunk/context/` so AI coding agents (e.g., Claude Code) automatically pick it up as context.
 
+### task
+
+Triggers and configures chunk pipeline runs.
+
+#### Prerequisites
+
+You will need three identifiers from CircleCI before running setup:
+
+| Identifier | Where to find it |
+|------------|-----------------|
+| **Organization ID** | CircleCI app → Organization Settings → Overview |
+| **Project ID** | CircleCI app → Project Settings → Overview |
+| **Definition ID** | CircleCI app → the chunk pipeline definition page (UUID in the URL or settings) |
+
+You will also need a CircleCI personal API token set as `CIRCLECI_TOKEN`:
+
+```bash
+export CIRCLECI_TOKEN=your-token-here
+```
+
+#### Setup
+
+Run the interactive setup wizard from your repository root to create `.chunk/run.json`:
+
+```bash
+chunk task config
+```
+
+The wizard will prompt you for your org ID, project ID, and at least one named pipeline definition. You can add multiple definitions (e.g. `dev`, `prod`) pointing to different CircleCI pipeline definitions.
+
+The resulting `.chunk/run.json` looks like:
+
+```json
+{
+  "org_id": "<circleci-org-uuid>",
+  "project_id": "<circleci-project-uuid>",
+  "org_type": "github",
+  "definitions": {
+    "dev": {
+      "definition_id": "<pipeline-definition-uuid>",
+      "default_branch": "main"
+    }
+  }
+}
+```
+
+#### Usage
+
+```bash
+# Trigger a run using a named definition from .chunk/run.json
+chunk task run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
+
+# Override the branch
+chunk task run --definition dev --prompt "Refactor the payment module" --branch my-feature-branch
+
+# Create a new branch for the run
+chunk task run --definition dev --prompt "Add type annotations" --new-branch
+
+# Use a raw definition UUID directly (no .chunk/run.json needed)
+chunk task run --definition 550e8400-e29b-41d4-a716-446655440000 --prompt "Fix the flaky test"
+```
+
+**Options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--definition <name\|uuid>` | required | Named definition from `.chunk/run.json`, or a raw definition UUID |
+| `--prompt <text>` | required | Prompt to send to the agent |
+| `--branch <branch>` | definition default | Branch to check out |
+| `--new-branch` | `false` | Create a new branch for the run |
+| `--no-pipeline-as-tool` | — | Disable running the pipeline as a tool call |
+
+### Hook Automation
+
+`chunk hook` automates test, lint, and code-review tasks by wiring them into your AI coding agent's lifecycle events (Claude Code, Cursor, VS Code Copilot). Hooks fire at the right moments — blocking commits when tests fail, running lint before the agent stops, and triggering an AI review pass at session end.
+
+#### 1. Configure your shell environment
+
+Run once to write `CHUNK_HOOK_*` exports to a dedicated env file and source it from your shell startup files:
+
+```bash
+chunk hook env update --profile tests-lint
+```
+
+Available profiles:
+
+| Profile | What it enables |
+|---------|-----------------|
+| `disable` | All hooks disabled |
+| `enable` | All hooks enabled |
+| `tests-lint` | Tests and lint only |
+| `review` | AI code review only |
+
+Restart your shell (or `source ~/.zprofile`) after running for the first time.
+
+#### 2. Initialize your repository
+
+Run in your project root to scaffold the config files and wire up `.claude/settings.json`:
+
+```bash
+chunk hook repo init
+```
+
+This creates:
+
+| File | Purpose |
+|------|---------|
+| `.chunk/hook/config.yml` | Per-repo hook configuration (commands, timeouts, triggers) |
+| `.chunk/hook/code-review-instructions.md` | AI reviewer prompt |
+| `.chunk/hook/code-review-schema.json` | Structured output schema for the review agent |
+| `.chunk/hook/.gitignore` | Excludes runtime state files from git |
+| `.claude/settings.json` | Hook wiring for Claude Code (and compatible IDEs) |
+
+If any of these files already exist, the template is saved as a `.example` variant alongside the original so nothing is overwritten.
+
+#### 3. Configure your commands
+
+Edit `.chunk/hook/config.yml` to set the test and lint commands for your repo:
+
+```yaml
+execs:
+  tests:
+    command: "go test ./..."   # your test command
+    fileExt: ".go"             # skip if no matching files changed
+  lint:
+    command: "golangci-lint run"
+    timeout: 60
+```
+
+#### Other hook commands
+
+```bash
+chunk hook env update --profile <name>   # Update shell environment profile
+chunk hook repo init --force             # Re-scaffold, overwriting existing files
+```
 ### Other Commands
 
 ```bash

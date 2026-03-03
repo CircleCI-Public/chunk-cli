@@ -7,6 +7,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { CommandName } from "./env";
 import type { SentinelData } from "./sentinel";
 import { sentinelPath } from "./sentinel";
@@ -109,6 +110,29 @@ export function taskResultToSentinel(result: TaskResult, rawJson?: string): Sent
 		details: result.reason ?? "(no reason provided)",
 		rawResult: rawJson,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Schema resolution (shared by task.ts and sync.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the task result schema content.
+ *
+ * If `schemaRaw` is a path (absolute or project-relative) pointing to an
+ * existing file, its content is returned. Otherwise `DEFAULT_TASK_SCHEMA`
+ * is used as a fallback.
+ */
+export function resolveTaskSchemaContent(
+	projectDir: string,
+	schemaRaw: string | undefined,
+): string {
+	if (!schemaRaw) return DEFAULT_TASK_SCHEMA;
+	const schemaPath = schemaRaw.startsWith("/") ? schemaRaw : join(projectDir, schemaRaw);
+	if (existsSync(schemaPath)) {
+		return readFileSync(schemaPath, "utf-8").trim();
+	}
+	return DEFAULT_TASK_SCHEMA;
 }
 
 // ---------------------------------------------------------------------------

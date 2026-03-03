@@ -70,17 +70,28 @@ export function getChangedPackages(files: string[]): string[] {
 }
 
 /**
+ * Shell-quote a single token for safe inclusion in `sh -c` commands.
+ * Wraps in single quotes and escapes embedded single quotes.
+ */
+function shellQuote(s: string): string {
+	return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
  * Replace `{{CHANGED_FILES}}` and `{{CHANGED_PACKAGES}}` placeholders in a
  * command string with the actual values.
+ *
+ * Each file path and package path is shell-quoted to prevent command
+ * injection from repository-controlled file names containing metacharacters.
  */
 export function substitutePlaceholders(command: string, files: string[]): string {
 	let result = command;
 	if (result.includes("{{CHANGED_FILES}}")) {
-		result = result.replace("{{CHANGED_FILES}}", files.join(" "));
+		result = result.replace("{{CHANGED_FILES}}", files.map(shellQuote).join(" "));
 	}
 	if (result.includes("{{CHANGED_PACKAGES}}")) {
 		const pkgs = getChangedPackages(files);
-		result = result.replace("{{CHANGED_PACKAGES}}", pkgs.join(" "));
+		result = result.replace("{{CHANGED_PACKAGES}}", pkgs.map(shellQuote).join(" "));
 	}
 	return result;
 }

@@ -310,6 +310,34 @@ describe("sentinel", () => {
 				expect(readSentinel(testDir, projectDir, "cmd-b")).toBe(undefined);
 				expect(readCoordination(testDir, projectDir)).toEqual({ results: {} });
 			});
+
+			it("does not consume before delay elapses, consumes after", async () => {
+				writeSentinel(testDir, projectDir, "cmd-a", {
+					status: "pass",
+					startedAt: "2024-01-01T00:00:00Z",
+				});
+
+				const delayMs = 50;
+
+				// First call: all pass, sets readyAt — not yet consumed
+				const first = recordAndTryConsume(testDir, projectDir, "cmd-a", "pass", {
+					consumeDelayMs: delayMs,
+				});
+				expect(first).toBe(false);
+				expect(readCoordination(testDir, projectDir).readyAt).toBeDefined();
+				expect(readSentinel(testDir, projectDir, "cmd-a")).not.toBe(undefined);
+
+				// Wait for delay to elapse
+				await Bun.sleep(delayMs + 10);
+
+				// Second call: delay elapsed — sentinel consumed
+				const second = recordAndTryConsume(testDir, projectDir, "cmd-a", "pass", {
+					consumeDelayMs: delayMs,
+				});
+				expect(second).toBe(true);
+				expect(readSentinel(testDir, projectDir, "cmd-a")).toBe(undefined);
+				expect(readCoordination(testDir, projectDir)).toEqual({ results: {} });
+			});
 		});
 
 		describe("clearCoordinationEntry()", () => {

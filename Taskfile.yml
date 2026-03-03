@@ -1,6 +1,16 @@
 version: '3'
 
 tasks:
+  release:
+    desc: Tag, build, and publish a release (tag → goreleaser → NUR)
+    vars:
+      VERSION: '{{.VERSION | default ""}}'
+    cmds:
+      - task: tag
+        vars: { VERSION: '{{.VERSION}}' }
+      - goreleaser release --clean
+      - CHUNK_TAG=$(cat /tmp/chunk-release-tag) task nur:publish
+
   nur:publish:
     desc: Publish the Nix package to NUR (Nix User Repository)
     vars:
@@ -18,8 +28,8 @@ tasks:
       - cp dist/nix/pkgs/chunk/default.nix {{.NUR_DIR}}/pkgs/chunk/
 
       # Update URLs to point to the release tag
-      - sed -i "s|/v[0-9.]*-next/|/${CIRCLE_TAG}/|g" {{.NUR_DIR}}/pkgs/chunk/default.nix
-      - sed -i "s|/v[0-9.][0-9.]*[0-9]/|/${CIRCLE_TAG}/|g" {{.NUR_DIR}}/pkgs/chunk/default.nix
+      - sed -i "s|/v[0-9.]*-next/|/${CHUNK_TAG}/|g" {{.NUR_DIR}}/pkgs/chunk/default.nix
+      - sed -i "s|/v[0-9.][0-9.]*[0-9]/|/${CHUNK_TAG}/|g" {{.NUR_DIR}}/pkgs/chunk/default.nix
 
       # Calculate and update SHA256 hashes from local archives
       - |
@@ -34,7 +44,7 @@ tasks:
         done
 
       # Update version
-      - sed -i "s|version = \"[^\"]*\"|version = \"${CIRCLE_TAG#v}\"|g" {{.NUR_DIR}}/pkgs/chunk/default.nix
+      - sed -i "s|version = \"[^\"]*\"|version = \"${CHUNK_TAG#v}\"|g" {{.NUR_DIR}}/pkgs/chunk/default.nix
 
       # Copy flake.nix if it doesn't exist
       - |
@@ -45,7 +55,7 @@ tasks:
 
       # Commit and push
       - git -C {{.NUR_DIR}} add pkgs/chunk/default.nix
-      - git -C {{.NUR_DIR}} commit -m "Update chunk to ${CIRCLE_TAG}" || echo "No changes to commit"
+      - git -C {{.NUR_DIR}} commit -m "Update chunk to ${CHUNK_TAG}" || echo "No changes to commit"
       - git -C {{.NUR_DIR}} push https://${GITHUB_TOKEN}@github.com/CircleCI-Public/nur-packages.git main
 
   tag:
@@ -77,3 +87,4 @@ tasks:
         echo "Tagging version: ${TAG}"
         git tag "${TAG}"
         git push origin ${TAG}
+        echo "${TAG}" > /tmp/chunk-release-tag

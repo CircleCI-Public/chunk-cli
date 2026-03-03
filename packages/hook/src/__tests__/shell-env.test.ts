@@ -95,7 +95,7 @@ describe("shell-env", () => {
 				verbose: false,
 				envFile: "/tmp/env",
 			});
-			expect(content).toContain('export CHUNK_HOOK_LOG_DIR="/custom/logs"');
+			expect(content).toContain("export CHUNK_HOOK_LOG_DIR='/custom/logs'");
 		});
 
 		it("includes verbose when enabled", () => {
@@ -126,7 +126,7 @@ describe("shell-env", () => {
 				projectRoot: "/home/user/workspace",
 				envFile: "/tmp/env",
 			});
-			expect(content).toContain('export CHUNK_HOOK_PROJECT_ROOT="/home/user/workspace"');
+			expect(content).toContain("export CHUNK_HOOK_PROJECT_ROOT='/home/user/workspace'");
 		});
 
 		it("comments out project root when not set", () => {
@@ -261,13 +261,6 @@ describe("shell-env", () => {
 
 describe("env-update", () => {
 	const testDir = join(tmpdir(), "chunk-hook-test-env-update", String(Date.now()));
-	const saved: Record<string, string | undefined> = {};
-
-	function setEnv(key: string, val: string | undefined) {
-		saved[key] = process.env[key];
-		if (val === undefined) delete process.env[key];
-		else process.env[key] = val;
-	}
 
 	beforeEach(() => {
 		mkdirSync(testDir, { recursive: true });
@@ -275,10 +268,6 @@ describe("env-update", () => {
 
 	afterEach(() => {
 		rmSync(testDir, { recursive: true, force: true });
-		for (const [k, v] of Object.entries(saved)) {
-			if (v === undefined) delete process.env[k];
-			else process.env[k] = v;
-		}
 	});
 
 	// -----------------------------------------------------------------------
@@ -307,6 +296,10 @@ describe("env-update", () => {
 			expect(opts.logDir).toBe("/custom/logs");
 			expect(opts.verbose).toBe(true);
 			expect(opts.projectRoot).toBe("/workspace");
+		});
+
+		it("throws on unknown profile", () => {
+			expect(() => buildEnvUpdateOptions({ profile: "foo" })).toThrow('Unknown profile: "foo"');
 		});
 	});
 
@@ -387,7 +380,7 @@ describe("env-update", () => {
 			});
 
 			const content = readFileSync(envFile, "utf-8");
-			expect(content).toContain('export CHUNK_HOOK_PROJECT_ROOT="/home/user/workspace"');
+			expect(content).toContain("export CHUNK_HOOK_PROJECT_ROOT='/home/user/workspace'");
 		});
 	});
 });
