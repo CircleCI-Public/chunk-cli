@@ -45,6 +45,28 @@ jobs:
           command: bun run test:unit
           no_output_timeout: 90s
 
+  build-smoke-test:
+    executor: releaser
+    resource_class: medium
+    steps:
+      - checkout
+      - install-deps
+      - run:
+          name: Build linux binary
+          command: bun run build:linux-x64
+      - run:
+          name: Verify skill content is embedded (not a bunfs path)
+          command: |
+            mkdir -p ~/.claude
+            ./dist/chunk-linux-x64 skills install
+            if grep -qF '/$bunfs/' ~/.claude/skills/chunk-review/SKILL.md; then
+              echo "ERROR: SKILL.md contains a bunfs path — --loader .md:text was not applied"
+              cat ~/.claude/skills/chunk-review/SKILL.md
+              exit 1
+            fi
+            echo "OK: skill content embedded correctly"
+            head -5 ~/.claude/skills/chunk-review/SKILL.md
+
 workflows:
   ci:
     jobs:
@@ -53,6 +75,10 @@ workflows:
       - test:
           context:
             - chunk-cli-test
+          requires:
+            - shellcheck/check
+            - lint
+      - build-smoke-test:
           requires:
             - shellcheck/check
             - lint
