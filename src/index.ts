@@ -63,7 +63,7 @@ Examples:
 		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
 		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
 		.option("--since <date>", "Start date YYYY-MM-DD", parseDate, threeMonthsAgo())
-		.option("--output <path>", "Output path for the generated prompt", "./pr-review-prompt.md")
+		.option("--output <path>", "Output path for the generated prompt", "./review-prompt.md")
 		.option("--max-comments <number>", "Max comments per reviewer for analysis", parsePositiveInt)
 		.option("--analyze-model <model>", "Claude model for the analysis step", DEFAULT_ANALYZE_MODEL)
 		.option("--prompt-model <model>", "Claude model for prompt generation", DEFAULT_PROMPT_MODEL)

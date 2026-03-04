@@ -99,7 +99,7 @@ chunk build-prompt --org <org> [options]
 | `--repos <repos>` | all repos in org | Comma-separated list of repo names to include |
 | `--top <n>` | `5` | Number of top reviewers to analyze |
 | `--since <date>` | 3 months ago | Start date in `YYYY-MM-DD` format |
-| `--output <path>` | `./pr-review-prompt.md` | Output path for the generated prompt |
+| `--output <path>` | `./review-prompt.md` | Output path for the generated prompt |
 | `--max-comments <n>` | all | Max comments per reviewer sent for analysis |
 | `--analyze-model <model>` | `claude-sonnet-4-5-20250929` | Claude model for the analysis step |
 | `--prompt-model <model>` | `claude-opus-4-5-20251101` | Claude model for prompt generation |
