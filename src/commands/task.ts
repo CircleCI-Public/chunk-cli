@@ -268,7 +268,7 @@ export async function runTaskConfig(): Promise<CommandResult> {
 			const selectedOrg = await promptSelect<CircleCICollaboration>(
 				"\nSelect your organization:",
 				collaborations,
-				(collab) => `${collab.name} ${dim(`(${collab["vcs-type"]})`)}`,
+				(collab) => collab.name,
 			);
 			orgId = selectedOrg.id;
 			orgType = mapVcsTypeToOrgType(selectedOrg["vcs-type"]);
@@ -277,10 +277,13 @@ export async function runTaskConfig(): Promise<CommandResult> {
 			orgId = await promptRequiredInput("Organization ID: ");
 			orgType = "github";
 		}
-		projectId = await promptRequiredInput("Project ID: ");
+		projectId = await promptRequiredInput("Enter a project ID: ");
 	} else {
-		// Build selection list: projects + "Another project" sentinel
-		const selectionItems: ProjectSelection[] = [...projects, ANOTHER_PROJECT_SENTINEL];
+		// Build selection list sorted alphabetically, plus "Another project" sentinel
+		const sortedProjects = [...projects].sort((a, b) =>
+			`${a.username}/${a.reponame}`.localeCompare(`${b.username}/${b.reponame}`),
+		);
+		const selectionItems: ProjectSelection[] = [...sortedProjects, ANOTHER_PROJECT_SENTINEL];
 
 		const selected = await promptSelect<ProjectSelection>(
 			"\nSelect a project:",
@@ -289,7 +292,7 @@ export async function runTaskConfig(): Promise<CommandResult> {
 				if (item === ANOTHER_PROJECT_SENTINEL) {
 					return "Another project (enter IDs manually)";
 				}
-				return `${item.username}/${item.reponame} ${dim(`(${item.vcs_type})`)}`;
+				return `${item.username}/${item.reponame}`;
 			},
 		);
 
@@ -299,7 +302,7 @@ export async function runTaskConfig(): Promise<CommandResult> {
 				const selectedOrg = await promptSelect<CircleCICollaboration>(
 					"\nSelect your organization:",
 					collaborations,
-					(collab) => `${collab.name} ${dim(`(${collab["vcs-type"]})`)}`,
+					(collab) => collab.name,
 				);
 				orgId = selectedOrg.id;
 				orgType = mapVcsTypeToOrgType(selectedOrg["vcs-type"]);
@@ -307,7 +310,8 @@ export async function runTaskConfig(): Promise<CommandResult> {
 				orgId = await promptRequiredInput("\nOrganization ID: ");
 				orgType = "github";
 			}
-			projectId = await promptRequiredInput("Project ID: ");
+			console.log("");
+			projectId = await promptRequiredInput("Enter a project ID: ");
 		} else {
 			// Resolve UUIDs from selected project
 			const slug = buildProjectSlug(selected.vcs_type, selected.username, selected.reponame);

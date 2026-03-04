@@ -17,6 +17,7 @@ export function SelectPrompt({ message, options, onSelect }: SelectPromptProps) 
 			<Text>{message}</Text>
 			{!selected && (
 				<Select
+					visibleOptionCount={10}
 					options={options}
 					onChange={(value) => {
 						setSelected(true);
