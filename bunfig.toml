@@ -1,2 +1,5 @@
 [define]
 VERSION = '"dev"'
+
+[loader]
+".md" = "text"
