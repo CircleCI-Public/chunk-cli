@@ -35,22 +35,6 @@ Replace `aarch64-linux` with `x86_64-linux` if you're on an x86_64 machine.
 brew install CircleCI-Public/circleci/chunk
 ```
 
-### Install script
-
-Requires `gh` (the GitHub CLI) installed and authenticated (`gh auth login`):
-
-```bash
-gh api -H "Accept: application/vnd.github.v3.raw" "/repos/CircleCI-Public/chunk-cli/contents/install.sh" | bash
-```
-
-This installs the binary to `~/.local/bin` and will warn you if that directory is not in your `$PATH`.
-
-You can confirm the tool is installed by running:
-
-```bash
-chunk --version
-```
-
 ### Building a local development version
 
 To build and install from source:
