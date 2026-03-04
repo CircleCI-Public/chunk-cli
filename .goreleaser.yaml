@@ -24,6 +24,8 @@ builds:
     # Additional flags for bun build --compile
     flags:
       - --compile
+      - --loader
+      - .md:text
       - --define
       - VERSION="{{ .Version }}"
 
