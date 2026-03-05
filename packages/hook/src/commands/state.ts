@@ -13,6 +13,7 @@
  *
  * Subcommands:
  *   - `save`    — Read event input from stdin and save under event name.
+ *   - `append`  — Append event input as a new entry (records HEAD SHA per entry).
  *   - `load`    — Load a field from state and write to stdout.
  *   - `clear`   — Clear all saved state for the project.
  *
@@ -27,14 +28,15 @@
 
 import type { AgentEvent, HookAdapter } from "../lib/adapter";
 import type { ResolvedConfig } from "../lib/config";
+import { computeFingerprint, getHeadSha } from "../lib/git";
 import { log } from "../lib/log";
-import { clearState, loadField, readState, saveEvent } from "../lib/state";
+import { appendEvent, clearState, loadField, readState, saveEvent } from "../lib/state";
 
 const TAG = "state";
 
 /** CLI flags parsed from argv for the state command. */
 export type StateFlags = {
-	subcommand: "save" | "load" | "clear";
+	subcommand: "save" | "append" | "load" | "clear";
 	/** Field path for `load` subcommand (e.g., `UserPromptSubmit.prompt`). */
 	field?: string;
 };
@@ -47,17 +49,20 @@ export type StateFlags = {
  * @param event   Agent event from stdin (used by `save`).
  * @param flags   CLI flags from argv.
  */
-export function runState(
+export async function runState(
 	config: ResolvedConfig,
 	adapter: HookAdapter,
 	event: AgentEvent,
 	flags: StateFlags,
-): void {
+): Promise<void> {
 	log(TAG, `subcommand=${flags.subcommand}`);
 
 	switch (flags.subcommand) {
 		case "save":
-			handleSave(config, adapter, event);
+			await handleSave(config, adapter, event);
+			break;
+		case "append":
+			await handleAppend(config, adapter, event);
 			break;
 		case "load":
 			handleLoad(config, flags);
@@ -69,18 +74,68 @@ export function runState(
 }
 
 // ---------------------------------------------------------------------------
-// save — store event input under its event name
+// save — clear + single-entry append (records HEAD + fingerprint like append)
 // ---------------------------------------------------------------------------
 
-function handleSave(config: ResolvedConfig, adapter: HookAdapter, event: AgentEvent): void {
+async function handleSave(
+	config: ResolvedConfig,
+	adapter: HookAdapter,
+	event: AgentEvent,
+): Promise<void> {
 	const key = adapter.stateKey(event);
 	if (!key) {
 		log(TAG, "No state key for event, nothing to save");
 		return;
 	}
 
-	saveEvent(config.sentinelDir, config.projectDir, key, event.raw);
+	const [head, fingerprint] = await Promise.all([
+		getHeadSha(config.projectDir),
+		computeFingerprint({ cwd: config.projectDir }),
+	]);
+	const data: Record<string, unknown> = { ...event.raw };
+	if (head) {
+		data.head = head;
+	}
+	if (fingerprint) {
+		data.fingerprint = fingerprint;
+	}
+
+	saveEvent(config.sentinelDir, config.projectDir, key, data);
 	log(TAG, `Saved event: ${key}`);
+}
+
+// ---------------------------------------------------------------------------
+// append — accumulate event entries with per-entry HEAD + fingerprint
+// ---------------------------------------------------------------------------
+
+async function handleAppend(
+	config: ResolvedConfig,
+	adapter: HookAdapter,
+	event: AgentEvent,
+): Promise<void> {
+	const key = adapter.stateKey(event);
+	if (!key) {
+		log(TAG, "No state key for event, nothing to append");
+		return;
+	}
+
+	// Each append records the current HEAD SHA and a composite fingerprint
+	// (HEAD + working tree diff). The first entry's fingerprint serves as
+	// the session baseline for change detection.
+	const [head, fingerprint] = await Promise.all([
+		getHeadSha(config.projectDir),
+		computeFingerprint({ cwd: config.projectDir }),
+	]);
+	const data: Record<string, unknown> = { ...event.raw };
+	if (head) {
+		data.head = head;
+	}
+	if (fingerprint) {
+		data.fingerprint = fingerprint;
+	}
+
+	appendEvent(config.sentinelDir, config.projectDir, key, data);
+	log(TAG, `Appended event: ${key}`);
 }
 
 // ---------------------------------------------------------------------------

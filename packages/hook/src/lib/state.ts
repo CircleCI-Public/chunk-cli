@@ -2,8 +2,17 @@
  * Per-project state management — event-namespaced.
  *
  * State is a nested JSON object persisted alongside sentinels that enables
- * cross-event data sharing. Structure:
- * `{ "UserPromptSubmit": { "prompt": "...", ... }, "Stop": { ... } }`
+ * cross-event data sharing. Each event stores an `__entries` array:
+ * ```
+ * {
+ *   "UserPromptSubmit": { "__entries": [{ "prompt": "...", "head": "abc123" }, ...] },
+ *   "Stop": { "__entries": [{ ... }] }
+ * }
+ * ```
+ *
+ * Templating uses array-index access: `{{UserPromptSubmit[0].prompt}}` for
+ * the first entry. Plain dot access `{{UserPromptSubmit.prompt}}` is sugar
+ * for `{{UserPromptSubmit[0].prompt}}` (first entry).
  */
 
 import { createHash } from "node:crypto";
@@ -12,7 +21,7 @@ import { join } from "node:path";
 
 import { ensureSentinelDir } from "./sentinel";
 
-/** The top-level state shape: event name → event data. */
+/** The top-level state shape: event name → event data with __entries. */
 export type State = Record<string, Record<string, unknown>>;
 
 /** Compute a deterministic state file name for a project. */
@@ -45,9 +54,19 @@ export function readState(sentinelDir: string, projectDir: string): State {
 	}
 }
 
+/** Write the full state object to disk. */
+function writeState(sentinelDir: string, projectDir: string, state: State): void {
+	ensureSentinelDir(sentinelDir);
+	const path = statePath(sentinelDir, projectDir);
+	writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+}
+
 /**
- * Save event input under its event name.
- * Saving the same event again overwrites that event's data entirely.
+ * Save event input under its event name (clear + single-entry append).
+ *
+ * Replaces all existing entries for the event with a single entry
+ * containing `data`. The resulting shape is `{ __entries: [data] }` —
+ * consistent with `appendEvent` so all events have the same structure.
  */
 export function saveEvent(
 	sentinelDir: string,
@@ -55,16 +74,69 @@ export function saveEvent(
 	eventName: string,
 	data: Record<string, unknown>,
 ): void {
-	ensureSentinelDir(sentinelDir);
 	const existing = readState(sentinelDir, projectDir);
-	existing[eventName] = data;
-	const path = statePath(sentinelDir, projectDir);
-	writeFileSync(path, `${JSON.stringify(existing, null, 2)}\n`, "utf-8");
+	existing[eventName] = { __entries: [data] };
+	writeState(sentinelDir, projectDir, existing);
 }
 
 /**
- * Load a field from state using dot notation.
- * Supports `EventName.field` and deeper paths.
+ * Append event input under its event name, preserving previous entries.
+ *
+ * Each call pushes a new entry onto the `__entries` array. Consecutive
+ * duplicate entries (same `prompt` value) are deduplicated.
+ */
+export function appendEvent(
+	sentinelDir: string,
+	projectDir: string,
+	eventName: string,
+	data: Record<string, unknown>,
+): void {
+	const existing = readState(sentinelDir, projectDir);
+	const prev = existing[eventName] ?? {};
+	const entries = Array.isArray(prev.__entries)
+		? (prev.__entries as Record<string, unknown>[])
+		: [];
+
+	// Deduplicate: skip if the latest entry has the same prompt value.
+	if (entries.length > 0) {
+		const last = entries[entries.length - 1];
+		if (last?.prompt === data.prompt) return;
+	}
+
+	entries.push(data);
+
+	existing[eventName] = { __entries: entries };
+	writeState(sentinelDir, projectDir, existing);
+}
+
+/**
+ * Read the baseline fingerprint from the first entry for an event.
+ *
+ * Returns the `fingerprint` field of the first `__entries` element, or
+ * undefined if no entries exist or the first entry has no `fingerprint`.
+ * The fingerprint is a composite hash of HEAD + working tree diff,
+ * capturing the full repo state at the time of the first save/append.
+ */
+export function getBaselineFingerprint(
+	sentinelDir: string,
+	projectDir: string,
+	eventName: string,
+): string | undefined {
+	const state = readState(sentinelDir, projectDir);
+	const event = state[eventName];
+	if (!event) return undefined;
+	const entries = Array.isArray(event.__entries)
+		? (event.__entries as Record<string, unknown>[])
+		: [];
+	const first = entries[0];
+	if (!first) return undefined;
+	const fp = first.fingerprint;
+	return typeof fp === "string" && fp.length > 0 ? fp : undefined;
+}
+
+/**
+ * Load a field from state using dot/bracket notation.
+ * Supports `EventName.field`, `EventName[0].field`, and deeper paths.
  */
 export function loadField(sentinelDir: string, projectDir: string, field: string): unknown {
 	const state = readState(sentinelDir, projectDir);
@@ -78,17 +150,83 @@ export function clearState(sentinelDir: string, projectDir: string): void {
 }
 
 /**
- * Resolve a dot-separated field path against the state object.
- * Example: `"UserPromptSubmit.prompt"` → `state.UserPromptSubmit.prompt`
+ * Resolve a field path against the state object.
+ *
+ * Supports dot notation and bracket-index notation:
+ *   - `"UserPromptSubmit[0].prompt"` → `state.UserPromptSubmit.__entries[0].prompt`
+ *   - `"UserPromptSubmit.prompt"`    → sugar for `UserPromptSubmit[0].prompt`
+ *
+ * When the first step after the event name lands on an object with an
+ * `__entries` array and the next segment is NOT `__entries`, the path
+ * is transparently redirected through `__entries[0]` (syntactic sugar).
  */
 export function resolveFieldPath(state: State, path: string): unknown {
-	const parts = path.split(".");
+	const segments = parsePath(path);
 	let current: unknown = state;
-	for (const part of parts) {
+	for (const seg of segments) {
 		if (current === null || current === undefined || typeof current !== "object") {
 			return undefined;
 		}
-		current = (current as Record<string, unknown>)[part];
+		if (typeof seg === "number") {
+			// Array index access — also handles __entries sugar for bracket notation
+			if (Array.isArray(current)) {
+				current = current[seg];
+			} else {
+				const obj = current as Record<string, unknown>;
+				if (Array.isArray(obj.__entries)) {
+					current = (obj.__entries as unknown[])[seg];
+				} else {
+					return undefined;
+				}
+			}
+		} else {
+			const obj = current as Record<string, unknown>;
+			// Syntactic sugar: if the object has __entries and the key
+			// isn't "__entries" itself, redirect through __entries[0].
+			if (
+				Array.isArray(obj.__entries) &&
+				seg !== "__entries" &&
+				!(seg in obj && seg !== "__entries")
+			) {
+				const first = (obj.__entries as unknown[])[0];
+				if (first === null || first === undefined || typeof first !== "object") {
+					return undefined;
+				}
+				current = (first as Record<string, unknown>)[seg];
+			} else {
+				current = obj[seg];
+			}
+		}
 	}
 	return current;
+}
+
+/**
+ * Parse a field path into segments.
+ * `"Event[0].field.sub"` → `["Event", 0, "field", "sub"]`
+ * `"Event.field"` → `["Event", "field"]`
+ */
+function parsePath(path: string): (string | number)[] {
+	const segments: (string | number)[] = [];
+	let i = 0;
+	while (i < path.length) {
+		if (path[i] === "[") {
+			// Parse bracket index
+			const close = path.indexOf("]", i);
+			if (close === -1) break;
+			const idx = Number.parseInt(path.slice(i + 1, close), 10);
+			if (!Number.isNaN(idx)) segments.push(idx);
+			i = close + 1;
+			if (i < path.length && path[i] === ".") i++; // skip trailing dot
+		} else if (path[i] === ".") {
+			i++; // skip leading dot
+		} else {
+			// Parse key segment until . or [
+			let end = i;
+			while (end < path.length && path[end] !== "." && path[end] !== "[") end++;
+			segments.push(path.slice(i, end));
+			i = end;
+		}
+	}
+	return segments;
 }

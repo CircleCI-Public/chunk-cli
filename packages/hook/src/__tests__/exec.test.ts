@@ -134,6 +134,7 @@ describe("runExec() check subcommand", () => {
 	let exitSpy: ReturnType<typeof spyOn>;
 	let stderrSpy: ReturnType<typeof spyOn>;
 	let tmpDir: string;
+	let savedVerbose: string | undefined;
 	const ExitError = class extends Error {};
 
 	/** Return the block message (last stderr write before process.exit). */
@@ -149,6 +150,9 @@ describe("runExec() check subcommand", () => {
 		});
 		stderrSpy = spyOn(process.stderr, "write").mockImplementation(() => true);
 		process.env.CHUNK_HOOK_CONSUME_DELAY_MS = "0";
+		// Suppress log-to-stderr so only adapter.block() output lands in the spy.
+		savedVerbose = process.env.CHUNK_HOOK_VERBOSE;
+		delete process.env.CHUNK_HOOK_VERBOSE;
 	});
 
 	afterEach(() => {
@@ -156,6 +160,7 @@ describe("runExec() check subcommand", () => {
 		stderrSpy.mockRestore();
 		rmSync(tmpDir, { recursive: true, force: true });
 		delete process.env.CHUNK_HOOK_CONSUME_DELAY_MS;
+		if (savedVerbose !== undefined) process.env.CHUNK_HOOK_VERBOSE = savedVerbose;
 	});
 
 	it("allows (exit 0) when sentinel shows pass", async () => {

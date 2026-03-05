@@ -27,28 +27,45 @@ export type SentinelCheckResult =
 /**
  * Evaluate a consumed sentinel and return a structured result.
  *
- * When `currentSessionId` is provided, sentinels that carry a different
- * `sessionId` are treated as stale (returned as `"missing"`). This
- * prevents results from a previous session from leaking into the current
- * one — for example, a passing test sentinel left over from yesterday
- * should not auto-allow today's session. Sentinels without a `sessionId`
- * field (written by older versions) are treated as current to avoid
- * breaking upgrades.
+ * Staleness checks (applied in order):
+ *
+ * 1. **Session-aware:** When `currentSessionId` is provided, the sentinel must
+ *    carry a matching `sessionId` — otherwise it is treated as stale (`"missing"`).
+ *
+ * 2. **Content-aware:** When `currentContentHash` is provided, sentinels must
+ *    also carry a matching `contentHash` — otherwise they are treated as stale.
+ *    This prevents bait-and-switch: an agent cannot run tests on clean code,
+ *    then modify files and commit with the stale passing sentinel. Sentinels
+ *    without a `contentHash` are also rejected.
  */
 export function evaluateSentinel(
 	sentinel: SentinelData | undefined,
 	currentSessionId?: string,
+	currentContentHash?: string,
 ): SentinelCheckResult {
 	if (!sentinel) return { kind: "missing" };
 
-	// Session-aware staleness: if the sentinel was written in a different
-	// session, treat it as missing so the command re-runs with fresh context.
-	// Sentinels without a sessionId (pre-upgrade) are allowed through.
-	if (currentSessionId && sentinel.sessionId && sentinel.sessionId !== currentSessionId) {
+	// Session-aware staleness: the sentinel must belong to the current session.
+	// Missing or mismatched sessionId → treat as stale.
+	if (currentSessionId && (!sentinel.sessionId || sentinel.sessionId !== currentSessionId)) {
 		return { kind: "missing" };
 	}
 
+	// Pending sentinels are written before the command finishes, so they
+	// never carry a contentHash — check them before hash validation.
 	if (sentinel.status === "pending") return { kind: "pending" };
+
+	// Content-aware staleness: if the caller provides a content hash,
+	// the sentinel must also have one and it must match. A sentinel
+	// without a contentHash is treated as stale — this closes the
+	// loophole where a hand-crafted sentinel without a hash bypasses
+	// validation entirely. Only applies to terminal states (pass/fail).
+	if (currentContentHash) {
+		if (!sentinel.contentHash || sentinel.contentHash !== currentContentHash) {
+			return { kind: "missing" };
+		}
+	}
+
 	if (sentinel.status === "pass") return { kind: "pass" };
 	return { kind: "fail", sentinel };
 }

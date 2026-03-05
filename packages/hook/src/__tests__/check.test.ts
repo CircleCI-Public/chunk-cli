@@ -95,6 +95,110 @@ describe("evaluateSentinel()", () => {
 		const result = evaluateSentinel(sentinel);
 		expect(result).toEqual({ kind: "fail", sentinel });
 	});
+
+	// -- Session-aware staleness --
+
+	it("returns missing when sessionId does not match", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+			sessionId: "old-session",
+		};
+		expect(evaluateSentinel(sentinel, "current-session")).toEqual({ kind: "missing" });
+	});
+
+	it("returns missing when sentinel has no sessionId but session is active", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+		};
+		expect(evaluateSentinel(sentinel, "current-session")).toEqual({ kind: "missing" });
+	});
+
+	it("returns pass when sessionId matches", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+			sessionId: "same-session",
+		};
+		expect(evaluateSentinel(sentinel, "same-session")).toEqual({ kind: "pass" });
+	});
+
+	it("skips session check when no currentSessionId is provided", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+			sessionId: "any-session",
+		};
+		expect(evaluateSentinel(sentinel)).toEqual({ kind: "pass" });
+	});
+
+	// -- Content-aware staleness --
+
+	it("returns missing when contentHash does not match", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+			contentHash: "hash-old",
+		};
+		expect(evaluateSentinel(sentinel, undefined, "hash-new")).toEqual({ kind: "missing" });
+	});
+
+	it("returns missing when sentinel has no contentHash but caller provides one", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+		};
+		expect(evaluateSentinel(sentinel, undefined, "hash-current")).toEqual({ kind: "missing" });
+	});
+
+	it("returns pass when contentHash matches", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+			contentHash: "hash-match",
+		};
+		expect(evaluateSentinel(sentinel, undefined, "hash-match")).toEqual({ kind: "pass" });
+	});
+
+	it("skips content check when no currentContentHash is provided", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+		};
+		expect(evaluateSentinel(sentinel)).toEqual({ kind: "pass" });
+	});
+
+	// -- Combined session + content checks --
+
+	it("returns missing when session matches but contentHash does not", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+			sessionId: "same",
+			contentHash: "hash-old",
+		};
+		expect(evaluateSentinel(sentinel, "same", "hash-new")).toEqual({ kind: "missing" });
+	});
+
+	it("returns pass when both session and contentHash match", () => {
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: "2024-01-01T00:00:00Z",
+			sessionId: "same",
+			contentHash: "hash-match",
+		};
+		expect(evaluateSentinel(sentinel, "same", "hash-match")).toEqual({ kind: "pass" });
+	});
+
+	it("pending sentinels bypass content check", () => {
+		const sentinel: SentinelData = {
+			status: "pending",
+			startedAt: "2024-01-01T00:00:00Z",
+			sessionId: "same",
+		};
+		expect(evaluateSentinel(sentinel, "same", "any-hash")).toEqual({ kind: "pending" });
+	});
 });
 
 // ---------------------------------------------------------------------------

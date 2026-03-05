@@ -5,6 +5,8 @@
  * (`{{CHANGED_FILES}}`, `{{CHANGED_PACKAGES}}`) and skip-if-no-changes logic.
  */
 
+import { createHash } from "node:crypto";
+
 import { runCommand } from "./proc";
 
 /** Options for `getChangedFiles`. */
@@ -147,4 +149,78 @@ export async function detectChanges(opts: DetectChangesOptions): Promise<boolean
 		return files.length > 0;
 	}
 	return opts.staged ? hasStagedChanges(opts.cwd) : hasUncommittedChanges(opts.cwd);
+}
+
+/**
+ * Get the current HEAD commit SHA.
+ *
+ * Returns the full 40-character hex SHA, or an empty string if git is
+ * unavailable or the directory is not a repository.
+ */
+export async function getHeadSha(cwd?: string): Promise<string> {
+	try {
+		const result = await runCommand({
+			command: "git rev-parse HEAD",
+			cwd: cwd ?? process.cwd(),
+			timeout: 15,
+		});
+		return result.output.trim();
+	} catch {
+		return "";
+	}
+}
+
+/** Options for `computeFingerprint`. */
+export type FingerprintOptions = {
+	/** Working directory (repo root). */
+	cwd: string;
+	/** Only consider staged changes (for pre-commit checks). */
+	staged?: boolean;
+	/** Scope diff to files matching this extension (e.g., `.go`, `.ts`). */
+	fileExt?: string;
+};
+
+/**
+ * Compute a composite fingerprint of the repository state: HEAD + working tree.
+ *
+ * Returns `sha256(HEAD_SHA + "\n" + diff_output)`. This captures both:
+ *   1. The current commit (HEAD changes → fingerprint changes)
+ *   2. Uncommitted modifications (any edit → fingerprint changes)
+ *
+ * When `staged` is true, uses `git diff --cached` instead of `git diff HEAD`.
+ * When `fileExt` is provided, the diff is scoped to files matching that
+ * extension via a pathspec filter.
+ *
+ * Used by:
+ *   - state save/append — records a baseline fingerprint for session change
+ *     detection (no scoping, full-repo diff).
+ *   - exec run/check — records and validates sentinel fingerprints scoped
+ *     to the exec's file extension and staged flag.
+ *
+ * Returns an empty string when git is unavailable (treated as "unknown").
+ */
+export async function computeFingerprint(opts: FingerprintOptions): Promise<string> {
+	const head = await getHeadSha(opts.cwd);
+	if (!head) return "";
+
+	const parts = opts.staged ? ["git", "diff", "--cached"] : ["git", "diff", "HEAD"];
+
+	if (opts.fileExt) {
+		const ext = opts.fileExt.startsWith(".") ? opts.fileExt : `.${opts.fileExt}`;
+		parts.push("--", `'*${ext}'`);
+	}
+
+	let diff: string;
+	try {
+		const result = await runCommand({
+			command: parts.join(" "),
+			cwd: opts.cwd,
+			timeout: 30,
+		});
+		diff = result.output;
+	} catch {
+		return "";
+	}
+
+	return createHash("sha256").update(`${head}\n${diff}`).digest("hex");
 }

@@ -47,6 +47,15 @@ export type SentinelData = {
 	 * (different `sessionId`) are treated as stale and ignored.
 	 */
 	sessionId?: string;
+	/**
+	 * SHA-256 hash of `git diff HEAD` at the time the sentinel was written.
+	 *
+	 * Used for content-aware staleness: if the working tree has changed since
+	 * the sentinel was written (different hash), the sentinel is stale and
+	 * treated as missing. This prevents bait-and-switch attacks where an agent
+	 * runs tests on harmless code, then introduces bugs before committing.
+	 */
+	contentHash?: string;
 };
 
 /** Compute a deterministic sentinel ID for a project + command combination. */

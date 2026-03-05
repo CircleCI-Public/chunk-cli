@@ -25,7 +25,12 @@ import {
 } from "../lib/check";
 import type { ResolvedConfig, ResolvedExec } from "../lib/config";
 import { getExec } from "../lib/config";
-import { detectChanges, getChangedFiles, substitutePlaceholders } from "../lib/git";
+import {
+	computeFingerprint,
+	detectChanges,
+	getChangedFiles,
+	substitutePlaceholders,
+} from "../lib/git";
 import { log } from "../lib/log";
 import { runCommand } from "../lib/proc";
 import type { SentinelData } from "../lib/sentinel";
@@ -141,7 +146,15 @@ async function runCheck(
 	const marker = readMarker(config.projectDir);
 	const currentSessionId = marker?.sessionId;
 
-	emitCheckResult(config, adapter, flags, exec, sentinel, t, currentSessionId);
+	// Content-aware staleness: compute the current fingerprint so the check
+	// can detect if the working tree changed since the sentinel was written.
+	const contentHash = await computeFingerprint({
+		cwd: config.projectDir,
+		staged: flags.staged,
+		fileExt: exec.fileExt,
+	});
+
+	emitCheckResult(config, adapter, flags, exec, sentinel, t, currentSessionId, contentHash);
 }
 
 /**
@@ -155,8 +168,9 @@ function emitCheckResult(
 	sentinel: SentinelData | undefined,
 	t: string,
 	currentSessionId?: string,
+	currentContentHash?: string,
 ): never {
-	const result = evaluateSentinel(sentinel, currentSessionId);
+	const result = evaluateSentinel(sentinel, currentSessionId, currentContentHash);
 	const limit = flags.limit ?? exec.limit;
 	const name = flags.name;
 
@@ -351,7 +365,12 @@ async function executeExec(
 	// stored in sentinels for session-aware staleness detection.
 	const sessionId = readMarker(config.projectDir)?.sessionId;
 
-	// Skip-if-no-changes
+	// Skip-if-no-changes — return a synthetic sentinel without writing it to disk.
+	// Writing a "pass" sentinel here would be dangerous: an agent could run the
+	// command while the repo is clean to farm a passing sentinel, then introduce
+	// bugs and commit — the stale "pass" sentinel would allow the commit.
+	// The check and sync paths have their own independent `detectChanges`
+	// short-circuits, so they never read a skipped sentinel.
 	if (!exec.always) {
 		const hasChanges = await detectChanges({
 			cwd: config.projectDir,
@@ -369,7 +388,6 @@ async function executeExec(
 				project: config.projectDir,
 				sessionId,
 			};
-			writeSentinel(config.sentinelDir, config.projectDir, flags.name, sentinel);
 			return { sentinel };
 		}
 	}
@@ -394,6 +412,16 @@ async function executeExec(
 	const elapsedMs = Date.now() - runStart;
 
 	const status = result.exitCode === 0 ? "pass" : "fail";
+
+	// Compute a fingerprint of the current state so the check path can
+	// detect bait-and-switch: if the working tree changes after the sentinel
+	// is written, the fingerprint will no longer match and the sentinel is stale.
+	const contentHash = await computeFingerprint({
+		cwd: config.projectDir,
+		staged: flags.staged,
+		fileExt: exec.fileExt,
+	});
+
 	const sentinel: SentinelData = {
 		status,
 		startedAt,
@@ -403,6 +431,7 @@ async function executeExec(
 		output: result.output,
 		project: config.projectDir,
 		sessionId,
+		contentHash,
 	};
 	writeSentinel(config.sentinelDir, config.projectDir, flags.name, sentinel);
 	log(t, `Completed: ${status} (exit ${result.exitCode}, ${elapsedMs}ms)`);
