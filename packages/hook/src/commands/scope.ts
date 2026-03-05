@@ -52,7 +52,7 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { log } from "../lib/log";
+import { log, logVerbose } from "../lib/log";
 
 const TAG = "scope";
 
@@ -179,9 +179,6 @@ export function readMarker(projectDir: string): MarkerContent | undefined {
  * ID, the existing marker is preserved (not overwritten). This prevents
  * subagents from clobbering the parent session's scope.
  *
- * **CWD trust:** When `process.cwd()` matches `projectDir`, the scope
- * gate is bypassed and the function returns `true` immediately.
- *
  * @param projectDir - Absolute project root.
  * @param raw - Full stdin JSON (parsed by caller).
  * @param sessionId - Session ID from the hook payload (optional).
@@ -192,18 +189,18 @@ export function activateScope(
 	raw: Record<string, unknown>,
 	sessionId?: string,
 ): boolean {
-	// CWD trust: when process.cwd() matches the project dir, we're in a
-	// single-repo context (CLI mode or single-root workspace) where the
-	// path-match gate is unnecessary.
-	const trusted = process.cwd() === projectDir;
-
 	const match = matchesProject(projectDir, raw);
+	const toolName = raw.tool_name ?? raw.toolName;
+	log(
+		TAG,
+		`activate: tool=${String(toolName ?? "(none)")} match=${match} session=${sessionId ? sessionId.slice(0, 8) : "none"}`,
+	);
+	logVerbose(TAG, `raw payload: ${JSON.stringify(raw)}`);
 
-	// Activation: write the marker when we have a session ID and file paths.
-	// Trusted mode treats "mismatch" as activatable (system paths are benign);
-	// untrusted mode requires an exact "match".
-	// "no-paths" events (Stop, SessionStart) never auto-activate.
-	const shouldActivate = sessionId && (match === "match" || (trusted && match !== "no-paths"));
+	// Activation: write the marker when we have a session ID and file paths
+	// that reference this project.  "no-paths" and "mismatch" events never
+	// auto-activate — only an explicit path match does.
+	const shouldActivate = sessionId && match === "match";
 
 	if (shouldActivate) {
 		// Subagent safety: if a marker already exists with a different session
@@ -215,12 +212,6 @@ export function activateScope(
 		}
 		writeMarker(projectDir, sessionId);
 		log(TAG, `activated ${join(projectDir, MARKER_REL)}`);
-		return true;
-	}
-
-	// Trusted mode: always active even without a marker or file paths.
-	if (trusted) {
-		log(TAG, `cwd matches ${projectDir}, scope trusted (active)`);
 		return true;
 	}
 

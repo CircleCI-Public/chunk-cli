@@ -137,12 +137,17 @@ export function mapHookInputToEvent(input: HookInput): AgentEvent {
 
 /**
  * Extract the session ID from a raw hook payload.
- * Normalizes both snake_case and camelCase variants.
+ *
+ * Normalizes provider-specific field names:
+ * - Claude Code: `session_id` (snake_case)
+ * - VS Code Copilot: `sessionId` (camelCase)
+ * - Cursor: `conversation_id` (stable conversation identifier)
  */
 export function extractSessionId(raw: Record<string, unknown>): string | undefined {
 	return (
 		(typeof raw.session_id === "string" ? raw.session_id : undefined) ??
-		(typeof raw.sessionId === "string" ? (raw.sessionId as string) : undefined)
+		(typeof raw.sessionId === "string" ? (raw.sessionId as string) : undefined) ??
+		(typeof raw.conversation_id === "string" ? (raw.conversation_id as string) : undefined)
 	);
 }
 

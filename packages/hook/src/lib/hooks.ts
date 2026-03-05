@@ -36,6 +36,11 @@ export type HookInput = {
 	toolInput?: Record<string, unknown>;
 	toolUseId?: string;
 	stopHookActive?: boolean;
+	// Cursor-specific fields
+	conversation_id?: string;
+	generation_id?: string;
+	cursor_version?: string;
+	workspace_roots?: string[];
 	[key: string]: unknown;
 };
 

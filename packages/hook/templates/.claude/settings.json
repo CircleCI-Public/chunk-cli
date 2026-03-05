@@ -31,7 +31,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|Shell|run_in_terminal",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
