@@ -1,0 +1,31 @@
+{
+  "eval_name": "eval-exec-commands",
+  "variant": "old_skill",
+  "expectations": [
+    {
+      "text": "Review contains 5 or fewer findings",
+      "passed": true,
+      "evidence": "Found 5 findings"
+    },
+    {
+      "text": "Every finding includes a concrete failure scenario",
+      "passed": true,
+      "evidence": "All findings describe specific failure conditions"
+    },
+    {
+      "text": "No findings are style-only nitpicks",
+      "passed": true,
+      "evidence": "No style-only findings detected"
+    },
+    {
+      "text": "Every finding references a specific file and line number",
+      "passed": true,
+      "evidence": "Found 5 file:line refs for 5 findings"
+    },
+    {
+      "text": "Findings are grounded in review-prompt.md standards",
+      "passed": true,
+      "evidence": "Findings align with review-prompt categories"
+    }
+  ]
+}

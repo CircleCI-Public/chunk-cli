@@ -1,0 +1,32 @@
+{
+  "eval_id": 0,
+  "eval_name": "state-scope-commands",
+  "prompt": "Review the state and scope commands changes",
+  "assertions": [
+    {
+      "id": "a1",
+      "text": "Review contains 5 or fewer findings",
+      "type": "count_check"
+    },
+    {
+      "id": "a2",
+      "text": "Every finding includes a concrete failure scenario or specific consequence",
+      "type": "quality_check"
+    },
+    {
+      "id": "a3",
+      "text": "No findings are style-only nitpicks (naming, formatting, comment style)",
+      "type": "quality_check"
+    },
+    {
+      "id": "a4",
+      "text": "Every finding references a specific file and line number",
+      "type": "format_check"
+    },
+    {
+      "id": "a5",
+      "text": "Findings are grounded in the review-prompt.md standards, not invented criteria",
+      "type": "quality_check"
+    }
+  ]
+}

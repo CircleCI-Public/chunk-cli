@@ -1,0 +1,44 @@
+{
+  "skill_name": "chunk-review-v3",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Review the state and scope commands changes",
+      "expected_output": "A focused review with at most 5 high-signal findings, each with concrete failure scenarios",
+      "files": [],
+      "assertions": [
+        {"id": "a1", "text": "Review contains 5 or fewer findings", "type": "count_check"},
+        {"id": "a2", "text": "Every finding includes a concrete failure scenario or specific consequence", "type": "quality_check"},
+        {"id": "a3", "text": "No findings are style-only nitpicks", "type": "quality_check"},
+        {"id": "a4", "text": "Every finding references a specific file and line number", "type": "format_check"},
+        {"id": "a5", "text": "Findings are grounded in review-prompt.md standards", "type": "quality_check"}
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Review the exec commands and related changes",
+      "expected_output": "A focused review with at most 5 high-signal findings, each with concrete failure scenarios",
+      "files": [],
+      "assertions": [
+        {"id": "a1", "text": "Review contains 5 or fewer findings", "type": "count_check"},
+        {"id": "a2", "text": "Every finding includes a concrete failure scenario or specific consequence", "type": "quality_check"},
+        {"id": "a3", "text": "No findings are style-only nitpicks", "type": "quality_check"},
+        {"id": "a4", "text": "Every finding references a specific file and line number", "type": "format_check"},
+        {"id": "a5", "text": "Findings are grounded in review-prompt.md standards", "type": "quality_check"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review the hook entry point and integration tests",
+      "expected_output": "A focused review with at most 5 high-signal findings, each with concrete failure scenarios",
+      "files": [],
+      "assertions": [
+        {"id": "a1", "text": "Review contains 5 or fewer findings", "type": "count_check"},
+        {"id": "a2", "text": "Every finding includes a concrete failure scenario or specific consequence", "type": "quality_check"},
+        {"id": "a3", "text": "No findings are style-only nitpicks", "type": "quality_check"},
+        {"id": "a4", "text": "Every finding references a specific file and line number", "type": "format_check"},
+        {"id": "a5", "text": "Findings are grounded in review-prompt.md standards", "type": "quality_check"}
+      ]
+    }
+  ]
+}

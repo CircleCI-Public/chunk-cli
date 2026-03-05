@@ -1,0 +1,31 @@
+{
+  "eval_name": "eval-hook-entrypoint",
+  "variant": "old_skill",
+  "expectations": [
+    {
+      "text": "Review contains 5 or fewer findings",
+      "passed": true,
+      "evidence": "Found 4 findings"
+    },
+    {
+      "text": "Every finding includes a concrete failure scenario",
+      "passed": true,
+      "evidence": "All findings describe specific failure conditions"
+    },
+    {
+      "text": "No findings are style-only nitpicks",
+      "passed": false,
+      "evidence": "Finding #3 about diagnostic scaffolding in tests is a style/cleanup nitpick, not a real issue"
+    },
+    {
+      "text": "Every finding references a specific file and line number",
+      "passed": true,
+      "evidence": "4 file:line refs for 4 findings"
+    },
+    {
+      "text": "Findings are grounded in review-prompt.md standards",
+      "passed": true,
+      "evidence": "Findings align with testing standards and code organization categories"
+    }
+  ]
+}
