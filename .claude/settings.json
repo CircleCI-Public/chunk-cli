@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "chunk hook state save --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
+            "command": "chunk hook state append --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
             "timeout": 5
           }
         ]

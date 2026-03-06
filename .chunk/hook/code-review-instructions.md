@@ -8,7 +8,7 @@ Silence is better than incorrect or low-value feedback.
 </critical_constraint>
 
 <task_context>
-The agent was implementing:
+The agent was asked:
 {{UserPromptSubmit.prompt}}
 </task_context>
 

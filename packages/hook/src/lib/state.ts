@@ -110,6 +110,31 @@ export function appendEvent(
 }
 
 /**
+ * Read the baseline fingerprint from the first entry for an event.
+ *
+ * Returns the `fingerprint` field of the first `__entries` element, or
+ * undefined if no entries exist or the first entry has no `fingerprint`.
+ * The fingerprint is a composite hash of HEAD + working tree diff,
+ * capturing the full repo state at the time of the first save/append.
+ */
+export function getBaselineFingerprint(
+	sentinelDir: string,
+	projectDir: string,
+	eventName: string,
+): string | undefined {
+	const state = readState(sentinelDir, projectDir);
+	const event = state[eventName];
+	if (!event) return undefined;
+	const entries = Array.isArray(event.__entries)
+		? (event.__entries as Record<string, unknown>[])
+		: [];
+	const first = entries[0];
+	if (!first) return undefined;
+	const fp = first.fingerprint;
+	return typeof fp === "string" && fp.length > 0 ? fp : undefined;
+}
+
+/**
  * Load a field from state using dot/bracket notation.
  * Supports `EventName.field`, `EventName[0].field`, and deeper paths.
  */

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
 	appendEvent,
 	clearState,
+	getBaselineFingerprint,
 	loadField,
 	readState,
 	resolveFieldPath,
@@ -233,6 +234,48 @@ describe("state", () => {
 
 		it("does not throw when state file does not exist", () => {
 			expect(() => clearState(sentinelDir, projectDir)).not.toThrow();
+		});
+	});
+
+	describe("getBaselineFingerprint()", () => {
+		it("returns fingerprint from first entry after save", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", {
+				prompt: "fix bug",
+				fingerprint: "fp_abc123",
+			});
+			expect(getBaselineFingerprint(sentinelDir, projectDir, "UserPromptSubmit")).toBe("fp_abc123");
+		});
+
+		it("returns fingerprint from first entry after multiple appends", () => {
+			appendEvent(sentinelDir, projectDir, "UserPromptSubmit", {
+				prompt: "first",
+				fingerprint: "fp_first",
+			});
+			appendEvent(sentinelDir, projectDir, "UserPromptSubmit", {
+				prompt: "second",
+				fingerprint: "fp_second",
+			});
+			expect(getBaselineFingerprint(sentinelDir, projectDir, "UserPromptSubmit")).toBe("fp_first");
+		});
+
+		it("returns undefined when event does not exist", () => {
+			expect(getBaselineFingerprint(sentinelDir, projectDir, "UserPromptSubmit")).toBeUndefined();
+		});
+
+		it("returns undefined when first entry has no fingerprint", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", {
+				prompt: "no fingerprint",
+				head: "abc123",
+			});
+			expect(getBaselineFingerprint(sentinelDir, projectDir, "UserPromptSubmit")).toBeUndefined();
+		});
+
+		it("returns undefined when fingerprint is empty string", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", {
+				prompt: "empty fp",
+				fingerprint: "",
+			});
+			expect(getBaselineFingerprint(sentinelDir, projectDir, "UserPromptSubmit")).toBeUndefined();
 		});
 	});
 
