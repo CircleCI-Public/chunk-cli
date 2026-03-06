@@ -4,7 +4,15 @@ import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_MODEL } from "../config";
 import type { CommandResult } from "../types";
+import { bold } from "../ui/colors";
+import { promptInput } from "../ui/prompt";
 import { printError } from "../utils/errors";
+
+interface RequiredCredential {
+	buildArg: string;
+	description: string;
+	sensitive: boolean;
+}
 
 function isGitRepo(cwd: string): boolean {
 	try {
@@ -100,17 +108,29 @@ function gatherRepoContext(cwd: string): string {
 		"Cargo.toml",
 		".chunk/hook/config.yml",
 		// Registry and auth config — may reveal private dependencies
+		// Registry and auth config — may reveal private dependencies
 		".npmrc",
 		".yarnrc",
 		".yarnrc.yml",
 		"pip.conf",
 		".pip/pip.conf",
-		"Cargo.config.toml",
 		".cargo/config.toml",
 		"settings.xml",
 		"gradle.properties",
-		"poetry.lock",
+		// Python dep files — may reference private indexes
+		"requirements.txt",
+		"requirements-dev.txt",
+		"requirements-test.txt",
+		"Pipfile",
+		// Ruby
+		"Gemfile",
+		// Go
 		"go.sum",
+		// Clojure
+		"project.clj",
+		"deps.edn",
+		"build.clj",
+		"profiles.clj",
 	];
 
 	for (const rel of candidates) {
@@ -126,6 +146,101 @@ function gatherRepoContext(cwd: string): string {
 	}
 
 	return parts.join("\n");
+}
+
+async function identifyBaseImage(
+	client: Anthropic,
+	context: string,
+	testCommand: string,
+): Promise<string | null> {
+	const response = await client.messages.create({
+		model: DEFAULT_MODEL,
+		max_tokens: 64,
+		messages: [
+			{
+				role: "user",
+				content:
+					`You are selecting a Docker base image for a software project.\n\n` +
+					`Test command: ${testCommand}\n\n` +
+					`Repository context:\n${context}\n\n` +
+					`Output ONLY a JSON object with a single field "repository": the Docker Hub repository name ` +
+					`for the most appropriate base image (e.g. "clojure", "node", "python", "golang", "rust"). ` +
+					`For official images use just the name. For third-party images use "namespace/image". ` +
+					`No tag — just the repository name. No explanation, no markdown.`,
+			},
+		],
+	});
+
+	const block = response.content.find((b) => b.type === "text");
+	const text = block?.type === "text" ? block.text.trim() : "";
+	const stripped = text.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
+
+	try {
+		const parsed = JSON.parse(stripped) as { repository?: string };
+		return parsed.repository ?? null;
+	} catch {
+		return null;
+	}
+}
+
+async function fetchDockerHubTags(repository: string): Promise<string[]> {
+	const [namespace, image] = repository.includes("/")
+		? repository.split("/", 2)
+		: ["library", repository];
+
+	const url = `https://hub.docker.com/v2/repositories/${namespace}/${image}/tags/?page_size=50&ordering=-last_updated`;
+	const response = await fetch(url);
+	if (!response.ok) return [];
+
+	const data = (await response.json()) as { results?: { name: string }[] };
+	return (data.results ?? []).map((r) => r.name);
+}
+
+async function identifyRequiredCredentials(
+	client: Anthropic,
+	context: string,
+	existingDockerfiles: string,
+): Promise<RequiredCredential[]> {
+	const response = await client.messages.create({
+		model: DEFAULT_MODEL,
+		max_tokens: 512,
+		messages: [
+			{
+				role: "user",
+				content:
+					`You are analyzing a software repository to identify private or non-public dependencies that require authentication credentials at build or install time.\n\n` +
+					`Repository context:\n${context}\n\n` +
+					(existingDockerfiles
+						? `Existing Dockerfiles:\n${existingDockerfiles}\n\n`
+						: "") +
+					`Look carefully for:\n` +
+					`- Private npm registries (S3-backed, Artifactory, GitHub Packages, Verdaccio, etc.)\n` +
+					`- Private PyPI indexes or --extra-index-url references\n` +
+					`- Private Maven or Gradle repositories requiring credentials\n` +
+					`- Private Cargo registries\n` +
+					`- Private Go module proxies or GONOSUMCHECK patterns\n` +
+					`- Any other indication that a dependency is fetched from a non-public source\n\n` +
+					`For each required credential output a JSON array. Each element must have:\n` +
+					`  "buildArg": the Docker ARG name (e.g. "AWS_ACCESS_KEY_ID", "NPM_TOKEN")\n` +
+					`  "description": what it is and why it is needed\n` +
+					`  "sensitive": true if it is a secret/token/password, false otherwise\n\n` +
+					`Output ONLY the JSON array. If nothing private is detected, output [].`,
+			},
+		],
+	});
+
+	const block = response.content.find((b) => b.type === "text");
+	const text = block?.type === "text" ? block.text.trim() : "[]";
+
+	// Strip markdown fences if the model wrapped the JSON anyway
+	const stripped = text.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/, "").trim();
+
+	try {
+		const parsed = JSON.parse(stripped);
+		return Array.isArray(parsed) ? (parsed as RequiredCredential[]) : [];
+	} catch {
+		return [];
+	}
 }
 
 export async function runPrep(): Promise<CommandResult> {
@@ -152,6 +267,24 @@ export async function runPrep(): Promise<CommandResult> {
 	const existingDockerfiles = gatherExistingDockerfiles(cwd);
 
 	const client = new Anthropic({ apiKey });
+
+	console.log("scanning for private dependencies...");
+	const requiredCredentials = await identifyRequiredCredentials(client, context, existingDockerfiles);
+
+	const collectedCredentials: Record<string, string> = {};
+	if (requiredCredentials.length > 0) {
+		console.log(`\nFound ${requiredCredentials.length} credential(s) needed:\n`);
+		for (const cred of requiredCredentials) {
+			console.log(`  ${bold(cred.buildArg)}: ${cred.description}`);
+		}
+		console.log("");
+		for (const cred of requiredCredentials) {
+			const value = await promptInput(`${cred.buildArg}: `, { hidden: cred.sensitive });
+			collectedCredentials[cred.buildArg] = value;
+		}
+		console.log("");
+	}
+
 	const response = await client.messages.create({
 		model: DEFAULT_MODEL,
 		max_tokens: 256,
@@ -177,6 +310,13 @@ export async function runPrep(): Promise<CommandResult> {
 
 	console.log(`test command: ${testCommand}`);
 
+	console.log("resolving base image tags...");
+	const baseImageRepo = await identifyBaseImage(client, context, testCommand);
+	const availableTags = baseImageRepo ? await fetchDockerHubTags(baseImageRepo) : [];
+	if (baseImageRepo && availableTags.length > 0) {
+		console.log(`  ${baseImageRepo}: ${availableTags.length} tags fetched from Docker Hub`);
+	}
+
 	console.log("generating Dockerfile...");
 
 	const dockerfileResponse = await client.messages.create({
@@ -193,12 +333,20 @@ export async function runPrep(): Promise<CommandResult> {
 						? `Existing Dockerfiles in this repo (use as reference for base images, build steps, and patterns):\n${existingDockerfiles}\n\n`
 						: "") +
 					`Requirements:\n` +
-					`- Use an appropriate official base image from Docker Hub for the detected language and tooling.\n` +
-					`  Pin a specific version tag — do not use "latest".\n` +
+					(availableTags.length > 0
+						? `- Use ${baseImageRepo} as the base image. Choose the most recent stable tag from this list of currently available tags on Docker Hub:\n` +
+						  availableTags.map((t) => `  - ${t}`).join("\n") +
+						  `\n  Prefer the most recent stable release. Avoid tags marked alpha, beta, rc, snapshot, or edge.\n`
+						: `- Use an appropriate official base image from Docker Hub for the detected language and tooling.\n` +
+						  `  Pin a specific version tag — do not use "latest" — but aim for the most current stable release available.\n`) +
 					`- Install any additional system-level dependencies needed to run the test command.\n` +
-					`- Identify any dependencies that require non-public access (private npm registries, private GitHub packages, private PyPI indexes, private Maven/Gradle repos, private Cargo registries, etc.).\n` +
-					`  For each, add the necessary Dockerfile instructions to authenticate, using ARG/ENV for secrets so they are passed at build time and not baked into the image.\n` +
-					`  Add a comment above each such block explaining what credential is needed and why.\n` +
+					(Object.keys(collectedCredentials).length > 0
+					? `The following credentials have been collected and will be passed as Docker build args:\n` +
+					  Object.keys(collectedCredentials)
+					  	.map((k) => `  - ${k}`)
+					  	.join("\n") +
+					  `\nUse ARG ${Object.keys(collectedCredentials).join(" \\\n    ARG ")} in the Dockerfile to receive them, and use them to authenticate private dependencies.\n\n`
+					: "") +
 					`- Do NOT include the test command itself in the Dockerfile.\n` +
 					`- Output ONLY valid Dockerfile content. No markdown, no explanation, no code fences.`,
 			},
@@ -224,9 +372,16 @@ export async function runPrep(): Promise<CommandResult> {
 
 	const imageTag = "chunk-prep";
 
+	const buildArgs = Object.entries(collectedCredentials)
+		.map(([k, v]) => `--build-arg ${k}=${JSON.stringify(v)}`)
+		.join(" ");
+
 	console.log(`\nbuilding ${dockerfileName}...`);
 	try {
-		execSync(`sudo docker build -f ${dockerfileName} -t ${imageTag} .`, { cwd, stdio: "inherit" });
+		execSync(
+			`sudo docker build -f ${dockerfileName} -t ${imageTag}${buildArgs ? ` ${buildArgs}` : ""} .`,
+			{ cwd, stdio: "inherit" },
+		);
 	} catch {
 		printError("Docker build failed.", undefined, "Check the Dockerfile above for issues.");
 		return { exitCode: 1 };
