@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_MODEL } from "../config";
@@ -103,5 +103,67 @@ export async function runPrep(): Promise<CommandResult> {
 	}
 
 	console.log(`test command: ${testCommand}`);
+
+	console.log("generating Dockerfile...");
+
+	const dockerfileResponse = await client.messages.create({
+		model: DEFAULT_MODEL,
+		max_tokens: 1024,
+		messages: [
+			{
+				role: "user",
+				content:
+					`You are generating a Dockerfile to run tests for a software project in a CI environment.\n\n` +
+					`Test command: ${testCommand}\n\n` +
+					`Repository context:\n${context}\n\n` +
+					`Requirements:\n` +
+					`- Use a CircleCI convenience image (cimg/*) from Docker Hub as the base image.\n` +
+					`  Choose the most appropriate one for the detected language and tooling (e.g. cimg/node, cimg/python, cimg/go, cimg/rust, cimg/java, cimg/ruby).\n` +
+					`  Pin a specific version tag — do not use "latest".\n` +
+					`- Install any additional system-level dependencies needed to run the test command.\n` +
+					`- Do NOT include the test command itself in the Dockerfile.\n` +
+					`- Output ONLY valid Dockerfile content. No markdown, no explanation, no code fences.`,
+			},
+		],
+	});
+
+	const dockerfileBlock = dockerfileResponse.content.find((b) => b.type === "text");
+	const dockerfileContent = dockerfileBlock?.type === "text" ? dockerfileBlock.text.trim() : null;
+
+	if (!dockerfileContent) {
+		printError("Could not generate Dockerfile.");
+		return { exitCode: 1 };
+	}
+
+	let dockerfileName = "Dockerfile.chunk";
+	let counter = 1;
+	while (existsSync(join(cwd, dockerfileName))) {
+		dockerfileName = `Dockerfile.chunk.${counter++}`;
+	}
+	const dockerfilePath = join(cwd, dockerfileName);
+	writeFileSync(dockerfilePath, `${dockerfileContent}\n`, "utf-8");
+	console.log(`wrote ${dockerfileName}`);
+
+	const imageTag = "chunk-prep";
+
+	console.log(`\nbuilding ${dockerfileName}...`);
+	try {
+		execSync(`sudo docker build -f ${dockerfileName} -t ${imageTag} .`, { cwd, stdio: "inherit" });
+	} catch {
+		printError("Docker build failed.", undefined, "Check the Dockerfile above for issues.");
+		return { exitCode: 1 };
+	}
+
+	console.log(`\nrunning test command in container...`);
+	try {
+		execSync(`sudo docker run --rm ${imageTag} sh -c ${JSON.stringify(testCommand)}`, {
+			cwd,
+			stdio: "inherit",
+		});
+	} catch {
+		printError("Tests failed inside the container.");
+		return { exitCode: 1 };
+	}
+
 	return { exitCode: 0 };
 }
