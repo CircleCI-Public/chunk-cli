@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_MODEL } from "../config";
@@ -360,6 +361,7 @@ export async function runPrep(): Promise<CommandResult> {
 						: `- Use an appropriate official base image from Docker Hub for the detected language and tooling.\n` +
 						  `  Pin a specific version tag — do not use "latest" — but aim for the most current stable release available.\n`) +
 					`- Install any additional system-level dependencies needed to run the test command.\n` +
+					`- Always copy the entire repository using \`COPY . .\` — the build context will contain exactly the files tracked by git, so never selectively copy individual files or directories.\n` +
 					(Object.keys(collectedCredentials).length > 0
 					? `The following credentials have been collected and will be passed as Docker build args:\n` +
 					  Object.keys(collectedCredentials)
@@ -396,16 +398,29 @@ export async function runPrep(): Promise<CommandResult> {
 		.map(([k, v]) => `--build-arg ${k}=${JSON.stringify(v)}`)
 		.join(" ");
 
-	console.log(`\nbuilding ${dockerfileName}...`);
+	// Build context: only files tracked by git (respects .gitignore, excludes .git dir)
+	const buildContext = mkdtempSync(join(tmpdir(), "chunk-build-"));
 	try {
+		execSync(`git archive HEAD | tar -x -C ${buildContext}`, { cwd });
+		copyFileSync(dockerfilePath, join(buildContext, dockerfileName));
+
+		console.log(`\nbuilding ${dockerfileName}...`);
 		execSync(
 			`sudo docker build -f ${dockerfileName} -t ${imageTag}${buildArgs ? ` ${buildArgs}` : ""} .`,
-			{ cwd, stdio: "inherit" },
+			{ cwd: buildContext, stdio: "inherit" },
 		);
-	} catch {
-		printError("Docker build failed.", undefined, "Check the Dockerfile above for issues.");
+	} catch (err) {
+		rmSync(buildContext, { recursive: true, force: true });
+		const isDockerFailure =
+			err instanceof Error && err.message.toLowerCase().includes("docker");
+		printError(
+			isDockerFailure ? "Docker build failed." : "Failed to prepare build context.",
+			undefined,
+			isDockerFailure ? "Check the Dockerfile above for issues." : undefined,
+		);
 		return { exitCode: 1 };
 	}
+	rmSync(buildContext, { recursive: true, force: true });
 
 	console.log(`\nrunning test command in container...`);
 	try {
