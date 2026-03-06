@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { CircleCIError, type CircleCIRunRequest, triggerChunkRun } from "../api/circleci";
+import {
+	CircleCIError,
+	type CircleCIRunRequest,
+	fetchCollaborations,
+	fetchFollowedProjects,
+	fetchProjectBySlug,
+	triggerChunkRun,
+} from "../api/circleci";
 
 // Mock fetch globally
 const mockFetch = mock();
@@ -235,6 +242,244 @@ describe("CircleCI API Client", () => {
 				expect(circleCIError.statusCode).toBe(400);
 				expect(circleCIError.responseBody).toBe('{"error": "Bad Request"}');
 			}
+		});
+	});
+
+	describe("fetchFollowedProjects", () => {
+		it("should fetch and return followed projects", async () => {
+			const mockProjects = [
+				{ vcs_type: "github", username: "my-org", reponame: "repo-a" },
+				{ vcs_type: "github", username: "my-org", reponame: "repo-b" },
+			];
+			mockFetch.mockImplementation(async () => ({
+				ok: true,
+				status: 200,
+				text: async () => JSON.stringify(mockProjects),
+			}));
+
+			const result = await fetchFollowedProjects(mockToken);
+
+			expect(result).toEqual(mockProjects);
+			expect(mockFetch).toHaveBeenCalledWith("https://circleci.com/api/v1.1/projects", {
+				headers: {
+					Accept: "application/json",
+					"Circle-Token": mockToken,
+				},
+			});
+		});
+
+		it("should throw CircleCIError for 401", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: false,
+				status: 401,
+				text: async () => "Unauthorized",
+			}));
+
+			await expect(fetchFollowedProjects(mockToken)).rejects.toThrow(/Invalid CircleCI API token/);
+		});
+
+		it("should throw CircleCIError for 403", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: false,
+				status: 403,
+				text: async () => "Forbidden",
+			}));
+
+			await expect(fetchFollowedProjects(mockToken)).rejects.toThrow(/Access forbidden/);
+		});
+
+		it("should handle network errors", async () => {
+			mockFetch.mockImplementation(async () => {
+				throw new Error("Connection refused");
+			});
+
+			try {
+				await fetchFollowedProjects(mockToken);
+				expect.unreachable("Should have thrown");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				expect((error as CircleCIError).message).toMatch(/Failed to connect/);
+			}
+		});
+
+		it("should throw CircleCIError for invalid JSON", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: true,
+				status: 200,
+				text: async () => "not json",
+			}));
+
+			try {
+				await fetchFollowedProjects(mockToken);
+				expect.unreachable("Should have thrown");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				expect((error as CircleCIError).message).toMatch(/Invalid JSON response/);
+			}
+		});
+	});
+
+	describe("fetchCollaborations", () => {
+		it("should fetch and return collaborations", async () => {
+			const mockCollabs = [
+				{ id: "org-uuid-1", name: "my-org", "vcs-type": "github", slug: "gh/my-org" },
+				{
+					id: "org-uuid-2",
+					name: "another-org",
+					"vcs-type": "bitbucket",
+					slug: "bb/another-org",
+				},
+			];
+			mockFetch.mockImplementation(async () => ({
+				ok: true,
+				status: 200,
+				text: async () => JSON.stringify(mockCollabs),
+			}));
+
+			const result = await fetchCollaborations(mockToken);
+
+			expect(result).toEqual(mockCollabs);
+			expect(mockFetch).toHaveBeenCalledWith("https://circleci.com/api/v2/me/collaborations", {
+				headers: {
+					Accept: "application/json",
+					"Circle-Token": mockToken,
+				},
+			});
+		});
+
+		it("should throw CircleCIError for 401", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: false,
+				status: 401,
+				text: async () => "Unauthorized",
+			}));
+
+			await expect(fetchCollaborations(mockToken)).rejects.toThrow(/Invalid CircleCI API token/);
+		});
+
+		it("should handle network errors", async () => {
+			mockFetch.mockImplementation(async () => {
+				throw new Error("DNS resolution failed");
+			});
+
+			try {
+				await fetchCollaborations(mockToken);
+				expect.unreachable("Should have thrown");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				expect((error as CircleCIError).message).toMatch(/Failed to connect/);
+			}
+		});
+
+		it("should throw CircleCIError for invalid JSON", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: true,
+				status: 200,
+				text: async () => "<html>error</html>",
+			}));
+
+			try {
+				await fetchCollaborations(mockToken);
+				expect.unreachable("Should have thrown");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				expect((error as CircleCIError).message).toMatch(/Invalid JSON response/);
+			}
+		});
+	});
+
+	describe("fetchProjectBySlug", () => {
+		it("should fetch project details by slug", async () => {
+			const mockDetails = {
+				id: "project-uuid",
+				organization_id: "org-uuid",
+				name: "my-repo",
+				slug: "gh/my-org/my-repo",
+			};
+			mockFetch.mockImplementation(async () => ({
+				ok: true,
+				status: 200,
+				text: async () => JSON.stringify(mockDetails),
+			}));
+
+			const result = await fetchProjectBySlug(mockToken, "gh/my-org/my-repo");
+
+			expect(result).toEqual(mockDetails);
+			expect(mockFetch).toHaveBeenCalledWith(
+				"https://circleci.com/api/v2/project/gh/my-org/my-repo",
+				{
+					headers: {
+						Accept: "application/json",
+						"Circle-Token": mockToken,
+					},
+				},
+			);
+		});
+
+		it("should throw CircleCIError for 404", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: false,
+				status: 404,
+				text: async () => "Not Found",
+			}));
+
+			await expect(fetchProjectBySlug(mockToken, "gh/no-org/no-repo")).rejects.toThrow(
+				/Resource not found/,
+			);
+		});
+
+		it("should throw CircleCIError for 401", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: false,
+				status: 401,
+				text: async () => "Unauthorized",
+			}));
+
+			await expect(fetchProjectBySlug(mockToken, "gh/org/repo")).rejects.toThrow(
+				/Invalid CircleCI API token/,
+			);
+		});
+
+		it("should handle network errors", async () => {
+			mockFetch.mockImplementation(async () => {
+				throw new Error("Timeout");
+			});
+
+			try {
+				await fetchProjectBySlug(mockToken, "gh/org/repo");
+				expect.unreachable("Should have thrown");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				expect((error as CircleCIError).message).toMatch(/Failed to connect/);
+			}
+		});
+
+		it("should throw CircleCIError for invalid JSON", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: true,
+				status: 200,
+				text: async () => "}{invalid",
+			}));
+
+			try {
+				await fetchProjectBySlug(mockToken, "gh/org/repo");
+				expect.unreachable("Should have thrown");
+			} catch (error) {
+				expect(error).toBeInstanceOf(CircleCIError);
+				expect((error as CircleCIError).message).toMatch(/Invalid JSON response/);
+			}
+		});
+
+		it("should throw CircleCIError for 500 server error", async () => {
+			mockFetch.mockImplementation(async () => ({
+				ok: false,
+				status: 500,
+				text: async () => "Internal Server Error",
+			}));
+
+			await expect(fetchProjectBySlug(mockToken, "gh/org/repo")).rejects.toThrow(
+				/CircleCI server error/,
+			);
 		});
 	});
 
