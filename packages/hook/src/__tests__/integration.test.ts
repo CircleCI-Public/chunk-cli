@@ -26,6 +26,7 @@ import { join } from "node:path";
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Point to the main chunk CLI entry point — hook commands live under `chunk hook`
 // Repo root where bunfig.toml lives — must be the cwd when spawning bun so
 // that the VERSION define and .md loader are in effect.
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
@@ -68,10 +69,10 @@ async function runCli(
 	timeoutMs: number = 10_000,
 ): Promise<CliResult> {
 	const proc = Bun.spawn(["bun", "run", CLI_PATH, "hook", ...args], {
+		cwd: REPO_ROOT,
 		stdin: "pipe",
 		stdout: "pipe",
 		stderr: "pipe",
-		cwd: REPO_ROOT,
 		env: { ...cleanBaseEnv(), ...env },
 	});
 
@@ -921,6 +922,11 @@ describe("state lifecycle", () => {
 		expect(entries).toHaveLength(2);
 		expect(entries[0].prompt).toBe("first prompt");
 		expect(entries[1].prompt).toBe("second prompt");
+		// Both entries should have head and fingerprint from the git repo
+		expect(entries[0].head).toBeString();
+		expect(entries[0].fingerprint).toBeString();
+		expect(entries[1].head).toBeString();
+		expect(entries[1].fingerprint).toBeString();
 	});
 
 	it("append deduplicates consecutive same-prompt entries", async () => {

@@ -102,15 +102,40 @@ allow while the other hasn't checked yet, causing the second to see "missing" an
 `chunk hook state <subcommand>` manages per-project state that persists across events. The state
 command does **not** require `CHUNK_HOOK_ENABLE` — it is infrastructure, always available.
 
-- `state save` — reads event input from stdin and stores the full input under the event name. All input
-    fields are preserved.
-- `state load [field]` — reads a field from state using dot notation (e.g., `UserPromptSubmit.prompt`).
+- `state save` — reads event input from stdin and stores it under the event name. Internally this
+    is a clear + append: it replaces all existing entries with a single-entry `__entries` array.
+    Each entry records the current `HEAD` SHA and a composite fingerprint
+    (`sha256(HEAD + "\n" + git_diff)`) — used by change detection to determine whether code has
+    changed since the session started.
+- `state append` — like `state save`, but accumulates entries instead of replacing them. Successive
+    appends preserve earlier entries (e.g., the original prompt and any "Continue" prompts). Each
+    entry carries its own `head` and `fingerprint`; the first entry serves as the baseline reference.
+- `state load [field]` — reads a field from state using dot or bracket notation
+    (e.g., `UserPromptSubmit.prompt`, `UserPromptSubmit[0].prompt`).
     Without a field, dumps entire state as JSON.
 - `state clear` — removes all saved state for the project.
 
-State is event-namespaced: `{ "UserPromptSubmit": { "prompt": "...", ... }, "Stop": { ... } }`.
+**Data shape:** All events store an `__entries` array — both `save` (1 entry) and `append` (N entries)
+produce the same structure:
+```json
+{
+  "UserPromptSubmit": { "__entries": [{ "prompt": "...", "head": "abc123", "fingerprint": "sha256..." }, ...] },
+  "Stop": { "__entries": [{ ... }] }
+}
+```
 Stored in the sentinel directory alongside sentinel files, using a sha256 hash of the project dir.
-Saving an event overwrites all fields for that event; other events are preserved.
+Saving an event overwrites all entries for that event; other events are preserved.
+
+**Array-indexed templating:** Use bracket notation to access specific entries:
+`{{UserPromptSubmit[0].prompt}}` for the first entry, `{{UserPromptSubmit[1].prompt}}` for the
+second. Plain dot notation `{{UserPromptSubmit.prompt}}` is syntactic sugar for
+`{{UserPromptSubmit[0].prompt}}` (first entry, not concatenation).
+
+**Baseline fingerprint tracking:** The first entry's `fingerprint` field provides the composite hash
+at session start. Change detection compares the current fingerprint against the baseline — a single
+comparison that covers both commit-level and file-level changes. Used by both `sync check` and
+standalone `task check` to skip tasks when no code changes have occurred since the session started
+(see [Change detection](#change-detection) below).
 
 ### Scope: per-repo activity gate
 
@@ -262,8 +287,10 @@ expansion is a no-op), but they support **different scopes**:
    parallel, so a
    separate `state save` cannot reliably precede the current command — the overlay guarantees
    availability. The overlay is in-memory only; the persisted state file is not modified.
-2. **Saved state fields** — dot-notation path into event-namespaced state persisted by earlier `state
-   save` calls (e.g., `{{UserPromptSubmit.prompt}}` saved from a `UserPromptSubmit` hook).
+2. **Saved state fields** — dot or bracket-notation path into event-namespaced state persisted by
+   earlier `state save` / `state append` calls. Bracket notation accesses specific entries:
+   `{{UserPromptSubmit[0].prompt}}` (first entry), `{{UserPromptSubmit[1].prompt}}` (second).
+   Dot notation `{{UserPromptSubmit.prompt}}` is sugar for `{{UserPromptSubmit[0].prompt}}`.
 3. **Git placeholders** — `{{CHANGED_FILES}}` and `{{CHANGED_PACKAGES}}` (computed from git,
    deletions excluded — see [Git helpers](#git-helpers-gitts) below).
 4. **Unresolved** — replaced with empty string.
@@ -287,7 +314,7 @@ in the delegation pattern (check → block → re-run → check).
 | --- | --- | --- | --- |
 | `pass` | Command succeeded | Reset | — (exit 0) |
 | `fail` | Command failed / task blocked | Increment | `blockWithLimit()` |
-| `missing` | No result file yet | No change | `blockNoCount()` |
+| `missing` | No result file, or stale (session/content mismatch) | No change | `blockNoCount()` |
 | `pending` | Command still running | No change | `blockNoCount()` |
 
 `blockNoCount(tag, adapter, reason)` blocks (exit 2) **without** touching the
@@ -319,13 +346,39 @@ By default, execs and tasks **skip (exit 0) when no relevant changes exist:**
 
 - **Exec:** Skips if no files matching `--file-ext` have changed
   (or no changes at all if `--file-ext` is omitted).
-- **Task:** Skips if there are no uncommitted changes.
+- **Task:** Skips if the composite fingerprint has not changed since the baseline recorded on the
+  first `state save`/`append` for `UserPromptSubmit`. This prevents review from firing on
+  question-only interactions. **This logic is consistent between standalone `task check` and `task`
+  specs inside `sync check`.**
 
 Modifiers:
 
 - `--always` — force execution regardless of changes.
 - `--staged` — narrow to staged changes only (both exec and task).
 - `--file-ext` — filter by file extension (exec only; tasks operate on full diff via instructions).
+
+### Content-hash staleness
+
+Sentinels record a `contentHash` — a SHA-256 digest of the working-tree diff at the time the
+command was executed. When a sentinel is later evaluated (via `evaluateSentinel` in `check.ts`),
+the current diff hash is compared against the stored hash. If they differ, the sentinel is
+treated as **missing** (stale), forcing the command to re-run against the current code.
+
+This prevents **bait-and-switch** attacks: an agent cannot run tests against harmless code,
+obtain a "pass" sentinel, then swap in different code and have the sentinel still pass.
+
+**How it works:**
+
+1. `computeFingerprint({ cwd, staged?, fileExt? })` in `git.ts` computes
+   `sha256(HEAD + "\n" + git_diff)` — optionally using `--cached` for staged changes and a
+   pathspec filter for `--file-ext`. The HEAD commit is always included, so moving to a new
+   commit invalidates the fingerprint even without working-tree changes.
+2. `exec run --no-check` computes the fingerprint after the command completes and stores it in
+   the sentinel's `contentHash` field.
+3. `exec check`, `sync check`, and `exec run` (full mode) recompute the fingerprint and pass it
+   to `evaluateSentinel()`, which returns `"missing"` when the fingerprints differ.
+4. Task sentinels do not use content hashes — tasks operate on full-diff instructions and use
+   session-based staleness instead.
 
 ### Matcher filter (`--matcher`)
 
@@ -432,14 +485,14 @@ packages/hook/
 │   │   ├── config.ts       # YAML config loader (.chunk/hook/config.yml; execs + tasks)
 │   │   ├── hooks.ts        # Low-level stdin JSON parsing (consumed by adapter.ts)
 │   │   ├── placeholders.ts # {{Key.path}} placeholder expansion for task instructions
-│   │   ├── sentinel.ts     # Result-file CRUD, self-consuming sentinels, block counters
+│   │   ├── sentinel.ts     # Result-file CRUD, self-consuming sentinels, block counters, contentHash
 │   │   ├── shell-env.ts    # Shell environment utilities (env file, startup files, profiles)
 │   │   ├── state.ts        # Per-project state (event-namespaced persistence)
 │   │   ├── templates.ts    # Embedded template files for repo init
 │   │   ├── check.ts        # Shared check helpers (evaluate, block, guard, trigger matching)
 │   │   ├── task-result.ts  # Task result validation and sentinel conversion
 │   │   ├── proc.ts         # Bun.spawn wrapper with timeout
-│   │   ├── git.ts          # Changed files, placeholder substitution (see section below)
+│   │   ├── git.ts          # Changed files, placeholder substitution, fingerprinting
 │   │   └── log.ts          # File-based logger
 │   └── __tests__/
 │       ├── adapter.test.ts
@@ -573,12 +626,13 @@ chunk hook exec check tests-changed --staged --on pre-commit
 ```
 
 **Task — delegated review with state** (`Stop` review):
-State is saved on `UserPromptSubmit` to capture the original prompt. On `Stop`, a task check blocks
-with instructions that expand `{{UserPromptSubmit.prompt}}` and `{{CHANGED_FILES}}` placeholders. A
-subagent performs the review and writes a structured result.
+State is appended on `UserPromptSubmit` to capture the original prompt (and any subsequent
+"Continue" prompts). On `Stop`, a task check blocks with instructions that expand
+`{{UserPromptSubmit.prompt}}` and `{{CHANGED_FILES}}` placeholders. A subagent performs the review
+and writes a structured result.
 
 ```sh
-chunk hook state save                           # UserPromptSubmit hook
+chunk hook state append                         # UserPromptSubmit hook
 chunk hook task check review                    # Stop hook
 chunk hook state clear                          # SessionEnd hook
 ```
@@ -754,9 +808,8 @@ Sentinels are JSON files in a temp directory that record exec/task outcomes:
     **not** consumed — they remain for the next check to report the failure and prompt a re-run.
 - **Session-aware staleness:** Sentinels carry a `sessionId` copied from the scope marker
     at write time. When a check runs, it compares the sentinel's `sessionId` to the current
-    scope marker's `sessionId`. A mismatch means the sentinel is from a previous session and
-    is treated as missing, forcing the command to re-run with fresh context. Sentinels without
-    a `sessionId` (written by external agents) are treated as current.
+    scope marker's `sessionId`. A missing or mismatched `sessionId` means the sentinel is stale
+    and is treated as missing, forcing the command to re-run with fresh context.
 - **Group sentinels (sync):** `sync check` maintains a separate `sync-<hash>.json` tracking which
     specs have passed. Individual sentinels are consumed as each spec passes. On fail, the default
     behavior (`--on-fail restart`) removes the group sentinel and restarts the entire sequence.

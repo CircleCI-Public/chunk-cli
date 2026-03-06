@@ -55,6 +55,7 @@ import { computeFingerprint, detectChanges } from "../lib/git";
 import { log } from "../lib/log";
 import type { SentinelData } from "../lib/sentinel";
 import { readSentinel, removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
+import { getBaselineFingerprint } from "../lib/state";
 import { loadInstructions, readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
 import { readMarker } from "./scope";
 
@@ -249,6 +250,13 @@ export async function runSync(
 	// content-aware sentinel staleness detection.
 	const hashCache = await precomputeFingerprints(config, flags, changeCache);
 
+	// Precompute task-level skip-if-no-changes: compare the baseline HEAD
+	// (saved on the first UserPromptSubmit) against the current HEAD and
+	// working tree. If HEAD is unchanged and no uncommitted changes exist,
+	// task specs with always=false can be skipped (e.g., question-only
+	// interactions where the agent never modified code).
+	const taskNoChanges = await precomputeTaskNoChanges(config);
+
 	// Walk through specs in order, skipping already-passed ones.
 	// By default, we walk ALL specs and gather non-pass results into a
 	// single combined block message instead of stopping at the first issue.
@@ -278,6 +286,22 @@ export async function runSync(
 					);
 					continue;
 				}
+			}
+		}
+
+		// Skip-if-no-changes for task specs — compare baseline HEAD against
+		// current HEAD + working tree. Skips review for question-only
+		// interactions where the agent never modified code.
+		if (spec.type === "task" && taskNoChanges) {
+			const task = getTask(config, spec.name);
+			if (task && !task.always && !flags.always) {
+				group.passed.push(specKey);
+				writeGroupSentinel(config.sentinelDir, config.projectDir, flags.specs, group);
+				log(
+					t,
+					`  ${specKey}: no code changes since baseline → auto-pass (${group.passed.length}/${flags.specs.length})`,
+				);
+				continue;
 			}
 		}
 
@@ -678,6 +702,47 @@ async function precomputeFingerprints(
 	}
 
 	return cache;
+}
+
+// ---------------------------------------------------------------------------
+// Task-level change detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine whether any code changes occurred since the baseline.
+ *
+ * Compares the composite fingerprint (HEAD + working tree diff hash)
+ * saved on the first `state save`/`append` for `UserPromptSubmit`
+ * against the current fingerprint. A single comparison covers both
+ * commit-level and file-level changes.
+ *
+ * Returns `true` when no code has changed — the agent only asked
+ * questions or no tool calls modified files.
+ *
+ * Returns `false` (= changes detected / unknown) when:
+ * - No baseline is saved (first interaction or state was cleared)
+ * - Fingerprint differs (HEAD moved or files changed)
+ */
+export async function precomputeTaskNoChanges(config: ResolvedConfig): Promise<boolean> {
+	const baselineFingerprint = getBaselineFingerprint(
+		config.sentinelDir,
+		config.projectDir,
+		"UserPromptSubmit",
+	);
+
+	if (!baselineFingerprint) {
+		log(TAG, "task skip: no baseline fingerprint in state → cannot skip");
+		return false;
+	}
+
+	const currentFingerprint = await computeFingerprint({ cwd: config.projectDir });
+	if (!currentFingerprint || currentFingerprint !== baselineFingerprint) {
+		log(TAG, "task skip: fingerprint changed → cannot skip");
+		return false;
+	}
+
+	log(TAG, "task skip: fingerprint unchanged → tasks eligible for skip");
+	return true;
 }
 
 // ---------------------------------------------------------------------------

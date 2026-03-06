@@ -209,12 +209,22 @@ are read from `config.yml` — they cannot be overridden per-spec via CLI flags 
 ### `state save`
 
 Read event input from stdin and save to per-project state, namespaced by event name.
-The event name is read from the input JSON. All input fields are stored under the event namespace.
+Internally a clear + append: replaces all existing entries with a single-entry `__entries` array.
+Each entry records the current `HEAD` SHA and a composite fingerprint
+(`sha256(HEAD + "\n" + git_diff)`) — used by change detection to determine whether code has
+changed since the session started.
+
+### `state append`
+
+Like `state save`, but accumulates entries instead of replacing them. Successive appends preserve
+earlier entries (e.g., the original prompt and any "Continue" prompts). Each entry carries its own
+`head` and `fingerprint`; the first entry serves as the baseline reference.
 
 ### `state load [field]`
 
-Load a field from state and write to stdout. Supports dot notation to access event-namespaced fields
-(e.g., `UserPromptSubmit.prompt`). Without a field argument, dumps the entire state as JSON.
+Load a field from state and write to stdout. Supports dot and bracket notation to access
+event-namespaced fields (e.g., `UserPromptSubmit.prompt`, `UserPromptSubmit[0].prompt`).
+Without a field argument, dumps the entire state as JSON.
 
 ### `state clear`
 
@@ -335,16 +345,17 @@ In single-repo workspaces, every tool call matches, so the scope is always activ
 The **state** command and **placeholders** work together to enable cross-event data sharing — most
 commonly capturing the user's original prompt and injecting it into task instructions.
 
-State is **event-namespaced**: each `state save` stores the full event input under the event name
-(e.g., `UserPromptSubmit`, `Stop`). Placeholders use **dot notation** to reference fields:
-`{{UserPromptSubmit.prompt}}`.
+State is **event-namespaced**: both `state save` and `state append` store an `__entries` array
+under the event name. `save` replaces all entries with one; `append` accumulates entries.
+Placeholders use **dot or bracket notation** to reference fields:
+`{{UserPromptSubmit.prompt}}` (sugar for first entry) or `{{UserPromptSubmit[0].prompt}}`.
 
 ### Example: Prompt-Aware Code Review
 
-1. A `UserPromptSubmit` event saves the entire input to state:
+1. A `UserPromptSubmit` event appends the input to state:
 
    ```json
-   { "command": "chunk hook state save" }
+   { "command": "chunk hook state append" }
    ```
 
 2. Task instructions reference the saved prompt via dot notation:
@@ -387,12 +398,13 @@ Task and exec support **different scopes**:
 | `{{Stop.stop_hook_active}}` | Event | Whether stop hook is already active |
 | `{{CHANGED_FILES}}` | Git | Space-separated list of changed file paths (excludes deletions) |
 | `{{CHANGED_PACKAGES}}` | Git | Deduplicated parent directories (excludes deletions) |
-| `{{UserPromptSubmit.prompt}}` | State | The user's original prompt (requires `state save`) |
-| `{{EventName.field.nested}}` | State | Any saved event field (dot notation) |
+| `{{UserPromptSubmit.prompt}}` | State | The user's first prompt (sugar for `[0].prompt`) |
+| `{{UserPromptSubmit[1].prompt}}` | State | The second appended prompt (bracket notation) |
+| `{{EventName.field.nested}}` | State | Any saved event field (dot or bracket notation) |
 
 ### Triggering Event (Implicit — Task only)
 
-The current event's input is **always available** as placeholders — no `state save` needed. When a
+The current event's input is **always available** as placeholders — no `state save` / `state append` needed. When a
 `Stop` hook runs `chunk hook task check`, all fields from the `Stop` event input are automatically
 accessible:
 
@@ -403,14 +415,14 @@ Session: {{Stop.session_id}}
 Changed files: {{CHANGED_FILES}}
 ```
 
-This works because hooks on the same event run in parallel, so a separate `state save` hook cannot
-reliably complete before the current command reads state. The triggering event is overlaid in-memory
-without modifying the persisted state file.
+This works because hooks on the same event run in parallel, so a separate `state save`/`state append`
+hook cannot reliably complete before the current command reads state. The triggering event is overlaid
+in-memory without modifying the persisted state file.
 
 ### Cross-Event State (Explicit — Task only)
 
 To reference data from a **different** event (e.g., the user's prompt in a `Stop` hook), use
-`state save` on the earlier event:
+`state save` or `state append` on the earlier event:
 
 ```markdown
 # Instructions template
@@ -419,6 +431,8 @@ Changed files: {{CHANGED_FILES}}
 ```
 
 Deeply nested fields are supported: `{{PreToolUse.tool_input.command}}`.
+Bracket notation accesses specific entries: `{{UserPromptSubmit[0].prompt}}` (first),
+`{{UserPromptSubmit[1].prompt}}` (second). Dot notation is sugar for `[0]`.
 
 ### Exec Placeholders
 
@@ -428,7 +442,7 @@ fields and the triggering event overlay are not available in exec.
 ### Resolution Order (Task)
 
 1. **Triggering event** (in-memory overlay of the current event's input)
-2. **Saved state fields** (from earlier `state save` calls)
+2. **Saved state fields** (from earlier `state save` / `state append` calls)
 3. **Git placeholders** (`CHANGED_FILES`, `CHANGED_PACKAGES`)
 4. **Unresolved** — replaced with empty string
 
