@@ -15,6 +15,66 @@ function isGitRepo(cwd: string): boolean {
 	}
 }
 
+function gatherExistingDockerfiles(cwd: string): string {
+	const parts: string[] = [];
+
+	// Directories likely to contain Dockerfiles
+	const searchDirs = [".", "docker", ".docker", "build", "ci", ".circleci", "infra", "deploy"];
+
+	for (const dir of searchDirs) {
+		const dirPath = join(cwd, dir);
+		if (!existsSync(dirPath)) continue;
+
+		let entries: string[];
+		try {
+			entries = readdirSync(dirPath);
+		} catch {
+			continue;
+		}
+
+		for (const entry of entries) {
+			// Match Dockerfile, Dockerfile.*, dockerfile, dockerfile.*
+			// but skip our own generated files
+			if (
+				!/^[Dd]ockerfile(\.[^.]+)?$/.test(entry) ||
+				entry.startsWith("Dockerfile.chunk")
+			) {
+				continue;
+			}
+
+			const rel = dir === "." ? entry : `${dir}/${entry}`;
+			const full = join(cwd, rel);
+			try {
+				const content = readFileSync(full, "utf-8").slice(0, 4000);
+				parts.push(`\n--- ${rel} ---\n${content}`);
+			} catch {
+				// ignore
+			}
+		}
+	}
+
+	// Also pick up compose files as they reveal service/build context
+	const composeNames = [
+		"docker-compose.yml",
+		"docker-compose.yaml",
+		"compose.yml",
+		"compose.yaml",
+	];
+	for (const name of composeNames) {
+		const full = join(cwd, name);
+		if (existsSync(full)) {
+			try {
+				const content = readFileSync(full, "utf-8").slice(0, 4000);
+				parts.push(`\n--- ${name} ---\n${content}`);
+			} catch {
+				// ignore
+			}
+		}
+	}
+
+	return parts.join("\n");
+}
+
 function gatherRepoContext(cwd: string): string {
 	const parts: string[] = [];
 
@@ -26,7 +86,7 @@ function gatherRepoContext(cwd: string): string {
 		// ignore
 	}
 
-	// Key config files that signal how tests are run
+	// Key config files that signal how tests are run and what dependencies are required
 	const candidates = [
 		"package.json",
 		"Makefile",
@@ -39,6 +99,18 @@ function gatherRepoContext(cwd: string): string {
 		"pytest.ini",
 		"Cargo.toml",
 		".chunk/hook/config.yml",
+		// Registry and auth config — may reveal private dependencies
+		".npmrc",
+		".yarnrc",
+		".yarnrc.yml",
+		"pip.conf",
+		".pip/pip.conf",
+		"Cargo.config.toml",
+		".cargo/config.toml",
+		"settings.xml",
+		"gradle.properties",
+		"poetry.lock",
+		"go.sum",
 	];
 
 	for (const rel of candidates) {
@@ -77,6 +149,7 @@ export async function runPrep(): Promise<CommandResult> {
 	}
 
 	const context = gatherRepoContext(cwd);
+	const existingDockerfiles = gatherExistingDockerfiles(cwd);
 
 	const client = new Anthropic({ apiKey });
 	const response = await client.messages.create({
@@ -116,11 +189,16 @@ export async function runPrep(): Promise<CommandResult> {
 					`You are generating a Dockerfile to run tests for a software project in a CI environment.\n\n` +
 					`Test command: ${testCommand}\n\n` +
 					`Repository context:\n${context}\n\n` +
+					(existingDockerfiles
+						? `Existing Dockerfiles in this repo (use as reference for base images, build steps, and patterns):\n${existingDockerfiles}\n\n`
+						: "") +
 					`Requirements:\n` +
-					`- Use a CircleCI convenience image (cimg/*) from Docker Hub as the base image.\n` +
-					`  Choose the most appropriate one for the detected language and tooling (e.g. cimg/node, cimg/python, cimg/go, cimg/rust, cimg/java, cimg/ruby).\n` +
+					`- Use an appropriate official base image from Docker Hub for the detected language and tooling.\n` +
 					`  Pin a specific version tag — do not use "latest".\n` +
 					`- Install any additional system-level dependencies needed to run the test command.\n` +
+					`- Identify any dependencies that require non-public access (private npm registries, private GitHub packages, private PyPI indexes, private Maven/Gradle repos, private Cargo registries, etc.).\n` +
+					`  For each, add the necessary Dockerfile instructions to authenticate, using ARG/ENV for secrets so they are passed at build time and not baked into the image.\n` +
+					`  Add a comment above each such block explaining what credential is needed and why.\n` +
 					`- Do NOT include the test command itself in the Dockerfile.\n` +
 					`- Output ONLY valid Dockerfile content. No markdown, no explanation, no code fences.`,
 			},
