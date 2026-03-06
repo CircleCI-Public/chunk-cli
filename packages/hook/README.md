@@ -9,7 +9,7 @@ A Bun-based CLI that provides configurable exec, task, sync, state, scope, repo,
 | --- | --- | --- |
 | **Claude Code** (CLI / terminal) | Fully supported | Canonical provider — all features work natively |
 | **Cursor** | Supported | Reads `.claude/settings.json` directly; event/tool names are auto-normalized (see [Cursor Compatibility](#cursor-compatibility)) |
-| **VS Code** (GitHub Copilot with Claude) | Supported with workarounds | Ignores `matcher` field, pins `cwd` in multi-root workspaces (see [VS Code Compatibility](#vs-code-compatibility)) |
+| **VS Code** (GitHub Copilot with Claude) | Supported with workarounds | Ignores `matcher` field, fires all hooks for all repos in multi-root workspaces (see [VS Code Compatibility](#vs-code-compatibility)) |
 
 All environments share the same hook protocol (stdin JSON + exit codes 0/1/2) and the same
 `.claude/settings.json` configuration. Provider-specific differences are handled internally
@@ -309,9 +309,11 @@ In VS Code multi-root workspaces, Claude Code merges all `.claude/settings.json`
 for every repo — even ones the agent hasn't touched. The scope gate prevents expensive checks
 from running in inactive repos:
 
-1. The `exec` and `task` handlers automatically call `activateScope()` before each run — if
-   the stdin payload contains file paths matching the project and a session ID, the scope is
-   activated as a side effect and the function returns `true`.
+1. The `exec`, `task`, and `sync` handlers automatically call `activateScope()` before the
+   `--matcher` filter and gate check — if the stdin payload contains file paths matching the
+   project and a session ID, the scope is activated as a side effect. The default template sets
+   the native `matcher` to `"*"` so hooks fire for **every** tool event (not just shell tools),
+   ensuring file edits and reads keep the scope alive.
 2. If `activateScope()` returns `false`, `exec` and `task` allow silently (exit 0), skipping
    expensive work.
 3. Agent-invoked commands (`exec run --no-check`) skip the scope gate entirely — they run in
@@ -536,8 +538,8 @@ Several features exist specifically to work around known VS Code Copilot behavio
 
 | Feature | VS Code Issue | Workaround |
 | --- | --- | --- |
-| `--matcher` flag | VS Code ignores the hook `matcher` field and sends all tool events through all hooks ([docs](https://code.visualstudio.com/docs/copilot/customization/hooks#_how-does-vs-code-handle-claude-code-hook-configurations)) | CLI-side regex filtering before any other logic |
-| `--project` flag | `CLAUDE_PROJECT_DIR` and `event.cwd` are pinned to a single workspace in multi-root setups (bugs #8559, #12808) | Explicit per-repo project resolution via `CHUNK_HOOK_PROJECT_ROOT` |
+| `--matcher` flag | VS Code ignores the hook `matcher` field and sends all tool events through all hooks ([docs](https://code.visualstudio.com/docs/copilot/customization/hooks#_how-does-vs-code-handle-claude-code-hook-configurations)) | CLI-side regex filtering after scope activation (scope runs first so file-editing tools keep the scope alive, then `--matcher` restricts which tools trigger checks) |
+| `--project` flag | `process.cwd()` is set per-repo but is the same for every hook invocation — it cannot distinguish which repo the agent is editing (bugs #8559, #12808 are now fixed but CWD is still ambiguous) | Explicit per-repo project resolution via `CHUNK_HOOK_PROJECT_ROOT` |
 | Scope gate | All hooks fire for all repos in multi-root workspaces | `activateScope()` inspects `tool_input` file paths to determine the target repo |
 | Subagent safety | Subagents receive different session IDs; their tool calls trigger the parent's hooks | Existing scope markers are preserved (not overwritten) when a different session activates the same project |
 | Tool names | VS Code uses `run_in_terminal` instead of `Bash` | `isShellTool()` accepts both; `--matcher` includes `run_in_terminal` |

@@ -96,20 +96,21 @@ function registerExec(parent: Command): void {
 			initLog({ projectDir });
 			log(TAG, `command=exec subcommand=run name=${name} project=${config.projectDir}`);
 
+			// Multi-repo scope gate (skip for --no-check).
+			// Runs before --matcher so every tool call can activate scope.
+			if (!isNoCheck) {
+				const sessionId = extractSessionId(event.raw);
+				if (!activateScope(config.projectDir, event.raw, sessionId)) {
+					log(TAG, `Scope not active for "${config.projectDir}", allowing`);
+					adapter.allow();
+				}
+			}
+
 			// Matcher filter
 			if (opts.matcher && event.toolName) {
 				const re = new RegExp(opts.matcher);
 				if (!re.test(event.toolName)) {
 					log(TAG, `Tool "${event.toolName}" does not match --matcher, allowing`);
-					adapter.allow();
-				}
-			}
-
-			// Multi-repo scope gate (skip for --no-check)
-			if (!isNoCheck) {
-				const sessionId = extractSessionId(event.raw);
-				if (!activateScope(config.projectDir, event.raw, sessionId)) {
-					log(TAG, `Scope not active for "${config.projectDir}", allowing`);
 					adapter.allow();
 				}
 			}
@@ -159,18 +160,19 @@ function registerExec(parent: Command): void {
 			initLog({ projectDir });
 			log(TAG, `command=exec subcommand=check name=${name} project=${config.projectDir}`);
 
+			// Scope gate before matcher so every tool call can activate scope.
+			const sessionId = extractSessionId(event.raw);
+			if (!activateScope(config.projectDir, event.raw, sessionId)) {
+				log(TAG, `Scope not active for "${config.projectDir}", allowing`);
+				adapter.allow();
+			}
+
 			if (opts.matcher && event.toolName) {
 				const re = new RegExp(opts.matcher);
 				if (!re.test(event.toolName)) {
 					log(TAG, `Tool "${event.toolName}" does not match --matcher, allowing`);
 					adapter.allow();
 				}
-			}
-
-			const sessionId = extractSessionId(event.raw);
-			if (!activateScope(config.projectDir, event.raw, sessionId)) {
-				log(TAG, `Scope not active for "${config.projectDir}", allowing`);
-				adapter.allow();
 			}
 
 			const flags: ExecFlags = {
@@ -226,18 +228,19 @@ function registerTask(parent: Command): void {
 			initLog({ projectDir });
 			log(TAG, `command=task subcommand=check name=${name} project=${config.projectDir}`);
 
+			// Scope gate before matcher so every tool call can activate scope.
+			const sessionId = extractSessionId(event.raw);
+			if (!activateScope(config.projectDir, event.raw, sessionId)) {
+				log(TAG, `Scope not active for "${config.projectDir}", allowing`);
+				adapter.allow();
+			}
+
 			if (opts.matcher && event.toolName) {
 				const re = new RegExp(opts.matcher);
 				if (!re.test(event.toolName)) {
 					log(TAG, `Tool "${event.toolName}" does not match --matcher, allowing`);
 					adapter.allow();
 				}
-			}
-
-			const sessionId = extractSessionId(event.raw);
-			if (!activateScope(config.projectDir, event.raw, sessionId)) {
-				log(TAG, `Scope not active for "${config.projectDir}", allowing`);
-				adapter.allow();
 			}
 
 			const flags: TaskFlags = {
@@ -306,18 +309,19 @@ function registerSync(parent: Command): void {
 			initLog({ projectDir });
 			log(TAG, `command=sync specs=${specArgs.join(",")} project=${config.projectDir}`);
 
+			// Scope gate before matcher so every tool call can activate scope.
+			const sessionId = extractSessionId(event.raw);
+			if (!activateScope(config.projectDir, event.raw, sessionId)) {
+				log(TAG, `Scope not active for "${config.projectDir}", allowing`);
+				adapter.allow();
+			}
+
 			if (opts.matcher && event.toolName) {
 				const re = new RegExp(opts.matcher);
 				if (!re.test(event.toolName)) {
 					log(TAG, `Tool "${event.toolName}" does not match --matcher, allowing`);
 					adapter.allow();
 				}
-			}
-
-			const sessionId = extractSessionId(event.raw);
-			if (!activateScope(config.projectDir, event.raw, sessionId)) {
-				log(TAG, `Scope not active for "${config.projectDir}", allowing`);
-				adapter.allow();
 			}
 
 			const rawOnFail = typeof opts.onFail === "string" ? opts.onFail : undefined;
@@ -363,6 +367,23 @@ function registerState(parent: Command): void {
 			log(TAG, `command=state subcommand=save project=${config.projectDir}`);
 
 			const flags: StateFlags = { subcommand: "save" };
+			return runState(config, adapter, event, flags);
+		});
+
+	// state append
+	state
+		.command("append")
+		.description("Append event input as a new entry (records HEAD SHA per entry)")
+		.option("--project <path>", "Override project directory")
+		.action(async (opts) => {
+			const adapter = getAdapter();
+			const event = await adapter.readEvent();
+			const projectDir = resolveProject(opts.project, event.cwd);
+			const config = loadConfig(projectDir);
+			initLog({ projectDir });
+			log(TAG, `command=state subcommand=append project=${config.projectDir}`);
+
+			const flags: StateFlags = { subcommand: "append" };
 			return runState(config, adapter, event, flags);
 		});
 

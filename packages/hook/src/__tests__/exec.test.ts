@@ -134,7 +134,14 @@ describe("runExec() check subcommand", () => {
 	let exitSpy: ReturnType<typeof spyOn>;
 	let stderrSpy: ReturnType<typeof spyOn>;
 	let tmpDir: string;
+	let savedVerbose: string | undefined;
 	const ExitError = class extends Error {};
+
+	/** Return the block message (last stderr write before process.exit). */
+	const blockMessage = () => {
+		const calls = stderrSpy.mock.calls;
+		return calls[calls.length - 1][0] as string;
+	};
 
 	beforeEach(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "chunk-hook-exec-test-"));
@@ -143,6 +150,9 @@ describe("runExec() check subcommand", () => {
 		});
 		stderrSpy = spyOn(process.stderr, "write").mockImplementation(() => true);
 		process.env.CHUNK_HOOK_CONSUME_DELAY_MS = "0";
+		// Suppress log-to-stderr so only adapter.block() output lands in the spy.
+		savedVerbose = process.env.CHUNK_HOOK_VERBOSE;
+		delete process.env.CHUNK_HOOK_VERBOSE;
 	});
 
 	afterEach(() => {
@@ -150,6 +160,7 @@ describe("runExec() check subcommand", () => {
 		stderrSpy.mockRestore();
 		rmSync(tmpDir, { recursive: true, force: true });
 		delete process.env.CHUNK_HOOK_CONSUME_DELAY_MS;
+		if (savedVerbose !== undefined) process.env.CHUNK_HOOK_VERBOSE = savedVerbose;
 	});
 
 	it("allows (exit 0) when sentinel shows pass", async () => {
@@ -182,7 +193,7 @@ describe("runExec() check subcommand", () => {
 		const flags = { subcommand: "check" as const, name: "myexec", always: true };
 		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
 		expect(exitSpy).toHaveBeenCalledWith(2);
-		expect(stderrSpy.mock.calls[0][0]).toContain("3 tests failed");
+		expect(blockMessage()).toContain("3 tests failed");
 	});
 
 	it("blocks with 'no results' message when no sentinel exists", async () => {
@@ -190,7 +201,7 @@ describe("runExec() check subcommand", () => {
 		const flags = { subcommand: "check" as const, name: "myexec", always: true };
 		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
 		expect(exitSpy).toHaveBeenCalledWith(2);
-		const message = stderrSpy.mock.calls[0][0] as string;
+		const message = blockMessage();
 		expect(message).toContain("has no results");
 		expect(message).toContain("Run it first");
 	});
@@ -206,7 +217,7 @@ describe("runExec() check subcommand", () => {
 		const flags = { subcommand: "check" as const, name: "myexec", always: true };
 		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
 		expect(exitSpy).toHaveBeenCalledWith(2);
-		expect(stderrSpy.mock.calls[0][0]).toContain("still running");
+		expect(blockMessage()).toContain("still running");
 	});
 
 	it("runner command in 'no results' block message uses shell-quoted --cmd", async () => {
@@ -218,7 +229,7 @@ describe("runExec() check subcommand", () => {
 			cmd: "echo 'world'",
 		};
 		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
-		const message = stderrSpy.mock.calls[0][0] as string;
+		const message = blockMessage();
 		// The suggested re-run command should have properly escaped single quotes
 		expect(message).toContain(`--cmd 'echo '\\''world'\\'''`);
 	});
