@@ -6,12 +6,14 @@
  *   2. Consume sentinel → missing / pending / pass / fail
  */
 
+import { readMarker } from "../commands/scope";
 import type { AgentEvent, HookAdapter } from "./adapter";
-import type { ResolvedConfig } from "./config";
+import type { ResolvedConfig, ResolvedExec } from "./config";
 import { getTriggerPatterns } from "./config";
+import { computeFingerprint, detectChanges } from "./git";
 import { log } from "./log";
 import type { SentinelData } from "./sentinel";
-import { incrementBlockCount, resetBlockCount } from "./sentinel";
+import { incrementBlockCount, readSentinel, resetBlockCount } from "./sentinel";
 
 // ---------------------------------------------------------------------------
 // Sentinel evaluation result
@@ -68,6 +70,105 @@ export function evaluateSentinel(
 
 	if (sentinel.status === "pass") return { kind: "pass" };
 	return { kind: "fail", sentinel };
+}
+
+// ---------------------------------------------------------------------------
+// Exec pre-evaluation pipeline (pure)
+// ---------------------------------------------------------------------------
+
+/** Discriminated union describing the outcome of pre-evaluating an exec spec. */
+export type ExecCheckVerdict =
+	| { kind: "skip-trigger" }
+	| { kind: "skip-no-changes" }
+	| { kind: "missing" }
+	| { kind: "pending"; sentinel?: SentinelData }
+	| { kind: "pass" }
+	| { kind: "fail"; sentinel: SentinelData };
+
+/** Optional pre-computed values to avoid redundant git operations. */
+export type PreEvalCache = {
+	/** Pre-computed result of `detectChanges()`. When undefined, detection runs inline. */
+	hasChanges?: boolean;
+	/** Pre-computed result of `computeFingerprint()`. When undefined, computed inline. */
+	contentHash?: string;
+};
+
+/**
+ * Pure pre-evaluation pipeline for an exec spec.
+ *
+ * Runs the full check logic — trigger matching, change detection, sentinel
+ * reading, session-aware and content-aware staleness — and returns a verdict
+ * without any side effects (no `process.exit`, no sentinel removal).
+ *
+ * Both standalone `exec check` and `sync check` delegate to this function.
+ *
+ * @param config     Resolved project config.
+ * @param adapter    Hook adapter (used only for trigger matching, not for blocking).
+ * @param event      The current agent event.
+ * @param exec       Resolved exec configuration (command, fileExt, always, etc.).
+ * @param flags      Parsed exec flags (name, staged, trigger, etc.).
+ * @param cache      Optional pre-computed change detection and fingerprint values.
+ */
+export async function preEvaluateExec(
+	config: ResolvedConfig,
+	adapter: HookAdapter,
+	event: AgentEvent,
+	exec: ResolvedExec,
+	flags: { name: string; staged?: boolean; on?: string; trigger?: string },
+	cache?: PreEvalCache,
+): Promise<ExecCheckVerdict> {
+	// Trigger matching — skip if the event doesn't match the trigger filter.
+	const triggerPatterns = resolveTriggerPatterns(`exec:${flags.name}`, config, flags);
+	if (triggerPatterns.length > 0 && !matchesTrigger(adapter, event, triggerPatterns)) {
+		return { kind: "skip-trigger" };
+	}
+
+	// Skip-if-no-changes.
+	// At push time the working tree is always clean, so detectChanges would
+	// short-circuit — skipping sentinel/fingerprint validation entirely. We
+	// still keep it for non-push events as a performance optimization.
+	const isPush = matchesTrigger(adapter, event, ["git push"]);
+	if (!exec.always && !isPush) {
+		const hasChanges =
+			cache?.hasChanges ??
+			(await detectChanges({
+				cwd: config.projectDir,
+				fileExt: exec.fileExt,
+				staged: flags.staged,
+			}));
+		if (!hasChanges) {
+			return { kind: "skip-no-changes" };
+		}
+	}
+
+	// Read the individual sentinel.
+	const sentinel = readSentinel(config.sentinelDir, config.projectDir, flags.name);
+
+	// Session-aware staleness.
+	const marker = readMarker(config.projectDir);
+	const currentSessionId = marker?.sessionId;
+
+	// Content-aware staleness: compute or use cached fingerprint.
+	const contentHash =
+		cache?.contentHash ??
+		(await computeFingerprint({
+			cwd: config.projectDir,
+			staged: flags.staged,
+			fileExt: exec.fileExt,
+		}));
+
+	const result = evaluateSentinel(sentinel, currentSessionId, contentHash);
+
+	switch (result.kind) {
+		case "missing":
+			return { kind: "missing" };
+		case "pending":
+			return { kind: "pending", sentinel };
+		case "pass":
+			return { kind: "pass" };
+		case "fail":
+			return { kind: "fail", sentinel: result.sentinel };
+	}
 }
 
 // ---------------------------------------------------------------------------
