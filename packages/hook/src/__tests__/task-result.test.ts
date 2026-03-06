@@ -104,6 +104,32 @@ describe("task-result", () => {
 			expect(sentinel.status).toBe("pass");
 			expect(sentinel.rawResult).toBeUndefined();
 		});
+
+		it("injects sessionId into allow sentinel when provided", () => {
+			const sentinel = taskResultToSentinel({ decision: "allow" }, undefined, "sess-123");
+			expect(sentinel.status).toBe("pass");
+			expect(sentinel.sessionId).toBe("sess-123");
+		});
+
+		it("injects sessionId into block sentinel when provided", () => {
+			const sentinel = taskResultToSentinel(
+				{ decision: "block", reason: "bad" },
+				undefined,
+				"sess-456",
+			);
+			expect(sentinel.status).toBe("fail");
+			expect(sentinel.sessionId).toBe("sess-456");
+		});
+
+		it("omits sessionId when not provided", () => {
+			const sentinel = taskResultToSentinel({ decision: "allow" });
+			expect(sentinel.sessionId).toBeUndefined();
+		});
+
+		it("omits sessionId when undefined is passed explicitly", () => {
+			const sentinel = taskResultToSentinel({ decision: "block" }, undefined, undefined);
+			expect(sentinel.sessionId).toBeUndefined();
+		});
 	});
 
 	// -----------------------------------------------------------------------
@@ -146,7 +172,7 @@ describe("task-result", () => {
 			expect(existsSync(path)).toBe(true);
 		});
 
-		it("passes through existing SentinelData format (legacy compat)", () => {
+		it("passes through existing SentinelData format", () => {
 			writeSentinel(testDir, projectDir, name, {
 				status: "pending",
 				startedAt: "2024-01-01T00:00:00Z",
@@ -175,6 +201,40 @@ describe("task-result", () => {
 
 			const result = readTaskResult(testDir, projectDir, name);
 			expect(result).toBeUndefined();
+		});
+
+		it("injects sessionId into converted TaskResult", () => {
+			const path = sentinelPath(testDir, projectDir, name);
+			writeFileSync(path, JSON.stringify({ decision: "allow" }), "utf-8");
+
+			const result = readTaskResult(testDir, projectDir, name, "sess-abc");
+			expect(result).toBeDefined();
+			expect(result?.status).toBe("pass");
+			expect(result?.sessionId).toBe("sess-abc");
+		});
+
+		it("does not inject sessionId into existing SentinelData format", () => {
+			writeSentinel(testDir, projectDir, name, {
+				status: "pass",
+				startedAt: "2024-01-01T00:00:00Z",
+				project: projectDir,
+			});
+
+			const result = readTaskResult(testDir, projectDir, name, "sess-xyz");
+			expect(result).toBeDefined();
+			// SentinelData pass-through should NOT have sessionId injected —
+			// it already has whatever the original writer set.
+			expect(result?.sessionId).toBeUndefined();
+		});
+
+		it("injects sessionId into block TaskResult", () => {
+			const path = sentinelPath(testDir, projectDir, name);
+			writeFileSync(path, JSON.stringify({ decision: "block", reason: "nope" }), "utf-8");
+
+			const result = readTaskResult(testDir, projectDir, name, "sess-block");
+			expect(result).toBeDefined();
+			expect(result?.status).toBe("fail");
+			expect(result?.sessionId).toBe("sess-block");
 		});
 	});
 });

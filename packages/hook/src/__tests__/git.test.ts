@@ -156,12 +156,12 @@ describe("git helpers", () => {
 	});
 
 	describe("substitutePlaceholders()", () => {
-		it("replaces {{CHANGED_FILES}}", () => {
+		it("replaces {{CHANGED_FILES}} with shell-quoted paths", () => {
 			const result = substitutePlaceholders("go test {{CHANGED_FILES}}", ["a.go", "b.go"]);
 			expect(result).toBe("go test 'a.go' 'b.go'");
 		});
 
-		it("replaces {{CHANGED_PACKAGES}}", () => {
+		it("replaces {{CHANGED_PACKAGES}} with shell-quoted paths", () => {
 			const result = substitutePlaceholders("go test {{CHANGED_PACKAGES}}/...", [
 				"pkg/a/file.go",
 				"pkg/b/file.go",
@@ -174,7 +174,7 @@ describe("git helpers", () => {
 			expect(result).toBe("go test ./...");
 		});
 
-		it("replaces both placeholders", () => {
+		it("replaces both placeholders with shell-quoted paths", () => {
 			const result = substitutePlaceholders("test {{CHANGED_FILES}} in {{CHANGED_PACKAGES}}", [
 				"src/a.ts",
 			]);

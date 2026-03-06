@@ -51,7 +51,7 @@ import {
 } from "../lib/check";
 import type { ResolvedConfig } from "../lib/config";
 import { getExec, getTask } from "../lib/config";
-import { detectChanges } from "../lib/git";
+import { computeFingerprint, detectChanges } from "../lib/git";
 import { log } from "../lib/log";
 import type { SentinelData } from "../lib/sentinel";
 import { readSentinel, removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
@@ -245,6 +245,10 @@ export async function runSync(
 	// extension filter.
 	const changeCache = await precomputeChanges(config, flags);
 
+	// Precompute fingerprints for exec specs with changes, used for
+	// content-aware sentinel staleness detection.
+	const hashCache = await precomputeFingerprints(config, flags, changeCache);
+
 	// Walk through specs in order, skipping already-passed ones.
 	// By default, we walk ALL specs and gather non-pass results into a
 	// single combined block message instead of stopping at the first issue.
@@ -280,9 +284,14 @@ export async function runSync(
 		// Read the individual command's sentinel.
 		const sentinel =
 			spec.type === "task"
-				? readTaskResult(config.sentinelDir, config.projectDir, spec.name)
+				? readTaskResult(config.sentinelDir, config.projectDir, spec.name, currentSessionId)
 				: readSentinel(config.sentinelDir, config.projectDir, spec.name);
-		const result = evaluateSentinel(sentinel, currentSessionId);
+
+		// Fingerprint is only relevant for exec specs — tasks don't have
+		// fileExt-scoped diffs and use a different staleness model.
+		const specContentHash =
+			spec.type === "exec" ? hashCache.get(fingerprintCacheKey(config, spec, flags)) : undefined;
+		const result = evaluateSentinel(sentinel, currentSessionId, specContentHash);
 
 		log(t, `  ${specKey}: ${result.kind}`);
 
@@ -618,6 +627,54 @@ async function precomputeChanges(
 		});
 		cache.set(key, hasChanges);
 		log(TAG, `change detection [${key}]: ${hasChanges ? "changes found" : "no changes"}`);
+	}
+
+	return cache;
+}
+
+/**
+ * Build a cache key for fingerprint lookups, scoped by exec name so each
+ * spec gets its own fingerprint (different execs may have different fileExt).
+ */
+function fingerprintCacheKey(config: ResolvedConfig, spec: CommandSpec, flags: SyncFlags): string {
+	if (spec.type !== "exec") return "";
+	const exec = getExec(config, spec.name);
+	return `fp|${exec?.fileExt || "*"}|${flags.staged ? "staged" : "all"}`;
+}
+
+/**
+ * Precompute fingerprints for each unique `{fileExt, staged}` combination
+ * across exec specs that actually have changes. Specs with no changes are
+ * skipped — their sentinels are auto-passed and never reach fingerprint validation.
+ */
+async function precomputeFingerprints(
+	config: ResolvedConfig,
+	flags: SyncFlags,
+	changeCache: Map<string, boolean>,
+): Promise<Map<string, string>> {
+	const cache = new Map<string, string>();
+	const seen = new Set<string>();
+
+	for (const spec of flags.specs) {
+		if (spec.type !== "exec") continue;
+		const exec = getExec(config, spec.name);
+		if (!exec) continue;
+
+		const key = fingerprintCacheKey(config, spec, flags);
+		if (seen.has(key)) continue;
+		seen.add(key);
+
+		// Only hash specs that have changes — no-change specs are auto-passed.
+		const changeKey = changeCacheKey(exec.fileExt, flags.staged);
+		if (!exec.always && !flags.always && !(changeCache.get(changeKey) ?? false)) continue;
+
+		const hash = await computeFingerprint({
+			cwd: config.projectDir,
+			fileExt: exec.fileExt,
+			staged: flags.staged,
+		});
+		cache.set(key, hash);
+		log(TAG, `fingerprint [${key}]: ${hash.slice(0, 12)}…`);
 	}
 
 	return cache;
