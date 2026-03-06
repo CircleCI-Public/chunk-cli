@@ -10,6 +10,7 @@ import {
 	execCommandInSandbox,
 	listSandboxes,
 } from "./commands/sandbox";
+import { runSandboxPrepare } from "./commands/sandbox/prepare";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
@@ -168,6 +169,12 @@ Environment Variables:
 		.command("upgrade")
 		.description("Update to the latest version")
 		.action(async () => process.exit((await runUpgrade()).exitCode));
+
+	const sandbox = program.command("sandbox").description("Manage sandbox environments for testing");
+	sandbox
+		.command("prepare")
+		.description("Prepare the hook environment before a session begins")
+		.action(async () => process.exit((await runSandboxPrepare()).exitCode));
 
 	// Hook commands — exec, task, sync, state, scope for AI agent hooks
 	const hook = program
