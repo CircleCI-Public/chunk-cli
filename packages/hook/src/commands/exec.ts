@@ -126,8 +126,20 @@ async function runCheck(
 		adapter.allow();
 	}
 
-	// Skip-if-no-changes
-	if (!exec.always) {
+	// Skip-if-no-changes (commit-time optimization).
+	//
+	// At push time the working tree is always clean (`git status --porcelain`
+	// returns nothing) so detectChanges would short-circuit to allow — skipping
+	// sentinel/fingerprint validation entirely. This created a push-time bypass
+	// where reverted or plumbing-crafted commits could be pushed unchecked.
+	//
+	// We still keep detectChanges for non-push events because it is a valuable
+	// performance optimisation: it avoids sentinel I/O and hash computation for
+	// tool calls that touch unrelated files (e.g. editing README when the exec
+	// is scoped to .go files via fileExt). The hook fires on every matching
+	// run_in_terminal call, potentially dozens per session.
+	const isPush = matchesTrigger(adapter, event, ["git push"]);
+	if (!exec.always && !isPush) {
 		const hasChanges = await detectChanges({
 			cwd: config.projectDir,
 			fileExt: exec.fileExt,

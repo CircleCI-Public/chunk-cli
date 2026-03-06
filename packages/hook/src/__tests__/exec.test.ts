@@ -234,3 +234,91 @@ describe("runExec() check subcommand", () => {
 		expect(message).toContain(`--cmd 'echo '\\''world'\\'''`);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Push-time bypass prevention
+// ---------------------------------------------------------------------------
+
+describe("runExec() push-time bypass prevention", () => {
+	let exitSpy: ReturnType<typeof spyOn>;
+	let stderrSpy: ReturnType<typeof spyOn>;
+	let tmpDir: string;
+	let savedVerbose: string | undefined;
+	const ExitError = class extends Error {};
+
+	const blockMessage = () => {
+		const calls = stderrSpy.mock.calls;
+		return calls[calls.length - 1][0] as string;
+	};
+
+	/** Adapter that reports the event as a `git push` shell command. */
+	function makePushAdapter(overrides: Partial<HookAdapter> = {}): HookAdapter {
+		return makeTestAdapter({
+			isShellToolCall: () => true,
+			getShellCommand: () => "git push origin main",
+			...overrides,
+		});
+	}
+
+	beforeEach(() => {
+		tmpDir = mkdtempSync(join(tmpdir(), "chunk-hook-exec-push-test-"));
+		exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new ExitError("process.exit called");
+		});
+		stderrSpy = spyOn(process.stderr, "write").mockImplementation(() => true);
+		process.env.CHUNK_HOOK_CONSUME_DELAY_MS = "0";
+		savedVerbose = process.env.CHUNK_HOOK_VERBOSE;
+		delete process.env.CHUNK_HOOK_VERBOSE;
+	});
+
+	afterEach(() => {
+		exitSpy.mockRestore();
+		stderrSpy.mockRestore();
+		rmSync(tmpDir, { recursive: true, force: true });
+		delete process.env.CHUNK_HOOK_CONSUME_DELAY_MS;
+		if (savedVerbose !== undefined) process.env.CHUNK_HOOK_VERBOSE = savedVerbose;
+	});
+
+	it("blocks push when no sentinel exists (does not short-circuit on clean tree)", async () => {
+		const config = makeConfig(tmpDir);
+		// always: false (default) — detectChanges would allow on a clean tree,
+		// but push events must bypass detectChanges and fall through to sentinel check.
+		const flags = { subcommand: "check" as const, name: "tests" };
+		await expect(runExec(config, makePushAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		expect(exitSpy).toHaveBeenCalledWith(2);
+		expect(blockMessage()).toContain("has no results");
+	});
+
+	it("allows push when sentinel shows pass", async () => {
+		const config = makeConfig(tmpDir);
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: new Date().toISOString(),
+			finishedAt: new Date().toISOString(),
+			exitCode: 0,
+		};
+		writeSentinel(tmpDir, "/test/project", "tests", sentinel);
+
+		const flags = { subcommand: "check" as const, name: "tests" };
+		await expect(runExec(config, makePushAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		expect(exitSpy).toHaveBeenCalledWith(0);
+	});
+
+	it("blocks push when sentinel shows fail", async () => {
+		const config = makeConfig(tmpDir);
+		const sentinel: SentinelData = {
+			status: "fail",
+			startedAt: new Date().toISOString(),
+			finishedAt: new Date().toISOString(),
+			exitCode: 1,
+			output: "tests failed",
+			command: "bun test",
+		};
+		writeSentinel(tmpDir, "/test/project", "tests", sentinel);
+
+		const flags = { subcommand: "check" as const, name: "tests" };
+		await expect(runExec(config, makePushAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		expect(exitSpy).toHaveBeenCalledWith(2);
+		expect(blockMessage()).toContain("tests failed");
+	});
+});

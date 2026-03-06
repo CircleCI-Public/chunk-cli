@@ -871,3 +871,32 @@ by `resolveProject()` to override the project directory for config loading and s
 - ≤ 72 char lines, valid Markdown (backticks for code/config)
 - Explain **what** and **why**, not how — bullet per significant change
 - Flag breaking changes, compatibility issues, or caveats when applicable
+
+## Security Model
+
+### `contentHash` (fingerprint) enforcement
+
+Sentinels record `contentHash = sha256(HEAD + "\n" + git diff HEAD)`. At check time the current
+fingerprint is recomputed and compared. Mismatch → sentinel treated as stale ("missing") →
+command must re-run. This blocks bait-and-switch, staged-swap, and history-rewrite attacks.
+
+### Push-time detection
+
+Exec `detectChanges()` uses `git status --porcelain` — always empty at push time. Push events
+(`git push`) bypass the `detectChanges` short-circuit and fall through directly to
+sentinel/fingerprint validation. Task is not affected: it uses fingerprint-based comparison
+(`precomputeTaskNoChanges`) which includes HEAD in the hash, so a changed HEAD after
+revert/plumbing is detected automatically.
+
+### `detectChanges` is a performance optimisation, not a security gate
+
+It skips sentinel I/O and hash computation for tool calls that touch unrelated files. The
+fingerprint (`contentHash`) is the security-critical mechanism.
+
+### Known limitations
+
+- **`fileExt` gap:** `--file-ext .go` only monitors `.go` files; other extensions are unprotected.
+- **Config self-sabotage:** Agent can modify `.chunk/hook/config.yml` or `.claude/settings.json`.
+- **Trigger allowlist:** Unlisted commands (`git revert`, `git cherry-pick`) bypass hooks entirely.
+- **Git plumbing:** `hash-object`/`write-tree`/`commit-tree`/`update-ref` create commits without
+  triggering tool calls.
