@@ -9,6 +9,7 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
+import { listSandboxes } from "./commands/sandbox";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
@@ -162,6 +163,13 @@ Examples:
 		.command("hook")
 		.description("Manage AI coding agent hooks (exec, task, sync, state, scope)");
 	registerHookCommands(hook);
+
+	const sandboxes = program.command("sandboxes").description("Manage sandboxes");
+	sandboxes
+		.command("list")
+		.description("List all sandboxes in an organization")
+		.requiredOption("--org-id <orgId>", "Org ID to list sandboxes for")
+		.action(async (options) => process.exit((await listSandboxes(options.orgId)).exitCode));
 
 	program.action(() => {
 		program.outputHelp();

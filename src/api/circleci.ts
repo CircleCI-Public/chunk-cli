@@ -23,6 +23,28 @@ export interface CircleCIRunResponse {
 	[key: string]: unknown;
 }
 
+export interface Sandbox {
+	id: string;
+	name: string;
+	organization_id: string;
+	image?: string;
+	[key: string]: unknown;
+}
+
+export interface SandboxListResponse {
+	items: Sandbox[];
+	[key: string]: unknown;
+}
+
+export interface SandboxAccessTokenResponse {
+	access_token: string;
+	[key: string]: unknown;
+}
+
+export interface ExecCommandResponse {
+	[key: string]: unknown;
+}
+
 export class CircleCIError extends Error {
 	constructor(
 		message: string,
@@ -93,4 +115,120 @@ export async function triggerChunkRun(
 			responseBody,
 		);
 	}
+}
+
+async function circleciRequest<T>(
+	url: string,
+	options: RequestInit,
+): Promise<T> {
+	let response: Response;
+	try {
+		response = await fetch(url, options);
+	} catch (error) {
+		throw new CircleCIError(
+			`Failed to connect to CircleCI API: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+
+	const responseBody = await response.text();
+
+	if (!response.ok) {
+		throw new CircleCIError(
+			`CircleCI API request failed with status ${response.status}`,
+			response.status,
+			responseBody,
+		);
+	}
+
+	try {
+		return JSON.parse(responseBody) as T;
+	} catch {
+		throw new CircleCIError(
+			"Invalid JSON response from CircleCI API",
+			response.status,
+			responseBody,
+		);
+	}
+}
+
+/**
+ * List sandboxes for an organization
+ */
+export async function listSandboxesForOrg(
+	orgId: string,
+	token: string,
+): Promise<SandboxListResponse> {
+	return circleciRequest<SandboxListResponse>(
+		`https://circleci.com/api/v2/sandboxes?org_id=${orgId}`,
+		{
+			headers: {
+				Accept: "application/json",
+				"Circle-Token": token,
+			},
+		},
+	);
+}
+
+/**
+ * Create a new sandbox
+ */
+export async function createSandbox(
+	organizationId: string,
+	name: string,
+	token: string,
+	image?: string,
+): Promise<Sandbox> {
+	return circleciRequest<Sandbox>("https://circleci.com/api/v2/sandboxes", {
+		method: "POST",
+		headers: {
+			Accept: "application/json",
+			"Content-Type": "application/json",
+			"Circle-Token": token,
+		},
+		body: JSON.stringify({ organization_id: organizationId, name, ...(image && { image }) }),
+	});
+}
+
+/**
+ * Create an access token for a sandbox
+ */
+export async function createSandboxAccessToken(
+	sandboxId: string,
+	organizationId: string,
+	token: string,
+): Promise<SandboxAccessTokenResponse> {
+	return circleciRequest<SandboxAccessTokenResponse>(
+		`https://circleci.com/api/v2/sandboxes/${sandboxId}/access_token`,
+		{
+			method: "POST",
+			headers: {
+				Accept: "application/json",
+				"Content-Type": "application/json",
+				"Circle-Token": token,
+			},
+			body: JSON.stringify({ organization_id: organizationId }),
+		},
+	);
+}
+
+/**
+ * Execute a command in a sandbox
+ */
+export async function execCommand(
+	command: string,
+	args: string[],
+	accessToken: string,
+): Promise<ExecCommandResponse> {
+	return circleciRequest<ExecCommandResponse>(
+		"https://circleci.com/api/v2/sandboxes/exec",
+		{
+			method: "POST",
+			headers: {
+				Accept: "application/json",
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${accessToken}`,
+			},
+			body: JSON.stringify({ command, args }),
+		},
+	);
 }
