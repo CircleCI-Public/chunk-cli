@@ -117,10 +117,7 @@ export async function triggerChunkRun(
 	}
 }
 
-async function circleciRequest<T>(
-	url: string,
-	options: RequestInit,
-): Promise<T> {
+async function circleciRequest<T>(url: string, options: RequestInit): Promise<T> {
 	let response: Response;
 	try {
 		response = await fetch(url, options);
@@ -220,16 +217,13 @@ export async function execCommand(
 	args: string[],
 	accessToken: string,
 ): Promise<ExecCommandResponse> {
-	return circleciRequest<ExecCommandResponse>(
-		"https://circleci.com/api/v2/sandboxes/exec",
-		{
-			method: "POST",
-			headers: {
-				Accept: "application/json",
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${accessToken}`,
-			},
-			body: JSON.stringify({ command, args }),
+	return circleciRequest<ExecCommandResponse>("https://circleci.com/api/v2/sandboxes/exec", {
+		method: "POST",
+		headers: {
+			Accept: "application/json",
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${accessToken}`,
 		},
-	);
+		body: JSON.stringify({ command, args }),
+	});
 }

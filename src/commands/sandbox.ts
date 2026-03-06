@@ -1,7 +1,7 @@
 import {
 	CircleCIError,
-	type ExecCommandResponse,
 	createSandboxAccessToken,
+	type ExecCommandResponse,
 	execCommand,
 	listSandboxesForOrg,
 } from "../api/circleci";
@@ -27,11 +27,7 @@ export async function listSandboxes(orgId: string): Promise<CommandResult> {
 		result = await listSandboxesForOrg(orgId, token);
 	} catch (error) {
 		if (error instanceof CircleCIError) {
-			printError(
-				"CircleCI API error",
-				error.message,
-				"Check your CIRCLECI_TOKEN and org ID.",
-			);
+			printError("CircleCI API error", error.message, "Check your CIRCLECI_TOKEN and org ID.");
 			return { exitCode: 2 };
 		}
 		throw error;

@@ -178,7 +178,18 @@ Examples:
 		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID of sandbox")
 		.requiredOption("--command <command>", "Command to execute")
 		.option("--args [args...]", "Arguments to command")
-		.action(async (options) => process.exit((await execCommandInSandbox(options.orgId, options.sandboxId, options.command, options.args)).exitCode));
+		.action(async (options) =>
+			process.exit(
+				(
+					await execCommandInSandbox(
+						options.orgId,
+						options.sandboxId,
+						options.command,
+						options.args,
+					)
+				).exitCode,
+			),
+		);
 
 	program.action(() => {
 		program.outputHelp();
