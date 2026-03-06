@@ -9,7 +9,7 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
-import { listSandboxes } from "./commands/sandbox";
+import { execCommandInSandbox, listSandboxes } from "./commands/sandbox";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
@@ -170,6 +170,15 @@ Examples:
 		.description("List all sandboxes in an organization")
 		.requiredOption("--org-id <orgId>", "Org ID to list sandboxes for")
 		.action(async (options) => process.exit((await listSandboxes(options.orgId)).exitCode));
+
+	sandboxes
+		.command("exec")
+		.description("Execute a command in a sandbox")
+		.requiredOption("--org-id <orgId>", "Org ID of sandbox")
+		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID of sandbox")
+		.requiredOption("--command <command>", "Command to execute")
+		.option("--args [args...]", "Arguments to command")
+		.action(async (options) => process.exit((await execCommandInSandbox(options.orgId, options.sandboxId, options.command, options.args)).exitCode));
 
 	program.action(() => {
 		program.outputHelp();
