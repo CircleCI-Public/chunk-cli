@@ -41,12 +41,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 
 import type { AgentEvent, HookAdapter } from "../lib/adapter";
+import type { ExecCheckVerdict, SentinelCheckResult } from "../lib/check";
 import {
 	blockNoCount,
 	blockWithLimit,
 	evaluateSentinel,
 	guardStopEvent,
 	matchesTrigger,
+	preEvaluateExec,
 	resolveTriggerPatterns,
 } from "../lib/check";
 import type { ResolvedConfig } from "../lib/config";
@@ -54,7 +56,7 @@ import { getExec, getTask } from "../lib/config";
 import { computeFingerprint, detectChanges } from "../lib/git";
 import { log } from "../lib/log";
 import type { SentinelData } from "../lib/sentinel";
-import { readSentinel, removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
+import { removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
 import { getBaselineFingerprint } from "../lib/state";
 import { loadInstructions, readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
 import { readMarker } from "./scope";
@@ -235,11 +237,6 @@ export async function runSync(
 	const group = readGroupSentinel(config.sentinelDir, config.projectDir, flags.specs);
 	log(t, `Group state: ${group.passed.length}/${flags.specs.length} passed`);
 
-	// Session-aware staleness: sentinels from a different session are
-	// treated as missing so commands re-run with fresh context.
-	const marker = readMarker(config.projectDir);
-	const currentSessionId = marker?.sessionId;
-
 	// Hoist detectChanges: precompute change detection results for each unique
 	// {fileExt, staged} combination across all exec specs. This avoids
 	// redundant git operations when multiple execs share the same file
@@ -249,6 +246,11 @@ export async function runSync(
 	// Precompute fingerprints for exec specs with changes, used for
 	// content-aware sentinel staleness detection.
 	const hashCache = await precomputeFingerprints(config, flags, changeCache);
+
+	// Session-aware staleness: sentinels from a different session are
+	// treated as missing so commands re-run with fresh context.
+	const marker = readMarker(config.projectDir);
+	const currentSessionId = marker?.sessionId;
 
 	// Precompute task-level skip-if-no-changes: compare the baseline HEAD
 	// (saved on the first UserPromptSubmit) against the current HEAD and
@@ -271,28 +273,57 @@ export async function runSync(
 			continue;
 		}
 
-		// Skip-if-no-changes for exec specs
+		// ------------------------------------------------------------------
+		// Exec specs: delegate to the shared pre-evaluation pipeline.
+		// ------------------------------------------------------------------
 		if (spec.type === "exec") {
 			const exec = getExec(config, spec.name);
-			if (exec && !exec.always && !flags.always) {
-				const cacheKey = changeCacheKey(exec.fileExt, flags.staged);
-				const hasChanges = changeCache.get(cacheKey) ?? false;
-				if (!hasChanges) {
-					group.passed.push(specKey);
-					writeGroupSentinel(config.sentinelDir, config.projectDir, flags.specs, group);
-					log(
-						t,
-						`  ${specKey}: no changed files → auto-pass (${group.passed.length}/${flags.specs.length})`,
-					);
-					continue;
-				}
-			}
+			if (!exec) continue; // validated at entry
+
+			// Build cache from precomputed values for this spec.
+			const cacheKey = changeCacheKey(exec.fileExt, flags.staged);
+			const fpKey = fingerprintCacheKey(config, spec, flags);
+			const resolvedExec = {
+				...exec,
+				always: exec.always || (flags.always ?? false),
+			};
+			const cache = {
+				hasChanges: changeCache.get(cacheKey),
+				contentHash: hashCache.get(fpKey),
+			};
+
+			// Trigger matching is handled at the sync group level, so pass
+			// empty trigger flags to skip the per-spec trigger check.
+			const verdict = await preEvaluateExec(
+				config,
+				adapter,
+				event,
+				resolvedExec,
+				{ name: spec.name, staged: flags.staged },
+				cache,
+			);
+
+			const handled = handleExecVerdict(
+				config,
+				adapter,
+				event,
+				flags,
+				spec,
+				specKey,
+				group,
+				groupLimit,
+				verdict,
+				collected,
+				t,
+			);
+			if (handled === "exit") return;
+			continue;
 		}
 
-		// Skip-if-no-changes for task specs — compare baseline HEAD against
-		// current HEAD + working tree. Skips review for question-only
-		// interactions where the agent never modified code.
-		if (spec.type === "task" && taskNoChanges) {
+		// ------------------------------------------------------------------
+		// Task specs: skip-if-no-changes, then evaluate sentinel directly.
+		// ------------------------------------------------------------------
+		if (taskNoChanges) {
 			const task = getTask(config, spec.name);
 			if (task && !task.always && !flags.always) {
 				group.passed.push(specKey);
@@ -305,136 +336,31 @@ export async function runSync(
 			}
 		}
 
-		// Read the individual command's sentinel.
-		const sentinel =
-			spec.type === "task"
-				? readTaskResult(config.sentinelDir, config.projectDir, spec.name, currentSessionId)
-				: readSentinel(config.sentinelDir, config.projectDir, spec.name);
-
-		// Fingerprint is only relevant for exec specs — tasks don't have
-		// fileExt-scoped diffs and use a different staleness model.
-		const specContentHash =
-			spec.type === "exec" ? hashCache.get(fingerprintCacheKey(config, spec, flags)) : undefined;
-		const result = evaluateSentinel(sentinel, currentSessionId, specContentHash);
+		const sentinel = readTaskResult(
+			config.sentinelDir,
+			config.projectDir,
+			spec.name,
+			currentSessionId,
+		);
+		const result = evaluateSentinel(sentinel, currentSessionId);
 
 		log(t, `  ${specKey}: ${result.kind}`);
 
-		switch (result.kind) {
-			case "pass": {
-				// Mark as passed in the group sentinel, consume the individual sentinel.
-				group.passed.push(specKey);
-				writeGroupSentinel(config.sentinelDir, config.projectDir, flags.specs, group);
-				removeSentinel(config.sentinelDir, config.projectDir, spec.name);
-				resetBlockCount(config.sentinelDir, config.projectDir, spec.name);
-				log(
-					t,
-					`  ${specKey}: consumed sentinel, updated group (${group.passed.length}/${flags.specs.length})`,
-				);
-				continue;
-			}
-			case "missing": {
-				if (flags.bail) {
-					// Bail mode: block immediately on first missing.
-					const reason = await buildMissingMessage(config, event, flags, spec);
-					log(t, `  ${specKey}: missing → block (agent must run command first)`);
-					blockNoCount(t, adapter, reason, config.projectDir);
-					return; // blockNoCount calls process.exit
-				}
-				// Default: gather and continue.
-				const reason = await buildMissingMessage(config, event, flags, spec);
-				collected.push({ specKey, kind: "missing", reason });
-				log(t, `  ${specKey}: missing → collected (${collected.length})`);
-				continue;
-			}
-			case "pending": {
-				// Check timeout.
-				const timeout = resolveTimeout(config, spec);
-				if (sentinel?.startedAt && timeout > 0) {
-					const elapsed = (Date.now() - new Date(sentinel.startedAt).getTime()) / 1000;
-					if (elapsed > timeout) {
-						if (flags.bail) {
-							log(
-								t,
-								`  ${specKey}: pending (timed out after ${Math.round(elapsed)}s) → resetting group`,
-							);
-							removeSentinel(config.sentinelDir, config.projectDir, spec.name);
-							resetGroupOnFailure(config, flags, specKey);
-							const reason =
-								`${specLabel(spec)} timed out after ${Math.round(elapsed)}s ` +
-								`(timeout: ${timeout}s).\n\n` +
-								`Investigate and re-run: ${buildRunCommand(spec, flags)}`;
-							blockWithLimit(t, adapter, config, spec.name, groupLimit, reason);
-							return;
-						}
-						// Default: treat timeout as a failure-like issue.
-						removeSentinel(config.sentinelDir, config.projectDir, spec.name);
-						resetGroupOnFailure(config, flags, specKey);
-						// Sync in-memory group after disk reset to prevent subsequent
-						// pass cases from re-writing stale passed entries.
-						group.passed = readGroupSentinel(
-							config.sentinelDir,
-							config.projectDir,
-							flags.specs,
-						).passed;
-						const reason =
-							`${specLabel(spec)} timed out after ${Math.round(elapsed)}s ` +
-							`(timeout: ${timeout}s).\n\n` +
-							`Investigate and re-run: ${buildRunCommand(spec, flags)}`;
-						collected.push({ specKey, kind: "timeout", reason });
-						log(t, `  ${specKey}: timeout → collected (${collected.length})`);
-						continue;
-					}
-				}
-				if (flags.bail) {
-					log(t, `  ${specKey}: pending → block (waiting for command to complete)`);
-					blockNoCount(
-						t,
-						adapter,
-						`${specLabel(spec)} is still running. Wait for completion before retrying.`,
-						config.projectDir,
-					);
-					return;
-				}
-				// Default: gather pending.
-				collected.push({
-					specKey,
-					kind: "pending",
-					reason: `${specLabel(spec)} is still running. Wait for completion before retrying.`,
-				});
-				log(t, `  ${specKey}: pending → collected (${collected.length})`);
-				continue;
-			}
-			case "fail": {
-				const mode = flags.onFail ?? "restart";
-				if (flags.bail) {
-					if (mode === "retry") {
-						log(t, `  ${specKey}: fail → retry reset (removing only failed spec)`);
-					} else {
-						log(t, `  ${specKey}: fail → resetting group (all commands must re-pass)`);
-					}
-					resetGroupOnFailure(config, flags, specKey);
-					removeSentinel(config.sentinelDir, config.projectDir, spec.name);
-					const reason = buildFailMessage(spec, result.sentinel);
-					blockWithLimit(t, adapter, config, spec.name, groupLimit, reason);
-					return;
-				}
-				// Default: reset group for failure and gather.
-				if (mode === "retry") {
-					log(t, `  ${specKey}: fail → retry reset + collected`);
-				} else {
-					log(t, `  ${specKey}: fail → resetting group + collected`);
-				}
-				resetGroupOnFailure(config, flags, specKey);
-				// Sync in-memory group after disk reset to prevent subsequent
-				// pass cases from re-writing stale passed entries.
-				group.passed = readGroupSentinel(config.sentinelDir, config.projectDir, flags.specs).passed;
-				removeSentinel(config.sentinelDir, config.projectDir, spec.name);
-				const reason = buildFailMessage(spec, result.sentinel);
-				collected.push({ specKey, kind: "fail", reason });
-				log(t, `  ${specKey}: fail → collected (${collected.length})`);
-				continue;
-			}
-		}
+		const handled = await handleTaskVerdict(
+			config,
+			adapter,
+			event,
+			flags,
+			spec,
+			specKey,
+			group,
+			groupLimit,
+			result,
+			sentinel,
+			collected,
+			t,
+		);
+		if (handled === "exit") return;
 	}
 
 	// If any issues were gathered, emit a single combined block message.
@@ -461,6 +387,221 @@ export async function runSync(
 	log(t, "All commands passed → allow");
 	removeGroupSentinel(config.sentinelDir, config.projectDir, flags.specs);
 	adapter.allow();
+}
+
+// ---------------------------------------------------------------------------
+// Exec verdict handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Map an `ExecCheckVerdict` to a sync-loop action.
+ *
+ * Returns `"exit"` when the loop should terminate (bail mode block),
+ * `"continue"` otherwise.
+ */
+function handleExecVerdict(
+	config: ResolvedConfig,
+	adapter: HookAdapter,
+	_event: AgentEvent,
+	flags: SyncFlags,
+	spec: CommandSpec,
+	specKey: string,
+	group: GroupSentinel,
+	groupLimit: number,
+	verdict: ExecCheckVerdict,
+	collected: CollectedIssue[],
+	t: string,
+): "exit" | "continue" {
+	log(t, `  ${specKey}: ${verdict.kind}`);
+
+	switch (verdict.kind) {
+		case "skip-trigger":
+		case "skip-no-changes": {
+			group.passed.push(specKey);
+			writeGroupSentinel(config.sentinelDir, config.projectDir, flags.specs, group);
+			log(
+				t,
+				`  ${specKey}: ${verdict.kind} → auto-pass (${group.passed.length}/${flags.specs.length})`,
+			);
+			return "continue";
+		}
+		case "pass": {
+			group.passed.push(specKey);
+			writeGroupSentinel(config.sentinelDir, config.projectDir, flags.specs, group);
+			resetBlockCount(config.sentinelDir, config.projectDir, spec.name);
+			log(t, `  ${specKey}: pass → updated group (${group.passed.length}/${flags.specs.length})`);
+			return "continue";
+		}
+		case "missing": {
+			const reason =
+				`${specLabel(spec)} has no results. Run it first:\n\n` +
+				`  ${buildRunCommand(spec, flags)}\n\n` +
+				`Retry after the command completes.`;
+			if (flags.bail) {
+				log(t, `  ${specKey}: missing → block (agent must run command first)`);
+				blockNoCount(t, adapter, reason, config.projectDir);
+				return "exit";
+			}
+			collected.push({ specKey, kind: "missing", reason });
+			log(t, `  ${specKey}: missing → collected (${collected.length})`);
+			return "continue";
+		}
+		case "pending": {
+			const timeout = resolveTimeout(config, spec);
+			const sentinel = verdict.sentinel;
+			if (sentinel?.startedAt && timeout > 0) {
+				const elapsed = (Date.now() - new Date(sentinel.startedAt).getTime()) / 1000;
+				if (elapsed > timeout) {
+					removeSentinel(config.sentinelDir, config.projectDir, spec.name);
+					resetGroupOnFailure(config, flags, specKey);
+					const reason =
+						`${specLabel(spec)} timed out after ${Math.round(elapsed)}s ` +
+						`(timeout: ${timeout}s).\n\n` +
+						`Investigate and re-run: ${buildRunCommand(spec, flags)}`;
+					if (flags.bail) {
+						log(
+							t,
+							`  ${specKey}: pending (timed out after ${Math.round(elapsed)}s) → resetting group`,
+						);
+						blockWithLimit(t, adapter, config, spec.name, groupLimit, reason);
+						return "exit";
+					}
+					group.passed = readGroupSentinel(
+						config.sentinelDir,
+						config.projectDir,
+						flags.specs,
+					).passed;
+					collected.push({ specKey, kind: "timeout", reason });
+					log(t, `  ${specKey}: timeout → collected (${collected.length})`);
+					return "continue";
+				}
+			}
+			const pendingReason = `${specLabel(spec)} is still running. Wait for completion before retrying.`;
+			if (flags.bail) {
+				log(t, `  ${specKey}: pending → block (waiting for command to complete)`);
+				blockNoCount(t, adapter, pendingReason, config.projectDir);
+				return "exit";
+			}
+			collected.push({ specKey, kind: "pending", reason: pendingReason });
+			log(t, `  ${specKey}: pending → collected (${collected.length})`);
+			return "continue";
+		}
+		case "fail": {
+			const mode = flags.onFail ?? "restart";
+			resetGroupOnFailure(config, flags, specKey);
+			removeSentinel(config.sentinelDir, config.projectDir, spec.name);
+			const reason = buildFailMessage(spec, verdict.sentinel);
+			if (flags.bail) {
+				log(t, `  ${specKey}: fail → ${mode === "retry" ? "retry reset" : "resetting group"}`);
+				blockWithLimit(t, adapter, config, spec.name, groupLimit, reason);
+				return "exit";
+			}
+			group.passed = readGroupSentinel(config.sentinelDir, config.projectDir, flags.specs).passed;
+			collected.push({ specKey, kind: "fail", reason });
+			log(t, `  ${specKey}: fail → collected (${collected.length})`);
+			return "continue";
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task verdict handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Map an `evaluateSentinel` result to a sync-loop action for task specs.
+ *
+ * Returns `"exit"` when the loop should terminate (bail mode block),
+ * `"continue"` otherwise.
+ */
+async function handleTaskVerdict(
+	config: ResolvedConfig,
+	adapter: HookAdapter,
+	event: AgentEvent,
+	flags: SyncFlags,
+	spec: CommandSpec,
+	specKey: string,
+	group: GroupSentinel,
+	groupLimit: number,
+	result: SentinelCheckResult,
+	sentinel: SentinelData | undefined,
+	collected: CollectedIssue[],
+	t: string,
+): Promise<"exit" | "continue"> {
+	switch (result.kind) {
+		case "pass": {
+			group.passed.push(specKey);
+			writeGroupSentinel(config.sentinelDir, config.projectDir, flags.specs, group);
+			resetBlockCount(config.sentinelDir, config.projectDir, spec.name);
+			log(t, `  ${specKey}: pass → updated group (${group.passed.length}/${flags.specs.length})`);
+			return "continue";
+		}
+		case "missing": {
+			const reason = await buildMissingMessage(config, event, flags, spec);
+			if (flags.bail) {
+				log(t, `  ${specKey}: missing → block (agent must run task first)`);
+				blockNoCount(t, adapter, reason, config.projectDir);
+				return "exit";
+			}
+			collected.push({ specKey, kind: "missing", reason });
+			log(t, `  ${specKey}: missing → collected (${collected.length})`);
+			return "continue";
+		}
+		case "pending": {
+			const timeout = resolveTimeout(config, spec);
+			if (sentinel?.startedAt && timeout > 0) {
+				const elapsed = (Date.now() - new Date(sentinel.startedAt).getTime()) / 1000;
+				if (elapsed > timeout) {
+					removeSentinel(config.sentinelDir, config.projectDir, spec.name);
+					resetGroupOnFailure(config, flags, specKey);
+					const reason =
+						`${specLabel(spec)} timed out after ${Math.round(elapsed)}s ` +
+						`(timeout: ${timeout}s).\n\n` +
+						`Investigate and re-run: ${buildRunCommand(spec, flags)}`;
+					if (flags.bail) {
+						log(
+							t,
+							`  ${specKey}: pending (timed out after ${Math.round(elapsed)}s) → resetting group`,
+						);
+						blockWithLimit(t, adapter, config, spec.name, groupLimit, reason);
+						return "exit";
+					}
+					group.passed = readGroupSentinel(
+						config.sentinelDir,
+						config.projectDir,
+						flags.specs,
+					).passed;
+					collected.push({ specKey, kind: "timeout", reason });
+					log(t, `  ${specKey}: timeout → collected (${collected.length})`);
+					return "continue";
+				}
+			}
+			const pendingReason = `${specLabel(spec)} is still running. Wait for completion before retrying.`;
+			if (flags.bail) {
+				log(t, `  ${specKey}: pending → block (waiting for task to complete)`);
+				blockNoCount(t, adapter, pendingReason, config.projectDir);
+				return "exit";
+			}
+			collected.push({ specKey, kind: "pending", reason: pendingReason });
+			log(t, `  ${specKey}: pending → collected (${collected.length})`);
+			return "continue";
+		}
+		case "fail": {
+			const mode = flags.onFail ?? "restart";
+			resetGroupOnFailure(config, flags, specKey);
+			removeSentinel(config.sentinelDir, config.projectDir, spec.name);
+			const reason = buildFailMessage(spec, result.sentinel);
+			if (flags.bail) {
+				log(t, `  ${specKey}: fail → ${mode === "retry" ? "retry reset" : "resetting group"}`);
+				blockWithLimit(t, adapter, config, spec.name, groupLimit, reason);
+				return "exit";
+			}
+			group.passed = readGroupSentinel(config.sentinelDir, config.projectDir, flags.specs).passed;
+			collected.push({ specKey, kind: "fail", reason });
+			log(t, `  ${specKey}: fail → collected (${collected.length})`);
+			return "continue";
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { runTask } from "../commands/task";
 import type { AgentEvent, HookAdapter } from "../lib/adapter";
 import type { ResolvedConfig } from "../lib/config";
-import type { SentinelData } from "../lib/sentinel";
 import { sentinelPath, writeSentinel } from "../lib/sentinel";
 
 // ---------------------------------------------------------------------------
@@ -91,14 +90,12 @@ describe("runTask() session-aware staleness", () => {
 
 	it("blocks when task sentinel has a different sessionId (stale session)", async () => {
 		const projectDir = "/test/project";
-		const config = makeConfig(tmpDir, projectDir);
 
 		// Write a passing task result with session-A
 		const path = sentinelPath(tmpDir, projectDir, "review");
 		writeFileSync(path, JSON.stringify({ decision: "allow" }), "utf-8");
 
 		// Activate scope marker with session-B
-		const hookDir = join(projectDir, ".chunk", "hook");
 		// runTask reads the marker from config.projectDir — we can't write there
 		// because /test/project doesn't exist. Instead, use a real tmpDir as projectDir.
 		const realProjectDir = mkdtempSync(join(tmpdir(), "chunk-hook-task-proj-"));

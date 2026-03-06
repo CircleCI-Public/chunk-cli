@@ -76,7 +76,8 @@ Behavior:
 
 1. Maintains a **group sentinel** tracking which specs have already passed.
 2. Runs specs left-to-right. For each: reads the individual sentinel, enforces the result.
-3. On **pass**: consumes the individual sentinel, updates group sentinel, moves to next spec.
+3. On **pass**: updates group sentinel, moves to next spec. The individual sentinel **persists** as
+   a cache — it is not consumed. Staleness is detected via session ID and content-hash checks.
 4. On **missing/pending**: blocks with a directive to run/complete that command. Resumes here next time.
 5. On **fail** (default `--on-fail restart`): removes the group sentinel and the individual sentinel,
    blocks. The entire group restarts from the beginning on the next invocation.
@@ -91,11 +92,11 @@ With `--bail`, sync stops at the first non-pass spec and blocks immediately.
 Flags (`--on`, `--trigger`, `--matcher`, `--limit`, `--staged`, `--always`, `--instructions`,
 `--schema`, `--on-fail`, `--bail`) are parsed once and applied to all specs in the group.
 
-**Caveat — standalone `exec check` / `task check`:** Each standalone check self-consumes its
-sentinel on pass. This is correct when only **one** delegated check exists per hook event. When
-multiple standalone checks share the same event, they race — one may consume its sentinel and
-allow while the other hasn't checked yet, causing the second to see "missing" and re-block
-(ping-pong). **Always use `sync check` to group multiple delegated checks on the same event.**
+**Note — standalone `exec check` / `task check`:** Sentinels persist on pass (they are not
+consumed). Staleness is detected via session ID and content-hash mismatches, so stale sentinels
+from a previous session or against different code are automatically treated as missing.
+**Use `sync check` to group multiple delegated checks on the same event** to ensure correct
+ordering and a single combined block message.
 
 ### State: cross-event data sharing
 
@@ -321,8 +322,8 @@ in the delegation pattern (check → block → re-run → check).
 counter — for transient states where the agent needs to wait, not fix anything.
 `blockWithLimit(tag, config, name, limit, reason)` increments the counter and
 auto-allows when the limit is exceeded. On auto-allow, it records `"pass"`
-in coordination so that sentinels can be consumed when all commands have passed (including via
-auto-allow).
+in coordination so that the group sentinel can be updated when all commands have passed
+(including via auto-allow).
 
 **Pending timeout:** If a pending command exceeds `timeout` seconds (default 300 for exec, 600 for
 task), the check removes the stale sentinel, increments the block counter, and blocks with an explicit
@@ -485,7 +486,7 @@ packages/hook/
 │   │   ├── config.ts       # YAML config loader (.chunk/hook/config.yml; execs + tasks)
 │   │   ├── hooks.ts        # Low-level stdin JSON parsing (consumed by adapter.ts)
 │   │   ├── placeholders.ts # {{Key.path}} placeholder expansion for task instructions
-│   │   ├── sentinel.ts     # Result-file CRUD, self-consuming sentinels, block counters, contentHash
+│   │   ├── sentinel.ts     # Result-file CRUD, persistent sentinels, block counters, contentHash
 │   │   ├── shell-env.ts    # Shell environment utilities (env file, startup files, profiles)
 │   │   ├── state.ts        # Per-project state (event-namespaced persistence)
 │   │   ├── templates.ts    # Embedded template files for repo init
@@ -803,17 +804,20 @@ Sentinels are JSON files in a temp directory that record exec/task outcomes:
 
 - **Deterministic IDs:** `sha256(projectDir:commandName)` — same command + project
     always maps to the same file.
-- **Self-consuming checks:** `exec check` and `task check` consume (delete) their sentinel on pass.
-    This prevents stale sentinels from being re-read on subsequent invocations. Fail sentinels are
-    **not** consumed — they remain for the next check to report the failure and prompt a re-run.
+- **Persistent sentinels:** `exec check` and `task check` **do not** consume (delete) their
+    sentinel on pass — sentinels persist as a cache. Staleness is detected by comparing the
+    sentinel's `sessionId` and `contentHash` against the current session and working-tree state.
+    A mismatch causes the sentinel to be treated as missing, forcing a re-run. Fail sentinels
+    also persist — they remain for the next check to report the failure and prompt a re-run.
 - **Session-aware staleness:** Sentinels carry a `sessionId` copied from the scope marker
     at write time. When a check runs, it compares the sentinel's `sessionId` to the current
     scope marker's `sessionId`. A missing or mismatched `sessionId` means the sentinel is stale
     and is treated as missing, forcing the command to re-run with fresh context.
 - **Group sentinels (sync):** `sync check` maintains a separate `sync-<hash>.json` tracking which
-    specs have passed. Individual sentinels are consumed as each spec passes. On fail, the default
-    behavior (`--on-fail restart`) removes the group sentinel and restarts the entire sequence.
-    With `--on-fail retry`, only the failed spec is removed from the passed list.
+    specs have passed. Individual sentinels persist (not consumed) as each spec passes. On fail,
+    the default behavior (`--on-fail restart`) removes the group sentinel and the individual
+    sentinel, restarting the entire sequence. With `--on-fail retry`, only the failed spec's
+    sentinel is removed from the group — previously-passed specs are preserved.
 - **Block counters:** Separate `.blocks` files track consecutive blocks for `--limit`
     enforcement. Only actionable failures (fail/timeout) increment the counter; transient
     states (missing/pending) do not.
@@ -824,11 +828,9 @@ Sentinels are JSON files in a temp directory that record exec/task outcomes:
 - **Named commands:** Both exec and task commands are named — each name gets its own
     sentinel file and block counter.
 
-**Caveat — standalone checks and ping-pong:** Standalone `exec check` / `task check` self-consume
-independently. If two standalone checks share the same hook event, they race: one consumes and
-allows while the other sees "missing" and re-blocks. This ping-pong repeats indefinitely.
-**Use `sync check` to group multiple checks on the same event.** A single standalone check per
-event works correctly.
+**Note — ordering with multiple checks:** Sentinels persist on pass, so standalone checks no
+longer race or ping-pong. However, **use `sync check` to group multiple checks on the same
+event** — it ensures correct ordering and combines non-pass results into a single block message.
 
 ## Common Patterns
 
