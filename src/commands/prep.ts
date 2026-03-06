@@ -188,12 +188,31 @@ async function fetchDockerHubTags(repository: string): Promise<string[]> {
 		? repository.split("/", 2)
 		: ["library", repository];
 
-	const url = `https://hub.docker.com/v2/repositories/${namespace}/${image}/tags/?page_size=50&ordering=-last_updated`;
-	const response = await fetch(url);
-	if (!response.ok) return [];
+	const tags: string[] = [];
+	let url: string | null =
+		`https://hub.docker.com/v2/repositories/${namespace}/${image}/tags/?page_size=100`;
 
-	const data = (await response.json()) as { results?: { name: string }[] };
-	return (data.results ?? []).map((r) => r.name);
+	// Fetch up to 3 pages so Claude sees a broad, representative set
+	for (let page = 0; page < 3 && url !== null; page++) {
+		const response = await fetch(url);
+		if (!response.ok) break;
+
+		const data = (await response.json()) as {
+			next?: string | null;
+			results?: { name: string }[];
+		};
+
+		for (const r of data.results ?? []) {
+			// Skip digest-only and other non-version tags
+			if (!r.name.startsWith("sha256:") && r.name !== "latest") {
+				tags.push(r.name);
+			}
+		}
+
+		url = data.next ?? null;
+	}
+
+	return tags;
 }
 
 async function identifyRequiredCredentials(
@@ -313,7 +332,7 @@ export async function runPrep(): Promise<CommandResult> {
 	console.log("resolving base image tags...");
 	const baseImageRepo = await identifyBaseImage(client, context, testCommand);
 	const availableTags = baseImageRepo ? await fetchDockerHubTags(baseImageRepo) : [];
-	if (baseImageRepo && availableTags.length > 0) {
+	if (baseImageRepo) {
 		console.log(`  ${baseImageRepo}: ${availableTags.length} tags fetched from Docker Hub`);
 	}
 
@@ -334,9 +353,10 @@ export async function runPrep(): Promise<CommandResult> {
 						: "") +
 					`Requirements:\n` +
 					(availableTags.length > 0
-						? `- Use ${baseImageRepo} as the base image. Choose the most recent stable tag from this list of currently available tags on Docker Hub:\n` +
+						? `- Use ${baseImageRepo} as the base image. The following tags are currently available on Docker Hub — ` +
+						  `choose the most recent stable one by reasoning about the version numbers in the tag names:\n` +
 						  availableTags.map((t) => `  - ${t}`).join("\n") +
-						  `\n  Prefer the most recent stable release. Avoid tags marked alpha, beta, rc, snapshot, or edge.\n`
+						  `\n  Avoid tags marked alpha, beta, rc, snapshot, edge, or that reference very old major versions.\n`
 						: `- Use an appropriate official base image from Docker Hub for the detected language and tooling.\n` +
 						  `  Pin a specific version tag — do not use "latest" — but aim for the most current stable release available.\n`) +
 					`- Install any additional system-level dependencies needed to run the test command.\n` +
