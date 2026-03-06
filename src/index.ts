@@ -9,6 +9,7 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
+import { runPrep } from "./commands/prep";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
@@ -157,11 +158,17 @@ Examples:
 		.description("Update to the latest version")
 		.action(async () => process.exit((await runUpgrade()).exitCode));
 
+	program
+		.command("prep")
+		.description("Prepare the hook environment before a session begins")
+		.action(async () => process.exit((await runPrep()).exitCode));
+
 	// Hook commands — exec, task, sync, state, scope for AI agent hooks
 	const hook = program
 		.command("hook")
 		.description("Manage AI coding agent hooks (exec, task, sync, state, scope)");
 	registerHookCommands(hook);
+
 
 	program.action(() => {
 		program.outputHelp();
