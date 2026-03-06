@@ -30,17 +30,7 @@ The State command is infrastructure and always available — it does not require
 
 ### 1. Install the `chunk` binary
 
-The hook commands ship as part of the `chunk` CLI. Install it first:
-
-```bash
-# Production install (downloads pre-built binary via gh CLI):
-gh api -H "Accept: application/vnd.github.v3.raw" \
-  "/repos/circleci/code-review-cli/contents/install.sh" | bash
-
-# Or build from source (for development):
-cd chunk-cli
-./install-local.sh
-```
+The hook commands ship as part of the `chunk` CLI: [Installation](../../README.md#installation)
 
 Both methods install the binary to `~/.local/bin/chunk`. Verify:
 
