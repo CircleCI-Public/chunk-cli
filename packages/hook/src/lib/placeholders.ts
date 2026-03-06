@@ -46,7 +46,9 @@ export type ExpandOptions = {
  */
 export async function expandPlaceholders(template: string, opts: ExpandOptions): Promise<string> {
 	// Use a local regex to avoid shared lastIndex state across sequential or concurrent calls.
-	const re = /\{\{([A-Za-z_][A-Za-z0-9_.]*)\}\}/g;
+	// Supports dot notation and bracket-index notation: {{Event.field}}, {{Event[0].field}}
+	// biome-ignore lint/complexity/noUselessEscapeInRegex: \] needed inside char class to match literal ]
+	const re = /\{\{([A-Za-z_][A-Za-z0-9_.\[\]]*)\}\}/g;
 
 	// Quick check: any placeholders at all?
 	if (!re.test(template)) return template;
@@ -65,13 +67,25 @@ export async function expandPlaceholders(template: string, opts: ExpandOptions):
 	const replacements = new Map<string, string>();
 
 	// 1. Overlay triggering event input into state (in-memory only).
+	//    Merge the live event fields into entry [0] so that both saved
+	//    and live fields are accessible, with live values winning on conflict.
 	const state: State = { ...opts.state };
 	const eventName = opts.event?.eventName ? normalizeEventName(opts.event.eventName) : undefined;
 	if (eventName && opts.event) {
-		state[eventName] = {
-			...state[eventName],
-			...(opts.event.raw as Record<string, unknown>),
-		};
+		const raw = opts.event.raw as Record<string, unknown>;
+		const prev = state[eventName] ?? {};
+		const prevEntries = Array.isArray(prev.__entries)
+			? (prev.__entries as Record<string, unknown>[])
+			: [];
+		if (prevEntries.length > 0) {
+			// Merge live event into the first entry (live wins on conflict),
+			// preserve remaining entries unchanged.
+			const merged = { ...prevEntries[0], ...raw };
+			state[eventName] = { __entries: [merged, ...prevEntries.slice(1)] };
+		} else {
+			// No prior state for this event — wrap the live event as entry [0].
+			state[eventName] = { __entries: [{ ...raw }] };
+		}
 	}
 
 	// 2. State field paths (dot notation resolved against nested state)

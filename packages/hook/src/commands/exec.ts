@@ -351,7 +351,12 @@ async function executeExec(
 	// stored in sentinels for session-aware staleness detection.
 	const sessionId = readMarker(config.projectDir)?.sessionId;
 
-	// Skip-if-no-changes
+	// Skip-if-no-changes — return a synthetic sentinel without writing it to disk.
+	// Writing a "pass" sentinel here would be dangerous: an agent could run the
+	// command while the repo is clean to farm a passing sentinel, then introduce
+	// bugs and commit — the stale "pass" sentinel would allow the commit.
+	// The check and sync paths have their own independent `detectChanges`
+	// short-circuits, so they never read a skipped sentinel.
 	if (!exec.always) {
 		const hasChanges = await detectChanges({
 			cwd: config.projectDir,
@@ -369,7 +374,6 @@ async function executeExec(
 				project: config.projectDir,
 				sessionId,
 			};
-			writeSentinel(config.sentinelDir, config.projectDir, flags.name, sentinel);
 			return { sentinel };
 		}
 	}

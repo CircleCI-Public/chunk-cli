@@ -370,6 +370,23 @@ function registerState(parent: Command): void {
 			return runState(config, adapter, event, flags);
 		});
 
+	// state append
+	state
+		.command("append")
+		.description("Append event input as a new entry (records HEAD SHA per entry)")
+		.option("--project <path>", "Override project directory")
+		.action(async (opts) => {
+			const adapter = getAdapter();
+			const event = await adapter.readEvent();
+			const projectDir = resolveProject(opts.project, event.cwd);
+			const config = loadConfig(projectDir);
+			initLog({ projectDir });
+			log(TAG, `command=state subcommand=append project=${config.projectDir}`);
+
+			const flags: StateFlags = { subcommand: "append" };
+			return runState(config, adapter, event, flags);
+		});
+
 	// state load [field]
 	state
 		.command("load")
