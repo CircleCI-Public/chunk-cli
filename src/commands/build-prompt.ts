@@ -34,7 +34,7 @@ export async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<Com
 		if (repos.length === 0) {
 			repos = [detected.repo];
 		}
-		console.log(dim(`Detected from git remote: org=${detected.org}, repo=${detected.repo}`));
+		console.log(dim(`Detected org from git remote: ${detected.org}`));
 	}
 
 	const options: BuildPromptOptions = {
