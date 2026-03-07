@@ -159,6 +159,24 @@ export async function preEvaluateExec(
 
 	const result = evaluateSentinel(sentinel, currentSessionId, contentHash);
 
+	// Command validation: the sentinel must have been produced by the same
+	// command that exec check expects. This prevents --cmd bypass where an
+	// agent runs `exec run --no-check --cmd "true"` to farm a passing
+	// sentinel that would be accepted by `exec check` with the real command.
+	// Uses configuredCommand (pre-substitution template) for comparison,
+	// falling back to command (post-substitution) for older sentinels.
+	if ((result.kind === "pass" || result.kind === "fail") && sentinel) {
+		const sentinelCmd = sentinel.configuredCommand ?? sentinel.command;
+		if (sentinelCmd && sentinelCmd !== exec.command) {
+			log(
+				`exec:${flags.name}`,
+				`Command mismatch: sentinel produced by "${sentinelCmd}" ` +
+					`but configured command is "${exec.command}"`,
+			);
+			return { kind: "missing" };
+		}
+	}
+
 	switch (result.kind) {
 		case "missing":
 			return { kind: "missing" };

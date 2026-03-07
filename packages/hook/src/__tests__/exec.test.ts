@@ -190,7 +190,7 @@ describe("runExec() check subcommand", () => {
 		};
 		writeSentinel(tmpDir, "/test/project", "myexec", sentinel);
 
-		const flags = { subcommand: "check" as const, name: "myexec", always: true };
+		const flags = { subcommand: "check" as const, name: "myexec", always: true, cmd: "bun test" };
 		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
 		expect(exitSpy).toHaveBeenCalledWith(2);
 		expect(blockMessage()).toContain("3 tests failed");
@@ -316,9 +316,115 @@ describe("runExec() push-time bypass prevention", () => {
 		};
 		writeSentinel(tmpDir, "/test/project", "tests", sentinel);
 
-		const flags = { subcommand: "check" as const, name: "tests" };
+		const flags = { subcommand: "check" as const, name: "tests", cmd: "bun test" };
 		await expect(runExec(config, makePushAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
 		expect(exitSpy).toHaveBeenCalledWith(2);
 		expect(blockMessage()).toContain("tests failed");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Command validation (--cmd bypass prevention)
+// ---------------------------------------------------------------------------
+
+describe("runExec() command validation", () => {
+	let exitSpy: ReturnType<typeof spyOn>;
+	let stderrSpy: ReturnType<typeof spyOn>;
+	let tmpDir: string;
+	let savedVerbose: string | undefined;
+	const ExitError = class extends Error {};
+
+	const blockMessage = () => {
+		const calls = stderrSpy.mock.calls;
+		return calls[calls.length - 1][0] as string;
+	};
+
+	beforeEach(() => {
+		tmpDir = mkdtempSync(join(tmpdir(), "chunk-hook-exec-cmd-test-"));
+		exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new ExitError("process.exit called");
+		});
+		stderrSpy = spyOn(process.stderr, "write").mockImplementation(() => true);
+		process.env.CHUNK_HOOK_CONSUME_DELAY_MS = "0";
+		savedVerbose = process.env.CHUNK_HOOK_VERBOSE;
+		delete process.env.CHUNK_HOOK_VERBOSE;
+	});
+
+	afterEach(() => {
+		exitSpy.mockRestore();
+		stderrSpy.mockRestore();
+		rmSync(tmpDir, { recursive: true, force: true });
+		delete process.env.CHUNK_HOOK_CONSUME_DELAY_MS;
+		if (savedVerbose !== undefined) process.env.CHUNK_HOOK_VERBOSE = savedVerbose;
+	});
+
+	it("blocks when sentinel configuredCommand does not match --cmd flag", async () => {
+		const config = makeConfig(tmpDir);
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: new Date().toISOString(),
+			finishedAt: new Date().toISOString(),
+			exitCode: 0,
+			command: "true",
+			configuredCommand: "bun test",
+		};
+		writeSentinel(tmpDir, "/test/project", "myexec", sentinel);
+
+		// Check with a different command — should be treated as missing
+		const flags = { subcommand: "check" as const, name: "myexec", always: true, cmd: "true" };
+		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		expect(exitSpy).toHaveBeenCalledWith(2);
+		expect(blockMessage()).toContain("has no results");
+	});
+
+	it("allows when sentinel configuredCommand matches --cmd flag", async () => {
+		const config = makeConfig(tmpDir);
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: new Date().toISOString(),
+			finishedAt: new Date().toISOString(),
+			exitCode: 0,
+			command: "bun test",
+			configuredCommand: "bun test",
+		};
+		writeSentinel(tmpDir, "/test/project", "myexec", sentinel);
+
+		const flags = { subcommand: "check" as const, name: "myexec", always: true, cmd: "bun test" };
+		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		expect(exitSpy).toHaveBeenCalledWith(0);
+	});
+
+	it("falls back to sentinel.command when configuredCommand is absent", async () => {
+		const config = makeConfig(tmpDir);
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: new Date().toISOString(),
+			finishedAt: new Date().toISOString(),
+			exitCode: 0,
+			command: "bun test",
+		};
+		writeSentinel(tmpDir, "/test/project", "myexec", sentinel);
+
+		// --cmd differs from sentinel.command → blocks
+		const flags = { subcommand: "check" as const, name: "myexec", always: true, cmd: "true" };
+		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		expect(exitSpy).toHaveBeenCalledWith(2);
+		expect(blockMessage()).toContain("has no results");
+	});
+
+	it("skips command validation when sentinel has no command fields", async () => {
+		const config = makeConfig(tmpDir);
+		const sentinel: SentinelData = {
+			status: "pass",
+			startedAt: new Date().toISOString(),
+			finishedAt: new Date().toISOString(),
+			exitCode: 0,
+		};
+		writeSentinel(tmpDir, "/test/project", "myexec", sentinel);
+
+		// No command in sentinel → validation skipped → pass
+		const flags = { subcommand: "check" as const, name: "myexec", always: true, cmd: "true" };
+		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		expect(exitSpy).toHaveBeenCalledWith(0);
 	});
 });

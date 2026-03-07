@@ -135,6 +135,10 @@ execs:
     command: "sh -c 'echo FAIL && exit 1'"
     always: true
     timeout: 30
+  fixable-cmd:
+    command: "sh -c 'exit \${FIXABLE_EXIT:-1}'"
+    always: true
+    timeout: 30
   timeout-cmd:
     command: "sleep 999"
     always: true
@@ -347,31 +351,31 @@ describe("exec check (deferred check)", () => {
 
 describe("exec full lifecycle", () => {
 	it("fail → fix → pass cycle works correctly", async () => {
-		// Step 1: Run failing command (deferred)
+		// Step 1: Run failing command (FIXABLE_EXIT defaults to 1 → fail)
 		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always"],
+			["exec", "run", "fixable-cmd", "--no-check", "--always"],
 			"",
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
 
 		// Step 2: Check shows failure
 		const checkFail = await runCli(
-			["exec", "check", "fail-cmd", "--always"],
+			["exec", "check", "fixable-cmd", "--always"],
 			projectEvent(),
 			testEnv(),
 		);
 		expect(checkFail.exitCode).toBe(2);
 
-		// Step 3: "Fix" by running the passing command with the same name override
+		// Step 3: "Fix" — re-run the same command with FIXABLE_EXIT=0 → pass
 		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always", "--cmd", "echo fixed"],
+			["exec", "run", "fixable-cmd", "--no-check", "--always"],
 			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir, FIXABLE_EXIT: "0" }),
 		);
 
-		// Step 4: Check now passes
+		// Step 4: Check now passes (same exec, command matches sentinel)
 		const checkPass = await runCli(
-			["exec", "check", "fail-cmd", "--always"],
+			["exec", "check", "fixable-cmd", "--always"],
 			projectEvent(),
 			testEnv(),
 		);
@@ -469,43 +473,44 @@ describe("block limit", () => {
 	});
 
 	it("counter resets when check evaluates as pass", async () => {
-		// Run a failing command, accumulate blocks, then run passing → counter resets
+		// Run a failing command, accumulate blocks, then run passing → counter resets.
+		// Uses fixable-cmd which exits based on FIXABLE_EXIT env (defaults to 1).
 		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always"],
+			["exec", "run", "fixable-cmd", "--no-check", "--always"],
 			"",
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
 
 		// Check twice (count → 1, then 2)
 		await runCli(
-			["exec", "check", "fail-cmd", "--always", "--limit", "5"],
+			["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
 			projectEvent(),
 			testEnv(),
 		);
 		await runCli(
-			["exec", "check", "fail-cmd", "--always", "--limit", "5"],
+			["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
 			projectEvent(),
 			testEnv(),
 		);
 
-		// Now "fix" the command so it passes
+		// Now "fix" — re-run the same command with FIXABLE_EXIT=0 → pass
 		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always", "--cmd", "echo fixed"],
+			["exec", "run", "fixable-cmd", "--no-check", "--always"],
 			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir, FIXABLE_EXIT: "0" }),
 		);
 
 		// Check passes → counter resets to 0
 		const rPass = await runCli(
-			["exec", "check", "fail-cmd", "--always", "--limit", "5"],
+			["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
 			projectEvent(),
 			testEnv(),
 		);
 		expect(rPass.exitCode).toBe(0);
 
-		// Run failing again
+		// Run failing again (FIXABLE_EXIT defaults to 1)
 		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always"],
+			["exec", "run", "fixable-cmd", "--no-check", "--always"],
 			"",
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
@@ -513,7 +518,7 @@ describe("block limit", () => {
 		// Counter was reset by the pass, so we need limit+1 checks to auto-allow
 		for (let i = 0; i < 5; i++) {
 			const r = await runCli(
-				["exec", "check", "fail-cmd", "--always", "--limit", "5"],
+				["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
 				projectEvent(),
 				testEnv(),
 			);
@@ -522,7 +527,7 @@ describe("block limit", () => {
 
 		// Count 6 > limit 5 → auto-allow (proving reset happened on pass)
 		const rAllow = await runCli(
-			["exec", "check", "fail-cmd", "--always", "--limit", "5"],
+			["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
 			projectEvent(),
 			testEnv(),
 		);
@@ -693,7 +698,7 @@ describe("scope lifecycle", () => {
 		// Deactivate
 		const deactivateResult = await runCli(
 			["scope", "deactivate"],
-			"",
+			JSON.stringify({ session_id: "sess-123" }),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
 		expect(deactivateResult.exitCode).toBe(0);
@@ -807,6 +812,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "implement feature X",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -829,6 +835,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "test",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -837,7 +844,7 @@ describe("state lifecycle", () => {
 		// Clear
 		const clearResult = await runCli(
 			["state", "clear"],
-			"",
+			JSON.stringify({ session_id: "sess-001" }),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
 		expect(clearResult.exitCode).toBe(0);
@@ -861,6 +868,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "hello",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -872,6 +880,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "Stop",
 				transcript_path: "/tmp/transcript.json",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -895,6 +904,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "first prompt",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -906,6 +916,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "second prompt",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -935,6 +946,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "same prompt",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -945,6 +957,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "same prompt",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -965,6 +978,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "first",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
@@ -975,6 +989,7 @@ describe("state lifecycle", () => {
 			JSON.stringify({
 				hook_event_name: "UserPromptSubmit",
 				prompt: "second",
+				session_id: "sess-001",
 				cwd: testProjectDir,
 			}),
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),

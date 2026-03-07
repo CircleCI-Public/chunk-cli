@@ -412,8 +412,8 @@ function registerState(parent: Command): void {
 		.option("--project <path>", "Override project directory")
 		.action(async (opts) => {
 			const adapter = getAdapter();
-			const event = { eventName: "", raw: {} };
-			const projectDir = resolveProject(opts.project);
+			const event = await adapter.readEvent();
+			const projectDir = resolveProject(opts.project, event.cwd);
 			const config = loadConfig(projectDir);
 			initLog({ projectDir });
 			log(TAG, `command=state subcommand=clear project=${config.projectDir}`);
@@ -468,7 +468,25 @@ function registerScope(parent: Command): void {
 		.action(async (opts) => {
 			const projectDir = resolveProject(opts.project);
 			initLog({ projectDir });
-			deactivateScope(projectDir);
+
+			// Read stdin to extract session ID for session-aware deactivation.
+			let raw: Record<string, unknown> = {};
+			try {
+				const text = await Bun.stdin.text();
+				if (text.trim()) raw = JSON.parse(text);
+			} catch {
+				// Malformed stdin — no context available
+			}
+
+			const sessionId = extractSessionId(raw);
+			if (!sessionId) {
+				log(TAG, "scope deactivate: no session ID — command must be called from a hook context");
+				console.error(
+					"chunk hook: scope deactivate requires an active session (no session ID in stdin)",
+				);
+				process.exit(1);
+			}
+			deactivateScope(projectDir, sessionId);
 			process.exit(0);
 		});
 }

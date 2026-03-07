@@ -398,6 +398,7 @@ async function executeExec(
 		finishedAt: new Date().toISOString(),
 		exitCode: result.exitCode,
 		command: result.command,
+		configuredCommand: exec.command,
 		output: result.output,
 		project: config.projectDir,
 		sessionId,

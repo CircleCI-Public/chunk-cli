@@ -237,6 +237,73 @@ describe("state", () => {
 		});
 	});
 
+	describe("session-aware state", () => {
+		it("saves session ID as __session entry", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", { prompt: "hi" }, "session-1");
+			const state = readState(sentinelDir, projectDir);
+			expect(state.__session).toEqual({ id: "session-1" });
+		});
+
+		it("preserves state within the same session", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", { prompt: "first" }, "session-1");
+			saveEvent(sentinelDir, projectDir, "Stop", { active: true }, "session-1");
+			const state = readState(sentinelDir, projectDir);
+			expect(state.UserPromptSubmit).toBeDefined();
+			expect(state.Stop).toBeDefined();
+			expect(state.__session).toEqual({ id: "session-1" });
+		});
+
+		it("overwrites state when session changes (save)", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", { prompt: "old" }, "session-1");
+			saveEvent(sentinelDir, projectDir, "Stop", { active: true }, "session-2");
+			const state = readState(sentinelDir, projectDir);
+			// Old session data is gone
+			expect(state.UserPromptSubmit).toBeUndefined();
+			// New session data present
+			expect(state.Stop).toEqual({ __entries: [{ active: true }] });
+			expect(state.__session).toEqual({ id: "session-2" });
+		});
+
+		it("overwrites state when session changes (append)", () => {
+			appendEvent(sentinelDir, projectDir, "UserPromptSubmit", { prompt: "old" }, "session-1");
+			appendEvent(sentinelDir, projectDir, "Stop", { active: true }, "session-2");
+			const state = readState(sentinelDir, projectDir);
+			expect(state.UserPromptSubmit).toBeUndefined();
+			expect(state.Stop).toEqual({ __entries: [{ active: true }] });
+			expect(state.__session).toEqual({ id: "session-2" });
+		});
+
+		it("does not overwrite when sessionId is omitted", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", { prompt: "old" }, "session-1");
+			saveEvent(sentinelDir, projectDir, "Stop", { active: true });
+			const state = readState(sentinelDir, projectDir);
+			// Both events present — no session comparison when omitted
+			expect(state.UserPromptSubmit).toBeDefined();
+			expect(state.Stop).toBeDefined();
+		});
+
+		it("clearState skips when session does not match", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", { prompt: "keep" }, "session-1");
+			clearState(sentinelDir, projectDir, "session-2");
+			const state = readState(sentinelDir, projectDir);
+			expect(state.UserPromptSubmit).toBeDefined();
+		});
+
+		it("clearState succeeds when session matches", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", { prompt: "gone" }, "session-1");
+			clearState(sentinelDir, projectDir, "session-1");
+			const state = readState(sentinelDir, projectDir);
+			expect(state).toEqual({});
+		});
+
+		it("clearState succeeds unconditionally without sessionId", () => {
+			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", { prompt: "gone" }, "session-1");
+			clearState(sentinelDir, projectDir);
+			const state = readState(sentinelDir, projectDir);
+			expect(state).toEqual({});
+		});
+	});
+
 	describe("getBaselineFingerprint()", () => {
 		it("returns fingerprint from first entry after save", () => {
 			saveEvent(sentinelDir, projectDir, "UserPromptSubmit", {
