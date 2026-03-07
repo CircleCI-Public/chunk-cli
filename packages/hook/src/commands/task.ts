@@ -210,7 +210,6 @@ async function emitCheckResult(
 		case "pass":
 			log(t, "Result: pass → action: allow");
 			resetBlockCount(config.sentinelDir, config.projectDir, flags.name);
-			removeSentinel(config.sentinelDir, config.projectDir, flags.name);
 			adapter.allow();
 			break;
 		case "fail": {
