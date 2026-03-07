@@ -124,11 +124,11 @@ export async function preEvaluateExec(
 	}
 
 	// Skip-if-no-changes.
-	// At push time the working tree is always clean, so detectChanges would
-	// short-circuit — skipping sentinel/fingerprint validation entirely. We
-	// still keep it for non-push events as a performance optimization.
-	const isPush = matchesTrigger(adapter, event, ["git push"]);
-	if (!exec.always && !isPush) {
+	// When there are no changed files, the exec run path writes a passing
+	// "skipped" sentinel with a content hash. The check path can safely
+	// short-circuit here because that sentinel will be found and validated
+	// if changes are later introduced (the fingerprint won't match).
+	if (!exec.always) {
 		const hasChanges =
 			cache?.hasChanges ??
 			(await detectChanges({
@@ -158,6 +158,24 @@ export async function preEvaluateExec(
 		}));
 
 	const result = evaluateSentinel(sentinel, currentSessionId, contentHash);
+
+	// Command validation: the sentinel must have been produced by the same
+	// command that exec check expects. This prevents --cmd bypass where an
+	// agent runs `exec run --no-check --cmd "true"` to farm a passing
+	// sentinel that would be accepted by `exec check` with the real command.
+	// Uses configuredCommand (pre-substitution template) for comparison,
+	// falling back to command (post-substitution) for older sentinels.
+	if ((result.kind === "pass" || result.kind === "fail") && sentinel) {
+		const sentinelCmd = sentinel.configuredCommand ?? sentinel.command;
+		if (sentinelCmd && sentinelCmd !== exec.command) {
+			log(
+				`exec:${flags.name}`,
+				`Command mismatch: sentinel produced by "${sentinelCmd}" ` +
+					`but configured command is "${exec.command}"`,
+			);
+			return { kind: "missing" };
+		}
+	}
 
 	switch (result.kind) {
 		case "missing":

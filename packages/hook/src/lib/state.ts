@@ -62,19 +62,41 @@ function writeState(sentinelDir: string, projectDir: string, state: State): void
 }
 
 /**
+ * Return existing state if it belongs to the given session, otherwise an
+ * empty state. When `sessionId` is provided and differs from the stored
+ * `__sessionId`, the old state is discarded (overwrite model).
+ */
+/** Reserved key for the session metadata entry in state. */
+const SESSION_KEY = "__session";
+
+function sessionAwareState(sentinelDir: string, projectDir: string, sessionId?: string): State {
+	const existing = readState(sentinelDir, projectDir);
+	if (sessionId && existing[SESSION_KEY]?.id !== sessionId) {
+		// Different session (or no session stored) — start fresh.
+		return {};
+	}
+	return existing;
+}
+
+/**
  * Save event input under its event name (clear + single-entry append).
  *
  * Replaces all existing entries for the event with a single entry
  * containing `data`. The resulting shape is `{ __entries: [data] }` —
  * consistent with `appendEvent` so all events have the same structure.
+ *
+ * When `sessionId` is provided and differs from the stored session, the
+ * entire state is overwritten (session-aware overwrite model).
  */
 export function saveEvent(
 	sentinelDir: string,
 	projectDir: string,
 	eventName: string,
 	data: Record<string, unknown>,
+	sessionId?: string,
 ): void {
-	const existing = readState(sentinelDir, projectDir);
+	const existing = sessionAwareState(sentinelDir, projectDir, sessionId);
+	if (sessionId) existing[SESSION_KEY] = { id: sessionId };
 	existing[eventName] = { __entries: [data] };
 	writeState(sentinelDir, projectDir, existing);
 }
@@ -84,14 +106,19 @@ export function saveEvent(
  *
  * Each call pushes a new entry onto the `__entries` array. Consecutive
  * duplicate entries (same `prompt` value) are deduplicated.
+ *
+ * When `sessionId` is provided and differs from the stored session, the
+ * entire state is overwritten (session-aware overwrite model).
  */
 export function appendEvent(
 	sentinelDir: string,
 	projectDir: string,
 	eventName: string,
 	data: Record<string, unknown>,
+	sessionId?: string,
 ): void {
-	const existing = readState(sentinelDir, projectDir);
+	const existing = sessionAwareState(sentinelDir, projectDir, sessionId);
+	if (sessionId) existing[SESSION_KEY] = { id: sessionId };
 	const prev = existing[eventName] ?? {};
 	const entries = Array.isArray(prev.__entries)
 		? (prev.__entries as Record<string, unknown>[])
@@ -143,8 +170,20 @@ export function loadField(sentinelDir: string, projectDir: string, field: string
 	return resolveFieldPath(state, field);
 }
 
-/** Remove the state file (cleanup). */
-export function clearState(sentinelDir: string, projectDir: string): void {
+/**
+ * Remove the state file (cleanup).
+ *
+ * When `sessionId` is provided, the state is only cleared if it belongs
+ * to the given session. This prevents one session from clearing another
+ * session's state. Without a `sessionId` the clear is unconditional.
+ */
+export function clearState(sentinelDir: string, projectDir: string, sessionId?: string): void {
+	if (sessionId) {
+		const existing = readState(sentinelDir, projectDir);
+		if (existing[SESSION_KEY]?.id && existing[SESSION_KEY].id !== sessionId) {
+			return; // Different session — skip (best effort).
+		}
+	}
 	const path = statePath(sentinelDir, projectDir);
 	if (existsSync(path)) rmSync(path);
 }
