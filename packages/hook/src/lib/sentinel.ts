@@ -34,6 +34,14 @@ export type SentinelData = {
 	finishedAt?: string;
 	exitCode?: number;
 	command?: string;
+	/**
+	 * The configured command template (pre-substitution).
+	 *
+	 * When the configured command contains placeholders like `{{CHANGED_FILES}}`,
+	 * `command` stores the substituted version while `configuredCommand` stores
+	 * the original template. Used for command validation at check time.
+	 */
+	configuredCommand?: string;
 	output?: string;
 	details?: string;
 	project?: string;
