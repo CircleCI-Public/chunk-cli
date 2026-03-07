@@ -158,7 +158,7 @@ describe("git helpers", () => {
 	describe("substitutePlaceholders()", () => {
 		it("replaces {{CHANGED_FILES}}", () => {
 			const result = substitutePlaceholders("go test {{CHANGED_FILES}}", ["a.go", "b.go"]);
-			expect(result).toBe("go test a.go b.go");
+			expect(result).toBe("go test 'a.go' 'b.go'");
 		});
 
 		it("replaces {{CHANGED_PACKAGES}}", () => {
@@ -166,7 +166,7 @@ describe("git helpers", () => {
 				"pkg/a/file.go",
 				"pkg/b/file.go",
 			]);
-			expect(result).toBe("go test ./pkg/a ./pkg/b/...");
+			expect(result).toBe("go test './pkg/a' './pkg/b'/...");
 		});
 
 		it("handles no placeholders", () => {
@@ -178,7 +178,7 @@ describe("git helpers", () => {
 			const result = substitutePlaceholders("test {{CHANGED_FILES}} in {{CHANGED_PACKAGES}}", [
 				"src/a.ts",
 			]);
-			expect(result).toBe("test src/a.ts in ./src");
+			expect(result).toBe("test 'src/a.ts' in './src'");
 		});
 	});
 

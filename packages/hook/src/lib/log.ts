@@ -48,3 +48,14 @@ export function log(tag: string, message: string): void {
 		process.stderr.write(line);
 	}
 }
+
+/**
+ * Log only when `CHUNK_HOOK_VERBOSE` is set.
+ *
+ * Use for large diagnostic payloads (e.g. full stdin JSON) that are
+ * invaluable during debugging but too noisy for regular log files.
+ */
+export function logVerbose(tag: string, message: string): void {
+	if (env("CHUNK_HOOK_VERBOSE") === undefined) return;
+	log(tag, message);
+}
