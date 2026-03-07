@@ -124,11 +124,11 @@ export async function preEvaluateExec(
 	}
 
 	// Skip-if-no-changes.
-	// At push time the working tree is always clean, so detectChanges would
-	// short-circuit — skipping sentinel/fingerprint validation entirely. We
-	// still keep it for non-push events as a performance optimization.
-	const isPush = matchesTrigger(adapter, event, ["git push"]);
-	if (!exec.always && !isPush) {
+	// When there are no changed files, the exec run path writes a passing
+	// "skipped" sentinel with a content hash. The check path can safely
+	// short-circuit here because that sentinel will be found and validated
+	// if changes are later introduced (the fingerprint won't match).
+	if (!exec.always) {
 		const hasChanges =
 			cache?.hasChanges ??
 			(await detectChanges({

@@ -335,12 +335,10 @@ async function executeExec(
 	// stored in sentinels for session-aware staleness detection.
 	const sessionId = readMarker(config.projectDir)?.sessionId;
 
-	// Skip-if-no-changes — return a synthetic sentinel without writing it to disk.
-	// Writing a "pass" sentinel here would be dangerous: an agent could run the
-	// command while the repo is clean to farm a passing sentinel, then introduce
-	// bugs and commit — the stale "pass" sentinel would allow the commit.
-	// The check and sync paths have their own independent `detectChanges`
-	// short-circuits, so they never read a skipped sentinel.
+	// Skip-if-no-changes — write a passing "skipped" sentinel to disk.
+	// The content-hash fingerprint prevents bait-and-switch: if the agent
+	// later modifies files and tries to commit, the fingerprint won't match
+	// and the sentinel is treated as stale by the check path.
 	if (!exec.always) {
 		const hasChanges = await detectChanges({
 			cwd: config.projectDir,
@@ -348,6 +346,11 @@ async function executeExec(
 			staged: flags.staged,
 		});
 		if (!hasChanges) {
+			const contentHash = await computeFingerprint({
+				cwd: config.projectDir,
+				staged: flags.staged,
+				fileExt: exec.fileExt,
+			});
 			const sentinel: SentinelData = {
 				status: "pass",
 				startedAt,
@@ -357,7 +360,9 @@ async function executeExec(
 				skipped: true,
 				project: config.projectDir,
 				sessionId,
+				contentHash,
 			};
+			writeSentinel(config.sentinelDir, config.projectDir, flags.name, sentinel);
 			return { sentinel };
 		}
 	}
