@@ -18,17 +18,6 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 
 ## Installation
 
-### Flox
-
-Add to `~/.flox/env/manifest.toml` under `[packages]`:
-
-```toml
-[packages]
-chunk.flake = "github:CircleCI-Public/nur-packages#packages.aarch64-linux.chunk"
-```
-
-Replace `aarch64-linux` with `x86_64-linux` if you're on an x86_64 machine.
-
 ### Homebrew
 
 ```bash
@@ -83,7 +72,7 @@ chunk build-prompt --org <org> [options]
 | `--repos <repos>` | all repos in org | Comma-separated list of repo names to include |
 | `--top <n>` | `5` | Number of top reviewers to analyze |
 | `--since <date>` | 3 months ago | Start date in `YYYY-MM-DD` format |
-| `--output <path>` | `./pr-review-prompt.md` | Output path for the generated prompt |
+| `--output <path>` | `./review-prompt.md` | Output path for the generated prompt |
 | `--max-comments <n>` | all | Max comments per reviewer sent for analysis |
 | `--analyze-model <model>` | `claude-sonnet-4-5-20250929` | Claude model for the analysis step |
 | `--prompt-model <model>` | `claude-opus-4-5-20251101` | Claude model for prompt generation |
@@ -133,10 +122,10 @@ You will need three identifiers from CircleCI before running setup:
 | **Project ID** | CircleCI app → Project Settings → Overview |
 | **Definition ID** | CircleCI app → the chunk pipeline definition page (UUID in the URL or settings) |
 
-You will also need a CircleCI personal API token set as `CIRCLECI_TOKEN`:
+You will also need a CircleCI personal API token set as `CIRCLE_TOKEN`:
 
 ```bash
-export CIRCLECI_TOKEN=your-token-here
+export CIRCLE_TOKEN=your-token-here
 ```
 
 #### Setup

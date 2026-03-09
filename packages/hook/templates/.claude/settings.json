@@ -35,12 +35,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "chunk hook exec check tests-changed --staged --on pre-commit --matcher 'Bash|Shell|run_in_terminal' --project ${CLAUDE_PROJECT_DIR:-__PROJECT__}",
+            "command": "chunk hook exec check tests-changed --on pre-commit --matcher 'Bash|Shell|run_in_terminal' --project ${CLAUDE_PROJECT_DIR:-__PROJECT__}",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "chunk hook exec run lint --staged --on pre-commit --matcher 'Bash|Shell|run_in_terminal' --project ${CLAUDE_PROJECT_DIR:-__PROJECT__}",
+            "command": "chunk hook exec run lint --on pre-commit --matcher 'Bash|Shell|run_in_terminal' --project ${CLAUDE_PROJECT_DIR:-__PROJECT__}",
             "timeout": 60
           }
         ]

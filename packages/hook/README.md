@@ -32,7 +32,7 @@ The State command is infrastructure and always available — it does not require
 
 The hook commands ship as part of the `chunk` CLI: [Installation](../../README.md#installation)
 
-Both methods install the binary to `~/.local/bin/chunk`. Verify:
+The binary installs to `~/.local/bin/chunk`. Verify:
 
 ```bash
 chunk --version

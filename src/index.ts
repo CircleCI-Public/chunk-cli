@@ -56,14 +56,18 @@ Environment Variables:
   -h, --help               Show this help message
 
 Examples:
-  chunk build-prompt --org myorg --repos myrepo
-  chunk build-prompt --org myorg --repos repo1,repo2 --top 5 --output ./my-prompt.md`,
+  chunk build-prompt                                     # Auto-detect org and repo from git remote
+  chunk build-prompt --org myorg --repos myrepo          # Explicit org and repo(s)
+  chunk build-prompt --repos repo1,repo2                 # Auto-detect org, explicit repos`,
 		)
-		.requiredOption("--org <org>", "GitHub organization to analyze")
+		.option(
+			"--org <org>",
+			"GitHub organization to analyze (auto-detected from git remote if omitted)",
+		)
 		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
 		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
 		.option("--since <date>", "Start date YYYY-MM-DD", parseDate, threeMonthsAgo())
-		.option("--output <path>", "Output path for the generated prompt", "./pr-review-prompt.md")
+		.option("--output <path>", "Output path for the generated prompt", "./review-prompt.md")
 		.option("--max-comments <number>", "Max comments per reviewer for analysis", parsePositiveInt)
 		.option("--analyze-model <model>", "Claude model for the analysis step", DEFAULT_ANALYZE_MODEL)
 		.option("--prompt-model <model>", "Claude model for prompt generation", DEFAULT_PROMPT_MODEL)
@@ -127,7 +131,7 @@ Examples:
 			"after",
 			`
 Environment Variables:
-  CIRCLECI_TOKEN           Required: CircleCI personal API token
+  CIRCLE_TOKEN             Required: CircleCI personal API token
 
 Examples:
   chunk task run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
@@ -150,6 +154,12 @@ Examples:
 	task
 		.command("config")
 		.description("Initialize .chunk/run.json for this repository")
+		.addHelpText(
+			"after",
+			`
+Environment Variables:
+  CIRCLE_TOKEN             Required: CircleCI personal API token`,
+		)
 		.action(async () => process.exit((await runTaskConfig()).exitCode));
 
 	program
