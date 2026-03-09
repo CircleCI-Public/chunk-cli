@@ -8,11 +8,12 @@ Checklist for the codebase and CLI restructuring. See `ARCHITECTURE.md` and `CLI
 - [x] Write `tasks.md`
 
 ## Phase 2: Consolidate Defaults
-- [ ] Move `DEFAULT_ANALYZE_MODEL` and `DEFAULT_PROMPT_MODEL` to `config/index.ts`
+- [ ] Move `DEFAULT_ANALYZE_MODEL` and `DEFAULT_PROMPT_MODEL` from `commands/build-prompt.ts` to `config/index.ts`
 - [ ] Add `DEFAULT_OUTPUT_PATH` (`.chunk/context/review-prompt.md`) to `config/index.ts`
 - [ ] Change `--output` default to `.chunk/context/review-prompt.md` (via `DEFAULT_OUTPUT_PATH`)
-- [ ] Update `commands/build-prompt.ts` to import from `config/`
-- [ ] Update `index.ts` to use `DEFAULT_OUTPUT_PATH` for `--output` default
+- [ ] Update `commands/build-prompt.ts` to import model defaults from `config/`
+- [ ] Update `index.ts` to import model defaults and `DEFAULT_OUTPUT_PATH` from `config/` (currently imports `DEFAULT_ANALYZE_MODEL` / `DEFAULT_PROMPT_MODEL` from `commands/build-prompt.ts`)
+- [ ] Note: Changing the `--output` default from `./review-prompt.md` to `.chunk/context/review-prompt.md` is a user-facing behavior change — document in release notes
 
 ## Phase 3: Extract Core Logic from commands/task.ts
 - [ ] Create `src/core/run-setup.ts` with `runSetupWizard()`
@@ -31,15 +32,16 @@ Checklist for the codebase and CLI restructuring. See `ARCHITECTURE.md` and `CLI
 ## Phase 5: Rename task → run
 - [ ] Rename `commands/task.ts` → `commands/run.ts`
 - [ ] Update exports and function names
-- [ ] Update `index.ts` command structure
-- [ ] Update help text and examples
+- [ ] Update `index.ts` command structure: `chunk run` triggers directly (with `--definition`/`--prompt` flags), `chunk run setup` is the setup wizard
+- [ ] Update help text and examples (including the "Next steps" output in `runTaskConfig` which currently prints `chunk task run --definition ...`)
 - [ ] Add hidden `task` deprecation alias
 - [ ] Rename/update test files
 
 ## Phase 6: Merge skills list + status
-- [ ] Remove `listSkills()` from `core/skills.ts`
-- [ ] Merge `skills list` and `skills status` into single `skills list` view
+- [ ] Merge `skills list` and `skills status` into single `skills list` view that shows: skill name, description, and per-agent install state (current/outdated/missing)
+- [ ] Remove standalone `listSkills()` from `core/skills.ts` (fold into `getSkillsStatus()` or a new combined function)
 - [ ] Remove `skills status` subcommand from `index.ts`
+- [ ] Update `commands/skills.ts`: remove `runSkillsList()` and `runSkillsStatus()`, replace with single `runSkillsList()` that renders the merged view
 - [ ] Update `skills.unit.test.ts`
 
 ## Phase 7: Reorganize Tests
