@@ -13,12 +13,15 @@ Checklist for the codebase and CLI restructuring. See `ARCHITECTURE.md` and `CLI
 - [ ] Change `--output` default to `.chunk/context/review-prompt.md` (via `DEFAULT_OUTPUT_PATH`)
 - [ ] Update `commands/build-prompt.ts` to import model defaults from `config/`
 - [ ] Update `index.ts` to import model defaults and `DEFAULT_OUTPUT_PATH` from `config/` (currently imports `DEFAULT_ANALYZE_MODEL` / `DEFAULT_PROMPT_MODEL` from `commands/build-prompt.ts`)
+- [ ] Resolve `build-prompt` flag semantics so implementation, help text, and README all agree:
+  - `--org` omitted → auto-detect org from git remote
+  - `--org` provided + `--repos` omitted → analyze all repos in the org
 - [ ] Note: Changing the `--output` default from `./review-prompt.md` to `.chunk/context/review-prompt.md` is a user-facing behavior change — document in release notes
 
 ## Phase 3: Extract Core Logic from commands/task.ts
-- [ ] Create `src/core/run-setup.ts` with `runSetupWizard()`
-- [ ] Create `src/core/run-trigger.ts` with `triggerRun()`
-- [ ] Move `mapVcsTypeToOrgType()` and `buildProjectSlug()` to `core/run-setup.ts`
+- [ ] Create `src/core/task-config.ts` with `runTaskConfigWizard()`
+- [ ] Create `src/core/task-run.ts` with `runTask()`
+- [ ] Move `mapVcsTypeToOrgType()` and `buildProjectSlug()` to `core/task-config.ts`
 - [ ] Slim `commands/task.ts` to thin wrappers
 - [ ] Update existing tests
 
@@ -29,12 +32,11 @@ Checklist for the codebase and CLI restructuring. See `ARCHITECTURE.md` and `CLI
   - `generatePromptFile()` — transform analysis into markdown prompt
 - [ ] Refactor `extractCommentsAndBuildPrompt()` to call step functions (orchestrator handles spinners/display; step functions return data only)
 
-## Phase 5: Rename task → run
-- [ ] Rename `commands/task.ts` → `commands/run.ts`
-- [ ] Update exports and function names
-- [ ] Update `index.ts` command structure: `chunk run` triggers directly (with `--definition`/`--prompt` flags), `chunk run setup` is the setup wizard
-- [ ] Update help text and examples (including the "Next steps" output in `runTaskConfig` which currently prints `chunk task run --definition ...`)
-- [ ] Add hidden `task` deprecation alias
+## Phase 5: Tighten task command UX
+- [ ] Keep `task` as the top-level command group and preserve `chunk task config` / `chunk task run`
+- [ ] Update help text and examples so the `task` command tree is clearer and more consistent
+- [ ] Align any "Next steps" output in `runTaskConfig` with the finalized help text and examples
+- [ ] Rename extracted core symbols/files as needed to match `task-*` naming consistently
 - [ ] Rename/update test files
 
 ## Phase 6: Merge skills list + status
@@ -48,9 +50,15 @@ Checklist for the codebase and CLI restructuring. See `ARCHITECTURE.md` and `CLI
 - [ ] Create directory structure under `__tests__/`
 - [ ] Move test files to mirror source structure (consider combining with source moves from Phases 3/5 where possible to avoid double-churn)
 - [ ] Verify imports
+- [ ] Add CLI help/usage tests covering `chunk task config` and `chunk task run`
+- [ ] Add an import-boundary check so forbidden upward imports fail CI
 
 ## Phase 8: Finalize Documentation
 - [ ] Update `ARCHITECTURE.md` — remove "proposed" framing
 - [ ] Update `CLI.md` — remove "proposed" framing
 - [ ] Update `tasks.md` — mark complete or remove
 - [ ] Update `CLAUDE.md` to reflect all changes
+- [ ] Update `README.md` examples and command reference to match the final CLI
+- [ ] Add release notes / migration notes for:
+  - new default output path for `build-prompt`
+  - finalized `build-prompt` auto-detection behavior
