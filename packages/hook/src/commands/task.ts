@@ -138,12 +138,17 @@ async function runCheck(
 		}
 	}
 
-	const sentinel = readTaskResult(config.sentinelDir, config.projectDir, flags.name);
-
 	// Session-aware staleness: sentinels from a different session are
 	// treated as missing so the task re-runs with fresh context.
 	const marker = readMarker(config.projectDir);
 	const currentSessionId = marker?.sessionId;
+
+	const sentinel = readTaskResult(
+		config.sentinelDir,
+		config.projectDir,
+		flags.name,
+		currentSessionId,
+	);
 
 	await emitCheckResult(t, config, adapter, event, flags, task, sentinel, currentSessionId);
 }

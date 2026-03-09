@@ -54,6 +54,7 @@ export function readTaskResult(
 	sentinelDir: string,
 	projectDir: string,
 	name: CommandName,
+	sessionId?: string,
 ): SentinelData | undefined {
 	const path = sentinelPath(sentinelDir, projectDir, name);
 	if (!existsSync(path)) return undefined;
@@ -73,7 +74,7 @@ export function readTaskResult(
 		return undefined;
 	}
 
-	// Check if this is already internal SentinelData (legacy compat).
+	// Already in SentinelData format — return as-is.
 	const asRecord = parsed as Record<string, unknown>;
 	if (typeof asRecord.status === "string" && typeof asRecord.startedAt === "string") {
 		return parsed as SentinelData;
@@ -84,7 +85,7 @@ export function readTaskResult(
 	if (!result) return undefined;
 
 	// Translate TaskResult → SentinelData
-	return taskResultToSentinel(result, raw);
+	return taskResultToSentinel(result, raw, sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +95,11 @@ export function readTaskResult(
 /**
  * Convert a validated `TaskResult` into `SentinelData`.
  */
-export function taskResultToSentinel(result: TaskResult, rawJson?: string): SentinelData {
+export function taskResultToSentinel(
+	result: TaskResult,
+	rawJson?: string,
+	sessionId?: string,
+): SentinelData {
 	const now = new Date().toISOString();
 
 	if (result.decision === "allow") {
@@ -103,6 +108,7 @@ export function taskResultToSentinel(result: TaskResult, rawJson?: string): Sent
 			startedAt: now,
 			finishedAt: now,
 			details: result.reason ?? "Task passed.",
+			...(sessionId ? { sessionId } : {}),
 		};
 	}
 
@@ -112,6 +118,7 @@ export function taskResultToSentinel(result: TaskResult, rawJson?: string): Sent
 		finishedAt: now,
 		details: result.reason ?? "(no reason provided)",
 		rawResult: rawJson,
+		...(sessionId ? { sessionId } : {}),
 	};
 }
 

@@ -26,8 +26,10 @@ import { join } from "node:path";
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Point to the main chunk CLI entry point — hook commands live under `chunk hook`
-const CLI_PATH = join(import.meta.dir, "..", "..", "..", "..", "src", "index.ts");
+// Repo root where bunfig.toml lives — must be the cwd when spawning bun so
+// that the VERSION define and .md loader are in effect.
+const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
+const CLI_PATH = join(REPO_ROOT, "src", "index.ts");
 
 /**
  * Build a clean base environment by stripping CHUNK_HOOK_* and CLAUDE_* variables
@@ -69,6 +71,7 @@ async function runCli(
 		stdin: "pipe",
 		stdout: "pipe",
 		stderr: "pipe",
+		cwd: REPO_ROOT,
 		env: { ...cleanBaseEnv(), ...env },
 	});
 
@@ -185,6 +188,14 @@ beforeEach(() => {
 	writeFileSync(join(testProjectDir, "README.md"), "# Test\n");
 	Bun.spawnSync(["git", "add", "."], { cwd: testProjectDir });
 	Bun.spawnSync(["git", "commit", "-m", "initial"], { cwd: testProjectDir });
+
+	// Pre-activate scope — mirrors production where scope is always activated
+	// by a prior PreToolUse event before exec run --no-check fires.
+	// Uses the same session_id as hookEvent() default.
+	writeFileSync(
+		join(hookDir, ".chunk-hook-active"),
+		`${JSON.stringify({ sessionId: "test-session-001", timestamp: Date.now() })}\n`,
+	);
 });
 
 afterEach(() => {
@@ -228,31 +239,7 @@ function projectEvent(overrides: Record<string, unknown> = {}): string {
 
 describe("exec run (direct invocation)", () => {
 	it("exits 0 when command passes", async () => {
-		const env = testEnv();
-		const mergedEnv = { ...cleanBaseEnv(), ...env };
-		const result = await runCli(["exec", "run", "tests", "--always"], projectEvent(), env);
-		if (result.exitCode !== 0) {
-			console.error("[DIAG] exit:", result.exitCode);
-			console.error("[DIAG] stderr:", result.stderr.slice(0, 2000));
-			console.error("[DIAG] stdout:", result.stdout.slice(0, 500));
-			console.error("[DIAG] testProjectDir:", testProjectDir);
-			console.error("[DIAG] sentinelDir:", sentinelDir);
-			console.error("[DIAG] CLI_PATH:", CLI_PATH);
-			console.error("[DIAG] CLI_PATH exists:", existsSync(CLI_PATH));
-			console.error(
-				"[DIAG] process.env CHUNK_HOOK/CLAUDE keys:",
-				Object.keys(process.env).filter(
-					(k) => k.startsWith("CHUNK_HOOK_") || k.startsWith("CLAUDE"),
-				),
-			);
-			console.error(
-				"[DIAG] mergedEnv CHUNK_HOOK/CLAUDE keys:",
-				Object.keys(mergedEnv).filter((k) => k.startsWith("CHUNK_HOOK_") || k.startsWith("CLAUDE")),
-			);
-			console.error("[DIAG] mergedEnv has HOME:", !!mergedEnv.HOME);
-			console.error("[DIAG] mergedEnv has PATH:", !!mergedEnv.PATH);
-			console.error("[DIAG] mergedEnv has TMPDIR:", !!mergedEnv.TMPDIR);
-		}
+		const result = await runCli(["exec", "run", "tests", "--always"], projectEvent(), testEnv());
 		expect(result.exitCode).toBe(0);
 	});
 
@@ -682,6 +669,8 @@ describe("trigger matching", () => {
 describe("scope lifecycle", () => {
 	it("activate + deactivate creates and removes marker", async () => {
 		const markerPath = join(testProjectDir, ".chunk", "hook", ".chunk-hook-active");
+		// Remove beforeEach marker — this test controls scope from scratch.
+		rmSync(markerPath, { force: true });
 
 		// Activate with matching file paths
 		const activateResult = await runCli(
@@ -712,6 +701,8 @@ describe("scope lifecycle", () => {
 
 	it("does not activate without file paths (no-paths event)", async () => {
 		const markerPath = join(testProjectDir, ".chunk", "hook", ".chunk-hook-active");
+		// Remove beforeEach marker — this test controls scope from scratch.
+		rmSync(markerPath, { force: true });
 
 		const result = await runCli(
 			["scope", "activate"],
@@ -728,6 +719,8 @@ describe("scope lifecycle", () => {
 
 	it("does not activate without session ID", async () => {
 		const markerPath = join(testProjectDir, ".chunk", "hook", ".chunk-hook-active");
+		// Remove beforeEach marker — this test controls scope from scratch.
+		rmSync(markerPath, { force: true });
 
 		const result = await runCli(
 			["scope", "activate"],
@@ -743,6 +736,8 @@ describe("scope lifecycle", () => {
 
 	it("does not overwrite marker from different session (subagent safety)", async () => {
 		const markerPath = join(testProjectDir, ".chunk", "hook", ".chunk-hook-active");
+		// Remove beforeEach marker — this test controls scope from scratch.
+		rmSync(markerPath, { force: true });
 
 		// Parent session activates
 		await runCli(
@@ -1278,6 +1273,7 @@ describe("concurrent lock safety", () => {
 			details: "Test review pass",
 			project: testProjectDir,
 			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001",
 		});
 
 		// Fire all three checks in parallel
@@ -1312,6 +1308,7 @@ describe("concurrent lock safety", () => {
 			details: "Issues found",
 			project: testProjectDir,
 			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001",
 		});
 
 		// Check both in parallel — each self-consumes independently
@@ -1370,6 +1367,7 @@ describe("self-consumption timing", () => {
 			details: "Review passed",
 			project: testProjectDir,
 			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001",
 		});
 
 		// Sentinel exists before check
@@ -1522,6 +1520,7 @@ describe("pending sentinel", () => {
 			status: "pending",
 			startedAt: new Date().toISOString(),
 			project: testProjectDir,
+			sessionId: "test-session-001",
 		});
 
 		const result = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
@@ -1609,6 +1608,7 @@ describe("mixed delegated (exec check) and direct (exec run) on same event", () 
 			details: "Review passed",
 			project: testProjectDir,
 			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001",
 		});
 
 		// Run lint with a failing command (direct)
@@ -1778,6 +1778,7 @@ describe("auto-allow isolation", () => {
 			details: "Review passed",
 			project: testProjectDir,
 			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001",
 		});
 
 		// Check fail-cmd 3 times (limit=2) — blocks twice then auto-allows
@@ -1988,6 +1989,7 @@ describe("sync check (grouped sequential checks)", () => {
 			details: "",
 			project: testProjectDir,
 			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001",
 		});
 
 		const result = await runCli(
@@ -2015,6 +2017,7 @@ describe("sync check (grouped sequential checks)", () => {
 			details: "Review passed",
 			project: testProjectDir,
 			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001",
 		});
 
 		const result = await runCli(
@@ -2263,6 +2266,7 @@ describe("self-consuming exec/task check", () => {
 			details: "Review passed",
 			project: testProjectDir,
 			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001",
 		});
 
 		// First check: passes and self-consumes.
@@ -2815,25 +2819,30 @@ describe("sync session-aware staleness", () => {
 	});
 
 	it("sentinel from same session is treated as current (passes)", async () => {
-		const { writeSentinel: ws } = await import("../lib/sentinel");
+		const { readSentinel: rs } = await import("../lib/sentinel");
 
 		const sessionId = "current-session-001";
 
-		// Write a passing sentinel with the SAME session ID.
-		ws(sentinelDir, testProjectDir, "tests", {
-			status: "pass",
-			details: "all tests passed",
-			project: testProjectDir,
-			startedAt: new Date().toISOString(),
-			sessionId,
-		});
-
-		// Write a scope marker with the same session ID.
+		// Write the scope marker FIRST — the marker must exist before exec run
+		// and before sync check so the session ID is available.
 		const markerDir = join(testProjectDir, ".chunk", "hook");
 		writeFileSync(
 			join(markerDir, ".chunk-hook-active"),
 			`${JSON.stringify({ sessionId, timestamp: Date.now() })}\n`,
 		);
+
+		// Use exec run in a subprocess to create a sentinel with a correct
+		// fingerprint (immune to module-level mocks in parallel test files).
+		await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Read the sentinel created by exec run and verify it has the right sessionId.
+		const sentinel = rs(sentinelDir, testProjectDir, "tests");
+		expect(sentinel).toBeDefined();
+		expect(sentinel?.sessionId).toBe(sessionId);
 
 		// Sync check: sentinel and marker share the same sessionId → valid → passes.
 		const result = await runCli(
@@ -2844,32 +2853,42 @@ describe("sync session-aware staleness", () => {
 		expect(result.exitCode).toBe(0);
 	});
 
-	it("sentinel without sessionId is allowed through (backward compat)", async () => {
-		const { writeSentinel: ws } = await import("../lib/sentinel");
+	it("sentinel without sessionId is rejected when session is active", async () => {
+		const { writeSentinel: ws, readSentinel: rs } = await import("../lib/sentinel");
 
-		// Write a passing sentinel WITHOUT a sessionId (pre-upgrade sentinel).
-		ws(sentinelDir, testProjectDir, "tests", {
-			status: "pass",
-			details: "all tests passed",
-			project: testProjectDir,
-			startedAt: new Date().toISOString(),
-			// no sessionId field
-		});
-
-		// Write a scope marker with a session ID.
+		// Write the scope marker first so exec run picks up the session.
 		const markerDir = join(testProjectDir, ".chunk", "hook");
 		writeFileSync(
 			join(markerDir, ".chunk-hook-active"),
 			`${JSON.stringify({ sessionId: "current-session-001", timestamp: Date.now() })}\n`,
 		);
 
-		// Sentinel has no sessionId → backward-compatible → treated as current → passes.
+		// Use exec run to create a sentinel with correct fingerprint.
+		await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Read the sentinel's contentHash, then rewrite without sessionId.
+		const original = rs(sentinelDir, testProjectDir, "tests");
+		expect(original).toBeDefined();
+		ws(sentinelDir, testProjectDir, "tests", {
+			status: "pass",
+			details: "all tests passed",
+			project: testProjectDir,
+			startedAt: new Date().toISOString(),
+			contentHash: original?.contentHash,
+			// no sessionId field — sentinel is treated as stale
+		});
+
+		// Sentinel has no sessionId → treated as stale → sync blocks (exit 2).
 		const result = await runCli(
 			["sync", "check", "exec:tests", "--always"],
 			projectEvent(),
 			testEnv(),
 		);
-		expect(result.exitCode).toBe(0);
+		expect(result.exitCode).toBe(2);
 	});
 
 	it("exec run writes sessionId into sentinel, checked by sync", async () => {
