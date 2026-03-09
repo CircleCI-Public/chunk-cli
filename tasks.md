@@ -11,39 +11,42 @@ This restructuring covers `src/` only. `packages/hook/` (`@chunk/hook`) is **out
 - [x] Write `CLI.md` (proposed)
 - [x] Write `tasks.md`
 
-## Phase 2: Fix Import Direction and Consolidate Defaults
-The main goal here is fixing the import direction: `index.ts` (entry point) currently imports model defaults from `commands/build-prompt.ts`, which violates the proposed layering. Moving the defaults to `config/` fixes this so both files import downward.
+## Phase 2a: Fix Import Direction and Consolidate Defaults
+The main goal here is fixing the import direction: `index.ts` (entry point) currently imports model defaults from `commands/build-prompt.ts`, which violates the proposed layering. Moving the defaults to `config/` fixes this so both files import downward. This phase is mechanical with no user-facing changes — ship it immediately.
 
 - [ ] Move `DEFAULT_ANALYZE_MODEL` and `DEFAULT_PROMPT_MODEL` from `commands/build-prompt.ts` to `config/index.ts` — after the move, both `commands/build-prompt.ts` and `index.ts` import from `config/`
-- [ ] Add `DEFAULT_OUTPUT_PATH` (`.chunk/context/review-prompt.md`) to `config/index.ts`
-- [ ] Change `--output` default to `.chunk/context/review-prompt.md` (via `DEFAULT_OUTPUT_PATH`)
-- [ ] Auto-create `.chunk/context/` directory in `build-prompt` if it doesn't exist when using the default output path
-- [ ] Add a deprecation warning: if `./review-prompt.md` exists in the working directory when using the new default path, print a one-time notice so users with scripts referencing the old path are aware
 - [ ] Update `commands/build-prompt.ts` to import model defaults from `config/`
-- [ ] Update `index.ts` to import model defaults and `DEFAULT_OUTPUT_PATH` from `config/`
+- [ ] Update `index.ts` to import model defaults from `config/`
+
+## Phase 2b: Finalize `build-prompt` Behavior and Docs
+This phase is intentionally separate from Phase 2a because it changes user-visible behavior and documentation even if the code changes are still small.
+
 - [ ] Resolve `build-prompt` flag semantics so implementation, help text, and README all agree:
   - no flags → auto-detect org and current repo from git remote
   - `--repos` only → auto-detect org from git remote and use the provided repos
   - `--org` provided + `--repos` provided → analyze the provided repos in the provided org
   - `--org` provided + `--repos` omitted → error (no way to enumerate all repos in an org)
   - if auto-detection is needed and fails, print a clear error telling the user to pass `--org`
-- [ ] Note: Changing the `--output` default from `./review-prompt.md` to `.chunk/context/review-prompt.md` is a user-facing behavior change — document in release notes
+- [ ] Move org/repo auto-detection logic from `commands/build-prompt.ts` into `core/` — currently `commands/build-prompt.ts:31-38` calls `detectGitHubOrgAndRepo()` and applies fallback logic, which is business logic that belongs in the orchestration layer, not in a thin command wrapper
+- [ ] Update `chunk build-prompt --help` examples and wording to match the finalized behavior matrix
+- [ ] Update `README.md` command reference/examples for the finalized `build-prompt` behavior
+
+## Phase 2c: Make `index.ts` a Composition Root
+The goal here is to reduce CLI drift by keeping command UX definitions close to the command modules they belong to.
+
+- [ ] Move command-specific help text, examples, parser helpers, and option definitions out of `src/index.ts` and into the corresponding `src/commands/*` modules
+- [ ] Keep `src/index.ts` limited to program creation, top-level command registration, and top-level error handling
+- [ ] Introduce per-command registration helpers (for example `registerBuildPromptCommand()` / `registerTaskCommands()`) as needed
+- [ ] Keep `index.ts` free of command-specific defaults, validation rules, and help-copy maintenance
 
 ## Phase 3: Extract Core Logic from commands/task.ts ⬅ highest-value phase
 - [ ] Create `src/core/task-config.ts` with `runTaskConfigWizard()`
 - [ ] Create `src/core/task-run.ts` with `runTask()`
 - [ ] Move `mapVcsTypeToOrgType()` and `buildProjectSlug()` to `core/task-config.ts`
 - [ ] Slim `commands/task.ts` to thin wrappers
-- [ ] Update existing tests
+- [ ] Update existing tests — place new test files in `src/__tests__/core/` to start the mirrored structure
 
-## Phase 4: Break Up core/build-prompt.ts (lower priority — file is 300 lines, not unwieldy)
-- [ ] Create `src/core/build-prompt-steps.ts` with step functions:
-  - `discoverTopReviewers()` — query GitHub for top reviewers by activity
-  - `analyzeReviewPatterns()` — send comments to Claude for pattern analysis
-  - `generatePromptFile()` — transform analysis into markdown prompt
-- [ ] Refactor `extractCommentsAndBuildPrompt()` to call step functions (orchestrator handles spinners/display; step functions return data only)
-
-## Phase 5: Tighten task command UX
+## Phase 4: Tighten task command UX
 - [ ] Keep `task` as the top-level command group and preserve `chunk task config` / `chunk task run`
 - [ ] Audit and rewrite `chunk task --help` output:
   - Ensure the description explains what "tasks" are (CircleCI pipeline runs)
@@ -58,19 +61,30 @@ The main goal here is fixing the import direction: `index.ts` (entry point) curr
 - [ ] Rename extracted core symbols/files as needed to match `task-*` naming consistently
 - [ ] Rename/update test files
 
-## Phase 6: Merge skills list + status
+## Phase 5: Merge skills list + status
 - [ ] Merge `skills list` and `skills status` into single `skills list` view that shows: skill name, description, and per-agent install state (current/outdated/missing)
 - [ ] Remove standalone `listSkills()` from `core/skills.ts` (fold into `getSkillsStatus()` or a new combined function)
 - [ ] Remove `skills status` subcommand from `index.ts`
 - [ ] Update `commands/skills.ts`: remove `runSkillsList()` and `runSkillsStatus()`, replace with single `runSkillsList()` that renders the merged view
 - [ ] Update `skills.unit.test.ts`
 
-## Phase 7: Reorganize Tests
-- [ ] Create directory structure under `__tests__/` (see ARCHITECTURE.md for target layout)
-- [ ] Move test files to mirror source structure — combine with source moves from Phases 3/5 where possible to avoid double-churn (e.g., when creating `core/task-config.ts` in Phase 3, create `__tests__/core/task-config.unit.test.ts` at the same time rather than first moving the old test and then moving it again)
-- [ ] Verify imports
+## Phase 6: Change Default Output Path
+This is a user-facing breaking change — ship it separately from the mechanical refactors above.
+
+- [ ] Add `DEFAULT_OUTPUT_PATH` (`.chunk/context/review-prompt.md`) to `config/index.ts`
+- [ ] Change `--output` default to `.chunk/context/review-prompt.md` (via `DEFAULT_OUTPUT_PATH`)
+- [ ] Auto-create parent directories for the chosen `build-prompt` output path if they don't exist
+- [ ] Add a deprecation warning: if `./review-prompt.md` exists in the working directory when using the new default path, print a one-time notice so users with scripts referencing the old path are aware
+- [ ] Update `index.ts` to import `DEFAULT_OUTPUT_PATH` from `config/`
+- [ ] Document the change in release notes
+
+## Phase 7: Add Enforcement and Help Tests
+These can be added incrementally as each phase lands, but should all be in place by the end.
+
+- [ ] Add an import-boundary check so the documented machine-enforced rule fails CI when violated. Suggested approach: a unit test that checks `src/storage/`, `src/api/`, `src/review_prompt_mining/`, `src/ui/`, `src/utils/`, and `src/skills/` for imports from `commands/` or `core/`, and checks that `src/config/` imports nothing from the rest of `src/`. Keep lateral leaf-to-leaf imports as review guidance rather than part of the first enforcement pass.
 - [ ] Add CLI help/usage tests covering `chunk build-prompt`, `chunk task config`, and `chunk task run`
-- [ ] Add an import-boundary check so the documented machine-enforced rule fails CI when violated. Suggested approach: a unit test that checks `src/storage/`, `src/api/`, `src/review_prompt_mining/`, `src/ui/`, and `src/utils/` for imports from `commands/` or `core/`, and checks that `src/config/` imports nothing from the rest of `src/`. Keep lateral leaf-to-leaf imports as review guidance rather than part of the first enforcement pass.
+- [ ] Add at least one help/usage test for the top-level `chunk` command so `index.ts` stays a thin composition root and command registration drift is caught earlier
+- [ ] Place new test files in the mirrored `src/__tests__/` structure; move existing test files into the structure opportunistically when touching them for other phases (avoid a dedicated big-bang move)
 
 ## Phase 8: Finalize Documentation
 - [ ] Update `ARCHITECTURE.md` — remove "proposed" framing
@@ -84,3 +98,17 @@ The main goal here is fixing the import direction: `index.ts` (entry point) curr
   - new default output path for `build-prompt`
   - deprecation warning for old `./review-prompt.md` path
   - finalized `build-prompt` auto-detection behavior
+
+## Decided Against
+
+### Break up `core/build-prompt.ts`
+Previously proposed as a phase to extract step functions into `core/build-prompt-steps.ts`. Decided against because:
+- The file is ~300 lines and reads clearly top-to-bottom with ASCII section dividers
+- The three steps already delegate to `review_prompt_mining/` modules — extracting them would create thin wrappers around single calls
+- Splitting would mean reading two files instead of one with no real testability gain
+- Can revisit if the file grows significantly or a concrete testing need arises
+
+### Big-bang test reorganization
+Previously proposed as a dedicated phase to move all test files at once into a mirrored directory structure. Decided against because:
+- Moving all 8 test files in one pass adds churn for marginal benefit
+- Better to place new test files in the right structure as each phase lands, and move existing ones opportunistically when touching them

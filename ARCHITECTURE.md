@@ -19,8 +19,10 @@ No upward dependencies.
 
 Machine-enforced boundary:
 
-- leaf modules must not import from `commands/` or `core/`
+- leaf modules (`storage/`, `api/`, `review_prompt_mining/`, `ui/`, `utils/`, `skills/`) must not import from `commands/` or `core/`
 - `config/` must not import from any other `src/` module
+
+`types/` remains runtime-free and can be checked separately if needed; it is not part of the first import-boundary rule.
 
 Design guidance beyond the enforced rule:
 
@@ -28,24 +30,40 @@ Design guidance beyond the enforced rule:
 - `ui/` is the main shared leaf for formatting and display helpers
 - if a helper exists mainly to print, format, or color terminal output, prefer `ui/` over `utils/`
 
-> **Known violation**: `review_prompt_mining/top-reviewers/output.ts` imports from `ui/colors` and `ui/format`. This is acceptable under the `ui/` exception above.
+> **Example**: `review_prompt_mining/top-reviewers/output.ts` imports from `ui/colors` and `ui/format`. This is a conforming lateral import under the `ui/` exception above.
+
+## index.ts Rules
+
+`src/index.ts` is the composition root only. It should:
+
+- Create the top-level Commander program
+- Register top-level command groups from `commands/`
+- Handle top-level process exit and uncaught error presentation
+- Avoid command-specific business logic, help text, defaults, parser helpers, and validation rules
+
+Command-specific option definitions, examples, and help text should live with the corresponding `commands/*` module so CLI behavior is defined close to the implementation it triggers.
 
 ## commands/ Rules
 
-Thin wrappers only. Each command file should:
+Thin registration modules only. Each command file should:
 
-- Parse flags and validate inputs
-- Call one core function
-- Return `CommandResult`
-- Target 30–60 lines when practical; treat this as a guideline, not a hard limit
+- Define one command or command group
+- Own that command's help text, examples, option parsing, and validation
+- Call one core function per action handler
+- Return `CommandResult` from action handlers
+- Export a registration helper that `index.ts` can compose
+- Target 30–80 lines when practical; treat this as a guideline, not a hard limit
 - Contain NO business logic, NO spinners, NO complex control flow
 
 Example structure:
 ```typescript
-export async function runBuildPrompt(flags: ParsedFlags): Promise<CommandResult> {
-  // validate / transform flags
-  // call core function
-  // return { exitCode: 0 }
+export function registerBuildPromptCommand(program: Command): void {
+  program
+    .command("build-prompt")
+    // options, help text, examples
+    .action(async (flags) => {
+      process.exit((await runBuildPrompt(flags)).exitCode);
+    });
 }
 ```
 
@@ -59,21 +77,24 @@ Business logic and orchestration. Each public function does one conceptual step.
 - Interactive wizards (like `runTaskConfigWizard`) are orchestrators, not step functions — they coordinate user input and business logic, so they belong in `core/` and are allowed to use `ui/`
 - This is an intentional CLI-specific tradeoff: `core/` owns orchestration and user-facing interaction, while leaf modules stay display-free
 - Keep functions focused: one function, one responsibility
+- `core/` should not become a grab-bag for shared helpers; if logic is pure and reusable outside one workflow, prefer a leaf module
+
+`core/` is not intended to be framework-agnostic domain logic. In this CLI, `core/` is the orchestration layer: it coordinates business logic, workflow sequencing, and user-facing CLI interaction, while leaf modules stay display-free.
 
 ## Enforcement
 
 These rules should be machine-checked where possible:
 
 - Add an import-boundary check in tests or linting so forbidden upward imports fail CI
-- Keep the machine-checked rule narrow and explicit: leaf modules must not import from `commands/` or `core/`, and `config/` must not import from other `src/` modules
+- Keep the machine-checked rule narrow and explicit: `storage/`, `api/`, `review_prompt_mining/`, `ui/`, `utils/`, and `skills/` must not import from `commands/` or `core/`, and `config/` must not import from other `src/` modules
 - Add CLI help tests for the public command tree so docs and implementation do not drift
 - Prefer one focused refactor per phase to keep reviewable diffs small
 
 ## config/ Rules
 
-Single source of truth for ALL defaults.
+Single source of truth for defaults, env var names, and config-level path helpers.
 
-- Constants only, no side effects
+- Side-effect-free only: constants and pure helper functions are allowed
 - All model defaults (`DEFAULT_ANALYZE_MODEL`, `DEFAULT_PROMPT_MODEL`, etc.)
 - All path defaults (`DEFAULT_OUTPUT_PATH`)
 - Environment variable names
@@ -107,6 +128,19 @@ Type-only exports. No runtime code, no side effects.
 ## skills/ Rules
 
 Embedded skill content loaded at build time. Leaf module — no imports from other `src/` modules.
+
+## Change Routing
+
+When deciding where new code belongs:
+
+- Add a CLI flag or subcommand in `commands/`, then delegate immediately to `core/`
+- Add a workflow, wizard, or multi-step operation in `core/`
+- Add a persisted config schema, read/write, or file validation in `storage/`
+- Add a thin external API client in `api/`
+- Add terminal formatting, color, or prompt helpers in `ui/`
+- Add a pure helper with no presentation concerns in `utils/`
+- Add defaults, env var names, or path helpers in `config/`
+- Add shared runtime-free types in `types/`
 
 ## Packages
 
@@ -160,7 +194,7 @@ By this framework, nothing currently in `src/` needs to become a package. If a n
 
 ## Test Organization
 
-Mirror `src/` structure under `__tests__/`:
+Mirror `src/` structure under `src/__tests__/`. New test files should go in the mirrored location; existing flat test files migrate opportunistically when touched.
 
 ```
 src/__tests__/
@@ -170,7 +204,6 @@ src/__tests__/
 ├── api/
 │   └── circleci-api.unit.test.ts
 ├── core/
-│   ├── build-prompt-steps.unit.test.ts
 │   ├── task-config.unit.test.ts
 │   └── task-run.unit.test.ts
 ├── storage/
@@ -188,19 +221,18 @@ Naming: `<module>.unit.test.ts` or `<module>.e2e.test.ts`
 
 ```
 src/
-├── index.ts                        # CLI routing (thin)
-├── commands/                       # Thin wrappers only (30-60 lines each)
-│   ├── build-prompt.ts
-│   ├── task.ts
-│   ├── auth.ts
-│   ├── config.ts
-│   ├── skills.ts
-│   └── upgrade.ts
+├── index.ts                        # Composition root only: create program, register commands, top-level error handling
+├── commands/                       # Command registration modules (thin)
+│   ├── build-prompt.ts             # registerBuildPromptCommand()
+│   ├── task.ts                     # registerTaskCommands()
+│   ├── auth.ts                     # registerAuthCommands()
+│   ├── config.ts                   # registerConfigCommands()
+│   ├── skills.ts                   # registerSkillsCommands()
+│   └── upgrade.ts                  # registerUpgradeCommand()
 ├── config/
 │   └── index.ts                    # ALL defaults: models, paths, env vars
 ├── core/
-│   ├── build-prompt.ts             # Orchestrator calling step functions
-│   ├── build-prompt-steps.ts       # discoverReviewers(), analyzePatterns(), generatePrompt()
+│   ├── build-prompt.ts             # Three-step pipeline orchestrator (~300 lines, clear as-is)
 │   ├── task-config.ts              # Extracted task setup wizard
 │   ├── task-run.ts                 # Extracted task trigger logic
 │   ├── agent.ts
@@ -215,7 +247,7 @@ src/
 ├── utils/                          # Pure utility functions (leaf)
 ├── skills/                         # Embedded skill content (leaf)
 ├── types/                          # Type-only exports (leaf)
-└── __tests__/                      # Mirrored structure
+└── __tests__/                      # Mirrored structure (migrate incrementally)
     ├── commands/
     ├── api/
     ├── core/
