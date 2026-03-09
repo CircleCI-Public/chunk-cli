@@ -15,7 +15,9 @@ commands/ → core/ → (storage, api, review_prompt_mining, ui, utils)
 - `storage/`, `api/`, `review_prompt_mining/`, `ui/`, `utils/` must NOT import from `commands/` or `core/`
 - `config/` is a leaf — no imports from any `src/` module
 
-No upward or lateral dependencies between peer modules at the same layer.
+No upward dependencies. Lateral imports between leaf modules are allowed only for `ui/` (formatting/colors), since display helpers are general-purpose. All other leaf modules (`storage/`, `api/`, `utils/`, `skills/`) must not import from each other.
+
+> **Known violation**: `review_prompt_mining/top-reviewers/output.ts` imports from `ui/colors` and `ui/format`. This is acceptable under the `ui/` exception above.
 
 ## commands/ Rules
 
@@ -65,11 +67,11 @@ File I/O for persisted configuration.
 
 ## api/ Rules
 
-External service clients. Currently contains `circleci.ts` (CircleCI API).
+External service clients. Currently contains `circleci.ts` (CircleCI API client, types, and error classes).
 
 - One file per external service
 - No business logic — thin wrappers around HTTP calls
-- Return typed responses
+- Return typed responses; export service-specific error classes alongside the client
 - Note: `review_prompt_mining/graphql-client.ts` is the GitHub GraphQL client. It lives under `review_prompt_mining/` because it's specific to the review mining pipeline, whereas `api/` holds general-purpose service clients.
 
 ## utils/ Rules
@@ -89,11 +91,11 @@ Embedded skill content loaded at build time. Leaf module — no imports from oth
 | CLI Command | Code File | Export Pattern |
 |-------------|-----------|----------------|
 | `chunk run setup` | `core/run-setup.ts` | `runSetupWizard()` |
-| `chunk run task` | `core/run-trigger.ts` | `triggerRun()` |
+| `chunk run --definition ...` | `core/run-trigger.ts` | `triggerRun()` |
 | `chunk build-prompt` | `core/build-prompt.ts` | `extractCommentsAndBuildPrompt()` |
 
 - CLI `run` → code `run-*.ts`
-- "task" refers to the pipeline run triggered by `chunk run task`
+- `chunk run` (with flags) triggers a pipeline run directly; `chunk run setup` is the config wizard
 
 ## Test Organization
 

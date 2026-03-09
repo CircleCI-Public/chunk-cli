@@ -19,7 +19,7 @@ chunk
 │
 ├── run                             # Was: task — pipeline operations
 │   ├── setup                       # Was: task config — setup wizard for .chunk/run.json
-│   └── task                        # Was: task run — trigger a pipeline run
+│   └── (default action)            # Was: task run — trigger a pipeline run
 │       --definition <name>         # Definition name or UUID (required)
 │       --prompt <text>             # Prompt to send to the agent (required)
 │       --branch <branch>           # Branch to check out (overrides definition default)
@@ -60,9 +60,9 @@ The `--output` flag for `build-prompt` defaults to `.chunk/context/review-prompt
 ## Naming Rules
 
 - Top-level commands are verbs or nouns: `build-prompt`, `run`, `auth`, `config`, `skills`, `hook`, `upgrade`
-- `run` is the parent for pipeline operations
-- `task` is the subcommand under `run` that triggers a pipeline run
+- `run` is the parent for pipeline operations; when called with `--definition` and `--prompt` flags it triggers a run directly (no `task` subcommand needed)
 - `setup` is the subcommand under `run` that configures `.chunk/run.json`
+- Examples: `chunk run --definition dev --prompt "Fix the test"`, `chunk run setup`
 
 ## Deprecation
 
