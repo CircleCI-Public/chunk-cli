@@ -15,7 +15,18 @@ commands/ → core/ → (storage, api, review_prompt_mining, ui, utils)
 - `storage/`, `api/`, `review_prompt_mining/`, `ui/`, `utils/` must NOT import from `commands/` or `core/`
 - `config/` is a leaf — no imports from any `src/` module
 
-No upward dependencies. Lateral imports between leaf modules are allowed only for `ui/` (formatting/colors), since display helpers are general-purpose. All other leaf modules (`storage/`, `api/`, `utils/`, `skills/`) must not import from each other.
+No upward dependencies.
+
+Machine-enforced boundary:
+
+- leaf modules must not import from `commands/` or `core/`
+- `config/` must not import from any other `src/` module
+
+Design guidance beyond the enforced rule:
+
+- keep lateral imports between leaf modules rare
+- `ui/` is the main shared leaf for formatting and display helpers
+- if a helper exists mainly to print, format, or color terminal output, prefer `ui/` over `utils/`
 
 > **Known violation**: `review_prompt_mining/top-reviewers/output.ts` imports from `ui/colors` and `ui/format`. This is acceptable under the `ui/` exception above.
 
@@ -42,10 +53,11 @@ export async function runBuildPrompt(flags: ParsedFlags): Promise<CommandResult>
 
 Business logic and orchestration. Each public function does one conceptual step.
 
-- Orchestrator functions (e.g., `extractCommentsAndBuildPrompt`) call step functions and handle display (spinners, progress)
-- Step functions return data only — no spinners, no direct terminal output
-- Orchestrators may use `ui/` for formatting and spinners; step functions must not
-- This is an intentional CLI-specific tradeoff: `core/` owns orchestration and user-facing progress, while leaf modules stay display-free
+- Orchestrator functions (e.g., `extractCommentsAndBuildPrompt`, `runTaskConfigWizard`) call step functions and handle display (spinners, progress, interactive prompts)
+- Step functions return data only — no spinners, no direct terminal output, no interactive prompts
+- Orchestrators may use `ui/` for formatting, spinners, and interactive prompts; step functions must not
+- Interactive wizards (like `runTaskConfigWizard`) are orchestrators, not step functions — they coordinate user input and business logic, so they belong in `core/` and are allowed to use `ui/`
+- This is an intentional CLI-specific tradeoff: `core/` owns orchestration and user-facing interaction, while leaf modules stay display-free
 - Keep functions focused: one function, one responsibility
 
 ## Enforcement
@@ -53,6 +65,7 @@ Business logic and orchestration. Each public function does one conceptual step.
 These rules should be machine-checked where possible:
 
 - Add an import-boundary check in tests or linting so forbidden upward imports fail CI
+- Keep the machine-checked rule narrow and explicit: leaf modules must not import from `commands/` or `core/`, and `config/` must not import from other `src/` modules
 - Add CLI help tests for the public command tree so docs and implementation do not drift
 - Prefer one focused refactor per phase to keep reviewable diffs small
 
@@ -85,7 +98,7 @@ External service clients. Currently contains `circleci.ts` (CircleCI API client,
 
 ## utils/ Rules
 
-Pure utility functions. No side effects, no imports from other `src/` modules (except `types/`).
+Prefer pure utility functions. Avoid terminal formatting and display logic here; put presentation-oriented helpers in `ui/`.
 
 ## types/ Rules
 
@@ -94,6 +107,45 @@ Type-only exports. No runtime code, no side effects.
 ## skills/ Rules
 
 Embedded skill content loaded at build time. Leaf module — no imports from other `src/` modules.
+
+## Packages
+
+This is a Bun workspace monorepo. Packages live under `packages/` and are declared in the root `package.json` (`"workspaces": ["packages/hook"]`).
+
+### `@chunk/hook` (`packages/hook/`)
+
+The hook package implements the `chunk hook` command group — 7 subcommand families (exec, task, sync, state, scope, repo, env) for AI coding agent hook lifecycle automation. It is the largest body of code in the repo (~2,500+ lines of source, 17 lib modules, 26 test files).
+
+**Integration point**: The main CLI imports a single function:
+
+```typescript
+import { registerHookCommands } from "@chunk/hook";
+const hook = program.command("hook").description("...");
+registerHookCommands(hook);
+```
+
+The hook package has **no imports from `src/`** and `src/` has **no knowledge of hook internals**. The package follows its own internal conventions documented in `packages/hook/AGENTS.md`. The `src/` layering rules in this document do not apply inside `packages/hook/`.
+
+> **Evaluated**: The hook command structure (7 subcommand families) was reviewed during restructuring planning. The current design is well-suited: families map to distinct responsibilities, machine-invoked commands benefit from explicitness, and the `hook` namespace cleanly isolates them from the rest of the CLI. No changes needed.
+
+> **Naming collision**: `src/commands/task.ts` (CircleCI pipeline runs) and `packages/hook/src/commands/task.ts` (delegated subagent work) are completely unrelated. The former is the `chunk task` command; the latter is `chunk hook task`.
+
+### When to create a package vs. keep in `src/`
+
+Create a separate package when:
+
+- The code has a **distinct domain** with its own concepts that don't overlap with the main CLI (e.g., sentinels, adapters, scope markers)
+- It has a **clean API surface** — ideally one export function as the entire contract
+- It has **its own dependency tree** (even if minimal)
+- It's **large enough** that separate conventions and test organization reduce cognitive load
+
+Keep in `src/` when:
+
+- The code is **tightly coupled** to the main CLI's data flow (e.g., `review_prompt_mining/` feeds directly into `core/build-prompt.ts`)
+- It **shares types and utilities** heavily with the rest of `src/`
+- It's **small enough** that packaging overhead (separate package.json, workspace config, path aliases) adds more friction than clarity
+
+By this framework, nothing currently in `src/` needs to become a package. If a new major feature area emerged with a similarly distinct domain and clean boundary, that would be the signal.
 
 ## Naming Conventions
 
@@ -115,6 +167,8 @@ src/__tests__/
 ├── commands/
 │   ├── task-command.unit.test.ts
 │   └── ...
+├── api/
+│   └── circleci-api.unit.test.ts
 ├── core/
 │   ├── build-prompt-steps.unit.test.ts
 │   ├── task-config.unit.test.ts
@@ -125,8 +179,7 @@ src/__tests__/
 ├── ui/
 │   └── format.unit.test.ts
 └── utils/
-    ├── git-remote.unit.test.ts
-    └── circleci-api.unit.test.ts
+    └── git-remote.unit.test.ts
 ```
 
 Naming: `<module>.unit.test.ts` or `<module>.e2e.test.ts`
@@ -156,14 +209,15 @@ src/
 ├── storage/
 │   ├── config.ts
 │   └── run-config.ts
-├── review_prompt_mining/
-├── api/
-├── ui/
-├── utils/
-├── skills/
-├── types/
+├── review_prompt_mining/           # PR review mining pipeline
+├── api/                            # External service clients (leaf)
+├── ui/                             # Terminal display helpers (leaf, lateral-import exception)
+├── utils/                          # Pure utility functions (leaf)
+├── skills/                         # Embedded skill content (leaf)
+├── types/                          # Type-only exports (leaf)
 └── __tests__/                      # Mirrored structure
     ├── commands/
+    ├── api/
     ├── core/
     ├── storage/
     ├── ui/
