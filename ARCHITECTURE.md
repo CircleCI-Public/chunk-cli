@@ -40,9 +40,9 @@ export async function runBuildPrompt(flags: ParsedFlags): Promise<CommandResult>
 
 Business logic and orchestration. Each public function does one conceptual step.
 
-- May use `ui/` for formatting and spinners
-- Orchestrator functions (e.g., `extractCommentsAndBuildPrompt`) call step functions
-- Step functions return data; orchestrators handle display
+- Orchestrator functions (e.g., `extractCommentsAndBuildPrompt`) call step functions and handle display (spinners, progress)
+- Step functions return data only — no spinners, no direct terminal output
+- Orchestrators may use `ui/` for formatting and spinners; step functions must not
 - Keep functions focused: one function, one responsibility
 
 ## config/ Rules
@@ -62,6 +62,27 @@ File I/O for persisted configuration.
 - No business logic
 - Read/write/validate config files
 - Return typed data structures
+
+## api/ Rules
+
+External service clients. Currently contains `circleci.ts` (CircleCI API).
+
+- One file per external service
+- No business logic — thin wrappers around HTTP calls
+- Return typed responses
+- Note: `review_prompt_mining/graphql-client.ts` is the GitHub GraphQL client. It lives under `review_prompt_mining/` because it's specific to the review mining pipeline, whereas `api/` holds general-purpose service clients.
+
+## utils/ Rules
+
+Pure utility functions. No side effects, no imports from other `src/` modules (except `types/`).
+
+## types/ Rules
+
+Type-only exports. No runtime code, no side effects.
+
+## skills/ Rules
+
+Embedded skill content loaded at build time. Leaf module — no imports from other `src/` modules.
 
 ## Naming Conventions
 
