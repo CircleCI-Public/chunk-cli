@@ -12,6 +12,8 @@ This restructuring covers `src/` only. `packages/hook/` (`@chunk/hook`) is **out
 - [x] Write `tasks.md`
 
 ## Phase 2a: Fix Import Direction and Consolidate Defaults
+**Depends on:** Phase 1. **No dependencies from other phases on this**, but should land before 2c (both touch `index.ts` and `commands/build-prompt.ts`).
+
 The main goal here is fixing the import direction: `index.ts` (entry point) currently imports model defaults from `commands/build-prompt.ts`, which violates the proposed layering. Moving the defaults to `config/` fixes this so both files import downward. This phase is mechanical with no user-facing changes — ship it immediately.
 
 - [ ] Move `DEFAULT_ANALYZE_MODEL` and `DEFAULT_PROMPT_MODEL` from `commands/build-prompt.ts` to `config/index.ts` — after the move, both `commands/build-prompt.ts` and `index.ts` import from `config/`
@@ -19,6 +21,8 @@ The main goal here is fixing the import direction: `index.ts` (entry point) curr
 - [ ] Update `index.ts` to import model defaults from `config/`
 
 ## Phase 2b: Finalize `build-prompt` Behavior and Docs
+**Depends on:** Phase 2a (model defaults already in `config/`). **Independent of** 2c.
+
 This phase is intentionally separate from Phase 2a because it changes user-visible behavior and documentation even if the code changes are still small.
 
 - [ ] Resolve `build-prompt` flag semantics so implementation, help text, and README all agree:
@@ -32,6 +36,8 @@ This phase is intentionally separate from Phase 2a because it changes user-visib
 - [ ] Update `README.md` command reference/examples for the finalized `build-prompt` behavior
 
 ## Phase 2c: Make `index.ts` a Composition Root
+**Depends on:** Phase 2a (must land first — both touch `index.ts` and `commands/build-prompt.ts`). **Independent of** 2b.
+
 The goal here is to reduce CLI drift by keeping command UX definitions close to the command modules they belong to.
 
 - [ ] Move command-specific help text, examples, parser helpers, and option definitions out of `src/index.ts` and into the corresponding `src/commands/*` modules
@@ -40,6 +46,7 @@ The goal here is to reduce CLI drift by keeping command UX definitions close to 
 - [ ] Keep `index.ts` free of command-specific defaults, validation rules, and help-copy maintenance
 
 ## Phase 3: Extract Core Logic from commands/task.ts ⬅ highest-value phase
+**Depends on:** Phase 2c (command registration pattern established). **Independent of** 2b.
 - [ ] Create `src/core/task-config.ts` with `runTaskConfigWizard()`
 - [ ] Create `src/core/task-run.ts` with `runTask()`
 - [ ] Move `mapVcsTypeToOrgType()` and `buildProjectSlug()` to `core/task-config.ts`
@@ -47,6 +54,7 @@ The goal here is to reduce CLI drift by keeping command UX definitions close to 
 - [ ] Update existing tests — place new test files in `src/__tests__/core/` to start the mirrored structure
 
 ## Phase 4: Tighten task command UX
+**Depends on:** Phase 3 (extracted core modules exist to rename/align).
 - [ ] Keep `task` as the top-level command group and preserve `chunk task config` / `chunk task run`
 - [ ] Audit and rewrite `chunk task --help` output:
   - Ensure the description explains what "tasks" are (CircleCI pipeline runs)
@@ -62,6 +70,7 @@ The goal here is to reduce CLI drift by keeping command UX definitions close to 
 - [ ] Rename/update test files
 
 ## Phase 5: Merge skills list + status
+**Depends on:** Phase 2c (registration pattern established). **Independent of** Phases 3–4 — can be done in parallel.
 - [ ] Merge `skills list` and `skills status` into single `skills list` view that shows: skill name, description, and per-agent install state (current/outdated/missing)
 - [ ] Remove standalone `listSkills()` from `core/skills.ts` (fold into `getSkillsStatus()` or a new combined function)
 - [ ] Remove `skills status` subcommand from `index.ts`
@@ -69,6 +78,8 @@ The goal here is to reduce CLI drift by keeping command UX definitions close to 
 - [ ] Update `skills.unit.test.ts`
 
 ## Phase 6: Change Default Output Path
+**Depends on:** Phase 2a (defaults consolidated in `config/`), Phase 2b (`build-prompt` behavior finalized). Ship after all mechanical refactors.
+
 This is a user-facing breaking change — ship it separately from the mechanical refactors above.
 
 - [ ] Add `DEFAULT_OUTPUT_PATH` (`.chunk/context/review-prompt.md`) to `config/index.ts`
@@ -79,25 +90,35 @@ This is a user-facing breaking change — ship it separately from the mechanical
 - [ ] Document the change in release notes
 
 ## Phase 7: Add Enforcement and Help Tests
-These can be added incrementally as each phase lands, but should all be in place by the end.
+**Depends on:** Phase 2c at minimum (command structure stable enough to test). Individual tests can be added incrementally as earlier phases land, but should all be in place by the end.
 
 - [ ] Add an import-boundary check so the documented machine-enforced rule fails CI when violated. Suggested approach: a unit test that checks `src/storage/`, `src/api/`, `src/review_prompt_mining/`, `src/ui/`, `src/utils/`, and `src/skills/` for imports from `commands/` or `core/`, and checks that `src/config/` imports nothing from the rest of `src/`. Keep lateral leaf-to-leaf imports as review guidance rather than part of the first enforcement pass.
 - [ ] Add CLI help/usage tests covering `chunk build-prompt`, `chunk task config`, and `chunk task run`
 - [ ] Add at least one help/usage test for the top-level `chunk` command so `index.ts` stays a thin composition root and command registration drift is caught earlier
 - [ ] Place new test files in the mirrored `src/__tests__/` structure; move existing test files into the structure opportunistically when touching them for other phases (avoid a dedicated big-bang move)
 
+## Phase 7b: Make Hook Tests Runnable from Root
+**Independent of** all other phases — can be done at any time.
+
+This is an infrastructure improvement, not gated on restructuring. Pulling it out of Phase 8 so it doesn't block or get blocked by documentation finalization.
+
+- [ ] Confirm hook tests are runnable from root — currently `bun test` only runs `src/**/*.unit.test.ts`; hook tests require `cd packages/hook && bun test` or a new workspace-aware script
+
 ## Phase 8: Finalize Documentation
+**Depends on:** All prior phases complete.
+
 - [ ] Update `ARCHITECTURE.md` — remove "proposed" framing
 - [ ] Update `CLI.md` — remove "proposed" framing
 - [ ] Delete `SUMMARY.md` — it served as a pitch document for the restructuring; once complete, `ARCHITECTURE.md` and `CLI.md` are the living docs
 - [ ] Update `tasks.md` — mark complete or remove
 - [ ] Update `CLAUDE.md` to reflect all changes (including monorepo workspace structure and `packages/hook/`)
-- [ ] Confirm hook tests are runnable from root — currently `bun test` only runs `src/**/*.unit.test.ts`; hook tests require `cd packages/hook && bun test` or a new workspace-aware script
 - [ ] Update `README.md` examples and command reference to match the final CLI
 - [ ] Add release notes / migration notes for:
   - new default output path for `build-prompt`
   - deprecation warning for old `./review-prompt.md` path
   - finalized `build-prompt` auto-detection behavior
+
+> **Note**: Update `CLAUDE.md` incrementally as each phase lands, not just in Phase 8. During restructuring, AI agents read `CLAUDE.md` for guidance — if it's stale until the end, they'll be working from outdated information. Each phase that changes file locations, module boundaries, or command behavior should include a `CLAUDE.md` update in the same PR.
 
 ## Decided Against
 
