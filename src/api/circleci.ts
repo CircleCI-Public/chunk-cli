@@ -203,7 +203,6 @@ export async function createSandbox(
 			"Circle-Token": token,
 		},
 		body: JSON.stringify({ organization_id: organizationId, name, ...(image && { image }) }),
-
 	});
 }
 
