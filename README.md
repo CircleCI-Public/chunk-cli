@@ -138,10 +138,10 @@ You will need three identifiers from CircleCI before running setup:
 | **Project ID** | CircleCI app → Project Settings → Overview |
 | **Definition ID** | CircleCI app → the chunk pipeline definition page (UUID in the URL or settings) |
 
-You will also need a CircleCI personal API token set as `CIRCLECI_TOKEN`:
+You will also need a CircleCI personal API token set as `CIRCLE_TOKEN`:
 
 ```bash
-export CIRCLECI_TOKEN=your-token-here
+export CIRCLE_TOKEN=your-token-here
 ```
 
 #### Setup

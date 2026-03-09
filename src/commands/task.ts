@@ -1,4 +1,9 @@
 import * as fs from "node:fs";
+
+function getCircleCIToken(): string | undefined {
+	return process.env.CIRCLE_TOKEN ?? process.env.CIRCLECI_TOKEN;
+}
+
 import {
 	type CircleCICollaboration,
 	CircleCIError,
@@ -35,12 +40,12 @@ export interface RunCommandOptions {
 
 export async function runTaskRun(options: RunCommandOptions): Promise<CommandResult> {
 	const definition = options.definition;
-	const token = process.env.CIRCLECI_TOKEN;
+	const token = getCircleCIToken();
 	if (!token) {
 		printError(
 			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is not set.",
-			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
+			"CIRCLE_TOKEN environment variable is not set.",
+			"Set CIRCLE_TOKEN to your CircleCI personal API token.",
 		);
 		return { exitCode: 2 };
 	}
@@ -108,7 +113,7 @@ export async function runTaskRun(options: RunCommandOptions): Promise<CommandRes
 			printError(
 				"CircleCI API error",
 				error.message,
-				"Check your CIRCLECI_TOKEN and .chunk/run.json configuration.",
+				"Check your CIRCLE_TOKEN and .chunk/run.json configuration.",
 			);
 			return { exitCode: 2 };
 		}
@@ -197,13 +202,13 @@ export async function runTaskConfig(): Promise<CommandResult> {
 	console.log(`This wizard creates ${cyan(".chunk/run.json")} in your repository root.`);
 	console.log("");
 
-	// Check for CIRCLECI_TOKEN
-	const token = process.env.CIRCLECI_TOKEN;
+	// Check for CIRCLE_TOKEN
+	const token = getCircleCIToken();
 	if (!token) {
 		printError(
 			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is required for setup.",
-			"Export your CircleCI personal API token:\n  export CIRCLECI_TOKEN=<your-token>",
+			"CIRCLE_TOKEN environment variable is required for setup.",
+			"Export your CircleCI personal API token:\n  export CIRCLE_TOKEN=<your-token>",
 		);
 		return { exitCode: 2 };
 	}
@@ -248,7 +253,7 @@ export async function runTaskConfig(): Promise<CommandResult> {
 			printError(
 				"Failed to fetch CircleCI data",
 				error.message,
-				"Check your CIRCLECI_TOKEN and try again.",
+				"Check your CIRCLE_TOKEN and try again.",
 			);
 			return { exitCode: 2 };
 		}
@@ -325,7 +330,7 @@ export async function runTaskConfig(): Promise<CommandResult> {
 					printError(
 						"Failed to fetch project details",
 						error.message,
-						"Check your CIRCLECI_TOKEN and try again.",
+						"Check your CIRCLE_TOKEN and try again.",
 					);
 					return { exitCode: 2 };
 				}
