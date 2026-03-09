@@ -26,7 +26,7 @@ Thin wrappers only. Each command file should:
 - Parse flags and validate inputs
 - Call one core function
 - Return `CommandResult`
-- Target 30–60 lines
+- Target 30–60 lines when practical; treat this as a guideline, not a hard limit
 - Contain NO business logic, NO spinners, NO complex control flow
 
 Example structure:
@@ -45,7 +45,16 @@ Business logic and orchestration. Each public function does one conceptual step.
 - Orchestrator functions (e.g., `extractCommentsAndBuildPrompt`) call step functions and handle display (spinners, progress)
 - Step functions return data only — no spinners, no direct terminal output
 - Orchestrators may use `ui/` for formatting and spinners; step functions must not
+- This is an intentional CLI-specific tradeoff: `core/` owns orchestration and user-facing progress, while leaf modules stay display-free
 - Keep functions focused: one function, one responsibility
+
+## Enforcement
+
+These rules should be machine-checked where possible:
+
+- Add an import-boundary check in tests or linting so forbidden upward imports fail CI
+- Add CLI help tests for the public command tree so docs and implementation do not drift
+- Prefer one focused refactor per phase to keep reviewable diffs small
 
 ## config/ Rules
 
@@ -90,12 +99,12 @@ Embedded skill content loaded at build time. Leaf module — no imports from oth
 
 | CLI Command | Code File | Export Pattern |
 |-------------|-----------|----------------|
-| `chunk run setup` | `core/run-setup.ts` | `runSetupWizard()` |
-| `chunk run --definition ...` | `core/run-trigger.ts` | `triggerRun()` |
+| `chunk task config` | `core/task-config.ts` | `runTaskConfigWizard()` |
+| `chunk task run --definition ...` | `core/task-run.ts` | `runTask()` |
 | `chunk build-prompt` | `core/build-prompt.ts` | `extractCommentsAndBuildPrompt()` |
 
-- CLI `run` → code `run-*.ts`
-- `chunk run` (with flags) triggers a pipeline run directly; `chunk run setup` is the config wizard
+- CLI `task` → code `task-*.ts`
+- `chunk task run` triggers a pipeline run; `chunk task config` is the setup wizard
 
 ## Test Organization
 
@@ -104,12 +113,12 @@ Mirror `src/` structure under `__tests__/`:
 ```
 src/__tests__/
 ├── commands/
-│   ├── run-command.unit.test.ts
+│   ├── task-command.unit.test.ts
 │   └── ...
 ├── core/
 │   ├── build-prompt-steps.unit.test.ts
-│   ├── run-setup.unit.test.ts
-│   └── run-trigger.unit.test.ts
+│   ├── task-config.unit.test.ts
+│   └── task-run.unit.test.ts
 ├── storage/
 │   ├── run-config.unit.test.ts
 │   └── run-config-fs.unit.test.ts
@@ -129,7 +138,7 @@ src/
 ├── index.ts                        # CLI routing (thin)
 ├── commands/                       # Thin wrappers only (30-60 lines each)
 │   ├── build-prompt.ts
-│   ├── run.ts                      # Was: task.ts
+│   ├── task.ts
 │   ├── auth.ts
 │   ├── config.ts
 │   ├── skills.ts
@@ -139,8 +148,8 @@ src/
 ├── core/
 │   ├── build-prompt.ts             # Orchestrator calling step functions
 │   ├── build-prompt-steps.ts       # discoverReviewers(), analyzePatterns(), generatePrompt()
-│   ├── run-setup.ts                # Extracted setup wizard
-│   ├── run-trigger.ts              # Extracted trigger logic
+│   ├── task-config.ts              # Extracted task setup wizard
+│   ├── task-run.ts                 # Extracted task trigger logic
 │   ├── agent.ts
 │   ├── skills.ts
 │   └── upgrade.ts
