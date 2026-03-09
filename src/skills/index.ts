@@ -2,6 +2,7 @@
 // content as a string literal in the compiled binary (requires --loader .md:text
 // in build commands).
 import chunkReviewContent from "../../skills/chunk-review/SKILL.md";
+import chunkTestingGapsContent from "../../skills/chunk-testing-gaps/SKILL.md";
 
 export interface EmbeddedSkill {
 	name: string;
@@ -10,6 +11,12 @@ export interface EmbeddedSkill {
 }
 
 export const EMBEDDED_SKILLS: readonly EmbeddedSkill[] = [
+	{
+		name: "chunk-testing-gaps",
+		description:
+			'Use when asked to "find testing gaps", "chunk testing-gaps", "mutation test", "mutate this code", or "find surviving mutants". Runs a 4-stage mutation testing process.',
+		content: chunkTestingGapsContent,
+	},
 	{
 		name: "chunk-review",
 		description:
