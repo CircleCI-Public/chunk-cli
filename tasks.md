@@ -9,7 +9,8 @@ Checklist for the codebase and CLI restructuring. See `ARCHITECTURE.md` and `CLI
 
 ## Phase 2: Consolidate Defaults
 - [ ] Move `DEFAULT_ANALYZE_MODEL` and `DEFAULT_PROMPT_MODEL` to `config/index.ts`
-- [ ] Add `DEFAULT_OUTPUT_PATH` to `config/index.ts`
+- [ ] Add `DEFAULT_OUTPUT_PATH` (`.chunk/context/review-prompt.md`) to `config/index.ts`
+- [ ] Change `--output` default to `.chunk/context/review-prompt.md` (via `DEFAULT_OUTPUT_PATH`)
 - [ ] Update `commands/build-prompt.ts` to import from `config/`
 - [ ] Update `index.ts` to use `DEFAULT_OUTPUT_PATH` for `--output` default
 
@@ -21,8 +22,11 @@ Checklist for the codebase and CLI restructuring. See `ARCHITECTURE.md` and `CLI
 - [ ] Update existing tests
 
 ## Phase 4: Break Up core/build-prompt.ts
-- [ ] Create `src/core/build-prompt-steps.ts` with step functions
-- [ ] Refactor `extractCommentsAndBuildPrompt()` to call step functions
+- [ ] Create `src/core/build-prompt-steps.ts` with step functions:
+  - `discoverTopReviewers()` — query GitHub for top reviewers by activity
+  - `analyzeReviewPatterns()` — send comments to Claude for pattern analysis
+  - `generatePromptFile()` — transform analysis into markdown prompt
+- [ ] Refactor `extractCommentsAndBuildPrompt()` to call step functions (orchestrator handles spinners/display; step functions return data only)
 
 ## Phase 5: Rename task → run
 - [ ] Rename `commands/task.ts` → `commands/run.ts`
@@ -40,7 +44,7 @@ Checklist for the codebase and CLI restructuring. See `ARCHITECTURE.md` and `CLI
 
 ## Phase 7: Reorganize Tests
 - [ ] Create directory structure under `__tests__/`
-- [ ] Move test files to mirror source structure
+- [ ] Move test files to mirror source structure (consider combining with source moves from Phases 3/5 where possible to avoid double-churn)
 - [ ] Verify imports
 
 ## Phase 8: Finalize Documentation
