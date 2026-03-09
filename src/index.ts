@@ -57,10 +57,14 @@ Environment Variables:
   -h, --help               Show this help message
 
 Examples:
-  chunk build-prompt --org myorg --repos myrepo
-  chunk build-prompt --org myorg --repos repo1,repo2 --top 5 --output ./my-prompt.md`,
+  chunk build-prompt                                     # Auto-detect org and repo from git remote
+  chunk build-prompt --org myorg --repos myrepo          # Explicit org and repo(s)
+  chunk build-prompt --repos repo1,repo2                 # Auto-detect org, explicit repos`,
 		)
-		.requiredOption("--org <org>", "GitHub organization to analyze")
+		.option(
+			"--org <org>",
+			"GitHub organization to analyze (auto-detected from git remote if omitted)",
+		)
 		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
 		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
 		.option("--since <date>", "Start date YYYY-MM-DD", parseDate, threeMonthsAgo())
@@ -128,7 +132,7 @@ Examples:
 			"after",
 			`
 Environment Variables:
-  CIRCLECI_TOKEN           Required: CircleCI personal API token
+  CIRCLE_TOKEN             Required: CircleCI personal API token
 
 Examples:
   chunk task run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
@@ -151,6 +155,12 @@ Examples:
 	task
 		.command("config")
 		.description("Initialize .chunk/run.json for this repository")
+		.addHelpText(
+			"after",
+			`
+Environment Variables:
+  CIRCLE_TOKEN             Required: CircleCI personal API token`,
+		)
 		.action(async () => process.exit((await runTaskConfig()).exitCode));
 
 	program
@@ -177,7 +187,7 @@ Examples:
 		.requiredOption("--org-id <orgId>", "Org ID of sandbox")
 		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID of sandbox")
 		.requiredOption("--command <command>", "Command to execute")
-		.option("--args [args...]", "Arguments to command")
+		.option("--args <args...>", "Arguments to command", [])
 		.action(async (options) =>
 			process.exit(
 				(

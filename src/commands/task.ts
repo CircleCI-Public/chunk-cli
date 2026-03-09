@@ -1,8 +1,18 @@
 import * as fs from "node:fs";
+
+function getCircleCIToken(): string | undefined {
+	return process.env.CIRCLE_TOKEN ?? process.env.CIRCLECI_TOKEN;
+}
+
 import {
+	type CircleCICollaboration,
 	CircleCIError,
+	type CircleCIProject,
 	type CircleCIRunRequest,
 	type CircleCIRunResponse,
+	fetchCollaborations,
+	fetchFollowedProjects,
+	fetchProjectBySlug,
 	triggerChunkRun,
 } from "../api/circleci";
 import {
@@ -17,7 +27,7 @@ import {
 import type { CommandResult } from "../types";
 import { bold, cyan, dim, yellow } from "../ui/colors";
 import { formatStep, label, printSuccess, printWarning } from "../ui/format";
-import { promptConfirm, promptInput } from "../ui/prompt";
+import { promptConfirm, promptInput, promptSelect } from "../ui/prompt";
 import { handleError, printError } from "../utils/errors";
 
 export interface RunCommandOptions {
@@ -30,12 +40,12 @@ export interface RunCommandOptions {
 
 export async function runTaskRun(options: RunCommandOptions): Promise<CommandResult> {
 	const definition = options.definition;
-	const token = process.env.CIRCLECI_TOKEN;
+	const token = getCircleCIToken();
 	if (!token) {
 		printError(
 			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is not set.",
-			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
+			"CIRCLE_TOKEN environment variable is not set.",
+			"Set CIRCLE_TOKEN to your CircleCI personal API token.",
 		);
 		return { exitCode: 2 };
 	}
@@ -103,7 +113,7 @@ export async function runTaskRun(options: RunCommandOptions): Promise<CommandRes
 			printError(
 				"CircleCI API error",
 				error.message,
-				"Check your CIRCLECI_TOKEN and .chunk/run.json configuration.",
+				"Check your CIRCLE_TOKEN and .chunk/run.json configuration.",
 			);
 			return { exitCode: 2 };
 		}
@@ -153,6 +163,20 @@ async function promptUuid(message: string, required: boolean): Promise<string | 
 	}
 }
 
+const ANOTHER_PROJECT_SENTINEL = Symbol("another-project");
+type ProjectSelection = CircleCIProject | typeof ANOTHER_PROJECT_SENTINEL;
+
+export function mapVcsTypeToOrgType(vcsType: string | undefined): "github" | "circleci" {
+	const lower = vcsType?.toLowerCase();
+	if (lower === "github" || lower === "gh") return "github";
+	return "circleci";
+}
+
+export function buildProjectSlug(vcsType: string | undefined, org: string, repo: string): string {
+	const prefix = vcsType?.toLowerCase() === "bitbucket" ? "bb" : "gh";
+	return `${prefix}/${org}/${repo}`;
+}
+
 async function collectDefinition(): Promise<{ name: string; definition: RunDefinition }> {
 	const name = await promptRequiredInput("  Definition name (e.g. dev, prod): ");
 
@@ -176,9 +200,18 @@ async function collectDefinition(): Promise<{ name: string; definition: RunDefin
 export async function runTaskConfig(): Promise<CommandResult> {
 	console.log(`\n${bold("Chunk Run Setup")}\n`);
 	console.log(`This wizard creates ${cyan(".chunk/run.json")} in your repository root.`);
-	console.log(
-		"You will need your CircleCI org ID, project ID, and at least one pipeline definition ID.\n",
-	);
+	console.log("");
+
+	// Check for CIRCLE_TOKEN
+	const token = getCircleCIToken();
+	if (!token) {
+		printError(
+			"CircleCI token not found",
+			"CIRCLE_TOKEN environment variable is required for setup.",
+			"Export your CircleCI personal API token:\n  export CIRCLE_TOKEN=<your-token>",
+		);
+		return { exitCode: 2 };
+	}
 
 	// Check for git repo and existing config
 	let configPath: string;
@@ -204,28 +237,127 @@ export async function runTaskConfig(): Promise<CommandResult> {
 		console.log("");
 	}
 
-	// Collect org and project info
+	// Step 1: Organization & project via API
 	console.log(`${formatStep(1, 3, "Organization & project")}\n`);
-	console.log(dim("  Find these in CircleCI → Organization Settings → Overview\n"));
+	console.log(dim("  Fetching your CircleCI projects...\n"));
 
-	const orgId = await promptRequiredInput("Organization ID: ");
-	const projectId = await promptRequiredInput("Project ID: ");
-
-	let orgType: "github" | "circleci" = "github";
-	while (true) {
-		const input = (await promptInput("Organization type (github/circleci) [github]: "))
-			.trim()
-			.toLowerCase();
-		if (!input || input === "github") {
-			orgType = "github";
-			break;
+	let projects: CircleCIProject[];
+	let collaborations: CircleCICollaboration[];
+	try {
+		[projects, collaborations] = await Promise.all([
+			fetchFollowedProjects(token),
+			fetchCollaborations(token),
+		]);
+	} catch (error) {
+		if (error instanceof CircleCIError) {
+			printError(
+				"Failed to fetch CircleCI data",
+				error.message,
+				"Check your CIRCLE_TOKEN and try again.",
+			);
+			return { exitCode: 2 };
 		}
-		if (input === "circleci") {
-			orgType = "circleci";
-			break;
-		}
-		console.log(yellow('  Must be "github" or "circleci".'));
+		handleError(error);
+		return { exitCode: 2 };
 	}
+
+	let orgId: string;
+	let projectId: string;
+	let orgType: "github" | "circleci" = "github";
+
+	if (projects.length === 0) {
+		console.log(dim("  No followed projects found. Enter IDs manually.\n"));
+
+		// Fall back to org selection from collaborations
+		if (collaborations.length > 0) {
+			const selectedOrg = await promptSelect<CircleCICollaboration>(
+				"\nSelect your organization:",
+				collaborations,
+				(collab) => collab.name,
+			);
+			orgId = selectedOrg.id;
+			orgType = mapVcsTypeToOrgType(selectedOrg["vcs-type"]);
+			console.log("");
+		} else {
+			orgId = await promptRequiredInput("Organization ID: ");
+			orgType = "github";
+		}
+		projectId = await promptRequiredInput("Enter a project ID: ");
+	} else {
+		// Build selection list sorted alphabetically, plus "Another project" sentinel
+		const sortedProjects = [...projects].sort((a, b) =>
+			`${a.username}/${a.reponame}`.localeCompare(`${b.username}/${b.reponame}`),
+		);
+		const selectionItems: ProjectSelection[] = [...sortedProjects, ANOTHER_PROJECT_SENTINEL];
+
+		const selected = await promptSelect<ProjectSelection>(
+			"\nSelect a project:",
+			selectionItems,
+			(item) => {
+				if (item === ANOTHER_PROJECT_SENTINEL) {
+					return "Another project (enter IDs manually)";
+				}
+				return `${item.username}/${item.reponame}`;
+			},
+		);
+
+		if (selected === ANOTHER_PROJECT_SENTINEL) {
+			// User wants to enter IDs manually — show org list if available
+			if (collaborations.length > 0) {
+				const selectedOrg = await promptSelect<CircleCICollaboration>(
+					"\nSelect your organization:",
+					collaborations,
+					(collab) => collab.name,
+				);
+				orgId = selectedOrg.id;
+				orgType = mapVcsTypeToOrgType(selectedOrg["vcs-type"]);
+			} else {
+				orgId = await promptRequiredInput("\nOrganization ID: ");
+				orgType = "github";
+			}
+			console.log("");
+			projectId = await promptRequiredInput("Enter a project ID: ");
+		} else {
+			// Resolve UUIDs from selected project
+			const slug = buildProjectSlug(selected.vcs_type, selected.username, selected.reponame);
+			console.log(dim(`\n  Resolving project details for ${slug}...\n`));
+
+			let projectDetails: Awaited<ReturnType<typeof fetchProjectBySlug>>;
+			try {
+				projectDetails = await fetchProjectBySlug(token, slug);
+			} catch (error) {
+				if (error instanceof CircleCIError) {
+					printError(
+						"Failed to fetch project details",
+						error.message,
+						"Check your CIRCLE_TOKEN and try again.",
+					);
+					return { exitCode: 2 };
+				}
+				handleError(error);
+				return { exitCode: 2 };
+			}
+
+			projectId = projectDetails.id;
+			orgId = projectDetails.organization_id;
+
+			// Determine org type from the project's vcs_type, falling back to collaboration data
+			if (selected.vcs_type) {
+				orgType = mapVcsTypeToOrgType(selected.vcs_type);
+			} else {
+				const matchedCollab = collaborations.find(
+					(c) => c.name.toLowerCase() === selected.username.toLowerCase(),
+				);
+				orgType = mapVcsTypeToOrgType(matchedCollab?.["vcs-type"]);
+			}
+		}
+	}
+
+	const labelWidth = 18;
+	console.log(dim("\n  Resolved configuration:"));
+	console.log(`  ${label("Org ID:", labelWidth)} ${orgId}`);
+	console.log(`  ${label("Project ID:", labelWidth)} ${projectId}`);
+	console.log(`  ${label("Org type:", labelWidth)} ${orgType}\n`);
 
 	// Collect definitions
 	console.log(`\n${formatStep(2, 3, "Pipeline definitions")}\n`);
@@ -274,10 +406,10 @@ export async function runTaskConfig(): Promise<CommandResult> {
 
 	const defNames = Object.keys(definitions).join(", ");
 	console.log(`${bold("Next steps:")}`);
-	console.log(`  Set ${cyan("CIRCLECI_TOKEN")} in your environment, then run:`);
+	console.log("  Run a task with:");
 	console.log(
 		dim(
-			`  chunk run --definition ${Object.keys(definitions)[0] ?? "<definition>"} --prompt "your task"\n`,
+			`  chunk task run --definition ${Object.keys(definitions)[0] ?? "<definition>"} --prompt "your task"\n`,
 		),
 	);
 	if (Object.keys(definitions).length > 1) {
