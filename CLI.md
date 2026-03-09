@@ -11,7 +11,7 @@ chunk
 │   --repos <items>                 # Comma-separated list of repo names
 │   --top <number>                  # Number of top reviewers to analyze (default: 5)
 │   --since <date>                  # Start date YYYY-MM-DD (default: 3 months ago)
-│   --output <path>                 # Output path (default: .chunk/context/review-prompt.md)
+│   --output <path>                 # Output path (default: ./review-prompt.md → changing to .chunk/context/review-prompt.md in Phase 6)
 │   --max-comments <number>         # Max comments per reviewer
 │   --analyze-model <model>         # Claude model for analysis step
 │   --prompt-model <model>          # Claude model for prompt generation
@@ -51,6 +51,12 @@ The `hook` command group is implemented entirely in `packages/hook/` (`@chunk/ho
 
 > **Naming collision**: `chunk task` (CircleCI pipeline runs, `src/commands/task.ts`) and `chunk hook task` (delegated subagent work, `packages/hook/src/commands/task.ts`) are unrelated commands.
 
+## Registration Boundary
+
+- `src/index.ts` should stay a composition root: create the Commander program, register top-level command groups, and handle top-level errors
+- Command-specific help text, examples, option parsing, and validation should live in the corresponding `src/commands/*` module
+- This keeps each command's UX definition close to the action it triggers and reduces help-text drift
+
 ## Flag Conventions
 
 - **Required flags**: Use `.requiredOption()` in Commander
@@ -63,6 +69,7 @@ The `hook` command group is implemented entirely in `packages/hook/` (`@chunk/ho
 
 - `build-prompt` should support org auto-detection from the git remote when `--org` is omitted
 - If `--org` is provided, `--repos` is required (we have no way to enumerate all repos in an org)
+- `build-prompt` should create parent directories for the chosen `--output` path when they do not exist, whether the user kept the default path or passed a custom one
 - The CLI help text, README, and implementation must all describe the same `build-prompt` behavior
 - `task` should remain an explicit command group because it matches the product terminology used in the UI
 
@@ -88,11 +95,11 @@ No separate config-less `task run` mode is part of this restructuring.
 
 ## Default Output Path
 
-The `--output` flag for `build-prompt` defaults to `.chunk/context/review-prompt.md`, placing the generated prompt where AI coding agents auto-discover it.
+The `--output` flag for `build-prompt` will change to default to `.chunk/context/review-prompt.md`, placing the generated prompt where AI coding agents auto-discover it.
 
-> **Migration note**: The current default is `./review-prompt.md`. Changing it to `.chunk/context/review-prompt.md` is a Phase 2 task — see `tasks.md`. This is a user-facing behavior change:
-> - `build-prompt` should auto-create the `.chunk/context/` directory if it doesn't exist
-> - Consider printing a one-time deprecation warning if `./review-prompt.md` exists in the working directory, so users with scripts or workflows referencing the old path are aware of the change
+> **Migration note**: The current default is `./review-prompt.md`. This is a user-facing breaking change, so it ships separately from the mechanical refactors (Phase 6 in `tasks.md`):
+> - `build-prompt` should auto-create parent directories for the output path if they don't exist
+> - Print a one-time deprecation warning if `./review-prompt.md` exists in the working directory, so users with scripts or workflows referencing the old path are aware of the change
 > - Document the change in release notes
 
 ## Naming Rules
