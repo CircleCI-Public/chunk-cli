@@ -131,7 +131,7 @@ Examples:
 			"after",
 			`
 Environment Variables:
-  CIRCLECI_TOKEN           Required: CircleCI personal API token
+  CIRCLE_TOKEN             Required: CircleCI personal API token
 
 Examples:
   chunk task run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
@@ -158,7 +158,7 @@ Examples:
 			"after",
 			`
 Environment Variables:
-  CIRCLECI_TOKEN           Required: CircleCI personal API token`,
+  CIRCLE_TOKEN             Required: CircleCI personal API token`,
 		)
 		.action(async () => process.exit((await runTaskConfig()).exitCode));
 

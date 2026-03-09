@@ -10,7 +10,8 @@ global.fetch = mockFetch;
 
 const testDir = path.join(process.cwd(), ".test-run-command");
 const originalCwd = process.cwd();
-const originalToken = process.env.CIRCLECI_TOKEN;
+const originalCircleToken = process.env.CIRCLE_TOKEN;
+const originalCircleCIToken = process.env.CIRCLECI_TOKEN;
 
 const mockConfig = {
 	org_id: "a37b44de-e4f8-4d09-956a-9c1148f3adf5",
@@ -43,7 +44,8 @@ describe("runTaskRun", () => {
 	beforeEach(() => {
 		fs.mkdirSync(path.join(testDir, ".git"), { recursive: true });
 		process.chdir(testDir);
-		process.env.CIRCLECI_TOKEN = "test-token";
+		process.env.CIRCLE_TOKEN = "test-token";
+		delete process.env.CIRCLECI_TOKEN;
 		saveRunConfig(mockConfig);
 		mockFetch.mockReset();
 	});
@@ -51,8 +53,13 @@ describe("runTaskRun", () => {
 	afterEach(() => {
 		process.chdir(originalCwd);
 		fs.rmSync(testDir, { recursive: true, force: true });
-		if (originalToken !== undefined) {
-			process.env.CIRCLECI_TOKEN = originalToken;
+		if (originalCircleToken !== undefined) {
+			process.env.CIRCLE_TOKEN = originalCircleToken;
+		} else {
+			delete process.env.CIRCLE_TOKEN;
+		}
+		if (originalCircleCIToken !== undefined) {
+			process.env.CIRCLECI_TOKEN = originalCircleCIToken;
 		} else {
 			delete process.env.CIRCLECI_TOKEN;
 		}
@@ -65,13 +72,36 @@ describe("runTaskRun", () => {
 		pipelineAsTool: true,
 	};
 
-	it("returns exitCode 2 when CIRCLECI_TOKEN is not set", async () => {
+	it("returns exitCode 2 when neither CIRCLE_TOKEN nor CIRCLECI_TOKEN is set", async () => {
+		delete process.env.CIRCLE_TOKEN;
 		delete process.env.CIRCLECI_TOKEN;
 
 		const result = await runTaskRun(baseOptions);
 
 		expect(result.exitCode).toBe(2);
 		expect(mockFetch).not.toHaveBeenCalled();
+	});
+
+	it("accepts CIRCLECI_TOKEN as fallback", async () => {
+		delete process.env.CIRCLE_TOKEN;
+		process.env.CIRCLECI_TOKEN = "test-token";
+		mockFetch.mockImplementation(async () => mockSuccess());
+
+		const result = await runTaskRun(baseOptions);
+
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("prefers CIRCLE_TOKEN over CIRCLECI_TOKEN", async () => {
+		process.env.CIRCLE_TOKEN = "preferred-token";
+		process.env.CIRCLECI_TOKEN = "fallback-token";
+		mockFetch.mockImplementation(async () => mockSuccess());
+
+		await runTaskRun(baseOptions);
+
+		// biome-ignore lint/style/noNonNullAssertion: test helper, always called after a successful mock invocation
+		const [_url, opts] = mockFetch.mock.calls[0]!;
+		expect(opts.headers["Circle-Token"]).toBe("preferred-token");
 	});
 
 	it("returns exitCode 2 when run.json does not exist", async () => {

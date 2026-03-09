@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CIRCLECI_TOKEN="${CIRCLECI_TOKEN:?CIRCLECI_TOKEN is required}"
+CIRCLE_TOKEN="${CIRCLE_TOKEN:-${CIRCLECI_TOKEN:-}}"
+: "${CIRCLE_TOKEN:?CIRCLE_TOKEN is required}"
 
 VERSION=""
 while [[ $# -gt 0 ]]; do
@@ -23,7 +24,7 @@ fi
 curl -sSL \
   --request POST \
   --url "https://circleci.com/api/v2/project/${PROJECT_SLUG}/pipeline/run" \
-  --header "Circle-Token: ${CIRCLECI_TOKEN}" \
+  --header "Circle-Token: ${CIRCLE_TOKEN}" \
   --header "Content-Type: application/json" \
   --data "{
     \"checkout\": {\"branch\": \"${BRANCH}\"},
