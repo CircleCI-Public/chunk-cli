@@ -35,7 +35,7 @@ The hook commands ship as part of the `chunk` CLI. Install it first:
 ```bash
 # Production install (downloads pre-built binary via gh CLI):
 gh api -H "Accept: application/vnd.github.v3.raw" \
-  "/repos/circleci/code-review-cli/contents/install.sh" | bash
+  "/repos/CircleCI-Public/chunk-cli/contents/install.sh" | bash
 
 # Or build from source (for development):
 cd chunk-cli
