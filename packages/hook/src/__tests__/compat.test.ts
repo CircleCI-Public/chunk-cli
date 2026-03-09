@@ -303,6 +303,21 @@ describe("extractSessionId()", () => {
 	it("falls back to camelCase when snake_case is non-string", () => {
 		expect(extractSessionId({ session_id: null, sessionId: "fallback" })).toBe("fallback");
 	});
+
+	it("extracts conversation_id (Cursor)", () => {
+		expect(extractSessionId({ conversation_id: "d15be335-98f9-4b9e" })).toBe("d15be335-98f9-4b9e");
+	});
+
+	it("prefers session_id and sessionId over conversation_id", () => {
+		expect(extractSessionId({ session_id: "claude", conversation_id: "cursor" })).toBe("claude");
+		expect(extractSessionId({ sessionId: "copilot", conversation_id: "cursor" })).toBe("copilot");
+	});
+
+	it("falls back to conversation_id when session_id/sessionId are non-string", () => {
+		expect(
+			extractSessionId({ session_id: null, sessionId: undefined, conversation_id: "cursor-fb" }),
+		).toBe("cursor-fb");
+	});
 });
 
 // ---------------------------------------------------------------------------

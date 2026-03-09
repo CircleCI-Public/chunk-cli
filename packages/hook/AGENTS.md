@@ -121,11 +121,10 @@ expensive hooks (tests, lint, review) from running in inactive repos.
 
 > **Why this exists:** Ideally, Claude Code would set `CLAUDE_PROJECT_DIR` (or the hook payload's
 > `cwd`) to the repo that the current tool call targets. If it did, a simple `cwd`-vs-config check
-> would be enough and the scope gate would be unnecessary. However, VS Code does not properly
-> switch the CWD context per tool call in multi-root workspaces — `CLAUDE_PROJECT_DIR` and `cwd`
-> remain pinned to a single session-wide workspace regardless of which repo the agent is editing. This
-> is the root cause tracked in bugs #8559 and #12808. The scope command works around the issue by
-> inspecting the actual file paths in `tool_input` to determine which repo is being touched.
+> would be enough and the scope gate would be unnecessary. VS Code now sets CWD per-repo (bugs
+> #8559 and #12808 are fixed), but `process.cwd() === projectDir` is true for **every** repo — it
+> tells us "a hook launched here" not "the agent is working here". The scope command works around
+> this by inspecting the actual file paths in `tool_input` to determine which repo is being touched.
 >
 > **The `--project` flag** further mitigates the CWD bug: each per-repo `settings.json` passes
 > `--project <repo-name>` to all commands, so the CLI knows which repo _should_ be the target
@@ -134,18 +133,14 @@ expensive hooks (tests, lint, review) from running in inactive repos.
 > This replaces `event.cwd` for config loading and
 > project-dir resolution.
 
-**CWD trust:** When `process.cwd()` matches the resolved `--project` directory, the scope gate
-is bypassed — the project is considered active regardless of what file paths appear in `tool_input`.
-This handles Claude Code CLI (single-repo) and single-root VS Code workspaces. The path-match
-gate only exists to work around the VS Code multi-root CWD bug (#8559, #12808) where cwd is
-pinned to the first root regardless of which repo is being edited. In single-repo contexts,
-cwd is always correct, so bypassing the gate avoids false rejections (e.g., system paths like
-`/usr/local/go/bin/go` in Bash commands trigger "mismatch"). Even when trusted, activation still
-writes the marker file (with subagent safety) when a session ID and file paths are present —
-this preserves deactivation cleanup and first-writer-wins semantics.
+**No CWD trust:** The scope gate does **not** use `process.cwd()` as a discriminator.
+VS Code now correctly sets CWD per-repo in multi-root workspaces (bugs #8559, #12808 are
+fixed), which means `process.cwd() === projectDir` is true for **every** repo — it cannot
+distinguish "agent worked here" from "VS Code launched a hook here". Activation relies
+exclusively on file paths extracted from `tool_input` matching the project directory.
 
 - `scope activate` — reads stdin JSON, checks if any file paths in `tool_input` reference the
-    current working directory AND a session ID is present. If both conditions are met, writes
+    project directory AND a session ID is present. If both conditions are met, writes
     `.chunk/hook/.chunk-hook-active` with the session ID and timestamp. Always exits 0 (exits 1
     only on fatal write errors). Available for explicit use when no exec/task hook is present
     in a hook group.
@@ -161,10 +156,12 @@ irrelevant). `matchesProject()` returns a tri-state: `"match"` (paths hit this r
 handler skips the scope gate entirely for `--no-check` since those run in the target repo via
 `process.cwd()`.
 
-**Auto-activate:** The `exec` and `task` handlers call `activateScope()` automatically before
-the gate check — if the stdin payload contains matching file paths and a session ID, the scope
-is activated as a side effect and the function returns `true`. No separate `scope activate` hook
-entry is needed in the default template.
+**Auto-activate:** The `exec`, `task`, and `sync` handlers call `activateScope()` automatically
+before both the `--matcher` filter and the gate check — if the stdin payload contains matching
+file paths and a session ID, the scope is activated as a side effect and the function returns
+`true`. This runs for **every** tool event (the native `matcher` is `"*"`), not just shell tools,
+so file edits and reads keep the scope alive. No separate `scope activate` hook entry is needed
+in the default template.
 
 **Session binding:** The marker file stores `{ sessionId, timestamp }` as JSON. When a session
 ID is available in a subsequent event, it is compared to the stored one. The comparison has two
@@ -196,8 +193,9 @@ silently (exit 0).
 
 **Hook wiring:** Only `scope deactivate` needs explicit hook entries (`SessionStart` / `SessionEnd`).
 
-In single-repo workspaces (including Claude Code CLI), `process.cwd()` matches the project
-directory, so the scope is always active via the CWD trust bypass — no behavior change.
+In single-repo workspaces (including Claude Code CLI), tool-call events that reference project
+files activate the marker as a side effect. Once the marker exists, no-paths events (Stop) find
+it and the scope is active — behavior is identical to multi-repo workspaces.
 
 The marker file lives inside `.chunk/hook/` (chunk hook's own directory, typically gitignored).
 It does not require `CHUNK_HOOK_ENABLE` — it is infrastructure, always available (like `state`).
@@ -333,7 +331,8 @@ Modifiers:
 
 `--matcher <pattern>` restricts a hook to specific tool names — the CLI-side equivalent of the
 hook configuration's `matcher` field. When set, the CLI auto-allows (exit 0) any event whose
-tool name does not match the pattern — before scope gating, trigger matching, or any other logic.
+tool name does not match the pattern — after scope activation but before trigger matching or
+any other logic.
 
 **Why this exists:** Claude Code's hook configuration supports a `matcher` field that filters
 `PreToolUse` / `PostToolUse` hooks by tool name (e.g., `"matcher": "Bash"`). However, **VS Code
@@ -354,16 +353,27 @@ The `--matcher` flag moves the filtering from the host (which ignores it) into t
 The pattern is tested via `RegExp.test()` against the event's tool name. It is a contains-match,
 not an exact match (e.g., `--matcher Edit` matches both `Edit` and `MultiEditTool`).
 
-**Placement:** `--matcher` is parsed in `index.ts` (not in command modules). It runs immediately
-after reading the event and before scope activation — this ensures non-matching tools exit as
-fast as possible with zero side effects.
+**Placement:** `--matcher` is parsed in `index.ts` (not in command modules). It runs **after**
+scope activation — `activateScope()` is called first for every tool event, then `--matcher`
+filters non-matching tools. This ordering is deliberate: in VS Code multi-root workspaces, many
+tool calls (file edits, reads, searches) carry file paths that identify the target repo but are
+not shell tools. If `--matcher` ran first, those events would exit before `activateScope()` could
+inspect their paths, and the scope would never re-activate after an external marker deletion.
+By running activation first, every tool call with repo-matching paths keeps the scope alive,
+while `--matcher` still prevents non-matching tools from triggering expensive checks.
+
+**Native matcher:** The default template sets the PreToolUse native `matcher` to `"*"` (match all
+tools). This ensures hooks fire for every tool event so `activateScope()` always runs. The CLI
+`--matcher` flag then narrows which tools trigger the actual check/run logic. In Claude Code
+`"*"` is the documented wildcard; in VS Code Copilot the native matcher is ignored anyway.
 
 **Both commands:** Available on both `exec check` and `task check`. Not passed through to
 `exec run --no-check` (the delegated run has no tool context).
 
-**When to use:** Always include `--matcher` when a hook uses a `matcher` field. This ensures
-correct behavior in both Claude Code (where `matcher` works) and VS Code Copilot (where it
-doesn't). Hooks without a `matcher` (e.g., `Stop`, `SessionStart`, `UserPromptSubmit`) do not
+**When to use:** Always include `--matcher` when a hook targets specific tool types (e.g., shell
+commands). This ensures correct behavior across all IDEs: Claude Code (where native `matcher`
+works), VS Code Copilot (where it doesn't), and Cursor (which reads settings.json directly).
+Hooks without a tool-type filter (e.g., `Stop`, `SessionStart`, `UserPromptSubmit`) do not
 need `--matcher`.
 
 ## Development Environment
@@ -652,8 +662,26 @@ into a single `AgentEvent` shape, preferring snake_case and falling back to came
 
 **Session ID extraction** — `extractSessionId(raw)`:
 
-VS Code Copilot sends `sessionId` (camelCase) instead of `session_id` (snake_case). This helper
-normalizes both forms, preferring snake_case.
+Normalizes provider-specific session ID fields:
+- Claude Code: `session_id` (snake_case, highest priority)
+- VS Code Copilot: `sessionId` (camelCase)
+- Cursor: `conversation_id` (stable conversation identifier, lowest priority)
+
+Cursor's `sessionStart` event sends **both** `session_id` and `conversation_id` (same UUID value).
+However, `preToolUse` and most other events send only `conversation_id` — no `session_id` field.
+The fallback chain ensures scope activation works for all Cursor events.
+
+**Cursor hook payload — common schema** (per [official docs](https://cursor.com/docs/agent/hooks)):
+
+All Cursor hook events receive these base fields (in addition to event-specific fields):
+`conversation_id`, `generation_id`, `model`, `hook_event_name`, `cursor_version`,
+`workspace_roots`, `user_email`, `transcript_path`.
+
+**Verbose payload logging:**
+
+When `CHUNK_HOOK_VERBOSE` is set, `activateScope()` logs the full raw stdin JSON payload via
+`logVerbose()`. This makes future field-mapping issues immediately diagnosable without code
+changes — run with verbose mode and the complete payload is visible in the log.
 
 **Stop-hook-active flag** — `isStopHookActive(raw)`:
 

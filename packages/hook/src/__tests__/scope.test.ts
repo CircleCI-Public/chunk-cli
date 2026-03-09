@@ -151,17 +151,6 @@ describe("activateScope() and deactivateScope()", () => {
 				// ignore
 			}
 		}
-		// CWD trust tests call activateScope(process.cwd(), ...) which writes a
-		// marker inside the workspace.  Clean up only the marker file so we don't
-		// destroy the real .chunk/hook/ config files committed in the repo.
-		const cwdMarker = join(process.cwd(), MARKER_REL);
-		if (existsSync(cwdMarker)) {
-			try {
-				rmSync(cwdMarker, { force: true });
-			} catch {
-				// ignore
-			}
-		}
 	});
 
 	function makeTmpDir(): string {
@@ -353,37 +342,42 @@ describe("activateScope() and deactivateScope()", () => {
 	});
 
 	// -------------------------------------------------------------------------
-	// CWD trust — bypass scope gate in single-repo / CLI mode
+	// System-path and no-path events (CWD matching does NOT grant trust)
 	// -------------------------------------------------------------------------
 
-	describe("CWD trust (process.cwd() === projectDir)", () => {
-		it("returns true when cwd matches projectDir (even with mismatch paths)", () => {
-			const dir = process.cwd();
-			const raw = { tool_input: { command: "/usr/local/go/bin/go test ./..." } };
-			const result = activateScope(dir, raw, "sess-test");
-			expect(result).toBe(true);
-		});
-
-		it("returns true when cwd matches projectDir (no paths event)", () => {
-			const dir = process.cwd();
-			const result = activateScope(dir, {}, "sess-test");
-			expect(result).toBe(true);
-		});
-
-		it("returns true when cwd matches projectDir (no session ID)", () => {
-			const dir = process.cwd();
-			const result = activateScope(dir, {});
-			expect(result).toBe(true);
-		});
-
-		it("falls through to normal logic when cwd doesn't match projectDir", () => {
+	describe("system-path and no-path events", () => {
+		it("does not activate on system-path-only tool calls (no file paths reference projectDir)", () => {
 			const dir = makeTmpDir();
 			const raw = { tool_input: { command: "/usr/local/go/bin/go test ./..." } };
 			const result = activateScope(dir, raw, "sess-test");
 			expect(result).toBe(false);
+			expect(existsSync(join(dir, MARKER_REL))).toBe(false);
 		});
 
-		it("activates scope normally when cwd doesn't match but paths do", () => {
+		it("does not activate on no-paths event without marker (Stop event, never activated)", () => {
+			const dir = makeTmpDir();
+			const result = activateScope(dir, {}, "sess-test");
+			expect(result).toBe(false);
+		});
+
+		it("does not activate on no-paths event without session ID", () => {
+			const dir = makeTmpDir();
+			const result = activateScope(dir, {});
+			expect(result).toBe(false);
+		});
+
+		it("returns true on no-paths event when marker exists from prior file-path activation", () => {
+			const dir = makeTmpDir();
+			// First: activate via a tool call with matching file paths
+			activateScope(dir, { tool_input: { file_path: `${dir}/src/file.ts` } }, "sess-test");
+			expect(existsSync(join(dir, MARKER_REL))).toBe(true);
+
+			// Second: no-paths event — marker exists, same session → active
+			const result = activateScope(dir, {}, "sess-test");
+			expect(result).toBe(true);
+		});
+
+		it("activates scope when file paths match projectDir", () => {
 			const dir = makeTmpDir();
 			const raw = { tool_input: { file_path: `${dir}/src/file.ts` } };
 			const result = activateScope(dir, raw, "sess-test");
