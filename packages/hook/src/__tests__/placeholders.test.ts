@@ -32,12 +32,29 @@ describe("placeholders", () => {
 			expect(result).toBe("No placeholders here");
 		});
 
-		it("resolves event-namespaced state fields via dot notation", async () => {
+		it("resolves event-namespaced state fields via dot notation (__entries sugar)", async () => {
 			const result = await expandPlaceholders("Task: {{UserPromptSubmit.prompt}}", {
 				...baseOpts,
-				state: { UserPromptSubmit: { prompt: "Fix the login bug" } },
+				state: {
+					UserPromptSubmit: { __entries: [{ prompt: "Fix the login bug" }] },
+				},
 			});
 			expect(result).toBe("Task: Fix the login bug");
+		});
+
+		it("resolves fields via explicit bracket notation", async () => {
+			const result = await expandPlaceholders(
+				"First: {{UserPromptSubmit[0].prompt}} Second: {{UserPromptSubmit[1].prompt}}",
+				{
+					...baseOpts,
+					state: {
+						UserPromptSubmit: {
+							__entries: [{ prompt: "first" }, { prompt: "second" }],
+						},
+					},
+				},
+			);
+			expect(result).toBe("First: first Second: second");
 		});
 
 		it("resolves fields from multiple events", async () => {
@@ -46,8 +63,8 @@ describe("placeholders", () => {
 				{
 					...baseOpts,
 					state: {
-						UserPromptSubmit: { prompt: "review code" },
-						Stop: { stop_hook_active: true },
+						UserPromptSubmit: { __entries: [{ prompt: "review code" }] },
+						Stop: { __entries: [{ stop_hook_active: true }] },
 					},
 				},
 			);
@@ -58,7 +75,9 @@ describe("placeholders", () => {
 			const result = await expandPlaceholders("Cmd: {{PreToolUse.tool_input.command}}", {
 				...baseOpts,
 				state: {
-					PreToolUse: { tool_input: { command: "git commit" } },
+					PreToolUse: {
+						__entries: [{ tool_input: { command: "git commit" } }],
+					},
 				},
 			});
 			expect(result).toBe("Cmd: git commit");
@@ -77,7 +96,7 @@ describe("placeholders", () => {
 		it("replaces unresolved placeholders with empty string", async () => {
 			const result = await expandPlaceholders("{{UserPromptSubmit.prompt}} and {{Missing.field}}", {
 				...baseOpts,
-				state: { UserPromptSubmit: { prompt: "resolved" } },
+				state: { UserPromptSubmit: { __entries: [{ prompt: "resolved" }] } },
 			});
 			expect(result).toBe("resolved and ");
 		});
@@ -97,7 +116,7 @@ describe("placeholders", () => {
 				"Review {{CHANGED_FILES}} for {{UserPromptSubmit.prompt}} issues",
 				{
 					...baseOpts,
-					state: { UserPromptSubmit: { prompt: "security" } },
+					state: { UserPromptSubmit: { __entries: [{ prompt: "security" }] } },
 				},
 			);
 			expect(result).toBe("Review src/lib/state.ts src/commands/task.ts for security issues");
@@ -149,7 +168,7 @@ describe("placeholders", () => {
 				"{{UserPromptSubmit.prompt}} transcript={{Stop.transcript_path}}",
 				{
 					...baseOpts,
-					state: { UserPromptSubmit: { prompt: "fix bug" } },
+					state: { UserPromptSubmit: { __entries: [{ prompt: "fix bug" }] } },
 					event: {
 						eventName: "Stop",
 						raw: {
@@ -167,7 +186,7 @@ describe("placeholders", () => {
 				"saved={{Stop.custom_field}} live={{Stop.transcript_path}}",
 				{
 					...baseOpts,
-					state: { Stop: { custom_field: "from-save" } },
+					state: { Stop: { __entries: [{ custom_field: "from-save" }] } },
 					event: {
 						eventName: "Stop",
 						raw: {
@@ -183,7 +202,7 @@ describe("placeholders", () => {
 		it("event overrides same-named fields from saved state", async () => {
 			const result = await expandPlaceholders("{{Stop.session_id}}", {
 				...baseOpts,
-				state: { Stop: { session_id: "old-saved" } },
+				state: { Stop: { __entries: [{ session_id: "old-saved" }] } },
 				event: {
 					eventName: "Stop",
 					raw: {

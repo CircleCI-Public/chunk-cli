@@ -801,7 +801,7 @@ describe("state lifecycle", () => {
 		expect(loadAllResult.exitCode).toBe(0);
 		const state = JSON.parse(loadAllResult.stdout);
 		expect(state.UserPromptSubmit).toBeDefined();
-		expect(state.UserPromptSubmit.prompt).toBe("fix the bug in main.go");
+		expect(state.UserPromptSubmit.__entries[0].prompt).toBe("fix the bug in main.go");
 	});
 
 	it("load with dot-notation field path", async () => {
@@ -888,8 +888,123 @@ describe("state lifecycle", () => {
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
 		const state = JSON.parse(result.stdout);
-		expect(state.UserPromptSubmit.prompt).toBe("hello");
-		expect(state.Stop.transcript_path).toBe("/tmp/transcript.json");
+		expect(state.UserPromptSubmit.__entries[0].prompt).toBe("hello");
+		expect(state.Stop.__entries[0].transcript_path).toBe("/tmp/transcript.json");
+	});
+
+	it("append accumulates entries", async () => {
+		// First append
+		await runCli(
+			["state", "append"],
+			JSON.stringify({
+				hook_event_name: "UserPromptSubmit",
+				prompt: "first prompt",
+				cwd: testProjectDir,
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Second append with different prompt
+		await runCli(
+			["state", "append"],
+			JSON.stringify({
+				hook_event_name: "UserPromptSubmit",
+				prompt: "second prompt",
+				cwd: testProjectDir,
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Load and verify both entries exist
+		const result = await runCli(
+			["state", "load"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+		const state = JSON.parse(result.stdout);
+		const entries = state.UserPromptSubmit.__entries;
+		expect(entries).toHaveLength(2);
+		expect(entries[0].prompt).toBe("first prompt");
+		expect(entries[1].prompt).toBe("second prompt");
+	});
+
+	it("append deduplicates consecutive same-prompt entries", async () => {
+		await runCli(
+			["state", "append"],
+			JSON.stringify({
+				hook_event_name: "UserPromptSubmit",
+				prompt: "same prompt",
+				cwd: testProjectDir,
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		await runCli(
+			["state", "append"],
+			JSON.stringify({
+				hook_event_name: "UserPromptSubmit",
+				prompt: "same prompt",
+				cwd: testProjectDir,
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		const result = await runCli(
+			["state", "load"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+		const state = JSON.parse(result.stdout);
+		expect(state.UserPromptSubmit.__entries).toHaveLength(1);
+	});
+
+	it("load with bracket notation after append", async () => {
+		await runCli(
+			["state", "append"],
+			JSON.stringify({
+				hook_event_name: "UserPromptSubmit",
+				prompt: "first",
+				cwd: testProjectDir,
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		await runCli(
+			["state", "append"],
+			JSON.stringify({
+				hook_event_name: "UserPromptSubmit",
+				prompt: "second",
+				cwd: testProjectDir,
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Load first entry via bracket notation
+		const r0 = await runCli(
+			["state", "load", "UserPromptSubmit[0].prompt"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+		expect(r0.exitCode).toBe(0);
+		expect(r0.stdout).toBe("first");
+
+		// Load second entry via bracket notation
+		const r1 = await runCli(
+			["state", "load", "UserPromptSubmit[1].prompt"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+		expect(r1.exitCode).toBe(0);
+		expect(r1.stdout).toBe("second");
+
+		// Dot notation is sugar for [0]
+		const rDot = await runCli(
+			["state", "load", "UserPromptSubmit.prompt"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+		expect(rDot.exitCode).toBe(0);
+		expect(rDot.stdout).toBe("first");
 	});
 });
 
