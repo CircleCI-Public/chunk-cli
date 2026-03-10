@@ -4,6 +4,7 @@ import {
 	type CircleCIRunResponse,
 	triggerChunkRun,
 } from "../api/circleci";
+import { getCircleCIToken } from "../config";
 import { getDefinitionByNameOrId, loadRunConfig, type RunConfig } from "../storage/run-config";
 import type { CommandResult } from "../types";
 import { bold, dim } from "../ui/colors";
@@ -20,12 +21,12 @@ export interface RunTaskOptions {
 
 export async function runTask(options: RunTaskOptions): Promise<CommandResult> {
 	const definition = options.definition;
-	const token = process.env.CIRCLE_TOKEN || process.env.CIRCLECI_TOKEN;
+	const token = getCircleCIToken();
 	if (!token) {
 		printError(
 			"CircleCI token not found",
 			"CIRCLECI_TOKEN environment variable is not set.",
-			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
+			"Set CIRCLECI_TOKEN (or CIRCLE_TOKEN) to your CircleCI personal API token.",
 		);
 		return { exitCode: 2 };
 	}

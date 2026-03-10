@@ -7,6 +7,7 @@ import {
 	fetchFollowedProjects,
 	fetchProjectBySlug,
 } from "../api/circleci";
+import { getCircleCIToken } from "../config";
 import {
 	getRunConfigPath,
 	type RunConfig,
@@ -90,8 +91,8 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 	console.log(`This wizard creates ${cyan(".chunk/run.json")} in your repository root.`);
 	console.log("");
 
-	// Check for CIRCLECI_TOKEN
-	const token = process.env.CIRCLECI_TOKEN;
+	// Check for CircleCI token
+	const token = getCircleCIToken();
 	if (!token) {
 		printError(
 			"CircleCI token not found",

@@ -10,7 +10,8 @@ global.fetch = mockFetch;
 
 const testDir = path.join(process.cwd(), ".test-core-task-run");
 const originalCwd = process.cwd();
-const originalToken = process.env.CIRCLECI_TOKEN;
+const originalCircleCIToken = process.env.CIRCLECI_TOKEN;
+const originalCircleToken = process.env.CIRCLE_TOKEN;
 
 const mockConfig = {
 	org_id: "a37b44de-e4f8-4d09-956a-9c1148f3adf5",
@@ -51,10 +52,15 @@ describe("runTask", () => {
 	afterEach(() => {
 		process.chdir(originalCwd);
 		fs.rmSync(testDir, { recursive: true, force: true });
-		if (originalToken !== undefined) {
-			process.env.CIRCLECI_TOKEN = originalToken;
+		if (originalCircleCIToken !== undefined) {
+			process.env.CIRCLECI_TOKEN = originalCircleCIToken;
 		} else {
 			delete process.env.CIRCLECI_TOKEN;
+		}
+		if (originalCircleToken !== undefined) {
+			process.env.CIRCLE_TOKEN = originalCircleToken;
+		} else {
+			delete process.env.CIRCLE_TOKEN;
 		}
 	});
 
@@ -65,13 +71,35 @@ describe("runTask", () => {
 		pipelineAsTool: true,
 	};
 
-	it("returns exitCode 2 when CIRCLECI_TOKEN is not set", async () => {
+	it("returns exitCode 2 when no CircleCI token is set", async () => {
 		delete process.env.CIRCLECI_TOKEN;
+		delete process.env.CIRCLE_TOKEN;
 
 		const result = await runTask(baseOptions);
 
 		expect(result.exitCode).toBe(2);
 		expect(mockFetch).not.toHaveBeenCalled();
+	});
+
+	it("accepts CIRCLE_TOKEN as fallback when CIRCLECI_TOKEN is not set", async () => {
+		delete process.env.CIRCLECI_TOKEN;
+		process.env.CIRCLE_TOKEN = "fallback-token";
+		mockFetch.mockImplementation(async () => mockSuccess());
+
+		const result = await runTask(baseOptions);
+
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("prefers CIRCLECI_TOKEN over CIRCLE_TOKEN", async () => {
+		process.env.CIRCLECI_TOKEN = "preferred-token";
+		process.env.CIRCLE_TOKEN = "fallback-token";
+		mockFetch.mockImplementation(async () => mockSuccess());
+
+		await runTask(baseOptions);
+
+		const authHeader = mockFetch.mock.calls[0]![1].headers["Circle-Token"];
+		expect(authHeader).toBe("preferred-token");
 	});
 
 	it("returns exitCode 2 when run.json does not exist", async () => {

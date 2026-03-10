@@ -82,9 +82,9 @@ describe("runTaskRun", () => {
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
-	it("accepts CIRCLECI_TOKEN as fallback", async () => {
-		delete process.env.CIRCLE_TOKEN;
-		process.env.CIRCLECI_TOKEN = "test-token";
+	it("accepts CIRCLE_TOKEN as fallback", async () => {
+		delete process.env.CIRCLECI_TOKEN;
+		process.env.CIRCLE_TOKEN = "test-token";
 		mockFetch.mockImplementation(async () => mockSuccess());
 
 		const result = await runTaskRun(baseOptions);
@@ -92,9 +92,9 @@ describe("runTaskRun", () => {
 		expect(result.exitCode).toBe(0);
 	});
 
-	it("prefers CIRCLE_TOKEN over CIRCLECI_TOKEN", async () => {
-		process.env.CIRCLE_TOKEN = "preferred-token";
-		process.env.CIRCLECI_TOKEN = "fallback-token";
+	it("prefers CIRCLECI_TOKEN over CIRCLE_TOKEN", async () => {
+		process.env.CIRCLECI_TOKEN = "preferred-token";
+		process.env.CIRCLE_TOKEN = "fallback-token";
 		mockFetch.mockImplementation(async () => mockSuccess());
 
 		await runTaskRun(baseOptions);
