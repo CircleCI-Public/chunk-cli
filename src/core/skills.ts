@@ -107,8 +107,3 @@ export function getSkillsStatus(): AgentStatus[] {
 		return { agent: agent.type, available, skills };
 	});
 }
-
-/** Return the list of skills embedded in this binary. */
-export function listSkills(): { name: string; description: string }[] {
-	return EMBEDDED_SKILLS.map(({ name, description }) => ({ name, description }));
-}

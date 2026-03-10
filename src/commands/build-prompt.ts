@@ -1,9 +1,15 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type { Command } from "@commander-js/extra-typings";
-import { DEFAULT_ANALYZE_MODEL, DEFAULT_PROMPT_MODEL } from "../config";
-import { type BuildPromptOptions, extractCommentsAndBuildPrompt } from "../core/build-prompt";
+import {
+	DEFAULT_ANALYZE_MODEL,
+	DEFAULT_OUTPUT_PATH,
+	DEFAULT_PROMPT_MODEL,
+	LEGACY_OUTPUT_PATH,
+} from "../config";
+import { extractCommentsAndBuildPrompt, resolveOrgAndRepos } from "../core/build-prompt";
 import type { CommandResult } from "../types";
-import { dim } from "../ui/colors";
-import { detectGitHubOrgAndRepo } from "../utils/git-remote";
+import { yellow } from "../ui/colors";
 
 export interface ParsedBuildPromptFlags {
 	org?: string;
@@ -53,12 +59,14 @@ Environment Variables:
   GITHUB_TOKEN             Required: GitHub personal access token with repo scope
   ANTHROPIC_API_KEY        Required: Anthropic API key
 
-  -h, --help               Show this help message
-
 Examples:
   chunk build-prompt                                     # Auto-detect org and repo from git remote
-  chunk build-prompt --org myorg --repos myrepo          # Explicit org and repo(s)
-  chunk build-prompt --repos repo1,repo2                 # Auto-detect org, explicit repos`,
+  chunk build-prompt --repos api,backend                 # Auto-detect org, analyze specific repos
+  chunk build-prompt --org myorg --repos api,backend     # Explicit org and repos
+  chunk build-prompt --top 10 --since 2025-01-01         # More reviewers, custom date range
+
+Note: --org without --repos is an error (cannot enumerate all repos in an org).
+      Omit --org to auto-detect from git remote.`,
 		)
 		.option(
 			"--org <org>",
@@ -67,7 +75,7 @@ Examples:
 		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
 		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
 		.option("--since <date>", "Start date YYYY-MM-DD", parseDate, threeMonthsAgo())
-		.option("--output <path>", "Output path for the generated prompt", "./review-prompt.md")
+		.option("--output <path>", "Output path for the generated prompt", DEFAULT_OUTPUT_PATH)
 		.option("--max-comments <number>", "Max comments per reviewer for analysis", parsePositiveInt)
 		.option("--analyze-model <model>", "Claude model for the analysis step", DEFAULT_ANALYZE_MODEL)
 		.option("--prompt-model <model>", "Claude model for prompt generation", DEFAULT_PROMPT_MODEL)
@@ -78,25 +86,27 @@ Examples:
 }
 
 async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {
-	let org = flags.org;
-	let repos = [...flags.repos];
-
-	if (org && repos.length === 0) {
-		throw new Error(
-			"--repos is required when --org is provided. Omit --org to auto-detect from git remote.",
+	// Warn if a legacy output file exists and the user is using the new default path
+	if (
+		resolve(flags.output) === resolve(DEFAULT_OUTPUT_PATH) &&
+		existsSync(resolve(LEGACY_OUTPUT_PATH))
+	) {
+		console.log(
+			yellow(
+				`[deprecation] Found ${LEGACY_OUTPUT_PATH} in the working directory.\n` +
+					`  The default output path has changed to ${DEFAULT_OUTPUT_PATH}.\n` +
+					`  Update scripts that reference the old path, or pass --output ${LEGACY_OUTPUT_PATH} to keep the old behavior.`,
+			),
 		);
+		console.log("");
 	}
 
-	if (!org) {
-		const detected = await detectGitHubOrgAndRepo();
-		org = detected.org;
-		if (repos.length === 0) {
-			repos = [detected.repo];
-		}
-		console.log(dim(`Detected org from git remote: ${detected.org}`));
-	}
+	const { org, repos } = await resolveOrgAndRepos({
+		org: flags.org,
+		repos: flags.repos,
+	});
 
-	const options: BuildPromptOptions = {
+	await extractCommentsAndBuildPrompt({
 		org,
 		repos,
 		top: flags.top,
@@ -106,8 +116,7 @@ async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandRes
 		analyzeModel: flags.analyzeModel,
 		promptModel: flags.promptModel,
 		includeAttribution: flags.includeAttribution,
-	};
+	});
 
-	await extractCommentsAndBuildPrompt(options);
 	return { exitCode: 0 };
 }
