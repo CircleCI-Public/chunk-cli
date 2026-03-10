@@ -37,7 +37,7 @@ import { log } from "../lib/log";
 import { runCommand } from "../lib/proc";
 import type { SentinelData } from "../lib/sentinel";
 import { resetBlockCount, writeSentinel } from "../lib/sentinel";
-import { shellQuote } from "../lib/shell-env";
+import { getCleanEnv, shellQuote } from "../lib/shell-env";
 import { readMarker } from "./scope";
 
 /** Build a name-qualified tag for log messages. */
@@ -378,11 +378,14 @@ async function executeExec(
 	const command = await buildCommand(config, exec, flags);
 	log(t, `Running: ${command}`);
 
+	const cleanEnv = await getCleanEnv();
 	const runStart = Date.now();
 	const result = await runCommand({
 		command,
 		cwd: config.projectDir,
 		timeout: exec.timeout,
+		env: cleanEnv,
+		extendEnv: false,
 	});
 	const elapsedMs = Date.now() - runStart;
 

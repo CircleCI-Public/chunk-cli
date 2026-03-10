@@ -1,3 +1,5 @@
+env = false
+
 [define]
 VERSION = '"dev"'
 

@@ -22,6 +22,12 @@ export type RunOptions = {
 	timeout?: number;
 	/** Extra environment variables merged with `process.env`. */
 	env?: Record<string, string>;
+	/**
+	 * When `true` (default), `env` is merged on top of `process.env`.
+	 * When `false`, `env` is used as the complete environment — `process.env`
+	 * is NOT inherited.  Use this to run commands in a clean shell environment.
+	 */
+	extendEnv?: boolean;
 };
 
 /**
@@ -31,12 +37,13 @@ export type RunOptions = {
  * Output is truncated to the last 50 KB to keep result files manageable.
  */
 export async function runCommand(opts: RunOptions): Promise<RunResult> {
-	const { command, cwd = process.cwd(), timeout = 300, env: extraEnv } = opts;
+	const { command, cwd = process.cwd(), timeout = 300, env: extraEnv, extendEnv = true } = opts;
 	const maxOutput = 50 * 1024; // 50 KB
 
+	const baseEnv = extendEnv ? process.env : {};
 	const proc = Bun.spawn(["sh", "-c", command], {
 		cwd,
-		env: { ...process.env, ...extraEnv },
+		env: { ...baseEnv, ...extraEnv },
 		stdout: "pipe",
 		stderr: "pipe",
 	});

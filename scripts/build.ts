@@ -43,8 +43,8 @@ async function build(): Promise<void> {
         'bun', 'build', entryPoint,
         '--compile',
         '--minify',
+        '--no-compile-autoload-dotenv',
         `--target=${target}`,
-        '--loader', '.md:text',
         '--external', 'react-devtools-core',
         `--outfile=${outputPath}`,
       ], {
