@@ -3,9 +3,6 @@ import type { CommandResult } from "../types";
 import { dim } from "../ui/colors";
 import { detectGitHubOrgAndRepo } from "../utils/git-remote";
 
-export const DEFAULT_ANALYZE_MODEL = "claude-sonnet-4-5-20250929";
-export const DEFAULT_PROMPT_MODEL = "claude-opus-4-5-20251101";
-
 export interface ParsedBuildPromptFlags {
 	org?: string;
 	repos: string[];
