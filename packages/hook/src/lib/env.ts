@@ -97,3 +97,13 @@ export function resolveProject(flagValue: string | undefined, eventCwd?: string)
 	// No workspace root — resolve relative to eventCwd or process.cwd()
 	return join(eventCwd ?? process.cwd(), flagValue);
 }
+
+const DEFAULT_MARKER_TTL_MS = 5 * 60 * 1000;
+
+/** Read marker TTL override in milliseconds. Default: 5 minutes. 0 disables session protection. */
+export function getMarkerTtlMs(): number {
+	const val = env("CHUNK_HOOK_MARKER_TTL_MS");
+	if (val === undefined) return DEFAULT_MARKER_TTL_MS;
+	const n = Number(val);
+	return Number.isFinite(n) && n >= 0 ? n : DEFAULT_MARKER_TTL_MS;
+}

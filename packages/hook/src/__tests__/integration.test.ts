@@ -772,6 +772,67 @@ describe("scope lifecycle", () => {
 		const afterMarker = JSON.parse(readFileSync(markerPath, "utf-8"));
 		expect(afterMarker.sessionId).toBe("parent-session");
 	});
+
+	it("reclaims expired marker from different session", async () => {
+		const markerPath = join(testProjectDir, ".chunk", "hook", ".chunk-hook-active");
+		// Write an expired marker (6 minutes old)
+		const expired = { sessionId: "dead-session", timestamp: Date.now() - 6 * 60 * 1000 };
+		writeFileSync(markerPath, `${JSON.stringify(expired)}\n`);
+
+		// New session activates — should reclaim
+		await runCli(
+			["scope", "activate"],
+			JSON.stringify({
+				session_id: "new-session",
+				tool_input: { file_path: join(testProjectDir, "main.go") },
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
+		expect(marker.sessionId).toBe("new-session");
+	});
+
+	it("does NOT reclaim non-expired marker from different session", async () => {
+		const markerPath = join(testProjectDir, ".chunk", "hook", ".chunk-hook-active");
+		// Write a recent marker (1 minute old)
+		const recent = { sessionId: "active-session", timestamp: Date.now() - 60 * 1000 };
+		writeFileSync(markerPath, `${JSON.stringify(recent)}\n`);
+
+		// New session tries to activate — should NOT reclaim
+		await runCli(
+			["scope", "activate"],
+			JSON.stringify({
+				session_id: "new-session",
+				tool_input: { file_path: join(testProjectDir, "main.go") },
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
+		expect(marker.sessionId).toBe("active-session");
+	});
+
+	it("respects CHUNK_HOOK_MARKER_TTL_MS override", async () => {
+		const markerPath = join(testProjectDir, ".chunk", "hook", ".chunk-hook-active");
+		// Write a marker 2 seconds old
+		const marker = { sessionId: "old-session", timestamp: Date.now() - 2000 };
+		writeFileSync(markerPath, `${JSON.stringify(marker)}\n`);
+
+		// With default TTL (5 min), this marker is NOT expired.
+		// With TTL=1000 (1 second), it IS expired — should reclaim.
+		await runCli(
+			["scope", "activate"],
+			JSON.stringify({
+				session_id: "new-session",
+				tool_input: { file_path: join(testProjectDir, "main.go") },
+			}),
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir, CHUNK_HOOK_MARKER_TTL_MS: "1000" }),
+		);
+
+		const after = JSON.parse(readFileSync(markerPath, "utf-8"));
+		expect(after.sessionId).toBe("new-session");
+	});
 });
 
 // ===========================================================================

@@ -24,6 +24,12 @@ result, and returns immediately.
 
 Best for short-running commands at major workflow checkpoints (pre-commit, pre-push).
 
+**Clean environment:** Exec commands run in a clean login-shell environment obtained via the
+`shell-env` package (`getCleanEnv()` in `shell-env.ts`). This prevents environment variables
+from the agent process (e.g. `AGENT_MODE`, `CLAUDE_*`) from leaking into tests and lint.
+The clean env is cached for the process lifetime. Internal CLI operations (git, config) still
+inherit `process.env` normally — only the user's exec commands get the clean shell.
+
 ### Exec: delegation pattern (long-running commands)
 
 Hooks enforce a strict timeout (10 min max). For commands that may exceed this, the delegation pattern
@@ -210,9 +216,23 @@ review), the subagent receives a **different session ID** from VS Code. The suba
 which calls `activateScope()` with the subagent's session ID. Without protection, this would
 overwrite the parent's marker, causing a brief scope gap when control returns to the parent
 (the parent's session ID no longer matches the marker). The "first writer wins" rule in the
-activation path prevents this: once a marker exists, it is not overwritten by a different session.
-The subagent is treated as active (hooks still run for it) but the parent retains ownership.
-The marker is only cleared by explicit `scope deactivate` (on `SessionStart`/`SessionEnd`).
+activation path prevents this: while the marker is **not expired**, it is not overwritten by a
+different session. The subagent is treated as active (hooks still run for it) but the parent
+retains ownership.
+
+**TTL-based marker expiry:** The marker includes a `timestamp` that is refreshed on every
+`activateScope()` call that returns `true` for the same session. The TTL (5 minutes) only
+gates **different-session** reclaim — the owning session always bypasses TTL checks. When a
+new session encounters a marker from a different session:
+
+- **Not expired:** The marker is preserved (subagent safety on the activation path) or treated
+  as inactive (validation path).
+- **Expired:** The marker is overwritten — the dead session's marker is reclaimed. This handles
+  the case where `SessionEnd` never fired (e.g., VS Code closed, tab closed, crash).
+
+The default TTL is 5 minutes, covering all observed active-work gaps (max 125 s in experiment
+data) with margin. Override with `CHUNK_HOOK_MARKER_TTL_MS` (milliseconds). Same-session
+pauses of any length (hours) are unaffected because same-session calls never check TTL.
 
 **Internal gate:** `activateScope()` returns a boolean. If `false`, `exec` and `task` allow
 silently (exit 0).
@@ -487,12 +507,12 @@ packages/hook/
 │   │   ├── hooks.ts        # Low-level stdin JSON parsing (consumed by adapter.ts)
 │   │   ├── placeholders.ts # {{Key.path}} placeholder expansion for task instructions
 │   │   ├── sentinel.ts     # Result-file CRUD, persistent sentinels, block counters, contentHash
-│   │   ├── shell-env.ts    # Shell environment utilities (env file, startup files, profiles)
+│   │   ├── shell-env.ts    # Shell environment utilities (env file, startup files, profiles, getCleanEnv)
 │   │   ├── state.ts        # Per-project state (event-namespaced persistence)
 │   │   ├── templates.ts    # Embedded template files for repo init
 │   │   ├── check.ts        # Shared check helpers (evaluate, block, guard, trigger matching)
 │   │   ├── task-result.ts  # Task result validation and sentinel conversion
-│   │   ├── proc.ts         # Bun.spawn wrapper with timeout
+│   │   ├── proc.ts         # Bun.spawn wrapper with timeout and extendEnv flag
 │   │   ├── git.ts          # Changed files, placeholder substitution, fingerprinting
 │   │   └── log.ts          # File-based logger
 │   └── __tests__/
