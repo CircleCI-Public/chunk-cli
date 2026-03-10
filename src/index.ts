@@ -2,12 +2,8 @@
 import { registerHookCommands } from "@chunk/hook";
 import { Command } from "@commander-js/extra-typings";
 import { runAuthLogin, runAuthLogout, runAuthStatus } from "./commands/auth";
-import {
-	DEFAULT_ANALYZE_MODEL,
-	DEFAULT_PROMPT_MODEL,
-	type ParsedBuildPromptFlags,
-	runBuildPrompt,
-} from "./commands/build-prompt";
+import { type ParsedBuildPromptFlags, runBuildPrompt } from "./commands/build-prompt";
+import { DEFAULT_ANALYZE_MODEL, DEFAULT_PROMPT_MODEL } from "./config";
 import { runConfigSet, runConfigShow } from "./commands/config";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
