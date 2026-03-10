@@ -4,13 +4,18 @@
 # Edit the `command:` fields below to match your repo's tooling.
 #
 # Environment variable overrides (always win over this file):
-#   CHUNK_HOOK_ENABLE=1              Enable all commands
-#   CHUNK_HOOK_ENABLE_TESTS=1        Enable a specific exec by name
-#   CHUNK_HOOK_ENABLE_REVIEW=1       Enable a specific task by name
-#   CHUNK_HOOK_TIMEOUT_TESTS=120     Override timeout for an exec (seconds)
-#   CHUNK_HOOK_SENTINELS_DIR=/tmp/s  Override result-file directory
-#   CHUNK_HOOK_CONFIG=/path/to.yml   Use a different config file
-#   CHUNK_HOOK_VERBOSE=1             Verbose logging to stderr
+#   CHUNK_HOOK_ENABLE=1               Enable all commands
+#   CHUNK_HOOK_ENABLE_TESTS=1         Enable a specific exec by name
+#   CHUNK_HOOK_ENABLE_TESTS_CHANGED=1 Enable tests-changed exec by name
+#   CHUNK_HOOK_ENABLE_LINT=1          Enable lint exec by name
+#   CHUNK_HOOK_ENABLE_REVIEW=1        Enable a specific task by name
+#   CHUNK_HOOK_TIMEOUT_TESTS=120      Override timeout for an exec (seconds)
+#   CHUNK_HOOK_SENTINELS_DIR=/tmp/s   Override result-file directory
+#   CHUNK_HOOK_CONFIG=/path/to.yml    Use a different config file
+#   CHUNK_HOOK_VERBOSE=1              Verbose logging to stderr
+#   CHUNK_HOOK_LOG_DIR=/path/to/logs  Override log directory
+#   CHUNK_HOOK_PROJECT_ROOT=/path     Workspace root for multi-repo setups
+#   CHUNK_HOOK_MARKER_TTL_MS=300000   Override scope marker TTL (milliseconds)
 
 # --- Named trigger groups ---
 triggers:

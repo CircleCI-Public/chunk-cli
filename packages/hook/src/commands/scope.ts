@@ -29,9 +29,15 @@
  *
  * **Subagent safety:** When a marker already exists and a different
  * session ID attempts to activate the same project (e.g. a subagent
- * spawned by the parent), the existing marker is preserved. The subagent
- * is treated as active (returns true) without overwriting the parent's
- * session ID. This prevents scope gaps when control returns to the parent.
+ * spawned by the parent), the existing marker is preserved — as long as
+ * it has not expired. This prevents scope gaps when control returns to
+ * the parent.
+ *
+ * **TTL-based expiry:** The marker timestamp is refreshed on every
+ * `activateScope()` call that returns `true` for the same session.
+ * A different session can reclaim an expired marker (>5 min) from a dead
+ * session where `SessionEnd` never fired. Same-session calls always
+ * bypass TTL — pauses of any length are safe.
  *
  * Subcommands:
  *   activate   — Read stdin JSON, activate scope if file paths reference
@@ -52,12 +58,33 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { getMarkerTtlMs } from "../lib/env";
 import { log, logVerbose } from "../lib/log";
 
 const TAG = "scope";
 
 /** Scope marker file path relative to project root. */
 export const MARKER_REL = join(".chunk", "hook", ".chunk-hook-active");
+
+/**
+ * How long a marker remains valid without being refreshed.
+ *
+ * Same-session calls bypass TTL (the owning session can always reclaim).
+ * TTL only gates different-session reclaim: when a new session encounters
+ * an expired marker from a dead session (e.g. VS Code closed without
+ * firing SessionEnd), it can overwrite it.
+ *
+ * 5 minutes: covers all observed active-work gaps (max 125 s in
+ * experiment data) with margin, while keeping dead-session wait short.
+ *
+ * Override with `CHUNK_HOOK_MARKER_TTL_MS` (milliseconds).
+ */
+export const MARKER_TTL_MS = getMarkerTtlMs();
+
+/** Check whether a marker has exceeded the TTL. */
+function isExpired(marker: MarkerContent, now: number = Date.now()): boolean {
+	return now - marker.timestamp > MARKER_TTL_MS;
+}
 
 // ---------------------------------------------------------------------------
 // Path extraction from raw stdin JSON
@@ -204,11 +231,14 @@ export function activateScope(
 
 	if (shouldActivate) {
 		// Subagent safety: if a marker already exists with a different session
-		// ID, preserve it (first-writer-wins).
+		// ID, preserve it — unless the marker has expired (dead session).
 		const existing = readMarker(projectDir);
 		if (existing && existing.sessionId !== sessionId) {
-			log(TAG, `already active for ${projectDir} (owned by ${existing.sessionId}, keeping)`);
-			return true;
+			if (!isExpired(existing)) {
+				log(TAG, `already active for ${projectDir} (owned by ${existing.sessionId}, keeping)`);
+				return true;
+			}
+			log(TAG, `expired marker from ${existing.sessionId}, reclaiming for ${sessionId}`);
 		}
 		writeMarker(projectDir, sessionId);
 		log(TAG, `activated ${join(projectDir, MARKER_REL)}`);
@@ -228,10 +258,24 @@ export function activateScope(
 
 	// If we have a session ID, validate it matches the stored one.
 	if (sessionId && existing.sessionId && sessionId !== existing.sessionId) {
-		log(TAG, `stale marker (session ${existing.sessionId} != ${sessionId}), not active`);
-		return false;
+		if (!isExpired(existing)) {
+			log(
+				TAG,
+				`valid marker from session ${existing.sessionId} (current ${sessionId}), not active`,
+			);
+			return false;
+		}
+		// Expired marker from a dead session — reclaim it.
+		writeMarker(projectDir, sessionId);
+		log(TAG, `expired marker from ${existing.sessionId}, reclaimed for ${sessionId}`);
+		return true;
 	}
 
+	// Same session (or no session to compare) — refresh the timestamp
+	// so the marker stays live for TTL purposes.
+	if (sessionId && existing.sessionId === sessionId) {
+		writeMarker(projectDir, sessionId);
+	}
 	log(TAG, `already active for ${projectDir} (from prior event)`);
 	return true;
 }
