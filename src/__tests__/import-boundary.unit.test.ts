@@ -28,10 +28,11 @@ function extractImportPaths(filePath: string): string[] {
 	const content = fs.readFileSync(filePath, "utf-8");
 	const importRegex = /(?:import|export)\s+.*?from\s+["']([^"']+)["']|import\s+["']([^"']+)["']/g;
 	const paths: string[] = [];
-	let match: RegExpExecArray | null;
-	while ((match = importRegex.exec(content)) !== null) {
+	let match: RegExpExecArray | null = importRegex.exec(content);
+	while (match !== null) {
 		const importPath = match[1] ?? match[2];
 		if (importPath) paths.push(importPath);
+		match = importRegex.exec(content);
 	}
 	return paths;
 }
