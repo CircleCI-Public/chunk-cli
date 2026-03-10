@@ -55,10 +55,11 @@ To build and install from source:
 chunk auth login
 
 # Generate a context prompt from your org's review patterns
-chunk build-prompt --org myorg
+# (auto-detects org and repo from git remote)
+chunk build-prompt
 
-# Use the generated context with an AI coding agent
-# Place the output file in .chunk/context/ or pass it via --config
+# Or specify org and repos explicitly
+chunk build-prompt --org myorg --repos api,backend
 ```
 
 ## Commands
@@ -72,20 +73,15 @@ Mines PR review comments from GitHub to generate a custom review prompt tuned to
 3. **Generate** — produces a markdown prompt file that agents can use for context
 
 ```bash
-chunk build-prompt --org <org> [options]
+chunk build-prompt [options]
 ```
-
-**Required:**
-
-| Flag | Description |
-|------|-------------|
-| `--org <org>` | GitHub organization to analyze |
 
 **Options:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--repos <repos>` | all repos in org | Comma-separated list of repo names to include |
+| `--org <org>` | auto-detected from git remote | GitHub organization to analyze |
+| `--repos <repos>` | current repo (auto-detected) | Comma-separated list of repo names to include |
 | `--top <n>` | `5` | Number of top reviewers to analyze |
 | `--since <date>` | 3 months ago | Start date in `YYYY-MM-DD` format |
 | `--output <path>` | `./review-prompt.md` | Output path for the generated prompt |
@@ -109,17 +105,29 @@ chunk build-prompt --org <org> [options]
 | `<output>-analysis.md` | Claude's analysis of reviewer patterns |
 | `<output>.md` | Final generated prompt |
 
+**Behavior matrix:**
+
+| Flags provided | Behavior |
+|---------------|----------|
+| (none) | Auto-detect org and current repo from git remote |
+| `--repos` only | Auto-detect org from git remote, analyze specified repos |
+| `--org` + `--repos` | Analyze the specified repos in the specified org |
+| `--org` only | Error (cannot enumerate all repos in an org) |
+
 **Examples:**
 
 ```bash
-# Analyze all repos in an org
-chunk build-prompt --org myorg
+# Auto-detect org and repo from git remote
+chunk build-prompt
 
-# Analyze specific repos, keeping the top 10 reviewers
+# Auto-detect org, analyze specific repos
+chunk build-prompt --repos api,backend,frontend
+
+# Explicit org and repos, keeping the top 10 reviewers
 chunk build-prompt --org myorg --repos api,backend,frontend --top 10
 
 # Limit data sent to Claude and save output to a specific path
-chunk build-prompt --org myorg --repos myrepo --max-comments 50 --output ./prompts/review.md
+chunk build-prompt --repos myrepo --max-comments 50 --output ./prompts/review.md
 ```
 
 Once generated, place the output file in `.chunk/context/` so AI coding agents (e.g., Claude Code) automatically pick it up as context.
