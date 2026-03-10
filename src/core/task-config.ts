@@ -292,17 +292,16 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 	printSuccess("Configuration saved!");
 	console.log(dim(`  ${configPath}\n`));
 
-	const defNames = Object.keys(definitions).join(", ");
+	const defNames = Object.keys(definitions);
+	const exampleDef = defNames[0] ?? "<name>";
 	console.log(`${bold("Next steps:")}`);
-	console.log("  Run a task with:");
-	console.log(
-		dim(
-			`  chunk task run --definition ${Object.keys(definitions)[0] ?? "<definition>"} --prompt "your task"\n`,
-		),
-	);
-	if (Object.keys(definitions).length > 1) {
-		console.log(dim(`  Available definitions: ${defNames}\n`));
+	console.log("  Trigger a pipeline run:");
+	console.log(dim(`  chunk task run --definition ${exampleDef} --prompt "your prompt"\n`));
+	if (defNames.length > 1) {
+		console.log(dim(`  Available definitions: ${defNames.join(", ")}\n`));
 	}
+	console.log("  View all options:");
+	console.log(dim("  chunk task run --help\n"));
 
 	return { exitCode: 0 };
 }
