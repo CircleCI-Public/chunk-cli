@@ -85,10 +85,15 @@ Note: --org without --repos is an error (cannot enumerate all repos in an org).
 		});
 }
 
-async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {
-	// Warn if a legacy output file exists and the user is using the new default path
+/**
+ * Check if the legacy output file exists and the user is using the new default path.
+ * If so, print a deprecation warning.
+ *
+ * @returns true if a warning was printed
+ */
+export function warnIfLegacyOutputPath(outputFlag: string): boolean {
 	if (
-		resolve(flags.output) === resolve(DEFAULT_OUTPUT_PATH) &&
+		resolve(outputFlag) === resolve(DEFAULT_OUTPUT_PATH) &&
 		existsSync(resolve(LEGACY_OUTPUT_PATH))
 	) {
 		console.log(
@@ -99,7 +104,14 @@ async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandRes
 			),
 		);
 		console.log("");
+		return true;
 	}
+	return false;
+}
+
+async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {
+	// Warn if a legacy output file exists and the user is using the new default path
+	warnIfLegacyOutputPath(flags.output);
 
 	const { org, repos } = await resolveOrgAndRepos({
 		org: flags.org,
