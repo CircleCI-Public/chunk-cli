@@ -20,7 +20,7 @@ export interface RunTaskOptions {
 
 export async function runTask(options: RunTaskOptions): Promise<CommandResult> {
 	const definition = options.definition;
-	const token = process.env.CIRCLECI_TOKEN;
+	const token = process.env.CIRCLE_TOKEN || process.env.CIRCLECI_TOKEN;
 	if (!token) {
 		printError(
 			"CircleCI token not found",
