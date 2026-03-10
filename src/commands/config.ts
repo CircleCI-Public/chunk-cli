@@ -1,8 +1,29 @@
+import type { Command } from "@commander-js/extra-typings";
 import { resolveConfig, saveUserConfig } from "../storage/config";
 import type { CommandResult } from "../types";
 import { bold, cyan, dim, gray, green, yellow } from "../ui/colors";
 import { label, printSuccess } from "../ui/format";
 import { printError } from "../utils/errors";
+
+export function registerConfigCommands(program: Command): void {
+	const config = program.command("config").description("Manage configuration");
+	config
+		.command("show")
+		.description("Display current configuration")
+		.action(() => process.exit(runConfigShow().exitCode));
+	config
+		.command("set")
+		.addHelpText(
+			"after",
+			`
+Examples:
+  chunk config set model opus`,
+		)
+		.description("Set a configuration value")
+		.argument("<key>", "config key (model, apiKey)")
+		.argument("<value>", "value to set")
+		.action((key: string, value: string) => process.exit(runConfigSet(key, value).exitCode));
+}
 
 /** Known configuration keys that can be set */
 const VALID_CONFIG_KEYS = ["model", "apiKey"] as const;
