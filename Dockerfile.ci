@@ -1,4 +1,4 @@
-FROM cimg/go:1.26.0
+FROM cimg/go:1.26.1
 
 ENV BUN_INSTALL=/home/circleci/.bun
 ENV PATH=/home/circleci/.bun/bin:/home/circleci/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
