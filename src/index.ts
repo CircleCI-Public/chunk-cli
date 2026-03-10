@@ -7,7 +7,7 @@ import { runConfigSet, runConfigShow } from "./commands/config";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
-import { DEFAULT_ANALYZE_MODEL, DEFAULT_PROMPT_MODEL } from "./config";
+import { DEFAULT_ANALYZE_MODEL, DEFAULT_OUTPUT_PATH, DEFAULT_PROMPT_MODEL } from "./config";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
 const program = new Command();
@@ -65,7 +65,7 @@ Note: --org without --repos is an error (cannot enumerate all repos in an org).
 		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
 		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
 		.option("--since <date>", "Start date YYYY-MM-DD", parseDate, threeMonthsAgo())
-		.option("--output <path>", "Output path for the generated prompt", "./review-prompt.md")
+		.option("--output <path>", "Output path for the generated prompt", DEFAULT_OUTPUT_PATH)
 		.option("--max-comments <number>", "Max comments per reviewer for analysis", parsePositiveInt)
 		.option("--analyze-model <model>", "Claude model for the analysis step", DEFAULT_ANALYZE_MODEL)
 		.option("--prompt-model <model>", "Claude model for prompt generation", DEFAULT_PROMPT_MODEL)

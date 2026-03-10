@@ -19,6 +19,8 @@ export const ENV = {
 // --- Paths ---
 export const USER_CONFIG_DIR = ".chunk";
 export const USER_CONFIG_FILENAME = "config.json";
+export const DEFAULT_OUTPUT_PATH = ".chunk/context/review-prompt.md";
+export const LEGACY_OUTPUT_PATH = "./review-prompt.md";
 
 export function getUserConfigDir() {
 	return path.join(os.homedir(), USER_CONFIG_DIR);
