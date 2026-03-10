@@ -16,6 +16,14 @@ export const ENV = {
 	MODEL: "CODE_REVIEW_CLI_MODEL",
 } as const;
 
+/**
+ * Resolve the CircleCI API token from environment variables.
+ * Prefers CIRCLECI_TOKEN but falls back to CIRCLE_TOKEN for backward compatibility.
+ */
+export function getCircleCIToken(): string | undefined {
+	return process.env.CIRCLECI_TOKEN ?? process.env.CIRCLE_TOKEN;
+}
+
 // --- Paths ---
 export const USER_CONFIG_FILENAME = "config.json";
 
