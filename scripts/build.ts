@@ -45,6 +45,7 @@ async function build(): Promise<void> {
         '--minify',
         `--target=${target}`,
         '--loader', '.md:text',
+        '--external', 'react-devtools-core',
         `--outfile=${outputPath}`,
       ], {
         cwd: rootDir,
