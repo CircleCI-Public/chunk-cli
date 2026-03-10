@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type RunTaskOptions, runTask } from "../../core/task-run";
 import { saveRunConfig } from "../../storage/run-config";
 
 const mockFetch = mock();
+const originalFetch = global.fetch;
 // @ts-expect-error - Mock doesn't fully implement fetch type
 global.fetch = mockFetch;
 
@@ -47,6 +48,10 @@ describe("runTask", () => {
 		process.env.CIRCLECI_TOKEN = "test-token";
 		saveRunConfig(mockConfig);
 		mockFetch.mockReset();
+	});
+
+	afterAll(() => {
+		global.fetch = originalFetch;
 	});
 
 	afterEach(() => {
