@@ -65,6 +65,12 @@ export function buildProjectSlug(vcsType: string | undefined, org: string, repo:
 	return `${prefix}/${org}/${repo}`;
 }
 
+export function sortProjectsByName(projects: CircleCIProject[]): CircleCIProject[] {
+	return [...projects].sort((a, b) =>
+		`${a.username}/${a.reponame}`.localeCompare(`${b.username}/${b.reponame}`),
+	);
+}
+
 async function collectDefinition(): Promise<{ name: string; definition: RunDefinition }> {
 	const name = await promptRequiredInput("  Definition name (e.g. dev, prod): ");
 
@@ -174,9 +180,7 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 		projectId = await promptRequiredInput("Enter a project ID: ");
 	} else {
 		// Build selection list sorted alphabetically, plus "Another project" sentinel
-		const sortedProjects = [...projects].sort((a, b) =>
-			`${a.username}/${a.reponame}`.localeCompare(`${b.username}/${a.reponame}`),
-		);
+		const sortedProjects = sortProjectsByName(projects);
 		const selectionItems: ProjectSelection[] = [...sortedProjects, ANOTHER_PROJECT_SENTINEL];
 
 		const selected = await promptSelect<ProjectSelection>(

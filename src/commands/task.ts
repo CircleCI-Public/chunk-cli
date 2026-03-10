@@ -12,7 +12,8 @@ export function registerTaskCommands(program: Command): void {
 			"after",
 			`
 Environment Variables:
-  CIRCLE_TOKEN             Required: CircleCI personal API token
+  CIRCLECI_TOKEN           Required: CircleCI personal API token
+  CIRCLE_TOKEN             Fallback: legacy CircleCI token name
 
 Examples:
   chunk task run --definition dev --prompt "Fix the flaky test in auth.spec.ts"
@@ -39,7 +40,8 @@ Examples:
 			"after",
 			`
 Environment Variables:
-  CIRCLE_TOKEN             Required: CircleCI personal API token`,
+  CIRCLECI_TOKEN           Required: CircleCI personal API token
+  CIRCLE_TOKEN             Fallback: legacy CircleCI token name`,
 		)
 		.action(async () => process.exit((await runTaskConfigWizard()).exitCode));
 }
