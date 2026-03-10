@@ -1,7 +1,12 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Command } from "@commander-js/extra-typings";
-import { DEFAULT_ANALYZE_MODEL, DEFAULT_OUTPUT_PATH, DEFAULT_PROMPT_MODEL, LEGACY_OUTPUT_PATH } from "../config";
+import {
+	DEFAULT_ANALYZE_MODEL,
+	DEFAULT_OUTPUT_PATH,
+	DEFAULT_PROMPT_MODEL,
+	LEGACY_OUTPUT_PATH,
+} from "../config";
 import { extractCommentsAndBuildPrompt, resolveOrgAndRepos } from "../core/build-prompt";
 import type { CommandResult } from "../types";
 import { yellow } from "../ui/colors";
