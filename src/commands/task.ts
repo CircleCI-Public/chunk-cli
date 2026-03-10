@@ -12,7 +12,7 @@ export function registerTaskCommands(program: Command): void {
 
 	task
 		.command("run")
-		.description("Trigger a CircleCI pipeline run with a prompt")
+		.description("Trigger a chunk run against a CircleCI pipeline definition")
 		.addHelpText(
 			"after",
 			`
@@ -22,7 +22,7 @@ definition UUID. Even when a raw UUID is passed, .chunk/run.json must exist
 because it supplies the org and project IDs needed by the CircleCI API.
 
 Environment Variables:
-  CIRCLECI_TOKEN           Required. CircleCI personal API token.
+  CIRCLE_TOKEN             Required. CircleCI personal API token.
 
 Examples:
   # Run using a configured definition name
@@ -60,7 +60,7 @@ The file stores your CircleCI org, project, and pipeline definition IDs
 so that "chunk task run" can trigger runs without extra flags.
 
 Environment Variables:
-  CIRCLECI_TOKEN           Required. CircleCI personal API token.`,
+  CIRCLE_TOKEN             Required. CircleCI personal API token.`,
 		)
 		.action(async () => process.exit((await runTaskConfigWizard()).exitCode));
 }
