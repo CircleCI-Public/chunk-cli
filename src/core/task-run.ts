@@ -24,8 +24,8 @@ export async function runTask(options: RunTaskOptions): Promise<CommandResult> {
 	const token = getCircleCIToken();
 	if (!token) {
 		printError(
-			"CircleCI token not found",
-			"CIRCLE_TOKEN environment variable is not set.",
+			"CircleCI API token not found",
+			"CIRCLE_TOKEN or CIRCLECI_TOKEN environment variable is not set.",
 			"Set CIRCLE_TOKEN to your CircleCI personal API token.",
 		);
 		return { exitCode: 2 };

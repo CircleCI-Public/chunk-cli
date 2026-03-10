@@ -158,6 +158,47 @@ describe("runTask", () => {
 		expect(lastRequestBody().definition_id).toBe(uuid);
 	});
 
+	it("defaults to 'main' branch when using a raw UUID definition", async () => {
+		mockFetch.mockImplementation(async () => mockSuccess());
+		const uuid = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
+
+		await runTask({ ...baseOptions, definition: uuid });
+
+		expect(lastRequestBody().checkout_branch).toBe("main");
+	});
+
+	it("passes prompt, newBranch, and pipelineAsTool through to the API", async () => {
+		mockFetch.mockImplementation(async () => mockSuccess());
+
+		await runTask({
+			definition: "dev",
+			prompt: "refactor the auth module",
+			newBranch: true,
+			pipelineAsTool: false,
+		});
+
+		const body = lastRequestBody();
+		expect(body.parameters["custom-prompt"]).toBe("refactor the auth module");
+		expect(body.parameters["create-new-branch"]).toBe(true);
+		expect(body.parameters["run-pipeline-as-a-tool"]).toBe(false);
+	});
+
+	it("includes environment ID from named definition", async () => {
+		mockFetch.mockImplementation(async () => mockSuccess());
+
+		await runTask({ ...baseOptions, definition: "dev" });
+
+		expect(lastRequestBody().chunk_environment_id).toBe("b3c27e5f-1234-5678-9abc-def012345678");
+	});
+
+	it("sends null environment ID when definition has no environment", async () => {
+		mockFetch.mockImplementation(async () => mockSuccess());
+
+		await runTask({ ...baseOptions, definition: "prod" });
+
+		expect(lastRequestBody().chunk_environment_id).toBeNull();
+	});
+
 	it("returns exitCode 0 on success", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
