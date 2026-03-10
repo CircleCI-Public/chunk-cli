@@ -17,7 +17,7 @@
     "test:unit": "bun test src/**/*.unit.test.ts",
     "test:hook": "bun test --cwd packages/hook",
     "test:e2e": "bun test src/**/*.e2e.test.ts",
-    "test:all": "bun test src/**/*.unit.test.ts && bun test --cwd packages/hook",
+    "test:all": "bun run test:unit && bun run test:e2e && bun run test:hook",
     "lint": "biome check src/ packages/hook/src/",
     "lint:fix": "biome check --fix src/ packages/hook/src/",
     "format": "biome format --write src/ packages/hook/src/",
