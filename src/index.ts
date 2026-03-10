@@ -49,12 +49,14 @@ Environment Variables:
   GITHUB_TOKEN             Required: GitHub personal access token with repo scope
   ANTHROPIC_API_KEY        Required: Anthropic API key
 
-  -h, --help               Show this help message
-
 Examples:
   chunk build-prompt                                     # Auto-detect org and repo from git remote
-  chunk build-prompt --org myorg --repos myrepo          # Explicit org and repo(s)
-  chunk build-prompt --repos repo1,repo2                 # Auto-detect org, explicit repos`,
+  chunk build-prompt --repos api,backend                 # Auto-detect org, analyze specific repos
+  chunk build-prompt --org myorg --repos api,backend     # Explicit org and repos
+  chunk build-prompt --top 10 --since 2025-01-01         # More reviewers, custom date range
+
+Note: --org without --repos is an error (cannot enumerate all repos in an org).
+      Omit --org to auto-detect from git remote.`,
 		)
 		.option(
 			"--org <org>",
