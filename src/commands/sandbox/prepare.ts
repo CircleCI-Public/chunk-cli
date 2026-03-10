@@ -76,6 +76,29 @@ function gatherExistingDockerfiles(cwd: string): string {
 	return parts.join("\n");
 }
 
+interface PackageManager {
+	name: string;
+	installCommand: string;
+	lockfile: string;
+}
+
+function detectPackageManager(cwd: string): PackageManager | null {
+	const managers: { lockfile: string; name: string; installCommand: string }[] = [
+		{ lockfile: "pnpm-lock.yaml", name: "pnpm", installCommand: "pnpm install --frozen-lockfile" },
+		{ lockfile: "yarn.lock", name: "yarn", installCommand: "yarn install --frozen-lockfile" },
+		{ lockfile: "bun.lock", name: "bun", installCommand: "bun install --frozen-lockfile" },
+		{ lockfile: "bun.lockb", name: "bun", installCommand: "bun install --frozen-lockfile" },
+		{ lockfile: "package-lock.json", name: "npm", installCommand: "npm ci" },
+	];
+
+	for (const m of managers) {
+		if (existsSync(join(cwd, m.lockfile))) {
+			return { name: m.name, installCommand: m.installCommand, lockfile: m.lockfile };
+		}
+	}
+	return null;
+}
+
 function gatherRepoContext(cwd: string): string {
 	const parts: string[] = [];
 
@@ -173,9 +196,12 @@ function buildCredentialsPrompt(context: string, existingDockerfiles: string): s
 	);
 }
 
-function buildTestCommandPrompt(context: string): string {
+function buildTestCommandPrompt(context: string, packageManager: PackageManager | null): string {
 	return (
 		`You are analyzing a software repository to determine how tests are run.\n\n` +
+		(packageManager
+			? `Detected package manager: ${packageManager.name} (lockfile: ${packageManager.lockfile}). Use ${packageManager.name} to run tests (e.g. \`${packageManager.name} test\`).\n\n`
+			: "") +
 		`${context}\n\n` +
 		`Based on the above, output ONLY the shell command used to run the test suite — ` +
 		`nothing else. No explanation, no markdown. Just the command string.`
@@ -189,10 +215,15 @@ function buildDockerfilePrompt(
 	baseImageRepo: string | null,
 	availableTags: string[],
 	collectedCredentials: Record<string, string>,
+	packageManager: PackageManager | null,
 ): string {
 	return (
 		`You are generating a Dockerfile to run tests for a software project in a CI environment.\n\n` +
 		`Test command: ${testCommand}\n\n` +
+		(packageManager
+			? `Package manager: ${packageManager.name} (lockfile: ${packageManager.lockfile})\n` +
+				`Install command: ${packageManager.installCommand}\n\n`
+			: "") +
 		`Repository context:\n${context}\n\n` +
 		(existingDockerfiles
 			? `Existing Dockerfiles in this repo (use as reference for base images, build steps, and patterns):\n${existingDockerfiles}\n\n`
@@ -206,7 +237,13 @@ function buildDockerfilePrompt(
 			: `- Use an appropriate official base image from Docker Hub for the detected language and tooling.\n` +
 				`  Pin a specific version tag — do not use "latest" — but aim for the most current stable release available.\n`) +
 		`- Install any additional system-level dependencies needed to run the test command.\n` +
-		`- Always copy the entire repository using \`COPY . .\` — the build context will contain exactly the files tracked by git, so never selectively copy individual files or directories.\n` +
+		(packageManager
+			? `- Use \`${packageManager.installCommand}\` to install dependencies (not npm ci or npm install unless the project uses npm).\n` +
+				(packageManager.name === "pnpm"
+					? `- Install pnpm first: \`RUN corepack enable && corepack prepare pnpm@latest --activate\` (or \`npm install -g pnpm\`).\n`
+					: "")
+			: "") +
+		`- CRITICAL: Use a single \`COPY . .\` to copy the entire repository. The build context already contains exactly the git-tracked files. Do NOT use selective COPY commands (e.g. COPY package*.json) — they will break in monorepos and non-standard layouts.\n` +
 		(Object.keys(collectedCredentials).length > 0
 			? `The following credentials have been collected and will be passed as Docker build args:\n` +
 				Object.keys(collectedCredentials)
@@ -224,14 +261,21 @@ function buildDockerfileFixPrompt(
 	errorOutput: string,
 	testCommand: string,
 	context: string,
+	packageManager: PackageManager | null,
 ): string {
 	return (
 		`The following Dockerfile failed when building or running tests.\n\n` +
 		`Test command: ${testCommand}\n\n` +
+		(packageManager
+			? `Package manager: ${packageManager.name} (lockfile: ${packageManager.lockfile})\n` +
+				`Install command: ${packageManager.installCommand}\n\n`
+			: "") +
 		`Repository context:\n${context}\n\n` +
 		`Current Dockerfile:\n${dockerfileContent}\n\n` +
 		`Error output:\n${errorOutput.slice(0, 3000)}\n\n` +
-		`Fix the Dockerfile to resolve the error. Output ONLY valid Dockerfile content. No markdown, no explanation, no code fences.`
+		`Fix the Dockerfile to resolve the error.\n` +
+		`CRITICAL: Use a single \`COPY . .\` to copy the entire repository — do NOT use selective COPY commands like \`COPY package*.json\`.\n` +
+		`Output ONLY valid Dockerfile content. No markdown, no explanation, no code fences.`
 	);
 }
 
@@ -241,6 +285,7 @@ async function askClaudeToFixDockerfile(
 	errorOutput: string,
 	testCommand: string,
 	context: string,
+	packageManager: PackageManager | null,
 ): Promise<string | null> {
 	const response = await client.messages.create({
 		model: DEFAULT_MODEL,
@@ -248,7 +293,13 @@ async function askClaudeToFixDockerfile(
 		messages: [
 			{
 				role: "user",
-				content: buildDockerfileFixPrompt(dockerfileContent, errorOutput, testCommand, context),
+				content: buildDockerfileFixPrompt(
+					dockerfileContent,
+					errorOutput,
+					testCommand,
+					context,
+					packageManager,
+				),
 			},
 		],
 	});
@@ -364,6 +415,10 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 
 	const context = gatherRepoContext(cwd);
 	const existingDockerfiles = gatherExistingDockerfiles(cwd);
+	const packageManager = detectPackageManager(cwd);
+	if (packageManager) {
+		console.log(`detected package manager: ${packageManager.name} (${packageManager.lockfile})`);
+	}
 
 	const client = new Anthropic({ apiKey });
 
@@ -391,7 +446,7 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 	const response = await client.messages.create({
 		model: DEFAULT_MODEL,
 		max_tokens: 256,
-		messages: [{ role: "user", content: buildTestCommandPrompt(context) }],
+		messages: [{ role: "user", content: buildTestCommandPrompt(context, packageManager) }],
 	});
 
 	const block = response.content.find((b) => b.type === "text");
@@ -426,6 +481,7 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 					baseImageRepo,
 					availableTags,
 					collectedCredentials,
+					packageManager,
 				),
 			},
 		],
@@ -501,6 +557,7 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 						buildErrorOutput,
 						testCommand,
 						context,
+						packageManager,
 					);
 					if (fixed) currentDockerfileContent = fixed;
 					continue;
@@ -537,6 +594,7 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 					runErrorOutput!,
 					testCommand,
 					context,
+					packageManager,
 				);
 				if (fixed) currentDockerfileContent = fixed;
 			} else {
