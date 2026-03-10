@@ -83,7 +83,8 @@ async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandRes
 
 	if (org && repos.length === 0) {
 		throw new Error(
-			"--repos is required when --org is provided. Omit --org to auto-detect from git remote.",
+			"--repos is required when --org is provided. There is no way to enumerate all repos in an org.\n" +
+				"  Omit --org to auto-detect from git remote, or specify repos with --repos.",
 		);
 	}
 
