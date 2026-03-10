@@ -18,10 +18,10 @@ export const ENV = {
 
 /**
  * Resolve the CircleCI API token from environment variables.
- * Prefers CIRCLECI_TOKEN but falls back to CIRCLE_TOKEN for backward compatibility.
+ * Prefers CIRCLE_TOKEN but falls back to CIRCLECI_TOKEN.
  */
 export function getCircleCIToken(): string | undefined {
-	return process.env.CIRCLECI_TOKEN ?? process.env.CIRCLE_TOKEN;
+	return process.env.CIRCLE_TOKEN ?? process.env.CIRCLECI_TOKEN;
 }
 
 // --- Paths ---

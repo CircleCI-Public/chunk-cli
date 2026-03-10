@@ -45,7 +45,8 @@ describe("runTask", () => {
 	beforeEach(() => {
 		fs.mkdirSync(path.join(testDir, ".git"), { recursive: true });
 		process.chdir(testDir);
-		process.env.CIRCLECI_TOKEN = "test-token";
+		process.env.CIRCLE_TOKEN = "test-token";
+		delete process.env.CIRCLECI_TOKEN;
 		saveRunConfig(mockConfig);
 		mockFetch.mockReset();
 	});
@@ -76,9 +77,9 @@ describe("runTask", () => {
 		pipelineAsTool: true,
 	};
 
-	it("returns exitCode 2 when no CircleCI token is set", async () => {
-		delete process.env.CIRCLECI_TOKEN;
+	it("returns exitCode 2 when neither CIRCLE_TOKEN nor CIRCLECI_TOKEN is set", async () => {
 		delete process.env.CIRCLE_TOKEN;
+		delete process.env.CIRCLECI_TOKEN;
 
 		const result = await runTask(baseOptions);
 
@@ -86,9 +87,9 @@ describe("runTask", () => {
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
-	it("accepts CIRCLE_TOKEN as fallback when CIRCLECI_TOKEN is not set", async () => {
-		delete process.env.CIRCLECI_TOKEN;
-		process.env.CIRCLE_TOKEN = "fallback-token";
+	it("accepts CIRCLECI_TOKEN as fallback when CIRCLE_TOKEN is not set", async () => {
+		delete process.env.CIRCLE_TOKEN;
+		process.env.CIRCLECI_TOKEN = "fallback-token";
 		mockFetch.mockImplementation(async () => mockSuccess());
 
 		const result = await runTask(baseOptions);
@@ -96,9 +97,9 @@ describe("runTask", () => {
 		expect(result.exitCode).toBe(0);
 	});
 
-	it("prefers CIRCLECI_TOKEN over CIRCLE_TOKEN", async () => {
-		process.env.CIRCLECI_TOKEN = "preferred-token";
-		process.env.CIRCLE_TOKEN = "fallback-token";
+	it("prefers CIRCLE_TOKEN over CIRCLECI_TOKEN", async () => {
+		process.env.CIRCLE_TOKEN = "preferred-token";
+		process.env.CIRCLECI_TOKEN = "fallback-token";
 		mockFetch.mockImplementation(async () => mockSuccess());
 
 		await runTask(baseOptions);

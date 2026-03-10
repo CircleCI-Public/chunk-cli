@@ -102,8 +102,8 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 	if (!token) {
 		printError(
 			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is required for setup.",
-			"Export your CircleCI personal API token:\n  export CIRCLECI_TOKEN=<your-token>",
+			"CIRCLE_TOKEN environment variable is required for setup.",
+			"Export your CircleCI personal API token:\n  export CIRCLE_TOKEN=<your-token>",
 		);
 		return { exitCode: 2 };
 	}
@@ -148,7 +148,7 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 			printError(
 				"Failed to fetch CircleCI data",
 				error.message,
-				"Check your CIRCLECI_TOKEN and try again.",
+				"Check your CIRCLE_TOKEN and try again.",
 			);
 			return { exitCode: 2 };
 		}
@@ -223,7 +223,7 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 					printError(
 						"Failed to fetch project details",
 						error.message,
-						"Check your CIRCLECI_TOKEN and try again.",
+						"Check your CIRCLE_TOKEN and try again.",
 					);
 					return { exitCode: 2 };
 				}
