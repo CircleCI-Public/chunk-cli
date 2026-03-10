@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 
@@ -29,9 +29,11 @@ function runCli(args: string[]): string {
 describe("chunk (top-level)", () => {
 	let helpOutput: string;
 
-	// Run once for the whole describe block
-	it("prints help without error", () => {
+	beforeAll(() => {
 		helpOutput = runCli(["--help"]);
+	});
+
+	it("prints help without error", () => {
 		expect(helpOutput).toBeDefined();
 	});
 
@@ -82,8 +84,11 @@ describe("chunk (top-level)", () => {
 describe("chunk build-prompt --help", () => {
 	let helpOutput: string;
 
-	it("prints help without error", () => {
+	beforeAll(() => {
 		helpOutput = runCli(["build-prompt", "--help"]);
+	});
+
+	it("prints help without error", () => {
 		expect(helpOutput).toBeDefined();
 	});
 
@@ -142,8 +147,11 @@ describe("chunk build-prompt --help", () => {
 describe("chunk task config --help", () => {
 	let helpOutput: string;
 
-	it("prints help without error", () => {
+	beforeAll(() => {
 		helpOutput = runCli(["task", "config", "--help"]);
+	});
+
+	it("prints help without error", () => {
 		expect(helpOutput).toBeDefined();
 	});
 
@@ -162,8 +170,11 @@ describe("chunk task config --help", () => {
 describe("chunk task run --help", () => {
 	let helpOutput: string;
 
-	it("prints help without error", () => {
+	beforeAll(() => {
 		helpOutput = runCli(["task", "run", "--help"]);
+	});
+
+	it("prints help without error", () => {
 		expect(helpOutput).toBeDefined();
 	});
 
