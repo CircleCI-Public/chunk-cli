@@ -4,7 +4,7 @@ To create an instance and connect
 
 export METRO=<your-metro>
 export KRAFTCLOUD_USER=<user>
-export KRAFTCLOUD_TOKEN=$(op read "op://Employee/unikraft-cci-org/credential")
+export KRAFTCLOUD_TOKEN=<token>
 
 
 ```
