@@ -170,7 +170,9 @@ Environment Variables:
 		.description("Update to the latest version")
 		.action(async () => process.exit((await runUpgrade()).exitCode));
 
-	const sandbox = program.command("sandbox").description("Manage sandbox environments for testing");
+	const sandbox = program
+		.command("sandbox")
+		.description("[EXPERIMENTAL] Manage sandbox environments for testing");
 	sandbox
 		.command("prepare")
 		.description("Prepare the hook environment before a session begins")
