@@ -27,6 +27,7 @@
  */
 
 import type { AgentEvent, HookAdapter } from "../lib/adapter";
+import { extractSessionId } from "../lib/compat";
 import type { ResolvedConfig } from "../lib/config";
 import { computeFingerprint, getHeadSha } from "../lib/git";
 import { log } from "../lib/log";
@@ -43,6 +44,11 @@ export type StateFlags = {
 
 /**
  * Execute the state command.
+ *
+ * Write operations (`save`, `append`, `clear`) require an active scope
+ * marker with a session ID. If the marker is absent the command exits 1
+ * with a helpful message — this prevents agents from calling state
+ * commands outside of an active session.
  *
  * @param config  Resolved config (YAML + env merged).
  * @param adapter Hook adapter for allow/block signaling.
@@ -68,7 +74,7 @@ export async function runState(
 			handleLoad(config, flags);
 			break;
 		case "clear":
-			handleClear(config);
+			handleClear(config, event);
 			break;
 	}
 }
@@ -88,6 +94,13 @@ async function handleSave(
 		return;
 	}
 
+	const sessionId = extractSessionId(event.raw);
+	if (!sessionId) {
+		log(TAG, "state save: no session ID in event — command must be called from a hook context");
+		console.error("chunk hook: state save requires an active session (no session ID in stdin)");
+		process.exit(1);
+	}
+
 	const [head, fingerprint] = await Promise.all([
 		getHeadSha(config.projectDir),
 		computeFingerprint({ cwd: config.projectDir }),
@@ -100,7 +113,7 @@ async function handleSave(
 		data.fingerprint = fingerprint;
 	}
 
-	saveEvent(config.sentinelDir, config.projectDir, key, data);
+	saveEvent(config.sentinelDir, config.projectDir, key, data, sessionId);
 	log(TAG, `Saved event: ${key}`);
 }
 
@@ -119,6 +132,13 @@ async function handleAppend(
 		return;
 	}
 
+	const sessionId = extractSessionId(event.raw);
+	if (!sessionId) {
+		log(TAG, "state append: no session ID in event — command must be called from a hook context");
+		console.error("chunk hook: state append requires an active session (no session ID in stdin)");
+		process.exit(1);
+	}
+
 	// Each append records the current HEAD SHA and a composite fingerprint
 	// (HEAD + working tree diff). The first entry's fingerprint serves as
 	// the session baseline for change detection.
@@ -134,7 +154,7 @@ async function handleAppend(
 		data.fingerprint = fingerprint;
 	}
 
-	appendEvent(config.sentinelDir, config.projectDir, key, data);
+	appendEvent(config.sentinelDir, config.projectDir, key, data, sessionId);
 	log(TAG, `Appended event: ${key}`);
 }
 
@@ -163,7 +183,13 @@ function handleLoad(config: ResolvedConfig, flags: StateFlags): void {
 // clear — remove all state for the project
 // ---------------------------------------------------------------------------
 
-function handleClear(config: ResolvedConfig): void {
-	clearState(config.sentinelDir, config.projectDir);
+function handleClear(config: ResolvedConfig, event: AgentEvent): void {
+	const sessionId = extractSessionId(event.raw);
+	if (!sessionId) {
+		log(TAG, "state clear: no session ID in event — command must be called from a hook context");
+		console.error("chunk hook: state clear requires an active session (no session ID in stdin)");
+		process.exit(1);
+	}
+	clearState(config.sentinelDir, config.projectDir, sessionId);
 	log(TAG, "State cleared");
 }

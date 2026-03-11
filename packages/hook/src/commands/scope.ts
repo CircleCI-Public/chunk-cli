@@ -239,10 +239,28 @@ export function activateScope(
 /**
  * Remove the scope marker file.
  *
+ * Session-aware: when `sessionId` is provided, only removes the marker
+ * if it belongs to the same session. This prevents an agent from
+ * deactivating a scope that belongs to a different session (e.g. a
+ * parallel agent or parent session).
+ *
  * @param projectDir - Absolute project root.
+ * @param sessionId  - Current session ID. When provided, validates ownership.
  */
-export function deactivateScope(projectDir: string): void {
+export function deactivateScope(projectDir: string, sessionId?: string): void {
 	const markerPath = join(projectDir, MARKER_REL);
+
+	if (sessionId) {
+		const marker = readMarker(projectDir);
+		if (marker && marker.sessionId !== sessionId) {
+			log(
+				TAG,
+				`deactivate skipped: marker owned by session ${marker.sessionId}, ` +
+					`current session is ${sessionId}`,
+			);
+			return;
+		}
+	}
 
 	try {
 		unlinkSync(markerPath);
