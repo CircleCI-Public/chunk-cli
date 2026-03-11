@@ -15,12 +15,14 @@
  */
 
 import type { AgentEvent, HookAdapter } from "../lib/adapter";
+import type { ExecCheckVerdict } from "../lib/check";
 import {
 	blockNoCount,
 	blockWithLimit,
 	evaluateSentinel,
 	guardStopEvent,
 	matchesTrigger,
+	preEvaluateExec,
 	resolveTriggerPatterns,
 } from "../lib/check";
 import type { ResolvedConfig, ResolvedExec } from "../lib/config";
@@ -34,7 +36,7 @@ import {
 import { log } from "../lib/log";
 import { runCommand } from "../lib/proc";
 import type { SentinelData } from "../lib/sentinel";
-import { readSentinel, removeSentinel, resetBlockCount, writeSentinel } from "../lib/sentinel";
+import { resetBlockCount, writeSentinel } from "../lib/sentinel";
 import { shellQuote } from "../lib/shell-env";
 import { readMarker } from "./scope";
 
@@ -118,75 +120,33 @@ async function runCheck(
 	const limit = flags.limit ?? exec.limit;
 	guardStopEvent(t, adapter, event, limit);
 
-	// Trigger matching
-	const triggerPatterns = resolveTriggerPatterns(t, config, flags);
-	if (triggerPatterns.length > 0 && !matchesTrigger(adapter, event, triggerPatterns)) {
-		const cmd = adapter.commandSummary(event);
-		log(t, `Trigger ${JSON.stringify(triggerPatterns)} did not match${cmd}, allowing`);
-		adapter.allow();
-	}
-
-	// Skip-if-no-changes (commit-time optimization).
-	//
-	// At push time the working tree is always clean (`git status --porcelain`
-	// returns nothing) so detectChanges would short-circuit to allow — skipping
-	// sentinel/fingerprint validation entirely. This created a push-time bypass
-	// where reverted or plumbing-crafted commits could be pushed unchecked.
-	//
-	// We still keep detectChanges for non-push events because it is a valuable
-	// performance optimisation: it avoids sentinel I/O and hash computation for
-	// tool calls that touch unrelated files (e.g. editing README when the exec
-	// is scoped to .go files via fileExt). The hook fires on every matching
-	// run_in_terminal call, potentially dozens per session.
-	const isPush = matchesTrigger(adapter, event, ["git push"]);
-	if (!exec.always && !isPush) {
-		const hasChanges = await detectChanges({
-			cwd: config.projectDir,
-			fileExt: exec.fileExt,
-			staged: flags.staged,
-		});
-		if (!hasChanges) {
-			log(t, "No changed files, allowing");
-			adapter.allow();
-		}
-	}
-
-	const sentinel = readSentinel(config.sentinelDir, config.projectDir, flags.name);
-
-	// Session-aware staleness: sentinels from a different session are
-	// treated as missing so the command re-runs with fresh context.
-	const marker = readMarker(config.projectDir);
-	const currentSessionId = marker?.sessionId;
-
-	// Content-aware staleness: compute the current fingerprint so the check
-	// can detect if the working tree changed since the sentinel was written.
-	const contentHash = await computeFingerprint({
-		cwd: config.projectDir,
-		staged: flags.staged,
-		fileExt: exec.fileExt,
-	});
-
-	emitCheckResult(config, adapter, flags, exec, sentinel, t, currentSessionId, contentHash);
+	const verdict = await preEvaluateExec(config, adapter, event, exec, flags);
+	emitExecVerdict(config, adapter, flags, exec, verdict, t);
 }
 
 /**
- * Evaluate a consumed sentinel and emit the check result (self-consuming).
+ * Map an `ExecCheckVerdict` to a terminal action (allow/block + process.exit).
  */
-function emitCheckResult(
+function emitExecVerdict(
 	config: ResolvedConfig,
 	adapter: HookAdapter,
 	flags: ExecFlags,
 	exec: ResolvedExec,
-	sentinel: SentinelData | undefined,
+	verdict: ExecCheckVerdict,
 	t: string,
-	currentSessionId?: string,
-	currentContentHash?: string,
 ): never {
-	const result = evaluateSentinel(sentinel, currentSessionId, currentContentHash);
 	const limit = flags.limit ?? exec.limit;
 	const name = flags.name;
 
-	switch (result.kind) {
+	switch (verdict.kind) {
+		case "skip-trigger":
+			log(t, "Trigger did not match, allowing");
+			adapter.allow();
+			break;
+		case "skip-no-changes":
+			log(t, "No changed files, allowing");
+			adapter.allow();
+			break;
 		case "missing": {
 			const runnerCmd = buildRunnerCommand(flags);
 			const reason =
@@ -199,14 +159,13 @@ function emitCheckResult(
 		}
 		case "pending": {
 			const timeout = flags.timeout ?? exec.timeout;
-			if (sentinel?.startedAt && timeout > 0) {
-				const elapsed = (Date.now() - new Date(sentinel.startedAt).getTime()) / 1000;
+			if (verdict.sentinel?.startedAt && timeout > 0) {
+				const elapsed = (Date.now() - new Date(verdict.sentinel.startedAt).getTime()) / 1000;
 				if (elapsed > timeout) {
 					log(
 						t,
 						`Result: pending (timed out after ${Math.round(elapsed)}s, limit: ${timeout}s) → action: block`,
 					);
-					removeSentinel(config.sentinelDir, config.projectDir, name);
 					const runnerCmd = buildRunnerCommand(flags);
 					const reason =
 						`Exec "${name}" timed out after ${Math.round(elapsed)}s ` +
@@ -230,19 +189,18 @@ function emitCheckResult(
 		case "pass":
 			log(t, "Result: pass → action: allow");
 			resetBlockCount(config.sentinelDir, config.projectDir, name);
-			removeSentinel(config.sentinelDir, config.projectDir, name);
 			adapter.allow();
 			break;
 		case "fail": {
 			const reason = formatFailureReason(
 				name,
-				result.sentinel.command ?? exec.command,
-				result.sentinel.exitCode ?? 1,
-				result.sentinel.output ?? "(no output)",
+				verdict.sentinel.command ?? exec.command,
+				verdict.sentinel.exitCode ?? 1,
+				verdict.sentinel.output ?? "(no output)",
 			);
 			log(
 				t,
-				`Result: fail (exit ${result.sentinel.exitCode}) → action: block (agent must fix and re-run)`,
+				`Result: fail (exit ${verdict.sentinel.exitCode}) → action: block (agent must fix and re-run)`,
 			);
 			blockWithLimit(t, adapter, config, name, limit, reason);
 			break;

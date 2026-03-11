@@ -164,10 +164,9 @@ instructions, result schema, and the file path where the subagent should write i
   See [Blocking Behavior](#blocking-behavior-and-limits).
 - `--matcher <pattern>` — Same as `exec check --matcher` (see above).
 
-> **Caveat:** Standalone `exec check` and `task check` self-consume their sentinel on pass. This
-> works correctly when only **one** delegated check exists per hook event. When multiple standalone
-> checks share the same event, they race and ping-pong (one allows, the other sees "missing" and
-> re-blocks). Use `sync check` to group them.
+> **Note:** Sentinels persist on pass (they are not consumed). Staleness is detected via session ID
+> and content-hash mismatches. Use `sync check` to group multiple checks on the same event for
+> correct ordering and a single combined block message.
 
 ### `sync check exec:<name> [task:<name>] ...`
 
@@ -181,7 +180,8 @@ chunk hook sync check exec:tests task:review --on pre-commit
 Behavior:
 
 1. Maintains a **group sentinel** tracking which specs have already passed.
-2. Processes specs left-to-right. On pass: consumes the individual sentinel, advances.
+2. Processes specs left-to-right. On pass: updates the group sentinel, advances (individual
+   sentinel persists as cache).
 3. On missing/pending: blocks with a directive to run that command. Resumes here next time.
 4. On fail (default): removes the group sentinel, restarts the entire sequence on next invocation.
    With `--on-fail retry`: only the failed spec is removed from the group — previously-passed
@@ -506,9 +506,10 @@ counter from exhausting the limit while the agent is still working to produce a 
 600 for task), the check treats it as a timeout failure — removes the stale sentinel, increments the
 block counter, and blocks with an explicit timeout message.
 
-**Self-consuming checks:** Standalone `exec check` and `task check` consume their sentinel immediately
-on pass. When using `sync check`, individual sentinels are consumed as each spec passes, and a group
-sentinel coordinates the sequence.
+**Persistent sentinels:** Standalone `exec check` and `task check` do not consume their sentinel
+on pass — sentinels persist as a cache. Staleness is detected via session ID and content-hash
+checks. When using `sync check`, individual sentinels also persist, and a group sentinel
+coordinates the sequence.
 
 **Defaults:**
 
@@ -519,9 +520,8 @@ sentinel coordinates the sequence.
 
 - **Stop event recursion:** With `limit = 0`, a re-fired Stop auto-allows after the first block to
   prevent infinite loops (set `--limit` to change this behavior).
-- **Standalone check ping-pong:** Multiple standalone `exec check` / `task check` commands on the
-  same hook event will race — one self-consumes and allows while the other sees "missing" and
-  re-blocks, repeating indefinitely. Use `sync check` to group them into a single ordered sequence.
+- **Multiple standalone checks:** While sentinels persist on pass (no ping-pong), use `sync check`
+  to group multiple checks on the same event for correct ordering and combined block messages.
 
 ## Cursor Compatibility
 
@@ -700,7 +700,7 @@ packages/hook/
 │   │   ├── config.ts       # YAML config loader (triggers + execs + tasks)
 │   │   ├── hooks.ts        # Event I/O, decisions, trigger matching
 │   │   ├── placeholders.ts # {{Key.path}} placeholder expansion for tasks
-│   │   ├── sentinel.ts     # Result-file CRUD, coordinated consumption, block counter
+│   │   ├── sentinel.ts     # Result-file CRUD, persistent sentinels, block counter
 │   │   ├── shell-env.ts    # Shell environment utilities (env file, startup files, profiles)
 │   │   ├── state.ts        # Per-project state (event-namespaced persistence)
 │   │   ├── templates.ts    # Embedded template files for repo init

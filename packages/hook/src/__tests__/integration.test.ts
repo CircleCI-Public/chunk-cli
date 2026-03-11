@@ -1130,7 +1130,7 @@ describe("enable/disable gating", () => {
 // ===========================================================================
 
 describe("multi-command coordination", () => {
-	it("sentinels are consumed only when all commands pass", async () => {
+	it("sentinels persist after all commands pass", async () => {
 		// Run both commands (both pass)
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always"],
@@ -1151,22 +1151,12 @@ describe("multi-command coordination", () => {
 		const r2 = await runCli(["exec", "check", "lint", "--always"], projectEvent(), testEnv());
 		expect(r2.exitCode).toBe(0);
 
-		// After both pass, sentinels should be consumed.
-		// A subsequent check should find "missing" result.
+		// Sentinels persist as cache — a subsequent check still passes.
 		const r3 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
-		expect(r3.exitCode).toBe(2);
-		expect(r3.stderr).toContain("no results");
+		expect(r3.exitCode).toBe(0);
 	});
 
-	it("sentinel consumed when first check passes (serial execution)", async () => {
-		// In serial execution, the coordination mechanism consumes sentinels eagerly:
-		// when the first command registers as "pass", it's the only entry in the
-		// coordination file, so "all entries pass" is true → sentinel consumed.
-		//
-		// This is correct: in real hook usage, all hooks fire in parallel and register
-		// simultaneously, so consumption only happens when ALL are pass. But in serial,
-		// the first passer consumes immediately.
-
+	it("sentinel persists when first check passes (serial execution)", async () => {
 		// Run one pass, one fail
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always"],
@@ -1179,18 +1169,17 @@ describe("multi-command coordination", () => {
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
 
-		// Check tests first (pass) — coordination has {tests: "pass"}, all pass → consumed
+		// Check tests first (pass) — sentinel persists as cache
 		const r1 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
 		expect(r1.exitCode).toBe(0);
 
-		// Check fail-cmd (block) — coordination starts fresh: {"fail-cmd": "fail"}
+		// Check fail-cmd (block)
 		const r2 = await runCli(["exec", "check", "fail-cmd", "--always"], projectEvent(), testEnv());
 		expect(r2.exitCode).toBe(2);
 
-		// Tests sentinel was already consumed by r1 → now missing → block
+		// Tests sentinel persists — re-check still passes
 		const r3 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
-		expect(r3.exitCode).toBe(2);
-		expect(r3.stderr).toContain("no results");
+		expect(r3.exitCode).toBe(0);
 	});
 });
 
@@ -1226,7 +1215,7 @@ describe("concurrent lock safety", () => {
 		}
 	});
 
-	it("parallel standalone checks self-consume independently", async () => {
+	it("parallel checks: pass sentinel persists, fail sentinel persists", async () => {
 		// Run one pass, one fail
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always"],
@@ -1245,16 +1234,15 @@ describe("concurrent lock safety", () => {
 			runCli(["exec", "check", "fail-cmd", "--always"], projectEvent(), testEnv()),
 		]);
 
-		// tests should pass (and self-consume), fail-cmd should block
+		// tests should pass, fail-cmd should block
 		expect(r1.exitCode).toBe(0);
 		expect(r2.exitCode).toBe(2);
 
-		// tests sentinel was self-consumed on pass — re-check blocks
+		// tests sentinel persists — re-check still passes
 		const r3 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
-		expect(r3.exitCode).toBe(2);
-		expect(r3.stderr).toContain("no results");
+		expect(r3.exitCode).toBe(0);
 
-		// fail-cmd sentinel is NOT consumed (only pass self-consumes)
+		// fail-cmd sentinel also persists — still blocks
 		const r4 = await runCli(["exec", "check", "fail-cmd", "--always"], projectEvent(), testEnv());
 		expect(r4.exitCode).toBe(2);
 		expect(r4.stderr).toContain("FAIL");
@@ -1294,13 +1282,12 @@ describe("concurrent lock safety", () => {
 		expect(r2.exitCode).toBe(0);
 		expect(r3.exitCode).toBe(0);
 
-		// After all pass, sentinels should be consumed
+		// Sentinels persist — re-check still passes
 		const r4 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
-		expect(r4.exitCode).toBe(2);
-		expect(r4.stderr).toContain("no results");
+		expect(r4.exitCode).toBe(0);
 	});
 
-	it("standalone checks self-consume independently (exec pass + task fail)", async () => {
+	it("standalone checks: exec pass persists, task fail persists", async () => {
 		// Run exec pass, but task review fails
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always"],
@@ -1317,19 +1304,18 @@ describe("concurrent lock safety", () => {
 			sessionId: "test-session-001",
 		});
 
-		// Check both in parallel — each self-consumes independently
+		// Check both in parallel
 		const [r1, r2] = await Promise.all([
 			runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv()),
 			runCli(["task", "check", "review", "--always"], projectEvent(), testEnv()),
 		]);
 
-		expect(r1.exitCode).toBe(0); // tests pass (and self-consume)
-		expect(r2.exitCode).toBe(2); // review blocks (fail not consumed)
+		expect(r1.exitCode).toBe(0); // tests pass
+		expect(r2.exitCode).toBe(2); // review blocks (fail)
 
-		// tests sentinel was self-consumed — re-check blocks
+		// tests sentinel persists — re-check still passes
 		const r3 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
-		expect(r3.exitCode).toBe(2);
-		expect(r3.stderr).toContain("no results");
+		expect(r3.exitCode).toBe(0);
 	});
 });
 
@@ -1337,8 +1323,8 @@ describe("concurrent lock safety", () => {
 // 12b. SELF-CONSUMPTION TIMING
 // ===========================================================================
 
-describe("self-consumption timing", () => {
-	it("exec check self-consumes immediately on pass", async () => {
+describe("sentinel persistence on pass", () => {
+	it("exec check preserves sentinel on pass", async () => {
 		const { readSentinel } = await import("../lib/sentinel");
 
 		// Run a passing command
@@ -1351,20 +1337,19 @@ describe("self-consumption timing", () => {
 		// Sentinel exists before check
 		expect(readSentinel(sentinelDir, testProjectDir, "tests")).not.toBe(undefined);
 
-		// Check: passes and self-consumes
+		// Check: passes — sentinel persists as cache
 		const r1 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
 		expect(r1.exitCode).toBe(0);
 
-		// Sentinel is gone (self-consumed on pass)
-		expect(readSentinel(sentinelDir, testProjectDir, "tests")).toBe(undefined);
+		// Sentinel still exists (persists on pass)
+		expect(readSentinel(sentinelDir, testProjectDir, "tests")).not.toBe(undefined);
 
-		// Re-check blocks with "no results"
+		// Re-check still passes
 		const r2 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
-		expect(r2.exitCode).toBe(2);
-		expect(r2.stderr).toContain("no results");
+		expect(r2.exitCode).toBe(0);
 	});
 
-	it("task check self-consumes immediately on pass", async () => {
+	it("task check preserves sentinel on pass", async () => {
 		const { readSentinel, writeSentinel } = await import("../lib/sentinel");
 
 		// Write a passing task sentinel
@@ -1379,12 +1364,12 @@ describe("self-consumption timing", () => {
 		// Sentinel exists before check
 		expect(readSentinel(sentinelDir, testProjectDir, "review")).not.toBe(undefined);
 
-		// Check: passes and self-consumes
+		// Check: passes — sentinel persists
 		const r1 = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
 		expect(r1.exitCode).toBe(0);
 
-		// Sentinel is gone
-		expect(readSentinel(sentinelDir, testProjectDir, "review")).toBe(undefined);
+		// Sentinel still exists
+		expect(readSentinel(sentinelDir, testProjectDir, "review")).not.toBe(undefined);
 	});
 });
 
@@ -1565,7 +1550,7 @@ describe("mixed delegated (exec check) and direct (exec run) on same event", () 
 
 		const delayEnv = { ...testEnv(), CHUNK_HOOK_CONSUME_DELAY_MS: "100" };
 
-		// No sentinels exist for tests or review (simulating first Stop after commit consumed them).
+		// No sentinels exist yet for tests or review.
 		// Lint runs inline and should pass independently.
 		const lintResult = await runCli(
 			["exec", "run", "lint", "--always"],
@@ -1644,9 +1629,9 @@ describe("mixed delegated (exec check) and direct (exec run) on same event", () 
 	});
 
 	it("direct exec run does not participate in sentinel coordination/consumption", async () => {
-		// Scenario: After delegated checks pass and sentinels are consumed,
-		// running lint directly should not be affected (it writes + evaluates inline).
-		// Conversely, a direct run should not prevent sentinel consumption.
+		// Scenario: After delegated checks pass, running lint directly should not
+		// be affected (it writes + evaluates inline). A direct run is independent
+		// of the sync coordination path.
 
 		const { readCoordination } = await import("../lib/sentinel");
 
@@ -1679,40 +1664,35 @@ describe("mixed delegated (exec check) and direct (exec run) on same event", () 
 		expect(testsResult.exitCode).toBe(0);
 	});
 
-	it("full Stop cycle: sentinel consumption does not carry over direct run results", async () => {
-		// Scenario simulating the user's question:
-		//
-		//   1. Agent commits (PreToolUse fires tests-changed + lint checks → all pass → consumed)
-		//   2. Agent introduces a new bug after commit
-		//   3. Agent tries to Stop → Stop fires: exec check tests, exec run lint, task check review
-		//   4. Tests sentinel was consumed on commit → missing → agent must re-run tests
-		//   5. Lint runs directly → passes (or fails on its own)
-		//   6. Agent fixes bug, re-runs tests, they pass
-		//   7. Next Stop cycle: all three pass
+	it("full Stop cycle: sentinel persistence allows re-checks without re-running", async () => {
+		// Scenario:
+		//   1. Agent commits (PreToolUse fires tests + lint checks → all pass → sentinels persist)
+		//   2. Agent tries to Stop → Stop fires: exec check tests, exec run lint
+		//   3. Tests sentinel still exists from commit → passes immediately (no re-run needed)
+		//   4. If agent introduces a bug and re-runs tests (fail), sentinel updates to fail
+		//   5. Agent fixes bug, re-runs tests → sentinel updates to pass
+		//   6. Next check still passes (sentinel persists)
 
-		// --- Phase 1: Simulate that sentinels were already consumed (post-commit) ---
-		// (No sentinels exist — they were consumed after the commit passed.)
-
-		// --- Phase 2: Stop event fires ---
-
-		// Lint runs directly — passes on its own
-		const lint1 = await runCli(
-			["exec", "run", "lint", "--always"],
-			projectEvent({ hook_event_name: "Stop" }),
-			testEnv(),
+		// --- Phase 1: Simulate passing sentinels from commit ---
+		await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
-		expect(lint1.exitCode).toBe(0);
 
-		// Check tests — no sentinel → blocks with "run it first"
+		// Check tests on commit — passes, sentinel persists
+		const commit1 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
+		expect(commit1.exitCode).toBe(0);
+
+		// --- Phase 2: Stop event fires — sentinel still valid ---
 		const tests1 = await runCli(
 			["exec", "check", "tests", "--always"],
 			projectEvent({ hook_event_name: "Stop" }),
 			testEnv(),
 		);
-		expect(tests1.exitCode).toBe(2);
-		expect(tests1.stderr).toContain("no results");
+		expect(tests1.exitCode).toBe(0); // sentinel persists from commit
 
-		// --- Phase 3: Agent runs tests, they fail (bug) ---
+		// --- Phase 3: Agent runs tests again, they fail (bug) ---
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always", "--cmd", "sh -c 'echo BUG && exit 1'"],
 			"",
@@ -1741,22 +1721,13 @@ describe("mixed delegated (exec check) and direct (exec run) on same event", () 
 		);
 		expect(tests3.exitCode).toBe(0);
 
-		// --- Phase 5: Lint still passes on re-run (direct, no stale sentinel issues) ---
-		const lint2 = await runCli(
-			["exec", "run", "lint", "--always"],
-			projectEvent({ hook_event_name: "Stop" }),
-			testEnv(),
-		);
-		expect(lint2.exitCode).toBe(0);
-
-		// --- Phase 6: Tests sentinel was consumed → next Stop starts fresh again ---
+		// --- Phase 5: Sentinel persists — next check still passes ---
 		const tests4 = await runCli(
 			["exec", "check", "tests", "--always"],
 			projectEvent({ hook_event_name: "Stop" }),
 			testEnv(),
 		);
-		expect(tests4.exitCode).toBe(2);
-		expect(tests4.stderr).toContain("no results");
+		expect(tests4.exitCode).toBe(0);
 	});
 });
 
@@ -1814,9 +1785,9 @@ describe("auto-allow isolation", () => {
 		expect(r4.exitCode).toBe(0);
 	});
 
-	it("self-consumed sentinel is not affected by other command's auto-allow", async () => {
-		// lint passes and self-consumes, fail-cmd auto-allows.
-		// Verify lint's consumption is clean and independent.
+	it("persistent sentinel is not affected by other command's auto-allow", async () => {
+		// lint passes (sentinel persists), fail-cmd auto-allows.
+		// Verify lint's sentinel is independent.
 
 		await runCli(
 			["exec", "run", "lint", "--no-check", "--always"],
@@ -1829,7 +1800,7 @@ describe("auto-allow isolation", () => {
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
 
-		// lint check passes (and self-consumes)
+		// lint check passes (sentinel persists)
 		const l1 = await runCli(["exec", "check", "lint", "--always"], projectEvent(), testEnv());
 		expect(l1.exitCode).toBe(0);
 
@@ -1848,10 +1819,9 @@ describe("auto-allow isolation", () => {
 		);
 		expect(t2.exitCode).toBe(0); // auto-allow
 
-		// lint sentinel was already consumed — re-check blocks
+		// lint sentinel persists — re-check still passes
 		const l2 = await runCli(["exec", "check", "lint", "--always"], projectEvent(), testEnv());
-		expect(l2.exitCode).toBe(2);
-		expect(l2.stderr).toContain("no results");
+		expect(l2.exitCode).toBe(0);
 	});
 });
 
@@ -1934,7 +1904,7 @@ describe("sync check (grouped sequential checks)", () => {
 		expect(r1.exitCode).toBe(2);
 		expect(r1.stderr).toContain("fail-cmd");
 
-		// Re-run tests (sentinel was consumed by group). Need new sentinel.
+		// Re-run tests — group was reset on fail, so a fresh sentinel is needed.
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always"],
 			"",
@@ -1942,14 +1912,14 @@ describe("sync check (grouped sequential checks)", () => {
 		);
 
 		// Second sync check: tests must re-pass because group was reset.
-		// fail-cmd sentinel was removed on fail, so it's now missing.
+		// fail-cmd sentinel was removed on fail, so it's missing.
 		const r2 = await runCli(
 			["sync", "check", "exec:tests", "exec:fail-cmd", "--always"],
 			projectEvent(),
 			testEnv(),
 		);
 		expect(r2.exitCode).toBe(2);
-		// Should block on fail-cmd being missing now (sentinel was removed)
+		// Should block on fail-cmd being missing (sentinel was removed on fail)
 		expect(r2.stderr).toContain("no results");
 	});
 
@@ -1977,7 +1947,7 @@ describe("sync check (grouped sequential checks)", () => {
 		);
 
 		// Second call: tests is cached in group sentinel (skipped), lint now passes → allow.
-		// Note: tests sentinel was consumed on first call, but group sentinel remembers it.
+		// Note: tests sentinel persists on disk; the group sentinel also remembers it.
 		const r2 = await runCli(
 			["sync", "check", "exec:tests", "exec:lint", "--always"],
 			projectEvent(),
@@ -2241,11 +2211,11 @@ tasks:
 });
 
 // ===========================================================================
-// 22. SELF-CONSUMING CHECKS
+// 22. SENTINEL PERSISTENCE ON PASS
 // ===========================================================================
 
-describe("self-consuming exec/task check", () => {
-	it("exec check consumes sentinel after pass (not available for second check)", async () => {
+describe("sentinel persistence on pass (exec/task check)", () => {
+	it("exec check preserves sentinel after pass (available for second check)", async () => {
 		// Run tests to create a passing sentinel.
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always"],
@@ -2253,17 +2223,16 @@ describe("self-consuming exec/task check", () => {
 			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
 		);
 
-		// First check: passes and self-consumes.
+		// First check: passes — sentinel persists.
 		const r1 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
 		expect(r1.exitCode).toBe(0);
 
-		// Second check: sentinel was consumed → blocks with "no results".
+		// Second check: sentinel still valid → passes again.
 		const r2 = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
-		expect(r2.exitCode).toBe(2);
-		expect(r2.stderr).toContain("no results");
+		expect(r2.exitCode).toBe(0);
 	});
 
-	it("task check consumes sentinel after pass (not available for second check)", async () => {
+	it("task check preserves sentinel after pass (available for second check)", async () => {
 		const { writeSentinel: ws } = await import("../lib/sentinel");
 
 		// Write a passing task sentinel.
@@ -2275,13 +2244,13 @@ describe("self-consuming exec/task check", () => {
 			sessionId: "test-session-001",
 		});
 
-		// First check: passes and self-consumes.
+		// First check: passes — sentinel persists.
 		const r1 = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
 		expect(r1.exitCode).toBe(0);
 
-		// Second check: sentinel was consumed → blocks.
+		// Second check: sentinel still valid → passes again.
 		const r2 = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
-		expect(r2.exitCode).toBe(2);
+		expect(r2.exitCode).toBe(0);
 	});
 
 	it("exec check does NOT consume sentinel on fail", async () => {
@@ -2413,7 +2382,7 @@ triggers:
 		);
 		expect(r1.exitCode).toBe(2);
 
-		// Re-run tests (sentinel was consumed, group was reset).
+		// Re-run tests — group was fully reset on fail.
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always"],
 			"",
@@ -2421,8 +2390,8 @@ triggers:
 		);
 
 		// Second sync check: since group was reset, tests must re-pass even though
-		// it already passed before. fail-cmd sentinel was removed, so it should block
-		// on fail-cmd being missing.
+		// it already passed before. fail-cmd sentinel was removed on fail, so it
+		// should block on fail-cmd being missing.
 		const r2 = await runCli(
 			[
 				"sync",
@@ -2463,7 +2432,7 @@ triggers:
 		);
 		expect(r1.exitCode).toBe(2);
 
-		// Re-run only tests (fail-cmd sentinel removed on fail).
+		// Re-run tests (fail-cmd sentinel was removed on fail, tests sentinel persists).
 		await runCli(
 			["exec", "run", "tests", "--no-check", "--always"],
 			"",
@@ -3113,7 +3082,48 @@ triggers:
 });
 
 // ===========================================================================
-// 28. TASK SESSION STALENESS (attack vector: cross-session sentinel reuse)
+// 28a. EXEC SESSION STALENESS (attack vector: cross-session sentinel reuse)
+// ===========================================================================
+
+describe("exec session staleness", () => {
+	it("blocks when exec sentinel belongs to a different session", async () => {
+		const { writeSentinel: ws } = await import("../lib/sentinel");
+
+		// Write a passing exec sentinel from session-OLD (e.g. left over from a previous session)
+		ws(sentinelDir, testProjectDir, "tests", {
+			status: "pass",
+			startedAt: new Date().toISOString(),
+			finishedAt: new Date().toISOString(),
+			exitCode: 0,
+			output: "All tests passed",
+			project: testProjectDir,
+			sessionId: "session-OLD",
+			contentHash: "irrelevant-because-session-blocks-first",
+		});
+
+		// Current scope is activated with session "test-session-001" (from beforeEach).
+		// The sentinel's sessionId ("session-OLD") doesn't match → treated as stale → blocks.
+		const result = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("no results");
+	});
+
+	it("allows when exec sentinel belongs to the current session with valid content hash", async () => {
+		// Run exec in the current session — creates sentinel with matching sessionId and contentHash.
+		await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Check — sessionId matches and contentHash matches → allows.
+		const result = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
+		expect(result.exitCode).toBe(0);
+	});
+});
+
+// ===========================================================================
+// 28b. TASK SESSION STALENESS (attack vector: cross-session sentinel reuse)
 // ===========================================================================
 
 describe("task session staleness", () => {
