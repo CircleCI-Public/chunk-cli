@@ -76,7 +76,7 @@ async function runAuthLogin(): Promise<CommandResult> {
 	return { exitCode: 0 };
 }
 
-export async function runAuthStatus(): Promise<CommandResult> {
+async function runAuthStatus(): Promise<CommandResult> {
 	const userConfig = loadUserConfig();
 	const envApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -133,7 +133,7 @@ export async function runAuthStatus(): Promise<CommandResult> {
 	}
 }
 
-export async function runAuthLogout(): Promise<CommandResult> {
+async function runAuthLogout(): Promise<CommandResult> {
 	// Check if there's an API key stored in config
 	const userConfig = loadUserConfig();
 

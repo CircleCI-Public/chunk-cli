@@ -5,7 +5,7 @@ import type { CommandResult } from "../types";
 import { dim } from "../ui/colors";
 import { detectGitHubOrgAndRepo } from "../utils/git-remote";
 
-export interface ParsedBuildPromptFlags {
+interface ParsedBuildPromptFlags {
 	org?: string;
 	repos: string[];
 	top: number;
@@ -53,8 +53,6 @@ Environment Variables:
   GITHUB_TOKEN             Required: GitHub personal access token with repo scope
   ANTHROPIC_API_KEY        Required: Anthropic API key
 
-  -h, --help               Show this help message
-
 Examples:
   chunk build-prompt                                     # Auto-detect org and repo from git remote
   chunk build-prompt --org myorg --repos myrepo          # Explicit org and repo(s)
@@ -72,7 +70,7 @@ Examples:
 		.option("--analyze-model <model>", "Claude model for the analysis step", DEFAULT_ANALYZE_MODEL)
 		.option("--prompt-model <model>", "Claude model for prompt generation", DEFAULT_PROMPT_MODEL)
 		.option("--include-attribution", "Include reviewer attribution in the generated prompt", false)
-		.action(async (options: ParsedBuildPromptFlags) => {
+		.action(async (options) => {
 			process.exit((await runBuildPrompt(options)).exitCode);
 		});
 }
