@@ -48,21 +48,22 @@ export interface Sandbox {
 	name: string;
 	organization_id: string;
 	image?: string;
-	[key: string]: unknown;
 }
 
 export interface SandboxListResponse {
 	sandboxes: Sandbox[];
-	[key: string]: unknown;
 }
 
 export interface SandboxAccessTokenResponse {
 	access_token: string;
-	[key: string]: unknown;
 }
 
 export interface ExecCommandResponse {
-	[key: string]: unknown;
+	command_id: string;
+	pid: number;
+	stdout: string;
+	stderr: string;
+	exit_code: number;
 }
 
 export class CircleCIError extends Error {
