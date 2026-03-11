@@ -105,20 +105,19 @@ interface CircleCIFetchOptions {
 }
 
 async function circleciFetch<T>(url: string, options: CircleCIFetchOptions): Promise<T> {
-	const authHeader =
-		options.auth.type === "bearer"
+	const headers: Record<string, string> = {
+		Accept: "application/json",
+		...(options.body && { "Content-Type": "application/json" }),
+		...(options.auth.type === "bearer"
 			? { Authorization: `Bearer ${options.auth.token}` }
-			: { "Circle-Token": options.auth.token };
+			: { "Circle-Token": options.auth.token }),
+	};
 
 	let response: Response;
 	try {
 		response = await fetch(url, {
 			...(options.method && { method: options.method }),
-			headers: {
-				Accept: "application/json",
-				...(options.body && { "Content-Type": "application/json" }),
-				...authHeader,
-			},
+			headers,
 			...(options.body && { body: options.body }),
 		});
 	} catch (error) {
