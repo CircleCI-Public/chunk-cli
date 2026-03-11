@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +17,7 @@ interface RequiredCredential {
 
 function isGitRepo(cwd: string): boolean {
 	try {
-		execSync("git rev-parse --git-dir", { cwd, stdio: "ignore" });
+		execFileSync("git", ["rev-parse", "--git-dir"], { cwd, stdio: "ignore" });
 		return true;
 	} catch {
 		return false;
@@ -511,9 +511,10 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 
 	const imageTag = "chunk-prep";
 
-	const buildArgs = Object.entries(collectedCredentials)
-		.map(([k, v]) => `--build-arg ${k}=${JSON.stringify(v)}`)
-		.join(" ");
+	const buildArgs = Object.entries(collectedCredentials).flatMap(([k, v]) => [
+		"--build-arg",
+		`${k}=${v}`,
+	]);
 
 	const MAX_RETRIES = 3;
 	// Build context: only files tracked by git (respects .gitignore, excludes .git dir)
@@ -522,7 +523,8 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 
 	try {
 		try {
-			execSync(`git archive HEAD | tar -x -C ${buildContext}`, { cwd });
+			const archive = execFileSync("git", ["archive", "HEAD"], { cwd });
+			execFileSync("tar", ["-x", "-C", buildContext], { input: archive });
 		} catch {
 			printError("Failed to prepare build context.");
 			return { exitCode: 1 };
@@ -538,8 +540,9 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 			console.log(`\nbuilding ${dockerfileName}...`);
 			let buildErrorOutput: string | null = null;
 			try {
-				const out = execSync(
-					`sudo docker build -f ${dockerfileName} -t ${imageTag}${buildArgs ? ` ${buildArgs}` : ""} .`,
+				const out = execFileSync(
+					"sudo",
+					["docker", "build", "-f", dockerfileName, "-t", imageTag, ...buildArgs, "."],
 					{ cwd: buildContext, stdio: "pipe" },
 				);
 				process.stdout.write(out);
@@ -573,8 +576,9 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 			console.log(`\nrunning test command in container...`);
 			let runErrorOutput: string | null = null;
 			try {
-				const out = execSync(
-					`sudo docker run --rm ${imageTag} sh -c ${JSON.stringify(testCommand)}`,
+				const out = execFileSync(
+					"sudo",
+					["docker", "run", "--rm", imageTag, "sh", "-c", testCommand],
 					{ cwd, stdio: "pipe" },
 				);
 				process.stdout.write(out);
