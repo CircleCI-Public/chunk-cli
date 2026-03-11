@@ -71,8 +71,25 @@ export function registerBuildPromptCommand(program: Command): void {
 
 Business logic and orchestration. Each public function does one conceptual step.
 
-- Orchestrator functions (e.g., `extractCommentsAndBuildPrompt`, `runTaskConfigWizard`) call step functions and handle display (spinners, progress, interactive prompts)
-- Step functions return data only — no spinners, no direct terminal output, no interactive prompts
+### Orchestrators vs Step Functions
+
+`core/` contains two kinds of functions:
+
+- **Orchestrator functions** (e.g., `extractCommentsAndBuildPrompt`, `runTaskConfigWizard`) coordinate workflow steps and handle display (spinners, progress, interactive prompts). They live in the main module file (e.g., `core/build-prompt.ts`).
+- **Step functions** are pure or near-pure functions that return data only — no spinners, no direct terminal output, no interactive prompts. They live in a `.steps.ts` sibling file (e.g., `core/build-prompt.steps.ts`).
+
+This separation gives testability (step functions are easy to unit test without mocking UI) while keeping orchestration centralized in `core/` (not scattered across commands/).
+
+**File convention:**
+```
+core/build-prompt.ts          # orchestrator: UI + workflow coordination
+core/build-prompt.steps.ts    # step functions: pure logic, return data only
+```
+
+**Example step function:** `resolveOrgAndRepos()` in `core/build-prompt.steps.ts` — resolves org/repo from CLI flags with git remote auto-detection. Pure decision logic, no terminal output.
+
+### General Rules
+
 - Orchestrators may use `ui/` for formatting, spinners, and interactive prompts; step functions must not
 - Interactive wizards (like `runTaskConfigWizard`) are orchestrators, not step functions — they coordinate user input and business logic, so they belong in `core/` and are allowed to use `ui/`
 - This is an intentional CLI-specific tradeoff: `core/` owns orchestration and user-facing interaction, while leaf modules stay display-free
@@ -232,7 +249,8 @@ src/
 ├── config/
 │   └── index.ts                    # ALL defaults: models, paths, env vars
 ├── core/
-│   ├── build-prompt.ts             # Three-step pipeline orchestrator (~300 lines, clear as-is)
+│   ├── build-prompt.ts             # Pipeline orchestrator: UI + workflow coordination
+│   ├── build-prompt.steps.ts       # Pure step functions: resolveOrgAndRepos(), deriveOutputPaths()
 │   ├── task-config.ts              # Extracted task setup wizard
 │   ├── task-run.ts                 # Extracted task trigger logic
 │   ├── agent.ts
