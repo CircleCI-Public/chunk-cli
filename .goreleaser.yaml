@@ -26,6 +26,8 @@ builds:
       - --compile
       - --define
       - VERSION="{{ .Version }}"
+      - --no-compile-autoload-dotenv
+      - --no-compile-autoload-bunfig
 
     # Environment variables for the build
     env:
