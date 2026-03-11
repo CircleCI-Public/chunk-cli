@@ -1,6 +1,4 @@
-# Proposed Architecture
-
-> **Note**: This document describes the *target* module structure, not necessarily the current state. It serves as a reference for all restructuring work.
+# Architecture
 
 ## Layering Rules
 
@@ -31,6 +29,35 @@ Design guidance beyond the enforced rule:
 - if a helper exists mainly to print, format, or color terminal output, prefer `ui/` over `utils/`
 
 > **Example**: `review_prompt_mining/top-reviewers/output.ts` imports from `ui/colors` and `ui/format`. This is a conforming lateral import under the `ui/` exception above.
+
+## Data Flow: `chunk build-prompt`
+
+1. **Entry Point** (`src/index.ts`): Command routing and top-level error handling
+2. **Command Layer** (`src/commands/build-prompt.ts`): Parse args, validate inputs (org, repos, dates, models)
+3. **Reviewer Discovery** (`src/review_prompt_mining/top-reviewers/`): Query GitHub GraphQL API for top reviewers by activity in the org
+4. **Comment Fetching** (`src/review_prompt_mining/top-reviewers/review-fetcher.ts`): Fetch detailed review comments for the top reviewers
+5. **Analysis** (`src/review_prompt_mining/analyze/`): Send review comments to Claude to identify recurring patterns and team standards
+6. **Context Generation** (`src/review_prompt_mining/generate-prompt/`): Use Claude to transform the analysis into a markdown prompt file
+7. **Output Files**: Writes `<output>.md` (final prompt), `<output>-analysis.md` (pattern analysis), `<output>-details.json` (raw comments)
+
+### Three-Step Pipeline
+
+1. **Discover** — find the top reviewers in the org by PR review activity (GitHub GraphQL API)
+2. **Analyze** — send their comments to Claude to extract recurring patterns and standards
+3. **Generate** — use Claude to transform the analysis into a well-structured markdown prompt
+
+### Context File Usage
+
+- The generated prompt is a markdown file that codifies team review standards
+- Place it in `.chunk/context/` so AI coding agents (Claude Code, etc.) load it automatically as context
+- The file instructs agents to apply the same patterns human reviewers consistently enforce
+- Only top-level files, lowercase `.md` extension (no subdirectories)
+
+### Configuration Resolution
+
+Model and other settings resolve in this priority order:
+1. CLI flags (`--analyze-model`, `--prompt-model`, etc.)
+2. Built-in defaults
 
 ## index.ts Rules
 
@@ -273,3 +300,32 @@ src/
     ├── ui/
     └── utils/
 ```
+
+## Implementation Details
+
+### Pipeline Output Files
+
+Running `chunk build-prompt --org <org>` produces three files alongside the final prompt:
+- `<output>.md` — the generated context prompt (main output)
+- `<output>-analysis.md` — Claude's analysis of reviewer patterns
+- `<output>-details.json` — raw review comment data for the top reviewers
+
+### GitHub GraphQL API
+
+- Requires `GITHUB_TOKEN` with `repo` scope
+- Rate limit is checked before starting; the tool backs off if limits are hit
+- `--since` limits the date range; `--repos` limits which repos are scanned
+
+## Binary Distribution
+
+The tool is distributed as pre-compiled binaries via GitHub Releases:
+- `chunk-darwin-arm64`, `chunk-darwin-x64`, `chunk-linux-arm64`, `chunk-linux-x64`
+- Installation via `install.sh` tries binary download first (requires `gh` CLI), falls back to source build
+- `~/.local/share/chunk/repo` is always cloned/updated for team prompts and self-update
+- Self-update via `chunk upgrade` re-runs `install.sh`
+
+## Development Tips
+
+- When adding new pattern files, update `PATTERN_FILES` array in `src/core/filesystem-prompts.ts`
+- The pipeline is orchestrated in `src/core/build-prompt.ts`; each of the three steps is a separate module under `src/review_prompt_mining/`
+- Cost calculation requires model pricing data in `src/config/index.ts`
