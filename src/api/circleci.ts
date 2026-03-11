@@ -43,6 +43,29 @@ export interface CircleCIRunResponse {
 	[key: string]: unknown;
 }
 
+export interface Sandbox {
+	id: string;
+	name: string;
+	organization_id: string;
+	image?: string;
+}
+
+export interface SandboxListResponse {
+	sandboxes: Sandbox[];
+}
+
+export interface SandboxAccessTokenResponse {
+	access_token: string;
+}
+
+export interface ExecCommandResponse {
+	command_id: string;
+	pid: number;
+	stdout: string;
+	stderr: string;
+	exit_code: number;
+}
+
 export class CircleCIError extends Error {
 	constructor(
 		message: string,
@@ -73,26 +96,29 @@ function handleErrorResponse(response: Response, responseBody: string): void {
 	}
 }
 
+type CircleCIAuth = { type: "circle-token"; token: string } | { type: "bearer"; token: string };
+
 interface CircleCIFetchOptions {
 	method?: string;
 	body?: string;
+	auth: CircleCIAuth;
 }
 
-async function circleciFetch<T>(
-	token: string,
-	url: string,
-	options?: CircleCIFetchOptions,
-): Promise<T> {
+async function circleciFetch<T>(url: string, options: CircleCIFetchOptions): Promise<T> {
+	const headers: Record<string, string> = {
+		Accept: "application/json",
+		...(options.body && { "Content-Type": "application/json" }),
+		...(options.auth.type === "bearer"
+			? { Authorization: `Bearer ${options.auth.token}` }
+			: { "Circle-Token": options.auth.token }),
+	};
+
 	let response: Response;
 	try {
 		response = await fetch(url, {
-			...(options?.method && { method: options.method }),
-			headers: {
-				Accept: "application/json",
-				...(options?.body && { "Content-Type": "application/json" }),
-				"Circle-Token": token,
-			},
-			...(options?.body && { body: options.body }),
+			...(options.method && { method: options.method }),
+			headers,
+			...(options.body && { body: options.body }),
 		});
 	} catch (error) {
 		throw new CircleCIError(
@@ -115,6 +141,35 @@ async function circleciFetch<T>(
 }
 
 /**
+ * List sandboxes for an organization
+ */
+export async function listSandboxesForOrg(
+	orgId: string,
+	token: string,
+): Promise<SandboxListResponse> {
+	return circleciFetch<SandboxListResponse>(
+		`https://circleci.com/api/v2/sandboxes?org_id=${orgId}`,
+		{ auth: { type: "circle-token", token } },
+	);
+}
+
+/**
+ * Create a new sandbox
+ */
+export async function createSandbox(
+	organizationId: string,
+	name: string,
+	token: string,
+	image?: string,
+): Promise<Sandbox> {
+	return circleciFetch<Sandbox>("https://circleci.com/api/v2/sandboxes", {
+		method: "POST",
+		body: JSON.stringify({ organization_id: organizationId, name, ...(image && { image }) }),
+		auth: { type: "circle-token", token },
+	});
+}
+
+/**
  * Trigger a CircleCI chunk run via the API
  */
 export async function triggerChunkRun(
@@ -124,27 +179,79 @@ export async function triggerChunkRun(
 	request: CircleCIRunRequest,
 ): Promise<CircleCIRunResponse> {
 	const url = `https://circleci.com/api/v2/agents/org/${orgId}/project/${projectId}/runs`;
-	return circleciFetch<CircleCIRunResponse>(token, url, {
+	return circleciFetch<CircleCIRunResponse>(url, {
 		method: "POST",
 		body: JSON.stringify(request),
+		auth: { type: "circle-token", token },
 	});
+}
+
+/**
+ * Create an access token for a sandbox
+ */
+export async function createSandboxAccessToken(
+	sandboxId: string,
+	organizationId: string,
+	token: string,
+): Promise<SandboxAccessTokenResponse> {
+	return circleciFetch<SandboxAccessTokenResponse>(
+		`https://circleci.com/api/v2/sandboxes/${sandboxId}/access_token`,
+		{
+			method: "POST",
+			body: JSON.stringify({ organization_id: organizationId }),
+			auth: { type: "circle-token", token },
+		},
+	);
 }
 
 /**
  * Fetch the list of projects the authenticated user follows
  */
 export async function fetchFollowedProjects(token: string): Promise<CircleCIProject[]> {
-	return circleciFetch<CircleCIProject[]>(token, "https://circleci.com/api/v1.1/projects");
+	return circleciFetch<CircleCIProject[]>("https://circleci.com/api/v1.1/projects", {
+		auth: { type: "circle-token", token },
+	});
 }
 
 /**
  * Fetch the authenticated user's organization collaborations
  */
 export async function fetchCollaborations(token: string): Promise<CircleCICollaboration[]> {
-	return circleciFetch<CircleCICollaboration[]>(
-		token,
-		"https://circleci.com/api/v2/me/collaborations",
+	return circleciFetch<CircleCICollaboration[]>("https://circleci.com/api/v2/me/collaborations", {
+		auth: { type: "circle-token", token },
+	});
+}
+
+/**
+ * Add an SSH public key to a sandbox
+ */
+export async function addSandboxSshKey(
+	publicKey: string,
+	accessToken: string,
+): Promise<Record<string, unknown>> {
+	return circleciFetch<Record<string, unknown>>(
+		"https://circleci.com/api/v2/sandboxes/ssh/add-key",
+		{
+			method: "POST",
+			body: JSON.stringify({ public_key: publicKey }),
+			auth: { type: "bearer", token: accessToken },
+		},
 	);
+}
+
+/**
+ * Execute a command in a sandbox
+ */
+export async function execCommand(
+	command: string,
+	args: string[],
+	accessToken: string,
+): Promise<ExecCommandResponse> {
+	return circleciFetch<ExecCommandResponse>("https://circleci.com/api/v2/sandboxes/exec", {
+		method: "POST",
+		body: JSON.stringify({ command, args }),
+		auth: { type: "bearer", token: accessToken },
+	});
 }
 
 /**
@@ -154,8 +261,7 @@ export async function fetchProjectBySlug(
 	token: string,
 	slug: string,
 ): Promise<CircleCIProjectDetails> {
-	return circleciFetch<CircleCIProjectDetails>(
-		token,
-		`https://circleci.com/api/v2/project/${slug}`,
-	);
+	return circleciFetch<CircleCIProjectDetails>(`https://circleci.com/api/v2/project/${slug}`, {
+		auth: { type: "circle-token", token },
+	});
 }
