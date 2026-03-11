@@ -10,6 +10,7 @@ import {
 	execCommandInSandbox,
 	listSandboxes,
 } from "./commands/sandbox";
+import { runSandboxPrepare } from "./commands/sandbox/prepare";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
@@ -222,6 +223,14 @@ Environment Variables:
 					)
 				).exitCode,
 			),
+		);
+
+	sandboxes
+		.command("prepare")
+		.description("[EXPERIMENTAL] Prepare the hook environment before a session begins")
+		.option("--docker-sudo", "Run docker commands with sudo", false)
+		.action(async (opts: { dockerSudo: boolean }) =>
+			process.exit((await runSandboxPrepare({ dockerSudo: opts.dockerSudo })).exitCode),
 		);
 
 	program.action(() => {
