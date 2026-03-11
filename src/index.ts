@@ -170,17 +170,6 @@ Environment Variables:
 		.description("Update to the latest version")
 		.action(async () => process.exit((await runUpgrade()).exitCode));
 
-	const sandbox = program
-		.command("sandbox")
-		.description("[EXPERIMENTAL] Manage sandbox environments for testing");
-	sandbox
-		.command("prepare")
-		.description("Prepare the hook environment before a session begins")
-		.option("--docker-sudo", "Run docker commands with sudo", false)
-		.action(async (opts: { dockerSudo: boolean }) =>
-			process.exit((await runSandboxPrepare({ dockerSudo: opts.dockerSudo })).exitCode),
-		);
-
 	// Hook commands — exec, task, sync, state, scope for AI agent hooks
 	const hook = program
 		.command("hook")
@@ -234,6 +223,14 @@ Environment Variables:
 					)
 				).exitCode,
 			),
+		);
+
+	sandboxes
+		.command("prepare")
+		.description("[EXPERIMENTAL] Prepare the hook environment before a session begins")
+		.option("--docker-sudo", "Run docker commands with sudo", false)
+		.action(async (opts: { dockerSudo: boolean }) =>
+			process.exit((await runSandboxPrepare({ dockerSudo: opts.dockerSudo })).exitCode),
 		);
 
 	program.action(() => {
