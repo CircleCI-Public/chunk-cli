@@ -1,6 +1,4 @@
-# Proposed CLI Command Tree
-
-> **Note**: This document describes the *target* CLI structure, not necessarily the current state. It serves as a reference for all restructuring work.
+# CLI Command Tree
 
 ## Command Tree
 
@@ -47,7 +45,7 @@ chunk
 
 ## Package Boundaries
 
-The `hook` command group is implemented entirely in `packages/hook/` (`@chunk/hook`), not in `src/commands/`. The main CLI registers it via a single `registerHookCommands()` call. See `ARCHITECTURE.md` for the package boundary rationale.
+The `hook` command group is implemented entirely in `packages/hook/` (`@chunk/hook`), not in `src/commands/`. The main CLI registers it via a single `registerHookCommands()` call. See `ARCHITECTURE.md` (in this directory) for the package boundary rationale.
 
 > **Naming collision**: `chunk task` (CircleCI pipeline runs, `src/commands/task.ts`) and `chunk hook task` (delegated subagent work, `packages/hook/src/commands/task.ts`) are unrelated commands.
 
