@@ -1,11 +1,5 @@
 import type { CircleCIProject } from "../api/circleci";
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export function isValidUuid(value: string): boolean {
-	return UUID_REGEX.test(value);
-}
-
 export function mapVcsTypeToOrgType(vcsType: string | undefined): "github" | "circleci" {
 	const lower = vcsType?.toLowerCase();
 	if (lower === "github" || lower === "gh") return "github";

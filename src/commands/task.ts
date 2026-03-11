@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import type { Command } from "@commander-js/extra-typings";
+import { z } from "zod";
 import {
 	type CircleCICollaboration,
 	CircleCIError,
@@ -25,12 +26,7 @@ import type { CommandResult } from "../types";
 import { bold, cyan, dim, yellow } from "../ui/colors";
 import { formatStep, label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput, promptSelect } from "../ui/prompt";
-import {
-	buildProjectSlug,
-	isValidUuid,
-	mapVcsTypeToOrgType,
-	sortProjectsByName,
-} from "../utils/circleci";
+import { buildProjectSlug, mapVcsTypeToOrgType, sortProjectsByName } from "../utils/circleci";
 import { handleError, printError } from "../utils/errors";
 
 // --- Command Registration ---
@@ -95,7 +91,7 @@ async function promptUuid(message: string, required: boolean): Promise<string | 
 			console.log(yellow("  This field is required."));
 			continue;
 		}
-		if (!isValidUuid(value)) {
+		if (!z.uuid().safeParse(value).success) {
 			console.log(yellow("  Must be a valid UUID (e.g. 550e8400-e29b-41d4-a716-446655440000)."));
 			continue;
 		}
