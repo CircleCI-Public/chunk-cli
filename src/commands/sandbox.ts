@@ -1,12 +1,12 @@
 import {
-	CircleCIError,
-	type Sandbox,
 	addSandboxSshKey,
+	CircleCIError,
 	createSandbox,
 	createSandboxAccessToken,
 	type ExecCommandResponse,
 	execCommand,
 	listSandboxesForOrg,
+	type Sandbox,
 } from "../api/circleci";
 import type { CommandResult } from "../types/index";
 import { bold } from "../ui/colors";
@@ -69,7 +69,11 @@ export async function createNewSandbox(
 		sandbox = await createSandbox(organizationId, name, token, image);
 	} catch (error) {
 		if (error instanceof CircleCIError) {
-			printError("Failed to create sandbox", error.message, "Check your CIRCLECI_TOKEN and org ID.");
+			printError(
+				"Failed to create sandbox",
+				error.message,
+				"Check your CIRCLECI_TOKEN and org ID.",
+			);
 			return { exitCode: 2 };
 		}
 		throw error;

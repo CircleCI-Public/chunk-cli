@@ -9,7 +9,12 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
-import { addSshKeyToSandbox, createNewSandbox, execCommandInSandbox, listSandboxes } from "./commands/sandbox";
+import {
+	addSshKeyToSandbox,
+	createNewSandbox,
+	execCommandInSandbox,
+	listSandboxes,
+} from "./commands/sandbox";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
