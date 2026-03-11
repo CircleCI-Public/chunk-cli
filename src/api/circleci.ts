@@ -148,7 +148,6 @@ async function circleciRequest<T>(url: string, options: RequestInit): Promise<T>
 
 	const responseBody = await response.text();
 
-	console.log(responseBody);
 	if (!response.ok) {
 		throw new CircleCIError(
 			`CircleCI API request failed with status ${response.status}`,
