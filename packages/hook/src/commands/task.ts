@@ -36,12 +36,12 @@ import {
 import type { ResolvedConfig, TaskConfig } from "../lib/config";
 import { getTask } from "../lib/config";
 import type { Subcommand } from "../lib/env";
-import { hasStagedChanges, hasUncommittedChanges } from "../lib/git";
 import { log } from "../lib/log";
 import type { SentinelData } from "../lib/sentinel";
 import { removeSentinel, resetBlockCount, sentinelPath } from "../lib/sentinel";
 import { loadInstructions, readTaskResult, resolveTaskSchemaContent } from "../lib/task-result";
 import { readMarker } from "./scope";
+import { precomputeTaskNoChanges } from "./sync";
 
 /** Build a name-qualified tag for log messages. */
 function ntag(name: string): string {
@@ -129,11 +129,9 @@ async function runCheck(
 
 	// Skip-if-no-changes (default behavior unless --always)
 	if (!task.always) {
-		const hasChanges = flags.staged
-			? await hasStagedChanges(config.projectDir)
-			: await hasUncommittedChanges(config.projectDir);
-		if (!hasChanges) {
-			log(t, "No changed files, allowing");
+		const noChanges = await precomputeTaskNoChanges(config);
+		if (noChanges) {
+			log(t, "No code changes since baseline, allowing");
 			adapter.allow();
 		}
 	}

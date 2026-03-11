@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "chunk hook state save --project __PROJECT__",
+            "command": "chunk hook state append --project __PROJECT__",
             "timeout": 5
           }
         ]
