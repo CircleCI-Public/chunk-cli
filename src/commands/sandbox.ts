@@ -1,5 +1,7 @@
 import {
 	CircleCIError,
+	type Sandbox,
+	createSandbox,
 	createSandboxAccessToken,
 	type ExecCommandResponse,
 	execCommand,
@@ -42,6 +44,37 @@ export async function listSandboxes(orgId: string): Promise<CommandResult> {
 		console.log(`  ${sandbox.name}  ${sandbox.id}`);
 	}
 	console.log("");
+
+	return { exitCode: 0 };
+}
+
+export async function createNewSandbox(
+	organizationId: string,
+	name: string,
+	image?: string,
+): Promise<CommandResult> {
+	const token = process.env.CIRCLECI_TOKEN;
+	if (!token) {
+		printError(
+			"CircleCI token not found",
+			"CIRCLECI_TOKEN environment variable is not set.",
+			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
+		);
+		return { exitCode: 2 };
+	}
+
+	let sandbox: Sandbox;
+	try {
+		sandbox = await createSandbox(organizationId, name, token, image);
+	} catch (error) {
+		if (error instanceof CircleCIError) {
+			printError("Failed to create sandbox", error.message, "Check your CIRCLECI_TOKEN and org ID.");
+			return { exitCode: 2 };
+		}
+		throw error;
+	}
+
+	console.log(JSON.stringify(sandbox, null, 2));
 
 	return { exitCode: 0 };
 }

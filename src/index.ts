@@ -9,7 +9,7 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
-import { execCommandInSandbox, listSandboxes } from "./commands/sandbox";
+import { createNewSandbox, execCommandInSandbox, listSandboxes } from "./commands/sandbox";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
@@ -180,6 +180,16 @@ Environment Variables:
 		.description("List all sandboxes in an organization")
 		.requiredOption("--org-id <orgId>", "Org ID to list sandboxes for")
 		.action(async (options) => process.exit((await listSandboxes(options.orgId)).exitCode));
+
+	sandboxes
+		.command("create")
+		.description("Create a new sandbox")
+		.requiredOption("--org-id <orgId>", "Organization ID")
+		.requiredOption("--name <name>", "Sandbox name")
+		.option("--image <image>", "Sandbox image")
+		.action(async (options) =>
+			process.exit((await createNewSandbox(options.orgId, options.name, options.image)).exitCode),
+		);
 
 	sandboxes
 		.command("exec")
