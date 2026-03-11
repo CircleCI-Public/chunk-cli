@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { type RunTaskOptions, runTask } from "../../core/task-run";
+import { type RunTaskOptions, runTask } from "../../commands/task";
 import { saveRunConfig } from "../../storage/run-config";
 
 const mockFetch = mock();
