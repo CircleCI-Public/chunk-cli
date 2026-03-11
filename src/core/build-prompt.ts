@@ -42,6 +42,7 @@ import type { ReviewCommentDetail, UserActivity } from "../review_prompt_mining/
 import { bold, dim, yellow } from "../ui/colors";
 import { formatStep, formatSuccess, label, printSuccess } from "../ui/format";
 import { TerminalSpinner } from "../ui/spinner";
+import { deriveOutputPaths } from "./build-prompt.steps";
 
 export interface BuildPromptOptions {
 	org: string;
@@ -69,9 +70,7 @@ export async function extractCommentsAndBuildPrompt(options: BuildPromptOptions)
 	} = options;
 
 	// Derive intermediate file paths alongside the final output
-	const outputBase = outputPath.replace(/\.md$/, "");
-	const detailsPath = `${outputBase}-details.json`;
-	const analysisPath = `${outputBase}-analysis.md`;
+	const { detailsPath, analysisPath } = deriveOutputPaths(outputPath);
 	const sinceStr = since.toISOString().slice(0, 10);
 	const spinner = new TerminalSpinner();
 
