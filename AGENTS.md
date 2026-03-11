@@ -2,6 +2,14 @@
 
 `chunk` is a context generation CLI that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.chunk/context/` for AI coding agents to pick up automatically.
 
+## Refactor Status
+
+This document describes the intended end state of the current CLI architecture/docs refactor.
+
+- Treat the rules and file layout below as the target to move toward when making related changes
+- Expect some implementation drift while the refactor is still landing; verify the current code before assuming every extraction or file move already exists
+- Use the linked docs as design targets, not proof that every mechanical step has already been completed
+
 ## Common Commands
 
 ```bash
@@ -21,8 +29,8 @@ bun run format                        # Format code
 
 Read these when working in the relevant area:
 
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — module layering, dependency rules, change routing, data flow, file structure, implementation details
-- **[docs/CLI.md](docs/CLI.md)** — full command tree, flag conventions, behavior decisions
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — target module layering, dependency rules, change routing, data flow, file structure, implementation details
+- **[docs/CLI.md](docs/CLI.md)** — target command tree, flag conventions, behavior decisions
 - **[packages/hook/AGENTS.md](packages/hook/AGENTS.md)** — read when working on hook package code
 
 ## Key Architectural Constraints

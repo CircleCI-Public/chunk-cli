@@ -1,5 +1,11 @@
 # CLI Command Tree
 
+This document describes the intended end state of the command tree after the current CLI restructuring lands.
+
+- Treat it as the target public CLI shape
+- Some current commands or subcommands may still exist temporarily while cleanup is in progress
+- The absence of a current command here means it is out of scope for this target-state doc, not that the command has necessarily been removed already
+
 ## Command Tree
 
 ```

@@ -1,5 +1,11 @@
 # Architecture
 
+This document describes the intended end state of the current CLI restructuring work.
+
+- Use it as the design target when routing new changes
+- Do not assume every file move or extraction described here has already landed in `main`
+- When touching transitional code, prefer changes that move the implementation toward this shape without rewriting unrelated areas
+
 ## Layering Rules
 
 Dependencies flow strictly downward:
