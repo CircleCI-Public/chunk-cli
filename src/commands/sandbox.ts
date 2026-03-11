@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
 	addSandboxSshKey,
 	CircleCIError,
@@ -124,13 +125,66 @@ export async function execCommandInSandbox(
 	return { exitCode: 0 };
 }
 
+const PRIVATE_KEY_RE = /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/;
+
+function assertNotPrivateKey(key: string): void {
+	if (PRIVATE_KEY_RE.test(key)) {
+		throw new Error(
+			"This looks like it might be a private key — please provide the public key instead.",
+		);
+	}
+}
+
+export function validatePublicKey(value: string): string {
+	assertNotPrivateKey(value);
+	return value;
+}
+
+export function resolvePublicKeyFile(filePath: string): string {
+	let key: string;
+	try {
+		key = readFileSync(filePath, "utf8").trim();
+	} catch (error) {
+		const err = error as NodeJS.ErrnoException;
+		if (err.code === "ENOENT") {
+			throw new Error(`Public key file not found: ${filePath}`, { cause: error });
+		}
+		throw new Error(`Could not read public key file: ${(error as Error).message}`, {
+			cause: error,
+		});
+	}
+	assertNotPrivateKey(key);
+	return key;
+}
+
 export async function addSshKeyToSandbox(
 	organizationId: string,
 	sandboxId: string,
-	publicKey: string,
+	publicKey: string | undefined,
+	publicKeyFile: string | undefined,
 ): Promise<CommandResult> {
 	const token = requireToken();
 	if (!token) return { exitCode: 2 };
+
+	if (publicKey && publicKeyFile) {
+		printError("SSH key error", "--public-key and --public-key-file are mutually exclusive");
+		return { exitCode: 2 };
+	}
+
+	let resolvedKey: string;
+	try {
+		if (publicKeyFile) {
+			resolvedKey = resolvePublicKeyFile(publicKeyFile);
+		} else if (publicKey) {
+			resolvedKey = validatePublicKey(publicKey);
+		} else {
+			printError("SSH key error", "One of --public-key or --public-key-file is required");
+			return { exitCode: 2 };
+		}
+	} catch (error) {
+		printError("SSH key error", error instanceof Error ? error.message : String(error));
+		return { exitCode: 2 };
+	}
 
 	let accessToken: string;
 	try {
@@ -150,7 +204,7 @@ export async function addSshKeyToSandbox(
 
 	let result: Awaited<ReturnType<typeof addSandboxSshKey>>;
 	try {
-		result = await addSandboxSshKey(publicKey, accessToken);
+		result = await addSandboxSshKey(resolvedKey, accessToken);
 	} catch (error) {
 		if (error instanceof CircleCIError) {
 			printError("Failed to add SSH key", error.message);

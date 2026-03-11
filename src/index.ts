@@ -197,10 +197,18 @@ Environment Variables:
 		.description("Add an SSH public key to a sandbox")
 		.requiredOption("--org-id <orgId>", "Organization ID")
 		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID")
-		.requiredOption("--public-key <publicKey>", "SSH public key to add")
+		.option("--public-key <publicKey>", "SSH public key string to add")
+		.option("--public-key-file <keyFile>", "Path to a .pub file containing the SSH public key")
 		.action(async (options) =>
 			process.exit(
-				(await addSshKeyToSandbox(options.orgId, options.sandboxId, options.publicKey)).exitCode,
+				(
+					await addSshKeyToSandbox(
+						options.orgId,
+						options.sandboxId,
+						options.publicKey,
+						options.publicKeyFile,
+					)
+				).exitCode,
 			),
 		);
 
