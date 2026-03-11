@@ -176,7 +176,10 @@ Environment Variables:
 	sandbox
 		.command("prepare")
 		.description("Prepare the hook environment before a session begins")
-		.action(async () => process.exit((await runSandboxPrepare()).exitCode));
+		.option("--docker-sudo", "Run docker commands with sudo", false)
+		.action(async (opts: { dockerSudo: boolean }) =>
+			process.exit((await runSandboxPrepare({ dockerSudo: opts.dockerSudo })).exitCode),
+		);
 
 	// Hook commands — exec, task, sync, state, scope for AI agent hooks
 	const hook = program

@@ -397,7 +397,11 @@ async function identifyRequiredCredentials(
 	}
 }
 
-export async function runSandboxPrepare(): Promise<CommandResult> {
+export interface SandboxPrepareOptions {
+	dockerSudo: boolean;
+}
+
+export async function runSandboxPrepare(options: SandboxPrepareOptions): Promise<CommandResult> {
 	console.log("preparing...");
 
 	const cwd = process.cwd();
@@ -510,6 +514,8 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 	console.log(`wrote ${dockerfileName}`);
 
 	const imageTag = "chunk-prep";
+	const dockerCmd = options.dockerSudo ? "sudo" : "docker";
+	const dockerArgs = (subcmd: string[]) => (options.dockerSudo ? ["docker", ...subcmd] : subcmd);
 
 	const buildArgs = Object.entries(collectedCredentials).flatMap(([k, v]) => [
 		"--build-arg",
@@ -541,8 +547,8 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 			let buildErrorOutput: string | null = null;
 			try {
 				const out = execFileSync(
-					"sudo",
-					["docker", "build", "-f", dockerfileName, "-t", imageTag, ...buildArgs, "."],
+					dockerCmd,
+					dockerArgs(["build", "-f", dockerfileName, "-t", imageTag, ...buildArgs, "."]),
 					{ cwd: buildContext, stdio: "pipe" },
 				);
 				process.stdout.write(out);
@@ -577,8 +583,8 @@ export async function runSandboxPrepare(): Promise<CommandResult> {
 			let runErrorOutput: string | null = null;
 			try {
 				const out = execFileSync(
-					"sudo",
-					["docker", "run", "--rm", imageTag, "sh", "-c", testCommand],
+					dockerCmd,
+					dockerArgs(["run", "--rm", imageTag, "sh", "-c", testCommand]),
 					{ cwd, stdio: "pipe" },
 				);
 				process.stdout.write(out);
