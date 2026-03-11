@@ -84,7 +84,7 @@ interface PackageManager {
 
 function detectPackageManager(cwd: string): PackageManager | null {
 	const managers: { lockfile: string; name: string; installCommand: string }[] = [
-		{ lockfile: "pnpm-lock.yaml", name: "pnpm", installCommand: "pnpm install --frozen-lockfile" },
+		{ lockfile: "pnpm-lock.yaml", name: "pnpm", installCommand: "pnpm install" },
 		{ lockfile: "yarn.lock", name: "yarn", installCommand: "yarn install --frozen-lockfile" },
 		{ lockfile: "bun.lock", name: "bun", installCommand: "bun install --frozen-lockfile" },
 		{ lockfile: "bun.lockb", name: "bun", installCommand: "bun install --frozen-lockfile" },
@@ -240,10 +240,13 @@ function buildDockerfilePrompt(
 		(packageManager
 			? `- Use \`${packageManager.installCommand}\` to install dependencies (not npm ci or npm install unless the project uses npm).\n` +
 				(packageManager.name === "pnpm"
-					? `- Install pnpm first: \`RUN corepack enable && corepack prepare pnpm@latest --activate\` (or \`npm install -g pnpm\`).\n`
+					? `- Install pnpm first: \`RUN corepack enable && corepack prepare pnpm --activate\` (this respects the packageManager version in package.json; do NOT pin pnpm@latest).\n`
 					: "")
 			: "") +
 		`- CRITICAL: Use a single \`COPY . .\` to copy the entire repository. The build context already contains exactly the git-tracked files. Do NOT use selective COPY commands (e.g. COPY package*.json) — they will break in monorepos and non-standard layouts.\n` +
+		`- After COPY, initialize a git repository so that tests relying on git work:\n` +
+		`  RUN git init && git remote add origin https://github.com/placeholder/repo.git && git add -A && git commit -m "init" --allow-empty\n` +
+		`  This is required because the build context does not include the .git directory.\n` +
 		(Object.keys(collectedCredentials).length > 0
 			? `The following credentials have been collected and will be passed as Docker build args:\n` +
 				Object.keys(collectedCredentials)
@@ -275,6 +278,7 @@ function buildDockerfileFixPrompt(
 		`Error output:\n${errorOutput.slice(0, 3000)}\n\n` +
 		`Fix the Dockerfile to resolve the error.\n` +
 		`CRITICAL: Use a single \`COPY . .\` to copy the entire repository — do NOT use selective COPY commands like \`COPY package*.json\`.\n` +
+		`After COPY, ensure a git repository is initialized: RUN git init && git remote add origin https://github.com/placeholder/repo.git && git add -A && git commit -m "init" --allow-empty\n` +
 		`Output ONLY valid Dockerfile content. No markdown, no explanation, no code fences.`
 	);
 }
