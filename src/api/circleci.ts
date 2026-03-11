@@ -96,9 +96,7 @@ function handleErrorResponse(response: Response, responseBody: string): void {
 	}
 }
 
-type CircleCIAuth =
-	| { type: "circle-token"; token: string }
-	| { type: "bearer"; token: string };
+type CircleCIAuth = { type: "circle-token"; token: string } | { type: "bearer"; token: string };
 
 interface CircleCIFetchOptions {
 	method?: string;
