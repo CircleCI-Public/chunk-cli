@@ -2963,3 +2963,246 @@ describe("sync session-aware staleness", () => {
 		expect(result.stderr).toContain("lint");
 	});
 });
+
+// ===========================================================================
+// 26. CONTENT HASH STALENESS (bait-and-switch prevention)
+// ===========================================================================
+
+describe("content hash staleness", () => {
+	it("blocks when code changes after sentinel was written (bait-and-switch)", async () => {
+		// Step 1: Run exec to create a passing sentinel with a valid contentHash.
+		await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Step 2: Modify a TRACKED file (bait-and-switch attack).
+		// Must modify a tracked file — untracked files don't appear in `git diff HEAD`.
+		writeFileSync(join(testProjectDir, "README.md"), "# Exploit\nMalicious content\n");
+
+		// Step 3: Check — contentHash now differs → sentinel is stale → blocks.
+		const result = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("no results");
+	});
+
+	it("allows when code has not changed since sentinel was written", async () => {
+		// Run and check without modifying anything in between.
+		await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		const result = await runCli(["exec", "check", "tests", "--always"], projectEvent(), testEnv());
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("sync check blocks when code changes after sentinel was written", async () => {
+		// Run exec to create a passing sentinel.
+		await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Modify a TRACKED file — untracked files don't appear in `git diff HEAD`.
+		writeFileSync(join(testProjectDir, "README.md"), "# Backdoor\nCompromised\n");
+
+		// Sync check should block because contentHash changed.
+		const result = await runCli(
+			["sync", "check", "exec:tests", "--always"],
+			projectEvent(),
+			testEnv(),
+		);
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("no results");
+	});
+});
+
+// ===========================================================================
+// 27. PUSH-TIME BYPASS PREVENTION
+// ===========================================================================
+
+describe("push-time bypass prevention", () => {
+	it("blocks push when no sentinel exists (detectChanges not short-circuited)", async () => {
+		// Configure execs WITHOUT always: true and WITH a trigger that matches git push.
+		// Without the push-time fix, detectChanges would see a clean tree and allow.
+		const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
+		writeFileSync(
+			configPath,
+			`
+execs:
+  tests:
+    command: "echo 'all tests passed'"
+    timeout: 30
+tasks:
+  review:
+    instructions: ".chunk/hook/review-instructions.md"
+    schema: ""
+    limit: 3
+triggers:
+  pre-commit:
+    - "git commit"
+    - "git push"
+`,
+		);
+
+		// Commit the config so the tree is completely clean.
+		Bun.spawnSync(["git", "add", "."], { cwd: testProjectDir });
+		Bun.spawnSync(["git", "commit", "-m", "clean config"], { cwd: testProjectDir });
+
+		// Push event — clean tree, no sentinel, no --always.
+		// Without the fix: detectChanges returns false → allow (bypass!).
+		// With the fix: push bypasses detectChanges → falls through to sentinel check → blocks.
+		const result = await runCli(
+			["exec", "check", "tests", "--on", "pre-commit"],
+			hookEvent({
+				hook_event_name: "PreToolUse",
+				tool_name: "Bash",
+				tool_input: {
+					command: "git push origin main",
+					file_path: join(testProjectDir, "main.go"),
+				},
+				session_id: "test-session-001",
+				cwd: testProjectDir,
+			}),
+			testEnv(),
+		);
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("no results");
+	});
+
+	it("allows push when valid sentinel exists", async () => {
+		// The scope marker file (.chunk-hook-active) must be gitignored so that
+		// activateScope (which writes a new marker during check) doesn't change
+		// the git diff and invalidate the contentHash.
+		writeFileSync(join(testProjectDir, ".gitignore"), ".chunk/hook/.chunk-hook-active\n");
+
+		// Commit everything so the tree is completely clean.
+		Bun.spawnSync(["git", "add", "."], { cwd: testProjectDir });
+		Bun.spawnSync(["git", "commit", "-m", "clean"], { cwd: testProjectDir });
+
+		// Run exec AFTER the commit so the sentinel's contentHash matches
+		// the post-commit state (HEAD + clean tree).
+		await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+
+		// Push event with valid sentinel → should allow.
+		const result = await runCli(
+			["exec", "check", "tests", "--always"],
+			hookEvent({
+				hook_event_name: "PreToolUse",
+				tool_name: "Bash",
+				tool_input: {
+					command: "git push origin main",
+					file_path: join(testProjectDir, "main.go"),
+				},
+				session_id: "test-session-001",
+				cwd: testProjectDir,
+			}),
+			testEnv(),
+		);
+
+		expect(result.exitCode).toBe(0);
+	});
+});
+
+// ===========================================================================
+// 28. TASK SESSION STALENESS (attack vector: cross-session sentinel reuse)
+// ===========================================================================
+
+describe("task session staleness", () => {
+	it("blocks when task sentinel belongs to a different session", async () => {
+		const { writeSentinel: ws } = await import("../lib/sentinel");
+
+		// Write a passing task sentinel from session-OLD
+		ws(sentinelDir, testProjectDir, "review", {
+			status: "pass",
+			details: "Review passed",
+			project: testProjectDir,
+			startedAt: new Date().toISOString(),
+			sessionId: "session-OLD",
+		});
+
+		// Current scope is activated with session "test-session-001" (from beforeEach).
+		// The sentinel's sessionId ("session-OLD") doesn't match → treated as stale → blocks.
+		const result = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
+		expect(result.exitCode).toBe(2);
+	});
+
+	it("allows when task sentinel belongs to the current session", async () => {
+		const { writeSentinel: ws } = await import("../lib/sentinel");
+
+		// Write a passing task sentinel from current session
+		ws(sentinelDir, testProjectDir, "review", {
+			status: "pass",
+			details: "Review passed",
+			project: testProjectDir,
+			startedAt: new Date().toISOString(),
+			sessionId: "test-session-001", // matches scope marker from beforeEach
+		});
+
+		const result = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
+		expect(result.exitCode).toBe(0);
+	});
+});
+
+// ===========================================================================
+// 29. TASK RESULT FORGERY PREVENTION (attack vector: forged sentinel files)
+// ===========================================================================
+
+describe("task result forgery prevention", () => {
+	it("blocks when agent writes invalid JSON to task sentinel path", async () => {
+		const { sentinelPath: sp } = await import("../lib/sentinel");
+		const path = sp(sentinelDir, testProjectDir, "review");
+		writeFileSync(path, "this is not json {{{{", "utf-8");
+
+		const result = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
+		// Invalid JSON → readTaskResult returns undefined → "missing" → block
+		expect(result.exitCode).toBe(2);
+	});
+
+	it("blocks when agent writes wrong decision value (pass instead of allow)", async () => {
+		const { sentinelPath: sp } = await import("../lib/sentinel");
+		const path = sp(sentinelDir, testProjectDir, "review");
+		// Agent tries to forge by using "pass" instead of "allow"
+		writeFileSync(path, JSON.stringify({ decision: "pass", reason: "forged" }), "utf-8");
+
+		const result = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
+		// "pass" is not a valid decision → validateTaskResult rejects → "missing" → block
+		expect(result.exitCode).toBe(2);
+	});
+
+	it("blocks when agent writes JSON without decision field", async () => {
+		const { sentinelPath: sp } = await import("../lib/sentinel");
+		const path = sp(sentinelDir, testProjectDir, "review");
+		writeFileSync(path, JSON.stringify({ status: "pass", reason: "looks good" }), "utf-8");
+
+		const result = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
+		// No decision field → validateTaskResult rejects → "missing" → block
+		expect(result.exitCode).toBe(2);
+	});
+
+	it("properly blocks when agent writes a block result", async () => {
+		const { sentinelPath: sp } = await import("../lib/sentinel");
+		const path = sp(sentinelDir, testProjectDir, "review");
+		writeFileSync(
+			path,
+			JSON.stringify({
+				decision: "block",
+				reason: "SQL injection in handlers.go:42",
+				issues: [{ severity: "CRITICAL", file: "handlers.go", line: 42 }],
+			}),
+			"utf-8",
+		);
+
+		const result = await runCli(["task", "check", "review", "--always"], projectEvent(), testEnv());
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("SQL injection");
+	});
+});
