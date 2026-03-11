@@ -9,7 +9,7 @@ import {
 	runBuildPrompt,
 } from "./commands/build-prompt";
 import { runConfigSet, runConfigShow } from "./commands/config";
-import { createNewSandbox, execCommandInSandbox, listSandboxes } from "./commands/sandbox";
+import { addSshKeyToSandbox, createNewSandbox, execCommandInSandbox, listSandboxes } from "./commands/sandbox";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
@@ -189,6 +189,18 @@ Environment Variables:
 		.option("--image <image>", "Sandbox image")
 		.action(async (options) =>
 			process.exit((await createNewSandbox(options.orgId, options.name, options.image)).exitCode),
+		);
+
+	sandboxes
+		.command("add-ssh-key")
+		.description("Add an SSH public key to a sandbox")
+		.requiredOption("--org-id <orgId>", "Organization ID")
+		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID")
+		.requiredOption("--public-key <publicKey>", "SSH public key to add")
+		.action(async (options) =>
+			process.exit(
+				(await addSshKeyToSandbox(options.orgId, options.sandboxId, options.publicKey)).exitCode,
+			),
 		);
 
 	sandboxes

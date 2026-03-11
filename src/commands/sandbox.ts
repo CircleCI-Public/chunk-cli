@@ -1,6 +1,7 @@
 import {
 	CircleCIError,
 	type Sandbox,
+	addSandboxSshKey,
 	createSandbox,
 	createSandboxAccessToken,
 	type ExecCommandResponse,
@@ -117,6 +118,53 @@ export async function execCommandInSandbox(
 	} catch (error) {
 		if (error instanceof CircleCIError) {
 			printError("Failed to execute command", error.message);
+			return { exitCode: 2 };
+		}
+		throw error;
+	}
+
+	console.log(JSON.stringify(result, null, 2));
+
+	return { exitCode: 0 };
+}
+
+export async function addSshKeyToSandbox(
+	organizationId: string,
+	sandboxId: string,
+	publicKey: string,
+): Promise<CommandResult> {
+	const token = process.env.CIRCLECI_TOKEN;
+	if (!token) {
+		printError(
+			"CircleCI token not found",
+			"CIRCLECI_TOKEN environment variable is not set.",
+			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
+		);
+		return { exitCode: 2 };
+	}
+
+	let accessToken: string;
+	try {
+		const tokenResp = await createSandboxAccessToken(sandboxId, organizationId, token);
+		accessToken = tokenResp.access_token;
+	} catch (error) {
+		if (error instanceof CircleCIError) {
+			printError(
+				"Failed to get sandbox access token",
+				error.message,
+				"Check your CIRCLECI_TOKEN, sandbox ID, and org ID.",
+			);
+			return { exitCode: 2 };
+		}
+		throw error;
+	}
+
+	let result: Awaited<ReturnType<typeof addSandboxSshKey>>;
+	try {
+		result = await addSandboxSshKey(publicKey, accessToken);
+	} catch (error) {
+		if (error instanceof CircleCIError) {
+			printError("Failed to add SSH key", error.message);
 			return { exitCode: 2 };
 		}
 		throw error;

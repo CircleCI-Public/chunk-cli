@@ -262,6 +262,27 @@ export async function fetchCollaborations(token: string): Promise<CircleCICollab
 }
 
 /**
+ * Add an SSH public key to a sandbox
+ */
+export async function addSandboxSshKey(
+	publicKey: string,
+	accessToken: string,
+): Promise<Record<string, unknown>> {
+	return circleciRequest<Record<string, unknown>>(
+		"https://circleci.com/api/v2/sandboxes/ssh/add-key",
+		{
+			method: "POST",
+			headers: {
+				Accept: "application/json",
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${accessToken}`,
+			},
+			body: JSON.stringify({ public_key: publicKey }),
+		},
+	);
+}
+
+/**
  * Execute a command in a sandbox
  */
 export async function execCommand(
