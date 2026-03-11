@@ -12,7 +12,7 @@ import type { CommandResult } from "../types/index";
 import { bold } from "../ui/colors";
 import { printError } from "../utils/errors";
 
-export async function listSandboxes(orgId: string): Promise<CommandResult> {
+function requireToken(): string | null {
 	const token = process.env.CIRCLECI_TOKEN;
 	if (!token) {
 		printError(
@@ -20,8 +20,14 @@ export async function listSandboxes(orgId: string): Promise<CommandResult> {
 			"CIRCLECI_TOKEN environment variable is not set.",
 			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
 		);
-		return { exitCode: 2 };
+		return null;
 	}
+	return token;
+}
+
+export async function listSandboxes(orgId: string): Promise<CommandResult> {
+	const token = requireToken();
+	if (!token) return { exitCode: 2 };
 
 	console.log(`\n${bold("Sandboxes")}\n`);
 
@@ -54,15 +60,8 @@ export async function createNewSandbox(
 	name: string,
 	image?: string,
 ): Promise<CommandResult> {
-	const token = process.env.CIRCLECI_TOKEN;
-	if (!token) {
-		printError(
-			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is not set.",
-			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
-		);
-		return { exitCode: 2 };
-	}
+	const token = requireToken();
+	if (!token) return { exitCode: 2 };
 
 	let sandbox: Sandbox;
 	try {
@@ -90,15 +89,8 @@ export async function execCommandInSandbox(
 	command: string,
 	args: string[],
 ): Promise<CommandResult> {
-	const token = process.env.CIRCLECI_TOKEN;
-	if (!token) {
-		printError(
-			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is not set.",
-			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
-		);
-		return { exitCode: 2 };
-	}
+	const token = requireToken();
+	if (!token) return { exitCode: 2 };
 
 	let accessToken: string;
 	try {
@@ -137,15 +129,8 @@ export async function addSshKeyToSandbox(
 	sandboxId: string,
 	publicKey: string,
 ): Promise<CommandResult> {
-	const token = process.env.CIRCLECI_TOKEN;
-	if (!token) {
-		printError(
-			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is not set.",
-			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
-		);
-		return { exitCode: 2 };
-	}
+	const token = requireToken();
+	if (!token) return { exitCode: 2 };
 
 	let accessToken: string;
 	try {
