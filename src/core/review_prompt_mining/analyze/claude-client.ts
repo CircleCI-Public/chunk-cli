@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { printError } from "../../utils/errors";
+import { printError } from "../../../utils/errors";
 import type { ReviewerGroup } from "./json-parser";
 
 /**

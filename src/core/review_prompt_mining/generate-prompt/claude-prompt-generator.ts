@@ -3,7 +3,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { printError } from "../../utils/errors";
+import { printError } from "../../../utils/errors";
 
 export interface PromptGeneratorConfig {
 	model?: string;

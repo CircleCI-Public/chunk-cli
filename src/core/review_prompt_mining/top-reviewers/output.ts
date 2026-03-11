@@ -1,6 +1,6 @@
 import Table from "cli-table3";
-import { bold, dim } from "../../ui/colors";
-import { label } from "../../ui/format";
+import { bold, dim } from "../../../ui/colors";
+import { label } from "../../../ui/format";
 import type { PRRankingRow, ReviewCommentDetail, UserActivity } from "../types";
 
 export interface OutputMetadata {

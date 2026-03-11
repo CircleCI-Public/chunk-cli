@@ -1,5 +1,5 @@
 import { graphql } from "@octokit/graphql";
-import { printError } from "../utils/errors";
+import { printError } from "../../utils/errors";
 import type { GraphQLRateLimit } from "./types";
 
 export type GraphQLClient = typeof graphql;
