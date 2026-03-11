@@ -240,7 +240,7 @@ async function collectDefinition(): Promise<{ name: string; definition: RunDefin
 
 	return { name, definition };
 }
-export async function runTaskConfig(): Promise<CommandResult> {
+async function runTaskConfig(): Promise<CommandResult> {
 	console.log(`\n${bold("Chunk Run Setup")}\n`);
 	console.log(`This wizard creates ${cyan(".chunk/run.json")} in your repository root.`);
 	console.log("");

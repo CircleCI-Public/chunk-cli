@@ -68,7 +68,7 @@ function isValidConfigKey(key: string): key is ConfigKey {
 /**
  * Display current configuration with sources
  */
-export function runConfigShow(): CommandResult {
+function runConfigShow(): CommandResult {
 	const config = resolveConfig();
 
 	console.log(`\n${bold("Configuration:")}\n`);
@@ -95,7 +95,7 @@ export function runConfigShow(): CommandResult {
 /**
  * Set a configuration value
  */
-export function runConfigSet(key: string, value: string): CommandResult {
+function runConfigSet(key: string, value: string): CommandResult {
 	if (!key) {
 		printError(
 			"Missing config key",
