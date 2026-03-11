@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildProjectSlug, mapVcsTypeToOrgType, sortProjectsByName } from "../../core/task-config";
+import { buildProjectSlug, mapVcsTypeToOrgType, sortProjectsByName } from "../../utils/circleci";
 
 describe("mapVcsTypeToOrgType", () => {
 	it("maps 'github' to 'github'", () => {

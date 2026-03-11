@@ -13,12 +13,6 @@ import {
 } from "../api/circleci";
 import { getCircleCIToken } from "../config";
 import {
-	buildProjectSlug,
-	isValidUuid,
-	mapVcsTypeToOrgType,
-	sortProjectsByName,
-} from "../core/task-config";
-import {
 	getDefinitionByNameOrId,
 	getRunConfigPath,
 	loadRunConfig,
@@ -31,6 +25,12 @@ import type { CommandResult } from "../types";
 import { bold, cyan, dim, yellow } from "../ui/colors";
 import { formatStep, label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput, promptSelect } from "../ui/prompt";
+import {
+	buildProjectSlug,
+	isValidUuid,
+	mapVcsTypeToOrgType,
+	sortProjectsByName,
+} from "../utils/circleci";
 import { handleError, printError } from "../utils/errors";
 
 // --- Command Registration ---
