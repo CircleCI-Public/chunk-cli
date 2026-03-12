@@ -253,7 +253,7 @@ The command does not require `CHUNK_HOOK_ENABLE` — it is a setup utility.
 Steps performed:
 
 1. **Log directory:** Creates `--set-log-dir` if it doesn't exist.
-2. **Env file:** Writes `--env-file` (default `~/.config/chunk-hook/env`) with profile-appropriate
+2. **Env file:** Writes `--env-file` (default `~/.config/chunk/hook/env`) with profile-appropriate
    exports via `generateEnvContent()`.
 3. **Login sourcing:** Adds a `source <env-file>` line to shell startup files via
    `ensureLoginSourcing()` so the env file is loaded on login.

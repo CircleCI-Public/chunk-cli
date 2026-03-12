@@ -10,13 +10,15 @@
  * command updates existing blocks in place rather than appending duplicates.
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 import {
 	defaultEnvFile,
 	defaultLogDir,
 	ensureLoginSourcing,
 	generateEnvContent,
+	legacyEnvFile,
 	PROFILES,
 	type Profile,
 	writeEnvFile,
@@ -78,6 +80,28 @@ export function buildEnvUpdateOptions(flags: {
 // ---------------------------------------------------------------------------
 
 /**
+ * Migrate env file from legacy location to new location.
+ * Moves the file and attempts to remove the empty legacy directory.
+ */
+export function migrateEnvFile(newFile: string, legacyFile: string): void {
+	if (legacyFile === newFile) return;
+	if (!existsSync(legacyFile) || existsSync(newFile)) return;
+
+	try {
+		const dir = dirname(newFile);
+		mkdirSync(dir, { recursive: true });
+		renameSync(legacyFile, newFile);
+		try {
+			rmdirSync(dirname(legacyFile));
+		} catch {
+			// Directory not empty or already removed — ignore
+		}
+	} catch {
+		// Migration failed — will create fresh on write
+	}
+}
+
+/**
  * Configure the user's shell environment for chunk hook.
  *
  * 1. Creates log directory
@@ -85,6 +109,11 @@ export function buildEnvUpdateOptions(flags: {
  * 3. Ensures shell startup files source the ENV file
  */
 export function runEnvUpdate(opts: EnvUpdateOptions): EnvUpdateResult {
+	// 0. Migrate legacy env file if needed (only for default path)
+	if (opts.envFile === defaultEnvFile()) {
+		migrateEnvFile(opts.envFile, legacyEnvFile());
+	}
+
 	// 1. Create log directory
 	mkdirSync(opts.logDir, { recursive: true });
 

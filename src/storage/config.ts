@@ -1,5 +1,12 @@
 import * as fs from "node:fs";
-import { DEFAULT_MODEL, ENV, getConfigFile, getUserConfigDir } from "../config";
+import * as path from "node:path";
+import {
+	DEFAULT_MODEL,
+	ENV,
+	getConfigFile,
+	getLegacyConfigFile,
+	getUserConfigDir,
+} from "../config";
 
 export interface UserConfig {
 	apiKey?: string;
@@ -17,8 +24,29 @@ export interface ResolvedConfig {
 
 type ConfigSource = "default" | "env" | "user-config" | "flag";
 
-export function loadUserConfig(): UserConfig {
-	const configPath = getConfigFile();
+/** @param legacyPath — test-only override to avoid writing to real home directory */
+function migrateIfNeeded(legacyPath?: string): void {
+	const newPath = getConfigFile();
+	if (fs.existsSync(newPath)) return;
+
+	const legacy = legacyPath ?? getLegacyConfigFile();
+	if (!fs.existsSync(legacy)) return;
+
+	try {
+		const dir = path.dirname(newPath);
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+		fs.copyFileSync(legacy, newPath);
+		fs.chmodSync(newPath, 0o600);
+	} catch {
+		// Migration failed — caller falls back to legacy path
+	}
+}
+
+/** @param legacyPath — test-only override to avoid writing to real home directory */
+export function loadUserConfig(legacyPath?: string): UserConfig {
+	migrateIfNeeded(legacyPath);
+	const newPath = getConfigFile();
+	const configPath = fs.existsSync(newPath) ? newPath : (legacyPath ?? getLegacyConfigFile());
 
 	try {
 		if (!fs.existsSync(configPath)) {

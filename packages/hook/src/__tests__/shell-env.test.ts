@@ -3,12 +3,13 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildEnvUpdateOptions, runEnvUpdate } from "../commands/env-update";
+import { buildEnvUpdateOptions, migrateEnvFile, runEnvUpdate } from "../commands/env-update";
 import {
 	defaultEnvFile,
 	defaultLogDir,
 	defaultShellStartupFiles,
 	generateEnvContent,
+	legacyEnvFile,
 	PROFILES,
 	upsertManagedBlock,
 } from "../lib/shell-env";
@@ -247,9 +248,20 @@ describe("shell-env", () => {
 	// -----------------------------------------------------------------------
 
 	describe("default paths", () => {
-		it("defaultEnvFile returns a path under .config", () => {
+		it("defaultEnvFile returns a path under .config/chunk/hook", () => {
 			const envFile = defaultEnvFile();
-			expect(envFile).toContain(".config/chunk-hook/env");
+			expect(envFile).toContain(".config/chunk/hook/env");
+		});
+
+		it("defaultEnvFile respects XDG_CONFIG_HOME", () => {
+			setEnv("XDG_CONFIG_HOME", "/custom/config");
+			const envFile = defaultEnvFile();
+			expect(envFile).toBe("/custom/config/chunk/hook/env");
+		});
+
+		it("legacyEnvFile returns the old chunk-hook path", () => {
+			const legacy = legacyEnvFile();
+			expect(legacy).toContain(".config/chunk-hook/env");
 		});
 
 		it("defaultLogDir returns a platform-appropriate path", () => {
@@ -279,7 +291,7 @@ describe("env-update", () => {
 			const opts = buildEnvUpdateOptions({});
 			expect(opts.profile).toBe("enable");
 			expect(opts.verbose).toBe(false);
-			expect(opts.envFile).toContain("chunk-hook");
+			expect(opts.envFile).toContain("chunk/hook");
 			expect(opts.logDir).toContain("chunk-hook");
 		});
 
@@ -381,6 +393,44 @@ describe("env-update", () => {
 
 			const content = readFileSync(envFile, "utf-8");
 			expect(content).toContain("export CHUNK_HOOK_PROJECT_ROOT='/home/user/workspace'");
+		});
+
+		it("migrates legacy env file to new location", () => {
+			const legacyDir = join(testDir, "legacy-config", "chunk-hook");
+			const legacyFile = join(legacyDir, "env");
+			mkdirSync(legacyDir, { recursive: true });
+			writeFileSync(legacyFile, "export CHUNK_HOOK_ENABLE=1\n");
+
+			const newEnvFile = join(testDir, "new-config", "chunk", "hook", "env");
+
+			migrateEnvFile(newEnvFile, legacyFile);
+
+			expect(existsSync(newEnvFile)).toBe(true);
+			const content = readFileSync(newEnvFile, "utf-8");
+			expect(content).toContain("export CHUNK_HOOK_ENABLE=1");
+
+			// Legacy file should be moved (not copied)
+			expect(existsSync(legacyFile)).toBe(false);
+		});
+
+		it("skips migration when new env file already exists", () => {
+			const legacyDir = join(testDir, "legacy-config", "chunk-hook");
+			const legacyFile = join(legacyDir, "env");
+			mkdirSync(legacyDir, { recursive: true });
+			writeFileSync(legacyFile, "export CHUNK_HOOK_ENABLE=0\n");
+
+			const newDir = join(testDir, "new-config", "chunk", "hook");
+			mkdirSync(newDir, { recursive: true });
+			const newEnvFile = join(newDir, "env");
+			writeFileSync(newEnvFile, "export CHUNK_HOOK_ENABLE=1\n");
+
+			migrateEnvFile(newEnvFile, legacyFile);
+
+			// New file should be unchanged
+			const content = readFileSync(newEnvFile, "utf-8");
+			expect(content).toContain("export CHUNK_HOOK_ENABLE=1");
+			// Legacy should still exist (migration skipped)
+			expect(existsSync(legacyFile)).toBe(true);
 		});
 	});
 });

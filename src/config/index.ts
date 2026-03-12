@@ -17,13 +17,24 @@ export const ENV = {
 } as const;
 
 // --- Paths ---
-export const USER_CONFIG_DIR = ".chunk";
 export const USER_CONFIG_FILENAME = "config.json";
 
-export function getUserConfigDir() {
-	return path.join(os.homedir(), USER_CONFIG_DIR);
+function xdgConfigBase(): string {
+	return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
 }
 
-export function getConfigFile() {
+export function getUserConfigDir(): string {
+	return path.join(xdgConfigBase(), "chunk");
+}
+
+export function getConfigFile(): string {
 	return path.join(getUserConfigDir(), USER_CONFIG_FILENAME);
+}
+
+export function getLegacyConfigDir(): string {
+	return path.join(os.homedir(), ".chunk");
+}
+
+export function getLegacyConfigFile(): string {
+	return path.join(getLegacyConfigDir(), USER_CONFIG_FILENAME);
 }
