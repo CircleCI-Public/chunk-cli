@@ -12,7 +12,7 @@ import {
 	fetchProjectBySlug,
 	triggerChunkRun,
 } from "../api/circleci";
-import { getCircleCIToken } from "../config";
+import { getCircleCIToken } from "../utils/tokens";
 import {
 	getDefinitionByNameOrId,
 	getRunConfigPath,
@@ -68,7 +68,8 @@ Examples:
 			"after",
 			`
 Environment Variables:
-  CIRCLE_TOKEN             Required: CircleCI personal API token`,
+  CIRCLE_TOKEN             CircleCI personal API token (preferred)
+  CIRCLECI_TOKEN           CircleCI personal API token (fallback)`,
 		)
 		.action(async () => process.exit((await runTaskConfigWizard()).exitCode));
 }

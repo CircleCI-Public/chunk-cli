@@ -9,7 +9,7 @@ const originalFetch = global.fetch;
 // @ts-expect-error - Mock doesn't fully implement fetch type
 global.fetch = mockFetch;
 
-const testDir = path.join(process.cwd(), ".test-core-task-run");
+const testDir = path.join(process.cwd(), ".test-commands-task-run");
 const originalCwd = process.cwd();
 const originalCircleCIToken = process.env.CIRCLECI_TOKEN;
 const originalCircleToken = process.env.CIRCLE_TOKEN;
