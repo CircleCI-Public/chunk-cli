@@ -12,7 +12,6 @@ import {
 	fetchProjectBySlug,
 	triggerChunkRun,
 } from "../api/circleci";
-import { getCircleCIToken } from "../utils/tokens";
 import {
 	getDefinitionByNameOrId,
 	getRunConfigPath,
@@ -28,6 +27,7 @@ import { formatStep, label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput, promptSelect } from "../ui/prompt";
 import { buildProjectSlug, mapVcsTypeToOrgType, sortProjectsByName } from "../utils/circleci";
 import { handleError, printError } from "../utils/errors";
+import { getCircleCIToken } from "../utils/tokens";
 
 // --- Command Registration ---
 
