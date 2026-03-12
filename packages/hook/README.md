@@ -56,7 +56,7 @@ chunk hook env update --profile review
 chunk hook env update --profile disable
 ```
 
-Restart your terminal (or `source ~/.config/chunk-hook/env`) after setup.
+Restart your terminal (or `source ~/.config/chunk/hook/env`) after setup.
 
 #### Environment options
 
@@ -71,8 +71,8 @@ chunk hook env update --set-verbose
 #### Quick enable/disable without re-running setup
 
 ```bash
-echo 'export CHUNK_HOOK_ENABLE=0' > ~/.config/chunk-hook/env   # disable all
-echo 'export CHUNK_HOOK_ENABLE=1' > ~/.config/chunk-hook/env   # enable all
+echo 'export CHUNK_HOOK_ENABLE=0' > ~/.config/chunk/hook/env   # disable all
+echo 'export CHUNK_HOOK_ENABLE=1' > ~/.config/chunk/hook/env   # enable all
 ```
 
 ### 3. Initialize a repo
@@ -267,7 +267,7 @@ Configure the user's shell environment for chunk hook. Creates an env file sourc
 that exports `CHUNK_HOOK_*` variables.
 
 - `--profile <name>` — Predefined variable set: `enable` (default), `disable`, `tests-lint`, `review`.
-- `--env-file <path>` — Override env file location (default: `~/.config/chunk-hook/env`).
+- `--env-file <path>` — Override env file location (default: `~/.config/chunk/hook/env`).
 - `--set-log-dir <dir>` — Log directory to write into the ENV file
   (default: `~/Library/Logs/chunk-hook` on macOS,
   `~/.local/share/chunk-hook/logs` on Linux).

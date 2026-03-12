@@ -7,7 +7,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Platform detection
@@ -31,9 +31,18 @@ export function detectOS(): "macos" | "linux" {
 // Default paths
 // ---------------------------------------------------------------------------
 
+function xdgConfigBase(): string {
+	return process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+}
+
 /** Default ENV file location. */
 export function defaultEnvFile(): string {
-	return `${homedir()}/.config/chunk-hook/env`;
+	return join(xdgConfigBase(), "chunk", "hook", "env");
+}
+
+/** Legacy ENV file location (pre-XDG consolidation). */
+export function legacyEnvFile(): string {
+	return join(homedir(), ".config", "chunk-hook", "env");
 }
 
 /** Default log directory. */
