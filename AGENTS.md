@@ -1,154 +1,60 @@
-# Chunk CLI
+# AGENTS.md
 
-Internal CLI tool for generating AI agent context from real PR review patterns using Claude.
+`chunk` is a context generation CLI that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.chunk/context/` for AI coding agents to pick up automatically.
 
-## Project Structure
+## Refactor Status
 
-### Core Directories
-- `src/` - TypeScript source code
-  - `index.ts` - Main entry point, command routing
-  - `commands/` - Command implementations (build-prompt, auth, config, upgrade)
-  - `core/` - Core business logic (build-prompt orchestration, agent)
-  - `review_prompt_mining/` - Pipeline: reviewer discovery, analysis, context generation
-  - `config/` - Configuration system (models, paths)
-  - `storage/` - Persistence layer (config files)
-  - `ui/` - Terminal UI utilities (colors, spinner, formatting)
-  - `types/` - TypeScript type definitions
-  - `utils/` - Utilities (errors)
-  - `__tests__/` - Test suite (unit tests)
+This document describes the intended end state of the current CLI architecture/docs refactor.
 
-### Configuration Files
-- `package.json` - Dependencies and scripts
-- `tsconfig.json` - TypeScript configuration (strict mode)
-- `.mise.toml` - Runtime version management (Bun 1.3, Node 24)
-- `install.sh` - Installation script (binary download with source build fallback)
-- `scripts/` - Build and release automation
+- Treat the rules and file layout below as the target to move toward when making related changes
+- Expect some implementation drift while the refactor is still landing; verify the current code before assuming every extraction or file move already exists
+- Use the linked docs as design targets, not proof that every mechanical step has already been completed
 
-### Documentation
-- `README.md` - User-facing documentation
-## Architecture
+## Common Commands
 
-The TypeScript implementation follows a layered architecture with clear separation of concerns:
-
-### Commands Layer
-Entry points for CLI commands. Each command:
-- Parses arguments and validates input
-- Delegates business logic to core services
-
-### Core Layer
-Business logic and domain services:
-- **Build Prompt** (`src/core/build-prompt.ts`): Orchestrates the three-step context generation pipeline
-- **Agent** (`src/core/agent.ts`): Anthropic API client and key validation
-- **Review Prompt Mining** (`src/review_prompt_mining/`): GitHub reviewer discovery, comment analysis, and context generation
-
-### Storage Layer
-Persistent data management:
-- User config at `~/.config/chunk/config.json`
-- Secure file permissions (0600)
-
-### Configuration System
-Multi-source configuration with precedence:
-1. CLI arguments (highest priority)
-2. Environment variables
-3. User-level config
-4. Built-in defaults (lowest priority)
-
-## Installation Design
-
-### Binary Download (Preferred)
-- `install.sh` first tries `gh release download` from GitHub Releases
-- Requires `gh` CLI installed and authenticated — handles private repo auth automatically
-- Downloads platform-specific binary, verifies with `--version`, installs atomically
-- Falls back to source build if `gh` is unavailable, unauthenticated, or download fails
-- `--branch` flag forces source build (for development use)
-
-### Source-Based Installation (Fallback)
-- Installation builds from source using Bun
-- Bun 1.3 required (auto-installed via mise if available)
-- Platform-specific builds for darwin-arm64, darwin-x64, linux-arm64, and linux-x64
-- Build artifacts created in `dist/` directory (gitignored)
-- Installed binary at `~/.local/bin/chunk`
-- No pre-built binaries in repository (prevents git issues)
-
-### Repo Clone
-- `~/.local/share/chunk/repo` is always cloned/updated regardless of install method
-- Required for team prompts, upgrade command, and `install.sh` itself
-
-### Self-Update Mechanism
-- `chunk upgrade` runs `install.sh`, which tries binary download first, then source build
-- Git pull + download/rebuild + replace binary atomically
-- Uses semantic versioning (x.y.z) from package.json
-- Preserves user configuration during upgrades
-
-### Build Process
-- `bun run build` compiles TypeScript to native binaries
-- `scripts/build.ts` handles multi-platform compilation
-- Platform-specific builds available for faster installation
-
-## Development Workflow
-
-### Running from Source
 ```bash
-# Run with development mode (hot reload)
-bun run dev build-prompt --org <org>
-
-# Run specific command
-bun run dev auth login
+bun run dev build-prompt --org myorg  # Run from source
+bun run typecheck                     # Type check without building
+bun run build                         # Build all platform binaries → dist/
+bun test                              # Run all tests
+bun test:unit                         # Unit tests only
+bun test:e2e                          # E2E tests only
+bun run lint                          # Biome lint check
+bun run lint:fix                      # Auto-fix lint issues
+bun run format                        # Format code
+./install-local.sh                    # Build and install locally
 ```
 
-### Type Checking
-```bash
-# Check types without building
-bun run typecheck
-```
+## Documentation Map
 
-### Building Binaries
-```bash
-# Build for current platform
-bun run build
+Read these when working in the relevant area:
 
-# Output: dist/chunk-darwin-arm64
-```
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — target module layering, dependency rules, change routing, data flow, file structure, implementation details
+- **[docs/CLI.md](docs/CLI.md)** — target command tree, flag conventions, behavior decisions
+- **[packages/hook/AGENTS.md](packages/hook/AGENTS.md)** — read when working on hook package code
 
-### Testing
-```bash
-bun test                                    # All tests
-```
+## Key Architectural Constraints
+
+- Dependencies flow strictly downward: `commands/ → core/ → leaf modules`
+- `commands/` are thin: no business logic, no spinners — delegate to `core/`
+- `core/` splits orchestrators (UI + workflow) from step functions (pure logic, `.steps.ts` files)
+- Leaf modules (`storage/`, `api/`, `review_prompt_mining/`, `ui/`, `utils/`, `skills/`) must not import from `commands/` or `core/`
+- `config/` is a leaf with no imports from any `src/` module
 
 ## Code Conventions
 
-### TypeScript
-- Strict mode enabled in tsconfig.json
-- Type-first development: define types before implementation
-- No `any` types unless absolutely necessary
-- Prefer interfaces for public APIs, types for internal use
+- **TypeScript strict mode**: No implicit any, strict null checks
+- **Async/await**: Prefer over raw promises
+- **Early returns**: Reduce nesting depth
+- **Const over let**: Immutability by default
+- **Template literals**: For string interpolation
+- **Destructuring**: Objects and arrays where readable
+- **Error handling**: Typed error classes (NetworkError, AuthError, GitError) bubble to command layer
 
-### Project Organization
-- Path aliases: `@/*` maps to `src/*`
-- One component/service per file
-- Index files for clean exports
-- Separation of concerns: commands, core, storage layers
+## Testing Rules
 
-### Error Handling
-- Typed error classes (NetworkError, AuthError, GitError)
-- Errors bubble up to command layer for display
-- User-friendly error messages with actionable suggestions
-
-### Testing Philosophy
-- Unit tests for pure functions and utilities
-- No Claude API mocking - tests requiring API key skip gracefully if missing
-
-### Code Style
-- Use async/await over promises
-- Prefer const over let
-- Destructure objects and arrays
-- Use template literals for string interpolation
-- Early returns to reduce nesting
-
-## Data Storage
-
-| Path | Purpose |
-|------|---------|
-| `~/.config/chunk/config.json` | User configuration |
-
-All files created with mode `0600` (owner read/write only).
+- **E2E over mocks**: Critical workflows use real git operations in temp directories
+- **No Claude API mocking**: Tests requiring `ANTHROPIC_API_KEY` skip gracefully if missing
+- **Fakes over mocks**: Use fake servers instead of mocking libraries
+- **Test isolation**: Each test creates its own temp directory and cleans up
+- Naming: `*.unit.test.ts` (pure functions), `*.e2e.test.ts` (end-to-end workflows)

@@ -330,4 +330,4 @@ bun test               # Run test suite
 
 ---
 
-See [AGENTS.md](AGENTS.md) for architecture and development documentation.
+See [AGENTS.md](AGENTS.md) for AI agent instructions, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the target architecture, and [docs/CLI.md](docs/CLI.md) for the target command tree during the current refactor.
