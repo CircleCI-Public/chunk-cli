@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { deriveOutputPaths, resolveOrgAndRepos } from "../../core/build-prompt.steps";
 
-// Mock the git-remote module
+// Mock the git-remote module. Bun scopes mock.module() to this file,
+// so it does not affect other test files.
 const mockDetectGitHubOrgAndRepo = mock(() =>
 	Promise.resolve({ org: "detected-org", repo: "detected-repo" }),
 );
@@ -20,9 +21,9 @@ describe("resolveOrgAndRepos", () => {
 	});
 
 	it("throws when org is provided without repos", async () => {
-		await expect(resolveOrgAndRepos({ org: "my-org", repos: [] })).rejects.toThrow(
-			"--repos is required when --org is provided",
-		);
+		const error = await resolveOrgAndRepos({ org: "my-org", repos: [] }).catch(e => e);
+		expect(error).toBeInstanceOf(Error);
+		expect(error.message).toMatch("--repos is required when --org is provided");
 	});
 
 	it("returns org and repos as-is when both are provided", async () => {
