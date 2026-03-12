@@ -21,7 +21,7 @@ describe("resolveOrgAndRepos", () => {
 	});
 
 	it("throws when org is provided without repos", async () => {
-		const error = await resolveOrgAndRepos({ org: "my-org", repos: [] }).catch(e => e);
+		const error = await resolveOrgAndRepos({ org: "my-org", repos: [] }).catch((e) => e);
 		expect(error).toBeInstanceOf(Error);
 		expect(error.message).toMatch("--repos is required when --org is provided");
 	});
