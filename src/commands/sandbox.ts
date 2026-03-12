@@ -213,7 +213,12 @@ export async function addSshKeyToSandbox(
 		throw error;
 	}
 
-	console.log(JSON.stringify(result, null, 2));
+	console.log("Successfully added SSH key to sandbox.");
+	console.log("");
+	console.log(`Sandbox domain is: ${result.url}`);
+	console.log("");
+	console.log("To SSH into this sandbox, run:");
+	console.log(`  ssh -o ProxyCommand="socat - OPENSSL:${result.url}:2222,verify=0" user@localhost`);
 
 	return { exitCode: 0 };
 }
