@@ -4,6 +4,7 @@ import { Command } from "@commander-js/extra-typings";
 import { registerAuthCommands } from "./commands/auth";
 import { registerBuildPromptCommand } from "./commands/build-prompt";
 import { registerConfigCommands } from "./commands/config";
+import { registerSandboxCommands } from "./commands/sandbox";
 import { registerSkillsCommands } from "./commands/skills";
 import { registerTaskCommands } from "./commands/task";
 import { registerUpgradeCommand } from "./commands/upgrade";
@@ -26,70 +27,7 @@ async function main(): Promise<void> {
 		.description("Manage AI coding agent hooks (exec, task, sync, state, scope)");
 	registerHookCommands(hook);
 
-	const sandboxes = program.command("sandboxes").description("Manage sandboxes");
-	sandboxes
-		.command("list")
-		.description("List all sandboxes in an organization")
-		.requiredOption("--org-id <orgId>", "Org ID to list sandboxes for")
-		.action(async (options) => process.exit((await listSandboxes(options.orgId)).exitCode));
-
-	sandboxes
-		.command("create")
-		.description("Create a new sandbox")
-		.requiredOption("--org-id <orgId>", "Organization ID")
-		.requiredOption("--name <name>", "Sandbox name")
-		.option("--image <image>", "Sandbox image")
-		.action(async (options) =>
-			process.exit((await createNewSandbox(options.orgId, options.name, options.image)).exitCode),
-		);
-
-	sandboxes
-		.command("add-ssh-key")
-		.description("Add an SSH public key to a sandbox")
-		.requiredOption("--org-id <orgId>", "Organization ID")
-		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID")
-		.option("--public-key <publicKey>", "SSH public key string to add")
-		.option("--public-key-file <keyFile>", "Path to a .pub file containing the SSH public key")
-		.action(async (options) =>
-			process.exit(
-				(
-					await addSshKeyToSandbox(
-						options.orgId,
-						options.sandboxId,
-						options.publicKey,
-						options.publicKeyFile,
-					)
-				).exitCode,
-			),
-		);
-
-	sandboxes
-		.command("exec")
-		.description("Execute a command in a sandbox")
-		.requiredOption("--org-id <orgId>", "Org ID of sandbox")
-		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID of sandbox")
-		.requiredOption("--command <command>", "Command to execute")
-		.option("--args <args...>", "Arguments to command", [])
-		.action(async (options) =>
-			process.exit(
-				(
-					await execCommandInSandbox(
-						options.orgId,
-						options.sandboxId,
-						options.command,
-						options.args,
-					)
-				).exitCode,
-			),
-		);
-
-	sandboxes
-		.command("prepare")
-		.description("[EXPERIMENTAL] Prepare the hook environment before a session begins")
-		.option("--docker-sudo", "Run docker commands with sudo", false)
-		.action(async (opts: { dockerSudo: boolean }) =>
-			process.exit((await runSandboxPrepare({ dockerSudo: opts.dockerSudo })).exitCode),
-		);
+	registerSandboxCommands(program);
 
 	program.action(() => {
 		program.outputHelp();
