@@ -191,4 +191,43 @@ execs:
 		expect(exec?.always).toBe(false);
 		expect(exec?.timeout).toBe(300);
 	});
+
+	it("testFilePattern defaults to empty string when not set", () => {
+		writeFileSync(
+			configFile,
+			`
+execs:
+  tests:
+    command: "bun test"
+    fileExt: ".ts"
+`,
+			"utf-8",
+		);
+
+		const config = loadConfig();
+		const exec = getExec(config, "tests");
+		expect(exec).toBeDefined();
+		expect(exec?.testFilePattern).toBe("");
+	});
+
+	it("reads testFilePattern from YAML config", () => {
+		writeFileSync(
+			configFile,
+			`
+execs:
+  tests:
+    command: "bun test {{CHANGED_FILES}}"
+    fileExt: ".ts"
+    testFilePattern: "*.test.ts"
+`,
+			"utf-8",
+		);
+
+		const config = loadConfig();
+		const exec = getExec(config, "tests");
+		expect(exec).toBeDefined();
+		expect(exec?.testFilePattern).toBe("*.test.ts");
+		expect(exec?.fileExt).toBe(".ts");
+		expect(exec?.command).toBe("bun test {{CHANGED_FILES}}");
+	});
 });

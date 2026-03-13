@@ -3,6 +3,7 @@ import {
 	_resetRunCommand,
 	_setRunCommand,
 	detectChanges,
+	filterByPattern,
 	getChangedFiles,
 	getChangedPackages,
 	hasStagedChanges,
@@ -281,6 +282,139 @@ describe("git helpers", () => {
 				mockResult = { exitCode: 0, output: "", command: "" };
 				expect(await detectChanges({ cwd: "/repo" })).toBe(false);
 			});
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// filterByPattern
+	// -----------------------------------------------------------------------
+	describe("filterByPattern()", () => {
+		it("filters files by glob pattern against basename", () => {
+			const files = ["src/foo.test.ts", "src/bar.ts", "scripts/build.ts", "lib/baz.test.ts"];
+			expect(filterByPattern(files, "*.test.ts")).toEqual(["src/foo.test.ts", "lib/baz.test.ts"]);
+		});
+
+		it("returns empty array when nothing matches", () => {
+			const files = ["src/bar.ts", "scripts/build.ts"];
+			expect(filterByPattern(files, "*.test.ts")).toEqual([]);
+		});
+
+		it("returns all files when all match", () => {
+			const files = ["a.test.ts", "b.test.ts"];
+			expect(filterByPattern(files, "*.test.ts")).toEqual(["a.test.ts", "b.test.ts"]);
+		});
+
+		it("matches root-level files", () => {
+			expect(filterByPattern(["foo.test.ts"], "*.test.ts")).toEqual(["foo.test.ts"]);
+		});
+
+		it("handles empty input", () => {
+			expect(filterByPattern([], "*.test.ts")).toEqual([]);
+		});
+
+		it("supports *.spec.ts glob pattern", () => {
+			const files = ["src/foo.spec.ts", "src/foo.test.ts", "src/utils.ts"];
+			expect(filterByPattern(files, "*.spec.ts")).toEqual(["src/foo.spec.ts"]);
+		});
+
+		it("supports _test.go suffix pattern", () => {
+			const files = ["pkg/handler_test.go", "pkg/handler.go", "main.go"];
+			expect(filterByPattern(files, "*_test.go")).toEqual(["pkg/handler_test.go"]);
+		});
+
+		it("matches against basename only, ignoring directory names", () => {
+			const files = ["test/helpers/utils.ts", "src/__tests__/foo.test.ts"];
+			expect(filterByPattern(files, "*.test.ts")).toEqual(["src/__tests__/foo.test.ts"]);
+		});
+
+		it("preserves full paths in output", () => {
+			const files = ["deeply/nested/dir/foo.test.ts"];
+			expect(filterByPattern(files, "*.test.ts")).toEqual(["deeply/nested/dir/foo.test.ts"]);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// getChangedFiles with testFilePattern
+	// -----------------------------------------------------------------------
+	describe("getChangedFiles() with testFilePattern", () => {
+		it("applies testFilePattern after fileExt filter", async () => {
+			mockResult = {
+				exitCode: 0,
+				output: "src/foo.test.ts\nsrc/bar.ts\nscripts/build.ts\n",
+				command: "",
+			};
+			const files = await getChangedFiles({ fileExt: ".ts", testFilePattern: "*.test.ts" });
+			expect(files).toEqual(["src/foo.test.ts"]);
+		});
+
+		it("returns empty when testFilePattern filters out all fileExt matches", async () => {
+			mockResult = {
+				exitCode: 0,
+				output: "src/bar.ts\nscripts/build.ts\n",
+				command: "",
+			};
+			const files = await getChangedFiles({ fileExt: ".ts", testFilePattern: "*.test.ts" });
+			expect(files).toEqual([]);
+		});
+
+		it("works with testFilePattern alone (no fileExt)", async () => {
+			mockResult = {
+				exitCode: 0,
+				output: "src/foo.test.ts\nREADME.md\n",
+				command: "",
+			};
+			const files = await getChangedFiles({ testFilePattern: "*.test.ts" });
+			expect(files).toEqual(["src/foo.test.ts"]);
+		});
+
+		it("does not filter when testFilePattern is empty (backward compat)", async () => {
+			mockResult = {
+				exitCode: 0,
+				output: "src/foo.test.ts\nsrc/bar.ts\nscripts/build.ts\n",
+				command: "",
+			};
+			const files = await getChangedFiles({ fileExt: ".ts", testFilePattern: "" });
+			expect(files).toEqual(["src/foo.test.ts", "src/bar.ts", "scripts/build.ts"]);
+		});
+
+		it("does not filter when testFilePattern is omitted (backward compat)", async () => {
+			mockResult = {
+				exitCode: 0,
+				output: "src/foo.test.ts\nsrc/bar.ts\nscripts/build.ts\n",
+				command: "",
+			};
+			const files = await getChangedFiles({ fileExt: ".ts" });
+			expect(files).toEqual(["src/foo.test.ts", "src/bar.ts", "scripts/build.ts"]);
+		});
+
+		it("fileExt narrows first, then testFilePattern narrows further", async () => {
+			mockResult = {
+				exitCode: 0,
+				output: "src/foo.test.ts\nsrc/bar.ts\nREADME.md\nscripts/build.ts\nlib/baz.test.ts\n",
+				command: "",
+			};
+			const files = await getChangedFiles({ fileExt: ".ts", testFilePattern: "*.test.ts" });
+			// README.md excluded by fileExt, bar.ts and build.ts excluded by testFilePattern
+			expect(files).toEqual(["src/foo.test.ts", "lib/baz.test.ts"]);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// substitutePlaceholders with testFilePattern-filtered results
+	// -----------------------------------------------------------------------
+	describe("substitutePlaceholders() with testFilePattern-filtered files", () => {
+		it("substitutes only test files into {{CHANGED_FILES}}", () => {
+			// Simulates the scenario: fileExt=.ts + testFilePattern=*.test.ts
+			// Only test files should appear in the command
+			const filteredFiles = ["src/foo.test.ts", "lib/baz.test.ts"];
+			const result = substitutePlaceholders("bun test {{CHANGED_FILES}}", filteredFiles);
+			expect(result).toBe("bun test 'src/foo.test.ts' 'lib/baz.test.ts'");
+		});
+
+		it("substitutes empty string when all files filtered out", () => {
+			// When testFilePattern removes all files, {{CHANGED_FILES}} → ""
+			const result = substitutePlaceholders("bun test {{CHANGED_FILES}}", []);
+			expect(result).toBe("bun test ");
 		});
 	});
 });

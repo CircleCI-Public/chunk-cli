@@ -26,7 +26,7 @@ triggers:
 # --- Exec definitions ---
 execs:
   tests:
-    command: "bun test"
+    command: "bun test --pass-with-no-tests"
     fileExt: ".ts"
     always: false
     timeout: 300
@@ -37,8 +37,9 @@ execs:
     #   {{CHANGED_FILES}}    — space-separated list of changed files
     #   {{CHANGED_PACKAGES}} — space-separated list of changed workspace packages
     #   {{<State.field>}}    — any dot-path into event-namespaced state
-    command: "bun test {{CHANGED_FILES}}"
+    command: "bun test --pass-with-no-tests {{CHANGED_FILES}}"
     fileExt: ".ts"
+    testFilePattern: "*.test.ts"
     always: false
     timeout: 300
     limit: 3

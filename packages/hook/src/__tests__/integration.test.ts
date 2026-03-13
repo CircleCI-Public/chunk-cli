@@ -2287,6 +2287,193 @@ tasks:
 });
 
 // ===========================================================================
+// 21b. testFilePattern — CHANGED_FILES FILTERING
+// ===========================================================================
+
+describe("testFilePattern integration", () => {
+	it("exec run substitutes only matching files into {{CHANGED_FILES}}", async () => {
+		// Config: command echoes the substituted files, testFilePattern filters to *.test.ts
+		const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
+		writeFileSync(
+			configPath,
+			`
+execs:
+  tests:
+    command: "echo {{CHANGED_FILES}}"
+    fileExt: ".ts"
+    testFilePattern: "*.test.ts"
+    always: true
+    timeout: 30
+tasks:
+  review:
+    instructions: ".chunk/hook/review-instructions.md"
+    schema: ""
+    limit: 3
+`,
+		);
+
+		Bun.spawnSync(["git", "add", "."], { cwd: testProjectDir });
+		Bun.spawnSync(["git", "commit", "-m", "update config"], { cwd: testProjectDir });
+
+		// Create both test and non-test .ts files (uncommitted)
+		writeFileSync(join(testProjectDir, "utils.ts"), "export const x = 1;\n");
+		writeFileSync(join(testProjectDir, "build.ts"), "console.log('build');\n");
+		writeFileSync(join(testProjectDir, "app.test.ts"), "test('a', () => {});\n");
+		writeFileSync(join(testProjectDir, "lib.test.ts"), "test('b', () => {});\n");
+
+		const result = await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+		expect(result.exitCode).toBe(0);
+
+		// stdout should contain only the test files, not utils.ts or build.ts
+		expect(result.stderr).toContain("app.test.ts");
+		expect(result.stderr).toContain("lib.test.ts");
+		expect(result.stderr).not.toContain("utils.ts");
+		expect(result.stderr).not.toContain("build.ts");
+	});
+
+	it("exec run resolves {{CHANGED_FILES}} to empty when pattern filters all files", async () => {
+		// Config: testFilePattern is *.spec.ts but we only create .test.ts files
+		const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
+		writeFileSync(
+			configPath,
+			`
+execs:
+  tests:
+    command: "echo {{CHANGED_FILES}}"
+    fileExt: ".ts"
+    testFilePattern: "*.spec.ts"
+    always: true
+    timeout: 30
+tasks:
+  review:
+    instructions: ".chunk/hook/review-instructions.md"
+    schema: ""
+    limit: 3
+`,
+		);
+
+		Bun.spawnSync(["git", "add", "."], { cwd: testProjectDir });
+		Bun.spawnSync(["git", "commit", "-m", "update config"], { cwd: testProjectDir });
+
+		// Create .test.ts files (none match *.spec.ts)
+		writeFileSync(join(testProjectDir, "app.test.ts"), "test('a', () => {});\n");
+
+		const result = await runCli(
+			["exec", "run", "tests", "--no-check", "--always"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+		// Command becomes "echo " (empty substitution) — should still pass
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("--test-file-pattern CLI flag overrides config", async () => {
+		// Config has testFilePattern: "*.test.ts" but CLI overrides to *.spec.ts
+		const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
+		writeFileSync(
+			configPath,
+			`
+execs:
+  tests:
+    command: "echo {{CHANGED_FILES}}"
+    fileExt: ".ts"
+    testFilePattern: "*.test.ts"
+    always: true
+    timeout: 30
+tasks:
+  review:
+    instructions: ".chunk/hook/review-instructions.md"
+    schema: ""
+    limit: 3
+`,
+		);
+
+		Bun.spawnSync(["git", "add", "."], { cwd: testProjectDir });
+		Bun.spawnSync(["git", "commit", "-m", "update config"], { cwd: testProjectDir });
+
+		// Create both .test.ts and .spec.ts files
+		writeFileSync(join(testProjectDir, "app.test.ts"), "test('a', () => {});\n");
+		writeFileSync(join(testProjectDir, "app.spec.ts"), "test('b', () => {});\n");
+
+		const result = await runCli(
+			["exec", "run", "tests", "--no-check", "--always", "--test-file-pattern", "*.spec.ts"],
+			"",
+			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+		);
+		expect(result.exitCode).toBe(0);
+		// CLI overrode to *.spec.ts — only spec file should appear
+		expect(result.stderr).toContain("app.spec.ts");
+		expect(result.stderr).not.toContain("app.test.ts");
+	});
+
+	it("exec check block message includes --test-file-pattern", async () => {
+		// Config with testFilePattern — check should include it in run command suggestion
+		const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
+		writeFileSync(
+			configPath,
+			`
+execs:
+  tests:
+    command: "echo {{CHANGED_FILES}}"
+    fileExt: ".ts"
+    testFilePattern: "*.test.ts"
+    always: true
+    timeout: 30
+tasks:
+  review:
+    instructions: ".chunk/hook/review-instructions.md"
+    schema: ""
+    limit: 3
+`,
+		);
+
+		Bun.spawnSync(["git", "add", "."], { cwd: testProjectDir });
+		Bun.spawnSync(["git", "commit", "-m", "update config"], { cwd: testProjectDir });
+
+		// No sentinel exists → check should block with "missing" and suggest run command
+		const result = await runCli(
+			["exec", "check", "tests", "--always", "--test-file-pattern", "*.test.ts"],
+			projectEvent(),
+			testEnv(),
+		);
+		expect(result.exitCode).toBe(2);
+		expect(result.stderr).toContain("--test-file-pattern");
+	});
+
+	it("sync check auto-passes when testFilePattern is set and no matching files changed", async () => {
+		// Config with fileExt: ".ts" and testFilePattern — but no .ts files changed
+		const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
+		writeFileSync(
+			configPath,
+			`
+execs:
+  tests:
+    command: "echo {{CHANGED_FILES}}"
+    fileExt: ".ts"
+    testFilePattern: "*.test.ts"
+    timeout: 30
+tasks:
+  review:
+    instructions: ".chunk/hook/review-instructions.md"
+    schema: ""
+    limit: 3
+`,
+		);
+
+		Bun.spawnSync(["git", "add", "."], { cwd: testProjectDir });
+		Bun.spawnSync(["git", "commit", "-m", "update config"], { cwd: testProjectDir });
+
+		// No .ts files changed → skip-if-no-changes should auto-pass
+		const result = await runCli(["sync", "check", "exec:tests"], projectEvent(), testEnv());
+		expect(result.exitCode).toBe(0);
+	});
+});
+
+// ===========================================================================
 // 22. SENTINEL PERSISTENCE ON PASS
 // ===========================================================================
 

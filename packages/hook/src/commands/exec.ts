@@ -52,6 +52,7 @@ export type ExecFlags = {
 	cmd?: string;
 	timeout?: number;
 	fileExt?: string;
+	testFilePattern?: string;
 	staged?: boolean;
 	always?: boolean;
 	noCheck?: boolean;
@@ -99,6 +100,7 @@ function resolveExecFromFlags(config: ResolvedConfig, flags: ExecFlags): Resolve
 		command:
 			flags.cmd ?? yamlExec?.command ?? `echo 'No command configured for exec: ${flags.name}'`,
 		fileExt: flags.fileExt ?? yamlExec?.fileExt ?? "",
+		testFilePattern: flags.testFilePattern ?? yamlExec?.testFilePattern ?? "",
 		always: flags.always ?? yamlExec?.always ?? false,
 		timeout: flags.timeout ?? yamlExec?.timeout ?? 300,
 		limit: flags.limit ?? yamlExec?.limit ?? 0,
@@ -435,6 +437,7 @@ async function buildCommand(
 			cwd: config.projectDir,
 			stagedOnly: flags.staged ?? false,
 			fileExt: exec.fileExt,
+			testFilePattern: exec.testFilePattern,
 		});
 		command = substitutePlaceholders(command, files);
 	}
@@ -450,6 +453,8 @@ export function buildRunnerCommand(flags: ExecFlags): string {
 	if (flags.cmd) parts.push(`--cmd '${shellQuote(flags.cmd)}'`);
 	if (flags.timeout !== undefined) parts.push(`--timeout ${flags.timeout}`);
 	if (flags.fileExt) parts.push(`--file-ext '${shellQuote(flags.fileExt)}'`);
+	if (flags.testFilePattern)
+		parts.push(`--test-file-pattern '${shellQuote(flags.testFilePattern)}'`);
 	if (flags.staged) parts.push("--staged");
 	if (flags.always) parts.push("--always");
 	return parts.join(" ");
