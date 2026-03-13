@@ -9,11 +9,13 @@ import {
 	createNewSandbox,
 	execCommandInSandbox,
 	listSandboxes,
+	validateOnSandbox,
 } from "./commands/sandbox";
 import { runSandboxPrepare } from "./commands/sandbox/prepare";
 import { runSkillsInstall, runSkillsList, runSkillsStatus } from "./commands/skills";
 import { runTaskConfig, runTaskRun } from "./commands/task";
 import { runUpgrade } from "./commands/upgrade";
+import { runValidate } from "./commands/validate";
 import { DEFAULT_ANALYZE_MODEL, DEFAULT_PROMPT_MODEL } from "./config";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
@@ -240,6 +242,20 @@ Environment Variables:
 		.action(async (opts: { dockerSudo: boolean }) =>
 			process.exit((await runSandboxPrepare({ dockerSudo: opts.dockerSudo })).exitCode),
 		);
+
+	sandboxes
+		.command("validate")
+		.description("Run 'chunk validate' on a sandbox and stream the output")
+		.requiredOption("--org-id <orgId>", "Organization ID")
+		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID to run validate on")
+		.action(async (options) =>
+			process.exit((await validateOnSandbox(options.orgId, options.sandboxId)).exitCode),
+		);
+
+	program
+		.command("validate")
+		.description("Run configured validation commands against the current working tree")
+		.action(async () => process.exit((await runValidate()).exitCode));
 
 	program.action(() => {
 		program.outputHelp();

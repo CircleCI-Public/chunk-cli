@@ -217,3 +217,43 @@ export async function addSshKeyToSandbox(
 
 	return { exitCode: 0 };
 }
+
+export async function validateOnSandbox(
+	organizationId: string,
+	sandboxId: string,
+): Promise<CommandResult> {
+	const token = requireToken();
+	if (!token) return { exitCode: 2 };
+
+	let accessToken: string;
+	try {
+		const tokenResp = await createSandboxAccessToken(sandboxId, organizationId, token);
+		accessToken = tokenResp.access_token;
+	} catch (error) {
+		if (error instanceof CircleCIError) {
+			printError(
+				"Failed to get sandbox access token",
+				error.message,
+				"Check your CIRCLECI_TOKEN, sandbox ID, and org ID.",
+			);
+			return { exitCode: 2 };
+		}
+		throw error;
+	}
+
+	let result: ExecCommandResponse;
+	try {
+		result = await execCommand("chunk", ["validate"], accessToken);
+	} catch (error) {
+		if (error instanceof CircleCIError) {
+			printError("Failed to run validate on sandbox", error.message);
+			return { exitCode: 2 };
+		}
+		throw error;
+	}
+
+	if (result.stdout) process.stdout.write(result.stdout);
+	if (result.stderr) process.stderr.write(result.stderr);
+
+	return { exitCode: result.exit_code === 0 ? 0 : 1 };
+}
