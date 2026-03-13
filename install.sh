@@ -1,85 +1,142 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN_DIR="$HOME/.local/bin"
+# === Config ===
+REPO="CircleCI-Public/chunk-cli"
+BIN_DIR="${CHUNK_BIN_DIR:-$HOME/.local/bin}"
 BINARY_NAME="chunk"
-BINARY_DEST="$BIN_DIR/$BINARY_NAME"
+BASE_URL="https://github.com/$REPO/releases/latest/download"
 
-# Download correct release.
-# GoReleaser names archives as: chunk-cli_{OS}_{Arch}.tar.gz
-# e.g. chunk-cli_Darwin_arm64.tar.gz, chunk-cli_Linux_x86_64.tar.gz
-OS="$(uname -s)"
-ARCH="$(uname -m)"
-RELEASE_NAME="chunk-cli_${OS}_${ARCH}.tar.gz"
-ARCHIVE_DEST="/tmp/$RELEASE_NAME"
+# Embedded GPG public key used to sign chunk releases.
+# To update: gpg --armor --export <FINGERPRINT>
+GPG_PUBLIC_KEY="-----BEGIN PGP PUBLIC KEY BLOCK-----
+# TODO: paste the release signing public key here
+-----END PGP PUBLIC KEY BLOCK-----"
 
-mkdir -p "$BIN_DIR"
+# === Colors ===
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-if ! command -v "gh" >/dev/null 2>&1; then
-	echo "Missing required command: gh" >&2
-	echo "Install the Github CLI before proceeding." >&2
-	exit 1
-fi
+info()  { echo -e "${GREEN}✓${NC} $*"; }
+warn()  { echo -e "${YELLOW}!${NC} $*"; }
+error() { echo -e "${RED}✗${NC} $*" >&2; exit 1; }
 
-CHECKSUMS_FILE="/tmp/chunk-checksums.txt"
+# === Detect platform → sets $ARCHIVE_NAME ===
+detect_platform() {
+	local os arch
+	os="$(uname -s)"
+	arch="$(uname -m)"
+	case "$os-$arch" in
+		Darwin-arm64)  ARCHIVE_NAME="chunk-cli_Darwin_arm64.tar.gz" ;;
+		Darwin-x86_64) ARCHIVE_NAME="chunk-cli_Darwin_x86_64.tar.gz" ;;
+		Linux-aarch64) ARCHIVE_NAME="chunk-cli_Linux_arm64.tar.gz" ;;
+		Linux-x86_64)  ARCHIVE_NAME="chunk-cli_Linux_x86_64.tar.gz" ;;
+		*) error "Unsupported platform: $os-$arch. Supported: macOS (arm64/x86_64), Linux (arm64/x86_64)" ;;
+	esac
+}
 
-echo "Downloading release $RELEASE_NAME with gh CLI..."
+# === Download with retry ===
+download() {
+	local url="$1" dest="$2"
+	curl -fsSL --retry 3 --retry-delay 2 --location "$url" -o "$dest" \
+		|| error "Download failed: $url"
+}
 
-gh release download \
-	--clobber \
-	--repo CircleCI-Public/chunk-cli \
-	--pattern "$RELEASE_NAME" \
-	--output "$ARCHIVE_DEST"
+# === GPG signature check on checksums.txt ===
+verify_signature() {
+	local file="$1" sig="$2"
 
-gh release download \
-	--clobber \
-	--repo CircleCI-Public/chunk-cli \
-	--pattern "checksums.txt" \
-	--output "$CHECKSUMS_FILE"
+	if ! command -v gpg &>/dev/null; then
+		warn "gpg not found — skipping signature verification"
+		warn "Install gpg to enable this check: brew install gnupg  (macOS) or apt install gnupg (Linux)"
+		return 0
+	fi
 
-echo "Verifying checksum..."
-EXPECTED_CHECKSUM="$(grep "$RELEASE_NAME" "$CHECKSUMS_FILE" | awk '{print $1}')"
-if [ -z "$EXPECTED_CHECKSUM" ]; then
-	echo "Error: checksum for $RELEASE_NAME not found in checksums.txt" >&2
-	rm -f "$ARCHIVE_DEST" "$CHECKSUMS_FILE"
-	exit 1
-fi
+	# Sanity-check that the embedded key is real
+	if echo "$GPG_PUBLIC_KEY" | grep -q "TODO:"; then
+		warn "Release signing key not yet configured in this installer — skipping signature verification"
+		return 0
+	fi
 
-if command -v sha256sum >/dev/null 2>&1; then
-	ACTUAL_CHECKSUM="$(sha256sum "$ARCHIVE_DEST" | awk '{print $1}')"
-elif command -v shasum >/dev/null 2>&1; then
-	ACTUAL_CHECKSUM="$(shasum -a 256 "$ARCHIVE_DEST" | awk '{print $1}')"
-else
-	echo "Error: cannot verify checksum: neither sha256sum nor shasum is available." >&2
-	rm -f "$ARCHIVE_DEST" "$CHECKSUMS_FILE"
-	exit 1
-fi
+	# Import key into an isolated temp keyring (does not touch ~/.gnupg)
+	local tmp_keyring="$TMP_DIR/chunk-keyring.gpg"
+	echo "$GPG_PUBLIC_KEY" | gpg --batch --no-default-keyring \
+		--keyring "$tmp_keyring" --import 2>/dev/null \
+		|| error "Failed to import chunk release signing key"
 
-if [ "$ACTUAL_CHECKSUM" != "$EXPECTED_CHECKSUM" ]; then
-	echo "Error: checksum mismatch for $RELEASE_NAME" >&2
-	echo "  expected: $EXPECTED_CHECKSUM" >&2
-	echo "  actual:   $ACTUAL_CHECKSUM" >&2
-	rm -f "$ARCHIVE_DEST" "$CHECKSUMS_FILE"
-	exit 1
-fi
-rm -f "$CHECKSUMS_FILE"
+	gpg --batch --no-default-keyring --keyring "$tmp_keyring" \
+		--verify "$sig" "$file" 2>/dev/null \
+		|| error "Signature verification FAILED — the release may be corrupted or tampered with"
 
-tar -xzf "$ARCHIVE_DEST" -C "/tmp" chunk
-mv "/tmp/chunk" "$BINARY_DEST"
-rm -f "$ARCHIVE_DEST"
+	info "GPG signature verified"
+}
 
-chmod +x "$BINARY_DEST"
+# === SHA256 checksum check ===
+verify_checksum() {
+	local archive="$1" checksums="$2"
 
-if ! "$BINARY_DEST" --version; then
-	echo "Binary does not appear to be successfully installed." >&2
-	exit 1
-fi
+	local expected
+	expected="$(grep "$(basename "$archive")" "$checksums" | awk '{print $1}')"
+	[ -n "$expected" ] || error "No checksum entry for $(basename "$archive") in checksums.txt"
 
-echo "Succesful! Binary installed at $BINARY_DEST"
+	local actual
+	if command -v sha256sum &>/dev/null; then
+		actual="$(sha256sum "$archive" | awk '{print $1}')"
+	elif command -v shasum &>/dev/null; then
+		actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+	else
+		error "Cannot verify checksum: neither sha256sum nor shasum found in PATH"
+	fi
 
-if ! echo "$PATH" | tr ':' '\n' | grep -w -q "$BIN_DIR"; then
-	echo ""
-	echo "WARNING: $BIN_DIR does not appear to be in your \$PATH."
-	echo ""
-	echo "Add it and then restart your shell session to use chunk."
-fi
+	if [ "$actual" != "$expected" ]; then
+		error "Checksum mismatch for $(basename "$archive")
+  expected: $expected
+  actual:   $actual"
+	fi
+
+	info "SHA256 checksum verified"
+}
+
+# === Main ===
+main() {
+	command -v curl &>/dev/null || error "curl is required but not found in PATH"
+
+	detect_platform
+
+	TMP_DIR="$(mktemp -d)"
+	trap 'rm -rf "$TMP_DIR"' EXIT
+
+	local archive="$TMP_DIR/$ARCHIVE_NAME"
+	local checksums="$TMP_DIR/checksums.txt"
+	local sig="$TMP_DIR/checksums.txt.sig"
+
+	echo "Downloading chunk ($ARCHIVE_NAME)..."
+	download "$BASE_URL/$ARCHIVE_NAME"      "$archive"
+	download "$BASE_URL/checksums.txt"      "$checksums"
+	download "$BASE_URL/checksums.txt.sig"  "$sig"
+
+	verify_signature "$checksums" "$sig"
+	verify_checksum  "$archive"  "$checksums"
+
+	tar -xzf "$archive" -C "$TMP_DIR" chunk
+
+	mkdir -p "$BIN_DIR"
+	install -m 755 "$TMP_DIR/chunk" "$BIN_DIR/$BINARY_NAME"
+
+	if ! "$BIN_DIR/$BINARY_NAME" --version &>/dev/null; then
+		error "Installed binary failed smoke test — installation may be incomplete"
+	fi
+
+	info "chunk $("$BIN_DIR/$BINARY_NAME" --version) installed to $BIN_DIR/$BINARY_NAME"
+
+	if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
+		echo ""
+		warn "$BIN_DIR is not in your \$PATH"
+		echo "  Add it with:  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc"
+		echo "  Then restart your shell."
+	fi
+}
+
+main
