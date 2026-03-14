@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,7 +7,9 @@ import {
 	deactivateScope,
 	extractFilePaths,
 	MARKER_REL,
+	MARKER_TTL_MS,
 	matchesProject,
+	readMarker,
 } from "../commands/scope";
 
 // ---------------------------------------------------------------------------
@@ -280,13 +282,13 @@ describe("activateScope() and deactivateScope()", () => {
 		expect(result).toBe(true);
 	});
 
-	it("returns false for stale marker (different session ID, path mismatch)", () => {
+	it("returns false for valid marker from different session (path mismatch)", () => {
 		const dir = makeTmpDir();
 
 		// Activate with session 1
 		activateScope(dir, { tool_input: { file_path: `${dir}/file.ts` } }, "sess-1");
 
-		// Different session sees the stale marker via path mismatch
+		// Different session sees the valid marker via path mismatch
 		const result = activateScope(
 			dir,
 			{ tool_input: { file_path: "/other-repo/file.ts" } },
@@ -315,6 +317,97 @@ describe("activateScope() and deactivateScope()", () => {
 		// Marker still belongs to parent session
 		const content = JSON.parse(readFileSync(join(dir, MARKER_REL), "utf-8").trim());
 		expect(content.sessionId).toBe("parent-sess");
+	});
+
+	// -------------------------------------------------------------------------
+	// TTL-based marker expiry
+	// -------------------------------------------------------------------------
+
+	/** Write a marker with a custom timestamp for TTL testing. */
+	function writeExpiredMarker(dir: string, sessionId: string, ageMs: number): void {
+		const markerPath = join(dir, MARKER_REL);
+		const markerDir = join(dir, ".chunk", "hook");
+		if (!existsSync(markerDir)) {
+			mkdirSync(markerDir, { recursive: true });
+		}
+		const content = { sessionId, timestamp: Date.now() - ageMs };
+		writeFileSync(markerPath, `${JSON.stringify(content)}\n`);
+	}
+
+	it("reclaims expired marker from different session (path match)", () => {
+		const dir = makeTmpDir();
+
+		// Old session left an expired marker
+		writeExpiredMarker(dir, "dead-sess", MARKER_TTL_MS + 1000);
+
+		// New session activates with matching paths
+		const result = activateScope(dir, { tool_input: { file_path: `${dir}/file.ts` } }, "new-sess");
+
+		expect(result).toBe(true);
+		const marker = readMarker(dir);
+		expect(marker?.sessionId).toBe("new-sess");
+	});
+
+	it("reclaims expired marker from different session (no-path event)", () => {
+		const dir = makeTmpDir();
+
+		// Old session left an expired marker
+		writeExpiredMarker(dir, "dead-sess", MARKER_TTL_MS + 1000);
+
+		// New session encounters it via a no-paths event (e.g. Stop)
+		const result = activateScope(dir, {}, "new-sess");
+
+		expect(result).toBe(true);
+		const marker = readMarker(dir);
+		expect(marker?.sessionId).toBe("new-sess");
+	});
+
+	it("does NOT reclaim non-expired marker from different session (path match)", () => {
+		const dir = makeTmpDir();
+
+		// Recent marker from another session
+		writeExpiredMarker(dir, "active-sess", MARKER_TTL_MS - 60_000);
+
+		const result = activateScope(dir, { tool_input: { file_path: `${dir}/file.ts` } }, "new-sess");
+
+		// Returns true (subagent safety) but marker is NOT overwritten
+		expect(result).toBe(true);
+		const marker = readMarker(dir);
+		expect(marker?.sessionId).toBe("active-sess");
+	});
+
+	it("does NOT reclaim non-expired marker from different session (no-path event)", () => {
+		const dir = makeTmpDir();
+
+		writeExpiredMarker(dir, "active-sess", MARKER_TTL_MS - 60_000);
+
+		const result = activateScope(
+			dir,
+			{ tool_input: { file_path: "/other-repo/file.ts" } },
+			"new-sess",
+		);
+
+		expect(result).toBe(false);
+	});
+
+	it("refreshes marker timestamp on same-session no-path event", () => {
+		const dir = makeTmpDir();
+
+		// Activate, then artificially age the marker
+		activateScope(dir, { tool_input: { file_path: `${dir}/file.ts` } }, "sess-1");
+		const beforeTs = readMarker(dir)?.timestamp ?? 0;
+		expect(beforeTs).toBeGreaterThan(0);
+
+		// Write an older timestamp to simulate time passing
+		writeExpiredMarker(dir, "sess-1", 120_000);
+		const agedTs = readMarker(dir)?.timestamp ?? 0;
+		expect(agedTs).toBeLessThan(beforeTs);
+
+		// Same session, no-path event should refresh
+		activateScope(dir, {}, "sess-1");
+		const afterMarker = readMarker(dir);
+		expect(afterMarker?.timestamp).toBeGreaterThan(agedTs);
+		expect(afterMarker?.sessionId).toBe("sess-1");
 	});
 
 	it("skips session validation when no session ID provided (no-paths event)", () => {

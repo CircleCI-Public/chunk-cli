@@ -9,6 +9,7 @@ import {
 	defaultLogDir,
 	defaultShellStartupFiles,
 	generateEnvContent,
+	getCleanEnv,
 	legacyEnvFile,
 	PROFILES,
 	upsertManagedBlock,
@@ -432,5 +433,34 @@ describe("env-update", () => {
 			// Legacy should still exist (migration skipped)
 			expect(existsSync(legacyFile)).toBe(true);
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// getCleanEnv
+// ---------------------------------------------------------------------------
+
+describe("getCleanEnv", () => {
+	it("returns an env object with standard variables", async () => {
+		const env = await getCleanEnv();
+		expect(env).toBeDefined();
+		expect(typeof env).toBe("object");
+		// Login shells always set HOME and PATH
+		expect(env.HOME).toBeDefined();
+		expect(env.PATH).toBeDefined();
+	});
+
+	it("does not include variables injected by the parent process", async () => {
+		// Ensure the login shell has been spawned and cached before we inject the
+		// test variable — this makes the test independent of execution order.
+		await getCleanEnv();
+
+		process.env.CHUNK_HOOK_TEST_LEAK = "should_not_appear";
+		try {
+			const env = await getCleanEnv();
+			expect(env.CHUNK_HOOK_TEST_LEAK).toBeUndefined();
+		} finally {
+			delete process.env.CHUNK_HOOK_TEST_LEAK;
+		}
 	});
 });
