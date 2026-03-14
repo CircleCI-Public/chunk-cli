@@ -1,9 +1,11 @@
+import type { Command } from "@commander-js/extra-typings";
+import { DEFAULT_ANALYZE_MODEL, DEFAULT_PROMPT_MODEL } from "../config";
 import { type BuildPromptOptions, extractCommentsAndBuildPrompt } from "../core/build-prompt";
 import type { CommandResult } from "../types";
 import { dim } from "../ui/colors";
 import { detectGitHubOrgAndRepo } from "../utils/git-remote";
 
-export interface ParsedBuildPromptFlags {
+interface ParsedBuildPromptFlags {
 	org?: string;
 	repos: string[];
 	top: number;
@@ -15,7 +17,65 @@ export interface ParsedBuildPromptFlags {
 	includeAttribution: boolean;
 }
 
-export async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {
+function parsePositiveInt(value: string, _dummyPrevious: unknown): number {
+	const n = parseInt(value, 10);
+	if (Number.isNaN(n) || n < 1) {
+		throw new Error("Not a number.");
+	}
+	return n;
+}
+
+function parseCommaSeparatedList(value: string, _dummyPrevious: unknown): string[] {
+	return value.split(",");
+}
+
+function parseDate(value: string, _dummyPrevious: unknown): Date {
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) {
+		throw new Error(`Invalid date: ${value}`);
+	}
+	return date;
+}
+
+function threeMonthsAgo(): Date {
+	const date = new Date();
+	date.setMonth(date.getMonth() - 3);
+	return date;
+}
+
+export function registerBuildPromptCommand(program: Command): void {
+	program
+		.command("build-prompt")
+		.addHelpText(
+			"after",
+			`
+Environment Variables:
+  GITHUB_TOKEN             Required: GitHub personal access token with repo scope
+  ANTHROPIC_API_KEY        Required: Anthropic API key
+
+Examples:
+  chunk build-prompt                                     # Auto-detect org and repo from git remote
+  chunk build-prompt --org myorg --repos myrepo          # Explicit org and repo(s)
+  chunk build-prompt --repos repo1,repo2                 # Auto-detect org, explicit repos`,
+		)
+		.option(
+			"--org <org>",
+			"GitHub organization to analyze (auto-detected from git remote if omitted)",
+		)
+		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
+		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
+		.option("--since <date>", "Start date YYYY-MM-DD", parseDate, threeMonthsAgo())
+		.option("--output <path>", "Output path for the generated prompt", "./review-prompt.md")
+		.option("--max-comments <number>", "Max comments per reviewer for analysis", parsePositiveInt)
+		.option("--analyze-model <model>", "Claude model for the analysis step", DEFAULT_ANALYZE_MODEL)
+		.option("--prompt-model <model>", "Claude model for prompt generation", DEFAULT_PROMPT_MODEL)
+		.option("--include-attribution", "Include reviewer attribution in the generated prompt", false)
+		.action(async (options) => {
+			process.exit((await runBuildPrompt(options)).exitCode);
+		});
+}
+
+async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {
 	let org = flags.org;
 	let repos = [...flags.repos];
 
