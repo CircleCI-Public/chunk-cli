@@ -1,9 +1,10 @@
 /**
  * Process runner with timeout support.
  *
- * Uses `Bun.spawn` to run child processes, capturing stdout+stderr and
- * enforcing a configurable timeout.
+ * Uses Node.js `child_process.spawn` to run child processes, capturing
+ * stdout+stderr and enforcing a configurable timeout.
  */
+import { spawn } from "child_process";
 
 /** Result of a child-process execution. */
 export type RunResult = {
@@ -41,57 +42,48 @@ export async function runCommand(opts: RunOptions): Promise<RunResult> {
 	const maxOutput = 50 * 1024; // 50 KB
 
 	const baseEnv = extendEnv ? process.env : {};
-	const proc = Bun.spawn(["sh", "-c", command], {
-		cwd,
-		env: { ...baseEnv, ...extraEnv },
-		stdout: "pipe",
-		stderr: "pipe",
+	const env = { ...baseEnv, ...extraEnv };
+
+	return new Promise<RunResult>((resolve) => {
+		const proc = spawn("sh", ["-c", command], { cwd, env });
+
+		let timedOut = false;
+		let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+		let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+		const stdoutChunks: Buffer[] = [];
+		const stderrChunks: Buffer[] = [];
+
+		// EventEmitter-based streams are reliable across Bun versions on all
+		// platforms. Data is buffered as it arrives; `close` fires only after
+		// the process exits AND both streams are fully drained.
+		proc.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+		proc.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+		if (timeout > 0) {
+			timeoutTimer = setTimeout(() => {
+				timedOut = true;
+				proc.kill("SIGTERM");
+				// Force-kill after 5 s grace period
+				killTimer = setTimeout(() => proc.kill("SIGKILL"), 5_000);
+			}, timeout * 1000);
+		}
+
+		proc.on("close", (code) => {
+			if (timeoutTimer) clearTimeout(timeoutTimer);
+			if (killTimer) clearTimeout(killTimer);
+
+			const combined = (
+				Buffer.concat(stdoutChunks).toString("utf-8") +
+				Buffer.concat(stderrChunks).toString("utf-8")
+			).trim();
+			const output = combined.length > maxOutput ? combined.slice(-maxOutput) : combined;
+
+			resolve({
+				exitCode: timedOut ? 124 : (code ?? 1),
+				output,
+				command,
+			});
+		});
 	});
-
-	let timedOut = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-
-	// Collect stdout and stderr as text. `new Response(stream).text()` is
-	// Bun's canonical way to read a piped stream and resolves once the
-	// underlying pipe closes (process exits or is killed).
-	const stdoutText = new Response(proc.stdout).text();
-	const stderrText = new Response(proc.stderr).text();
-
-	if (timeout > 0) {
-		await Promise.race([
-			proc.exited,
-			new Promise<void>((resolve) => {
-				timer = setTimeout(() => {
-					timedOut = true;
-					proc.kill("SIGTERM");
-					// Force-kill after 5 s grace period
-					setTimeout(() => proc.kill("SIGKILL"), 5_000);
-					resolve();
-				}, timeout * 1000);
-			}),
-		]);
-	} else {
-		await proc.exited;
-	}
-
-	if (timer) clearTimeout(timer);
-
-	// Drain output: wait for stdout/stderr streams to close fully.
-	// For normal exits this is near-instant. For timed-out processes we use a
-	// longer window since SIGKILL may take up to 5 s to take effect.
-	// If child processes hold pipes open past the window, we return what we have.
-	const DRAIN_MS = timedOut ? 6_000 : 500;
-	const [stdout, stderr] = await Promise.race([
-		Promise.all([stdoutText, stderrText]),
-		new Promise<[string, string]>((resolve) => setTimeout(() => resolve(["", ""]), DRAIN_MS)),
-	]);
-
-	const combined = (stdout + stderr).trim();
-	const output = combined.length > maxOutput ? combined.slice(-maxOutput) : combined;
-
-	return {
-		exitCode: timedOut ? 124 : (proc.exitCode ?? 1),
-		output,
-		command,
-	};
 }
