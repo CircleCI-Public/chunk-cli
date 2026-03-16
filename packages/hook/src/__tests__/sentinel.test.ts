@@ -21,7 +21,7 @@ import {
 } from "../lib/sentinel";
 
 describe("sentinel", () => {
-	const testDir = join(tmpdir(), "chunk-hook-test-sentinels", String(Date.now()));
+	const testDir = join(tmpdir(), "chunk-hook-test-sentinels", `${process.pid}-${Date.now()}`);
 	const projectDir = "/fake/project";
 	const name = "test" as const;
 
@@ -327,8 +327,9 @@ describe("sentinel", () => {
 				expect(readCoordination(testDir, projectDir).readyAt).toBeDefined();
 				expect(readSentinel(testDir, projectDir, "cmd-a")).not.toBe(undefined);
 
-				// Wait for delay to elapse
-				await Bun.sleep(delayMs + 10);
+				// Wait for delay to elapse — generous buffer to avoid flaking under
+				// CI load (10 ms was too tight; scheduler jitter easily exceeds that).
+				await Bun.sleep(delayMs + 250);
 
 				// Second call: delay elapsed — sentinel consumed
 				const second = recordAndTryConsume(testDir, projectDir, "cmd-a", "pass", {

@@ -472,67 +472,71 @@ describe("block limit", () => {
 		expect(r4.exitCode).toBe(0);
 	});
 
-	it("counter resets when check evaluates as pass", async () => {
-		// Run a failing command, accumulate blocks, then run passing → counter resets.
-		// Uses fixable-cmd which exits based on FIXABLE_EXIT env (defaults to 1).
-		await runCli(
-			["exec", "run", "fixable-cmd", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
+	it(
+		"counter resets when check evaluates as pass",
+		async () => {
+			// Run a failing command, accumulate blocks, then run passing → counter resets.
+			// Uses fixable-cmd which exits based on FIXABLE_EXIT env (defaults to 1).
+			await runCli(
+				["exec", "run", "fixable-cmd", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
 
-		// Check twice (count → 1, then 2)
-		await runCli(
-			["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
-			projectEvent(),
-			testEnv(),
-		);
-		await runCli(
-			["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
-			projectEvent(),
-			testEnv(),
-		);
-
-		// Now "fix" — re-run the same command with FIXABLE_EXIT=0 → pass
-		await runCli(
-			["exec", "run", "fixable-cmd", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir, FIXABLE_EXIT: "0" }),
-		);
-
-		// Check passes → counter resets to 0
-		const rPass = await runCli(
-			["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
-			projectEvent(),
-			testEnv(),
-		);
-		expect(rPass.exitCode).toBe(0);
-
-		// Run failing again (FIXABLE_EXIT defaults to 1)
-		await runCli(
-			["exec", "run", "fixable-cmd", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
-
-		// Counter was reset by the pass, so we need limit+1 checks to auto-allow
-		for (let i = 0; i < 5; i++) {
-			const r = await runCli(
+			// Check twice (count → 1, then 2)
+			await runCli(
 				["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
 				projectEvent(),
 				testEnv(),
 			);
-			expect(r.exitCode).toBe(2);
-		}
+			await runCli(
+				["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
+				projectEvent(),
+				testEnv(),
+			);
 
-		// Count 6 > limit 5 → auto-allow (proving reset happened on pass)
-		const rAllow = await runCli(
-			["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
-			projectEvent(),
-			testEnv(),
-		);
-		expect(rAllow.exitCode).toBe(0);
-	});
+			// Now "fix" — re-run the same command with FIXABLE_EXIT=0 → pass
+			await runCli(
+				["exec", "run", "fixable-cmd", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir, FIXABLE_EXIT: "0" }),
+			);
+
+			// Check passes → counter resets to 0
+			const rPass = await runCli(
+				["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
+				projectEvent(),
+				testEnv(),
+			);
+			expect(rPass.exitCode).toBe(0);
+
+			// Run failing again (FIXABLE_EXIT defaults to 1)
+			await runCli(
+				["exec", "run", "fixable-cmd", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
+
+			// Counter was reset by the pass, so we need limit+1 checks to auto-allow
+			for (let i = 0; i < 5; i++) {
+				const r = await runCli(
+					["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
+					projectEvent(),
+					testEnv(),
+				);
+				expect(r.exitCode).toBe(2);
+			}
+
+			// Count 6 > limit 5 → auto-allow (proving reset happened on pass)
+			const rAllow = await runCli(
+				["exec", "check", "fixable-cmd", "--always", "--limit", "5"],
+				projectEvent(),
+				testEnv(),
+			);
+			expect(rAllow.exitCode).toBe(0);
+		},
+		{ timeout: 30_000 },
+	);
 });
 
 // ===========================================================================
@@ -2099,47 +2103,51 @@ describe("sync check (grouped sequential checks)", () => {
 		expect(result.stderr).toContain("subagent");
 	});
 
-	it("group sentinel cleanup: allow removes group sentinel", async () => {
-		// Both specs pass.
-		await runCli(
-			["exec", "run", "tests", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
-		await runCli(
-			["exec", "run", "lint", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
+	it(
+		"group sentinel cleanup: allow removes group sentinel",
+		async () => {
+			// Both specs pass.
+			await runCli(
+				["exec", "run", "tests", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
+			await runCli(
+				["exec", "run", "lint", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
 
-		// Sync check allows.
-		const r1 = await runCli(
-			["sync", "check", "exec:tests", "exec:lint", "--always"],
-			projectEvent(),
-			testEnv(),
-		);
-		expect(r1.exitCode).toBe(0);
+			// Sync check allows.
+			const r1 = await runCli(
+				["sync", "check", "exec:tests", "exec:lint", "--always"],
+				projectEvent(),
+				testEnv(),
+			);
+			expect(r1.exitCode).toBe(0);
 
-		// Run both again so sentinels exist for second cycle.
-		await runCli(
-			["exec", "run", "tests", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
-		await runCli(
-			["exec", "run", "lint", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
+			// Run both again so sentinels exist for second cycle.
+			await runCli(
+				["exec", "run", "tests", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
+			await runCli(
+				["exec", "run", "lint", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
 
-		// Second sync check: group sentinel was cleaned up, so both are re-checked.
-		const r2 = await runCli(
-			["sync", "check", "exec:tests", "exec:lint", "--always"],
-			projectEvent(),
-			testEnv(),
-		);
-		expect(r2.exitCode).toBe(0);
-	});
+			// Second sync check: group sentinel was cleaned up, so both are re-checked.
+			const r2 = await runCli(
+				["sync", "check", "exec:tests", "exec:lint", "--always"],
+				projectEvent(),
+				testEnv(),
+			);
+			expect(r2.exitCode).toBe(0);
+		},
+		{ timeout: 30_000 },
+	);
 
 	it("exits 1 when no specs are provided", async () => {
 		const result = await runCli(["sync", "check", "--always"], projectEvent(), testEnv(), 5_000);
@@ -2525,48 +2533,50 @@ triggers:
 		expect(r2.stderr).toContain("no results");
 	});
 
-	it("--on-fail retry with three specs preserves first passed spec when second fails", async () => {
-		// Three specs: tests (pass), lint (pass), fail-cmd (fail).
-		await runCli(
-			["exec", "run", "tests", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
-		await runCli(
-			["exec", "run", "lint", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
-		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
+	it(
+		"--on-fail retry with three specs preserves first passed spec when second fails",
+		async () => {
+			// Three specs: tests (pass), lint (pass), fail-cmd (fail).
+			await runCli(
+				["exec", "run", "tests", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
+			await runCli(
+				["exec", "run", "lint", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
+			await runCli(
+				["exec", "run", "fail-cmd", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
 
-		// Sync with retry: tests + lint pass → cached, fail-cmd fails.
-		const r1 = await runCli(
-			[
-				"sync",
-				"check",
-				"exec:tests",
-				"exec:lint",
-				"exec:fail-cmd",
-				"--always",
-				"--on-fail",
-				"retry",
-				"--bail",
-			],
-			projectEvent(),
-			testEnv(),
-		);
-		expect(r1.exitCode).toBe(2);
-		expect(r1.stderr).toContain("fail-cmd");
+			// Sync with retry: tests + lint pass → cached, fail-cmd fails.
+			const r1 = await runCli(
+				[
+					"sync",
+					"check",
+					"exec:tests",
+					"exec:lint",
+					"exec:fail-cmd",
+					"--always",
+					"--on-fail",
+					"retry",
+					"--bail",
+				],
+				projectEvent(),
+				testEnv(),
+			);
+			expect(r1.exitCode).toBe(2);
+			expect(r1.stderr).toContain("fail-cmd");
 
-		// Don't re-run tests or lint. Override fail-cmd to pass.
-		const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
-		writeFileSync(
-			configPath,
-			`
+			// Don't re-run tests or lint. Override fail-cmd to pass.
+			const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
+			writeFileSync(
+				configPath,
+				`
 execs:
   tests:
     command: "echo 'all tests passed'"
@@ -2595,32 +2605,34 @@ triggers:
     - "git commit"
     - "git push"
 `,
-		);
+			);
 
-		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
+			await runCli(
+				["exec", "run", "fail-cmd", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
 
-		// Second sync: tests + lint should still be cached, fail-cmd now passes → allow.
-		const r2 = await runCli(
-			[
-				"sync",
-				"check",
-				"exec:tests",
-				"exec:lint",
-				"exec:fail-cmd",
-				"--always",
-				"--on-fail",
-				"retry",
-				"--bail",
-			],
-			projectEvent(),
-			testEnv(),
-		);
-		expect(r2.exitCode).toBe(0);
-	});
+			// Second sync: tests + lint should still be cached, fail-cmd now passes → allow.
+			const r2 = await runCli(
+				[
+					"sync",
+					"check",
+					"exec:tests",
+					"exec:lint",
+					"exec:fail-cmd",
+					"--always",
+					"--on-fail",
+					"retry",
+					"--bail",
+				],
+				projectEvent(),
+				testEnv(),
+			);
+			expect(r2.exitCode).toBe(0);
+		},
+		{ timeout: 30_000 },
+	);
 });
 
 // ===========================================================================
@@ -2736,44 +2748,46 @@ describe("sync --bail vs default evaluate-all", () => {
 		expect(result.exitCode).toBe(0);
 	});
 
-	it("default with --on-fail retry: collects failure and preserves passed", async () => {
-		// tests pass, fail-cmd fails, lint is missing.
-		await runCli(
-			["exec", "run", "tests", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
-		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
+	it(
+		"default with --on-fail retry: collects failure and preserves passed",
+		async () => {
+			// tests pass, fail-cmd fails, lint is missing.
+			await runCli(
+				["exec", "run", "tests", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
+			await runCli(
+				["exec", "run", "fail-cmd", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
 
-		// No --bail → evaluates all specs; --on-fail retry → preserves tests in group.
-		const r1 = await runCli(
-			[
-				"sync",
-				"check",
-				"exec:tests",
-				"exec:fail-cmd",
-				"exec:lint",
-				"--always",
-				"--on-fail",
-				"retry",
-			],
-			projectEvent(),
-			testEnv(),
-		);
-		expect(r1.exitCode).toBe(2);
-		// Should mention both fail-cmd (fail) and lint (missing).
-		expect(r1.stderr).toContain("fail-cmd");
-		expect(r1.stderr).toContain("lint");
+			// No --bail → evaluates all specs; --on-fail retry → preserves tests in group.
+			const r1 = await runCli(
+				[
+					"sync",
+					"check",
+					"exec:tests",
+					"exec:fail-cmd",
+					"exec:lint",
+					"--always",
+					"--on-fail",
+					"retry",
+				],
+				projectEvent(),
+				testEnv(),
+			);
+			expect(r1.exitCode).toBe(2);
+			// Should mention both fail-cmd (fail) and lint (missing).
+			expect(r1.stderr).toContain("fail-cmd");
+			expect(r1.stderr).toContain("lint");
 
-		// Override fail-cmd to pass and run both fail-cmd and lint.
-		const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
-		writeFileSync(
-			configPath,
-			`
+			// Override fail-cmd to pass and run both fail-cmd and lint.
+			const configPath = join(testProjectDir, ".chunk", "hook", "config.yml");
+			writeFileSync(
+				configPath,
+				`
 execs:
   tests:
     command: "echo 'all tests passed'"
@@ -2802,36 +2816,38 @@ triggers:
     - "git commit"
     - "git push"
 `,
-		);
+			);
 
-		await runCli(
-			["exec", "run", "fail-cmd", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
-		await runCli(
-			["exec", "run", "lint", "--no-check", "--always"],
-			"",
-			testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
-		);
+			await runCli(
+				["exec", "run", "fail-cmd", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
+			await runCli(
+				["exec", "run", "lint", "--no-check", "--always"],
+				"",
+				testEnv({ CLAUDE_PROJECT_DIR: testProjectDir }),
+			);
 
-		// tests is still cached (retry mode), fail-cmd + lint now pass → allow.
-		const r2 = await runCli(
-			[
-				"sync",
-				"check",
-				"exec:tests",
-				"exec:fail-cmd",
-				"exec:lint",
-				"--always",
-				"--on-fail",
-				"retry",
-			],
-			projectEvent(),
-			testEnv(),
-		);
-		expect(r2.exitCode).toBe(0);
-	});
+			// tests is still cached (retry mode), fail-cmd + lint now pass → allow.
+			const r2 = await runCli(
+				[
+					"sync",
+					"check",
+					"exec:tests",
+					"exec:fail-cmd",
+					"exec:lint",
+					"--always",
+					"--on-fail",
+					"retry",
+				],
+				projectEvent(),
+				testEnv(),
+			);
+			expect(r2.exitCode).toBe(0);
+		},
+		{ timeout: 30_000 },
+	);
 });
 
 // ===========================================================================

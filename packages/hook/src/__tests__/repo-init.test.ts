@@ -7,7 +7,7 @@ import { runRepoInit } from "../commands/repo-init";
 import { TEMPLATE_FILES } from "../lib/templates";
 
 describe("repo-init", () => {
-	const testDir = join(tmpdir(), "chunk-hook-test-repo-init", String(Date.now()));
+	const testDir = join(tmpdir(), "chunk-hook-test-repo-init", `${process.pid}-${Date.now()}`);
 
 	beforeEach(() => {
 		mkdirSync(testDir, { recursive: true });
