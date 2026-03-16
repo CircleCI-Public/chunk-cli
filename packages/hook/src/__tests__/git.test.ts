@@ -1,23 +1,7 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
-import type { RunResult } from "../lib/proc";
-
-// ---------------------------------------------------------------------------
-// Mock runCommand so getChangedFiles never shells out to real git.
-// ---------------------------------------------------------------------------
-let mockResult: RunResult = { exitCode: 0, output: "", command: "" };
-let lastRunOpts: { command: string; cwd: string; timeout: number } | undefined;
-let allRunOpts: { command: string; cwd: string; timeout: number }[] = [];
-
-mock.module("../lib/proc", () => ({
-	runCommand: async (opts: { command: string; cwd: string; timeout: number }) => {
-		lastRunOpts = opts;
-		allRunOpts.push(opts);
-		return mockResult;
-	},
-}));
-
-// Import after mocking so the mock is in effect.
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
+	_resetRunCommand,
+	_setRunCommand,
 	detectChanges,
 	getChangedFiles,
 	getChangedPackages,
@@ -25,12 +9,30 @@ import {
 	hasUncommittedChanges,
 	substitutePlaceholders,
 } from "../lib/git";
+import type { RunResult } from "../lib/proc";
+
+// ---------------------------------------------------------------------------
+// Intercept runCommand via the module's injectable reference so we never
+// shell out to real git and never pollute the shared module registry.
+// ---------------------------------------------------------------------------
+let mockResult: RunResult = { exitCode: 0, output: "", command: "" };
+let lastRunOpts: { command: string; cwd: string; timeout: number } | undefined;
+let allRunOpts: { command: string; cwd: string; timeout: number }[] = [];
 
 describe("git helpers", () => {
 	beforeEach(() => {
 		mockResult = { exitCode: 0, output: "", command: "" };
 		lastRunOpts = undefined;
 		allRunOpts = [];
+		_setRunCommand(async (opts) => {
+			lastRunOpts = opts as { command: string; cwd: string; timeout: number };
+			allRunOpts.push(opts as { command: string; cwd: string; timeout: number });
+			return mockResult;
+		});
+	});
+
+	afterEach(() => {
+		_resetRunCommand();
 	});
 
 	// -----------------------------------------------------------------------

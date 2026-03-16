@@ -40,8 +40,8 @@ jobs:
       - checkout
       - install-deps
       - run:
-          name: Run unit tests
-          command: bun run test:unit
+          name: Run tests
+          command: bun test
           no_output_timeout: 90s
 
   build-smoke-test:
