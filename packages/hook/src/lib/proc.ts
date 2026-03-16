@@ -36,34 +36,6 @@ export type RunOptions = {
  * Returns the combined stdout+stderr, exit code, and whether it timed out.
  * Output is truncated to the last 50 KB to keep result files manageable.
  */
-/**
- * Collect a ReadableStream into a string chunk-by-chunk, storing each decoded
- * chunk in `buffer` as it arrives. Returns a promise that resolves when the
- * stream closes. Callers can snapshot `buffer.join("")` at any time to get
- * whatever has been collected so far, even before the stream closes.
- */
-async function collectStream(stream: ReadableStream<Uint8Array>, buffer: string[]): Promise<void> {
-	const decoder = new TextDecoder();
-	const reader = stream.getReader();
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			// Push value before checking done: on Linux, Bun may return the final
-			// chunk with done=true in the same read, and breaking first would
-			// discard it (reproducible with short outputs like `echo hello`).
-			if (value) {
-				buffer.push(decoder.decode(value, { stream: !done }));
-			}
-			if (done) break;
-		}
-		// Flush any remaining bytes in the decoder
-		const tail = decoder.decode();
-		if (tail) buffer.push(tail);
-	} finally {
-		reader.releaseLock();
-	}
-}
-
 export async function runCommand(opts: RunOptions): Promise<RunResult> {
 	const { command, cwd = process.cwd(), timeout = 300, env: extraEnv, extendEnv = true } = opts;
 	const maxOutput = 50 * 1024; // 50 KB
@@ -79,12 +51,11 @@ export async function runCommand(opts: RunOptions): Promise<RunResult> {
 	let timedOut = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
-	// Accumulate chunks into buffers as they arrive. This lets us snapshot
-	// partial output if the drain window expires before the pipes close.
-	const stdoutBuf: string[] = [];
-	const stderrBuf: string[] = [];
-	const stdoutDone = collectStream(proc.stdout, stdoutBuf);
-	const stderrDone = collectStream(proc.stderr, stderrBuf);
+	// Collect stdout and stderr as text. `new Response(stream).text()` is
+	// Bun's canonical way to read a piped stream and resolves once the
+	// underlying pipe closes (process exits or is killed).
+	const stdoutText = new Response(proc.stdout).text();
+	const stderrText = new Response(proc.stderr).text();
 
 	if (timeout > 0) {
 		await Promise.race([
@@ -105,16 +76,17 @@ export async function runCommand(opts: RunOptions): Promise<RunResult> {
 
 	if (timer) clearTimeout(timer);
 
-	// Drain output: child processes spawned by sh may hold the pipes open after
-	// sh exits. Wait up to 500 ms for the readers to finish; if they don't,
-	// snapshot whatever has been collected so far rather than returning nothing.
-	const DRAIN_MS = 500;
-	await Promise.race([
-		Promise.all([stdoutDone, stderrDone]),
-		new Promise<void>((resolve) => setTimeout(resolve, DRAIN_MS)),
+	// Drain output: wait for stdout/stderr streams to close fully.
+	// For normal exits this is near-instant. For timed-out processes we use a
+	// longer window since SIGKILL may take up to 5 s to take effect.
+	// If child processes hold pipes open past the window, we return what we have.
+	const DRAIN_MS = timedOut ? 6_000 : 500;
+	const [stdout, stderr] = await Promise.race([
+		Promise.all([stdoutText, stderrText]),
+		new Promise<[string, string]>((resolve) => setTimeout(() => resolve(["", ""]), DRAIN_MS)),
 	]);
 
-	const combined = (stdoutBuf.join("") + stderrBuf.join("")).trim();
+	const combined = (stdout + stderr).trim();
 	const output = combined.length > maxOutput ? combined.slice(-maxOutput) : combined;
 
 	return {
