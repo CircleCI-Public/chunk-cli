@@ -9,14 +9,15 @@ interface ValidateRawConfig {
 	validate?: string[];
 }
 
-function loadValidateCommands(projectDir: string): string[] {
+export function loadValidateCommands(projectDir: string): string[] {
 	const configPath = join(projectDir, ".chunk", "hook", "config.yml");
 	if (!existsSync(configPath)) return [];
 	try {
 		const content = readFileSync(configPath, "utf-8");
 		const config = parseYaml(content) as ValidateRawConfig;
 		return Array.isArray(config.validate) ? config.validate : [];
-	} catch {
+	} catch (e) {
+		process.stderr.write(dim(`Warning: failed to parse ${configPath}: ${(e as Error).message}\n`));
 		return [];
 	}
 }
@@ -58,7 +59,7 @@ export async function runValidate(): Promise<CommandResult> {
 	}
 
 	const skipped = commands.slice(results.length);
-	const passed = results.every((r) => r.exitCode === 0) && skipped.length === 0;
+	const passed = results.length === commands.length && results.every((r) => r.exitCode === 0);
 
 	// Summary
 	process.stdout.write(`\n${bold("─".repeat(40))}\n`);

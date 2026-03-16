@@ -11,6 +11,7 @@ import {
 } from "../api/circleci";
 import type { CommandResult } from "../types/index";
 import { bold } from "../ui/colors";
+import { getSandboxAccessToken } from "../storage/sandbox-tokens";
 import { printError } from "../utils/errors";
 
 function requireToken(): string | null {
@@ -227,8 +228,7 @@ export async function validateOnSandbox(
 
 	let accessToken: string;
 	try {
-		const tokenResp = await createSandboxAccessToken(sandboxId, organizationId, token);
-		accessToken = tokenResp.access_token;
+		accessToken = await getSandboxAccessToken(sandboxId, organizationId, token);
 	} catch (error) {
 		if (error instanceof CircleCIError) {
 			printError(
