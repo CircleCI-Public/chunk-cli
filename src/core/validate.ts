@@ -77,7 +77,9 @@ export async function validateLocally(
 
 	const executor: CommandExecutor = (command, onOutput) =>
 		new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve, reject) => {
-			const proc = spawn("sh", ["-c", command], { stdio: ["ignore", "pipe", "pipe"] });
+			const proc = spawn("sh", ["-c", command], {
+				stdio: ["ignore", "pipe", "pipe"],
+			});
 			const stdoutChunks: Buffer[] = [];
 			const stderrChunks: Buffer[] = [];
 			proc.stdout.on("data", (chunk: Buffer) => {
@@ -88,14 +90,16 @@ export async function validateLocally(
 				stderrChunks.push(chunk);
 				onOutput(null, chunk.toString());
 			});
-			proc.on("close", (code) =>
+			// ChildProcessByStdio lacks EventEmitter methods in some @types/node versions
+			const emitter = proc as unknown as NodeJS.EventEmitter;
+			emitter.on("close", (code: number | null) =>
 				resolve({
 					exitCode: code ?? 1,
 					stdout: Buffer.concat(stdoutChunks).toString(),
 					stderr: Buffer.concat(stderrChunks).toString(),
 				}),
 			);
-			proc.on("error", reject);
+			emitter.on("error", reject);
 		});
 	return runValidateSequence(loaded.commands, onCommandStart, onCommandOutput, executor);
 }

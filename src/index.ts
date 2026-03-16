@@ -3,12 +3,14 @@ import { registerHookCommands } from "@chunk/hook";
 import { Command } from "@commander-js/extra-typings";
 import { registerAuthCommands } from "./commands/auth";
 import { registerBuildPromptCommand } from "./commands/build-prompt";
+import { registerCompletionCommands } from "./commands/completion";
 import { registerConfigCommands } from "./commands/config";
 import { registerSandboxCommands } from "./commands/sandbox";
 import { registerSkillsCommands } from "./commands/skills";
 import { registerTaskCommands } from "./commands/task";
 import { registerUpgradeCommand } from "./commands/upgrade";
 import { registerValidateCommands } from "./commands/validate";
+import { initCompletions } from "./completions";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
 const program = new Command();
@@ -21,6 +23,7 @@ async function main(): Promise<void> {
 	registerSkillsCommands(program);
 	registerTaskCommands(program);
 	registerUpgradeCommand(program);
+	registerCompletionCommands(program);
 
 	// Hook commands — exec, task, sync, state, scope for AI agent hooks
 	const hook = program
@@ -30,6 +33,10 @@ async function main(): Promise<void> {
 
 	registerSandboxCommands(program);
 	registerValidateCommands(program);
+
+	// Cheap no-op when not handling a completion request — omelette
+	// detects its own argv flags internally and exits when needed.
+	initCompletions(program);
 
 	program.action(() => {
 		program.outputHelp();
