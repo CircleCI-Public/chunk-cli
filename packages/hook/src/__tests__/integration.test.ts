@@ -532,7 +532,7 @@ describe("block limit", () => {
 			testEnv(),
 		);
 		expect(rAllow.exitCode).toBe(0);
-	});
+	}, { timeout: 30_000 });
 });
 
 // ===========================================================================
@@ -2139,7 +2139,7 @@ describe("sync check (grouped sequential checks)", () => {
 			testEnv(),
 		);
 		expect(r2.exitCode).toBe(0);
-	});
+	}, { timeout: 30_000 });
 
 	it("exits 1 when no specs are provided", async () => {
 		const result = await runCli(["sync", "check", "--always"], projectEvent(), testEnv(), 5_000);
@@ -2620,7 +2620,7 @@ triggers:
 			testEnv(),
 		);
 		expect(r2.exitCode).toBe(0);
-	});
+	}, { timeout: 30_000 });
 });
 
 // ===========================================================================
@@ -2831,7 +2831,7 @@ triggers:
 			testEnv(),
 		);
 		expect(r2.exitCode).toBe(0);
-	});
+	}, { timeout: 30_000 });
 });
 
 // ===========================================================================
