@@ -48,8 +48,13 @@ async function collectStream(stream: ReadableStream<Uint8Array>, buffer: string[
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
+			// Push value before checking done: on Linux, Bun may return the final
+			// chunk with done=true in the same read, and breaking first would
+			// discard it (reproducible with short outputs like `echo hello`).
+			if (value) {
+				buffer.push(decoder.decode(value, { stream: !done }));
+			}
 			if (done) break;
-			buffer.push(decoder.decode(value, { stream: true }));
 		}
 		// Flush any remaining bytes in the decoder
 		const tail = decoder.decode();
