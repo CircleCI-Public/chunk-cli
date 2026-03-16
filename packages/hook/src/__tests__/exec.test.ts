@@ -277,7 +277,10 @@ describe("runExec() skipped sentinel at push time", () => {
 
 	it("allows push via skip-no-changes when repo has no modifications", async () => {
 		// Initialize a real git repo so detectChanges can run and return false.
-		execSync("git init && git commit --allow-empty -m init", { cwd: tmpDir, stdio: "ignore" });
+		execSync(
+			'git init && git config user.email "test@example.com" && git config user.name "test user" && git commit --allow-empty -m init',
+			{ cwd: tmpDir, stdio: "ignore" },
+		);
 		const config: ResolvedConfig = {
 			triggers: {},
 			execs: {},

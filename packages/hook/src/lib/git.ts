@@ -6,8 +6,22 @@
  */
 
 import { createHash } from "node:crypto";
+import type { RunOptions, RunResult } from "./proc";
+import { runCommand as _defaultRunCommand } from "./proc";
 
-import { runCommand } from "./proc";
+// Module-level function reference — replaceable for testing without
+// polluting the shared module registry via mock.module().
+let _run: (opts: RunOptions) => Promise<RunResult> = _defaultRunCommand;
+
+/** @internal For testing only. Override the runCommand implementation. */
+export function _setRunCommand(fn: (opts: RunOptions) => Promise<RunResult>): void {
+	_run = fn;
+}
+
+/** @internal For testing only. Reset to the real runCommand. */
+export function _resetRunCommand(): void {
+	_run = _defaultRunCommand;
+}
 
 /** Options for `getChangedFiles`. */
 export type ChangedFilesOptions = {
@@ -39,7 +53,7 @@ export async function getChangedFiles(opts: ChangedFilesOptions = {}): Promise<s
 			" | cut -c4-" +
 			" | sed 's/.* -> //'";
 
-	const result = await runCommand({ command, cwd, timeout: 30 });
+	const result = await _run({ command, cwd, timeout: 30 });
 	if (result.exitCode !== 0) return [];
 
 	let files = result.output
@@ -103,7 +117,7 @@ export function substitutePlaceholders(command: string, files: string[]): string
  * Uses `git status --porcelain` which covers staged, unstaged, and untracked files.
  */
 export async function hasUncommittedChanges(cwd?: string): Promise<boolean> {
-	const result = await runCommand({
+	const result = await _run({
 		command: "git status --porcelain -uall",
 		cwd: cwd ?? process.cwd(),
 		timeout: 15,
@@ -116,7 +130,7 @@ export async function hasUncommittedChanges(cwd?: string): Promise<boolean> {
  * Useful for pre-commit checks where only staged files matter.
  */
 export async function hasStagedChanges(cwd?: string): Promise<boolean> {
-	const result = await runCommand({
+	const result = await _run({
 		command: "git diff --cached --stat",
 		cwd: cwd ?? process.cwd(),
 		timeout: 15,
@@ -159,7 +173,7 @@ export async function detectChanges(opts: DetectChangesOptions): Promise<boolean
  */
 export async function getHeadSha(cwd?: string): Promise<string> {
 	try {
-		const result = await runCommand({
+		const result = await _run({
 			command: "git rev-parse HEAD",
 			cwd: cwd ?? process.cwd(),
 			timeout: 15,
@@ -212,7 +226,7 @@ export async function computeFingerprint(opts: FingerprintOptions): Promise<stri
 
 	let diff: string;
 	try {
-		const result = await runCommand({
+		const result = await _run({
 			command: parts.join(" "),
 			cwd: opts.cwd,
 			timeout: 30,
