@@ -36,6 +36,29 @@ export type RunOptions = {
  * Returns the combined stdout+stderr, exit code, and whether it timed out.
  * Output is truncated to the last 50 KB to keep result files manageable.
  */
+/**
+ * Collect a ReadableStream into a string chunk-by-chunk, storing each decoded
+ * chunk in `buffer` as it arrives. Returns a promise that resolves when the
+ * stream closes. Callers can snapshot `buffer.join("")` at any time to get
+ * whatever has been collected so far, even before the stream closes.
+ */
+async function collectStream(stream: ReadableStream<Uint8Array>, buffer: string[]): Promise<void> {
+	const decoder = new TextDecoder();
+	const reader = stream.getReader();
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer.push(decoder.decode(value, { stream: true }));
+		}
+		// Flush any remaining bytes in the decoder
+		const tail = decoder.decode();
+		if (tail) buffer.push(tail);
+	} finally {
+		reader.releaseLock();
+	}
+}
+
 export async function runCommand(opts: RunOptions): Promise<RunResult> {
 	const { command, cwd = process.cwd(), timeout = 300, env: extraEnv, extendEnv = true } = opts;
 	const maxOutput = 50 * 1024; // 50 KB
@@ -51,35 +74,42 @@ export async function runCommand(opts: RunOptions): Promise<RunResult> {
 	let timedOut = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
-	const timeoutPromise =
-		timeout > 0
-			? new Promise<void>((resolve) => {
-					timer = setTimeout(() => {
-						timedOut = true;
-						proc.kill("SIGTERM");
-						// Force-kill after 5 s grace period
-						setTimeout(() => proc.kill("SIGKILL"), 5_000);
-						resolve();
-					}, timeout * 1000);
-				})
-			: undefined;
+	// Accumulate chunks into buffers as they arrive. This lets us snapshot
+	// partial output if the drain window expires before the pipes close.
+	const stdoutBuf: string[] = [];
+	const stderrBuf: string[] = [];
+	const stdoutDone = collectStream(proc.stdout, stdoutBuf);
+	const stderrDone = collectStream(proc.stderr, stderrBuf);
 
-	// Collect output streams
-	const [stdout, stderr] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-	]);
-
-	if (timeoutPromise) {
-		// Race the process exit against the timeout
-		await Promise.race([proc.exited, timeoutPromise]);
+	if (timeout > 0) {
+		await Promise.race([
+			proc.exited,
+			new Promise<void>((resolve) => {
+				timer = setTimeout(() => {
+					timedOut = true;
+					proc.kill("SIGTERM");
+					// Force-kill after 5 s grace period
+					setTimeout(() => proc.kill("SIGKILL"), 5_000);
+					resolve();
+				}, timeout * 1000);
+			}),
+		]);
 	} else {
 		await proc.exited;
 	}
 
 	if (timer) clearTimeout(timer);
 
-	const combined = (stdout + stderr).trim();
+	// Drain output: child processes spawned by sh may hold the pipes open after
+	// sh exits. Wait up to 500 ms for the readers to finish; if they don't,
+	// snapshot whatever has been collected so far rather than returning nothing.
+	const DRAIN_MS = 500;
+	await Promise.race([
+		Promise.all([stdoutDone, stderrDone]),
+		new Promise<void>((resolve) => setTimeout(resolve, DRAIN_MS)),
+	]);
+
+	const combined = (stdoutBuf.join("") + stderrBuf.join("")).trim();
 	const output = combined.length > maxOutput ? combined.slice(-maxOutput) : combined;
 
 	return {
