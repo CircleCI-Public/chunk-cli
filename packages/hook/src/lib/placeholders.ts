@@ -12,6 +12,7 @@
 
 import type { AgentEvent } from "./adapter";
 import { normalizeEventName } from "./compat";
+import type { ChangedFilesOptions } from "./git";
 import { getChangedFiles, getChangedPackages } from "./git";
 import { log } from "./log";
 import type { State } from "./state";
@@ -35,6 +36,14 @@ export type ExpandOptions = {
 	 * `{{Stop.transcript_path}}` resolve without an explicit `state save`.
 	 */
 	event?: AgentEvent;
+	/**
+	 * Override git functions (for testing without module-level mocking).
+	 * When omitted, the real git helpers are used.
+	 */
+	git?: {
+		getChangedFiles: (opts?: ChangedFilesOptions) => Promise<string[]>;
+		getChangedPackages: (files: string[]) => string[];
+	};
 };
 
 /**
@@ -102,7 +111,10 @@ export async function expandPlaceholders(template: string, opts: ExpandOptions):
 		(placeholders.has("CHANGED_PACKAGES") && !replacements.has("CHANGED_PACKAGES"));
 
 	if (needsFiles) {
-		const files = await getChangedFiles({
+		const gitGetChangedFiles = opts.git?.getChangedFiles ?? getChangedFiles;
+		const gitGetChangedPackages = opts.git?.getChangedPackages ?? getChangedPackages;
+
+		const files = await gitGetChangedFiles({
 			cwd: opts.projectDir,
 			stagedOnly: opts.staged ?? false,
 			fileExt: opts.fileExt ?? "",
@@ -112,7 +124,7 @@ export async function expandPlaceholders(template: string, opts: ExpandOptions):
 			replacements.set("CHANGED_FILES", files.join(" "));
 		}
 		if (placeholders.has("CHANGED_PACKAGES") && !replacements.has("CHANGED_PACKAGES")) {
-			replacements.set("CHANGED_PACKAGES", getChangedPackages(files).join(" "));
+			replacements.set("CHANGED_PACKAGES", gitGetChangedPackages(files).join(" "));
 		}
 	}
 
