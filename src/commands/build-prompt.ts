@@ -1,9 +1,9 @@
 import type { Command } from "@commander-js/extra-typings";
 import { DEFAULT_ANALYZE_MODEL, DEFAULT_PROMPT_MODEL } from "../config";
 import { type BuildPromptOptions, extractCommentsAndBuildPrompt } from "../core/build-prompt";
+import { resolveOrgAndRepos } from "../core/build-prompt.steps";
 import type { CommandResult } from "../types";
 import { dim } from "../ui/colors";
-import { detectGitHubOrgAndRepo } from "../utils/git-remote";
 
 interface ParsedBuildPromptFlags {
 	org?: string;
@@ -76,27 +76,15 @@ Examples:
 }
 
 async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {
-	let org = flags.org;
-	let repos = [...flags.repos];
+	const resolved = await resolveOrgAndRepos({ org: flags.org, repos: flags.repos });
 
-	if (org && repos.length === 0) {
-		throw new Error(
-			"--repos is required when --org is provided. Omit --org to auto-detect from git remote.",
-		);
-	}
-
-	if (!org) {
-		const detected = await detectGitHubOrgAndRepo();
-		org = detected.org;
-		if (repos.length === 0) {
-			repos = [detected.repo];
-		}
-		console.log(dim(`Detected org from git remote: ${detected.org}`));
+	if (!flags.org) {
+		console.log(dim(`Detected org from git remote: ${resolved.org}`));
 	}
 
 	const options: BuildPromptOptions = {
-		org,
-		repos,
+		org: resolved.org,
+		repos: resolved.repos,
 		top: flags.top,
 		since: flags.since,
 		outputPath: flags.output,
