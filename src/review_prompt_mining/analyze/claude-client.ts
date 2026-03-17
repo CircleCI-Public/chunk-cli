@@ -32,7 +32,7 @@ export function createClaudeClient(): Anthropic {
 		process.exit(1);
 	}
 
-	return new Anthropic({ apiKey });
+	return new Anthropic({ apiKey, defaultHeaders: { "User-Agent": `chunk/${VERSION}` } });
 }
 
 /**
