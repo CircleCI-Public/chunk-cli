@@ -1,0 +1,83 @@
+import type { Command } from "@commander-js/extra-typings";
+import type { ValidateMode, ValidateStepResult } from "../core/validate";
+import { runValidate } from "../core/validate";
+import type { CommandResult } from "../types/index";
+import { bold, dim, green, red, yellow } from "../ui/colors";
+import { printError } from "../utils/errors";
+import { requireToken } from "../utils/tokens";
+
+const NO_COMMANDS_HINT =
+	"Add execs with commands to .chunk/hook/config.yml\nExample:\n  execs:\n    tests:\n      command: bun test\n    lint:\n      command: bun run lint";
+
+function renderValidateResult(results: ValidateStepResult[], skipped: string[]): CommandResult {
+	const passed = results.every((r) => r.exitCode === 0);
+
+	process.stdout.write(`\n${bold("─".repeat(40))}\n`);
+	for (const { command, exitCode } of results) {
+		const icon = exitCode === 0 ? green("✓") : red("✗");
+		process.stdout.write(`${icon} ${command}\n`);
+	}
+	for (const command of skipped) {
+		process.stdout.write(`${dim("○")} ${yellow(command)} ${dim("(skipped)")}\n`);
+	}
+
+	return { exitCode: passed ? 0 : 1 };
+}
+
+function handleValidateError(error: string, hint?: string): CommandResult {
+	const resolvedHint =
+		hint ?? (error === "No validate commands configured" ? NO_COMMANDS_HINT : undefined);
+	printError(error, resolvedHint);
+	return { exitCode: 1 };
+}
+
+export function registerValidateCommand(program: Command): void {
+	program
+		.command("validate")
+		.description("Run configured validation commands locally or on a sandbox")
+		.option("--sandbox-id <id>", "Sandbox ID to run validation on (remote mode)")
+		.option("--org-id <id>", "Organization ID (required with --sandbox-id)")
+		.option("--dry-run", "Show commands that would run without executing them", false)
+		.action(async (options) => {
+			let mode: ValidateMode;
+
+			if (options.dryRun) {
+				mode = { type: "dry-run" };
+			} else if (options.sandboxId) {
+				if (!options.orgId) {
+					printError("Missing option", "--org-id is required with --sandbox-id");
+					process.exit(2);
+				}
+				const token = requireToken();
+				if (!token) process.exit(2);
+				mode = { type: "remote", orgId: options.orgId, sandboxId: options.sandboxId, token };
+			} else {
+				mode = { type: "local" };
+			}
+
+			const result = await runValidate(
+				process.cwd(),
+				mode,
+				(command) => process.stdout.write(`\n${bold("$")} ${command}\n`),
+				(stdout, stderr) => {
+					if (stdout) process.stdout.write(stdout);
+					if (stderr) process.stderr.write(stderr);
+				},
+			);
+
+			if (!result.ok) {
+				process.exit(handleValidateError(result.error, result.hint).exitCode);
+			}
+
+			if ("dryRun" in result) {
+				process.stdout.write(`\n${bold("Commands that would run")}\n\n`);
+				for (const command of result.commands) {
+					process.stdout.write(`  ${bold("$")} ${command}\n`);
+				}
+				process.stdout.write("\n");
+				process.exit(0);
+			}
+
+			process.exit(renderValidateResult(result.results, result.skipped).exitCode);
+		});
+}

@@ -222,13 +222,13 @@ export async function fetchCollaborations(token: string): Promise<CircleCICollab
 	});
 }
 
-/**
- * Add an SSH public key to a sandbox
- */
 export interface AddSandboxSshKeyResponse {
 	url: string;
 }
 
+/**
+ * Add an SSH public key to a sandbox
+ */
 export async function addSandboxSshKey(
 	publicKey: string,
 	accessToken: string,

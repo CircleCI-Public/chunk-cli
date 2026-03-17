@@ -13,20 +13,8 @@ import {
 import type { CommandResult } from "../types/index";
 import { bold } from "../ui/colors";
 import { printError } from "../utils/errors";
+import { requireToken } from "../utils/tokens";
 import { runSandboxPrepare } from "./sandbox/prepare";
-
-function requireToken(): string | null {
-	const token = process.env.CIRCLECI_TOKEN;
-	if (!token) {
-		printError(
-			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is not set.",
-			"Set CIRCLECI_TOKEN to your CircleCI personal API token.",
-		);
-		return null;
-	}
-	return token;
-}
 
 async function listSandboxes(orgId: string): Promise<CommandResult> {
 	const token = requireToken();
@@ -39,7 +27,7 @@ async function listSandboxes(orgId: string): Promise<CommandResult> {
 		result = await listSandboxesForOrg(orgId, token);
 	} catch (error) {
 		if (error instanceof CircleCIError) {
-			printError("CircleCI API error", error.message, "Check your CIRCLECI_TOKEN and org ID.");
+			printError("CircleCI API error", error.message, "Check your CIRCLE_TOKEN and org ID.");
 			return { exitCode: 2 };
 		}
 		throw error;
@@ -71,11 +59,7 @@ async function createNewSandbox(
 		sandbox = await createSandbox(organizationId, name, token, image);
 	} catch (error) {
 		if (error instanceof CircleCIError) {
-			printError(
-				"Failed to create sandbox",
-				error.message,
-				"Check your CIRCLECI_TOKEN and org ID.",
-			);
+			printError("Failed to create sandbox", error.message, "Check your CIRCLE_TOKEN and org ID.");
 			return { exitCode: 2 };
 		}
 		throw error;
@@ -104,7 +88,7 @@ async function execCommandInSandbox(
 			printError(
 				"Failed to get sandbox access token",
 				error.message,
-				"Check your CIRCLECI_TOKEN, sandbox ID, and org ID.",
+				"Check your CIRCLE_TOKEN, sandbox ID, and org ID.",
 			);
 			return { exitCode: 2 };
 		}
@@ -265,7 +249,7 @@ async function addSshKeyToSandbox(
 			printError(
 				"Failed to get sandbox access token",
 				error.message,
-				"Check your CIRCLECI_TOKEN, sandbox ID, and org ID.",
+				"Check your CIRCLE_TOKEN, sandbox ID, and org ID.",
 			);
 			return { exitCode: 2 };
 		}
