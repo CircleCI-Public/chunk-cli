@@ -8,9 +8,7 @@
 
 import { basename, resolve } from "node:path";
 import type { Command } from "@commander-js/extra-typings";
-import { buildEnvUpdateOptions, runEnvUpdate } from "./commands/env-update";
 import { type ExecFlags, runExec } from "./commands/exec";
-import { type CopyResult, runRepoInit } from "./commands/repo-init";
 import { activateScope, deactivateScope } from "./commands/scope";
 import { runState, type StateFlags } from "./commands/state";
 import { parseSpecs, runSync, type SyncFlags } from "./commands/sync";
@@ -20,7 +18,9 @@ import { extractSessionId } from "./lib/compat";
 import { loadConfig } from "./lib/config";
 import type { Subcommand } from "./lib/env";
 import { isEnabled, resolveProject } from "./lib/env";
+import { buildEnvUpdateOptions, runEnvUpdate } from "./lib/env-update";
 import { initLog, log } from "./lib/log";
+import { type CopyResult, runRepoInit } from "./lib/repo-init";
 import { runHookSetup } from "./lib/setup";
 import { PROFILES } from "./lib/shell-env";
 
