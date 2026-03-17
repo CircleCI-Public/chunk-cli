@@ -10,6 +10,7 @@ import { basename, resolve } from "node:path";
 import type { Command } from "@commander-js/extra-typings";
 import { buildEnvUpdateOptions, runEnvUpdate } from "./commands/env-update";
 import { type ExecFlags, runExec } from "./commands/exec";
+import { runHookSetup } from "./commands/hook-setup";
 import { type CopyResult, runRepoInit } from "./commands/repo-init";
 import { activateScope, deactivateScope } from "./commands/scope";
 import { runState, type StateFlags } from "./commands/state";
@@ -52,6 +53,7 @@ export function registerHookCommands(parent: Command): void {
 	registerScope(parent);
 	registerRepo(parent);
 	registerEnv(parent);
+	registerSetup(parent);
 }
 
 // ---------------------------------------------------------------------------
@@ -554,6 +556,68 @@ function formatCopyResult(r: CopyResult): void {
 			console.log(`  - Skipped ${r.relativePath}`);
 			break;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// setup
+// ---------------------------------------------------------------------------
+
+function registerSetup(parent: Command): void {
+	parent
+		.command("setup")
+		.description("One-shot setup: configure shell env and initialize repo hook files")
+		.argument("[dir]", "Target directory (default: current directory)", ".")
+		.option("--force", "Overwrite existing files instead of creating .example copies", false)
+		.option("--skip-env", "Skip the shell environment update step", false)
+		.option("--profile <name>", `Environment profile (${PROFILES.join(", ")})`, "enable")
+		.action((dir, opts) => {
+			if (!PROFILES.includes(opts.profile as (typeof PROFILES)[number])) {
+				console.error(`Invalid profile: ${opts.profile}. Valid profiles: ${PROFILES.join(", ")}`);
+				process.exit(1);
+			}
+
+			const result = runHookSetup({
+				targetDir: dir,
+				profile: opts.profile as (typeof PROFILES)[number],
+				force: opts.force,
+				skipEnv: opts.skipEnv,
+			});
+
+			const projectName = basename(resolve(dir));
+
+			console.log("");
+			console.log("Setup complete!");
+			console.log("");
+			console.log("Config files:");
+			for (const r of result.copyResults) {
+				formatCopyResult(r);
+			}
+
+			if (result.envResult) {
+				const env = result.envResult;
+				console.log("");
+				console.log("Shell environment:");
+				if (env.overwritten) {
+					console.log(`  ⚠ ENV file overwritten: ${env.envFile}`);
+				} else {
+					console.log(`  ✓ ENV file created: ${env.envFile}`);
+				}
+				for (const f of env.startupFiles) {
+					console.log(`  ✓ ${f} updated`);
+				}
+			}
+
+			console.log("");
+			console.log("Next steps:");
+			console.log("  1. Edit .chunk/hook/config.yml — set command: fields for tests/lint");
+			console.log("  2. Edit .chunk/hook/code-review-instructions.md — customize review prompt");
+			if (result.envResult) {
+				const firstFile = result.envResult.startupFiles[0] ?? "~/.zprofile";
+				console.log(`  3. Restart your terminal or: source ${firstFile}`);
+			}
+			console.log("");
+			console.log(`Project: ${projectName}`);
+		});
 }
 
 // ---------------------------------------------------------------------------
