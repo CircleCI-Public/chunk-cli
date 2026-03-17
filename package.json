@@ -35,7 +35,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",
     "@commander-js/extra-typings": "^14.0.0",
-    "@inkjs/ui": "^2.0.0",
     "@octokit/graphql": "^9.0.3",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.3",
