@@ -8,7 +8,7 @@ import { registerSandboxCommands } from "./commands/sandbox";
 import { registerSkillsCommands } from "./commands/skills";
 import { registerTaskCommands } from "./commands/task";
 import { registerUpgradeCommand } from "./commands/upgrade";
-import { registerValidateCommand } from "./commands/validate";
+import { registerValidateCommands } from "./commands/validate";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
 const program = new Command();
@@ -29,7 +29,7 @@ async function main(): Promise<void> {
 	registerHookCommands(hook);
 
 	registerSandboxCommands(program);
-	registerValidateCommand(program);
+	registerValidateCommands(program);
 
 	program.action(() => {
 		program.outputHelp();
