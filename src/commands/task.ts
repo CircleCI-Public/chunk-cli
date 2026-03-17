@@ -354,7 +354,7 @@ export interface RunTaskOptions {
 	pipelineAsTool: boolean;
 }
 
-async function runTask(options: RunTaskOptions): Promise<CommandResult> {
+export async function runTask(options: RunTaskOptions): Promise<CommandResult> {
 	const definition = options.definition;
 	const token = getCircleCIToken();
 	if (!token) {
