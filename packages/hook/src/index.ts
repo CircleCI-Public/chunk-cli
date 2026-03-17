@@ -10,7 +10,6 @@ import { basename, resolve } from "node:path";
 import type { Command } from "@commander-js/extra-typings";
 import { buildEnvUpdateOptions, runEnvUpdate } from "./commands/env-update";
 import { type ExecFlags, runExec } from "./commands/exec";
-import { runHookSetup } from "./commands/hook-setup";
 import { type CopyResult, runRepoInit } from "./commands/repo-init";
 import { activateScope, deactivateScope } from "./commands/scope";
 import { runState, type StateFlags } from "./commands/state";
@@ -22,6 +21,7 @@ import { loadConfig } from "./lib/config";
 import type { Subcommand } from "./lib/env";
 import { isEnabled, resolveProject } from "./lib/env";
 import { initLog, log } from "./lib/log";
+import { runHookSetup } from "./lib/setup";
 import { PROFILES } from "./lib/shell-env";
 
 const TAG = "cli";
@@ -571,14 +571,15 @@ function registerSetup(parent: Command): void {
 		.option("--skip-env", "Skip the shell environment update step", false)
 		.option("--profile <name>", `Environment profile (${PROFILES.join(", ")})`, "enable")
 		.action((dir, opts) => {
-			if (!PROFILES.includes(opts.profile as (typeof PROFILES)[number])) {
+			const profile = opts.profile as (typeof PROFILES)[number];
+			if (!PROFILES.includes(profile)) {
 				console.error(`Invalid profile: ${opts.profile}. Valid profiles: ${PROFILES.join(", ")}`);
 				process.exit(1);
 			}
 
 			const result = runHookSetup({
 				targetDir: dir,
-				profile: opts.profile as (typeof PROFILES)[number],
+				profile,
 				force: opts.force,
 				skipEnv: opts.skipEnv,
 			});

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runHookSetup } from "../commands/hook-setup";
+import { runHookSetup } from "../lib/setup";
 import { TEMPLATE_FILES } from "../lib/templates";
 
 describe("hook-setup", () => {
@@ -104,5 +104,52 @@ describe("hook-setup", () => {
 		expect(existsSync(join(testDir, ".chunk", "hook", "config.yml"))).toBe(true);
 		expect(existsSync(join(testDir, ".chunk", "hook", ".gitignore"))).toBe(true);
 		expect(existsSync(join(testDir, ".claude", "settings.json"))).toBe(true);
+	});
+
+	it("creates targetDir if it does not exist", () => {
+		const newDir = join(testDir, "nonexistent-subdir");
+		expect(existsSync(newDir)).toBe(false);
+
+		const result = runHookSetup({
+			targetDir: newDir,
+			profile: "enable",
+			force: false,
+			skipEnv: true,
+		});
+
+		expect(result.copyResults.length).toBeGreaterThan(0);
+		for (const r of result.copyResults) {
+			expect(r.action).toBe("created");
+			expect(existsSync(join(newDir, r.relativePath))).toBe(true);
+		}
+	});
+
+	it("returns empty startupFiles when startupFiles is [] and skipEnv is false", () => {
+		const result = runHookSetup({
+			targetDir: testDir,
+			profile: "enable",
+			force: false,
+			skipEnv: false,
+			startupFiles: [],
+		});
+
+		expect(result.envResult).not.toBeNull();
+		expect(result.envResult?.startupFiles).toEqual([]);
+	});
+
+	it("envResult.overwritten is true on second run (env file exists after first)", () => {
+		const opts = {
+			targetDir: testDir,
+			profile: "enable" as const,
+			force: false,
+			skipEnv: false,
+			startupFiles: [startupFile],
+		};
+
+		runHookSetup(opts);
+
+		// Regardless of pre-existing env file state, second run must report overwritten
+		const second = runHookSetup(opts);
+		expect(second.envResult?.overwritten).toBe(true);
 	});
 });
