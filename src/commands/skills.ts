@@ -1,9 +1,26 @@
+import type { Command } from "@commander-js/extra-typings";
 import type { SkillState } from "../core/skills.ts";
 import { getSkillsStatus, installSkills, listSkills } from "../core/skills.ts";
 import type { CommandResult } from "../types/index.ts";
 import { dim, green, yellow } from "../ui/colors.ts";
 
-export function runSkillsInstall(): CommandResult {
+export function registerSkillsCommands(program: Command): void {
+	const skills = program.command("skills").description("Install and manage AI agent skills");
+	skills
+		.command("install")
+		.description("Install or update all skills into agent config directories")
+		.action(() => process.exit(runSkillsInstall().exitCode));
+	skills
+		.command("status")
+		.description("Show current installation status without making changes")
+		.action(() => process.exit(runSkillsStatus().exitCode));
+	skills
+		.command("list")
+		.description("List skills bundled in this binary")
+		.action(() => process.exit(runSkillsList().exitCode));
+}
+
+function runSkillsInstall(): CommandResult {
 	const results = installSkills();
 
 	for (const result of results) {

@@ -1,13 +1,10 @@
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { expandPlaceholders } from "../lib/placeholders";
 import type { State } from "../lib/state";
 
-/**
- * Mock the git module to avoid real git operations in unit tests.
- * The `getChangedFiles` and `getChangedPackages` functions are stubbed
- * to return predictable results.
- */
-mock.module("../lib/git", () => ({
+// Stub git functions passed via opts.git to avoid real git operations and
+// module-level mocking that would pollute the shared module registry.
+const stubGit = {
 	getChangedFiles: async () => ["src/lib/state.ts", "src/commands/task.ts"],
 	getChangedPackages: (files: string[]) => {
 		const dirs = new Set<string>();
@@ -18,13 +15,14 @@ mock.module("../lib/git", () => ({
 		}
 		return [...dirs].sort();
 	},
-}));
+};
 
 describe("placeholders", () => {
 	describe("expandPlaceholders()", () => {
 		const baseOpts = {
 			state: {} as State,
 			projectDir: "/test/project",
+			git: stubGit,
 		};
 
 		it("returns template unchanged when no placeholders", async () => {

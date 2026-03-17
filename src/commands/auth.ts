@@ -1,3 +1,4 @@
+import type { Command } from "@commander-js/extra-typings";
 import { validateApiKeyWithServer } from "../core/agent";
 import { clearApiKey, loadUserConfig, saveUserConfig } from "../storage/config";
 import type { CommandResult } from "../types";
@@ -6,7 +7,23 @@ import { label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput } from "../ui/prompt";
 import { printError } from "../utils/errors";
 
-export async function runAuthLogin(): Promise<CommandResult> {
+export function registerAuthCommands(program: Command): void {
+	const auth = program.command("auth").description("Manage authentication");
+	auth
+		.command("login")
+		.description("Store API key for authentication")
+		.action(async () => process.exit((await runAuthLogin()).exitCode));
+	auth
+		.command("status")
+		.description("Check authentication status")
+		.action(async () => process.exit((await runAuthStatus()).exitCode));
+	auth
+		.command("logout")
+		.description("Remove stored credentials")
+		.action(async () => process.exit((await runAuthLogout()).exitCode));
+}
+
+async function runAuthLogin(): Promise<CommandResult> {
 	console.log(`\n${bold("Chunk CLI - API Key Setup")}\n`);
 	console.log("Enter your Anthropic API key (starts with sk-ant-).");
 	console.log("The key will be stored securely and never displayed.\n");
@@ -59,7 +76,7 @@ export async function runAuthLogin(): Promise<CommandResult> {
 	return { exitCode: 0 };
 }
 
-export async function runAuthStatus(): Promise<CommandResult> {
+async function runAuthStatus(): Promise<CommandResult> {
 	const userConfig = loadUserConfig();
 	const envApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -116,7 +133,7 @@ export async function runAuthStatus(): Promise<CommandResult> {
 	}
 }
 
-export async function runAuthLogout(): Promise<CommandResult> {
+async function runAuthLogout(): Promise<CommandResult> {
 	// Check if there's an API key stored in config
 	const userConfig = loadUserConfig();
 

@@ -320,13 +320,17 @@ from running in inactive repos:
    the target repo via `process.cwd()` and do not need scope validation.
 4. `SessionStart`/`SessionEnd` hooks call `chunk hook scope deactivate` to clear the gate.
 5. For hook groups with no exec/task entry, `chunk hook scope activate` can be added explicitly.
-6. The marker file stores a session ID — mismatched markers (from a different session, possibly
-   a parallel agent) are treated as inactive for the current session.
+6. The marker file stores a session ID and timestamp — mismatched markers (from a different
+   session, possibly a parallel agent) are treated as inactive for the current session, unless
+   the marker has expired (TTL: 5 minutes).
 7. **Subagent safety:** When the parent agent spawns a subagent (e.g., for code review), the
    subagent gets a different session ID. Its tool calls trigger the normal hook chain and call
-   `activateScope()`, but the existing marker is **not overwritten** — the subagent is treated
-   as active without clobbering the parent's session. This prevents a scope gap when control
-   returns to the parent. The marker is only cleared by explicit `scope deactivate`.
+   `activateScope()`, but a non-expired marker is **not overwritten** — the subagent is treated
+   as active without clobbering the parent's session.
+8. **TTL-based expiry:** The marker timestamp is refreshed on every same-session
+   `activateScope()` call. If a different session finds an expired marker (default: 5 min,
+   override with `CHUNK_HOOK_MARKER_TTL_MS`), it reclaims it. This handles dead sessions where
+   `SessionEnd` never fired. Same-session calls always bypass TTL — pauses of any length are safe.
 
 In single-repo workspaces, every tool call matches, so the scope is always active — no behavior change.
 

@@ -8,6 +8,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { shellEnv } from "shell-env";
+
+import { log } from "./log";
 
 // ---------------------------------------------------------------------------
 // Platform detection
@@ -270,4 +273,33 @@ export function writeEnvFile(envFile: string, content: string): boolean {
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(envFile, content);
 	return existed;
+}
+
+// ---------------------------------------------------------------------------
+// Clean shell environment for exec commands
+// ---------------------------------------------------------------------------
+
+let cachedCleanEnv: Promise<Record<string, string>> | undefined;
+
+/**
+ * Return a clean login-shell environment, free of variables injected by the
+ * parent process (e.g. `AGENT_MODE`, `CLAUDE_*`).
+ *
+ * The promise is cached for the lifetime of the process so the shell is only
+ * spawned once — concurrent callers share the same in-flight request.
+ * On failure the current `process.env` is returned as a fallback so commands
+ * still run.
+ */
+export function getCleanEnv(): Promise<Record<string, string>> {
+	if (cachedCleanEnv) return cachedCleanEnv;
+
+	cachedCleanEnv = shellEnv().catch((err) => {
+		log("shell-env", `Failed to read login-shell env, falling back to process.env: ${err}`);
+		// Fallback: copy process.env (strip undefineds)
+		return Object.fromEntries(
+			Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined),
+		);
+	});
+
+	return cachedCleanEnv;
 }

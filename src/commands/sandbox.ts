@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { Command } from "@commander-js/extra-typings";
 import {
 	addSandboxSshKey,
 	CircleCIError,
@@ -12,6 +13,7 @@ import {
 import type { CommandResult } from "../types/index";
 import { bold } from "../ui/colors";
 import { printError } from "../utils/errors";
+import { runSandboxPrepare } from "./sandbox/prepare";
 
 function requireToken(): string | null {
 	const token = process.env.CIRCLECI_TOKEN;
@@ -26,7 +28,7 @@ function requireToken(): string | null {
 	return token;
 }
 
-export async function listSandboxes(orgId: string): Promise<CommandResult> {
+async function listSandboxes(orgId: string): Promise<CommandResult> {
 	const token = requireToken();
 	if (!token) return { exitCode: 2 };
 
@@ -56,7 +58,7 @@ export async function listSandboxes(orgId: string): Promise<CommandResult> {
 	return { exitCode: 0 };
 }
 
-export async function createNewSandbox(
+async function createNewSandbox(
 	organizationId: string,
 	name: string,
 	image?: string,
@@ -84,7 +86,7 @@ export async function createNewSandbox(
 	return { exitCode: 0 };
 }
 
-export async function execCommandInSandbox(
+async function execCommandInSandbox(
 	organizationId: string,
 	sandboxId: string,
 	command: string,
@@ -157,7 +159,75 @@ export function resolvePublicKeyFile(filePath: string): string {
 	return key;
 }
 
-export async function addSshKeyToSandbox(
+export function registerSandboxCommands(program: Command): void {
+	const sandboxes = program.command("sandboxes").description("Manage sandboxes");
+
+	sandboxes
+		.command("list")
+		.description("List all sandboxes in an organization")
+		.requiredOption("--org-id <orgId>", "Org ID to list sandboxes for")
+		.action(async (options) => process.exit((await listSandboxes(options.orgId)).exitCode));
+
+	sandboxes
+		.command("create")
+		.description("Create a new sandbox")
+		.requiredOption("--org-id <orgId>", "Organization ID")
+		.requiredOption("--name <name>", "Sandbox name")
+		.option("--image <image>", "Sandbox image")
+		.action(async (options) =>
+			process.exit((await createNewSandbox(options.orgId, options.name, options.image)).exitCode),
+		);
+
+	sandboxes
+		.command("add-ssh-key")
+		.description("Add an SSH public key to a sandbox")
+		.requiredOption("--org-id <orgId>", "Organization ID")
+		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID")
+		.option("--public-key <publicKey>", "SSH public key string to add")
+		.option("--public-key-file <keyFile>", "Path to a .pub file containing the SSH public key")
+		.action(async (options) =>
+			process.exit(
+				(
+					await addSshKeyToSandbox(
+						options.orgId,
+						options.sandboxId,
+						options.publicKey,
+						options.publicKeyFile,
+					)
+				).exitCode,
+			),
+		);
+
+	sandboxes
+		.command("exec")
+		.description("Execute a command in a sandbox")
+		.requiredOption("--org-id <orgId>", "Org ID of sandbox")
+		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID of sandbox")
+		.requiredOption("--command <command>", "Command to execute")
+		.option("--args <args...>", "Arguments to command", [])
+		.action(async (options) =>
+			process.exit(
+				(
+					await execCommandInSandbox(
+						options.orgId,
+						options.sandboxId,
+						options.command,
+						options.args,
+					)
+				).exitCode,
+			),
+		);
+
+	sandboxes
+		.command("prepare")
+		.description("[EXPERIMENTAL] Prepare the hook environment before a session begins")
+		.option("--docker-sudo", "Run docker commands with sudo", false)
+		.action(async (opts: { dockerSudo: boolean }) =>
+			process.exit((await runSandboxPrepare({ dockerSudo: opts.dockerSudo })).exitCode),
+		);
+}
+
+async function addSshKeyToSandbox(
 	organizationId: string,
 	sandboxId: string,
 	publicKey: string | undefined,
@@ -213,7 +283,12 @@ export async function addSshKeyToSandbox(
 		throw error;
 	}
 
-	console.log(JSON.stringify(result, null, 2));
+	console.log("Successfully added SSH key to sandbox.");
+	console.log("");
+	console.log(`Sandbox domain is: ${result.url}`);
+	console.log("");
+	console.log("To SSH into this sandbox, run:");
+	console.log(`  ssh -o ProxyCommand="socat - OPENSSL:${result.url}:2222,verify=0" user@localhost`);
 
 	return { exitCode: 0 };
 }
