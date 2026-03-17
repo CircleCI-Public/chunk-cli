@@ -1,10 +1,6 @@
 import * as fs from "node:fs";
 import type { Command } from "@commander-js/extra-typings";
-
-function getCircleCIToken(): string | undefined {
-	return process.env.CIRCLE_TOKEN ?? process.env.CIRCLECI_TOKEN;
-}
-
+import { z } from "zod";
 import {
 	type CircleCICollaboration,
 	CircleCIError,
@@ -29,7 +25,11 @@ import type { CommandResult } from "../types";
 import { bold, cyan, dim, yellow } from "../ui/colors";
 import { formatStep, label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput, promptSelect } from "../ui/prompt";
+import { buildProjectSlug, mapVcsTypeToOrgType, sortProjectsByName } from "../utils/circleci";
 import { handleError, printError } from "../utils/errors";
+import { getCircleCIToken } from "../utils/tokens";
+
+// --- Command Registration ---
 
 export function registerTaskCommands(program: Command): void {
 	const task = program.command("task").description("Trigger and configure chunk pipeline runs");
@@ -58,7 +58,7 @@ Examples:
 		.option("--new-branch", "Create a new branch for the run", false)
 		.option("--pipeline-as-tool", "Run the pipeline as a tool call", true)
 		.action(async (options) => {
-			process.exit((await runTaskRun(options)).exitCode);
+			process.exit((await runTask(options)).exitCode);
 		});
 
 	task
@@ -68,119 +68,13 @@ Examples:
 			"after",
 			`
 Environment Variables:
-  CIRCLE_TOKEN             Required: CircleCI personal API token`,
+  CIRCLE_TOKEN             CircleCI personal API token (preferred)
+  CIRCLECI_TOKEN           CircleCI personal API token (fallback)`,
 		)
-		.action(async () => process.exit((await runTaskConfig()).exitCode));
+		.action(async () => process.exit((await runTaskConfigWizard()).exitCode));
 }
 
-export interface RunCommandOptions {
-	definition: string;
-	prompt: string;
-	branch?: string;
-	newBranch: boolean;
-	pipelineAsTool: boolean;
-}
-
-export async function runTaskRun(options: RunCommandOptions): Promise<CommandResult> {
-	const definition = options.definition;
-	const token = getCircleCIToken();
-	if (!token) {
-		printError(
-			"CircleCI token not found",
-			"CIRCLE_TOKEN environment variable is not set.",
-			"Set CIRCLE_TOKEN to your CircleCI personal API token.",
-		);
-		return { exitCode: 2 };
-	}
-
-	let config: RunConfig;
-	try {
-		config = loadRunConfig();
-	} catch (error) {
-		const err = error instanceof Error ? error : new Error(String(error));
-		printError(
-			"Failed to load run configuration",
-			err.message,
-			"Ensure .chunk/run.json exists in your repository root.",
-		);
-		return { exitCode: 2 };
-	}
-
-	let resolved: ReturnType<typeof getDefinitionByNameOrId>;
-	try {
-		resolved = getDefinitionByNameOrId(config, definition);
-	} catch (error) {
-		const err = error instanceof Error ? error : new Error(String(error));
-		const available = Object.keys(config.definitions).join(", ");
-		printError(
-			"Unknown definition",
-			err.message,
-			available ? `Available definitions: ${available}` : "No definitions found in .chunk/run.json",
-		);
-		return { exitCode: 2 };
-	}
-
-	const branch = options.branch ?? resolved.branch;
-	const labelWidth = 18;
-
-	console.log(`\n${bold("Triggering chunk run")}\n`);
-	console.log(`${label("Definition:", labelWidth)} ${definition}`);
-	console.log(`${label("Branch:", labelWidth)} ${branch}`);
-	console.log(`${label("New branch:", labelWidth)} ${options.newBranch ? "yes" : "no"}`);
-	console.log(`${label("Pipeline as tool:", labelWidth)} ${options.pipelineAsTool ? "yes" : "no"}`);
-	console.log(`${label("Prompt:", labelWidth)} ${options.prompt}\n`);
-
-	const request: CircleCIRunRequest = {
-		agent_type: "prompt",
-		checkout_branch: branch,
-		definition_id: resolved.definitionId,
-		parameters: {
-			"agent-type": "prompt",
-			"run-pipeline-as-a-tool": options.pipelineAsTool,
-			"create-new-branch": options.newBranch,
-			"custom-prompt": options.prompt,
-		},
-		chunk_environment_id: resolved.envId ?? null,
-		trigger_source: "chunk-cli",
-		stats: {
-			prompt: options.prompt,
-			checkout_branch: branch,
-		},
-	};
-
-	let response: CircleCIRunResponse;
-	try {
-		response = await triggerChunkRun(token, config.org_id, config.project_id, request);
-	} catch (error) {
-		if (error instanceof CircleCIError) {
-			printError(
-				"CircleCI API error",
-				error.message,
-				"Check your CIRCLE_TOKEN and .chunk/run.json configuration.",
-			);
-			return { exitCode: 2 };
-		}
-		handleError(error);
-		return { exitCode: 2 };
-	}
-
-	printSuccess("Run triggered successfully!");
-	if (response.runId) {
-		console.log(`${dim("Run ID:")}      ${response.runId}`);
-	}
-	if (response.pipelineId) {
-		console.log(`${dim("Pipeline ID:")} ${response.pipelineId}`);
-	}
-	console.log("");
-
-	return { exitCode: 0 };
-}
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidUuid(value: string): boolean {
-	return UUID_REGEX.test(value);
-}
+// --- Task Config Wizard ---
 
 async function promptRequiredInput(message: string): Promise<string> {
 	while (true) {
@@ -198,7 +92,7 @@ async function promptUuid(message: string, required: boolean): Promise<string | 
 			console.log(yellow("  This field is required."));
 			continue;
 		}
-		if (!isValidUuid(value)) {
+		if (!z.uuid().safeParse(value).success) {
 			console.log(yellow("  Must be a valid UUID (e.g. 550e8400-e29b-41d4-a716-446655440000)."));
 			continue;
 		}
@@ -208,17 +102,6 @@ async function promptUuid(message: string, required: boolean): Promise<string | 
 
 const ANOTHER_PROJECT_SENTINEL = Symbol("another-project");
 type ProjectSelection = CircleCIProject | typeof ANOTHER_PROJECT_SENTINEL;
-
-export function mapVcsTypeToOrgType(vcsType: string | undefined): "github" | "circleci" {
-	const lower = vcsType?.toLowerCase();
-	if (lower === "github" || lower === "gh") return "github";
-	return "circleci";
-}
-
-export function buildProjectSlug(vcsType: string | undefined, org: string, repo: string): string {
-	const prefix = vcsType?.toLowerCase() === "bitbucket" ? "bb" : "gh";
-	return `${prefix}/${org}/${repo}`;
-}
 
 async function collectDefinition(): Promise<{ name: string; definition: RunDefinition }> {
 	const name = await promptRequiredInput("  Definition name (e.g. dev, prod): ");
@@ -240,12 +123,13 @@ async function collectDefinition(): Promise<{ name: string; definition: RunDefin
 
 	return { name, definition };
 }
-async function runTaskConfig(): Promise<CommandResult> {
+
+async function runTaskConfigWizard(): Promise<CommandResult> {
 	console.log(`\n${bold("Chunk Run Setup")}\n`);
 	console.log(`This wizard creates ${cyan(".chunk/run.json")} in your repository root.`);
 	console.log("");
 
-	// Check for CIRCLE_TOKEN
+	// Check for CircleCI token
 	const token = getCircleCIToken();
 	if (!token) {
 		printError(
@@ -328,9 +212,7 @@ async function runTaskConfig(): Promise<CommandResult> {
 		projectId = await promptRequiredInput("Enter a project ID: ");
 	} else {
 		// Build selection list sorted alphabetically, plus "Another project" sentinel
-		const sortedProjects = [...projects].sort((a, b) =>
-			`${a.username}/${a.reponame}`.localeCompare(`${b.username}/${b.reponame}`),
-		);
+		const sortedProjects = sortProjectsByName(projects);
 		const selectionItems: ProjectSelection[] = [...sortedProjects, ANOTHER_PROJECT_SENTINEL];
 
 		const selected = await promptSelect<ProjectSelection>(
@@ -458,6 +340,111 @@ async function runTaskConfig(): Promise<CommandResult> {
 	if (Object.keys(definitions).length > 1) {
 		console.log(dim(`  Available definitions: ${defNames}\n`));
 	}
+
+	return { exitCode: 0 };
+}
+
+// --- Task Run ---
+
+export interface RunTaskOptions {
+	definition: string;
+	prompt: string;
+	branch?: string;
+	newBranch: boolean;
+	pipelineAsTool: boolean;
+}
+
+export async function runTask(options: RunTaskOptions): Promise<CommandResult> {
+	const definition = options.definition;
+	const token = getCircleCIToken();
+	if (!token) {
+		printError(
+			"CircleCI API token not found",
+			"CIRCLE_TOKEN or CIRCLECI_TOKEN environment variable is not set.",
+			"Set CIRCLE_TOKEN to your CircleCI personal API token.",
+		);
+		return { exitCode: 2 };
+	}
+
+	let config: RunConfig;
+	try {
+		config = loadRunConfig();
+	} catch (error) {
+		const err = error instanceof Error ? error : new Error(String(error));
+		printError(
+			"Failed to load run configuration",
+			err.message,
+			"Ensure .chunk/run.json exists in your repository root.",
+		);
+		return { exitCode: 2 };
+	}
+
+	let resolved: ReturnType<typeof getDefinitionByNameOrId>;
+	try {
+		resolved = getDefinitionByNameOrId(config, definition);
+	} catch (error) {
+		const err = error instanceof Error ? error : new Error(String(error));
+		const available = Object.keys(config.definitions).join(", ");
+		printError(
+			"Unknown definition",
+			err.message,
+			available ? `Available definitions: ${available}` : "No definitions found in .chunk/run.json",
+		);
+		return { exitCode: 2 };
+	}
+
+	const branch = options.branch ?? resolved.branch;
+	const labelWidth = 18;
+
+	console.log(`\n${bold("Triggering chunk run")}\n`);
+	console.log(`${label("Definition:", labelWidth)} ${definition}`);
+	console.log(`${label("Branch:", labelWidth)} ${branch}`);
+	console.log(`${label("New branch:", labelWidth)} ${options.newBranch ? "yes" : "no"}`);
+	console.log(`${label("Pipeline as tool:", labelWidth)} ${options.pipelineAsTool ? "yes" : "no"}`);
+	console.log(`${label("Prompt:", labelWidth)} ${options.prompt}\n`);
+
+	const request: CircleCIRunRequest = {
+		agent_type: "prompt",
+		checkout_branch: branch,
+		definition_id: resolved.definitionId,
+		parameters: {
+			"agent-type": "prompt",
+			"run-pipeline-as-a-tool": options.pipelineAsTool,
+			"create-new-branch": options.newBranch,
+			"custom-prompt": options.prompt,
+		},
+		chunk_environment_id: resolved.envId ?? null,
+		trigger_source: "chunk-cli",
+		stats: {
+			prompt: options.prompt,
+			checkout_branch: branch,
+		},
+	};
+
+	let response: CircleCIRunResponse;
+	try {
+		response = await triggerChunkRun(token, config.org_id, config.project_id, request);
+	} catch (error) {
+		if (error instanceof CircleCIError) {
+			printError(
+				"CircleCI API error",
+				error.message,
+				"Check your CIRCLE_TOKEN and .chunk/run.json configuration.",
+			);
+			return { exitCode: 2 };
+		}
+		handleError(error);
+		return { exitCode: 2 };
+	}
+
+	printSuccess("Run triggered successfully!");
+	if (response.runId) {
+		console.log(`${dim("Run ID:")}      ${response.runId}`);
+	}
+	if (response.pipelineId) {
+		console.log(`${dim("Pipeline ID:")} ${response.pipelineId}`);
+	}
+	console.log("");
 
 	return { exitCode: 0 };
 }

@@ -1,17 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { type RunCommandOptions, runTaskRun } from "../commands/task";
-import { saveRunConfig } from "../storage/run-config";
+import { type RunTaskOptions, runTask } from "../../commands/task";
+import { saveRunConfig } from "../../storage/run-config";
 
 const mockFetch = mock();
+const originalFetch = global.fetch;
 // @ts-expect-error - Mock doesn't fully implement fetch type
 global.fetch = mockFetch;
 
-const testDir = path.join(process.cwd(), ".test-run-command");
+const testDir = path.join(process.cwd(), ".test-commands-task-run");
 const originalCwd = process.cwd();
-const originalCircleToken = process.env.CIRCLE_TOKEN;
 const originalCircleCIToken = process.env.CIRCLECI_TOKEN;
+const originalCircleToken = process.env.CIRCLE_TOKEN;
 
 const mockConfig = {
 	org_id: "a37b44de-e4f8-4d09-956a-9c1148f3adf5",
@@ -40,7 +41,7 @@ function lastRequestBody() {
 	return JSON.parse(mockFetch.mock.calls[0]![1].body);
 }
 
-describe("runTaskRun", () => {
+describe("runTask", () => {
 	beforeEach(() => {
 		fs.mkdirSync(path.join(testDir, ".git"), { recursive: true });
 		process.chdir(testDir);
@@ -50,22 +51,26 @@ describe("runTaskRun", () => {
 		mockFetch.mockReset();
 	});
 
+	afterAll(() => {
+		global.fetch = originalFetch;
+	});
+
 	afterEach(() => {
 		process.chdir(originalCwd);
 		fs.rmSync(testDir, { recursive: true, force: true });
-		if (originalCircleToken !== undefined) {
-			process.env.CIRCLE_TOKEN = originalCircleToken;
-		} else {
-			delete process.env.CIRCLE_TOKEN;
-		}
 		if (originalCircleCIToken !== undefined) {
 			process.env.CIRCLECI_TOKEN = originalCircleCIToken;
 		} else {
 			delete process.env.CIRCLECI_TOKEN;
 		}
+		if (originalCircleToken !== undefined) {
+			process.env.CIRCLE_TOKEN = originalCircleToken;
+		} else {
+			delete process.env.CIRCLE_TOKEN;
+		}
 	});
 
-	const baseOptions: RunCommandOptions = {
+	const baseOptions: RunTaskOptions = {
 		definition: "dev",
 		prompt: "fix the tests",
 		newBranch: false,
@@ -76,18 +81,18 @@ describe("runTaskRun", () => {
 		delete process.env.CIRCLE_TOKEN;
 		delete process.env.CIRCLECI_TOKEN;
 
-		const result = await runTaskRun(baseOptions);
+		const result = await runTask(baseOptions);
 
 		expect(result.exitCode).toBe(2);
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
-	it("accepts CIRCLECI_TOKEN as fallback", async () => {
+	it("accepts CIRCLECI_TOKEN as fallback when CIRCLE_TOKEN is not set", async () => {
 		delete process.env.CIRCLE_TOKEN;
-		process.env.CIRCLECI_TOKEN = "test-token";
+		process.env.CIRCLECI_TOKEN = "fallback-token";
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		const result = await runTaskRun(baseOptions);
+		const result = await runTask(baseOptions);
 
 		expect(result.exitCode).toBe(0);
 	});
@@ -97,24 +102,24 @@ describe("runTaskRun", () => {
 		process.env.CIRCLECI_TOKEN = "fallback-token";
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runTaskRun(baseOptions);
+		await runTask(baseOptions);
 
 		// biome-ignore lint/style/noNonNullAssertion: test helper, always called after a successful mock invocation
-		const [_url, opts] = mockFetch.mock.calls[0]!;
-		expect(opts.headers["Circle-Token"]).toBe("preferred-token");
+		const authHeader = mockFetch.mock.calls[0]![1].headers["Circle-Token"];
+		expect(authHeader).toBe("preferred-token");
 	});
 
 	it("returns exitCode 2 when run.json does not exist", async () => {
 		fs.rmSync(path.join(testDir, ".chunk", "run.json"));
 
-		const result = await runTaskRun(baseOptions);
+		const result = await runTask(baseOptions);
 
 		expect(result.exitCode).toBe(2);
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
 	it("returns exitCode 2 for unknown definition name", async () => {
-		const result = await runTaskRun({ ...baseOptions, definition: "staging" });
+		const result = await runTask({ ...baseOptions, definition: "staging" });
 
 		expect(result.exitCode).toBe(2);
 		expect(mockFetch).not.toHaveBeenCalled();
@@ -123,7 +128,7 @@ describe("runTaskRun", () => {
 	it("resolves a named definition to its definition_id", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runTaskRun({ ...baseOptions, definition: "dev" });
+		await runTask({ ...baseOptions, definition: "dev" });
 
 		expect(lastRequestBody().definition_id).toBe("e2016e4e-0172-47b3-a4ea-a3ee1a592dba");
 	});
@@ -131,7 +136,7 @@ describe("runTaskRun", () => {
 	it("uses the definition's default branch when --branch is not specified", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runTaskRun({ ...baseOptions, definition: "dev" });
+		await runTask({ ...baseOptions, definition: "dev" });
 
 		expect(lastRequestBody().checkout_branch).toBe("develop");
 	});
@@ -139,7 +144,7 @@ describe("runTaskRun", () => {
 	it("overrides branch with --branch flag", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runTaskRun({ ...baseOptions, branch: "feature/my-branch" });
+		await runTask({ ...baseOptions, branch: "feature/my-branch" });
 
 		expect(lastRequestBody().checkout_branch).toBe("feature/my-branch");
 	});
@@ -148,7 +153,7 @@ describe("runTaskRun", () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 		const uuid = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
 
-		await runTaskRun({ ...baseOptions, definition: uuid });
+		await runTask({ ...baseOptions, definition: uuid });
 
 		expect(lastRequestBody().definition_id).toBe(uuid);
 	});
@@ -157,7 +162,7 @@ describe("runTaskRun", () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 		const uuid = "a1b2c3d4-5678-90ab-cdef-1234567890ab";
 
-		await runTaskRun({ ...baseOptions, definition: uuid });
+		await runTask({ ...baseOptions, definition: uuid });
 
 		expect(lastRequestBody().checkout_branch).toBe("main");
 	});
@@ -165,7 +170,7 @@ describe("runTaskRun", () => {
 	it("passes prompt, newBranch, and pipelineAsTool through to the API", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runTaskRun({
+		await runTask({
 			definition: "dev",
 			prompt: "refactor the auth module",
 			newBranch: true,
@@ -181,7 +186,7 @@ describe("runTaskRun", () => {
 	it("includes environment ID from named definition", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runTaskRun({ ...baseOptions, definition: "dev" });
+		await runTask({ ...baseOptions, definition: "dev" });
 
 		expect(lastRequestBody().chunk_environment_id).toBe("b3c27e5f-1234-5678-9abc-def012345678");
 	});
@@ -189,7 +194,7 @@ describe("runTaskRun", () => {
 	it("sends null environment ID when definition has no environment", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		await runTaskRun({ ...baseOptions, definition: "prod" });
+		await runTask({ ...baseOptions, definition: "prod" });
 
 		expect(lastRequestBody().chunk_environment_id).toBeNull();
 	});
@@ -197,7 +202,7 @@ describe("runTaskRun", () => {
 	it("returns exitCode 0 on success", async () => {
 		mockFetch.mockImplementation(async () => mockSuccess());
 
-		const result = await runTaskRun(baseOptions);
+		const result = await runTask(baseOptions);
 
 		expect(result.exitCode).toBe(0);
 	});
@@ -209,7 +214,7 @@ describe("runTaskRun", () => {
 			text: async () => "Unauthorized",
 		}));
 
-		const result = await runTaskRun(baseOptions);
+		const result = await runTask(baseOptions);
 
 		expect(result.exitCode).toBe(2);
 	});
