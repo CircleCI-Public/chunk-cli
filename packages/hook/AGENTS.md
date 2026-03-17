@@ -3,7 +3,7 @@
 A Bun-based CLI that provides configurable exec, task, sync, state, scope, repo, and env
 commands for Claude Code hooks.
 Seven commands: `exec` (run shell commands like tests/lint),
-`task` (delegated tasks like code review),
+`task` (delegated tasks),
 `sync` (grouped sequential checks), `state` (cross-event data sharing), `scope` (per-repo activity gate),
 `repo` (repository initialization), and `env` (shell environment configuration).
 Communicates via stdin JSON and exit codes per the Claude Code hooks spec.
@@ -54,12 +54,12 @@ trigger matching, or matcher filtering.
 
 ### Task: delegated work via subagent
 
-Tasks delegate complex work (code review) to a subagent and enforce the result.
+Tasks delegate complex work to a subagent and enforce the result.
 
 1. `chunk hook task check <name>` — the primary entry point. On first call
    (no result file), blocks with:
    - A directive to spawn a subagent.
-   - Task instructions loaded from a file (e.g., `code-review-instructions.md`).
+   - Task instructions loaded from a file (e.g., `task-instructions.md`).
    - The JSON schema for the result.
    - The file path where the subagent must write its result.
 
@@ -75,7 +75,7 @@ Tasks delegate complex work (code review) to a subagent and enforce the result.
 
 `chunk hook sync check exec:<name> [task:<name>] [flags]` — runs multiple exec/task checks as
 a single ordered group. Use `sync check` whenever **two or more** delegated checks share the same
-hook event (e.g., `exec check tests` + `task check review` on `Stop`). It ensures correct ordering
+hook event (e.g., `exec check tests` + `task check mytask` on `Stop`). It ensures correct ordering
 and prevents the ping-pong problem that standalone checks would cause.
 
 Behavior:
@@ -149,7 +149,7 @@ standalone `task check` to skip tasks when no code changes have occurred since t
 `chunk hook scope <subcommand>` manages a per-repo activity gate for multi-repo workspaces.
 In VS Code multi-root workspaces, Claude Code merges all `.claude/settings.json` files, so **all
 hooks fire for all repos** — even repos the agent hasn't touched. The scope command prevents
-expensive hooks (tests, lint, review) from running in inactive repos.
+expensive hooks (tests, lint) from running in inactive repos.
 
 > **Why this exists:** Ideally, Claude Code would set `CLAUDE_PROJECT_DIR` (or the hook payload's
 > `cwd`) to the repo that the current tool call targets. If it did, a simple `cwd`-vs-config check
@@ -210,8 +210,8 @@ When no session ID is present, session validation is skipped and only file exist
 Both `exec` and `task` handlers use the same `activateScope()` call with identical parameters,
 so session binding behavior is consistent across commands.
 
-**Subagent safety:** When the parent agent spawns a subagent (e.g., via `runSubagent` for code
-review), the subagent receives a **different session ID** from VS Code. The subagent's tool calls
+**Subagent safety:** When the parent agent spawns a subagent (e.g., via `runSubagent`),
+the subagent receives a **different session ID** from VS Code. The subagent's tool calls
 (reading files, searching code) trigger the normal hook chain — `exec check` / `task check` —
 which calls `activateScope()` with the subagent's session ID. Without protection, this would
 overwrite the parent's marker, causing a brief scope gap when control returns to the parent
@@ -283,7 +283,6 @@ Steps performed:
 - `disable` — no `CHUNK_HOOK_*` variables exported (effectively disables hooks).
 - `enable` — `CHUNK_HOOK_ENABLE=1`.
 - `tests-lint` — `CHUNK_HOOK_ENABLE=1`, `CHUNK_HOOK_ENABLE_TESTS=1`, `CHUNK_HOOK_ENABLE_LINT=1`.
-- `review` — `CHUNK_HOOK_ENABLE=1`, `CHUNK_HOOK_ENABLE_REVIEW=1`.
 
 **Shell startup file management** uses idempotent marker+value blocks:
 
@@ -368,7 +367,7 @@ By default, execs and tasks **skip (exit 0) when no relevant changes exist:**
 - **Exec:** Skips if no files matching `--file-ext` have changed
   (or no changes at all if `--file-ext` is omitted).
 - **Task:** Skips if the composite fingerprint has not changed since the baseline recorded on the
-  first `state save`/`append` for `UserPromptSubmit`. This prevents review from firing on
+  first `state save`/`append` for `UserPromptSubmit`. This prevents tasks from firing on
   question-only interactions. **This logic is consistent between standalone `task check` and `task`
   specs inside `sync check`.**
 
@@ -535,7 +534,6 @@ packages/hook/
 ├── examples/               # Example configurations
 │   ├── .chunk/hook/config.yml                    # Fully commented Go config example
 │   └── .claude/
-│       ├── settings.review-example.json           # Review-only hook config
 │       └── settings.test-lint-example.json        # Test+lint-only hook config
 ├── package.json
 └── tsconfig.json
@@ -646,15 +644,15 @@ event.
 chunk hook exec check tests-changed --staged --on pre-commit
 ```
 
-**Task — delegated review with state** (`Stop` review):
+**Task — delegated task with state** (`Stop` mytask):
 State is appended on `UserPromptSubmit` to capture the original prompt (and any subsequent
 "Continue" prompts). On `Stop`, a task check blocks with instructions that expand
-`{{UserPromptSubmit.prompt}}` and `{{CHANGED_FILES}}` placeholders. A subagent performs the review
+`{{UserPromptSubmit.prompt}}` and `{{CHANGED_FILES}}` placeholders. A subagent performs the task
 and writes a structured result.
 
 ```sh
 chunk hook state append                         # UserPromptSubmit hook
-chunk hook task check review                    # Stop hook
+chunk hook task check mytask                    # Stop hook
 chunk hook state clear                          # SessionEnd hook
 ```
 

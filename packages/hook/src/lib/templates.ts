@@ -12,10 +12,6 @@
  * that are substituted with the repo's basename at init time.
  */
 
-import instructionsContent from "../../templates/.chunk/hook/code-review-instructions.md" with {
-	type: "text",
-};
-import schemaObj from "../../templates/.chunk/hook/code-review-schema.json";
 import configContent from "../../templates/.chunk/hook/config.yml" with { type: "text" };
 import gitignoreContent from "../../templates/.chunk/hook/gitignore" with { type: "text" };
 import settingsObj from "../../templates/.claude/settings.json";
@@ -44,17 +40,6 @@ export const TEMPLATE_FILES: TemplateFile[] = [
 	{
 		relativePath: ".chunk/hook/config.yml",
 		content: configContent,
-		substituteProject: false,
-	},
-	{
-		relativePath: ".chunk/hook/code-review-instructions.md",
-		content: instructionsContent,
-		substituteProject: false,
-	},
-	{
-		relativePath: ".chunk/hook/code-review-schema.json",
-		content: `${JSON.stringify(schemaObj, null, 2)}
-`,
 		substituteProject: false,
 	},
 	{

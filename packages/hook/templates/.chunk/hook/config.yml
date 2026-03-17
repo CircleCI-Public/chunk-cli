@@ -8,7 +8,6 @@
 #   CHUNK_HOOK_ENABLE_TESTS=1         Enable a specific exec by name
 #   CHUNK_HOOK_ENABLE_TESTS_CHANGED=1 Enable tests-changed exec by name
 #   CHUNK_HOOK_ENABLE_LINT=1          Enable lint exec by name
-#   CHUNK_HOOK_ENABLE_REVIEW=1        Enable a specific task by name
 #   CHUNK_HOOK_TIMEOUT_TESTS=120      Override timeout for an exec (seconds)
 #   CHUNK_HOOK_SENTINELS_DIR=/tmp/s   Override result-file directory
 #   CHUNK_HOOK_CONFIG=/path/to.yml    Use a different config file
@@ -50,10 +49,3 @@ execs:
     timeout: 60
     limit: 3
 
-# --- Task definitions ---
-tasks:
-  review:
-    instructions: ".chunk/hook/code-review-instructions.md"
-    schema: ".chunk/hook/code-review-schema.json"
-    always: false
-    limit: 3

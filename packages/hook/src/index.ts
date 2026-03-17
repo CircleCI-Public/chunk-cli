@@ -207,7 +207,7 @@ function registerExec(parent: Command): void {
 function registerTask(parent: Command): void {
 	const task = parent
 		.command("task")
-		.description("Delegate a task to a subagent and enforce the result (code review, etc.)");
+		.description("Delegate a task to a subagent and enforce the result");
 
 	// task check <name>
 	task
@@ -541,11 +541,7 @@ function registerRepo(parent: Command): void {
 				"  2. Review .claude/settings.json — adjust hook matchers and timeouts if needed.",
 			);
 			console.log("");
-			console.log(
-				"  3. Review .chunk/hook/code-review-instructions.md — customize the review prompt.",
-			);
-			console.log("");
-			console.log("  4. Ensure chunk is installed: chunk --version");
+			console.log("  3. Ensure chunk is installed: chunk --version");
 		});
 }
 
