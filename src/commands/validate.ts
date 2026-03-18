@@ -5,6 +5,7 @@ import type { CommandResult } from "../types/index";
 import { bold, dim, green, red, yellow } from "../ui/colors";
 import { printError } from "../utils/errors";
 import { requireToken } from "../utils/tokens";
+import { runValidateInit } from "./validate/init";
 
 const NO_COMMANDS_HINT =
 	"Add execs with commands to .chunk/hook/config.yml\nExample:\n  execs:\n    tests:\n      command: bun test\n    lint:\n      command: bun run lint";
@@ -31,9 +32,11 @@ function handleValidateError(error: string, hint?: string): CommandResult {
 	return { exitCode: 1 };
 }
 
-export function registerValidateCommand(program: Command): void {
-	program
-		.command("validate")
+export function registerValidateCommands(program: Command): void {
+	const validate = program.command("validate").description("Validate your project");
+
+	validate
+		.command("run")
 		.description("Run configured validation commands locally or on a sandbox")
 		.option("--sandbox-id <id>", "Sandbox ID to run validation on (remote mode)")
 		.option("--org-id <id>", "Organization ID (required with --sandbox-id)")
@@ -80,4 +83,14 @@ export function registerValidateCommand(program: Command): void {
 
 			process.exit(renderValidateResult(result.results, result.skipped).exitCode);
 		});
+
+	validate
+		.command("init")
+		.description(
+			"Detect the dependency install and test commands and write them to .chunk/config.json",
+		)
+		.option("--force", "Overwrite existing config", false)
+		.action(async (opts: { force: boolean }) =>
+			process.exit((await runValidateInit({ force: opts.force })).exitCode),
+		);
 }
