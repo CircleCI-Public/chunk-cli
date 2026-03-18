@@ -326,7 +326,10 @@ export async function runSandboxPrepare(options: SandboxPrepareOptions): Promise
 		console.log(`detected package manager: ${packageManager.name} (${packageManager.lockfile})`);
 	}
 
-	const client = new Anthropic({ apiKey, defaultHeaders: { "User-Agent": `Chunk-CLI/${VERSION}` } });
+	const client = new Anthropic({
+		apiKey,
+		defaultHeaders: { "User-Agent": `Chunk-CLI/${VERSION}` },
+	});
 
 	console.log("scanning for private dependencies...");
 	const requiredCredentials = await identifyRequiredCredentials(
