@@ -38,6 +38,9 @@ function parseInt10(value: string): number {
 // Public API — register hook subcommands under a parent Commander command
 // ---------------------------------------------------------------------------
 
+export type { EnvUpdateResult } from "./lib/env-update";
+export type { CopyResult } from "./lib/repo-init";
+export type { HookSetupOptions, HookSetupResult } from "./lib/setup";
 /**
  * Register all hook subcommands under the given parent command.
  *
@@ -45,6 +48,10 @@ function parseInt10(value: string): number {
  *   const hook = program.command("hook").description("...");
  *   registerHookCommands(hook);
  */
+export { runHookSetup } from "./lib/setup";
+export type { Profile } from "./lib/shell-env";
+export { PROFILES } from "./lib/shell-env";
+
 export function registerHookCommands(parent: Command): void {
 	registerExec(parent);
 	registerTask(parent);

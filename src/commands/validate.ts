@@ -1,3 +1,4 @@
+import { PROFILES } from "@chunk/hook";
 import type { Command } from "@commander-js/extra-typings";
 import type { ValidateMode, ValidateStepResult } from "../core/validate";
 import { runValidate } from "../core/validate";
@@ -7,8 +8,7 @@ import { printError } from "../utils/errors";
 import { requireToken } from "../utils/tokens";
 import { runValidateInit } from "./validate/init";
 
-const NO_COMMANDS_HINT =
-	"Add execs with commands to .chunk/hook/config.yml\nExample:\n  execs:\n    tests:\n      command: bun test\n    lint:\n      command: bun run lint";
+const NO_COMMANDS_HINT = "Run `chunk validate init` to detect your install and test commands.";
 
 function renderValidateResult(results: ValidateStepResult[], skipped: string[]): CommandResult {
 	const passed = results.every((r) => r.exitCode === 0);
@@ -86,11 +86,19 @@ export function registerValidateCommands(program: Command): void {
 
 	validate
 		.command("init")
-		.description(
-			"Detect the dependency install and test commands and write them to .chunk/config.json",
-		)
-		.option("--force", "Overwrite existing config", false)
-		.action(async (opts: { force: boolean }) =>
-			process.exit((await runValidateInit({ force: opts.force })).exitCode),
+		.description("Initialize hook config files and detect install/test commands for this repo")
+		.option("--force", "Overwrite existing files and config", false)
+		.option("--profile <name>", `Shell environment profile (${PROFILES.join(", ")})`, "enable")
+		.option("--skip-env", "Skip shell environment update", false)
+		.action(async (opts) =>
+			process.exit(
+				(
+					await runValidateInit({
+						force: opts.force,
+						profile: opts.profile,
+						skipEnv: opts.skipEnv,
+					})
+				).exitCode,
+			),
 		);
 }
