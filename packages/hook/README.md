@@ -708,7 +708,8 @@ packages/hook/
 │       ├── scope.test.ts
 │       ├── sentinel.test.ts
 │       ├── shell-env.test.ts
-│       └── state.test.ts
+│       ├── state.test.ts
+│       └── task-result.test.ts
 ├── examples/               # Example configurations
 │   ├── .chunk/hook/config.yml
 │   └── .claude/

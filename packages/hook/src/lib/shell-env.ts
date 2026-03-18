@@ -137,7 +137,7 @@ export function generateEnvContent(opts: EnvContentOptions): string {
 			lines.push("export CHUNK_HOOK_ENABLE=1");
 			break;
 		case "tests-lint":
-			lines.push("# Profile: tests-lint — tests and lint enabled, review disabled");
+			lines.push("# Profile: tests-lint — tests and lint enabled");
 			lines.push("export CHUNK_HOOK_ENABLE=0");
 			lines.push("export CHUNK_HOOK_ENABLE_TESTS=1");
 			lines.push("export CHUNK_HOOK_ENABLE_TESTS_CHANGED=1");

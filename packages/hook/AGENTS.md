@@ -75,7 +75,7 @@ Tasks delegate complex work to a subagent and enforce the result.
 
 `chunk hook sync check exec:<name> [task:<name>] [flags]` — runs multiple exec/task checks as
 a single ordered group. Use `sync check` whenever **two or more** delegated checks share the same
-hook event (e.g., `exec check tests` + `task check mytask` on `Stop`). It ensures correct ordering
+hook event (e.g., `exec check tests` + `task check chunk-review` on `Stop`). It ensures correct ordering
 and prevents the ping-pong problem that standalone checks would cause.
 
 Behavior:
@@ -644,16 +644,15 @@ event.
 chunk hook exec check tests-changed --staged --on pre-commit
 ```
 
-**Task — delegated task with state** (`Stop` mytask):
-State is appended on `UserPromptSubmit` to capture the original prompt (and any subsequent
-"Continue" prompts). On `Stop`, a task check blocks with instructions that expand
-`{{UserPromptSubmit.prompt}}` and `{{CHANGED_FILES}}` placeholders. A subagent performs the task
-and writes a structured result.
+**Task — delegated task with sync** (`Stop` tests + chunk-review):
+Tests run via `exec`, review runs via a `task` that invokes the `/chunk-review` skill.
+On `Stop`, `sync check` merges both results: it blocks until tests pass and the review
+completes, collecting all issues into a single round-trip message.
 
 ```sh
-chunk hook state append                         # UserPromptSubmit hook
-chunk hook task check mytask                    # Stop hook
-chunk hook state clear                          # SessionEnd hook
+chunk hook state append                                    # UserPromptSubmit hook
+chunk hook sync check exec:tests task:chunk-review         # Stop hook
+chunk hook state clear                                     # SessionEnd hook
 ```
 
 ## HookAdapter (strategy pattern)
