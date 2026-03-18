@@ -313,7 +313,7 @@ describe("state", () => {
 			expect(getBaselineFingerprint(sentinelDir, projectDir, "UserPromptSubmit")).toBe("fp_abc123");
 		});
 
-		it("returns fingerprint from first entry after multiple appends", () => {
+		it("returns fingerprint from last entry after multiple appends", () => {
 			appendEvent(sentinelDir, projectDir, "UserPromptSubmit", {
 				prompt: "first",
 				fingerprint: "fp_first",
@@ -322,7 +322,7 @@ describe("state", () => {
 				prompt: "second",
 				fingerprint: "fp_second",
 			});
-			expect(getBaselineFingerprint(sentinelDir, projectDir, "UserPromptSubmit")).toBe("fp_first");
+			expect(getBaselineFingerprint(sentinelDir, projectDir, "UserPromptSubmit")).toBe("fp_second");
 		});
 
 		it("returns undefined when event does not exist", () => {
