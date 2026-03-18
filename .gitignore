@@ -33,3 +33,6 @@ PLANS.md
 
 # git
 .worktrees
+
+# sandbox sync scratch files
+.chunk/sandbox*.patch

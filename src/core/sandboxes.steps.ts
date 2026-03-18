@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { shellEscape } from "../utils/ssh";
 
 const PRIVATE_KEY_RE = /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/;
 
@@ -30,4 +31,14 @@ export function resolvePublicKeyFile(filePath: string): string {
 	}
 	assertNotPrivateKey(key);
 	return key;
+}
+
+export function buildSandboxInitCommand(
+	repoUrl: string,
+	branch: string | null,
+	dest: string,
+): string {
+	const clone = `git clone ${shellEscape(repoUrl)} ${shellEscape(dest)}`;
+	if (branch) return `${clone} && git -C ${shellEscape(dest)} checkout ${shellEscape(branch)}`;
+	return clone;
 }
