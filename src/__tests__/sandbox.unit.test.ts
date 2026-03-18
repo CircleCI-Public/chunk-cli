@@ -3,7 +3,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { resolvePublicKeyFile, validatePublicKey } from "../commands/sandbox";
+import { resolvePublicKeyFile, validatePublicKey } from "../core/sandboxes.steps";
 
 // Generated once — ed25519 is fast and covers PKCS8/SPKI formats
 let privPKCS8: string;

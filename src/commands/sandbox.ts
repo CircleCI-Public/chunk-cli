@@ -1,156 +1,49 @@
-import { readFileSync } from "node:fs";
 import type { Command } from "@commander-js/extra-typings";
+import type { Sandbox } from "../api/circleci";
 import {
-	addSandboxSshKey,
-	CircleCIError,
-	createSandbox,
-	createSandboxAccessToken,
-	type ExecCommandResponse,
-	execCommand,
-	listSandboxesForOrg,
-	type Sandbox,
-} from "../api/circleci";
+	addSshKeyToSandbox,
+	createNewSandbox,
+	execCommandInSandbox,
+	listSandboxes,
+} from "../core/sandboxes";
 import type { CommandResult } from "../types/index";
 import { bold } from "../ui/colors";
 import { printError } from "../utils/errors";
-import { requireToken } from "../utils/tokens";
 import { runSandboxPrepare } from "./sandbox/prepare";
 
-async function listSandboxes(orgId: string): Promise<CommandResult> {
-	const token = requireToken();
-	if (!token) return { exitCode: 2 };
-
-	console.log(`\n${bold("Sandboxes")}\n`);
-
-	let result: Awaited<ReturnType<typeof listSandboxesForOrg>>;
-	try {
-		result = await listSandboxesForOrg(orgId, token);
-	} catch (error) {
-		if (error instanceof CircleCIError) {
-			printError("CircleCI API error", error.message, "Check your CIRCLE_TOKEN and org ID.");
-			return { exitCode: 2 };
-		}
-		throw error;
+function finalize(result: CommandResult): never {
+	if (result.error) {
+		printError(result.error.title, result.error.detail, result.error.suggestion);
 	}
-
-	if (result.sandboxes.length === 0) {
-		console.log("No sandboxes found.\n");
-		return { exitCode: 0 };
-	}
-
-	for (const sandbox of result.sandboxes) {
-		console.log(`  ${sandbox.name}  ${sandbox.id}`);
-	}
-	console.log("");
-
-	return { exitCode: 0 };
-}
-
-async function createNewSandbox(
-	organizationId: string,
-	name: string,
-	image?: string,
-): Promise<CommandResult> {
-	const token = requireToken();
-	if (!token) return { exitCode: 2 };
-
-	let sandbox: Sandbox;
-	try {
-		sandbox = await createSandbox(organizationId, name, token, image);
-	} catch (error) {
-		if (error instanceof CircleCIError) {
-			printError("Failed to create sandbox", error.message, "Check your CIRCLE_TOKEN and org ID.");
-			return { exitCode: 2 };
-		}
-		throw error;
-	}
-
-	console.log(JSON.stringify(sandbox, null, 2));
-
-	return { exitCode: 0 };
-}
-
-async function execCommandInSandbox(
-	organizationId: string,
-	sandboxId: string,
-	command: string,
-	args: string[],
-): Promise<CommandResult> {
-	const token = requireToken();
-	if (!token) return { exitCode: 2 };
-
-	let accessToken: string;
-	try {
-		const tokenResp = await createSandboxAccessToken(sandboxId, organizationId, token);
-		accessToken = tokenResp.access_token;
-	} catch (error) {
-		if (error instanceof CircleCIError) {
-			printError(
-				"Failed to get sandbox access token",
-				error.message,
-				"Check your CIRCLE_TOKEN, sandbox ID, and org ID.",
-			);
-			return { exitCode: 2 };
-		}
-		throw error;
-	}
-
-	let result: ExecCommandResponse;
-	try {
-		result = await execCommand(command, args, accessToken);
-	} catch (error) {
-		if (error instanceof CircleCIError) {
-			printError("Failed to execute command", error.message);
-			return { exitCode: 2 };
-		}
-		throw error;
-	}
-
-	console.log(JSON.stringify(result, null, 2));
-
-	return { exitCode: 0 };
-}
-
-const PRIVATE_KEY_RE = /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/;
-
-function assertNotPrivateKey(key: string): void {
-	if (PRIVATE_KEY_RE.test(key)) {
-		throw new Error(
-			"This looks like it might be a private key — please provide the public key instead.",
-		);
-	}
-}
-
-export function validatePublicKey(value: string): string {
-	assertNotPrivateKey(value);
-	return value;
-}
-
-export function resolvePublicKeyFile(filePath: string): string {
-	let key: string;
-	try {
-		key = readFileSync(filePath, "utf8").trim();
-	} catch (error) {
-		const err = error as NodeJS.ErrnoException;
-		if (err.code === "ENOENT") {
-			throw new Error(`Public key file not found: ${filePath}`, { cause: error });
-		}
-		throw new Error(`Could not read public key file: ${(error as Error).message}`, {
-			cause: error,
-		});
-	}
-	assertNotPrivateKey(key);
-	return key;
+	process.exit(result.exitCode);
 }
 
 export function registerSandboxCommands(program: Command): void {
-	const sandboxes = program.command("sandboxes").description("Manage sandboxes");
+	const sandboxes = program
+		.command("sandboxes")
+		.description("Manage sandboxes")
+		.enablePositionalOptions();
 
 	sandboxes
 		.command("list")
 		.description("List all sandboxes in an organization")
 		.requiredOption("--org-id <orgId>", "Org ID to list sandboxes for")
-		.action(async (options) => process.exit((await listSandboxes(options.orgId)).exitCode));
+		.action(async (options) => {
+			const result = await listSandboxes(options.orgId);
+			if (result.exitCode === 0 && result.data) {
+				const sandboxList = result.data as Sandbox[];
+				console.log(`\n${bold("Sandboxes")}\n`);
+				if (sandboxList.length === 0) {
+					console.log("No sandboxes found.\n");
+				} else {
+					for (const sandbox of sandboxList) {
+						console.log(`  ${sandbox.name}  ${sandbox.id}`);
+					}
+					console.log("");
+				}
+			}
+			finalize(result);
+		});
 
 	sandboxes
 		.command("create")
@@ -158,9 +51,13 @@ export function registerSandboxCommands(program: Command): void {
 		.requiredOption("--org-id <orgId>", "Organization ID")
 		.requiredOption("--name <name>", "Sandbox name")
 		.option("--image <image>", "Sandbox image")
-		.action(async (options) =>
-			process.exit((await createNewSandbox(options.orgId, options.name, options.image)).exitCode),
-		);
+		.action(async (options) => {
+			const result = await createNewSandbox(options.orgId, options.name, options.image);
+			if (result.exitCode === 0 && result.data) {
+				console.log(JSON.stringify(result.data, null, 2));
+			}
+			finalize(result);
+		});
 
 	sandboxes
 		.command("add-ssh-key")
@@ -169,18 +66,26 @@ export function registerSandboxCommands(program: Command): void {
 		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID")
 		.option("--public-key <publicKey>", "SSH public key string to add")
 		.option("--public-key-file <keyFile>", "Path to a .pub file containing the SSH public key")
-		.action(async (options) =>
-			process.exit(
-				(
-					await addSshKeyToSandbox(
-						options.orgId,
-						options.sandboxId,
-						options.publicKey,
-						options.publicKeyFile,
-					)
-				).exitCode,
-			),
-		);
+		.action(async (options) => {
+			const result = await addSshKeyToSandbox(
+				options.orgId,
+				options.sandboxId,
+				options.publicKey,
+				options.publicKeyFile,
+			);
+			if (result.exitCode === 0 && result.data) {
+				const { url } = result.data as { url: string };
+				console.log("Successfully added SSH key to sandbox.");
+				console.log("");
+				console.log(`Sandbox domain is: ${url}`);
+				console.log("");
+				console.log("To SSH into this sandbox, run:");
+				console.log(
+					`  chunk sandboxes ssh --org-id ${options.orgId} --sandbox-id ${options.sandboxId} --identity-file <path/to/private-key>`,
+				);
+			}
+			finalize(result);
+		});
 
 	sandboxes
 		.command("exec")
@@ -189,90 +94,24 @@ export function registerSandboxCommands(program: Command): void {
 		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID of sandbox")
 		.requiredOption("--command <command>", "Command to execute")
 		.option("--args <args...>", "Arguments to command", [])
-		.action(async (options) =>
-			process.exit(
-				(
-					await execCommandInSandbox(
-						options.orgId,
-						options.sandboxId,
-						options.command,
-						options.args,
-					)
-				).exitCode,
-			),
-		);
+		.action(async (options) => {
+			const result = await execCommandInSandbox(
+				options.orgId,
+				options.sandboxId,
+				options.command,
+				options.args,
+			);
+			if (result.exitCode === 0 && result.data) {
+				console.log(JSON.stringify(result.data, null, 2));
+			}
+			finalize(result);
+		});
 
 	sandboxes
 		.command("prepare")
 		.description("[EXPERIMENTAL] Prepare the hook environment before a session begins")
 		.option("--docker-sudo", "Run docker commands with sudo", false)
 		.action(async (opts: { dockerSudo: boolean }) =>
-			process.exit((await runSandboxPrepare({ dockerSudo: opts.dockerSudo })).exitCode),
+			finalize(await runSandboxPrepare({ dockerSudo: opts.dockerSudo })),
 		);
-}
-
-async function addSshKeyToSandbox(
-	organizationId: string,
-	sandboxId: string,
-	publicKey: string | undefined,
-	publicKeyFile: string | undefined,
-): Promise<CommandResult> {
-	const token = requireToken();
-	if (!token) return { exitCode: 2 };
-
-	if (publicKey && publicKeyFile) {
-		printError("SSH key error", "--public-key and --public-key-file are mutually exclusive");
-		return { exitCode: 2 };
-	}
-
-	let resolvedKey: string;
-	try {
-		if (publicKeyFile) {
-			resolvedKey = resolvePublicKeyFile(publicKeyFile);
-		} else if (publicKey) {
-			resolvedKey = validatePublicKey(publicKey);
-		} else {
-			printError("SSH key error", "One of --public-key or --public-key-file is required");
-			return { exitCode: 2 };
-		}
-	} catch (error) {
-		printError("SSH key error", error instanceof Error ? error.message : String(error));
-		return { exitCode: 2 };
-	}
-
-	let accessToken: string;
-	try {
-		const tokenResp = await createSandboxAccessToken(sandboxId, organizationId, token);
-		accessToken = tokenResp.access_token;
-	} catch (error) {
-		if (error instanceof CircleCIError) {
-			printError(
-				"Failed to get sandbox access token",
-				error.message,
-				"Check your CIRCLE_TOKEN, sandbox ID, and org ID.",
-			);
-			return { exitCode: 2 };
-		}
-		throw error;
-	}
-
-	let result: Awaited<ReturnType<typeof addSandboxSshKey>>;
-	try {
-		result = await addSandboxSshKey(resolvedKey, accessToken);
-	} catch (error) {
-		if (error instanceof CircleCIError) {
-			printError("Failed to add SSH key", error.message);
-			return { exitCode: 2 };
-		}
-		throw error;
-	}
-
-	console.log("Successfully added SSH key to sandbox.");
-	console.log("");
-	console.log(`Sandbox domain is: ${result.url}`);
-	console.log("");
-	console.log("To SSH into this sandbox, run:");
-	console.log(`  ssh -o ProxyCommand="socat - OPENSSL:${result.url}:2222,verify=0" user@localhost`);
-
-	return { exitCode: 0 };
 }
