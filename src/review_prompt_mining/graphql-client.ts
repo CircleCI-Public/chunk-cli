@@ -19,7 +19,7 @@ export function createGraphQLClient(): GraphQLClient {
 	return graphql.defaults({
 		headers: {
 			authorization: `token ${token}`,
-			"user-agent": `chunk/${VERSION}`,
+			"user-agent": `Chunk-CLI/${VERSION}`,
 		},
 	});
 }

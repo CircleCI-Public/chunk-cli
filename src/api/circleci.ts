@@ -107,7 +107,7 @@ interface CircleCIFetchOptions {
 async function circleciFetch<T>(url: string, options: CircleCIFetchOptions): Promise<T> {
 	const headers: Record<string, string> = {
 		Accept: "application/json",
-		"User-Agent": `chunk/${VERSION}`,
+		"User-Agent": `Chunk-CLI/${VERSION}`,
 		...(options.body && { "Content-Type": "application/json" }),
 		...(options.auth.type === "bearer"
 			? { Authorization: `Bearer ${options.auth.token}` }
