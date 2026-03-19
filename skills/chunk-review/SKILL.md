@@ -24,9 +24,9 @@ Use the team's generated review prompt to review recent code changes. Runs the a
 3. **Load the review prompt**: The source depends on the review type:
    - **PR review**: fetch `.chunk/review-prompt.md` from the PR's head branch using:
      ```
-     gh api repos/{headRepositoryOwner}/{headRepository}/contents/.chunk/review-prompt.md?ref={headRefName} --jq '.content' | base64 -d
+     gh api repos/{headRepositoryOwner}/{headRepository}/contents/.chunk/review-prompt.md?ref={headRefName} --jq '.content' | base64 --decode
      ```
-     Substitute `{headRepositoryOwner}`, `{headRepository}`, and `{headRefName}` from the PR metadata fetched in step 1. If the file does not exist on that branch, fall back to the local `.chunk/review-prompt.md`.
+     From the PR metadata fetched in step 1, substitute `{headRepositoryOwner}` with `headRepositoryOwner.login`, `{headRepository}` with `headRepository.name`, and `{headRefName}` directly. If the file does not exist on that branch, fall back to the local `.chunk/review-prompt.md`.
    - **Local review**: read `.chunk/review-prompt.md` from the root of the current project.
    - If no review prompt is found in either location, tell the user and suggest they run `chunk build-prompt` to generate one. Do not proceed without it.
    - Store the full file contents — you will pass them inline to the subagent.
