@@ -1,6 +1,6 @@
 import type { Command } from "@commander-js/extra-typings";
 import type { SkillState } from "../core/skills.ts";
-import { getSkillsStatus, installSkills, listSkills } from "../core/skills.ts";
+import { getSkillsStatus, installSkills } from "../core/skills.ts";
 import type { CommandResult } from "../types/index.ts";
 import { dim, green, yellow } from "../ui/colors.ts";
 
@@ -11,12 +11,8 @@ export function registerSkillsCommands(program: Command): void {
 		.description("Install or update all skills into agent config directories")
 		.action(() => process.exit(runSkillsInstall().exitCode));
 	skills
-		.command("status")
-		.description("Show current installation status without making changes")
-		.action(() => process.exit(runSkillsStatus().exitCode));
-	skills
 		.command("list")
-		.description("List skills bundled in this binary")
+		.description("List bundled skills and their per-agent installation status")
 		.action(() => process.exit(runSkillsList().exitCode));
 }
 
@@ -49,30 +45,33 @@ function skillStateDisplay(state: SkillState): { icon: string; label: string } {
 	return { icon: dim("✗"), label: dim("missing") };
 }
 
-export function runSkillsStatus(): CommandResult {
-	const statuses = getSkillsStatus();
-	console.log();
-	for (const agentStatus of statuses) {
-		if (!agentStatus.available) {
-			console.log(`${dim(agentStatus.agent)}  ${dim("(not installed)")}`);
-			continue;
-		}
-		console.log(agentStatus.agent);
-		for (const skill of agentStatus.skills) {
-			const { icon, label } = skillStateDisplay(skill.state);
-			console.log(`  ${icon} ${skill.name}  ${label}`);
-		}
-	}
-	console.log();
-	return { exitCode: 0 };
-}
-
 export function runSkillsList(): CommandResult {
-	const skills = listSkills();
-	console.log(`\nBundled skills (${skills.length}):\n`);
-	for (const skill of skills) {
-		console.log(`  ${green(skill.name)}`);
-		console.log(`    ${dim(skill.description)}\n`);
+	const statuses = getSkillsStatus();
+
+	// Collect unique skill names (same across all agents).
+	const skillNames = statuses[0]?.skills.map((s) => s.name) ?? [];
+
+	console.log(`\nBundled skills (${skillNames.length}):\n`);
+
+	for (const [i, name] of skillNames.entries()) {
+		// Grab description by index — ordering is identical across agents.
+		const description = statuses[0]?.skills[i]?.description ?? "";
+		console.log(`  ${green(name)}`);
+		console.log(`    ${dim(description)}`);
+
+		for (const agentStatus of statuses) {
+			const skill = agentStatus.skills[i];
+			if (!skill) continue;
+
+			if (!agentStatus.available) {
+				console.log(`      ${dim(agentStatus.agent)}: ${dim("n/a (agent not installed)")}`);
+			} else {
+				const { icon, label } = skillStateDisplay(skill.state);
+				console.log(`      ${agentStatus.agent}: ${icon} ${label}`);
+			}
+		}
+		console.log();
 	}
+
 	return { exitCode: 0 };
 }

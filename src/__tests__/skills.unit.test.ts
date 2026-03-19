@@ -16,7 +16,7 @@ const testHome = mkdtempSync(join(tmpdir(), "chunk-skills-test-"));
 process.env.HOME = testHome;
 
 // Dynamic import AFTER HOME is set — AGENTS resolves to testHome paths.
-const { installSkills, getSkillsStatus, listSkills } = await import("../core/skills.ts");
+const { installSkills, getSkillsStatus } = await import("../core/skills.ts");
 
 const claudeDir = join(testHome, ".claude");
 const codexDir = join(testHome, ".codex");
@@ -31,30 +31,10 @@ afterAll(() => {
 	if (originalHome !== undefined) process.env.HOME = originalHome;
 });
 
-// ---------------------------------------------------------------------------
-// listSkills
-// ---------------------------------------------------------------------------
-
-describe("listSkills", () => {
-	it("returns at least one skill", () => {
-		expect(listSkills().length).toBeGreaterThan(0);
-	});
-
-	it("each entry has non-empty name and description strings", () => {
-		for (const skill of listSkills()) {
-			expect(typeof skill.name).toBe("string");
-			expect(skill.name.length).toBeGreaterThan(0);
-			expect(typeof skill.description).toBe("string");
-			expect(skill.description.length).toBeGreaterThan(0);
-		}
-	});
-
-	it("does not expose skill file content", () => {
-		for (const skill of listSkills()) {
-			expect(Object.keys(skill)).toEqual(["name", "description"]);
-		}
-	});
-});
+/** Helper: return skill names from the first agent in getSkillsStatus(). */
+function embeddedSkillNames(): string[] {
+	return getSkillsStatus()[0]?.skills.map((s) => s.name) ?? [];
+}
 
 // ---------------------------------------------------------------------------
 // installSkills
@@ -83,8 +63,9 @@ describe("installSkills", () => {
 		mkdirSync(claudeDir, { recursive: true });
 		installSkills();
 
-		for (const { name } of listSkills()) {
-			expect(existsSync(join(claudeDir, "skills", name, "SKILL.md"))).toBe(true);
+		const claude = getSkillsStatus().find((s) => s.agent === "claude");
+		for (const skill of claude?.skills ?? []) {
+			expect(existsSync(join(claudeDir, "skills", skill.name, "SKILL.md"))).toBe(true);
 		}
 	});
 
@@ -103,7 +84,7 @@ describe("installSkills", () => {
 		mkdirSync(claudeDir, { recursive: true });
 		installSkills();
 
-		const skillName = listSkills()[0]?.name ?? "";
+		const skillName = embeddedSkillNames()[0] ?? "";
 		writeFileSync(join(claudeDir, "skills", skillName, "SKILL.md"), "stale content", "utf-8");
 
 		const results = installSkills();
@@ -128,6 +109,12 @@ describe("installSkills", () => {
 // ---------------------------------------------------------------------------
 
 describe("getSkillsStatus", () => {
+	it("returns at least one skill", () => {
+		const statuses = getSkillsStatus();
+		expect(statuses.length).toBeGreaterThan(0);
+		expect(statuses[0]?.skills.length).toBeGreaterThan(0);
+	});
+
 	it("marks all agents as unavailable when no config dirs exist", () => {
 		for (const status of getSkillsStatus()) {
 			expect(status.available).toBe(false);
@@ -161,7 +148,7 @@ describe("getSkillsStatus", () => {
 		mkdirSync(claudeDir, { recursive: true });
 		installSkills();
 
-		const skillName = listSkills()[0]?.name ?? "";
+		const skillName = embeddedSkillNames()[0] ?? "";
 		writeFileSync(join(claudeDir, "skills", skillName, "SKILL.md"), "stale", "utf-8");
 
 		const claude = getSkillsStatus().find((s) => s.agent === "claude");
@@ -174,7 +161,9 @@ describe("getSkillsStatus", () => {
 		const claude = getSkillsStatus().find((s) => s.agent === "claude");
 		for (const skill of claude?.skills ?? []) {
 			expect(typeof skill.name).toBe("string");
+			expect(skill.name.length).toBeGreaterThan(0);
 			expect(typeof skill.description).toBe("string");
+			expect(skill.description.length).toBeGreaterThan(0);
 		}
 	});
 });
