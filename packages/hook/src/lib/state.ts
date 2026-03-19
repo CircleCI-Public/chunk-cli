@@ -137,12 +137,12 @@ export function appendEvent(
 }
 
 /**
- * Read the baseline fingerprint from the first entry for an event.
+ * Read the baseline fingerprint from the last entry for an event.
  *
- * Returns the `fingerprint` field of the first `__entries` element, or
- * undefined if no entries exist or the first entry has no `fingerprint`.
+ * Returns the `fingerprint` field of the last `__entries` element, or
+ * undefined if no entries exist or the last entry has no `fingerprint`.
  * The fingerprint is a composite hash of HEAD + working tree diff,
- * capturing the full repo state at the time of the first save/append.
+ * capturing the full repo state at the time of the most recent save/append.
  */
 export function getBaselineFingerprint(
 	sentinelDir: string,
@@ -155,9 +155,9 @@ export function getBaselineFingerprint(
 	const entries = Array.isArray(event.__entries)
 		? (event.__entries as Record<string, unknown>[])
 		: [];
-	const first = entries[0];
-	if (!first) return undefined;
-	const fp = first.fingerprint;
+	const last = entries[entries.length - 1];
+	if (!last) return undefined;
+	const fp = last.fingerprint;
 	return typeof fp === "string" && fp.length > 0 ? fp : undefined;
 }
 
