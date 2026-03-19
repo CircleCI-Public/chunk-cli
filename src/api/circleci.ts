@@ -1,3 +1,5 @@
+import { USER_AGENT } from "../config";
+
 export interface CircleCIProject {
 	vcs_type: string;
 	username: string;
@@ -107,7 +109,7 @@ interface CircleCIFetchOptions {
 async function circleciFetch<T>(url: string, options: CircleCIFetchOptions): Promise<T> {
 	const headers: Record<string, string> = {
 		Accept: "application/json",
-		"User-Agent": `Chunk-CLI/${VERSION}`,
+		"User-Agent": USER_AGENT,
 		...(options.body && { "Content-Type": "application/json" }),
 		...(options.auth.type === "bearer"
 			? { Authorization: `Bearer ${options.auth.token}` }

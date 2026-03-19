@@ -10,6 +10,9 @@ export const VALIDATION_MODEL = "claude-haiku-4-5-20251001";
 export const DEFAULT_ANALYZE_MODEL = "claude-sonnet-4-5-20250929";
 export const DEFAULT_PROMPT_MODEL = "claude-opus-4-5-20251101";
 
+// --- User-Agent ---
+export const USER_AGENT = `Chunk-CLI/${VERSION}`;
+
 // --- Environment ---
 export const ENV = {
 	ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
