@@ -39,6 +39,7 @@ execs:
     #   {{<State.field>}}    — any dot-path into event-namespaced state
     command: ""          # e.g. "go test {{CHANGED_PACKAGES}}", "npm test -- {{CHANGED_FILES}}"
     fileExt: ""          # e.g. ".go", ".ts", ".py"
+    testFilePattern: ""  # e.g. "*.test.ts" — narrow {{CHANGED_FILES}} to test files only
     always: false
     timeout: 300
     limit: 3

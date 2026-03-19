@@ -80,6 +80,10 @@ function registerExec(parent: Command): void {
 		.option("--cmd <command>", "Override exec command")
 		.option("--timeout <seconds>", "Override timeout in seconds", parseInt10)
 		.option("--file-ext <ext>", "File extension filter (e.g. .go)")
+		.option(
+			"--test-file-pattern <glob>",
+			"Glob to narrow {{CHANGED_FILES}} to test files (e.g. *.test.ts)",
+		)
 		.option("--staged", "Only consider staged files", false)
 		.option("--always", "Run even if no matching files changed", false)
 		.option("--on <trigger>", "Named trigger group from config")
@@ -130,6 +134,7 @@ function registerExec(parent: Command): void {
 				cmd: opts.cmd,
 				timeout: opts.timeout,
 				fileExt: opts.fileExt,
+				testFilePattern: opts.testFilePattern,
 				staged: opts.staged,
 				always: opts.always,
 				noCheck: isNoCheck,
@@ -147,6 +152,10 @@ function registerExec(parent: Command): void {
 		.description("Check a previously saved result")
 		.argument("<name>", "Exec name (matches config key)")
 		.option("--file-ext <ext>", "File extension filter (e.g. .go)")
+		.option(
+			"--test-file-pattern <glob>",
+			"Glob to narrow {{CHANGED_FILES}} to test files (e.g. *.test.ts)",
+		)
 		.option("--staged", "Only consider staged files", false)
 		.option("--always", "Run even if no matching files changed", false)
 		.option("--on <trigger>", "Named trigger group from config")
@@ -188,6 +197,7 @@ function registerExec(parent: Command): void {
 				subcommand: "check",
 				name,
 				fileExt: opts.fileExt,
+				testFilePattern: opts.testFilePattern,
 				staged: opts.staged,
 				always: opts.always,
 				on: opts.on,

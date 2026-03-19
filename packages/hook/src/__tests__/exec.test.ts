@@ -92,12 +92,18 @@ describe("buildRunnerCommand()", () => {
 		expect(buildRunnerCommand(flags)).toContain("--always");
 	});
 
+	it("includes --test-file-pattern flag", () => {
+		const flags = { subcommand: "check" as const, name: "tests", testFilePattern: "*.test.ts" };
+		expect(buildRunnerCommand(flags)).toContain("--test-file-pattern '*.test.ts'");
+	});
+
 	it("omits optional flags when not set", () => {
 		const flags = { subcommand: "check" as const, name: "tests" };
 		const result = buildRunnerCommand(flags);
 		expect(result).not.toContain("--cmd");
 		expect(result).not.toContain("--timeout");
 		expect(result).not.toContain("--file-ext");
+		expect(result).not.toContain("--test-file-pattern");
 		expect(result).not.toContain("--staged");
 		expect(result).not.toContain("--always");
 	});
@@ -233,6 +239,31 @@ describe("runExec() check subcommand", () => {
 		const message = blockMessage();
 		// The suggested re-run command should have properly escaped single quotes
 		expect(message).toContain(`--cmd 'echo '\\''world'\\'''`);
+	});
+
+	it("runner command in 'no results' block message includes --test-file-pattern", async () => {
+		const config = makeConfig(tmpDir);
+		const flags = {
+			subcommand: "check" as const,
+			name: "myexec",
+			always: true,
+			testFilePattern: "*.test.ts",
+		};
+		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		const message = blockMessage();
+		expect(message).toContain("--test-file-pattern '*.test.ts'");
+	});
+
+	it("runner command omits --test-file-pattern when not set", async () => {
+		const config = makeConfig(tmpDir);
+		const flags = {
+			subcommand: "check" as const,
+			name: "myexec",
+			always: true,
+		};
+		await expect(runExec(config, makeTestAdapter(), makeEvent(), flags)).rejects.toThrow(ExitError);
+		const message = blockMessage();
+		expect(message).not.toContain("--test-file-pattern");
 	});
 });
 

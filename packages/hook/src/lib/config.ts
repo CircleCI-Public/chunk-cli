@@ -27,6 +27,8 @@ export type Config = {
 export type ExecConfig = {
 	command?: string;
 	fileExt?: string;
+	/** Glob pattern to narrow {{CHANGED_FILES}} to test files only (e.g. `*.test.ts`). Unset = all files. */
+	testFilePattern?: string;
 	/** When true, run even if no matching files changed. Default: false. */
 	always?: boolean;
 	timeout?: number;
@@ -57,6 +59,8 @@ export type TaskConfig = {
 export type ResolvedExec = {
 	command: string;
 	fileExt: string;
+	/** Glob pattern to narrow {{CHANGED_FILES}} to test files only. Unset = all files. */
+	testFilePattern: string;
 	always: boolean;
 	timeout: number;
 	/** Max consecutive check-blocks before auto-allowing. 0 = unlimited. */
@@ -141,6 +145,7 @@ function resolveExec(name: string, cfg: ExecConfig): ResolvedExec {
 	return {
 		command: cfg.command ?? `echo 'No command configured for exec: ${name}'`,
 		fileExt: cfg.fileExt ?? "",
+		testFilePattern: cfg.testFilePattern ?? "",
 		always: cfg.always ?? false,
 		timeout: getEnvTimeout(name) ?? cfg.timeout ?? DEFAULT_TIMEOUT,
 		limit: cfg.limit ?? 0,

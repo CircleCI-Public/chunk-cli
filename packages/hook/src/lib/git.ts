@@ -6,6 +6,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import type { RunOptions, RunResult } from "./proc";
 import { runCommand as _defaultRunCommand } from "./proc";
 
@@ -31,6 +32,8 @@ export type ChangedFilesOptions = {
 	stagedOnly?: boolean;
 	/** Filter to files matching this extension (e.g., `.go`, `.ts`). */
 	fileExt?: string;
+	/** Glob to narrow to test files only (e.g. `*.test.ts`). Applied after fileExt. Unset = all. */
+	testFilePattern?: string;
 };
 
 /**
@@ -44,7 +47,7 @@ export type ChangedFilesOptions = {
  * staged, unstaged, and untracked files, filtering out deletions.
  */
 export async function getChangedFiles(opts: ChangedFilesOptions = {}): Promise<string[]> {
-	const { cwd = process.cwd(), stagedOnly = false, fileExt = "" } = opts;
+	const { cwd = process.cwd(), stagedOnly = false, fileExt = "", testFilePattern = "" } = opts;
 
 	const command = stagedOnly
 		? "git diff --cached --name-only --diff-filter=ACMR"
@@ -67,7 +70,20 @@ export async function getChangedFiles(opts: ChangedFilesOptions = {}): Promise<s
 		files = files.filter((f) => f.endsWith(ext));
 	}
 
+	if (testFilePattern) {
+		files = filterByPattern(files, testFilePattern);
+	}
+
 	return files;
+}
+
+/**
+ * Filter file paths by a glob pattern, matching against the basename.
+ * Uses Bun's built-in Glob for pattern matching.
+ */
+export function filterByPattern(files: string[], pattern: string): string[] {
+	const glob = new Bun.Glob(pattern);
+	return files.filter((f) => glob.match(basename(f)));
 }
 
 /**
