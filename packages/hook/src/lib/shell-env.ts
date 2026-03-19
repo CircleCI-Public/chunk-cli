@@ -89,10 +89,10 @@ export function defaultShellStartupFiles(): string[] {
 // ---------------------------------------------------------------------------
 
 /** Supported environment profiles. */
-export type Profile = "disable" | "enable" | "tests-lint" | "review";
+export type Profile = "disable" | "enable" | "tests-lint";
 
 /** All valid profile names. */
-export const PROFILES: Profile[] = ["disable", "enable", "tests-lint", "review"];
+export const PROFILES: Profile[] = ["disable", "enable", "tests-lint"];
 
 /** Options for ENV content generation. */
 export type EnvContentOptions = {
@@ -137,16 +137,11 @@ export function generateEnvContent(opts: EnvContentOptions): string {
 			lines.push("export CHUNK_HOOK_ENABLE=1");
 			break;
 		case "tests-lint":
-			lines.push("# Profile: tests-lint — tests and lint enabled, review disabled");
+			lines.push("# Profile: tests-lint — tests and lint enabled");
 			lines.push("export CHUNK_HOOK_ENABLE=0");
 			lines.push("export CHUNK_HOOK_ENABLE_TESTS=1");
 			lines.push("export CHUNK_HOOK_ENABLE_TESTS_CHANGED=1");
 			lines.push("export CHUNK_HOOK_ENABLE_LINT=1");
-			break;
-		case "review":
-			lines.push("# Profile: review — review enabled, tests and lint disabled");
-			lines.push("export CHUNK_HOOK_ENABLE=0");
-			lines.push("export CHUNK_HOOK_ENABLE_REVIEW=1");
 			break;
 	}
 

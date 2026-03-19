@@ -4,7 +4,7 @@
  * In VS Code multi-root workspaces, Claude Code merges all
  * `.claude/settings.json` files so hooks fire for every repo — even repos
  * the agent hasn't touched. The scope command prevents expensive hooks
- * (tests, lint, review) from running in inactive repos.
+ * (tests, lint) from running in inactive repos.
  *
  * **Auto-activate:** The `exec` and `task` handlers call
  * `activateScope()` automatically before checking the gate — if the

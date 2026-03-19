@@ -32,8 +32,6 @@ describe("repo-init", () => {
 
 		expect(existsSync(join(testDir, ".chunk", "hook", "config.yml"))).toBe(true);
 		expect(existsSync(join(testDir, ".chunk", "hook", ".gitignore"))).toBe(true);
-		expect(existsSync(join(testDir, ".chunk", "hook", "code-review-instructions.md"))).toBe(true);
-		expect(existsSync(join(testDir, ".chunk", "hook", "code-review-schema.json"))).toBe(true);
 		expect(existsSync(join(testDir, ".claude", "settings.json"))).toBe(true);
 	});
 
@@ -129,18 +127,15 @@ describe("repo-init", () => {
 
 		const settings = readFileSync(join(testDir, ".claude", "settings.json"), "utf-8");
 		expect(settings).toContain("chunk hook exec");
-		expect(settings).toContain("chunk hook sync");
 		expect(settings).toContain("chunk hook scope");
 		expect(settings).toContain("chunk hook state");
 		expect(settings).toContain("Bash(chunk:*)");
 	});
 
-	it("config.yml references .chunk/hook/ paths", () => {
+	it("config.yml contains CHUNK_HOOK_ENABLE reference", () => {
 		runRepoInit({ targetDir: testDir, force: false });
 
 		const config = readFileSync(join(testDir, ".chunk", "hook", "config.yml"), "utf-8");
-		expect(config).toContain(".chunk/hook/code-review-instructions.md");
-		expect(config).toContain(".chunk/hook/code-review-schema.json");
 		expect(config).toContain("CHUNK_HOOK_ENABLE");
 	});
 

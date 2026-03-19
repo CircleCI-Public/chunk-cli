@@ -21,7 +21,7 @@ by the compatibility layer (`compat.ts`) — no per-IDE configuration is needed.
 It communicates via stdin/stdout JSON and uses a subcommand-based interface.
 
 Execs and tasks are **named and user-defined** — configure as many as you need (tests, lint, format,
-typecheck, code review, etc.) in a single YAML file.
+typecheck, etc.) in a single YAML file.
 
 Activation: Exec and Task are disabled by default and require `CHUNK_HOOK_ENABLE` (or per-command overrides).
 The State command is infrastructure and always available — it does not require `CHUNK_HOOK_ENABLE`.
@@ -48,9 +48,6 @@ chunk hook env update
 
 # Enable only tests + lint (no review):
 chunk hook env update --profile tests-lint
-
-# Enable only review:
-chunk hook env update --profile review
 
 # Disable all hooks (install binary but leave hooks inactive):
 chunk hook env update --profile disable
@@ -92,10 +89,8 @@ This creates:
 ```text
 .chunk/hook/                        ← agent-agnostic config
   config.yml                        ← edit command: fields for your repo
-  code-review-instructions.md       ← review prompt template
-  code-review-schema.json           ← review result schema
 .claude/                            ← Claude Code hooks
-  settings.json                     ← hook wiring (tests, lint, review)
+  settings.json                     ← hook wiring (tests and lint)
 ```
 
 If files already exist, templates are saved as `<name>.example.<ext>` instead of overwriting.
@@ -112,8 +107,7 @@ If files already exist, templates are saved as `<name>.example.<ext>` instead of
    ```
 
 2. Review `.claude/settings.json` — adjust hook matchers and timeouts if needed.
-3. Review `.chunk/hook/code-review-instructions.md` — customize the review prompt.
-4. Run Claude Code — the hooks fire automatically.
+3. Run Claude Code — the hooks fire automatically.
 
 ```bash
 # Manual test (from any repo)
@@ -125,7 +119,7 @@ CHUNK_HOOK_ENABLE=1 echo '{}' | chunk hook exec run tests --cmd "go test ./..."
 | Command | Subcommands | Purpose |
 | --- | --- | --- |
 | `exec` | `run`, `check` | Run any named shell command (tests, lint, etc.) |
-| `task` | `check` | Delegate a task and enforce the result (e.g., code review) |
+| `task` | `check` | Delegate a task and enforce the result |
 | `sync` | `check` | Group multiple exec/task checks into a single ordered sequence |
 | `state` | `save`, `load`, `clear` | Manage per-project state for cross-event data sharing |
 | `scope` | `activate`, `deactivate` | Per-repo activity gate for multi-repo workspaces |
@@ -174,7 +168,7 @@ Group multiple exec/task checks into a single ordered sequence. Use this wheneve
 delegated checks share the same hook event.
 
 ```bash
-chunk hook sync check exec:tests task:review --on pre-commit
+chunk hook sync check exec:tests exec:lint --on pre-commit
 ```
 
 Behavior:
@@ -242,8 +236,6 @@ Initialize a repository with chunk hook configuration templates. Creates the `.c
 
 - `.chunk/hook/config.yml` — hook configuration (execs, tasks, triggers)
 - `.chunk/hook/.gitignore` — ignores runtime files (`.chunk-hook-active`, `*.result`, `*.state`)
-- `.chunk/hook/code-review-instructions.md` — review prompt template
-- `.chunk/hook/code-review-schema.yml` — review result schema
 - `.claude/settings.json` — Claude Code hook registrations
   (with `__PROJECT__` replaced by the repo's directory name)
 
@@ -266,7 +258,7 @@ chunk hook repo init --force
 Configure the user's shell environment for chunk hook. Creates an env file sourced on login
 that exports `CHUNK_HOOK_*` variables.
 
-- `--profile <name>` — Predefined variable set: `enable` (default), `disable`, `tests-lint`, `review`.
+- `--profile <name>` — Predefined variable set: `enable` (default), `disable`, `tests-lint`.
 - `--env-file <path>` — Override env file location (default: `~/.config/chunk/hook/env`).
 - `--set-log-dir <dir>` — Log directory to write into the ENV file
   (default: `~/Library/Logs/chunk-hook` on macOS,
@@ -284,9 +276,6 @@ The command:
 # Default setup (enable profile)
 chunk hook env update
 
-# Review-only profile
-chunk hook env update --profile review
-
 # Disable hooks
 chunk hook env update --profile disable
 
@@ -301,7 +290,6 @@ chunk hook env update --set-log-dir /tmp/hook-logs
 | `disable` | _(none — all CHUNK_HOOK_* vars removed)_ |
 | `enable` | `CHUNK_HOOK_ENABLE=1` |
 | `tests-lint` | `CHUNK_HOOK_ENABLE=1`, `CHUNK_HOOK_ENABLE_TESTS=1`, `CHUNK_HOOK_ENABLE_LINT=1` |
-| `review` | `CHUNK_HOOK_ENABLE=1`, `CHUNK_HOOK_ENABLE_REVIEW=1` |
 
 ### Multi-Repo Workspace Support
 
@@ -323,7 +311,7 @@ from running in inactive repos:
 6. The marker file stores a session ID and timestamp — mismatched markers (from a different
    session, possibly a parallel agent) are treated as inactive for the current session, unless
    the marker has expired (TTL: 5 minutes).
-7. **Subagent safety:** When the parent agent spawns a subagent (e.g., for code review), the
+7. **Subagent safety:** When the parent agent spawns a subagent, the
    subagent gets a different session ID. Its tool calls trigger the normal hook chain and call
    `activateScope()`, but a non-expired marker is **not overwritten** — the subagent is treated
    as active without clobbering the parent's session.
@@ -344,7 +332,7 @@ under the event name. `save` replaces all entries with one; `append` accumulates
 Placeholders use **dot or bracket notation** to reference fields:
 `{{UserPromptSubmit.prompt}}` (sugar for first entry) or `{{UserPromptSubmit[0].prompt}}`.
 
-### Example: Prompt-Aware Code Review
+### Example: Prompt-Aware Task
 
 1. A `UserPromptSubmit` event appends the input to state:
 
@@ -355,14 +343,14 @@ Placeholders use **dot or bracket notation** to reference fields:
 2. Task instructions reference the saved prompt via dot notation:
 
    ```markdown
-   Review the changes for: {{UserPromptSubmit.prompt}}
-   Focus on correctness, style, and potential issues.
+   Task context: {{UserPromptSubmit.prompt}}
+   Changed files: {{CHANGED_FILES}}
    ```
 
 3. A `Stop` event runs the task check (placeholders expand automatically):
 
    ```json
-   { "command": "chunk hook task check review" }
+   { "command": "chunk hook task check mytask" }
    ```
 
 4. A `SessionEnd` event cleans up state:
@@ -608,14 +596,6 @@ execs:
     command: "golangci-lint run"
     always: false    # default — skip if no changes
     timeout: 60
-
-tasks:
-  review:
-    instructions: ".chunk/hook/code-review-instructions.md"
-    schema: ".chunk/hook/code-review-schema.json"
-    limit: 3          # max consecutive blocks before auto-allowing
-    timeout: 600      # seconds before a pending task is considered timed out (default: 600)
-    # Placeholders ({{EventName.field}}) expand automatically in instructions
 ```
 
 ### Environment Variables
@@ -733,7 +713,6 @@ packages/hook/
 ├── examples/               # Example configurations
 │   ├── .chunk/hook/config.yml
 │   └── .claude/
-│       ├── settings.review-example.json
 │       └── settings.test-lint-example.json
 ├── AGENTS.md
 ├── README.md

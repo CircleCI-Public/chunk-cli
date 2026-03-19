@@ -10,7 +10,7 @@
  *   - `check <spec...>` — Check sentinels for a group of commands.
  *
  * Spec format:
- *   Each spec is `type:name`, e.g. `exec:tests`, `task:review`.
+ *   Each spec is `type:name`, e.g. `exec:tests`, `task:mytask`.
  *   Flags for the group are passed after the specs.
  *
  * Behavior:
@@ -67,7 +67,7 @@ const TAG = "sync";
 // Public types
 // ---------------------------------------------------------------------------
 
-/** A parsed command specifier — `exec:tests` or `task:review`. */
+/** A parsed command specifier — `exec:tests` or `task:mytask`. */
 export type CommandSpec = {
 	type: "exec" | "task";
 	name: string;

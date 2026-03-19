@@ -79,17 +79,6 @@ describe("shell-env", () => {
 			expect(content).toContain("export CHUNK_HOOK_ENABLE_LINT=1");
 		});
 
-		it("generates review profile", () => {
-			const content = generateEnvContent({
-				profile: "review",
-				logDir: "/tmp/logs",
-				verbose: false,
-				envFile: "/tmp/env",
-			});
-			expect(content).toContain("export CHUNK_HOOK_ENABLE=0");
-			expect(content).toContain("export CHUNK_HOOK_ENABLE_REVIEW=1");
-		});
-
 		it("includes log dir", () => {
 			const content = generateEnvContent({
 				profile: "enable",
@@ -239,8 +228,8 @@ describe("shell-env", () => {
 	// -----------------------------------------------------------------------
 
 	describe("PROFILES", () => {
-		it("contains all four profiles", () => {
-			expect(PROFILES).toEqual(["disable", "enable", "tests-lint", "review"]);
+		it("contains all profiles", () => {
+			expect(PROFILES).toEqual(["disable", "enable", "tests-lint"]);
 		});
 	});
 
@@ -298,13 +287,13 @@ describe("env-update", () => {
 
 		it("applies flag overrides", () => {
 			const opts = buildEnvUpdateOptions({
-				profile: "review",
+				profile: "tests-lint",
 				envFile: "/custom/env",
 				logDir: "/custom/logs",
 				verbose: true,
 				projectRoot: "/workspace",
 			});
-			expect(opts.profile).toBe("review");
+			expect(opts.profile).toBe("tests-lint");
 			expect(opts.envFile).toBe("/custom/env");
 			expect(opts.logDir).toBe("/custom/logs");
 			expect(opts.verbose).toBe(true);

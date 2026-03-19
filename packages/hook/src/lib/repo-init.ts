@@ -2,7 +2,7 @@
  * Pure step function for initializing a repository with hook configuration files.
  *
  * Copies template files into the target directory:
- *   - `.chunk/hook/` config files (gitignore, config.yml, review instructions, schema)
+ *   - `.chunk/hook/` config files (gitignore, config.yml)
  *   - `.claude/settings.json` with hook wiring (substitutes __PROJECT__ placeholder)
  *
  * When a target file already exists, the template is saved as a `.example.<ext>`
