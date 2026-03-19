@@ -27,7 +27,7 @@ export type RunConfig = z.infer<typeof RunConfigSchema>;
 /**
  * Find the git repository root by walking up the directory tree
  */
-function findRepoRoot(): string {
+export function findRepoRoot(): string {
 	let dir = process.cwd();
 	const root = path.parse(dir).root;
 

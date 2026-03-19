@@ -1,5 +1,5 @@
 /**
- * `chunk hook repo init` — Initialize a repository with hook configuration files.
+ * Pure step function for initializing a repository with hook configuration files.
  *
  * Copies template files into the target directory:
  *   - `.chunk/hook/` config files (gitignore, config.yml, review instructions, schema)
@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
-import { TEMPLATE_FILES } from "../lib/templates";
+import { TEMPLATE_FILES } from "./templates";
 
 // ---------------------------------------------------------------------------
 // Types

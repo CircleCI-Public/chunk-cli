@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildEnvUpdateOptions, migrateEnvFile, runEnvUpdate } from "../commands/env-update";
+import { buildEnvUpdateOptions, migrateEnvFile, runEnvUpdate } from "../lib/env-update";
 import {
 	defaultEnvFile,
 	defaultLogDir,

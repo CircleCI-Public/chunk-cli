@@ -68,31 +68,37 @@ describe("loadValidateCommands", () => {
 
 describe("validateLocally", () => {
 	let tmpDir: string;
+	let originalCwd: string;
 
 	beforeEach(() => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chunk-validate-test-"));
+		// Create a .git dir so findRepoRoot() resolves to tmpDir
+		fs.mkdirSync(path.join(tmpDir, ".git"));
+		originalCwd = process.cwd();
+		process.chdir(tmpDir);
 	});
 
 	afterEach(() => {
+		process.chdir(originalCwd);
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	function writeConfig(content: string) {
-		const configDir = path.join(tmpDir, ".chunk", "hook");
+	function writeProjectConfig(config: { installCommand?: string; testCommand?: string }) {
+		const configDir = path.join(tmpDir, ".chunk");
 		fs.mkdirSync(configDir, { recursive: true });
-		fs.writeFileSync(path.join(configDir, "config.yml"), content);
+		fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify(config, null, 2));
 	}
 
-	it("returns ok: false when config has a parse error", async () => {
-		writeConfig("execs: [\nunclosed");
+	it("returns ok: false with 'No validate commands configured' when config.json is missing", async () => {
 		const result = await validateLocally(tmpDir);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error).toMatch(/Failed to parse/);
+			expect(result.error).toBe("No validate commands configured");
 		}
 	});
 
 	it("returns ok: false with 'No validate commands configured' when no commands exist", async () => {
+		writeProjectConfig({});
 		const result = await validateLocally(tmpDir);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
@@ -101,8 +107,7 @@ describe("validateLocally", () => {
 	});
 
 	it("returns ok: true with empty skipped when all commands pass", async () => {
-		// Quote 'true'/'false' in YAML — bare values parse as booleans, not strings
-		writeConfig("execs:\n  a:\n    command: 'true'\n  b:\n    command: 'true'\n");
+		writeProjectConfig({ installCommand: "true", testCommand: "true" });
 		const result = await validateLocally(tmpDir);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
@@ -115,7 +120,7 @@ describe("validateLocally", () => {
 	});
 
 	it("stops on first failure and moves remaining commands to skipped", async () => {
-		writeConfig("execs:\n  fail:\n    command: 'false'\n  skip:\n    command: 'true'\n");
+		writeProjectConfig({ installCommand: "false", testCommand: "true" });
 		const result = await validateLocally(tmpDir);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
@@ -126,7 +131,7 @@ describe("validateLocally", () => {
 
 	it("returns subprocess stdout in step result", async () => {
 		// Use printf (not echo) to get predictable output without a trailing newline
-		writeConfig("execs:\n  out:\n    command: printf hello\n");
+		writeProjectConfig({ testCommand: "printf hello" });
 		const result = await validateLocally(tmpDir);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
@@ -137,26 +142,32 @@ describe("validateLocally", () => {
 
 describe("validateOnSandbox", () => {
 	let tmpDir: string;
+	let originalCwd: string;
 	const fetchMock = mock();
 	let originalFetch: typeof globalThis.fetch;
 
 	beforeEach(() => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chunk-validate-test-"));
+		// Create a .git dir so findRepoRoot() resolves to tmpDir
+		fs.mkdirSync(path.join(tmpDir, ".git"));
+		originalCwd = process.cwd();
+		process.chdir(tmpDir);
 		originalFetch = globalThis.fetch;
 		// @ts-expect-error - Mock doesn't fully implement fetch type
 		globalThis.fetch = fetchMock;
 	});
 
 	afterEach(() => {
+		process.chdir(originalCwd);
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 		fetchMock.mockReset();
 		globalThis.fetch = originalFetch;
 	});
 
-	function writeConfig(content: string) {
-		const configDir = path.join(tmpDir, ".chunk", "hook");
+	function writeProjectConfig(config: { installCommand?: string; testCommand?: string }) {
+		const configDir = path.join(tmpDir, ".chunk");
 		fs.mkdirSync(configDir, { recursive: true });
-		fs.writeFileSync(path.join(configDir, "config.yml"), content);
+		fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify(config, null, 2));
 	}
 
 	function tokenResponse(accessToken = "sandbox-token") {
@@ -184,12 +195,6 @@ describe("validateOnSandbox", () => {
 		} as Response;
 	}
 
-	it("returns ok: false when config has a parse error", async () => {
-		writeConfig("execs: [\nunclosed");
-		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir);
-		expect(result.ok).toBe(false);
-	});
-
 	it("returns ok: false with 'No validate commands configured' when no commands exist", async () => {
 		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir);
 		expect(result.ok).toBe(false);
@@ -199,7 +204,7 @@ describe("validateOnSandbox", () => {
 	});
 
 	it("returns ok: false with hint when createSandboxAccessToken returns a CircleCIError", async () => {
-		writeConfig("execs:\n  a:\n    command: bun test\n");
+		writeProjectConfig({ testCommand: "bun test" });
 		fetchMock.mockImplementation(async () => errorResponse(401));
 		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir);
 		expect(result.ok).toBe(false);
@@ -210,7 +215,7 @@ describe("validateOnSandbox", () => {
 	});
 
 	it("rethrows non-CircleCIError from createSandboxAccessToken", async () => {
-		writeConfig("execs:\n  a:\n    command: bun test\n");
+		writeProjectConfig({ testCommand: "bun test" });
 		// response.text() throwing is not wrapped by circleciFetch, so it escapes as a plain Error
 		fetchMock.mockImplementation(async () => ({
 			ok: true,
@@ -225,7 +230,7 @@ describe("validateOnSandbox", () => {
 	});
 
 	it("returns ok: false when execCommand returns a CircleCIError", async () => {
-		writeConfig("execs:\n  a:\n    command: bun test\n");
+		writeProjectConfig({ testCommand: "bun test" });
 		fetchMock
 			.mockImplementationOnce(async () => tokenResponse())
 			.mockImplementationOnce(async () => errorResponse(500));
@@ -237,7 +242,7 @@ describe("validateOnSandbox", () => {
 	});
 
 	it("rethrows non-CircleCIError from execCommand", async () => {
-		writeConfig("execs:\n  a:\n    command: bun test\n");
+		writeProjectConfig({ testCommand: "bun test" });
 		fetchMock
 			.mockImplementationOnce(async () => tokenResponse())
 			.mockImplementationOnce(async () => ({
@@ -247,13 +252,13 @@ describe("validateOnSandbox", () => {
 					throw new TypeError("exec stream error");
 				},
 			}));
-		await expect(validateOnSandbox("org-1", "sandbox-1", "token", tmpDir)).rejects.toBeInstanceOf(
+		await expect(validateOnSandbox("org-1", "sandbox-1", "tok", tmpDir)).rejects.toBeInstanceOf(
 			TypeError,
 		);
 	});
 
 	it("stops on non-zero exit code and moves remaining commands to skipped", async () => {
-		writeConfig("execs:\n  fail:\n    command: 'false'\n  skip:\n    command: 'true'\n");
+		writeProjectConfig({ installCommand: "false", testCommand: "true" });
 		fetchMock
 			.mockImplementationOnce(async () => tokenResponse())
 			.mockImplementationOnce(async () => execResponse(1));
@@ -266,17 +271,17 @@ describe("validateOnSandbox", () => {
 	});
 
 	it("returns ok: true with all results and empty skipped when all commands pass", async () => {
-		writeConfig("execs:\n  a:\n    command: bun test\n  b:\n    command: bun run lint\n");
+		writeProjectConfig({ installCommand: "bun install", testCommand: "bun test" });
 		fetchMock
 			.mockImplementationOnce(async () => tokenResponse("tok"))
-			.mockImplementationOnce(async () => execResponse(0, "test passed\n"))
-			.mockImplementationOnce(async () => execResponse(0, "lint clean\n"));
+			.mockImplementationOnce(async () => execResponse(0, "install done\n"))
+			.mockImplementationOnce(async () => execResponse(0, "test passed\n"));
 		const result = await validateOnSandbox("org-1", "sandbox-1", "tok", tmpDir);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.results).toEqual([
+				{ command: "bun install", exitCode: 0, stdout: "install done\n", stderr: "" },
 				{ command: "bun test", exitCode: 0, stdout: "test passed\n", stderr: "" },
-				{ command: "bun run lint", exitCode: 0, stdout: "lint clean\n", stderr: "" },
 			]);
 			expect(result.skipped).toEqual([]);
 		}

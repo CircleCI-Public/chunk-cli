@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runRepoInit } from "../commands/repo-init";
+import { runRepoInit } from "../lib/repo-init";
 import { TEMPLATE_FILES } from "../lib/templates";
 
 describe("repo-init", () => {

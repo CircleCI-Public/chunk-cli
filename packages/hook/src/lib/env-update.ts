@@ -1,5 +1,5 @@
 /**
- * `chunk hook env update` — Configure the user's shell environment.
+ * Pure step function for configuring the user's shell environment.
  *
  * Performs the following steps:
  *   1. Creates the log directory
@@ -22,7 +22,7 @@ import {
 	PROFILES,
 	type Profile,
 	writeEnvFile,
-} from "../lib/shell-env";
+} from "./shell-env";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -61,6 +61,7 @@ export function buildEnvUpdateOptions(flags: {
 	logDir?: string;
 	verbose?: boolean;
 	projectRoot?: string;
+	startupFiles?: string[];
 }): EnvUpdateOptions {
 	const profile = (flags.profile ?? "enable") as Profile;
 	if (!PROFILES.includes(profile)) {
@@ -72,6 +73,7 @@ export function buildEnvUpdateOptions(flags: {
 		logDir: flags.logDir ?? defaultLogDir(),
 		verbose: flags.verbose ?? false,
 		projectRoot: flags.projectRoot,
+		...(flags.startupFiles && { startupFiles: flags.startupFiles }),
 	};
 }
 
@@ -138,3 +140,5 @@ export function runEnvUpdate(opts: EnvUpdateOptions): EnvUpdateResult {
 		startupFiles,
 	};
 }
+
+export { defaultEnvFile, defaultLogDir, legacyEnvFile, PROFILES };
