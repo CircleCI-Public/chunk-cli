@@ -53,14 +53,14 @@ export function runSkillsList(): CommandResult {
 
 	console.log(`\nBundled skills (${skillNames.length}):\n`);
 
-	for (const name of skillNames) {
-		// Grab description from first agent entry (identical across agents).
-		const description = statuses[0]?.skills.find((s) => s.name === name)?.description ?? "";
+	for (const [i, name] of skillNames.entries()) {
+		// Grab description by index — ordering is identical across agents.
+		const description = statuses[0]?.skills[i]?.description ?? "";
 		console.log(`  ${green(name)}`);
 		console.log(`    ${dim(description)}`);
 
 		for (const agentStatus of statuses) {
-			const skill = agentStatus.skills.find((s) => s.name === name);
+			const skill = agentStatus.skills[i];
 			if (!skill) continue;
 
 			if (!agentStatus.available) {

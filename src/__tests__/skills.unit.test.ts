@@ -33,7 +33,7 @@ afterAll(() => {
 
 /** Helper: return skill names from the first agent in getSkillsStatus(). */
 function embeddedSkillNames(): string[] {
-	return getSkillsStatus().flatMap((a) => a.skills.map((s) => s.name));
+	return getSkillsStatus()[0]?.skills.map((s) => s.name) ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +111,7 @@ describe("installSkills", () => {
 describe("getSkillsStatus", () => {
 	it("returns at least one skill", () => {
 		const statuses = getSkillsStatus();
+		expect(statuses.length).toBeGreaterThan(0);
 		expect(statuses[0]?.skills.length).toBeGreaterThan(0);
 	});
 
