@@ -34,7 +34,7 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.79.0",
+    "@anthropic-ai/sdk": "^0.80.0",
     "@commander-js/extra-typings": "^14.0.0",
     "@inkjs/ui": "^2.0.0",
     "@octokit/graphql": "^9.0.3",
