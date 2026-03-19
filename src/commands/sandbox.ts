@@ -5,6 +5,8 @@ import {
 	createNewSandbox,
 	execCommandInSandbox,
 	listSandboxes,
+	runOverSsh,
+	syncToSandbox,
 } from "../core/sandboxes";
 import type { CommandResult } from "../types/index";
 import { bold } from "../ui/colors";
@@ -108,10 +110,55 @@ export function registerSandboxCommands(program: Command): void {
 		});
 
 	sandboxes
+		.command("ssh")
+		.description("Run a command on a sandbox over SSH")
+		.requiredOption("--org-id <orgId>", "Organization ID")
+		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID")
+		.option("--identity-file <keyFile>", "SSH private key to use (defaults to ~/.ssh/chunk_ai)")
+		.argument("[args...]", "Command and arguments to run on the sandbox")
+		.passThroughOptions()
+		.action(async (args, options) => {
+			const result = await runOverSsh(options.orgId, options.sandboxId, args, options.identityFile);
+			if (result.data) {
+				const { stdout, stderr } = result.data as { stdout: string; stderr: string };
+				if (stdout) process.stdout.write(stdout);
+				if (stderr) process.stderr.write(stderr);
+			}
+			finalize(result);
+		});
+
+	sandboxes
 		.command("prepare")
 		.description("[EXPERIMENTAL] Prepare the hook environment before a session begins")
 		.option("--docker-sudo", "Run docker commands with sudo", false)
 		.action(async (opts: { dockerSudo: boolean }) =>
 			finalize(await runSandboxPrepare({ dockerSudo: opts.dockerSudo })),
 		);
+
+	sandboxes
+		.command("sync")
+		.description("Sync the current working directory to a sandbox over SSH")
+		.requiredOption("--org-id <orgId>", "Organization ID")
+		.requiredOption("--sandbox-id <sandboxId>", "Sandbox ID")
+		.option("--dest <path>", "Destination path on sandbox", "/workspace")
+		.option("--identity-file <keyFile>", "SSH private key to use (defaults to ~/.ssh/chunk_ai)")
+		.option("--bootstrap", "Clone the repo on the sandbox before syncing", false)
+		.action(async (options) => {
+			const result = await syncToSandbox(
+				options.orgId,
+				options.sandboxId,
+				options.dest,
+				options.identityFile,
+				options.bootstrap,
+			);
+			if (result.exitCode === 0 && result.data) {
+				const { synced, reason } = result.data as { synced: boolean; reason?: string };
+				if (synced) {
+					console.log("Synced.");
+				} else {
+					console.log(reason ?? "Nothing to sync.");
+				}
+			}
+			finalize(result);
+		});
 }
