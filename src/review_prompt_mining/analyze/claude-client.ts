@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { USER_AGENT } from "../../config";
 import { printError } from "../../utils/errors";
 import type { ReviewerGroup } from "./json-parser";
 
@@ -32,7 +33,7 @@ export function createClaudeClient(): Anthropic {
 		process.exit(1);
 	}
 
-	return new Anthropic({ apiKey });
+	return new Anthropic({ apiKey, defaultHeaders: { "User-Agent": USER_AGENT } });
 }
 
 /**

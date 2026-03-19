@@ -1,4 +1,5 @@
 import { graphql } from "@octokit/graphql";
+import { USER_AGENT } from "../config";
 import { printError } from "../utils/errors";
 import type { GraphQLRateLimit } from "./types";
 
@@ -19,6 +20,7 @@ export function createGraphQLClient(): GraphQLClient {
 	return graphql.defaults({
 		headers: {
 			authorization: `token ${token}`,
+			"user-agent": USER_AGENT,
 		},
 	});
 }

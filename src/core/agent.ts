@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { VALIDATION_MODEL } from "../config";
+import { USER_AGENT, VALIDATION_MODEL } from "../config";
 
 export async function validateApiKeyWithServer(apiKey: string): Promise<boolean> {
-	const client = new Anthropic({ apiKey });
+	const client = new Anthropic({ apiKey, defaultHeaders: { "User-Agent": USER_AGENT } });
 
 	try {
 		await client.messages.countTokens({

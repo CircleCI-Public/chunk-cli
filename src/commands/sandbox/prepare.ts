@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
-import { DEFAULT_MODEL } from "../../config";
+import { DEFAULT_MODEL, USER_AGENT } from "../../config";
 import {
 	buildTestCommandPrompt,
 	detectPackageManager,
@@ -326,7 +326,10 @@ export async function runSandboxPrepare(options: SandboxPrepareOptions): Promise
 		console.log(`detected package manager: ${packageManager.name} (${packageManager.lockfile})`);
 	}
 
-	const client = new Anthropic({ apiKey });
+	const client = new Anthropic({
+		apiKey,
+		defaultHeaders: { "User-Agent": USER_AGENT },
+	});
 
 	console.log("scanning for private dependencies...");
 	const requiredCredentials = await identifyRequiredCredentials(

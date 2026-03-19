@@ -58,6 +58,7 @@ describe("CircleCI API Client", () => {
 					method: "POST",
 					headers: {
 						Accept: "application/json",
+						"User-Agent": "Chunk-CLI/dev",
 						"Content-Type": "application/json",
 						"Circle-Token": mockToken,
 					},
@@ -263,6 +264,7 @@ describe("CircleCI API Client", () => {
 			expect(mockFetch).toHaveBeenCalledWith("https://circleci.com/api/v1.1/projects", {
 				headers: {
 					Accept: "application/json",
+					"User-Agent": "Chunk-CLI/dev",
 					"Circle-Token": mockToken,
 				},
 			});
@@ -342,6 +344,7 @@ describe("CircleCI API Client", () => {
 			expect(mockFetch).toHaveBeenCalledWith("https://circleci.com/api/v2/me/collaborations", {
 				headers: {
 					Accept: "application/json",
+					"User-Agent": "Chunk-CLI/dev",
 					"Circle-Token": mockToken,
 				},
 			});
@@ -410,6 +413,7 @@ describe("CircleCI API Client", () => {
 				{
 					headers: {
 						Accept: "application/json",
+						"User-Agent": "Chunk-CLI/dev",
 						"Circle-Token": mockToken,
 					},
 				},
