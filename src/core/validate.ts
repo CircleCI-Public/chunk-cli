@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
-import { CircleCIError, createSandboxAccessToken, execCommand } from "../api/circleci";
+import { CircleCIError } from "../api/circleci";
 import { loadProjectConfig } from "../storage/project-config";
+import { shellEscape, withSshConnection } from "../utils/ssh";
+import { openSandboxSession } from "./sandbox-session";
 
 export type ValidateStepResult = {
 	command: string;
@@ -16,7 +18,7 @@ export type ValidateResult =
 export type ValidateMode =
 	| { type: "dry-run" }
 	| { type: "local" }
-	| { type: "remote"; orgId: string; sandboxId: string; token: string };
+	| { type: "remote"; orgId: string; sandboxId: string; token: string; identityFile?: string; dest?: string };
 
 export type ValidateCommandResult =
 	| { ok: true; results: ValidateStepResult[]; skipped: string[] }
@@ -109,16 +111,17 @@ export async function validateOnSandbox(
 	sandboxId: string,
 	circleciToken: string,
 	_projectDir: string,
+	identityFile?: string,
+	dest?: string,
 	onCommandStart: (command: string) => void = noop,
 	onCommandOutput: (stdout: string | null, stderr: string | null) => void = noop,
 ): Promise<ValidateResult> {
 	const loaded = loadCommands();
 	if ("ok" in loaded) return loaded;
 
-	let accessToken: string;
+	let session: Awaited<ReturnType<typeof openSandboxSession>>;
 	try {
-		const tokenResp = await createSandboxAccessToken(sandboxId, organizationId, circleciToken);
-		accessToken = tokenResp.access_token;
+		session = await openSandboxSession(sandboxId, organizationId, circleciToken, identityFile);
 	} catch (error) {
 		if (error instanceof CircleCIError) {
 			return {
@@ -130,19 +133,32 @@ export async function validateOnSandbox(
 		throw error;
 	}
 
-	const executor: CommandExecutor = async (command, onOutput) => {
-		const result = await execCommand("sh", ["-c", command], accessToken);
-		const stdout = result.stdout ?? "";
-		const stderr = result.stderr ?? "";
-		onOutput(stdout || null, stderr || null);
-		return { exitCode: result.exit_code, stdout, stderr };
-	};
-
 	try {
-		return await runValidateSequence(loaded.commands, onCommandStart, onCommandOutput, executor);
+		return await withSshConnection(
+			session.sandboxUrl,
+			session.identityFile,
+			session.knownHostsFile,
+			async (exec) => {
+				const executor: CommandExecutor = async (command, onOutput) => {
+					const cmd = dest ? `cd ${shellEscape(dest)} && ${command}` : command;
+					const result = await exec(["sh", "-c", cmd]);
+					onOutput(result.stdout || null, result.stderr || null);
+					return result;
+				};
+				return runValidateSequence(
+					loaded.commands,
+					onCommandStart,
+					onCommandOutput,
+					executor,
+				);
+			},
+		);
 	} catch (error) {
-		if (error instanceof CircleCIError) return { ok: false, error: error.message };
-		throw error;
+		return {
+			ok: false,
+			error: error instanceof Error ? error.message : String(error),
+			hint: "Check that the sandbox is running and your SSH key is registered.",
+		};
 	}
 }
 
@@ -165,6 +181,8 @@ export async function runValidate(
 		mode.sandboxId,
 		mode.token,
 		projectDir,
+		mode.identityFile,
+		mode.dest,
 		onCommandStart,
 		onCommandOutput,
 	);

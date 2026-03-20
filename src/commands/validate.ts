@@ -40,6 +40,8 @@ export function registerValidateCommands(program: Command): void {
 		.description("Run configured validation commands locally or on a sandbox")
 		.option("--sandbox-id <id>", "Sandbox ID to run validation on (remote mode)")
 		.option("--org-id <id>", "Organization ID (required with --sandbox-id)")
+		.option("--identity-file <keyFile>", "SSH private key to use (defaults to ~/.ssh/chunk_ai)")
+		.option("--dest <path>", "Working directory on the sandbox", "/workspace")
 		.option("--dry-run", "Show commands that would run without executing them", false)
 		.action(async (options) => {
 			let mode: ValidateMode;
@@ -53,7 +55,14 @@ export function registerValidateCommands(program: Command): void {
 				}
 				const token = requireToken();
 				if (!token) process.exit(2);
-				mode = { type: "remote", orgId: options.orgId, sandboxId: options.sandboxId, token };
+				mode = {
+					type: "remote",
+					orgId: options.orgId,
+					sandboxId: options.sandboxId,
+					token,
+					identityFile: options.identityFile,
+					dest: options.dest,
+				};
 			} else {
 				mode = { type: "local" };
 			}
