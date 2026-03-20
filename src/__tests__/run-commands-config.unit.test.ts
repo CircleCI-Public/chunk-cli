@@ -57,7 +57,7 @@ describe("core/run-config", () => {
 		it("resolves string shorthand", () => {
 			const config = { commands: { test: "npm test" } };
 			const resolved = resolveCommand("test", config);
-			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 300 });
+			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 300, fileExt: "" });
 		});
 
 		it("resolves expanded form", () => {
@@ -67,13 +67,33 @@ describe("core/run-config", () => {
 				},
 			};
 			const resolved = resolveCommand("test", config);
-			expect(resolved).toEqual({ run: "npm test", description: "Run tests", timeout: 300 });
+			expect(resolved).toEqual({
+				run: "npm test",
+				description: "Run tests",
+				timeout: 300,
+				fileExt: "",
+			});
+		});
+
+		it("resolves expanded form with fileExt", () => {
+			const config = {
+				commands: {
+					test: { run: "bun test", fileExt: ".ts" },
+				},
+			};
+			const resolved = resolveCommand("test", config);
+			expect(resolved).toEqual({
+				run: "bun test",
+				description: "",
+				timeout: 300,
+				fileExt: ".ts",
+			});
 		});
 
 		it("fills defaults for expanded form", () => {
 			const config = { commands: { test: { run: "npm test" } } };
 			const resolved = resolveCommand("test", config);
-			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 300 });
+			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 300, fileExt: "" });
 		});
 
 		it("returns undefined for missing command", () => {

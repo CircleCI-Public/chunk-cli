@@ -42,7 +42,8 @@ export async function runCommand(
 
 	// --status: check cache only
 	if (opts.status) {
-		const cached = checkCache(projectDir, name);
+		const ext = existingCommand?.fileExt || undefined;
+		const cached = checkCache(projectDir, name, ext);
 		if (cached) {
 			console.log(`${green("✓")} ${name}: cached (${cached.exitCode === 0 ? "pass" : "fail"})`);
 			return cached.exitCode;
@@ -54,6 +55,7 @@ export async function runCommand(
 	// Determine which command to run
 	let commandStr: string;
 	let timeout: number;
+	let fileExt: string | undefined;
 
 	if (opts.cmd) {
 		commandStr = opts.cmd;
@@ -80,6 +82,7 @@ export async function runCommand(
 	} else if (existingCommand) {
 		commandStr = existingCommand.run;
 		timeout = existingCommand.timeout;
+		fileExt = existingCommand.fileExt || undefined;
 	} else if (isTTY) {
 		// Interactive setup: prompt for the command
 		console.log(`Command ${bold(name)} is not configured yet.\n`);
@@ -107,6 +110,7 @@ export async function runCommand(
 	const result = executeCommand(projectDir, name, commandStr, {
 		force: opts.force,
 		timeout,
+		fileExt,
 	});
 
 	if (result.status === "cached") {

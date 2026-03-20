@@ -11,11 +11,18 @@ import { join } from "node:path";
 const CONFIG_DIR = ".chunk";
 const CONFIG_FILE = "commands.json";
 
-export type CommandConfig = string | { run: string; description?: string; timeout?: number };
+export type CommandConfig =
+	| string
+	| { run: string; description?: string; timeout?: number; fileExt?: string };
 
 export type RunConfig = { commands?: Record<string, CommandConfig> };
 
-export type ResolvedCommand = { run: string; description: string; timeout: number };
+export type ResolvedCommand = {
+	run: string;
+	description: string;
+	timeout: number;
+	fileExt: string;
+};
 
 const DEFAULT_TIMEOUT = 300;
 
@@ -43,13 +50,14 @@ export function resolveCommand(name: string, config: RunConfig): ResolvedCommand
 	if (entry === undefined) return undefined;
 
 	if (typeof entry === "string") {
-		return { run: entry, description: "", timeout: DEFAULT_TIMEOUT };
+		return { run: entry, description: "", timeout: DEFAULT_TIMEOUT, fileExt: "" };
 	}
 
 	return {
 		run: entry.run,
 		description: entry.description ?? "",
 		timeout: entry.timeout ?? DEFAULT_TIMEOUT,
+		fileExt: entry.fileExt ?? "",
 	};
 }
 
