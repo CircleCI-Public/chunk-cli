@@ -126,7 +126,7 @@ export function executeCommand(
 		if (cached) return cached;
 	}
 
-	const timeout = (opts.timeout ?? 120) * 1000;
+	const timeout = (opts.timeout ?? 300) * 1000;
 	let output: string;
 	let exitCode: number;
 
