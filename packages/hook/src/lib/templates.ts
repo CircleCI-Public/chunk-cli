@@ -13,6 +13,7 @@
  */
 
 import configContent from "../../templates/.chunk/hook/config.yml" with { type: "text" };
+import unifiedConfigContent from "../../templates/.chunk/config.yml" with { type: "text" };
 import gitignoreContent from "../../templates/.chunk/hook/gitignore" with { type: "text" };
 import settingsObj from "../../templates/.claude/settings.json";
 
@@ -35,6 +36,11 @@ export const TEMPLATE_FILES: TemplateFile[] = [
 	{
 		relativePath: ".chunk/hook/.gitignore",
 		content: gitignoreContent,
+		substituteProject: false,
+	},
+	{
+		relativePath: ".chunk/config.yml",
+		content: unifiedConfigContent,
 		substituteProject: false,
 	},
 	{

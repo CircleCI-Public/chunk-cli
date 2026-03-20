@@ -48,6 +48,7 @@ function makeConfig(sentinelDir: string, projectDir = "/test/project"): Resolved
 				timeout: 600,
 			},
 		},
+		hooks: {},
 		sentinelDir,
 		projectDir,
 	};

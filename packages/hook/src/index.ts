@@ -9,6 +9,7 @@
 import { basename, resolve } from "node:path";
 import type { Command } from "@commander-js/extra-typings";
 import { type ExecFlags, runExec } from "./commands/exec";
+import { dispatchHookEvent } from "./commands/hook-dispatch";
 import { activateScope, deactivateScope } from "./commands/scope";
 import { runState, type StateFlags } from "./commands/state";
 import { parseSpecs, runSync, type SyncFlags } from "./commands/sync";
@@ -21,6 +22,7 @@ import { isEnabled, resolveProject } from "./lib/env";
 import { buildEnvUpdateOptions, runEnvUpdate } from "./lib/env-update";
 import { initLog, log } from "./lib/log";
 import { type CopyResult, runRepoInit } from "./lib/repo-init";
+import { runNamedCommand } from "./lib/runner";
 import { runHookSetup } from "./lib/setup";
 import { PROFILES } from "./lib/shell-env";
 
@@ -49,10 +51,13 @@ export type { HookSetupOptions, HookSetupResult } from "./lib/setup";
  *   registerHookCommands(hook);
  */
 export { runHookSetup } from "./lib/setup";
+export { runNamedCommand } from "./lib/runner";
+export type { RunResult, RunOptions } from "./lib/runner";
 export type { Profile } from "./lib/shell-env";
 export { PROFILES } from "./lib/shell-env";
 
 export function registerHookCommands(parent: Command): void {
+	registerHookRun(parent);
 	registerExec(parent);
 	registerTask(parent);
 	registerSync(parent);
@@ -61,6 +66,33 @@ export function registerHookCommands(parent: Command): void {
 	registerRepo(parent);
 	registerEnv(parent);
 	registerSetup(parent);
+}
+
+// ---------------------------------------------------------------------------
+// run — unified hook event dispatch
+// ---------------------------------------------------------------------------
+
+function registerHookRun(parent: Command): void {
+	parent
+		.command("run")
+		.description("Unified hook event dispatch — routes events to configured checks")
+		.option("--project <path>", "Override project directory")
+		.action(async (opts) => {
+			const adapter = getAdapter();
+			const event = await adapter.readEvent();
+
+			if (!isEnabled("dispatch")) {
+				log(TAG, "Dispatch not enabled, allowing");
+				adapter.allow();
+			}
+
+			const projectDir = resolveProject(opts.project, event.cwd);
+			const config = loadConfig(projectDir);
+			initLog({ projectDir });
+			log(TAG, `command=run project=${config.projectDir}`);
+
+			return dispatchHookEvent(config, adapter, event);
+		});
 }
 
 // ---------------------------------------------------------------------------

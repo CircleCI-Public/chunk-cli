@@ -122,14 +122,20 @@ describe("repo-init", () => {
 		expect(configResult?.action).toBe("created");
 	});
 
-	it("settings.json contains chunk hook commands", () => {
+	it("settings.json contains unified chunk hook run command", () => {
 		runRepoInit({ targetDir: testDir, force: false });
 
 		const settings = readFileSync(join(testDir, ".claude", "settings.json"), "utf-8");
-		expect(settings).toContain("chunk hook exec");
-		expect(settings).toContain("chunk hook scope");
-		expect(settings).toContain("chunk hook state");
+		expect(settings).toContain("chunk hook run");
 		expect(settings).toContain("Bash(chunk:*)");
+	});
+
+	it("creates unified .chunk/config.yml with hooks section", () => {
+		runRepoInit({ targetDir: testDir, force: false });
+
+		const config = readFileSync(join(testDir, ".chunk", "config.yml"), "utf-8");
+		expect(config).toContain("commands:");
+		expect(config).toContain("hooks:");
 	});
 
 	it("config.yml contains CHUNK_HOOK_ENABLE reference", () => {

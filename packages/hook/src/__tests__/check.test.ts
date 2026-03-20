@@ -210,6 +210,7 @@ describe("resolveTriggerPatterns()", () => {
 		triggers,
 		execs: {},
 		tasks: {},
+		hooks: {},
 		sentinelDir: "/tmp/sentinels",
 		projectDir: "/test/project",
 	});
@@ -334,6 +335,7 @@ describe("blockWithLimit()", () => {
 		triggers: {},
 		execs: {},
 		tasks: {},
+		hooks: {},
 		sentinelDir,
 		projectDir: "/test/project",
 	});

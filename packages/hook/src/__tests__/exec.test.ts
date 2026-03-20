@@ -42,6 +42,7 @@ function makeConfig(sentinelDir: string): ResolvedConfig {
 		triggers: {},
 		execs: {},
 		tasks: {},
+		hooks: {},
 		sentinelDir,
 		projectDir: "/test/project",
 	};
@@ -285,6 +286,7 @@ describe("runExec() skipped sentinel at push time", () => {
 			triggers: {},
 			execs: {},
 			tasks: {},
+			hooks: {},
 			sentinelDir: tmpDir,
 			projectDir: tmpDir,
 		};

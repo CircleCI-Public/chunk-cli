@@ -15,12 +15,27 @@ import { getEnvConfigPath, getEnvSentinelDir, getEnvTimeout, getProjectDir } fro
 // Raw YAML config types
 // ---------------------------------------------------------------------------
 
-/** Top-level config shape matching `.chunk/hook/config.yml`. */
+/** Hook event routing configuration. */
+export type HookEventConfig = {
+	/** Tool-name regex filter (e.g. "Bash|Shell|run_in_terminal"). */
+	matcher?: string;
+	/** Named trigger group from `triggers:`. */
+	trigger?: string;
+	/** List of command/task names to run as checks. */
+	checks?: string[];
+};
+
+/** Top-level config shape matching `.chunk/config.yml` (or `.chunk/hook/config.yml`). */
 export type Config = {
 	triggers?: Record<string, string[]>;
+	/** Named commands — canonical key. */
+	commands?: Record<string, ExecConfig>;
+	/** Backwards-compat alias for `commands:`. */
 	execs?: Record<string, ExecConfig>;
 	tasks?: Record<string, TaskConfig>;
 	sentinels?: { dir?: string };
+	/** Hook event routing (only used by `chunk hook run`). */
+	hooks?: Record<string, HookEventConfig>;
 };
 
 /** Per-exec configuration in the YAML `execs:` section. */
@@ -70,6 +85,8 @@ export type ResolvedConfig = {
 	tasks: Record<string, Required<TaskConfig>>;
 	sentinelDir: string;
 	projectDir: string;
+	/** Hook event routing (only used by `chunk hook run`). */
+	hooks: Record<string, HookEventConfig>;
 };
 
 // ---------------------------------------------------------------------------
@@ -109,12 +126,17 @@ export function loadConfig(projectDir?: string, overrides?: Partial<Config>): Re
 		...merged.triggers,
 	};
 
+	// Merge commands: `commands:` is canonical, `execs:` is backwards-compat alias.
+	// `commands:` wins over `execs:` on key conflict.
+	const rawExecs: Record<string, ExecConfig> = {
+		...merged.execs,
+		...merged.commands,
+	};
+
 	// Resolve each exec
 	const execs: Record<string, ResolvedExec> = {};
-	if (merged.execs) {
-		for (const [name, cfg] of Object.entries(merged.execs)) {
-			execs[name] = resolveExec(name, cfg);
-		}
+	for (const [name, cfg] of Object.entries(rawExecs)) {
+		execs[name] = resolveExec(name, cfg);
 	}
 
 	// Resolve each task
@@ -133,6 +155,7 @@ export function loadConfig(projectDir?: string, overrides?: Partial<Config>): Re
 		tasks,
 		sentinelDir,
 		projectDir: resolvedProjectDir,
+		hooks: merged.hooks ?? {},
 	};
 }
 
@@ -183,10 +206,31 @@ export function getTriggerPatterns(
 	return config.triggers[triggerName];
 }
 
+/**
+ * Resolve the config file path.
+ *
+ * Priority:
+ *   1. `CHUNK_HOOK_CONFIG` env var
+ *   2. `.chunk/config.yml` (new unified location)
+ *   3. `.chunk/hook/config.yml` (backwards-compat fallback)
+ */
+export function resolveConfigPath(projectDir: string): string | undefined {
+	const envPath = getEnvConfigPath();
+	if (envPath) return existsSync(envPath) ? envPath : undefined;
+
+	const unified = join(projectDir, ".chunk", "config.yml");
+	if (existsSync(unified)) return unified;
+
+	const legacy = join(projectDir, ".chunk", "hook", "config.yml");
+	if (existsSync(legacy)) return legacy;
+
+	return undefined;
+}
+
 /** Read and parse the YAML config file. Returns empty config on any error. */
 function readConfigFile(projectDir: string): Config {
-	const configPath = getEnvConfigPath() ?? join(projectDir, ".chunk", "hook", "config.yml");
-	if (!existsSync(configPath)) return {};
+	const configPath = resolveConfigPath(projectDir);
+	if (!configPath) return {};
 	try {
 		const content = readFileSync(configPath, "utf-8");
 		return (parseYaml(content) as Config) ?? {};
