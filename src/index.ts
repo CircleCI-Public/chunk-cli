@@ -5,6 +5,7 @@ import { registerAuthCommands } from "./commands/auth";
 import { registerBuildPromptCommand } from "./commands/build-prompt";
 import { registerCompletionCommands } from "./commands/completion";
 import { registerConfigCommands } from "./commands/config";
+import { registerRunCommand } from "./commands/run";
 import { registerSandboxCommands } from "./commands/sandbox";
 import { registerSkillsCommands } from "./commands/skills";
 import { registerTaskCommands } from "./commands/task";
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
 	registerSkillsCommands(program);
 	registerTaskCommands(program);
 	registerUpgradeCommand(program);
+	registerRunCommand(program);
 	registerCompletionCommands(program);
 
 	// Hook commands — exec, task, sync, state, scope for AI agent hooks
