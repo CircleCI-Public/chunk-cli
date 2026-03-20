@@ -6,7 +6,7 @@ orbs:
 executors:
   releaser:
     docker:
-      - image: circleci/cli-releaser:0.3.0
+      - image: alpine:3.19
 
 commands:
   install-deps:
