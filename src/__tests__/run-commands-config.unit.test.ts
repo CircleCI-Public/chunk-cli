@@ -57,7 +57,7 @@ describe("core/run-config", () => {
 		it("resolves string shorthand", () => {
 			const config = { commands: { test: "npm test" } };
 			const resolved = resolveCommand("test", config);
-			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 120 });
+			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 300 });
 		});
 
 		it("resolves expanded form", () => {
@@ -73,7 +73,7 @@ describe("core/run-config", () => {
 		it("fills defaults for expanded form", () => {
 			const config = { commands: { test: { run: "npm test" } } };
 			const resolved = resolveCommand("test", config);
-			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 120 });
+			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 300 });
 		});
 
 		it("returns undefined for missing command", () => {

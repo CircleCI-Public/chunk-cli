@@ -17,7 +17,7 @@ export type RunConfig = { commands?: Record<string, CommandConfig> };
 
 export type ResolvedCommand = { run: string; description: string; timeout: number };
 
-const DEFAULT_TIMEOUT = 120;
+const DEFAULT_TIMEOUT = 300;
 
 function configPath(projectDir: string): string {
 	return join(projectDir, CONFIG_DIR, CONFIG_FILE);

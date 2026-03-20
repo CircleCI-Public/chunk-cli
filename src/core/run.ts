@@ -57,7 +57,7 @@ export async function runCommand(
 
 	if (opts.cmd) {
 		commandStr = opts.cmd;
-		timeout = 120;
+		timeout = 300;
 
 		// Handle save logic
 		const action = shouldPromptSave({
@@ -90,7 +90,7 @@ export async function runCommand(
 			return 1;
 		}
 		commandStr = trimmed;
-		timeout = 120;
+		timeout = 300;
 		saveCommand(projectDir, name, commandStr);
 		console.log(`${green("✓")} Saved ${bold(name)} to .chunk/commands.json\n`);
 	} else {
