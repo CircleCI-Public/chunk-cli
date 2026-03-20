@@ -49,7 +49,7 @@ function sentinelPath(projectDir: string, name: string): string {
 	return join(cacheDir(projectDir), `${safeName(name)}.json`);
 }
 
-function computeContentHash(projectDir: string): string {
+function computeContentHash(projectDir: string, fileExt?: string): string {
 	const hash = createHash("sha256");
 
 	try {
@@ -66,7 +66,9 @@ function computeContentHash(projectDir: string): string {
 	hash.update("\n");
 
 	try {
-		const diff = execFileSync("git", ["diff", "HEAD"], {
+		const diffArgs = ["diff", "HEAD"];
+		if (fileExt) diffArgs.push("--", `*${fileExt}`);
+		const diff = execFileSync("git", diffArgs, {
 			cwd: projectDir,
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "ignore"],
@@ -101,11 +103,15 @@ function writeSentinel(projectDir: string, name: string, data: SentinelData): vo
 	writeFileSync(sentinelPath(projectDir, name), JSON.stringify(data));
 }
 
-export function checkCache(projectDir: string, name: string): RunResult | undefined {
+export function checkCache(
+	projectDir: string,
+	name: string,
+	fileExt?: string,
+): RunResult | undefined {
 	const sentinel = readSentinel(projectDir, name);
 	if (!sentinel) return undefined;
 
-	const currentHash = computeContentHash(projectDir);
+	const currentHash = computeContentHash(projectDir, fileExt);
 	if (sentinel.contentHash !== currentHash) return undefined;
 
 	return {
@@ -119,10 +125,10 @@ export function executeCommand(
 	projectDir: string,
 	name: string,
 	command: string,
-	opts: { force?: boolean; timeout?: number } = {},
+	opts: { force?: boolean; timeout?: number; fileExt?: string } = {},
 ): RunResult {
 	if (!opts.force) {
-		const cached = checkCache(projectDir, name);
+		const cached = checkCache(projectDir, name, opts.fileExt);
 		if (cached) return cached;
 	}
 
@@ -147,7 +153,7 @@ export function executeCommand(
 
 	output = truncateOutput(output);
 
-	const contentHash = computeContentHash(projectDir);
+	const contentHash = computeContentHash(projectDir, opts.fileExt);
 	const status = exitCode === 0 ? "pass" : "fail";
 
 	writeSentinel(projectDir, name, {

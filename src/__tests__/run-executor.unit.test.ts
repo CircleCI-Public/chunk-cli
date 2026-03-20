@@ -87,4 +87,37 @@ describe("core/run-executor", () => {
 			expect(checkCache(testDir, "test")).toBeUndefined();
 		});
 	});
+
+	describe("fileExt scoping", () => {
+		it("cache remains valid when unrelated file changes", () => {
+			// Commit a .ts and a .md file
+			fs.writeFileSync(path.join(testDir, "app.ts"), "const x = 1;");
+			fs.writeFileSync(path.join(testDir, "readme.md"), "hello");
+			execSync("git add -A && git commit -m 'add files'", { cwd: testDir, stdio: "ignore" });
+
+			// Run scoped to .ts
+			executeCommand(testDir, "test", "echo ts-scoped", { force: true, fileExt: ".ts" });
+
+			// Change only the .md file
+			fs.writeFileSync(path.join(testDir, "readme.md"), "updated");
+
+			// Cache should still be valid since .ts files didn't change
+			const cached = checkCache(testDir, "test", ".ts");
+			expect(cached).toBeDefined();
+			expect(cached?.status).toBe("cached");
+		});
+
+		it("cache invalidates when scoped file changes", () => {
+			fs.writeFileSync(path.join(testDir, "app.ts"), "const x = 1;");
+			execSync("git add -A && git commit -m 'add ts'", { cwd: testDir, stdio: "ignore" });
+
+			executeCommand(testDir, "test", "echo ts-scoped", { force: true, fileExt: ".ts" });
+
+			// Change the .ts file
+			fs.writeFileSync(path.join(testDir, "app.ts"), "const x = 2;");
+
+			const cached = checkCache(testDir, "test", ".ts");
+			expect(cached).toBeUndefined();
+		});
+	});
 });
