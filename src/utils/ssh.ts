@@ -53,13 +53,22 @@ export function tofuVerifyHostKey(
 	return true;
 }
 
-export async function execOverSsh(
+export type SshExec = (
+	command: string[],
+	options?: { stdin?: string | Buffer },
+) => Promise<SshResult>;
+
+/**
+ * Open a single TLS+SSH connection and call fn with an exec function.
+ * All exec calls within fn share the same connection; the connection is
+ * closed when fn resolves or rejects.
+ */
+export function withSshConnection<T>(
 	sandboxUrl: string,
 	identityFile: string,
 	knownHostsFile: string,
-	command: string[],
-	options?: { stdin?: string | Buffer },
-): Promise<SshResult> {
+	fn: (exec: SshExec) => Promise<T>,
+): Promise<T> {
 	return new Promise((resolve, reject) => {
 		const client = new Client();
 
@@ -72,13 +81,32 @@ export async function execOverSsh(
 			rejectUnauthorized: false,
 		});
 
-		tlsSocket.once("error", reject);
+		let cleaned = false;
+		const cleanup = () => {
+			if (cleaned) return;
+			cleaned = true;
+			client.end();
+			tlsSocket.destroy();
+		};
+
+		// Fail fast if the TLS handshake itself hangs (e.g. sandbox not yet ready).
+		tlsSocket.setTimeout(15_000, () => {
+			cleanup();
+			reject(new Error("Timed out waiting for TLS connection"));
+		});
+
+		tlsSocket.once("error", (err: Error) => {
+			cleanup();
+			reject(err);
+		});
 
 		tlsSocket.once("secureConnect", () => {
+			tlsSocket.setTimeout(0); // clear timeout once TLS is up
 			client.connect({
 				sock: tlsSocket,
 				username: SANDBOX_SSH_USER,
 				privateKey: fs.readFileSync(identityFile),
+				readyTimeout: 15_000,
 				hostVerifier: (key: Buffer) => {
 					const fingerprint = crypto.createHash("sha256").update(key).digest("hex");
 					return tofuVerifyHostKey(knownHostsFile, sandboxUrl, fingerprint);
@@ -86,35 +114,56 @@ export async function execOverSsh(
 			});
 		});
 
+		client.once("error", (err) => {
+			cleanup();
+			reject(err);
+		});
+
 		client.once("ready", () => {
-			client.exec(shellJoin(command), (err, stream) => {
-				if (err) {
-					client.end();
-					return reject(err);
-				}
+			const exec: SshExec = (command, options) =>
+				new Promise((resolveExec, rejectExec) => {
+					client.exec(shellJoin(command), (err, stream) => {
+						if (err) return rejectExec(err);
 
-				const stdoutChunks: Buffer[] = [];
-				const stderrChunks: Buffer[] = [];
+						const stdoutChunks: Buffer[] = [];
+						const stderrChunks: Buffer[] = [];
 
-				stream.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
-				stream.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+						stream.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+						stream.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
 
-				stream.once("close", (exitCode: number | null) => {
-					client.end();
-					resolve({
-						exitCode: exitCode ?? 1,
-						stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-						stderr: Buffer.concat(stderrChunks).toString("utf8"),
+						stream.once("close", (exitCode: number | null) => {
+							resolveExec({
+								exitCode: exitCode ?? 1,
+								stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+								stderr: Buffer.concat(stderrChunks).toString("utf8"),
+							});
+						});
+
+						stream.stdin.end(options?.stdin);
 					});
 				});
 
-				stream.stdin.end(options?.stdin);
-			});
-		});
-
-		client.once("error", (err) => {
-			tlsSocket.destroy();
-			reject(err);
+			fn(exec)
+				.then((result) => {
+					cleanup();
+					resolve(result);
+				})
+				.catch((err) => {
+					cleanup();
+					reject(err);
+				});
 		});
 	});
+}
+
+export function execOverSsh(
+	sandboxUrl: string,
+	identityFile: string,
+	knownHostsFile: string,
+	command: string[],
+	options?: { stdin?: string | Buffer },
+): Promise<SshResult> {
+	return withSshConnection(sandboxUrl, identityFile, knownHostsFile, (exec) =>
+		exec(command, options),
+	);
 }
