@@ -20,14 +20,15 @@ const ORG_ID = "org-abc";
 const SANDBOX_ID = "sandbox-xyz";
 
 describe("buildSandboxInitCommand", () => {
-	it("clones and checks out the branch when branch is provided", () => {
+	it("clones with --branch when branch is provided, with plain-clone fallback", () => {
 		const cmd = buildSandboxInitCommand(
 			"https://github.com/org/repo.git",
 			"my-branch",
 			"/workspace",
 		);
-		expect(cmd).toContain("git clone 'https://github.com/org/repo.git' '/workspace'");
-		expect(cmd).toContain("git -C '/workspace' checkout 'my-branch'");
+		expect(cmd).toBe(
+			"git clone --branch 'my-branch' 'https://github.com/org/repo.git' '/workspace' || git clone 'https://github.com/org/repo.git' '/workspace'",
+		);
 	});
 
 	it("clones only when branch is null", () => {

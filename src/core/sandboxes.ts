@@ -18,21 +18,32 @@ import {
 	validatePublicKey,
 } from "./sandboxes.steps";
 
+const SSH_RETRYABLE_RE = /timed out|ECONNREFUSED|ETIMEDOUT|ECONNRESET|connection lost/i;
+const SSH_MAX_RETRIES = 3;
+const SSH_RETRY_DELAY_MS = 1_000;
+
 async function execOverSshSafe(
 	...args: Parameters<typeof execOverSsh>
 ): Promise<Awaited<ReturnType<typeof execOverSsh>> | CommandResult> {
-	try {
-		return await execOverSsh(...args);
-	} catch (error) {
-		return {
-			exitCode: 1,
-			error: {
-				title: "SSH connection failed",
-				detail: error instanceof Error ? error.message : String(error),
-				suggestion: "Check that the sandbox is running and your SSH key is registered.",
-			},
-		};
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= SSH_MAX_RETRIES; attempt++) {
+		try {
+			return await execOverSsh(...args);
+		} catch (error) {
+			lastError = error;
+			const msg = error instanceof Error ? error.message : String(error);
+			if (!SSH_RETRYABLE_RE.test(msg) || attempt === SSH_MAX_RETRIES) break;
+			await new Promise((r) => setTimeout(r, SSH_RETRY_DELAY_MS));
+		}
 	}
+	return {
+		exitCode: 1,
+		error: {
+			title: "SSH connection failed",
+			detail: lastError instanceof Error ? lastError.message : String(lastError),
+			suggestion: "Check that the sandbox is running and your SSH key is registered.",
+		},
+	};
 }
 
 async function withCircleCIError<T>(
@@ -230,6 +241,7 @@ export async function syncToSandbox(
 
 	const cwd = process.cwd();
 
+	let bootstrapCmd: string | null = null;
 	if (bootstrap) {
 		let repoUrl: string;
 		try {
@@ -245,23 +257,7 @@ export async function syncToSandbox(
 			};
 		}
 		const branch = await getCurrentBranch(cwd);
-		const initCmd = buildSandboxInitCommand(repoUrl, branch, dest);
-		const initResult = await execOverSshSafe(
-			session.sandboxUrl,
-			session.identityFile,
-			session.knownHostsFile,
-			["bash", "-c", initCmd],
-		);
-		if (!("stdout" in initResult)) return initResult;
-		if (initResult.exitCode !== 0) {
-			return {
-				exitCode: 1,
-				error: {
-					title: "Bootstrap failed",
-					detail: initResult.stderr || "git clone exited with a non-zero status.",
-				},
-			};
-		}
+		bootstrapCmd = buildSandboxInitCommand(repoUrl, branch, dest);
 	}
 
 	const remoteBase = await resolveRemoteBase(cwd);
@@ -277,31 +273,32 @@ export async function syncToSandbox(
 	}
 
 	const patch = await generatePatch(cwd, remoteBase.sha);
-	if (!patch) {
+	if (!patch && !bootstrapCmd) {
 		return {
 			exitCode: 0,
 			data: { synced: false, reason: "No local changes relative to remote base." },
 		};
 	}
 
+	const applyCmd = patch
+		? `git -C ${shellEscape(dest)} reset --hard ${shellEscape(remoteBase.sha)} && git -C ${shellEscape(dest)} clean -fd && git -C ${shellEscape(dest)} apply`
+		: null;
+	const remoteCmd = [bootstrapCmd, applyCmd].filter(Boolean).join(" && ");
+
 	const result = await execOverSshSafe(
 		session.sandboxUrl,
 		session.identityFile,
 		session.knownHostsFile,
-		[
-			"bash",
-			"-c",
-			`git -C ${shellEscape(dest)} reset --hard ${shellEscape(remoteBase.sha)} && git -C ${shellEscape(dest)} clean -fd && git -C ${shellEscape(dest)} apply`,
-		],
-		{ stdin: patch },
+		["bash", "-c", remoteCmd],
+		patch ? { stdin: patch } : undefined,
 	);
 	if (!("stdout" in result)) return result;
 	if (result.exitCode !== 0) {
 		return {
 			exitCode: 1,
 			error: {
-				title: "Sync failed",
-				detail: result.stderr || "git apply exited with a non-zero status.",
+				title: bootstrapCmd ? "Bootstrap failed" : "Sync failed",
+				detail: result.stderr || "Remote command exited with a non-zero status.",
 			},
 		};
 	}

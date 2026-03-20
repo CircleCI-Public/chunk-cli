@@ -38,7 +38,10 @@ export function buildSandboxInitCommand(
 	branch: string | null,
 	dest: string,
 ): string {
-	const clone = `git clone ${shellEscape(repoUrl)} ${shellEscape(dest)}`;
-	if (branch) return `${clone} && git -C ${shellEscape(dest)} checkout ${shellEscape(branch)}`;
-	return clone;
+	const plainClone = `git clone ${shellEscape(repoUrl)} ${shellEscape(dest)}`;
+	if (!branch) return plainClone;
+	// Attempt to clone directly onto the branch; fall back to cloning the default
+	// branch if the branch hasn't been pushed yet. Either way the sync step will
+	// reset to the correct base commit and apply the local patch.
+	return `git clone --branch ${shellEscape(branch)} ${shellEscape(repoUrl)} ${shellEscape(dest)} || ${plainClone}`;
 }
