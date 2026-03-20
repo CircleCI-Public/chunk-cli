@@ -36,7 +36,7 @@ execs:
     #   {{CHANGED_FILES}}    — space-separated list of changed files
     #   {{CHANGED_PACKAGES}} — space-separated list of changed workspace packages
     #   {{<State.field>}}    — any dot-path into event-namespaced state
-    command: "bun test {{CHANGED_FILES}}"
+    command: "t=$(echo '{{CHANGED_FILES}}' | tr ' ' '\n' | grep '\\.test\\.ts$' | tr '\n' ' '); [ -n \"$t\" ] && bun test $t || echo 'No test files staged, skipping.'"
     fileExt: ".ts"
     always: false
     timeout: 300

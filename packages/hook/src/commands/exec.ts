@@ -78,6 +78,13 @@ export async function runExec(
 	// Resolve exec config (from YAML or CLI flags)
 	const exec = resolveExecFromFlags(config, flags);
 
+	if (!exec.command || exec.command.trim() === "") {
+		process.stderr.write(
+			`chunk hook: exec "${flags.name}" has no command configured — skipping. Edit .chunk/hook/config.yml to set one.\n`,
+		);
+		process.exit(0);
+	}
+
 	switch (flags.subcommand) {
 		case "check":
 			return runCheck(config, adapter, event, flags, exec, t);

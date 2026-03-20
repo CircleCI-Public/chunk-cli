@@ -239,13 +239,19 @@ const ENV_MARKER = "# chunk-hook env";
  * @param envFile - Path to the ENV file to source.
  * @param overrideFiles - Override shell startup files (for testing). When omitted, uses auto-detected defaults.
  */
-export function ensureLoginSourcing(envFile: string, overrideFiles?: string[]): string[] {
+export function ensureLoginSourcing(
+	envFile: string,
+	overrideFiles?: string[],
+	dryRun?: boolean,
+): string[] {
 	const startupFiles = overrideFiles ?? defaultShellStartupFiles();
 	const sourceLine = `if [ -f '${shellQuote(envFile)}' ]; then . '${shellQuote(envFile)}'; fi`;
 	const updated: string[] = [];
 
 	for (const file of startupFiles) {
-		upsertManagedBlock(file, ENV_MARKER, sourceLine);
+		if (!dryRun) {
+			upsertManagedBlock(file, ENV_MARKER, sourceLine);
+		}
 		updated.push(file);
 	}
 

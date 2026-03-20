@@ -37,6 +37,8 @@ export type EnvUpdateOptions = {
 	projectRoot?: string;
 	/** Override shell startup files (for testing). When omitted, uses auto-detected defaults. */
 	startupFiles?: string[];
+	/** Preview changes without writing to files. */
+	dryRun?: boolean;
 };
 
 /** Result of the env update operation. */
@@ -62,6 +64,7 @@ export function buildEnvUpdateOptions(flags: {
 	verbose?: boolean;
 	projectRoot?: string;
 	startupFiles?: string[];
+	dryRun?: boolean;
 }): EnvUpdateOptions {
 	const profile = (flags.profile ?? "enable") as Profile;
 	if (!PROFILES.includes(profile)) {
@@ -74,6 +77,7 @@ export function buildEnvUpdateOptions(flags: {
 		verbose: flags.verbose ?? false,
 		projectRoot: flags.projectRoot,
 		...(flags.startupFiles && { startupFiles: flags.startupFiles }),
+		...(flags.dryRun && { dryRun: flags.dryRun }),
 	};
 }
 
@@ -111,6 +115,19 @@ export function migrateEnvFile(newFile: string, legacyFile: string): void {
  * 3. Ensures shell startup files source the ENV file
  */
 export function runEnvUpdate(opts: EnvUpdateOptions): EnvUpdateResult {
+	if (opts.dryRun) {
+		// Return what would happen without making any changes
+		const overwritten = existsSync(opts.envFile);
+		const startupFiles = ensureLoginSourcing(opts.envFile, opts.startupFiles, true);
+		return {
+			envFile: opts.envFile,
+			profile: opts.profile,
+			logDir: opts.logDir,
+			overwritten,
+			startupFiles,
+		};
+	}
+
 	// 0. Migrate legacy env file if needed (only for default path)
 	if (opts.envFile === defaultEnvFile()) {
 		migrateEnvFile(opts.envFile, legacyEnvFile());

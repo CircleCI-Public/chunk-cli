@@ -541,7 +541,9 @@ function registerRepo(parent: Command): void {
 				"  2. Review .claude/settings.json — adjust hook matchers and timeouts if needed.",
 			);
 			console.log("");
-			console.log("  3. Ensure chunk is installed: chunk --version");
+			console.log(
+				"  3. Enable hooks: run chunk hook env update (or chunk hook setup for a combined setup)",
+			);
 		});
 }
 
@@ -614,10 +616,11 @@ function registerSetup(parent: Command): void {
 			console.log("");
 			console.log("Next steps:");
 			console.log("  1. Edit .chunk/hook/config.yml — set command: fields for tests/lint");
-			console.log("  2. Edit .chunk/hook/code-review-instructions.md — customize review prompt");
 			if (result.envResult) {
 				const firstFile = result.envResult.startupFiles[0] ?? "~/.zprofile";
-				console.log(`  3. Restart your terminal or: source ${firstFile}`);
+				console.log(`  2. Restart your terminal or: source ${firstFile}`);
+			} else {
+				console.log("  2. Run chunk hook env update to enable hooks in your shell");
 			}
 			console.log("");
 			console.log(`Project: ${projectName}`);
@@ -640,6 +643,7 @@ function registerEnv(parent: Command): void {
 		.option("--set-log-dir <path>", "Log directory to write into the ENV file")
 		.option("--set-verbose", "Enable verbose logging in the generated ENV", false)
 		.option("--set-project-root <path>", "Multi-repo project root to write into the ENV file")
+		.option("--dry-run", "Preview changes without writing to files", false)
 		.action((opts) => {
 			if (!PROFILES.includes(opts.profile as (typeof PROFILES)[number])) {
 				console.error(`Invalid profile: ${opts.profile}. Valid profiles: ${PROFILES.join(", ")}`);
@@ -652,31 +656,47 @@ function registerEnv(parent: Command): void {
 				logDir: opts.setLogDir,
 				verbose: opts.setVerbose,
 				projectRoot: opts.setProjectRoot,
+				dryRun: opts.dryRun,
 			});
 
 			const result = runEnvUpdate(options);
 
 			console.log("");
-			console.log("Configuration complete!");
-			console.log("");
-			if (result.overwritten) {
-				console.log(`  ⚠ ENV file overwritten: ${result.envFile}`);
+			if (opts.dryRun) {
+				console.log("Dry run — no files were modified:");
+				console.log("");
+				if (result.overwritten) {
+					console.log(`  would overwrite: ${result.envFile}`);
+				} else {
+					console.log(`  would create: ${result.envFile}`);
+				}
+				for (const f of result.startupFiles) {
+					console.log(`  would update: ${f}`);
+				}
+				console.log("");
+				console.log("Run without --dry-run to apply.");
 			} else {
-				console.log(`  ✓ ENV file created: ${result.envFile}`);
+				console.log("Configuration complete!");
+				console.log("");
+				if (result.overwritten) {
+					console.log(`  ⚠ ENV file overwritten: ${result.envFile}`);
+				} else {
+					console.log(`  ✓ ENV file created: ${result.envFile}`);
+				}
+				console.log(`  ✓ Profile: ${result.profile}`);
+				console.log(`  ✓ Log dir: ${result.logDir}`);
+				console.log("");
+				console.log("Shell startup files updated:");
+				for (const f of result.startupFiles) {
+					console.log(`  ✓ ${f}`);
+				}
+				console.log("");
+				console.log("Restart your terminal or run:");
+				console.log(`  source ${result.startupFiles[0] ?? "~/.zprofile"}`);
+				console.log("");
+				console.log("Quick toggle (without re-running env update):");
+				console.log(`  echo 'export CHUNK_HOOK_ENABLE=0' > ${result.envFile}   # disable all`);
+				console.log(`  echo 'export CHUNK_HOOK_ENABLE=1' > ${result.envFile}   # enable all`);
 			}
-			console.log(`  ✓ Profile: ${result.profile}`);
-			console.log(`  ✓ Log dir: ${result.logDir}`);
-			console.log("");
-			console.log("Shell startup files updated:");
-			for (const f of result.startupFiles) {
-				console.log(`  ✓ ${f}`);
-			}
-			console.log("");
-			console.log("Restart your terminal or run:");
-			console.log(`  source ${result.startupFiles[0] ?? "~/.zprofile"}`);
-			console.log("");
-			console.log("Quick toggle (without re-running env update):");
-			console.log(`  echo 'export CHUNK_HOOK_ENABLE=0' > ${result.envFile}   # disable all`);
-			console.log(`  echo 'export CHUNK_HOOK_ENABLE=1' > ${result.envFile}   # enable all`);
 		});
 }
