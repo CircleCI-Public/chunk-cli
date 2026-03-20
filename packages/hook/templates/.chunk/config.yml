@@ -1,0 +1,63 @@
+# .chunk/config.yml — Unified configuration for chunk CLI.
+#
+# This file configures both `chunk run <name>` (terminal/CI) and
+# `chunk hook run` (AI agent hooks). Place at `.chunk/config.yml`
+# in your project root.
+#
+# Environment variable overrides (always win over this file):
+#   CHUNK_HOOK_ENABLE=1               Enable all commands
+#   CHUNK_HOOK_ENABLE_TESTS=1         Enable a specific command by name
+#   CHUNK_HOOK_TIMEOUT_TESTS=120      Override timeout for a command (seconds)
+#   CHUNK_HOOK_SENTINELS_DIR=/tmp/s   Override result-file directory
+#   CHUNK_HOOK_CONFIG=/path/to.yml    Use a different config file
+#   CHUNK_HOOK_VERBOSE=1              Verbose logging to stderr
+#   CHUNK_HOOK_LOG_DIR=/path/to/logs  Override log directory
+#   CHUNK_HOOK_PROJECT_ROOT=/path     Workspace root for multi-repo setups
+#   CHUNK_HOOK_MARKER_TTL_MS=300000   Override scope marker TTL (milliseconds)
+
+# --- Named trigger groups ---
+triggers:
+  pre-commit:
+    - "git commit"
+    - "git push"
+
+# --- Named commands ---
+# Used by both `chunk run` and `chunk hook run`.
+# TODO: Set the `command:` fields to match your repo's test/lint commands.
+commands:
+  tests:
+    command: ""          # e.g. "go test ./...", "npm test", "pytest"
+    fileExt: ""          # e.g. ".go", ".ts", ".py" — skip if no matching files changed
+    always: false
+    timeout: 300
+    limit: 3
+
+  tests-changed:
+    # Supported placeholders:
+    #   {{CHANGED_FILES}}    — space-separated list of changed files
+    #   {{CHANGED_PACKAGES}} — space-separated list of changed workspace packages
+    command: ""          # e.g. "go test {{CHANGED_PACKAGES}}", "npm test -- {{CHANGED_FILES}}"
+    fileExt: ""          # e.g. ".go", ".ts", ".py"
+    always: false
+    timeout: 300
+    limit: 3
+
+  lint:
+    command: ""          # e.g. "golangci-lint run", "npm run lint", "ruff check"
+    always: false
+    timeout: 60
+    limit: 3
+
+# --- Subagent tasks (hook-specific) ---
+# tasks:
+#   review:
+#     instructions: .chunk/hook/review-instructions.md
+
+# --- Hook event routing (only used by `chunk hook run`) ---
+hooks:
+  PreToolUse:
+    matcher: "Bash|Shell|run_in_terminal"
+    trigger: pre-commit
+    checks: [tests-changed, lint]
+  Stop:
+    checks: [tests, lint]
