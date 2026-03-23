@@ -3,9 +3,10 @@
  */
 
 import { bold, dim, green, red } from "../ui/colors";
+import { formatCommandList } from "../ui/format";
 import { promptConfirm, promptInput } from "../ui/prompt";
 import { printError } from "../utils/errors";
-import { formatCommandList, shouldPromptSave } from "./run.steps";
+import { shouldPromptSave } from "./run.steps";
 import { listCommands, loadRunConfig, resolveCommand, saveCommand } from "./run-config";
 import { checkCache, executeCommand } from "./run-executor";
 

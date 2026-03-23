@@ -98,6 +98,9 @@ export function loadRunConfig(projectDir: string): RunConfig {
 						commands: { ...migrated.commands, ...config.commands },
 					};
 					writeRunConfig(projectDir, merged);
+					process.stderr.write(
+						"chunk: migrated legacy .chunk/config.json into .chunk/commands.json\n",
+					);
 					return merged;
 				}
 			}
@@ -112,6 +115,7 @@ export function loadRunConfig(projectDir: string): RunConfig {
 	const migrated = migrateLegacyConfig(projectDir);
 	if (migrated) {
 		writeRunConfig(projectDir, migrated);
+		process.stderr.write("chunk: migrated legacy .chunk/config.json into .chunk/commands.json\n");
 		return migrated;
 	}
 

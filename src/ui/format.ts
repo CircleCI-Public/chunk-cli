@@ -6,7 +6,7 @@
  * Built on colors.ts.
  */
 
-import { bold, dim, green, yellow } from "./colors";
+import { bold, dim, gray, green, yellow } from "./colors";
 
 export function formatSuccess(message: string): string {
 	return green(`✓ ${message}`);
@@ -34,4 +34,19 @@ export function printSuccess(message: string, stream: "stdout" | "stderr" = "std
 export function printWarning(message: string, stream: "stdout" | "stderr" = "stdout"): void {
 	const write = stream === "stderr" ? console.error : console.log;
 	write(`\n${formatWarning(message)}`);
+}
+
+export function formatCommandList(
+	commands: Array<{ name: string; run: string; description: string }>,
+): string {
+	if (commands.length === 0) return "";
+
+	const maxName = Math.max(...commands.map((c) => c.name.length));
+	const lines = commands.map((c) => {
+		const padded = c.name.padEnd(maxName);
+		const desc = c.description ? `  ${dim(c.description)}` : "";
+		return `  ${bold(padded)}  ${gray(c.run)}${desc}`;
+	});
+
+	return lines.join("\n");
 }

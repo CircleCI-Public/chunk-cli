@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { formatCommandList, shouldPromptSave } from "../core/run.steps";
+import { shouldPromptSave } from "../core/run.steps";
+import { formatCommandList } from "../ui/format";
 
 describe("core/run.steps", () => {
 	describe("formatCommandList", () => {

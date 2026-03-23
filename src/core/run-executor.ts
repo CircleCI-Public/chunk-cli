@@ -11,7 +11,7 @@
  * - Output is combined stdout+stderr, truncated to last 50 KB
  */
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -133,23 +133,15 @@ export function executeCommand(
 	}
 
 	const timeout = (opts.timeout ?? 300) * 1000;
-	let output: string;
-	let exitCode: number;
 
-	try {
-		output = execSync(command, {
-			cwd: projectDir,
-			encoding: "utf-8",
-			timeout,
-			stdio: ["ignore", "pipe", "pipe"],
-			maxBuffer: 10 * 1024 * 1024,
-		});
-		exitCode = 0;
-	} catch (err: unknown) {
-		const execErr = err as { status?: number; stdout?: string; stderr?: string };
-		exitCode = execErr.status ?? 1;
-		output = (execErr.stdout ?? "") + (execErr.stderr ?? "");
-	}
+	const result = spawnSync("sh", ["-c", command], {
+		cwd: projectDir,
+		encoding: "utf-8",
+		timeout,
+		maxBuffer: 10 * 1024 * 1024,
+	});
+	const exitCode = result.status ?? 1;
+	let output = (result.stdout ?? "") + (result.stderr ?? "");
 
 	output = truncateOutput(output);
 
