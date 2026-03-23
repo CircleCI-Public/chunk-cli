@@ -1,8 +1,10 @@
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { CopyResult, EnvUpdateResult } from "@chunk/hook";
 import { PROFILES, runHookSetup } from "@chunk/hook";
 import { DEFAULT_MODEL } from "../../config";
+import { configExists, loadRunConfig, saveSequenceConfig } from "../../core/run-config";
+import type { CommandConfig } from "../../core/run-config";
 import {
 	buildTestCommandPrompt,
 	detectPackageManager,
@@ -10,11 +12,6 @@ import {
 	isGitRepo,
 } from "../../core/validate.steps";
 import { resolveConfig } from "../../storage/config";
-import {
-	getProjectConfigPath,
-	loadProjectConfig,
-	saveProjectConfig,
-} from "../../storage/project-config";
 import type { CommandResult } from "../../types";
 import { handleError, printError } from "../../utils/errors";
 
@@ -57,12 +54,15 @@ export async function runValidateInit(options: ValidateInitOptions): Promise<Com
 		return { exitCode: 1 };
 	}
 
-	const configPath = getProjectConfigPath();
-	if (!options.force && loadProjectConfig().testCommand) {
-		console.log(`Config already exists at ${configPath}`);
-		console.log(`  To view the current config: cat ${configPath}`);
-		console.log("  To re-detect and overwrite:  chunk validate init --force");
-		return { exitCode: 0 };
+	const configPath = join(cwd, ".chunk", "commands.json");
+	if (!options.force && configExists(cwd)) {
+		const existing = loadRunConfig(cwd);
+		if (existing.sequence?.length) {
+			console.log(`Config already exists at ${configPath}`);
+			console.log(`  To view the current config: cat ${configPath}`);
+			console.log("  To re-detect and overwrite:  chunk validate:init --force");
+			return { exitCode: 0 };
+		}
 	}
 
 	// Phase 1 — hook setup
@@ -129,11 +129,18 @@ export async function runValidateInit(options: ValidateInitOptions): Promise<Com
 
 	console.log(`test command: ${testCommand}`);
 
+	const sequence: string[] = [];
+	const commands: Record<string, CommandConfig> = {};
+
+	if (packageManager) {
+		commands.install = packageManager.installCommand;
+		sequence.push("install");
+	}
+	commands.test = testCommand;
+	sequence.push("test");
+
 	try {
-		saveProjectConfig({
-			...(packageManager ? { installCommand: packageManager.installCommand } : {}),
-			testCommand,
-		});
+		saveSequenceConfig(cwd, sequence, commands);
 	} catch (err) {
 		handleError(err, { brief: `Failed to write config to ${configPath}.` });
 		return { exitCode: 1 };

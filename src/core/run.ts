@@ -1,5 +1,5 @@
 /**
- * Orchestrator for `chunk run`.
+ * Orchestrator for `chunk validate:<name>` — single-command execution with caching.
  */
 
 import { bold, dim, green, red } from "../ui/colors";
@@ -15,8 +15,8 @@ export async function runList(projectDir: string): Promise<void> {
 	if (commands.length === 0) {
 		console.log(`No commands configured.\n`);
 		console.log(`Add commands to ${bold(".chunk/commands.json")}:\n`);
-		console.log(`  ${dim('chunk run test --cmd "npm test" --save')}`);
-		console.log(`  ${dim('chunk run lint --cmd "npm run lint" --save')}`);
+		console.log(`  ${dim('chunk validate:test --cmd "npm test" --save')}`);
+		console.log(`  ${dim('chunk validate:lint --cmd "npm run lint" --save')}`);
 		return;
 	}
 

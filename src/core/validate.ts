@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { CircleCIError, createSandboxAccessToken, execCommand } from "../api/circleci";
-import { loadProjectConfig } from "../storage/project-config";
+import { loadSequenceCommands } from "./run-config";
 
 export type ValidateStepResult = {
 	command: string;
@@ -47,32 +47,20 @@ async function runValidateSequence(
 	return { ok: true, results, skipped };
 }
 
-export function loadCommands():
-	| { commands: string[] }
-	| { ok: false; error: string; hint?: string } {
-	const config = loadProjectConfig();
-	const commands: string[] = [];
-	if (config.installCommand) commands.push(config.installCommand);
-	if (config.testCommand) commands.push(config.testCommand);
-
-	if (commands.length === 0) {
-		return {
-			ok: false,
-			error: "No validate commands configured",
-			hint: "Run `chunk validate init` to detect your install and test commands.",
-		};
-	}
-	return { commands };
+export function loadCommands(
+	projectDir: string,
+): { commands: string[] } | { ok: false; error: string; hint?: string } {
+	return loadSequenceCommands(projectDir);
 }
 
 const noop = () => {};
 
 export async function validateLocally(
-	_projectDir: string,
+	projectDir: string,
 	onCommandStart: (command: string) => void = noop,
 	onCommandOutput: (stdout: string | null, stderr: string | null) => void = noop,
 ): Promise<ValidateResult> {
-	const loaded = loadCommands();
+	const loaded = loadCommands(projectDir);
 	if ("ok" in loaded) return loaded;
 
 	const executor: CommandExecutor = (command, onOutput) =>
@@ -108,11 +96,11 @@ export async function validateOnSandbox(
 	organizationId: string,
 	sandboxId: string,
 	circleciToken: string,
-	_projectDir: string,
+	projectDir: string,
 	onCommandStart: (command: string) => void = noop,
 	onCommandOutput: (stdout: string | null, stderr: string | null) => void = noop,
 ): Promise<ValidateResult> {
-	const loaded = loadCommands();
+	const loaded = loadCommands(projectDir);
 	if ("ok" in loaded) return loaded;
 
 	let accessToken: string;
@@ -153,7 +141,7 @@ export async function runValidate(
 	onCommandOutput: (stdout: string | null, stderr: string | null) => void = noop,
 ): Promise<ValidateCommandResult> {
 	if (mode.type === "dry-run") {
-		const loaded = loadCommands();
+		const loaded = loadCommands(projectDir);
 		if ("ok" in loaded) return loaded;
 		return { ok: true, dryRun: true, commands: loaded.commands };
 	}

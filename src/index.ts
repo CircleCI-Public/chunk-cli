@@ -5,7 +5,6 @@ import { registerAuthCommands } from "./commands/auth";
 import { registerBuildPromptCommand } from "./commands/build-prompt";
 import { registerCompletionCommands } from "./commands/completion";
 import { registerConfigCommands } from "./commands/config";
-import { registerRunCommand } from "./commands/run";
 import { registerSandboxCommands } from "./commands/sandbox";
 import { registerSkillsCommands } from "./commands/skills";
 import { registerTaskCommands } from "./commands/task";
@@ -17,6 +16,22 @@ import { isAuthError, isNetworkError, printError } from "./utils/errors";
 const program = new Command();
 program.name("chunk").version(VERSION).description("AI code review CLI").helpOption("-h, --help");
 
+/**
+ * Rewrite `validate:<name>` colon syntax to `validate <name>` so
+ * Commander sees a standard command with a positional argument.
+ */
+export function rewriteColonSyntax(argv: string[]): string[] {
+	const args = argv.slice();
+	for (let i = 2; i < args.length; i++) {
+		const match = args[i]?.match(/^validate:(.+)$/);
+		if (match?.[1]) {
+			args.splice(i, 1, "validate", match[1]);
+			break;
+		}
+	}
+	return args;
+}
+
 async function main(): Promise<void> {
 	registerBuildPromptCommand(program);
 	registerAuthCommands(program);
@@ -24,7 +39,6 @@ async function main(): Promise<void> {
 	registerSkillsCommands(program);
 	registerTaskCommands(program);
 	registerUpgradeCommand(program);
-	registerRunCommand(program);
 	registerCompletionCommands(program);
 
 	// Hook commands — exec, task, sync, state, scope for AI agent hooks
@@ -45,7 +59,7 @@ async function main(): Promise<void> {
 		process.exit(0);
 	});
 
-	await program.parseAsync(process.argv);
+	await program.parseAsync(rewriteColonSyntax(process.argv));
 }
 
 main().catch((error) => {
