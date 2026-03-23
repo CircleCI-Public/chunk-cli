@@ -3,8 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { CopyResult, EnvUpdateResult } from "@chunk/hook";
 import { PROFILES, runHookSetup } from "@chunk/hook";
 import { DEFAULT_MODEL } from "../../config";
-import { configExists, loadRunConfig, saveSequenceConfig } from "../../core/run-config";
 import type { CommandConfig } from "../../core/run-config";
+import { configExists, loadRunConfig, saveSequenceConfig } from "../../core/run-config";
 import {
 	buildTestCommandPrompt,
 	detectPackageManager,
