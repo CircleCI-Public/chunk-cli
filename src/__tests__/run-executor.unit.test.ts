@@ -11,6 +11,8 @@ describe("core/run-executor", () => {
 	beforeEach(() => {
 		testDir = fs.mkdtempSync(path.join(os.tmpdir(), "chunk-run-test-"));
 		execSync("git init", { cwd: testDir, stdio: "ignore" });
+		execSync("git config user.email 'test@test.com'", { cwd: testDir, stdio: "ignore" });
+		execSync("git config user.name 'Test'", { cwd: testDir, stdio: "ignore" });
 		execSync("git commit --allow-empty -m 'init'", { cwd: testDir, stdio: "ignore" });
 	});
 
