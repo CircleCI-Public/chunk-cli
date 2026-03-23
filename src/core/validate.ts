@@ -18,7 +18,14 @@ export type ValidateResult =
 export type ValidateMode =
 	| { type: "dry-run" }
 	| { type: "local" }
-	| { type: "remote"; orgId: string; sandboxId: string; token: string; identityFile?: string; dest?: string };
+	| {
+			type: "remote";
+			orgId: string;
+			sandboxId: string;
+			token: string;
+			identityFile?: string;
+			dest?: string;
+	  };
 
 export type ValidateCommandResult =
 	| { ok: true; results: ValidateStepResult[]; skipped: string[] }
@@ -145,12 +152,7 @@ export async function validateOnSandbox(
 					onOutput(result.stdout || null, result.stderr || null);
 					return result;
 				};
-				return runValidateSequence(
-					loaded.commands,
-					onCommandStart,
-					onCommandOutput,
-					executor,
-				);
+				return runValidateSequence(loaded.commands, onCommandStart, onCommandOutput, executor);
 			},
 		);
 	} catch (error) {
