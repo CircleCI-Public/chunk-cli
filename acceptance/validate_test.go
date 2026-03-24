@@ -287,7 +287,7 @@ func TestValidateInitForce(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	// Verify config was overwritten
+	// Verify config was overwritten with the detected test command
 	configPath := filepath.Join(workDir, ".chunk", "config.json")
 	data, err := os.ReadFile(configPath)
 	assert.NilError(t, err)

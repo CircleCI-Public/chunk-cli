@@ -147,7 +147,7 @@ export function registerValidateCommands(program: Command): void {
 		.option("--list", "List all configured commands", false)
 		.option("--cmd <command>", "Run an inline command instead of config")
 		.option("--save", "Save --cmd to .chunk/config.json", false)
-		.option("--force", "Ignore cache, always run", false)
+		.option("--force-run", "Ignore cache, always run", false)
 		.option("--status", "Check cache only, don't execute", false)
 		.option("--project <path>", "Override project directory")
 		.action(async (name, opts) => {
@@ -173,7 +173,7 @@ export function registerValidateCommands(program: Command): void {
 				const exitCode = await handleSingleCommand(projectDir, name, {
 					cmd: opts.cmd,
 					save: opts.save,
-					force: opts.force,
+					force: opts.forceRun,
 					status: opts.status,
 				});
 				process.exit(exitCode);
