@@ -1,19 +1,24 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { DEFAULT_OUTPUT_PATH, LEGACY_OUTPUT_PATH } from "../../config";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { warnIfLegacyOutputPath } from "../../commands/build-prompt";
+import { DEFAULT_OUTPUT_PATH, LEGACY_OUTPUT_PATH } from "../../config";
 
 describe("warnIfLegacyOutputPath", () => {
 	let tempDir: string;
 	let originalCwd: string;
+	let originalConsoleLog: typeof console.log;
 	let consoleSpy: ReturnType<typeof mock>;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `chunk-test-legacy-output-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(
+			tmpdir(),
+			`chunk-test-legacy-output-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
 		mkdirSync(tempDir, { recursive: true });
 		originalCwd = process.cwd();
+		originalConsoleLog = console.log;
 		process.chdir(tempDir);
 		consoleSpy = mock(() => {});
 		console.log = consoleSpy;
@@ -22,6 +27,7 @@ describe("warnIfLegacyOutputPath", () => {
 	afterEach(() => {
 		process.chdir(originalCwd);
 		rmSync(tempDir, { recursive: true, force: true });
+		console.log = originalConsoleLog;
 	});
 
 	it("prints a deprecation warning when legacy file exists and default output is used", () => {
