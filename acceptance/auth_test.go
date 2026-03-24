@@ -40,6 +40,51 @@ func TestAuthStatusNoKey(t *testing.T) {
 		"expected output to indicate no auth, got: %s", combined)
 }
 
+// config takes priority over env var when both are set
+func TestAuthStatusConfigPriority(t *testing.T) {
+	anthropic := fakes.NewFakeAnthropic()
+	srv := httptest.NewServer(anthropic)
+	defer srv.Close()
+
+	env := testutil.NewTestEnv(t)
+	env.AnthropicURL = srv.URL
+	env.AnthropicKey = "sk-ant-env-key-EEEE"
+
+	// Store a different key in config file
+	setResult := testutil.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-config-key-CCCC"}, env, env.HomeDir)
+	assert.Equal(t, setResult.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
+
+	result := testutil.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "Config file"),
+		"expected config source to take priority over env, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "Environment variable"),
+		"expected config source, not env, got: %s", combined)
+}
+
+// auth status masks all but last 4 chars of API key
+func TestAuthStatusMaskExactlyFourChars(t *testing.T) {
+	anthropic := fakes.NewFakeAnthropic()
+	srv := httptest.NewServer(anthropic)
+	defer srv.Close()
+
+	env := testutil.NewTestEnv(t)
+	env.AnthropicURL = srv.URL
+	// Key where last-4 and chars-5-to-8-from-end are distinct
+	env.AnthropicKey = "sk-ant-AAAA-BBBB-CCCC-DDDD"
+
+	result := testutil.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "DDDD"),
+		"expected last 4 chars visible, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "CCCC"),
+		"expected chars 5-8 from end to be masked, got: %s", combined)
+}
+
 func TestAuthLogoutNoStoredKey(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 	env.AnthropicKey = ""

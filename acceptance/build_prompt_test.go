@@ -198,109 +198,54 @@ func TestBuildPromptMissingAnthropicKey(t *testing.T) {
 		"expected error to mention API key, got: %s", combined)
 }
 
-func TestBuildPromptWithSinceFlag(t *testing.T) {
-	gh := fakes.NewFakeGitHub()
-	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
-	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
-
-	anthropic := fakes.NewFakeAnthropic(
-		fixtures.AnalysisResponse,
-		fixtures.PromptResponse,
-	)
-
-	ghSrv := httptest.NewServer(gh)
-	defer ghSrv.Close()
-	anthropicSrv := httptest.NewServer(anthropic)
-	defer anthropicSrv.Close()
-
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
-	env.GithubURL = ghSrv.URL
-	env.AnthropicURL = anthropicSrv.URL
-
-	result := testutil.RunCLI(t, []string{
-		"build-prompt",
-		"--org", "test-org",
-		"--repos", "test-repo",
-		"--since", "2025-01-01",
-		"--output", filepath.Join(workDir, "review-prompt.md"),
-	}, env, workDir)
-
-	if result.ExitCode != 0 {
-		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
-			result.ExitCode, result.Stdout, result.Stderr)
+func TestBuildPromptFlagVariants(t *testing.T) {
+	tests := []struct {
+		name      string
+		extraArgs []string
+	}{
+		{"since", []string{"--since", "2025-01-01"}},
+		{"max-comments", []string{"--max-comments", "1"}},
+		{"include-attribution", []string{"--include-attribution"}},
 	}
-	assertFileExists(t, workDir, "review-prompt.md")
-}
 
-func TestBuildPromptWithMaxComments(t *testing.T) {
-	gh := fakes.NewFakeGitHub()
-	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
-	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gh := fakes.NewFakeGitHub()
+			gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+			gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
 
-	anthropic := fakes.NewFakeAnthropic(
-		fixtures.AnalysisResponse,
-		fixtures.PromptResponse,
-	)
+			anthropic := fakes.NewFakeAnthropic(
+				fixtures.AnalysisResponse,
+				fixtures.PromptResponse,
+			)
 
-	ghSrv := httptest.NewServer(gh)
-	defer ghSrv.Close()
-	anthropicSrv := httptest.NewServer(anthropic)
-	defer anthropicSrv.Close()
+			ghSrv := httptest.NewServer(gh)
+			defer ghSrv.Close()
+			anthropicSrv := httptest.NewServer(anthropic)
+			defer anthropicSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
-	env.GithubURL = ghSrv.URL
-	env.AnthropicURL = anthropicSrv.URL
+			workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+			env := testutil.NewTestEnv(t)
+			env.GithubURL = ghSrv.URL
+			env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
-		"build-prompt",
-		"--org", "test-org",
-		"--repos", "test-repo",
-		"--max-comments", "1",
-		"--output", filepath.Join(workDir, "review-prompt.md"),
-	}, env, workDir)
+			args := []string{
+				"build-prompt",
+				"--org", "test-org",
+				"--repos", "test-repo",
+			}
+			args = append(args, tt.extraArgs...)
+			args = append(args, "--output", filepath.Join(workDir, "review-prompt.md"))
 
-	if result.ExitCode != 0 {
-		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
-			result.ExitCode, result.Stdout, result.Stderr)
+			result := testutil.RunCLI(t, args, env, workDir)
+
+			if result.ExitCode != 0 {
+				t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+					result.ExitCode, result.Stdout, result.Stderr)
+			}
+			assertFileExists(t, workDir, "review-prompt.md")
+		})
 	}
-	assertFileExists(t, workDir, "review-prompt.md")
-}
-
-func TestBuildPromptWithIncludeAttribution(t *testing.T) {
-	gh := fakes.NewFakeGitHub()
-	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
-	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
-
-	anthropic := fakes.NewFakeAnthropic(
-		fixtures.AnalysisResponse,
-		fixtures.PromptResponse,
-	)
-
-	ghSrv := httptest.NewServer(gh)
-	defer ghSrv.Close()
-	anthropicSrv := httptest.NewServer(anthropic)
-	defer anthropicSrv.Close()
-
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
-	env.GithubURL = ghSrv.URL
-	env.AnthropicURL = anthropicSrv.URL
-
-	result := testutil.RunCLI(t, []string{
-		"build-prompt",
-		"--org", "test-org",
-		"--repos", "test-repo",
-		"--include-attribution",
-		"--output", filepath.Join(workDir, "review-prompt.md"),
-	}, env, workDir)
-
-	if result.ExitCode != 0 {
-		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
-			result.ExitCode, result.Stdout, result.Stderr)
-	}
-	assertFileExists(t, workDir, "review-prompt.md")
 }
 
 func TestBuildPromptWithModelOverrides(t *testing.T) {
@@ -505,9 +450,239 @@ func TestBuildPromptSinceDateFormat(t *testing.T) {
 		} `json:"metadata"`
 	}
 	assert.NilError(t, json.Unmarshal(detailsBytes, &details))
-	// MUT-014: .slice(0,10) gives YYYY-MM-DD, mutation to .slice(0,7) would give YYYY-MM
+	// .slice(0,10) gives YYYY-MM-DD, mutation to .slice(0,7) would give YYYY-MM
 	assert.Equal(t, details.Metadata.Since, "2025-06-15",
 		"expected since in YYYY-MM-DD format")
+}
+
+// --top N limits reviewers, filters bot reviews,
+// totalComments is correct, CSV sorted descending
+func TestBuildPromptTopNFiltering(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.MultiReviewerResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--top", "2",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+
+	detailsBytes, err := os.ReadFile(filepath.Join(workDir, "review-prompt-details.json"))
+	assert.NilError(t, err)
+	detailsStr := string(detailsBytes)
+
+	// only top-2 reviewers in details (alice, bob), not charlie
+	assert.Assert(t, strings.Contains(detailsStr, "reviewer-alice"),
+		"expected top reviewer alice in details")
+	assert.Assert(t, strings.Contains(detailsStr, "reviewer-bob"),
+		"expected top reviewer bob in details")
+	assert.Assert(t, !strings.Contains(detailsStr, "reviewer-charlie"),
+		"expected charlie (3rd reviewer) filtered out with --top 2")
+
+	// bot filtered from reviews, not just comments
+	assert.Assert(t, !strings.Contains(detailsStr, "dependabot[bot]"),
+		"expected bot reviewer filtered out of details")
+
+	// totalComments > 0
+	var details struct {
+		Metadata struct {
+			TotalComments int `json:"totalComments"`
+		} `json:"metadata"`
+		Comments []struct {
+			Reviewer string `json:"reviewer"`
+		} `json:"comments"`
+	}
+	assert.NilError(t, json.Unmarshal(detailsBytes, &details))
+	assert.Assert(t, details.Metadata.TotalComments > 0,
+		"expected totalComments > 0, got %d", details.Metadata.TotalComments)
+
+	// verify exactly 2 distinct reviewers in comments
+	reviewers := map[string]bool{}
+	for _, c := range details.Comments {
+		reviewers[c.Reviewer] = true
+	}
+	assert.Equal(t, len(reviewers), 2,
+		"expected exactly 2 reviewers with --top 2, got %d: %v", len(reviewers), reviewers)
+
+	// CSV sorted descending by total_comments
+	csvBytes, err := os.ReadFile(filepath.Join(workDir, "review-prompt-details-pr-rankings.csv"))
+	assert.NilError(t, err)
+	csvLines := strings.Split(strings.TrimSpace(string(csvBytes)), "\n")
+	assert.Assert(t, len(csvLines) >= 3,
+		"expected CSV header + at least 2 data rows, got %d lines", len(csvLines))
+	// First data row (most comments) should be PR 100, second should be PR 101
+	assert.Assert(t, strings.Contains(csvLines[1], "100"),
+		"expected first CSV row to be PR 100 (most comments), got: %s", csvLines[1])
+	assert.Assert(t, strings.Contains(csvLines[2], "101"),
+		"expected second CSV row to be PR 101 (fewer comments), got: %s", csvLines[2])
+}
+
+// default --top is 5 (not 1), so both reviewers appear when omitted
+func TestBuildPromptDefaultTop(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+
+	detailsBytes, err := os.ReadFile(filepath.Join(workDir, "review-prompt-details.json"))
+	assert.NilError(t, err)
+	detailsStr := string(detailsBytes)
+
+	// Default --top=5 should include both reviewers (fixture has 2)
+	assert.Assert(t, strings.Contains(detailsStr, "reviewer-alice"),
+		"expected alice in details with default --top")
+	assert.Assert(t, strings.Contains(detailsStr, "reviewer-bob"),
+		"expected bob in details with default --top")
+}
+
+// --repos without --org uses passed repos, not auto-detected repo
+func TestBuildPromptReposOverride(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("override-repo"))
+	gh.SetReviewActivity("override-repo", fixtures.ReviewActivityResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	// Git remote points to "detected-repo", but we pass --repos "override-repo"
+	workDir := testutil.SetupGitRepo(t, "detected-org", "detected-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--repos", "override-repo",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+
+	// Verify the override-repo was queried, not detected-repo
+	ghReqs := gh.Recorder.AllRequests()
+	foundOverride := false
+	for _, req := range ghReqs {
+		bodyStr := string(req.Body)
+		if strings.Contains(bodyStr, "override-repo") {
+			foundOverride = true
+		}
+		assert.Assert(t, !strings.Contains(bodyStr, `"repo":"detected-repo"`),
+			"expected override-repo to be used, not detected-repo")
+	}
+	assert.Assert(t, foundOverride,
+		"expected at least one request with override-repo in body")
+}
+
+// "Could not resolve" errors are skipped gracefully
+func TestBuildPromptRepoResolutionError(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("good-repo", "bad-repo"))
+	gh.SetReviewActivity("good-repo", fixtures.ReviewActivityResponse())
+	gh.SetRepoError("bad-repo", fixtures.RepoNotFoundError("test-org", "bad-repo"))
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "good-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "good-repo,bad-repo",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	// Should succeed — bad-repo error is skipped gracefully
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0 (graceful skip), got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	assertFileExists(t, workDir, "review-prompt.md")
+}
+
+// --top 0 is rejected by parsePositiveInt
+func TestBuildPromptTopZero(t *testing.T) {
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--top", "0",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit code for --top 0")
 }
 
 // helpers

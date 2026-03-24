@@ -20,6 +20,7 @@ type FakeGitHub struct {
 	orgValidation  string
 	orgRepos       string
 	reviewActivity map[string]string // keyed by repo name
+	errorRepos     map[string]string // keyed by repo name, value is full JSON error response
 	rateLimit      string
 }
 
@@ -32,6 +33,7 @@ func NewFakeGitHub() *FakeGitHub {
 		Handler:        r,
 		Recorder:       rec,
 		reviewActivity: map[string]string{},
+		errorRepos:     map[string]string{},
 		rateLimit:      `{"remaining": 4999, "resetAt": "2099-01-01T00:00:00Z"}`,
 	}
 
@@ -44,6 +46,7 @@ func (f *FakeGitHub) SetOrgValidation(resp string)               { f.set(func() 
 func (f *FakeGitHub) SetOrgRepos(resp string)                    { f.set(func() { f.orgRepos = resp }) }
 func (f *FakeGitHub) SetReviewActivity(repo string, resp string) { f.set(func() { f.reviewActivity[repo] = resp }) }
 func (f *FakeGitHub) SetRateLimit(resp string)                   { f.set(func() { f.rateLimit = resp }) }
+func (f *FakeGitHub) SetRepoError(repo string, resp string)      { f.set(func() { f.errorRepos[repo] = resp }) }
 
 func (f *FakeGitHub) set(fn func()) {
 	f.mu.Lock()
@@ -105,6 +108,10 @@ func (f *FakeGitHub) handleGraphQL(c *gin.Context) {
 
 	case strings.Contains(query, "pullRequests("):
 		repo, _ := body.Variables["repo"].(string)
+		if errResp, ok := f.errorRepos[repo]; ok {
+			c.Data(http.StatusOK, "application/json", []byte(errResp))
+			return
+		}
 		if resp, ok := f.reviewActivity[repo]; ok {
 			c.Data(http.StatusOK, "application/json", []byte(resp))
 			return

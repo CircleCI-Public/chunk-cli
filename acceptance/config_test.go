@@ -37,7 +37,7 @@ func TestConfigShowDefaults(t *testing.T) {
 		"expected config show to mention model, got: %s", combined)
 }
 
-// MUT-016: apiKey.slice(-4) → .slice(0,4) — verify last 4 chars shown, not first 4
+// apiKey.slice(-4) not .slice(0,4) — verify last 4 chars shown, not first 4
 func TestConfigShowMasksLastFourChars(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 	// Use a key where the first 4 and last 4 chars are distinct
@@ -56,7 +56,39 @@ func TestConfigShowMasksLastFourChars(t *testing.T) {
 		"expected first chars of API key to be masked, got: %s", combined)
 }
 
-// MUT-001, MUT-002: verify config file permissions are 0o600 and dir is 0o700
+// API key stored in config file (no env var) is resolved and shown
+func TestConfigShowFromConfigFile(t *testing.T) {
+	env := testutil.NewTestEnv(t)
+	env.AnthropicKey = "" // no env var
+
+	// Store key via config set
+	setResult := testutil.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-stored-key-ZZZZ"}, env, env.HomeDir)
+	assert.Equal(t, setResult.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
+
+	result := testutil.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "user config"),
+		"expected apiKey source to be 'user config', got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "ZZZZ"),
+		"expected last 4 chars of stored key visible, got: %s", combined)
+}
+
+// config set rejects invalid keys
+func TestConfigSetInvalidKey(t *testing.T) {
+	env := testutil.NewTestEnv(t)
+
+	result := testutil.RunCLI(t, []string{"config", "set", "badkey", "somevalue"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 2, "expected exit code 2 for invalid key\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t,
+		strings.Contains(combined, "Unknown config key") || strings.Contains(combined, "not a recognized"),
+		"expected error about invalid key, got: %s", combined)
+}
+
+// verify config file permissions are 0o600 and dir is 0o700
 func TestConfigFilePermissions(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 
