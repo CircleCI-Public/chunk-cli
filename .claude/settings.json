@@ -63,6 +63,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "chunk hook sync check exec:tests --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "chunk hook exec run lint --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
             "timeout": 60
           }
