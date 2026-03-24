@@ -11,6 +11,7 @@ import { registerTaskCommands } from "./commands/task";
 import { registerUpgradeCommand } from "./commands/upgrade";
 import { registerValidateCommands } from "./commands/validate";
 import { initCompletions } from "./completions";
+import { rewriteColonSyntax } from "./utils/argv";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
 const program = new Command();
@@ -43,7 +44,7 @@ async function main(): Promise<void> {
 		process.exit(0);
 	});
 
-	await program.parseAsync(process.argv);
+	await program.parseAsync(rewriteColonSyntax(process.argv));
 }
 
 main().catch((error) => {

@@ -5,6 +5,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { setColorEnabled } from "../ui/colors";
 import {
+	formatCommandList,
 	formatStep,
 	formatSuccess,
 	formatWarning,
@@ -29,6 +30,33 @@ describe("format functions", () => {
 		expect(formatStep(1, 3, "Discovering Top Reviewers")).toBe(
 			"Step 1/3  Discovering Top Reviewers",
 		);
+	});
+});
+
+describe("formatCommandList", () => {
+	beforeAll(() => setColorEnabled(false));
+	afterAll(() => setColorEnabled(true));
+
+	it("returns empty string for no commands", () => {
+		expect(formatCommandList([])).toBe("");
+	});
+
+	it("formats commands with aligned columns", () => {
+		const output = formatCommandList([
+			{ name: "test", run: "npm test", description: "" },
+			{ name: "lint", run: "npm run lint", description: "" },
+		]);
+		expect(output).toContain("test");
+		expect(output).toContain("lint");
+		expect(output).toContain("npm test");
+		expect(output).toContain("npm run lint");
+	});
+
+	it("includes description when present", () => {
+		const output = formatCommandList([
+			{ name: "test", run: "npm test", description: "Run the test suite" },
+		]);
+		expect(output).toContain("Run the test suite");
 	});
 });
 
