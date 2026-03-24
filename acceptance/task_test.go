@@ -182,6 +182,38 @@ func TestTaskRunPipelineAsToolDefault(t *testing.T) {
 	assert.Equal(t, params["run-pipeline-as-a-tool"], true)
 }
 
+func TestTaskRunNoPipelineAsTool(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testutil.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Add types",
+		"--no-pipeline-as-tool",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
+	assert.Equal(t, len(runReqs), 1)
+
+	var body map[string]interface{}
+	err := json.Unmarshal(runReqs[0].Body, &body)
+	assert.NilError(t, err)
+
+	params := body["parameters"].(map[string]interface{})
+	assert.Equal(t, params["run-pipeline-as-a-tool"], false)
+}
+
 func TestTaskRunProdDefinition(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
