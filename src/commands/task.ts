@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import type { Command } from "@commander-js/extra-typings";
+import { type Command, Option } from "@commander-js/extra-typings";
 import { z } from "zod";
 import {
 	type CircleCICollaboration,
@@ -56,7 +56,8 @@ Examples:
 		.requiredOption("--prompt <text>", "Prompt to send to the agent")
 		.option("--branch <branch>", "Branch to check out (overrides definition default)")
 		.option("--new-branch", "Create a new branch for the run", false)
-		.option("--pipeline-as-tool", "Run the pipeline as a tool call", true)
+		.addOption(new Option("--pipeline-as-tool", "Run the pipeline as a tool call").default(true))
+		.addOption(new Option("--no-pipeline-as-tool", "Do not run the pipeline as a tool call"))
 		.action(async (options) => {
 			process.exit((await runTask(options)).exitCode);
 		});

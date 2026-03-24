@@ -192,3 +192,116 @@ func TestValidateRunRemote(t *testing.T) {
 			"expected Bearer auth on exec request")
 	}
 }
+
+func TestValidateInitNotGitRepo(t *testing.T) {
+	env := testutil.NewTestEnv(t)
+
+	result := testutil.RunCLI(t, []string{
+		"validate", "init",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "git"),
+		"expected git repo error, got: %s", combined)
+}
+
+func TestValidateInitInvalidProfile(t *testing.T) {
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+
+	result := testutil.RunCLI(t, []string{
+		"validate", "init", "--profile", "bogus",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "Invalid profile") || strings.Contains(combined, "Valid profiles"),
+		"expected invalid profile error, got: %s", combined)
+}
+
+func TestValidateInitExistingConfigNoForce(t *testing.T) {
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	writeProjectConfig(t, workDir, "echo install", "echo test")
+
+	env := testutil.NewTestEnv(t)
+
+	result := testutil.RunCLI(t, []string{
+		"validate", "init", "--skip-env",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "already exists") || strings.Contains(combined, "--force"),
+		"expected existing config message, got: %s", combined)
+}
+
+func TestValidateInitHappyPath(t *testing.T) {
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+
+	anthropic := fakes.NewFakeAnthropic("bun test")
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	env := testutil.NewTestEnv(t)
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"validate", "init", "--skip-env",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	// Verify config.json was created
+	configPath := filepath.Join(workDir, ".chunk", "config.json")
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err, "expected .chunk/config.json to exist")
+	assert.Assert(t, strings.Contains(string(data), "testCommand"),
+		"expected testCommand in config, got: %s", string(data))
+
+	// Verify hook config was created
+	hookConfigPath := filepath.Join(workDir, ".chunk", "hook", "config.yml")
+	_, err = os.Stat(hookConfigPath)
+	assert.NilError(t, err, "expected .chunk/hook/config.yml to exist")
+}
+
+func TestValidateInitForce(t *testing.T) {
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	writeProjectConfig(t, workDir, "echo old-install", "echo old-test")
+
+	anthropic := fakes.NewFakeAnthropic("npm test")
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	env := testutil.NewTestEnv(t)
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"validate", "init", "--force", "--skip-env",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	// Verify config was overwritten
+	configPath := filepath.Join(workDir, ".chunk", "config.json")
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(data), "npm test"),
+		"expected overwritten test command, got: %s", string(data))
+}
+
+func TestValidateInitMissingApiKey(t *testing.T) {
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+
+	env := testutil.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := testutil.RunCLI(t, []string{
+		"validate", "init", "--skip-env",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "API key") || strings.Contains(combined, "ANTHROPIC_API_KEY"),
+		"expected API key error, got: %s", combined)
+}

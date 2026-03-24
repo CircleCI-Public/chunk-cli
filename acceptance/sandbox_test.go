@@ -86,20 +86,27 @@ func TestSandboxesListFiltersByOrg(t *testing.T) {
 		"should not contain org-b sandbox, got: %s", result.Stdout)
 }
 
-func TestSandboxesListMissingToken(t *testing.T) {
-	cci := fakes.NewFakeCircleCI()
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
+func TestSandboxesMissingToken(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"list", []string{"sandboxes", "list", "--org-id", "org-aaa"}},
+		{"create", []string{"sandboxes", "create", "--org-id", "org-aaa", "--name", "my-sandbox"}},
+		{"exec", []string{"sandboxes", "exec", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--command", "ls"}},
+		{"ssh", []string{"sandboxes", "ssh", "--org-id", "org-aaa", "--sandbox-id", "sb-111"}},
+		{"sync", []string{"sandboxes", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111"}},
+	}
 
-	env := testutil.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
-	env.CircleToken = ""
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := testutil.NewTestEnv(t)
+			env.CircleToken = ""
 
-	result := testutil.RunCLI(t, []string{
-		"sandboxes", "list", "--org-id", "org-aaa",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+			result := testutil.RunCLI(t, tt.args, env, env.HomeDir)
+			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+		})
+	}
 }
 
 func TestSandboxesCreateHappyPath(t *testing.T) {
@@ -161,24 +168,6 @@ func TestSandboxesCreateWithImage(t *testing.T) {
 	assert.Equal(t, body["image"], "ubuntu:22.04")
 }
 
-func TestSandboxesCreateMissingToken(t *testing.T) {
-	cci := fakes.NewFakeCircleCI()
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	env := testutil.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
-	env.CircleToken = ""
-
-	result := testutil.RunCLI(t, []string{
-		"sandboxes", "create",
-		"--org-id", "org-aaa",
-		"--name", "my-sandbox",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-}
-
 func TestSandboxesExecHappyPath(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.ExecResponse = &fakes.ExecResponse{
@@ -223,20 +212,6 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 	// Verify bearer auth on exec
 	assert.Assert(t, strings.HasPrefix(execReqs[0].Header.Get("Authorization"), "Bearer "),
 		"expected Bearer auth on exec request")
-}
-
-func TestSandboxesExecMissingToken(t *testing.T) {
-	env := testutil.NewTestEnv(t)
-	env.CircleToken = ""
-
-	result := testutil.RunCLI(t, []string{
-		"sandboxes", "exec",
-		"--org-id", "org-aaa",
-		"--sandbox-id", "sb-111",
-		"--command", "ls",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 }
 
 func TestSandboxesAddSshKeyFromString(t *testing.T) {
@@ -378,6 +353,130 @@ func TestSandboxesAddSshKeyPrivateKeyRejected(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(strings.ToLower(combined), "private"),
 		"expected private key error, got: %s", combined)
+}
+
+func TestSandboxesPrepareNotGitRepo(t *testing.T) {
+	env := testutil.NewTestEnv(t)
+
+	result := testutil.RunCLI(t, []string{
+		"sandboxes", "prepare",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "git"),
+		"expected git repo error, got: %s", combined)
+}
+
+func TestSandboxesPrepareDockerSudo(t *testing.T) {
+	env := testutil.NewTestEnv(t)
+
+	// --docker-sudo should be accepted as a flag; command fails for other reasons (not a git repo)
+	result := testutil.RunCLI(t, []string{
+		"sandboxes", "prepare", "--docker-sudo",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	// Should fail because not a git repo, NOT because of unknown flag
+	assert.Assert(t, strings.Contains(combined, "git"),
+		"expected git repo error (not flag parse error), got: %s", combined)
+}
+
+// TestSandboxesSshSyncFlags verifies that SSH/sync flags are accepted and
+// code progresses past flag parsing (fails at SSH step, not at parsing).
+func TestSandboxesSshSyncFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"ssh identity-file", []string{"sandboxes", "ssh", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+		{"sync dest", []string{"sandboxes", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--dest", "/custom/path"}},
+		{"sync identity-file", []string{"sandboxes", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+		{"sync bootstrap", []string{"sandboxes", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--bootstrap"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cci := fakes.NewFakeCircleCI()
+			srv := httptest.NewServer(cci)
+			defer srv.Close()
+
+			env := testutil.NewTestEnv(t)
+			env.CircleCIURL = srv.URL
+
+			result := testutil.RunCLI(t, tt.args, env, env.HomeDir)
+
+			// Verify access token request was made (proves flag was accepted)
+			reqs := cci.Recorder.AllRequests()
+			tokenReqs := filterByPath(reqs, "/api/v2/sandboxes/sb-111/access_token")
+			assert.Equal(t, len(tokenReqs), 1, "expected access token request (flag accepted)")
+			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
+		})
+	}
+}
+
+func TestSandboxesPrepareMissingApiKey(t *testing.T) {
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+
+	env := testutil.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := testutil.RunCLI(t, []string{
+		"sandboxes", "prepare",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "ANTHROPIC_API_KEY"),
+		"expected API key error, got: %s", combined)
+}
+
+func TestSandboxesExecWithArgs(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{
+		CommandID: "cmd-789",
+		PID:       99,
+		Stdout:    "file1.txt\nfile2.txt\n",
+		Stderr:    "",
+		ExitCode:  0,
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testutil.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"sandboxes", "exec",
+		"--org-id", "org-aaa",
+		"--sandbox-id", "sb-111",
+		"--command", "ls",
+		"--args", "-la", "/tmp",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	// Verify exec request body has the command
+	reqs := cci.Recorder.AllRequests()
+	execReqs := filterByPath(reqs, "/api/v2/sandboxes/exec")
+	assert.Equal(t, len(execReqs), 1)
+
+	var body map[string]interface{}
+	err := json.Unmarshal(execReqs[0].Body, &body)
+	assert.NilError(t, err)
+	assert.Equal(t, body["command"], "ls")
+}
+
+func TestSandboxesCreateMissingName(t *testing.T) {
+	env := testutil.NewTestEnv(t)
+
+	result := testutil.RunCLI(t, []string{
+		"sandboxes", "create",
+		"--org-id", "org-aaa",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code for missing --name")
 }
 
 // filterByMethod returns requests matching both method and path prefix.
