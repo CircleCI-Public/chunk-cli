@@ -1,9 +1,14 @@
 import type { Command } from "@commander-js/extra-typings";
-import { DEFAULT_ANALYZE_MODEL, DEFAULT_OUTPUT_PATH, DEFAULT_PROMPT_MODEL } from "../config";
+import {
+	DEFAULT_ANALYZE_MODEL,
+	DEFAULT_OUTPUT_PATH,
+	DEFAULT_PROMPT_MODEL,
+	LEGACY_OUTPUT_PATH,
+} from "../config";
 import { type BuildPromptOptions, extractCommentsAndBuildPrompt } from "../core/build-prompt";
-import { resolveOrgAndRepos, warnIfLegacyOutputPath } from "../core/build-prompt.steps";
+import { hasLegacyOutputPath, resolveOrgAndRepos } from "../core/build-prompt.steps";
 import type { CommandResult } from "../types";
-import { dim } from "../ui/colors";
+import { dim, yellow } from "../ui/colors";
 
 interface ParsedBuildPromptFlags {
 	org?: string;
@@ -77,7 +82,16 @@ Examples:
 
 async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {
 	// Warn if a legacy output file exists and the user is using the new default path
-	warnIfLegacyOutputPath(flags.output);
+	if (hasLegacyOutputPath(flags.output)) {
+		console.warn(
+			yellow(
+				`[deprecation] Found ${LEGACY_OUTPUT_PATH} in the working directory.\n` +
+					`  The default output path has changed to ${DEFAULT_OUTPUT_PATH}.\n` +
+					`  Update scripts that reference the old path, or pass --output ${LEGACY_OUTPUT_PATH} to keep the old behavior.`,
+			),
+		);
+		console.warn("");
+	}
 
 	const resolved = await resolveOrgAndRepos({ org: flags.org, repos: flags.repos });
 

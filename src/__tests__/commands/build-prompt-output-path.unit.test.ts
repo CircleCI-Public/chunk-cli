@@ -1,15 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_OUTPUT_PATH, LEGACY_OUTPUT_PATH } from "../../config";
-import { warnIfLegacyOutputPath } from "../../core/build-prompt.steps";
+import { DEFAULT_OUTPUT_PATH } from "../../config";
+import { hasLegacyOutputPath } from "../../core/build-prompt.steps";
 
-describe("warnIfLegacyOutputPath", () => {
+describe("hasLegacyOutputPath", () => {
 	let tempDir: string;
 	let originalCwd: string;
-	let originalConsoleWarn: typeof console.warn;
-	let consoleSpy: ReturnType<typeof mock>;
 
 	beforeEach(() => {
 		tempDir = join(
@@ -18,48 +16,27 @@ describe("warnIfLegacyOutputPath", () => {
 		);
 		mkdirSync(tempDir, { recursive: true });
 		originalCwd = process.cwd();
-		originalConsoleWarn = console.warn;
 		process.chdir(tempDir);
-		consoleSpy = mock(() => {});
-		console.warn = consoleSpy;
 	});
 
 	afterEach(() => {
 		process.chdir(originalCwd);
 		rmSync(tempDir, { recursive: true, force: true });
-		console.warn = originalConsoleWarn;
 	});
 
-	it("prints a deprecation warning when legacy file exists and default output is used", () => {
-		// Create the legacy output file in the temp directory
+	it("returns true when legacy file exists and default output is used", () => {
 		writeFileSync(join(tempDir, "review-prompt.md"), "legacy content");
 
-		const result = warnIfLegacyOutputPath(DEFAULT_OUTPUT_PATH);
-
-		expect(result).toBe(true);
-		expect(consoleSpy).toHaveBeenCalled();
-		const allArgs = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
-		expect(allArgs).toContain("[deprecation]");
-		expect(allArgs).toContain(LEGACY_OUTPUT_PATH);
+		expect(hasLegacyOutputPath(DEFAULT_OUTPUT_PATH)).toBe(true);
 	});
 
-	it("does NOT print a warning when legacy file does not exist", () => {
-		// No legacy file created
-
-		const result = warnIfLegacyOutputPath(DEFAULT_OUTPUT_PATH);
-
-		expect(result).toBe(false);
-		expect(consoleSpy).not.toHaveBeenCalled();
+	it("returns false when legacy file does not exist", () => {
+		expect(hasLegacyOutputPath(DEFAULT_OUTPUT_PATH)).toBe(false);
 	});
 
-	it("does NOT print a warning when --output is explicitly a non-default path", () => {
-		// Create the legacy output file
+	it("returns false when --output is explicitly a non-default path", () => {
 		writeFileSync(join(tempDir, "review-prompt.md"), "legacy content");
 
-		const customOutput = "custom/output.md";
-		const result = warnIfLegacyOutputPath(customOutput);
-
-		expect(result).toBe(false);
-		expect(consoleSpy).not.toHaveBeenCalled();
+		expect(hasLegacyOutputPath("custom/output.md")).toBe(false);
 	});
 });
