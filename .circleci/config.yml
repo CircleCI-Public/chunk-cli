@@ -2,6 +2,7 @@ version: 2.1
 
 orbs:
   shellcheck: circleci/shellcheck@3.4.0
+  go: circleci/go@3.0.3
 
 executors:
   releaser:
@@ -44,6 +45,26 @@ jobs:
           command: bun test
           no_output_timeout: 90s
 
+  acceptance-test:
+    docker:
+      - image: cimg/go:1.25
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: Install bun
+          command: curl -fsSL https://bun.sh/install | bash && echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$BASH_ENV"
+      - install-deps
+      - go/with-cache:
+          key: acceptance
+          checksum: '{{ checksum "acceptance/go.sum" }}'
+          mod: true
+          steps:
+            - run:
+                name: Run acceptance tests
+                command: cd acceptance && go test -v -count=1 -race ./...
+                no_output_timeout: 120s
+
   build-smoke-test:
     executor: releaser
     resource_class: medium
@@ -72,6 +93,12 @@ workflows:
       - shellcheck/check
       - lint
       - test:
+          context:
+            - chunk-cli-test
+          requires:
+            - shellcheck/check
+            - lint
+      - acceptance-test:
           context:
             - chunk-cli-test
           requires:

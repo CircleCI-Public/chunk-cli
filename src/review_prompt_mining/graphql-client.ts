@@ -22,6 +22,7 @@ export function createGraphQLClient(): GraphQLClient {
 			authorization: `token ${token}`,
 			"user-agent": USER_AGENT,
 		},
+		...(process.env.GITHUB_API_URL && { baseUrl: process.env.GITHUB_API_URL }),
 	});
 }
 
