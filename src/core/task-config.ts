@@ -296,7 +296,7 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 	const defNames = Object.keys(definitions);
 	const exampleDef = defNames[0] ?? "<name>";
 	console.log(`${bold("Next steps:")}`);
-	console.log("  Trigger a pipeline run:");
+	console.log("  Assign a task:");
 	console.log(dim(`  chunk task run --definition ${exampleDef} --prompt "your prompt"\n`));
 	if (defNames.length > 1) {
 		console.log(dim(`  Available definitions: ${defNames.join(", ")}\n`));

@@ -61,7 +61,7 @@ export async function runTask(options: RunTaskOptions): Promise<CommandResult> {
 	const branch = options.branch ?? resolved.branch;
 	const labelWidth = 18;
 
-	console.log(`\n${bold("Triggering chunk run")}\n`);
+	console.log(`\n${bold("Assigning Chunk task")}\n`);
 	console.log(`${label("Definition:", labelWidth)} ${definition}`);
 	console.log(`${label("Branch:", labelWidth)} ${branch}`);
 	console.log(`${label("New branch:", labelWidth)} ${options.newBranch ? "yes" : "no"}`);
@@ -102,7 +102,7 @@ export async function runTask(options: RunTaskOptions): Promise<CommandResult> {
 		return { exitCode: 2 };
 	}
 
-	printSuccess("Run triggered successfully!");
+	printSuccess("Task assigned successfully!");
 	if (response.runId) {
 		console.log(`${dim("Run ID:")}      ${response.runId}`);
 	}
