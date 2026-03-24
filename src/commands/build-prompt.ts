@@ -1,9 +1,14 @@
 import type { Command } from "@commander-js/extra-typings";
-import { DEFAULT_ANALYZE_MODEL, DEFAULT_PROMPT_MODEL } from "../config";
+import {
+	DEFAULT_ANALYZE_MODEL,
+	DEFAULT_OUTPUT_PATH,
+	DEFAULT_PROMPT_MODEL,
+	LEGACY_OUTPUT_PATH,
+} from "../config";
 import { type BuildPromptOptions, extractCommentsAndBuildPrompt } from "../core/build-prompt";
-import { resolveOrgAndRepos } from "../core/build-prompt.steps";
+import { hasLegacyOutputPath, resolveOrgAndRepos } from "../core/build-prompt.steps";
 import type { CommandResult } from "../types";
-import { dim } from "../ui/colors";
+import { dim, yellow } from "../ui/colors";
 
 interface ParsedBuildPromptFlags {
 	org?: string;
@@ -65,7 +70,7 @@ Examples:
 		.option("--repos <items>", "Comma-separated list of repo names", parseCommaSeparatedList, [])
 		.option("--top <number>", "Number of top reviewers to analyze", parsePositiveInt, 5)
 		.option("--since <date>", "Start date YYYY-MM-DD", parseDate, threeMonthsAgo())
-		.option("--output <path>", "Output path for the generated prompt", "./review-prompt.md")
+		.option("--output <path>", "Output path for the generated prompt", DEFAULT_OUTPUT_PATH)
 		.option("--max-comments <number>", "Max comments per reviewer for analysis", parsePositiveInt)
 		.option("--analyze-model <model>", "Claude model for the analysis step", DEFAULT_ANALYZE_MODEL)
 		.option("--prompt-model <model>", "Claude model for prompt generation", DEFAULT_PROMPT_MODEL)
@@ -76,6 +81,18 @@ Examples:
 }
 
 async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {
+	// Warn if a legacy output file exists and the user is using the new default path
+	if (hasLegacyOutputPath(flags.output)) {
+		console.warn(
+			yellow(
+				`[deprecation] Found ${LEGACY_OUTPUT_PATH} in the working directory.\n` +
+					`  The default output path has changed to ${DEFAULT_OUTPUT_PATH}.\n` +
+					`  Update scripts that reference the old path, or pass --output ${LEGACY_OUTPUT_PATH} to keep the old behavior.`,
+			),
+		);
+		console.warn("");
+	}
+
 	const resolved = await resolveOrgAndRepos({ org: flags.org, repos: flags.repos });
 
 	if (!flags.org) {

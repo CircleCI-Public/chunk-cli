@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { DEFAULT_OUTPUT_PATH, LEGACY_OUTPUT_PATH } from "../config";
 import { detectGitHubOrgAndRepo } from "../utils/git-remote";
 
 /**
@@ -41,4 +44,14 @@ export function deriveOutputPaths(outputPath: string): {
 		detailsPath: `${outputBase}-details.json`,
 		analysisPath: `${outputBase}-analysis.md`,
 	};
+}
+
+/**
+ * Check if the legacy output file exists and the user is using the new default path.
+ * Pure check — no terminal output.
+ */
+export function hasLegacyOutputPath(outputFlag: string): boolean {
+	return (
+		resolve(outputFlag) === resolve(DEFAULT_OUTPUT_PATH) && existsSync(resolve(LEGACY_OUTPUT_PATH))
+	);
 }

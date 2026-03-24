@@ -72,7 +72,7 @@ chunk build-prompt --org <org> [options]
 | `--repos <repos>` | all repos in org | Comma-separated list of repo names to include |
 | `--top <n>` | `5` | Number of top reviewers to analyze |
 | `--since <date>` | 3 months ago | Start date in `YYYY-MM-DD` format |
-| `--output <path>` | `./review-prompt.md` | Output path for the generated prompt |
+| `--output <path>` | `.chunk/context/review-prompt.md` | Output path for the generated prompt |
 | `--max-comments <n>` | all | Max comments per reviewer sent for analysis |
 | `--analyze-model <model>` | `claude-sonnet-4-5-20250929` | Claude model for the analysis step |
 | `--prompt-model <model>` | `claude-opus-4-5-20251101` | Claude model for prompt generation |
@@ -106,7 +106,7 @@ chunk build-prompt --org myorg --repos api,backend,frontend --top 10
 chunk build-prompt --org myorg --repos myrepo --max-comments 50 --output ./prompts/review.md
 ```
 
-Once generated, place the output file in `.chunk/context/` so AI coding agents (e.g., Claude Code) automatically pick it up as context.
+The default output path is `.chunk/context/review-prompt.md`, so AI coding agents (e.g., Claude Code) automatically pick it up as context. No manual copy step is needed.
 
 ### task
 
@@ -327,6 +327,12 @@ bun run build          # Build binaries for all platforms → dist/
 bun run typecheck      # Type check without building
 bun test               # Run test suite
 ```
+
+## Changelog
+
+### Unreleased
+
+- **Breaking**: Default `--output` path changed from `./review-prompt.md` to `.chunk/context/review-prompt.md`. The new path places the generated prompt directly where AI coding agents auto-discover context files. Parent directories are created automatically. If a legacy `./review-prompt.md` file exists when using the new default, a deprecation notice is printed. Pass `--output ./review-prompt.md` to restore the old behavior.
 
 ---
 

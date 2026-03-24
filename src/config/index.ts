@@ -21,6 +21,8 @@ export const ENV = {
 
 // --- Paths ---
 export const USER_CONFIG_FILENAME = "config.json";
+export const DEFAULT_OUTPUT_PATH = ".chunk/context/review-prompt.md";
+export const LEGACY_OUTPUT_PATH = "./review-prompt.md";
 
 function xdgConfigBase(): string {
 	return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
