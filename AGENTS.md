@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`chunk` is a Go CLI (built with cobra and charmbracelet/bubbletea) that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.chunk/context/` for AI coding agents to pick up automatically.
+`chunk` is a Go CLI (built with cobra) that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.chunk/context/` for AI coding agents to pick up automatically.
 
 ## Common Commands
 
