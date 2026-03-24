@@ -14,7 +14,7 @@ tasks:
   acceptance-test:
     desc: Run acceptance tests
     cmds:
-      - cd acceptance && go test -v -count=1 -race ./...
+      - go test -v -count=1 -race ./acceptance/...
 
   lint:
     desc: Run linters

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/httpcl"
 )
 
 func TestCallJSONRoundTrip(t *testing.T) {
@@ -32,7 +32,7 @@ func TestCallJSONRoundTrip(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(respBody{Greeting: "hello " + body.Name})
+		_ = json.NewEncoder(w).Encode(respBody{Greeting: "hello " + body.Name})
 	}))
 	defer srv.Close()
 
@@ -60,7 +60,7 @@ func TestCallJSONRoundTrip(t *testing.T) {
 func TestCallHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error":"not found"}`))
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
 	}))
 	defer srv.Close()
 
