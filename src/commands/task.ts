@@ -43,7 +43,10 @@ Examples:
 		.requiredOption("--prompt <text>", "task description to send to Chunk")
 		.option("--branch <branch>", "Git branch to check out (overrides definition default)")
 		.option("--new-branch", "create a new branch for this task", false)
-		.option("--pipeline-as-tool", "let Chunk invoke the verification pipeline as a tool call", true)
+		.option(
+			"--no-pipeline-as-tool",
+			"disable pipeline-as-tool (Chunk will not invoke the verification pipeline inline)",
+		)
 		.action(async (options) => {
 			process.exit((await runTask(options)).exitCode);
 		});
