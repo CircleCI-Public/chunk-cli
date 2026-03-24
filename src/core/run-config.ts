@@ -1,12 +1,9 @@
 /**
  * Config loading and writing for `.chunk/commands.json`.
  *
- * Supports string shorthand ("npm test") and expanded form
- * ({ run, description, timeout }).
- *
- * The `sequence` key defines the ordered list of commands that
- * `chunk validate` (bare) runs. Individual commands can be invoked
- * via `chunk validate:<name>`.
+ * Commands are stored as an ordered array. The array defines both
+ * the execution order for `chunk validate` and the named lookup
+ * for `chunk validate:<name>`.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -16,13 +13,16 @@ const CONFIG_DIR = ".chunk";
 const CONFIG_FILE = "commands.json";
 const LEGACY_CONFIG_FILE = "config.json";
 
-export type CommandConfig =
-	| string
-	| { run: string; description?: string; timeout?: number; fileExt?: string };
+export type CommandEntry = {
+	name: string;
+	run: string;
+	description?: string;
+	timeout?: number;
+	fileExt?: string;
+};
 
 export type RunConfig = {
-	sequence?: string[];
-	commands?: Record<string, CommandConfig>;
+	commands?: CommandEntry[];
 };
 
 export type ResolvedCommand = {
@@ -48,7 +48,7 @@ export function configExists(projectDir: string): boolean {
 
 /**
  * Migrate legacy `.chunk/config.json` (installCommand/testCommand)
- * into the unified `.chunk/commands.json` format with a `sequence` key.
+ * into the unified `.chunk/commands.json` array format.
  * Returns the migrated config, or undefined if no legacy config exists.
  */
 export function migrateLegacyConfig(projectDir: string): RunConfig | undefined {
@@ -64,19 +64,11 @@ export function migrateLegacyConfig(projectDir: string): RunConfig | undefined {
 
 		if (!installCommand && !testCommand) return undefined;
 
-		const commands: Record<string, CommandConfig> = {};
-		const sequence: string[] = [];
+		const commands: CommandEntry[] = [];
+		if (installCommand) commands.push({ name: "install", run: installCommand });
+		if (testCommand) commands.push({ name: "test", run: testCommand });
 
-		if (installCommand) {
-			commands.install = installCommand;
-			sequence.push("install");
-		}
-		if (testCommand) {
-			commands.test = testCommand;
-			sequence.push("test");
-		}
-
-		return { sequence, commands };
+		return { commands };
 	} catch {
 		return undefined;
 	}
@@ -89,19 +81,15 @@ export function loadRunConfig(projectDir: string): RunConfig {
 			const content = readFileSync(path, "utf-8");
 			const config = JSON.parse(content) as RunConfig;
 
-			// If commands.json exists but has no sequence, check for legacy config to migrate
-			if (!config.sequence) {
+			// If commands.json exists but has no commands, check for legacy config to migrate
+			if (!config.commands?.length) {
 				const migrated = migrateLegacyConfig(projectDir);
 				if (migrated) {
-					const merged: RunConfig = {
-						sequence: migrated.sequence,
-						commands: { ...migrated.commands, ...config.commands },
-					};
-					writeRunConfig(projectDir, merged);
+					writeRunConfig(projectDir, migrated);
 					process.stderr.write(
 						"chunk: migrated legacy .chunk/config.json into .chunk/commands.json\n",
 					);
-					return merged;
+					return migrated;
 				}
 			}
 
@@ -123,12 +111,8 @@ export function loadRunConfig(projectDir: string): RunConfig {
 }
 
 export function resolveCommand(name: string, config: RunConfig): ResolvedCommand | undefined {
-	const entry = config.commands?.[name];
-	if (entry === undefined) return undefined;
-
-	if (typeof entry === "string") {
-		return { run: entry, description: "", timeout: DEFAULT_TIMEOUT, fileExt: "" };
-	}
+	const entry = config.commands?.find((c) => c.name === name);
+	if (!entry) return undefined;
 
 	return {
 		run: entry.run,
@@ -139,16 +123,15 @@ export function resolveCommand(name: string, config: RunConfig): ResolvedCommand
 }
 
 /**
- * Resolve the `sequence` entries to their command strings.
- * Returns the ordered command strings for pipeline execution.
+ * Returns the ordered command strings for `chunk validate` (full suite).
  */
 export function loadSequenceCommands(
 	projectDir: string,
 ): { commands: string[] } | { ok: false; error: string; hint?: string } {
 	const config = loadRunConfig(projectDir);
-	const sequence = config.sequence ?? [];
+	const entries = config.commands ?? [];
 
-	if (sequence.length === 0) {
+	if (entries.length === 0) {
 		return {
 			ok: false,
 			error: "No validate commands configured",
@@ -156,32 +139,18 @@ export function loadSequenceCommands(
 		};
 	}
 
-	const commands: string[] = [];
-	for (const name of sequence) {
-		const resolved = resolveCommand(name, config);
-		if (!resolved) {
-			return {
-				ok: false,
-				error: `Sequence references unknown command "${name}"`,
-				hint: `Add "${name}" to the commands map in .chunk/commands.json`,
-			};
-		}
-		commands.push(resolved.run);
-	}
-
-	return { commands };
+	return { commands: entries.map((e) => e.run) };
 }
 
 export function listCommands(
 	projectDir: string,
 ): Array<{ name: string; run: string; description: string; timeout: number }> {
 	const config = loadRunConfig(projectDir);
-	if (!config.commands) return [];
+	if (!config.commands?.length) return [];
 
-	return Object.entries(config.commands).map(([name]) => {
-		// resolveCommand is guaranteed to return a value here since we're iterating config.commands
-		const resolved = resolveCommand(name, config) as ResolvedCommand;
-		return { name, ...resolved };
+	return config.commands.map((entry) => {
+		const resolved = resolveCommand(entry.name, config) as ResolvedCommand;
+		return { name: entry.name, ...resolved };
 	});
 }
 
@@ -193,20 +162,20 @@ function writeRunConfig(projectDir: string, config: RunConfig): void {
 
 export function saveCommand(projectDir: string, name: string, command: string): void {
 	const config = loadRunConfig(projectDir);
-	if (!config.commands) config.commands = {};
-	config.commands[name] = command;
+	if (!config.commands) config.commands = [];
+	const idx = config.commands.findIndex((c) => c.name === name);
+	if (idx >= 0) {
+		config.commands[idx] = { ...config.commands[idx], run: command } as CommandEntry;
+	} else {
+		config.commands.push({ name, run: command });
+	}
 	writeRunConfig(projectDir, config);
 }
 
-export function saveSequenceConfig(
-	projectDir: string,
-	sequence: string[],
-	commands: Record<string, CommandConfig>,
-): void {
+export function saveCommandsConfig(projectDir: string, commands: CommandEntry[]): void {
 	const existing = loadRunConfig(projectDir);
-	const merged: RunConfig = {
-		sequence,
-		commands: { ...existing.commands, ...commands },
-	};
-	writeRunConfig(projectDir, merged);
+	// Merge: existing entries not in the new list are preserved at the end
+	const newNames = new Set(commands.map((c) => c.name));
+	const preserved = (existing.commands ?? []).filter((c) => !newNames.has(c.name));
+	writeRunConfig(projectDir, { commands: [...commands, ...preserved] });
 }

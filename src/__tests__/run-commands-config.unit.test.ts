@@ -5,8 +5,10 @@ import {
 	configExists,
 	listCommands,
 	loadRunConfig,
+	loadSequenceCommands,
 	resolveCommand,
 	saveCommand,
+	saveCommandsConfig,
 } from "../core/run-config";
 
 describe("core/run-config", () => {
@@ -39,11 +41,16 @@ describe("core/run-config", () => {
 			expect(loadRunConfig(testDir)).toEqual({});
 		});
 
-		it("parses valid JSON", () => {
+		it("parses valid array format", () => {
 			fs.mkdirSync(chunkDir, { recursive: true });
-			fs.writeFileSync(configPath, JSON.stringify({ commands: { test: "npm test" } }));
+			fs.writeFileSync(
+				configPath,
+				JSON.stringify({ commands: [{ name: "test", run: "npm test" }] }),
+			);
 			const config = loadRunConfig(testDir);
-			expect(config.commands?.test).toBe("npm test");
+			expect(config.commands).toHaveLength(1);
+			expect(config.commands?.[0]?.name).toBe("test");
+			expect(config.commands?.[0]?.run).toBe("npm test");
 		});
 
 		it("returns empty object for invalid JSON", () => {
@@ -51,35 +58,56 @@ describe("core/run-config", () => {
 			fs.writeFileSync(configPath, "not json{");
 			expect(loadRunConfig(testDir)).toEqual({});
 		});
+
+		it("migrates legacy config.json to array format", () => {
+			fs.mkdirSync(chunkDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(chunkDir, "config.json"),
+				JSON.stringify({ installCommand: "npm install", testCommand: "npm test" }),
+			);
+			const config = loadRunConfig(testDir);
+			expect(config.commands).toHaveLength(2);
+			expect(config.commands?.[0]).toEqual({ name: "install", run: "npm install" });
+			expect(config.commands?.[1]).toEqual({ name: "test", run: "npm test" });
+			// Should have written commands.json
+			expect(fs.existsSync(configPath)).toBe(true);
+		});
+
+		it("migrates legacy config with only testCommand", () => {
+			fs.mkdirSync(chunkDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(chunkDir, "config.json"),
+				JSON.stringify({ testCommand: "bun test" }),
+			);
+			const config = loadRunConfig(testDir);
+			expect(config.commands).toHaveLength(1);
+			expect(config.commands?.[0]).toEqual({ name: "test", run: "bun test" });
+		});
 	});
 
 	describe("resolveCommand", () => {
-		it("resolves string shorthand", () => {
-			const config = { commands: { test: "npm test" } };
+		it("resolves command by name", () => {
+			const config = { commands: [{ name: "test", run: "npm test" }] };
 			const resolved = resolveCommand("test", config);
 			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 300, fileExt: "" });
 		});
 
-		it("resolves expanded form", () => {
+		it("fills in optional field defaults", () => {
 			const config = {
-				commands: {
-					test: { run: "npm test", description: "Run tests", timeout: 300 },
-				},
+				commands: [{ name: "test", run: "npm test", description: "Run tests", timeout: 120 }],
 			};
 			const resolved = resolveCommand("test", config);
 			expect(resolved).toEqual({
 				run: "npm test",
 				description: "Run tests",
-				timeout: 300,
+				timeout: 120,
 				fileExt: "",
 			});
 		});
 
-		it("resolves expanded form with fileExt", () => {
+		it("resolves fileExt field", () => {
 			const config = {
-				commands: {
-					test: { run: "bun test", fileExt: ".ts" },
-				},
+				commands: [{ name: "test", run: "bun test", fileExt: ".ts" }],
 			};
 			const resolved = resolveCommand("test", config);
 			expect(resolved).toEqual({
@@ -90,14 +118,10 @@ describe("core/run-config", () => {
 			});
 		});
 
-		it("fills defaults for expanded form", () => {
-			const config = { commands: { test: { run: "npm test" } } };
-			const resolved = resolveCommand("test", config);
-			expect(resolved).toEqual({ run: "npm test", description: "", timeout: 300, fileExt: "" });
-		});
-
 		it("returns undefined for missing command", () => {
-			expect(resolveCommand("missing", { commands: { test: "npm test" } })).toBeUndefined();
+			expect(
+				resolveCommand("missing", { commands: [{ name: "test", run: "npm test" }] }),
+			).toBeUndefined();
 		});
 
 		it("returns undefined when no commands", () => {
@@ -110,49 +134,111 @@ describe("core/run-config", () => {
 			expect(listCommands(testDir)).toEqual([]);
 		});
 
-		it("lists all commands", () => {
+		it("lists commands in array order", () => {
 			fs.mkdirSync(chunkDir, { recursive: true });
 			fs.writeFileSync(
 				configPath,
 				JSON.stringify({
-					commands: {
-						test: "npm test",
-						lint: { run: "npm run lint", description: "Lint code" },
-					},
+					commands: [
+						{ name: "install", run: "npm install" },
+						{ name: "test", run: "npm test" },
+						{ name: "lint", run: "npm run lint", description: "Lint code" },
+					],
 				}),
 			);
 			const commands = listCommands(testDir);
-			expect(commands).toHaveLength(2);
-			expect(commands[0]?.name).toBe("test");
-			expect(commands[0]?.run).toBe("npm test");
-			expect(commands[1]?.name).toBe("lint");
-			expect(commands[1]?.description).toBe("Lint code");
+			expect(commands).toHaveLength(3);
+			expect(commands[0]?.name).toBe("install");
+			expect(commands[1]?.name).toBe("test");
+			expect(commands[2]?.name).toBe("lint");
+			expect(commands[2]?.description).toBe("Lint code");
 		});
 	});
 
 	describe("saveCommand", () => {
-		it("creates config file and directory", () => {
+		it("creates config file with array entry", () => {
 			saveCommand(testDir, "test", "npm test");
 			expect(fs.existsSync(configPath)).toBe(true);
 			const content = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-			expect(content.commands.test).toBe("npm test");
+			expect(content.commands).toHaveLength(1);
+			expect(content.commands[0]).toEqual({ name: "test", run: "npm test" });
 		});
 
-		it("preserves existing commands", () => {
+		it("appends new command to array", () => {
 			fs.mkdirSync(chunkDir, { recursive: true });
-			fs.writeFileSync(configPath, JSON.stringify({ commands: { lint: "npm run lint" } }));
+			fs.writeFileSync(
+				configPath,
+				JSON.stringify({ commands: [{ name: "lint", run: "npm run lint" }] }),
+			);
 			saveCommand(testDir, "test", "npm test");
 			const content = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-			expect(content.commands.lint).toBe("npm run lint");
-			expect(content.commands.test).toBe("npm test");
+			expect(content.commands).toHaveLength(2);
+			expect(content.commands[0].name).toBe("lint");
+			expect(content.commands[1].name).toBe("test");
 		});
 
-		it("overwrites existing command", () => {
+		it("updates existing command in place", () => {
 			fs.mkdirSync(chunkDir, { recursive: true });
-			fs.writeFileSync(configPath, JSON.stringify({ commands: { test: "npm test" } }));
+			fs.writeFileSync(
+				configPath,
+				JSON.stringify({ commands: [{ name: "test", run: "npm test" }] }),
+			);
 			saveCommand(testDir, "test", "bun test");
 			const content = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-			expect(content.commands.test).toBe("bun test");
+			expect(content.commands).toHaveLength(1);
+			expect(content.commands[0].run).toBe("bun test");
+		});
+	});
+
+	describe("loadSequenceCommands", () => {
+		it("returns error when no commands", () => {
+			const result = loadSequenceCommands(testDir);
+			expect("ok" in result).toBe(true);
+			if ("ok" in result) expect(result.ok).toBe(false);
+		});
+
+		it("returns run strings in array order", () => {
+			fs.mkdirSync(chunkDir, { recursive: true });
+			fs.writeFileSync(
+				configPath,
+				JSON.stringify({
+					commands: [
+						{ name: "install", run: "bun install" },
+						{ name: "test", run: "bun test" },
+					],
+				}),
+			);
+			const result = loadSequenceCommands(testDir);
+			expect("commands" in result).toBe(true);
+			if ("commands" in result) {
+				expect(result.commands).toEqual(["bun install", "bun test"]);
+			}
+		});
+	});
+
+	describe("saveCommandsConfig", () => {
+		it("writes commands array", () => {
+			saveCommandsConfig(testDir, [
+				{ name: "install", run: "bun install" },
+				{ name: "test", run: "bun test" },
+			]);
+			const content = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+			expect(content.commands).toHaveLength(2);
+			expect(content.commands[0]).toEqual({ name: "install", run: "bun install" });
+			expect(content.commands[1]).toEqual({ name: "test", run: "bun test" });
+		});
+
+		it("preserves existing commands not in the new list", () => {
+			fs.mkdirSync(chunkDir, { recursive: true });
+			fs.writeFileSync(
+				configPath,
+				JSON.stringify({ commands: [{ name: "lint", run: "bun run lint" }] }),
+			);
+			saveCommandsConfig(testDir, [{ name: "test", run: "bun test" }]);
+			const content = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+			expect(content.commands).toHaveLength(2);
+			expect(content.commands[0].name).toBe("test");
+			expect(content.commands[1].name).toBe("lint");
 		});
 	});
 });

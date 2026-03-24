@@ -1,11 +1,10 @@
 /**
- * `chunk validate` — run the full validation sequence.
+ * `chunk validate` — run the full validation suite.
  * `chunk validate:<name>` — run a single named command with caching.
- * `chunk validate:init` — auto-detect and set up commands.
+ * `chunk validate init` — auto-detect and set up commands.
  *
  * Colon syntax is rewritten to positional args in `src/index.ts`
- * before Commander parses, so this registers a single `validate`
- * command with an optional `[name]` argument.
+ * before Commander parses, so `validate:<name>` becomes `validate <name>`.
  */
 
 import { PROFILES } from "@chunk/hook";
@@ -44,26 +43,30 @@ function handleValidateError(error: string, hint?: string): CommandResult {
 }
 
 export function registerValidateCommands(program: Command): void {
-	program
+	const validate = program
 		.command("validate")
-		.description("Validate your project — run sequence or a single command")
-		.argument("[name]", "Command name (e.g. test, lint) or 'init'")
-		// Sequence flags (bare `chunk validate`)
+		.description("Validate your project — run all commands or a single named command")
+		.argument("[name]", "Command name to run (e.g. test, lint)")
 		.option("--sandbox-id <id>", "Sandbox ID to run validation on (remote mode)")
 		.option("--org-id <id>", "Organization ID (required with --sandbox-id)")
 		.option("--dry-run", "Show commands that would run without executing them", false)
 		.option("--list", "List all configured commands", false)
-		// Single-command flags (`chunk validate:<name>`)
 		.option("--cmd <command>", "Run an inline command instead of config")
 		.option("--save", "Save --cmd to .chunk/commands.json", false)
 		.option("--force", "Ignore cache, always run", false)
 		.option("--status", "Check cache only, don't execute", false)
 		.option("--project <path>", "Override project directory")
-		// Init flags (`chunk validate:init`)
-		.option("--profile <name>", `Shell environment profile (${PROFILES.join(", ")})`, "enable")
-		.option("--skip-env", "Skip shell environment update", false)
 		.action(async (name, opts) => {
 			const projectDir = opts.project ?? process.cwd();
+
+			// Guard: `chunk validate run` was a subcommand on older versions
+			if (name === "run") {
+				printError(
+					'"chunk validate run" is no longer a subcommand',
+					'Use bare "chunk validate" to run all commands',
+				);
+				process.exit(2);
+			}
 
 			// chunk validate --list
 			if (opts.list) {
@@ -71,17 +74,7 @@ export function registerValidateCommands(program: Command): void {
 				process.exit(0);
 			}
 
-			// chunk validate:init
-			if (name === "init") {
-				const result = await runValidateInit({
-					force: opts.force,
-					profile: opts.profile,
-					skipEnv: opts.skipEnv,
-				});
-				process.exit(result.exitCode);
-			}
-
-			// chunk validate:<name> — run a single command with caching
+			// chunk validate:<name> — run a single named command with caching
 			if (name) {
 				const exitCode = await runCommand(projectDir, name, {
 					cmd: opts.cmd,
@@ -92,7 +85,7 @@ export function registerValidateCommands(program: Command): void {
 				process.exit(exitCode);
 			}
 
-			// chunk validate (bare) — run the full sequence
+			// chunk validate (bare) — run the full suite
 			let mode: ValidateMode;
 
 			if (opts.dryRun) {
@@ -134,4 +127,22 @@ export function registerValidateCommands(program: Command): void {
 
 			process.exit(renderValidateResult(result.results, result.skipped).exitCode);
 		});
+
+	validate
+		.command("init")
+		.description("Initialize hook config files and detect install/test commands for this repo")
+		.option("--force", "Overwrite existing files and config", false)
+		.option("--profile <name>", `Shell environment profile (${PROFILES.join(", ")})`, "enable")
+		.option("--skip-env", "Skip shell environment update", false)
+		.action(async (opts) =>
+			process.exit(
+				(
+					await runValidateInit({
+						force: opts.force,
+						profile: opts.profile,
+						skipEnv: opts.skipEnv,
+					})
+				).exitCode,
+			),
+		);
 }

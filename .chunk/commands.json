@@ -1,7 +1,7 @@
 {
-  "commands": {
-    "test": "bun test",
-    "typecheck": "bun run typecheck",
-    "lint": "bun run lint"
-  }
+  "commands": [
+    { "name": "test", "run": "bun test" },
+    { "name": "typecheck", "run": "bun run typecheck" },
+    { "name": "lint", "run": "bun run lint" }
+  ]
 }

@@ -3,8 +3,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { CopyResult, EnvUpdateResult } from "@chunk/hook";
 import { PROFILES, runHookSetup } from "@chunk/hook";
 import { DEFAULT_MODEL } from "../../config";
-import type { CommandConfig } from "../../core/run-config";
-import { configExists, loadRunConfig, saveSequenceConfig } from "../../core/run-config";
+import type { CommandEntry } from "../../core/run-config";
+import { configExists, loadRunConfig, saveCommandsConfig } from "../../core/run-config";
 import {
 	buildTestCommandPrompt,
 	detectPackageManager,
@@ -57,7 +57,7 @@ export async function runValidateInit(options: ValidateInitOptions): Promise<Com
 	const configPath = join(cwd, ".chunk", "commands.json");
 	if (!options.force && configExists(cwd)) {
 		const existing = loadRunConfig(cwd);
-		if (existing.sequence?.length) {
+		if (existing.commands?.length) {
 			console.log(`Config already exists at ${configPath}`);
 			console.log(`  To view the current config: cat ${configPath}`);
 			console.log("  To re-detect and overwrite:  chunk validate:init --force");
@@ -129,18 +129,15 @@ export async function runValidateInit(options: ValidateInitOptions): Promise<Com
 
 	console.log(`test command: ${testCommand}`);
 
-	const sequence: string[] = [];
-	const commands: Record<string, CommandConfig> = {};
+	const commands: CommandEntry[] = [];
 
 	if (packageManager) {
-		commands.install = packageManager.installCommand;
-		sequence.push("install");
+		commands.push({ name: "install", run: packageManager.installCommand });
 	}
-	commands.test = testCommand;
-	sequence.push("test");
+	commands.push({ name: "test", run: testCommand });
 
 	try {
-		saveSequenceConfig(cwd, sequence, commands);
+		saveCommandsConfig(cwd, commands);
 	} catch (err) {
 		handleError(err, { brief: `Failed to write config to ${configPath}.` });
 		return { exitCode: 1 };
