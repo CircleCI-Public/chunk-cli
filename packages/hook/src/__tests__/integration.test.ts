@@ -532,7 +532,7 @@ describe("block limit", () => {
 			testEnv(),
 		);
 		expect(rAllow.exitCode).toBe(0);
-	});
+	}, 20_000); // ~12 subprocess spawns; needs headroom above the 5 s default
 });
 
 // ===========================================================================
