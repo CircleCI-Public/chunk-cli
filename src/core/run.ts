@@ -1,43 +1,36 @@
 /**
- * Orchestrator for `chunk validate:<name>` — single-command execution with caching.
+ * Step functions for `chunk validate:<name>` — single-command resolution and execution.
+ *
+ * Returns structured data for the command layer to render.
  */
 
-import { bold, dim, green, red } from "../ui/colors";
-import { formatCommandList } from "../ui/format";
-import { promptConfirm, promptInput } from "../ui/prompt";
-import { printError } from "../utils/errors";
 import { shouldPromptSave } from "./run.steps";
 import { listCommands, loadRunConfig, resolveCommand, saveCommand } from "./run-config";
+import type { RunResult } from "./run-executor";
 import { checkCache, executeCommand } from "./run-executor";
 
-export async function runList(projectDir: string): Promise<void> {
-	const commands = listCommands(projectDir);
-
-	if (commands.length === 0) {
-		console.log(`No commands configured.\n`);
-		console.log(`Add commands to ${bold(".chunk/config.json")}:\n`);
-		console.log(`  ${dim('chunk validate:test --cmd "npm test" --save')}`);
-		console.log(`  ${dim('chunk validate:lint --cmd "npm run lint" --save')}`);
-		return;
-	}
-
-	console.log(formatCommandList(commands));
-}
+export { listCommands, saveCommand };
 
 export type RunCommandOpts = {
 	cmd?: string;
 	save?: boolean;
 	force?: boolean;
 	status?: boolean;
-	project?: string;
 };
 
-export async function runCommand(
+export type RunCommandResult =
+	| { type: "status-cached"; name: string; exitCode: number }
+	| { type: "status-miss"; name: string }
+	| { type: "not-configured"; name: string }
+	| { type: "needs-setup"; name: string }
+	| { type: "executed"; name: string; result: RunResult; saveAction: "save" | "prompt" | "skip" };
+
+export function resolveRunCommand(
 	projectDir: string,
 	name: string,
 	opts: RunCommandOpts,
-): Promise<number> {
-	const config = loadRunConfig(projectDir);
+): RunCommandResult {
+	const { config } = loadRunConfig(projectDir);
 	const existingCommand = resolveCommand(name, config);
 	const isTTY = process.stdin.isTTY === true;
 
@@ -46,89 +39,49 @@ export async function runCommand(
 		const ext = existingCommand?.fileExt || undefined;
 		const cached = checkCache(projectDir, name, ext);
 		if (cached) {
-			console.log(`${green("✓")} ${name}: cached (${cached.exitCode === 0 ? "pass" : "fail"})`);
-			return cached.exitCode;
+			return { type: "status-cached", name, exitCode: cached.exitCode };
 		}
-		console.log(`${dim("○")} ${name}: no cached result`);
-		return 0;
+		return { type: "status-miss", name };
 	}
 
-	// Determine which command to run
-	let commandStr: string;
-	let timeout: number;
-	let fileExt: string | undefined;
-
 	if (opts.cmd) {
-		commandStr = opts.cmd;
-		timeout = 300;
-
-		// Handle save logic
-		const action = shouldPromptSave({
+		const saveAction = shouldPromptSave({
 			isTTY,
 			saveFlag: opts.save === true,
 			cmdProvided: true,
 			existsInConfig: existingCommand !== undefined,
 		});
 
-		if (action === "save") {
-			saveCommand(projectDir, name, commandStr);
-			console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json`);
-		} else if (action === "prompt") {
-			const shouldSave = await promptConfirm(`Save ${bold(name)} to .chunk/config.json?`);
-			if (shouldSave) {
-				saveCommand(projectDir, name, commandStr);
-				console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json`);
-			}
-		}
-	} else if (existingCommand) {
-		commandStr = existingCommand.run;
-		timeout = existingCommand.timeout;
-		fileExt = existingCommand.fileExt || undefined;
-	} else if (isTTY) {
-		// Interactive setup: prompt for the command
-		console.log(`Command ${bold(name)} is not configured yet.\n`);
-		const input = await promptInput(`What command should ${bold(name)} run? `);
-		const trimmed = input.trim();
-		if (!trimmed) {
-			console.log(dim("No command entered, aborting."));
-			return 1;
-		}
-		commandStr = trimmed;
-		timeout = 300;
-		saveCommand(projectDir, name, commandStr);
-		console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json\n`);
-	} else {
-		// Non-TTY: can't prompt, error out
-		printError(
-			`Command "${name}" is not configured`,
-			undefined,
-			`Add "${name}" to .chunk/config.json`,
-		);
-		return 1;
+		const result = executeCommand(projectDir, name, opts.cmd, {
+			force: opts.force,
+			timeout: 300,
+		});
+
+		return { type: "executed", name, result, saveAction };
 	}
 
-	// Execute
-	const result = executeCommand(projectDir, name, commandStr, {
-		force: opts.force,
-		timeout,
-		fileExt,
-	});
+	if (existingCommand) {
+		const result = executeCommand(projectDir, name, existingCommand.run, {
+			force: opts.force,
+			timeout: existingCommand.timeout,
+			fileExt: existingCommand.fileExt || undefined,
+		});
 
-	if (result.status === "cached") {
-		console.log(
-			`${green("✓")} ${name}: cached result (${result.exitCode === 0 ? "pass" : "fail"})`,
-		);
-	} else if (result.status === "pass") {
-		console.log(`${green("✓")} ${name}: pass`);
-	} else {
-		console.error(`${red("✗")} ${name}: fail (exit ${result.exitCode})`);
+		return { type: "executed", name, result, saveAction: "skip" };
 	}
 
-	if (result.output) {
-		const stream = result.exitCode !== 0 ? process.stderr : process.stdout;
-		stream.write(result.output);
-		if (!result.output.endsWith("\n")) stream.write("\n");
+	if (isTTY) {
+		return { type: "needs-setup", name };
 	}
 
-	return result.exitCode !== 0 ? 1 : 0;
+	return { type: "not-configured", name };
+}
+
+export function executeRun(
+	projectDir: string,
+	name: string,
+	commandStr: string,
+	opts: { force?: boolean; timeout?: number; fileExt?: string },
+): RunResult {
+	return executeCommand(projectDir, name, commandStr, opts);
 }

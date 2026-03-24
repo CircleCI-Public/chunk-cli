@@ -37,8 +37,8 @@ describe("core/run-config", () => {
 	});
 
 	describe("loadRunConfig", () => {
-		it("returns empty object when no file", () => {
-			expect(loadRunConfig(testDir)).toEqual({});
+		it("returns empty config when no file", () => {
+			expect(loadRunConfig(testDir)).toEqual({ config: {}, migrated: false });
 		});
 
 		it("parses valid array format", () => {
@@ -47,16 +47,17 @@ describe("core/run-config", () => {
 				configPath,
 				JSON.stringify({ commands: [{ name: "test", run: "npm test" }] }),
 			);
-			const config = loadRunConfig(testDir);
+			const { config, migrated } = loadRunConfig(testDir);
+			expect(migrated).toBe(false);
 			expect(config.commands).toHaveLength(1);
 			expect(config.commands?.[0]?.name).toBe("test");
 			expect(config.commands?.[0]?.run).toBe("npm test");
 		});
 
-		it("returns empty object for invalid JSON", () => {
+		it("returns empty config for invalid JSON", () => {
 			fs.mkdirSync(chunkDir, { recursive: true });
 			fs.writeFileSync(configPath, "not json{");
-			expect(loadRunConfig(testDir)).toEqual({});
+			expect(loadRunConfig(testDir)).toEqual({ config: {}, migrated: false });
 		});
 
 		it("migrates legacy format (installCommand/testCommand) in place", () => {
@@ -65,7 +66,8 @@ describe("core/run-config", () => {
 				configPath,
 				JSON.stringify({ installCommand: "npm install", testCommand: "npm test" }),
 			);
-			const config = loadRunConfig(testDir);
+			const { config, migrated } = loadRunConfig(testDir);
+			expect(migrated).toBe(true);
 			expect(config.commands).toHaveLength(2);
 			expect(config.commands?.[0]).toEqual({ name: "install", run: "npm install" });
 			expect(config.commands?.[1]).toEqual({ name: "test", run: "npm test" });
@@ -77,7 +79,8 @@ describe("core/run-config", () => {
 		it("migrates legacy format with only testCommand", () => {
 			fs.mkdirSync(chunkDir, { recursive: true });
 			fs.writeFileSync(configPath, JSON.stringify({ testCommand: "bun test" }));
-			const config = loadRunConfig(testDir);
+			const { config, migrated } = loadRunConfig(testDir);
+			expect(migrated).toBe(true);
 			expect(config.commands).toHaveLength(1);
 			expect(config.commands?.[0]).toEqual({ name: "test", run: "bun test" });
 		});

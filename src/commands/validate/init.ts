@@ -56,7 +56,7 @@ export async function runValidateInit(options: ValidateInitOptions): Promise<Com
 
 	const configPath = join(cwd, ".chunk", "config.json");
 	if (!options.force && configExists(cwd)) {
-		const existing = loadRunConfig(cwd);
+		const { config: existing } = loadRunConfig(cwd);
 		if (existing.commands?.length) {
 			console.log(`Config already exists at ${configPath}`);
 			console.log(`  To view the current config: cat ${configPath}`);

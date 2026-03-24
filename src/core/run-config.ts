@@ -60,9 +60,9 @@ export function migrateLegacyConfig(parsed: Record<string, unknown>): RunConfig 
 	return { commands };
 }
 
-export function loadRunConfig(projectDir: string): RunConfig {
+export function loadRunConfig(projectDir: string): { config: RunConfig; migrated: boolean } {
 	const path = configPath(projectDir);
-	if (!existsSync(path)) return {};
+	if (!existsSync(path)) return { config: {}, migrated: false };
 
 	try {
 		const content = readFileSync(path, "utf-8");
@@ -70,20 +70,19 @@ export function loadRunConfig(projectDir: string): RunConfig {
 
 		// Already in new format
 		if (Array.isArray(parsed.commands)) {
-			return parsed as unknown as RunConfig;
+			return { config: parsed as unknown as RunConfig, migrated: false };
 		}
 
 		// Detect and migrate legacy format (installCommand/testCommand) in place
 		const migrated = migrateLegacyConfig(parsed);
 		if (migrated) {
 			writeRunConfig(projectDir, migrated);
-			process.stderr.write("chunk: migrated .chunk/config.json to new format\n");
-			return migrated;
+			return { config: migrated, migrated: true };
 		}
 
-		return {};
+		return { config: {}, migrated: false };
 	} catch {
-		return {};
+		return { config: {}, migrated: false };
 	}
 }
 
@@ -105,7 +104,7 @@ export function resolveCommand(name: string, config: RunConfig): ResolvedCommand
 export function loadSequenceCommands(
 	projectDir: string,
 ): { commands: string[] } | { ok: false; error: string; hint?: string } {
-	const config = loadRunConfig(projectDir);
+	const { config } = loadRunConfig(projectDir);
 	const entries = config.commands ?? [];
 
 	if (entries.length === 0) {
@@ -122,7 +121,7 @@ export function loadSequenceCommands(
 export function listCommands(
 	projectDir: string,
 ): Array<{ name: string; run: string; description: string; timeout: number }> {
-	const config = loadRunConfig(projectDir);
+	const { config } = loadRunConfig(projectDir);
 	if (!config.commands?.length) return [];
 
 	return config.commands.map((entry) => {
@@ -138,7 +137,7 @@ function writeRunConfig(projectDir: string, config: RunConfig): void {
 }
 
 export function saveCommand(projectDir: string, name: string, command: string): void {
-	const config = loadRunConfig(projectDir);
+	const { config } = loadRunConfig(projectDir);
 	if (!config.commands) config.commands = [];
 	const idx = config.commands.findIndex((c) => c.name === name);
 	if (idx >= 0) {
@@ -150,7 +149,7 @@ export function saveCommand(projectDir: string, name: string, command: string): 
 }
 
 export function saveCommandsConfig(projectDir: string, commands: CommandEntry[]): void {
-	const existing = loadRunConfig(projectDir);
+	const { config: existing } = loadRunConfig(projectDir);
 	// Merge: existing entries not in the new list are preserved at the end
 	const newNames = new Set(commands.map((c) => c.name));
 	const preserved = (existing.commands ?? []).filter((c) => !newNames.has(c.name));

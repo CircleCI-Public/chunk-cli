@@ -1,7 +1,7 @@
 /**
  * `chunk validate` — run the full validation suite.
  * `chunk validate:<name>` — run a single named command with caching.
- * `chunk validate init` — auto-detect and set up commands.
+ * `chunk validate:init` — auto-detect and set up commands.
  *
  * Colon syntax is rewritten to positional args in `src/index.ts`
  * before Commander parses, so `validate:<name>` becomes `validate <name>`.
@@ -9,11 +9,14 @@
 
 import { PROFILES } from "@chunk/hook";
 import type { Command } from "@commander-js/extra-typings";
-import { runCommand, runList } from "../core/run";
+import { executeRun, listCommands, resolveRunCommand, saveCommand } from "../core/run";
+import type { RunResult } from "../core/run-executor";
 import type { ValidateMode, ValidateStepResult } from "../core/validate";
 import { runValidate } from "../core/validate";
 import type { CommandResult } from "../types/index";
 import { bold, dim, green, red, yellow } from "../ui/colors";
+import { formatCommandList } from "../ui/format";
+import { promptConfirm, promptInput } from "../ui/prompt";
 import { printError } from "../utils/errors";
 import { requireToken } from "../utils/tokens";
 import { runValidateInit } from "./validate/init";
@@ -35,11 +38,101 @@ function renderValidateResult(results: ValidateStepResult[], skipped: string[]):
 	return { exitCode: passed ? 0 : 1 };
 }
 
+function renderExecution(name: string, result: RunResult): void {
+	if (result.status === "cached") {
+		console.log(
+			`${green("✓")} ${name}: cached result (${result.exitCode === 0 ? "pass" : "fail"})`,
+		);
+	} else if (result.status === "pass") {
+		console.log(`${green("✓")} ${name}: pass`);
+	} else {
+		console.error(`${red("✗")} ${name}: fail (exit ${result.exitCode})`);
+	}
+
+	if (result.output) {
+		const stream = result.exitCode !== 0 ? process.stderr : process.stdout;
+		stream.write(result.output);
+		if (!result.output.endsWith("\n")) stream.write("\n");
+	}
+}
+
 function handleValidateError(error: string, hint?: string): CommandResult {
 	const resolvedHint =
 		hint ?? (error === "No validate commands configured" ? NO_COMMANDS_HINT : undefined);
 	printError(error, resolvedHint);
 	return { exitCode: 1 };
+}
+
+function renderList(projectDir: string): void {
+	const commands = listCommands(projectDir);
+
+	if (commands.length === 0) {
+		console.log(`No commands configured.\n`);
+		console.log(`Add commands to ${bold(".chunk/config.json")}:\n`);
+		console.log(`  ${dim('chunk validate:test --cmd "npm test" --save')}`);
+		console.log(`  ${dim('chunk validate:lint --cmd "npm run lint" --save')}`);
+		return;
+	}
+
+	console.log(formatCommandList(commands));
+}
+
+async function handleSingleCommand(
+	projectDir: string,
+	name: string,
+	opts: { cmd?: string; save?: boolean; force?: boolean; status?: boolean },
+): Promise<number> {
+	const resolved = resolveRunCommand(projectDir, name, opts);
+
+	switch (resolved.type) {
+		case "status-cached": {
+			console.log(`${green("✓")} ${name}: cached (${resolved.exitCode === 0 ? "pass" : "fail"})`);
+			return resolved.exitCode;
+		}
+		case "status-miss": {
+			console.log(`${dim("○")} ${name}: no cached result`);
+			return 0;
+		}
+		case "not-configured": {
+			printError(
+				`Command "${name}" is not configured`,
+				undefined,
+				`Add "${name}" to .chunk/config.json`,
+			);
+			return 1;
+		}
+		case "needs-setup": {
+			console.log(`Command ${bold(name)} is not configured yet.\n`);
+			const input = await promptInput(`What command should ${bold(name)} run? `);
+			const trimmed = input.trim();
+			if (!trimmed) {
+				console.log(dim("No command entered, aborting."));
+				return 1;
+			}
+			saveCommand(projectDir, name, trimmed);
+			console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json\n`);
+			const result = executeRun(projectDir, name, trimmed, {
+				force: opts.force,
+				timeout: 300,
+			});
+			renderExecution(name, result);
+			return result.exitCode !== 0 ? 1 : 0;
+		}
+		case "executed": {
+			if (resolved.saveAction === "save") {
+				saveCommand(projectDir, name, opts.cmd as string);
+				console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json`);
+			} else if (resolved.saveAction === "prompt") {
+				const shouldSave = await promptConfirm(`Save ${bold(name)} to .chunk/config.json?`);
+				if (shouldSave) {
+					saveCommand(projectDir, name, opts.cmd as string);
+					console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json`);
+				}
+			}
+			renderExecution(name, resolved.result);
+			return resolved.result.exitCode !== 0 ? 1 : 0;
+		}
+	}
 }
 
 export function registerValidateCommands(program: Command): void {
@@ -70,13 +163,13 @@ export function registerValidateCommands(program: Command): void {
 
 			// chunk validate --list
 			if (opts.list) {
-				await runList(projectDir);
+				renderList(projectDir);
 				process.exit(0);
 			}
 
 			// chunk validate:<name> — run a single named command with caching
 			if (name) {
-				const exitCode = await runCommand(projectDir, name, {
+				const exitCode = await handleSingleCommand(projectDir, name, {
 					cmd: opts.cmd,
 					save: opts.save,
 					force: opts.force,
