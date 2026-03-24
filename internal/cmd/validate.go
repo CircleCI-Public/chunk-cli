@@ -18,24 +18,12 @@ import (
 )
 
 func newValidateCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "validate",
-		Short: "Run validation commands",
-	}
-
-	cmd.AddCommand(newValidateRunCmd())
-	cmd.AddCommand(newValidateInitCmd())
-
-	return cmd
-}
-
-func newValidateRunCmd() *cobra.Command {
 	var sandboxID, orgID string
 	var dryRun bool
 
 	cmd := &cobra.Command{
-		Use:   "run",
-		Short: "Run validation",
+		Use:   "validate",
+		Short: "Run validation commands",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workDir, err := os.Getwd()
 			if err != nil {
@@ -43,12 +31,12 @@ func newValidateRunCmd() *cobra.Command {
 			}
 
 			cfg, err := validate.LoadProjectConfig(workDir)
-			if err != nil {
+			if err != nil || !cfg.HasCommands() {
 				return fmt.Errorf("No validate commands configured. Run validate init first")
 			}
 
 			if dryRun {
-				return validate.RunDryRun(cfg)
+				return validate.RunDryRun(cfg, cmd.OutOrStdout())
 			}
 
 			if sandboxID != "" {
@@ -59,16 +47,18 @@ func newValidateRunCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return validate.RunRemote(cmd.Context(), client, cfg, sandboxID)
+				return validate.RunRemote(cmd.Context(), client, cfg, sandboxID, orgID, cmd.OutOrStdout())
 			}
 
-			return validate.RunLocally(cfg, workDir)
+			return validate.RunLocally(cfg, cmd.OutOrStdout())
 		},
 	}
 
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands without executing")
+
+	cmd.AddCommand(newValidateInitCmd())
 
 	return cmd
 }
@@ -113,7 +103,7 @@ func newValidateInitCmd() *cobra.Command {
 
 			configPath := filepath.Join(workDir, ".chunk", "config.json")
 			if _, err := os.Stat(configPath); err == nil && !force {
-				fmt.Println("Config already exists. Use --force to overwrite.")
+				fmt.Fprintln(cmd.OutOrStdout(), "Config already exists. Use --force to overwrite.")
 				return nil
 			}
 
@@ -137,8 +127,10 @@ func newValidateInitCmd() *cobra.Command {
 				return err
 			}
 
-			config := map[string]string{
-				"testCommand": testCmd,
+			config := map[string]interface{}{
+				"commands": []map[string]string{
+					{"name": "test", "run": testCmd},
+				},
 			}
 
 			data, err := json.MarshalIndent(config, "", "  ")
@@ -161,7 +153,7 @@ func newValidateInitCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Println("Validation config initialized")
+			fmt.Fprintln(cmd.OutOrStdout(), "Validation config initialized")
 			_ = skipEnv
 			return nil
 		},

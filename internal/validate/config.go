@@ -7,9 +7,13 @@ import (
 	"path/filepath"
 )
 
+type Command struct {
+	Name string `json:"name"`
+	Run  string `json:"run"`
+}
+
 type ProjectConfig struct {
-	InstallCommand string `json:"installCommand,omitempty"`
-	TestCommand    string `json:"testCommand,omitempty"`
+	Commands []Command `json:"commands"`
 }
 
 func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
@@ -26,5 +30,15 @@ func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
 }
 
 func (c *ProjectConfig) HasCommands() bool {
-	return c.InstallCommand != "" || c.TestCommand != ""
+	return len(c.Commands) > 0
+}
+
+// FindCommand returns the command with the given name, or nil if not found.
+func (c *ProjectConfig) FindCommand(name string) *Command {
+	for i := range c.Commands {
+		if c.Commands[i].Name == name {
+			return &c.Commands[i]
+		}
+	}
+	return nil
 }
