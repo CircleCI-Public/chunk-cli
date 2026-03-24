@@ -22,11 +22,6 @@ var (
 // Call from TestMain.
 func BuildBinary() (string, error) {
 	buildOnce.Do(func() {
-		if _, err := exec.LookPath("bun"); err != nil {
-			buildErr = fmt.Errorf("bun not found on PATH: %w", err)
-			return
-		}
-
 		dir, err := os.MkdirTemp("", "chunk-acceptance-*")
 		if err != nil {
 			buildErr = fmt.Errorf("create temp dir: %w", err)
@@ -42,12 +37,12 @@ func BuildBinary() (string, error) {
 			return
 		}
 
-		cmd := exec.Command("bun", "build", "./src/index.ts", "--compile", "--outfile", binaryPath)
+		cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/chunk")
 		cmd.Dir = repoRoot
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
-			buildErr = fmt.Errorf("bun build failed: %w\nstderr: %s", err, stderr.String())
+			buildErr = fmt.Errorf("go build failed: %w\nstderr: %s", err, stderr.String())
 			return
 		}
 	})
