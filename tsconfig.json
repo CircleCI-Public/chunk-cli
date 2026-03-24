@@ -19,10 +19,10 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
     "resolveJsonModule": true,
-    "baseUrl": ".",
+    "types": ["bun"],
     "paths": {
-      "@/*": ["src/*"],
-      "@chunk/hook": ["packages/hook/src/index.ts"]
+      "@/*": ["./src/*"],
+      "@chunk/hook": ["./packages/hook/src/index.ts"]
     }
   },
   "include": ["src/**/*", "packages/hook/src/**/*"],

@@ -32,7 +32,7 @@
     "@types/react": "^19.2.10",
     "@types/ssh2": "^1.15.5",
     "react-devtools-core": "^7.0.1",
-    "typescript": "^5"
+    "typescript": "^6.0.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
