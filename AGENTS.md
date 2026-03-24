@@ -16,8 +16,9 @@ task fmt                # Format code
 
 Read these when working in the relevant area:
 
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — target module layering, dependency rules, change routing, data flow, file structure, implementation details
-- **[docs/CLI.md](docs/CLI.md)** — target command tree, flag conventions, behavior decisions
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — module layering, dependency rules, data flow, environment variables
+- **[docs/CLI.md](docs/CLI.md)** — complete command tree, flag conventions, behavior decisions
+- **[docs/HOOKS.md](docs/HOOKS.md)** — hook system: exec, task, sync, state, scope, env, sentinel files, IDE integration
 
 ## Key Architectural Constraints
 
