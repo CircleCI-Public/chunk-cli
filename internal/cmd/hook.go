@@ -11,7 +11,7 @@ import (
 func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hook",
-		Short: "Hook automation for AI coding agents",
+		Short: "Configure AI coding agent lifecycle hooks",
 	}
 
 	cmd.AddCommand(newHookRepoCmd())
