@@ -125,10 +125,10 @@ export async function runCommand(
 	}
 
 	if (result.output) {
-		const stream = result.status === "fail" ? process.stderr : process.stdout;
+		const stream = result.exitCode !== 0 ? process.stderr : process.stdout;
 		stream.write(result.output);
 		if (!result.output.endsWith("\n")) stream.write("\n");
 	}
 
-	return result.status === "fail" ? 1 : 0;
+	return result.exitCode !== 0 ? 1 : 0;
 }
