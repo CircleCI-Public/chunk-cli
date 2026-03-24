@@ -54,7 +54,7 @@ export async function runValidateInit(options: ValidateInitOptions): Promise<Com
 		return { exitCode: 1 };
 	}
 
-	const configPath = join(cwd, ".chunk", "commands.json");
+	const configPath = join(cwd, ".chunk", "config.json");
 	if (!options.force && configExists(cwd)) {
 		const existing = loadRunConfig(cwd);
 		if (existing.commands?.length) {

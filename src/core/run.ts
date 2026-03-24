@@ -15,7 +15,7 @@ export async function runList(projectDir: string): Promise<void> {
 
 	if (commands.length === 0) {
 		console.log(`No commands configured.\n`);
-		console.log(`Add commands to ${bold(".chunk/commands.json")}:\n`);
+		console.log(`Add commands to ${bold(".chunk/config.json")}:\n`);
 		console.log(`  ${dim('chunk validate:test --cmd "npm test" --save')}`);
 		console.log(`  ${dim('chunk validate:lint --cmd "npm run lint" --save')}`);
 		return;
@@ -72,12 +72,12 @@ export async function runCommand(
 
 		if (action === "save") {
 			saveCommand(projectDir, name, commandStr);
-			console.log(`${green("✓")} Saved ${bold(name)} to .chunk/commands.json`);
+			console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json`);
 		} else if (action === "prompt") {
-			const shouldSave = await promptConfirm(`Save ${bold(name)} to .chunk/commands.json?`);
+			const shouldSave = await promptConfirm(`Save ${bold(name)} to .chunk/config.json?`);
 			if (shouldSave) {
 				saveCommand(projectDir, name, commandStr);
-				console.log(`${green("✓")} Saved ${bold(name)} to .chunk/commands.json`);
+				console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json`);
 			}
 		}
 	} else if (existingCommand) {
@@ -96,13 +96,13 @@ export async function runCommand(
 		commandStr = trimmed;
 		timeout = 300;
 		saveCommand(projectDir, name, commandStr);
-		console.log(`${green("✓")} Saved ${bold(name)} to .chunk/commands.json\n`);
+		console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json\n`);
 	} else {
 		// Non-TTY: can't prompt, error out
 		printError(
 			`Command "${name}" is not configured`,
 			undefined,
-			`Add "${name}" to .chunk/commands.json`,
+			`Add "${name}" to .chunk/config.json`,
 		);
 		return 1;
 	}

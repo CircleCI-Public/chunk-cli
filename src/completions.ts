@@ -15,7 +15,7 @@ export function buildTree(cmd: Command): CompletionTree | [] {
 }
 
 /**
- * Inject `validate:<name>` entries from `.chunk/commands.json`
+ * Inject `validate:<name>` entries from `.chunk/config.json`
  * so tab completion works with the colon syntax.
  */
 function injectValidateCompletions(tree: CompletionTree): void {

@@ -52,7 +52,7 @@ export function registerValidateCommands(program: Command): void {
 		.option("--dry-run", "Show commands that would run without executing them", false)
 		.option("--list", "List all configured commands", false)
 		.option("--cmd <command>", "Run an inline command instead of config")
-		.option("--save", "Save --cmd to .chunk/commands.json", false)
+		.option("--save", "Save --cmd to .chunk/config.json", false)
 		.option("--force", "Ignore cache, always run", false)
 		.option("--status", "Check cache only, don't execute", false)
 		.option("--project <path>", "Override project directory")

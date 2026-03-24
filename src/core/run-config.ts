@@ -1,5 +1,5 @@
 /**
- * Config loading and writing for `.chunk/commands.json`.
+ * Config loading and writing for `.chunk/config.json`.
  *
  * Commands are stored as an ordered array. The array defines both
  * the execution order for `chunk validate` and the named lookup
@@ -10,8 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const CONFIG_DIR = ".chunk";
-const CONFIG_FILE = "commands.json";
-const LEGACY_CONFIG_FILE = "config.json";
+const CONFIG_FILE = "config.json";
 
 export type CommandEntry = {
 	name: string;
@@ -38,76 +37,54 @@ function configPath(projectDir: string): string {
 	return join(projectDir, CONFIG_DIR, CONFIG_FILE);
 }
 
-function legacyConfigPath(projectDir: string): string {
-	return join(projectDir, CONFIG_DIR, LEGACY_CONFIG_FILE);
-}
-
 export function configExists(projectDir: string): boolean {
 	return existsSync(configPath(projectDir));
 }
 
 /**
- * Migrate legacy `.chunk/config.json` (installCommand/testCommand)
- * into the unified `.chunk/commands.json` array format.
- * Returns the migrated config, or undefined if no legacy config exists.
+ * Detect legacy `.chunk/config.json` format (installCommand/testCommand)
+ * and convert to the array format in place.
+ * Returns the migrated config, or undefined if the content isn't legacy format.
  */
-export function migrateLegacyConfig(projectDir: string): RunConfig | undefined {
-	const legacy = legacyConfigPath(projectDir);
-	if (!existsSync(legacy)) return undefined;
+export function migrateLegacyConfig(parsed: Record<string, unknown>): RunConfig | undefined {
+	const installCommand =
+		typeof parsed.installCommand === "string" ? parsed.installCommand : undefined;
+	const testCommand = typeof parsed.testCommand === "string" ? parsed.testCommand : undefined;
 
-	try {
-		const content = readFileSync(legacy, "utf-8");
-		const parsed = JSON.parse(content) as Record<string, unknown>;
-		const installCommand =
-			typeof parsed.installCommand === "string" ? parsed.installCommand : undefined;
-		const testCommand = typeof parsed.testCommand === "string" ? parsed.testCommand : undefined;
+	if (!installCommand && !testCommand) return undefined;
 
-		if (!installCommand && !testCommand) return undefined;
+	const commands: CommandEntry[] = [];
+	if (installCommand) commands.push({ name: "install", run: installCommand });
+	if (testCommand) commands.push({ name: "test", run: testCommand });
 
-		const commands: CommandEntry[] = [];
-		if (installCommand) commands.push({ name: "install", run: installCommand });
-		if (testCommand) commands.push({ name: "test", run: testCommand });
-
-		return { commands };
-	} catch {
-		return undefined;
-	}
+	return { commands };
 }
 
 export function loadRunConfig(projectDir: string): RunConfig {
 	const path = configPath(projectDir);
-	if (existsSync(path)) {
-		try {
-			const content = readFileSync(path, "utf-8");
-			const config = JSON.parse(content) as RunConfig;
+	if (!existsSync(path)) return {};
 
-			// If commands.json exists but has no commands, check for legacy config to migrate
-			if (!config.commands?.length) {
-				const migrated = migrateLegacyConfig(projectDir);
-				if (migrated) {
-					writeRunConfig(projectDir, migrated);
-					process.stderr.write(
-						"chunk: migrated legacy .chunk/config.json into .chunk/commands.json\n",
-					);
-					return migrated;
-				}
-			}
+	try {
+		const content = readFileSync(path, "utf-8");
+		const parsed = JSON.parse(content) as Record<string, unknown>;
 
-			return config;
-		} catch {
-			return {};
+		// Already in new format
+		if (Array.isArray(parsed.commands)) {
+			return parsed as unknown as RunConfig;
 		}
-	}
 
-	// No commands.json — try migrating legacy config.json
-	const migrated = migrateLegacyConfig(projectDir);
-	if (migrated) {
-		writeRunConfig(projectDir, migrated);
-		process.stderr.write("chunk: migrated legacy .chunk/config.json into .chunk/commands.json\n");
-		return migrated;
-	}
+		// Detect and migrate legacy format (installCommand/testCommand) in place
+		const migrated = migrateLegacyConfig(parsed);
+		if (migrated) {
+			writeRunConfig(projectDir, migrated);
+			process.stderr.write("chunk: migrated .chunk/config.json to new format\n");
+			return migrated;
+		}
 
-	return {};
+		return {};
+	} catch {
+		return {};
+	}
 }
 
 export function resolveCommand(name: string, config: RunConfig): ResolvedCommand | undefined {

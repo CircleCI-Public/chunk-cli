@@ -14,7 +14,7 @@ import {
 describe("core/run-config", () => {
 	const testDir = path.join(process.cwd(), ".test-commands-config");
 	const chunkDir = path.join(testDir, ".chunk");
-	const configPath = path.join(chunkDir, "commands.json");
+	const configPath = path.join(chunkDir, "config.json");
 
 	beforeEach(() => {
 		fs.mkdirSync(testDir, { recursive: true });
@@ -59,26 +59,24 @@ describe("core/run-config", () => {
 			expect(loadRunConfig(testDir)).toEqual({});
 		});
 
-		it("migrates legacy config.json to array format", () => {
+		it("migrates legacy format (installCommand/testCommand) in place", () => {
 			fs.mkdirSync(chunkDir, { recursive: true });
 			fs.writeFileSync(
-				path.join(chunkDir, "config.json"),
+				configPath,
 				JSON.stringify({ installCommand: "npm install", testCommand: "npm test" }),
 			);
 			const config = loadRunConfig(testDir);
 			expect(config.commands).toHaveLength(2);
 			expect(config.commands?.[0]).toEqual({ name: "install", run: "npm install" });
 			expect(config.commands?.[1]).toEqual({ name: "test", run: "npm test" });
-			// Should have written commands.json
-			expect(fs.existsSync(configPath)).toBe(true);
+			// Should have rewritten config.json with new format
+			const rewritten = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+			expect(Array.isArray(rewritten.commands)).toBe(true);
 		});
 
-		it("migrates legacy config with only testCommand", () => {
+		it("migrates legacy format with only testCommand", () => {
 			fs.mkdirSync(chunkDir, { recursive: true });
-			fs.writeFileSync(
-				path.join(chunkDir, "config.json"),
-				JSON.stringify({ testCommand: "bun test" }),
-			);
+			fs.writeFileSync(configPath, JSON.stringify({ testCommand: "bun test" }));
 			const config = loadRunConfig(testDir);
 			expect(config.commands).toHaveLength(1);
 			expect(config.commands?.[0]).toEqual({ name: "test", run: "bun test" });
