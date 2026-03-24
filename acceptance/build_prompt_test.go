@@ -704,3 +704,13 @@ func filterByPath(reqs []testutil.RecordedRequest, path string) []testutil.Recor
 	}
 	return filtered
 }
+
+func filterByPathPrefix(reqs []testutil.RecordedRequest, prefix string) []testutil.RecordedRequest {
+	var filtered []testutil.RecordedRequest
+	for _, r := range reqs {
+		if strings.HasPrefix(r.URL.Path, prefix) {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
+}
