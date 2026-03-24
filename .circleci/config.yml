@@ -2,7 +2,7 @@ version: 2.1
 
 orbs:
   shellcheck: circleci/shellcheck@3.4.0
-  go: circleci/go@3.0.3
+  go: circleci/go@3.0.4
 
 executors:
   releaser:
