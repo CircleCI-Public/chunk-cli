@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { DEFAULT_OUTPUT_PATH, LEGACY_OUTPUT_PATH } from "../config";
+import { yellow } from "../ui/colors";
 import { detectGitHubOrgAndRepo } from "../utils/git-remote";
 
 /**
@@ -41,4 +45,28 @@ export function deriveOutputPaths(outputPath: string): {
 		detailsPath: `${outputBase}-details.json`,
 		analysisPath: `${outputBase}-analysis.md`,
 	};
+}
+
+/**
+ * Check if the legacy output file exists and the user is using the new default path.
+ * If so, print a deprecation warning to stderr.
+ *
+ * @returns true if a warning was printed
+ */
+export function warnIfLegacyOutputPath(outputFlag: string): boolean {
+	if (
+		resolve(outputFlag) === resolve(DEFAULT_OUTPUT_PATH) &&
+		existsSync(resolve(LEGACY_OUTPUT_PATH))
+	) {
+		console.warn(
+			yellow(
+				`[deprecation] Found ${LEGACY_OUTPUT_PATH} in the working directory.\n` +
+					`  The default output path has changed to ${DEFAULT_OUTPUT_PATH}.\n` +
+					`  Update scripts that reference the old path, or pass --output ${LEGACY_OUTPUT_PATH} to keep the old behavior.`,
+			),
+		);
+		console.warn("");
+		return true;
+	}
+	return false;
 }

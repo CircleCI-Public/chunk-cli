@@ -1,16 +1,9 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import type { Command } from "@commander-js/extra-typings";
-import {
-	DEFAULT_ANALYZE_MODEL,
-	DEFAULT_OUTPUT_PATH,
-	DEFAULT_PROMPT_MODEL,
-	LEGACY_OUTPUT_PATH,
-} from "../config";
+import { DEFAULT_ANALYZE_MODEL, DEFAULT_OUTPUT_PATH, DEFAULT_PROMPT_MODEL } from "../config";
 import { type BuildPromptOptions, extractCommentsAndBuildPrompt } from "../core/build-prompt";
-import { resolveOrgAndRepos } from "../core/build-prompt.steps";
+import { resolveOrgAndRepos, warnIfLegacyOutputPath } from "../core/build-prompt.steps";
 import type { CommandResult } from "../types";
-import { dim, yellow } from "../ui/colors";
+import { dim } from "../ui/colors";
 
 interface ParsedBuildPromptFlags {
 	org?: string;
@@ -80,30 +73,6 @@ Examples:
 		.action(async (options) => {
 			process.exit((await runBuildPrompt(options)).exitCode);
 		});
-}
-
-/**
- * Check if the legacy output file exists and the user is using the new default path.
- * If so, print a deprecation warning.
- *
- * @returns true if a warning was printed
- */
-export function warnIfLegacyOutputPath(outputFlag: string): boolean {
-	if (
-		resolve(outputFlag) === resolve(DEFAULT_OUTPUT_PATH) &&
-		existsSync(resolve(LEGACY_OUTPUT_PATH))
-	) {
-		console.log(
-			yellow(
-				`[deprecation] Found ${LEGACY_OUTPUT_PATH} in the working directory.\n` +
-					`  The default output path has changed to ${DEFAULT_OUTPUT_PATH}.\n` +
-					`  Update scripts that reference the old path, or pass --output ${LEGACY_OUTPUT_PATH} to keep the old behavior.`,
-			),
-		);
-		console.log("");
-		return true;
-	}
-	return false;
 }
 
 async function runBuildPrompt(flags: ParsedBuildPromptFlags): Promise<CommandResult> {

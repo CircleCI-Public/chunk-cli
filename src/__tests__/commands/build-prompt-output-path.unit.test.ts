@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { warnIfLegacyOutputPath } from "../../commands/build-prompt";
 import { DEFAULT_OUTPUT_PATH, LEGACY_OUTPUT_PATH } from "../../config";
+import { warnIfLegacyOutputPath } from "../../core/build-prompt.steps";
 
 describe("warnIfLegacyOutputPath", () => {
 	let tempDir: string;
 	let originalCwd: string;
-	let originalConsoleLog: typeof console.log;
+	let originalConsoleWarn: typeof console.warn;
 	let consoleSpy: ReturnType<typeof mock>;
 
 	beforeEach(() => {
@@ -18,16 +18,16 @@ describe("warnIfLegacyOutputPath", () => {
 		);
 		mkdirSync(tempDir, { recursive: true });
 		originalCwd = process.cwd();
-		originalConsoleLog = console.log;
+		originalConsoleWarn = console.warn;
 		process.chdir(tempDir);
 		consoleSpy = mock(() => {});
-		console.log = consoleSpy;
+		console.warn = consoleSpy;
 	});
 
 	afterEach(() => {
 		process.chdir(originalCwd);
 		rmSync(tempDir, { recursive: true, force: true });
-		console.log = originalConsoleLog;
+		console.warn = originalConsoleWarn;
 	});
 
 	it("prints a deprecation warning when legacy file exists and default output is used", () => {
