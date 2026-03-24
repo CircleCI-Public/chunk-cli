@@ -2,7 +2,6 @@ import {
 	addSandboxSshKey,
 	CircleCIError,
 	createSandbox,
-	createSandboxAccessToken,
 	execCommand,
 	listSandboxesForOrg,
 } from "../api/circleci";
@@ -68,22 +67,6 @@ async function withCircleCIError<T>(
 	}
 }
 
-// Returns the access token string, or a CommandResult describing the failure.
-function fetchAccessToken(
-	sandboxId: string,
-	organizationId: string,
-	token: string,
-): Promise<string | CommandResult> {
-	return withCircleCIError(
-		async () => {
-			const { access_token } = await createSandboxAccessToken(sandboxId, organizationId, token);
-			return access_token;
-		},
-		"Failed to get sandbox access token",
-		"Check your CIRCLE_TOKEN, sandbox ID, and org ID.",
-	);
-}
-
 // Returns the sandbox session, or a CommandResult describing the failure.
 function openSession(
 	sandboxId: string,
@@ -92,7 +75,7 @@ function openSession(
 	identityFile?: string,
 ): Promise<SandboxSession | CommandResult> {
 	return withCircleCIError(
-		() => openSandboxSession(sandboxId, organizationId, token, identityFile),
+		() => openSandboxSession(sandboxId, token, identityFile),
 		"Failed to open sandbox session",
 		"Check your CIRCLE_TOKEN, sandbox ID, and org ID.",
 	);
@@ -139,11 +122,8 @@ export async function execCommandInSandbox(
 	const token = requireToken();
 	if (!token) return { exitCode: 2 };
 
-	const accessToken = await fetchAccessToken(sandboxId, organizationId, token);
-	if (typeof accessToken !== "string") return accessToken;
-
 	return withCircleCIError<CommandResult>(async () => {
-		const result = await execCommand(command, args, accessToken);
+		const result = await execCommand(sandboxId, command, args, token);
 		return { exitCode: 0, data: result };
 	}, "Failed to execute command");
 }
@@ -192,11 +172,8 @@ export async function addSshKeyToSandbox(
 		};
 	}
 
-	const accessToken = await fetchAccessToken(sandboxId, organizationId, token);
-	if (typeof accessToken !== "string") return accessToken;
-
 	return withCircleCIError<CommandResult>(async () => {
-		const result = await addSandboxSshKey(resolvedKey, accessToken);
+		const result = await addSandboxSshKey(sandboxId, resolvedKey, token);
 		return { exitCode: 0, data: result };
 	}, "Failed to add SSH key");
 }

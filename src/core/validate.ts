@@ -128,7 +128,7 @@ export async function validateOnSandbox(
 
 	let session: Awaited<ReturnType<typeof openSandboxSession>>;
 	try {
-		session = await openSandboxSession(sandboxId, organizationId, circleciToken, identityFile);
+		session = await openSandboxSession(sandboxId, circleciToken, identityFile);
 	} catch (error) {
 		if (error instanceof CircleCIError) {
 			return {

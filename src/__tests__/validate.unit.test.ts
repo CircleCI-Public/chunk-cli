@@ -4,6 +4,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { validateLocally, validateOnSandbox } from "../core/validate";
 import { loadValidateCommands } from "../core/validate.steps";
+import type { SshExec } from "../utils/ssh";
+
+// Mock withSshConnection so validateOnSandbox tests can control SSH execution
+// without a real connection. execOverSsh is provided as a no-op to avoid
+// undefined errors if the mock leaks into other modules that import it.
+const mockWithSshConnection = mock();
+
+mock.module("../utils/ssh", () => ({
+	withSshConnection: mockWithSshConnection,
+	execOverSsh: mock(),
+	shellEscape: (s: string) => `'${s.replace(/'/g, "'\\''")}'`,
+	shellJoin: (args: string[]) => args.map((s: string) => `'${s}'`).join(" "),
+}));
 
 describe("loadValidateCommands", () => {
 	let tmpDir: string;
@@ -143,23 +156,31 @@ describe("validateLocally", () => {
 describe("validateOnSandbox", () => {
 	let tmpDir: string;
 	let originalCwd: string;
+	let keyDir: string;
+	let identityFile: string;
 	const fetchMock = mock();
 	let originalFetch: typeof globalThis.fetch;
 
 	beforeEach(() => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "chunk-validate-test-"));
-		// Create a .git dir so findRepoRoot() resolves to tmpDir
 		fs.mkdirSync(path.join(tmpDir, ".git"));
 		originalCwd = process.cwd();
 		process.chdir(tmpDir);
 		originalFetch = globalThis.fetch;
 		// @ts-expect-error - Mock doesn't fully implement fetch type
 		globalThis.fetch = fetchMock;
+		// Provide real SSH key files so openSandboxSession can read them
+		keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "chunk-key-test-"));
+		identityFile = path.join(keyDir, "test_key");
+		fs.writeFileSync(identityFile, "fake-private-key");
+		fs.writeFileSync(`${identityFile}.pub`, "ssh-ed25519 AAAA fake-public-key test@test.com");
+		mockWithSshConnection.mockReset();
 	});
 
 	afterEach(() => {
 		process.chdir(originalCwd);
 		fs.rmSync(tmpDir, { recursive: true, force: true });
+		fs.rmSync(keyDir, { recursive: true, force: true });
 		fetchMock.mockReset();
 		globalThis.fetch = originalFetch;
 	});
@@ -170,20 +191,11 @@ describe("validateOnSandbox", () => {
 		fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify(config, null, 2));
 	}
 
-	function tokenResponse(accessToken = "sandbox-token") {
+	function sshKeyResponse(url = "sandbox.example.com") {
 		return {
 			ok: true,
 			status: 200,
-			text: async () => JSON.stringify({ access_token: accessToken }),
-		} as Response;
-	}
-
-	function execResponse(exitCode: number, stdout = "", stderr = "") {
-		return {
-			ok: true,
-			status: 200,
-			text: async () =>
-				JSON.stringify({ command_id: "cmd-1", pid: 1, stdout, stderr, exit_code: exitCode }),
+			text: async () => JSON.stringify({ url }),
 		} as Response;
 	}
 
@@ -203,10 +215,10 @@ describe("validateOnSandbox", () => {
 		}
 	});
 
-	it("returns ok: false with hint when createSandboxAccessToken returns a CircleCIError", async () => {
+	it("returns ok: false with hint when addSandboxSshKey returns a CircleCIError", async () => {
 		writeProjectConfig({ testCommand: "bun test" });
 		fetchMock.mockImplementation(async () => errorResponse(401));
-		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir);
+		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir, identityFile);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
 			expect(result.error).toBe("Invalid CircleCI API token");
@@ -214,9 +226,8 @@ describe("validateOnSandbox", () => {
 		}
 	});
 
-	it("rethrows non-CircleCIError from createSandboxAccessToken", async () => {
+	it("rethrows non-CircleCIError from addSandboxSshKey", async () => {
 		writeProjectConfig({ testCommand: "bun test" });
-		// response.text() throwing is not wrapped by circleciFetch, so it escapes as a plain Error
 		fetchMock.mockImplementation(async () => ({
 			ok: true,
 			status: 200,
@@ -224,45 +235,52 @@ describe("validateOnSandbox", () => {
 				throw new TypeError("stream error");
 			},
 		}));
-		await expect(validateOnSandbox("org-1", "sandbox-1", "token", tmpDir)).rejects.toBeInstanceOf(
-			TypeError,
-		);
+		await expect(
+			validateOnSandbox("org-1", "sandbox-1", "token", tmpDir, identityFile),
+		).rejects.toBeInstanceOf(TypeError);
 	});
 
-	it("returns ok: false when execCommand returns a CircleCIError", async () => {
+	it("returns ok: false when addSandboxSshKey fails with a CircleCIError", async () => {
 		writeProjectConfig({ testCommand: "bun test" });
-		fetchMock
-			.mockImplementationOnce(async () => tokenResponse())
-			.mockImplementationOnce(async () => errorResponse(500));
-		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir);
+		fetchMock.mockImplementationOnce(async () => errorResponse(500));
+		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir, identityFile);
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error).toBe("CircleCI server error (500) - please try again later");
+			expect(result.error).toContain("CircleCI server error (500)");
 		}
 	});
 
-	it("rethrows non-CircleCIError from execCommand", async () => {
+	it("returns ok: false when SSH connection fails", async () => {
 		writeProjectConfig({ testCommand: "bun test" });
-		fetchMock
-			.mockImplementationOnce(async () => tokenResponse())
-			.mockImplementationOnce(async () => ({
-				ok: true,
-				status: 200,
-				text: async () => {
-					throw new TypeError("exec stream error");
-				},
-			}));
-		await expect(validateOnSandbox("org-1", "sandbox-1", "tok", tmpDir)).rejects.toBeInstanceOf(
-			TypeError,
-		);
+		fetchMock.mockImplementationOnce(async () => sshKeyResponse());
+		mockWithSshConnection.mockRejectedValueOnce(new Error("Timed out waiting for TLS connection"));
+		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir, identityFile);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toBe("Timed out waiting for TLS connection");
+			expect(result.hint).toMatch(/SSH key is registered/);
+		}
 	});
 
 	it("stops on non-zero exit code and moves remaining commands to skipped", async () => {
 		writeProjectConfig({ installCommand: "false", testCommand: "true" });
-		fetchMock
-			.mockImplementationOnce(async () => tokenResponse())
-			.mockImplementationOnce(async () => execResponse(1));
-		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir);
+		fetchMock.mockImplementationOnce(async () => sshKeyResponse());
+		mockWithSshConnection.mockImplementationOnce(
+			async (
+				_url: string,
+				_key: string,
+				_hosts: string,
+				fn: (exec: SshExec) => Promise<unknown>,
+			) => {
+				const execMock: SshExec = mock().mockResolvedValueOnce({
+					exitCode: 1,
+					stdout: "",
+					stderr: "",
+				});
+				return fn(execMock);
+			},
+		);
+		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir, identityFile);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.results).toEqual([{ command: "false", exitCode: 1, stdout: "", stderr: "" }]);
@@ -272,11 +290,21 @@ describe("validateOnSandbox", () => {
 
 	it("returns ok: true with all results and empty skipped when all commands pass", async () => {
 		writeProjectConfig({ installCommand: "bun install", testCommand: "bun test" });
-		fetchMock
-			.mockImplementationOnce(async () => tokenResponse("tok"))
-			.mockImplementationOnce(async () => execResponse(0, "install done\n"))
-			.mockImplementationOnce(async () => execResponse(0, "test passed\n"));
-		const result = await validateOnSandbox("org-1", "sandbox-1", "tok", tmpDir);
+		fetchMock.mockImplementationOnce(async () => sshKeyResponse());
+		mockWithSshConnection.mockImplementationOnce(
+			async (
+				_url: string,
+				_key: string,
+				_hosts: string,
+				fn: (exec: SshExec) => Promise<unknown>,
+			) => {
+				const execMock: SshExec = mock()
+					.mockResolvedValueOnce({ exitCode: 0, stdout: "install done\n", stderr: "" })
+					.mockResolvedValueOnce({ exitCode: 0, stdout: "test passed\n", stderr: "" });
+				return fn(execMock);
+			},
+		);
+		const result = await validateOnSandbox("org-1", "sandbox-1", "token", tmpDir, identityFile);
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.results).toEqual([

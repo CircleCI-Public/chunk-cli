@@ -56,10 +56,6 @@ export interface SandboxListResponse {
 	sandboxes: Sandbox[];
 }
 
-export interface SandboxAccessTokenResponse {
-	access_token: string;
-}
-
 export interface ExecCommandResponse {
 	command_id: string;
 	pid: number;
@@ -151,7 +147,7 @@ export async function listSandboxesForOrg(
 	token: string,
 ): Promise<SandboxListResponse> {
 	return circleciFetch<SandboxListResponse>(
-		`https://circleci.com/api/v2/sandboxes?org_id=${orgId}`,
+		`https://circleci.com/api/v2/sandbox/instances?org_id=${orgId}`,
 		{ auth: { type: "circle-token", token } },
 	);
 }
@@ -165,7 +161,7 @@ export async function createSandbox(
 	token: string,
 	image?: string,
 ): Promise<Sandbox> {
-	return circleciFetch<Sandbox>("https://circleci.com/api/v2/sandboxes", {
+	return circleciFetch<Sandbox>("https://circleci.com/api/v2/sandbox/instances", {
 		method: "POST",
 		body: JSON.stringify({ organization_id: organizationId, name, ...(image && { image }) }),
 		auth: { type: "circle-token", token },
@@ -187,24 +183,6 @@ export async function triggerChunkRun(
 		body: JSON.stringify(request),
 		auth: { type: "circle-token", token },
 	});
-}
-
-/**
- * Create an access token for a sandbox
- */
-export async function createSandboxAccessToken(
-	sandboxId: string,
-	organizationId: string,
-	token: string,
-): Promise<SandboxAccessTokenResponse> {
-	return circleciFetch<SandboxAccessTokenResponse>(
-		`https://circleci.com/api/v2/sandboxes/${sandboxId}/access_token`,
-		{
-			method: "POST",
-			body: JSON.stringify({ organization_id: organizationId }),
-			auth: { type: "circle-token", token },
-		},
-	);
 }
 
 /**
@@ -233,15 +211,16 @@ export interface AddSandboxSshKeyResponse {
  * Add an SSH public key to a sandbox
  */
 export async function addSandboxSshKey(
+	sandboxId: string,
 	publicKey: string,
-	accessToken: string,
+	token: string,
 ): Promise<AddSandboxSshKeyResponse> {
 	return circleciFetch<AddSandboxSshKeyResponse>(
-		"https://circleci.com/api/v2/sandboxes/ssh/add-key",
+		`https://circleci.com/api/v2/sandbox/instances/${sandboxId}/ssh/add-key`,
 		{
 			method: "POST",
 			body: JSON.stringify({ public_key: publicKey }),
-			auth: { type: "bearer", token: accessToken },
+			auth: { type: "circle-token", token },
 		},
 	);
 }
@@ -250,15 +229,19 @@ export async function addSandboxSshKey(
  * Execute a command in a sandbox
  */
 export async function execCommand(
+	sandboxId: string,
 	command: string,
 	args: string[],
-	accessToken: string,
+	token: string,
 ): Promise<ExecCommandResponse> {
-	return circleciFetch<ExecCommandResponse>("https://circleci.com/api/v2/sandboxes/exec", {
-		method: "POST",
-		body: JSON.stringify({ command, args }),
-		auth: { type: "bearer", token: accessToken },
-	});
+	return circleciFetch<ExecCommandResponse>(
+		`https://circleci.com/api/v2/sandbox/instances/${sandboxId}/exec`,
+		{
+			method: "POST",
+			body: JSON.stringify({ command, args }),
+			auth: { type: "circle-token", token },
+		},
+	);
 }
 
 /**

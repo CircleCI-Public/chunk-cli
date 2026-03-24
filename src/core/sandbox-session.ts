@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { addSandboxSshKey, CircleCIError, createSandboxAccessToken } from "../api/circleci";
+import { addSandboxSshKey } from "../api/circleci";
 
 const SSH_DIR = join(homedir(), ".ssh");
 export const CHUNK_PRIVATE_KEY_PATH = join(SSH_DIR, "chunk_ai");
@@ -16,16 +16,9 @@ export interface SandboxSession {
 
 export async function openSandboxSession(
 	sandboxId: string,
-	organizationId: string,
 	token: string,
 	identityFile?: string,
 ): Promise<SandboxSession> {
-	const { access_token: accessToken } = await createSandboxAccessToken(
-		sandboxId,
-		organizationId,
-		token,
-	);
-
 	const privateKeyPath = identityFile ?? CHUNK_PRIVATE_KEY_PATH;
 	const publicKeyPath = `${privateKeyPath}.pub`;
 
@@ -52,16 +45,8 @@ export async function openSandboxSession(
 		throw err;
 	}
 
-	let sandboxUrl: string;
-	try {
-		const keyResp = await addSandboxSshKey(publicKey, accessToken);
-		sandboxUrl = keyResp.url;
-	} catch (error) {
-		if (error instanceof CircleCIError) {
-			throw new CircleCIError(`Failed to register SSH key with sandbox: ${error.message}`);
-		}
-		throw error;
-	}
+	const keyResp = await addSandboxSshKey(sandboxId, publicKey, token);
+	const sandboxUrl = keyResp.url;
 
 	return {
 		sandboxUrl,

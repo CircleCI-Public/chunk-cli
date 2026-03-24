@@ -143,7 +143,7 @@ describe("syncToSandbox", () => {
 		expect(mockFetch).not.toHaveBeenCalled();
 	});
 
-	it("returns exitCode 2 when createSandboxAccessToken fails", async () => {
+	it("returns exitCode 2 when addSandboxSshKey fails with 401", async () => {
 		mockFetch.mockImplementationOnce(async () => ({
 			ok: false,
 			status: 401,
@@ -153,14 +153,7 @@ describe("syncToSandbox", () => {
 		expect(result.exitCode).toBe(2);
 	});
 
-	it("returns exitCode 2 when addSandboxSshKey fails", async () => {
-		// First call: access token succeeds
-		mockFetch.mockImplementationOnce(async () => ({
-			ok: true,
-			status: 200,
-			text: async () => JSON.stringify({ access_token: "tok-123" }),
-		}));
-		// Second call: add-key fails
+	it("returns exitCode 2 when addSandboxSshKey fails with 403", async () => {
 		mockFetch.mockImplementationOnce(async () => ({
 			ok: false,
 			status: 403,
