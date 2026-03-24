@@ -7,13 +7,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
 // FakeAnthropic serves canned responses for the Anthropic Messages API.
 type FakeAnthropic struct {
 	http.Handler
-	Recorder *testutil.RequestRecorder
+	Recorder *recorder.RequestRecorder
 
 	mu        sync.Mutex
 	responses []string // queued text responses, dequeued in FIFO order
@@ -24,7 +24,7 @@ func NewFakeAnthropic(responses ...string) *FakeAnthropic {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
-	rec := testutil.NewRecorder()
+	rec := recorder.NewRecorder()
 	f := &FakeAnthropic{
 		Handler:   r,
 		Recorder:  rec,

@@ -31,7 +31,7 @@ jobs:
           steps:
             - run:
                 name: Run tests
-                command: go test -race ./...
+                command: go test -race $(go list ./... | grep -v /acceptance)
                 no_output_timeout: 90s
 
   acceptance-test:
@@ -42,12 +42,11 @@ jobs:
       - checkout
       - go/with-cache:
           key: acceptance
-          checksum: '{{ checksum "acceptance/go.sum" }}'
           mod: true
           steps:
             - run:
                 name: Run acceptance tests
-                command: cd acceptance && go test -v -count=1 -race ./...
+                command: go test -v -count=1 -race ./acceptance/...
                 no_output_timeout: 120s
 
   build-smoke-test:

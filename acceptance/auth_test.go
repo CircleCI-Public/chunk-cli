@@ -7,8 +7,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 func TestAuthStatusWithEnvKey(t *testing.T) {
@@ -16,10 +17,10 @@ func TestAuthStatusWithEnvKey(t *testing.T) {
 	srv := httptest.NewServer(anthropic)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
@@ -29,10 +30,10 @@ func TestAuthStatusWithEnvKey(t *testing.T) {
 }
 
 func TestAuthStatusNoKey(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
 
-	result := testutil.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
@@ -46,15 +47,15 @@ func TestAuthStatusConfigPriority(t *testing.T) {
 	srv := httptest.NewServer(anthropic)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 	env.AnthropicKey = "sk-ant-env-key-EEEE"
 
 	// Store a different key in config file
-	setResult := testutil.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-config-key-CCCC"}, env, env.HomeDir)
+	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-config-key-CCCC"}, env, env.HomeDir)
 	assert.Equal(t, setResult.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
 
-	result := testutil.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -70,12 +71,12 @@ func TestAuthStatusMaskExactlyFourChars(t *testing.T) {
 	srv := httptest.NewServer(anthropic)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 	// Key where last-4 and chars-5-to-8-from-end are distinct
 	env.AnthropicKey = "sk-ant-AAAA-BBBB-CCCC-DDDD"
 
-	result := testutil.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -86,10 +87,10 @@ func TestAuthStatusMaskExactlyFourChars(t *testing.T) {
 }
 
 func TestAuthLogoutNoStoredKey(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
 
-	result := testutil.RunCLI(t, []string{"auth", "logout"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"auth", "logout"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr

@@ -8,13 +8,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
 // FakeGitHub serves canned responses for GitHub's GraphQL API.
 type FakeGitHub struct {
 	http.Handler
-	Recorder *testutil.RequestRecorder
+	Recorder *recorder.RequestRecorder
 
 	mu             sync.RWMutex
 	orgValidation  string
@@ -28,7 +28,7 @@ func NewFakeGitHub() *FakeGitHub {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
-	rec := testutil.NewRecorder()
+	rec := recorder.NewRecorder()
 	f := &FakeGitHub{
 		Handler:        r,
 		Recorder:       rec,

@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
 type Collaboration struct {
@@ -46,7 +46,7 @@ type ExecResponse struct {
 // FakeCircleCI serves canned responses for the CircleCI API.
 type FakeCircleCI struct {
 	http.Handler
-	Recorder *testutil.RequestRecorder
+	Recorder *recorder.RequestRecorder
 
 	mu             sync.RWMutex
 	Collaborations []Collaboration
@@ -63,7 +63,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
-	rec := testutil.NewRecorder()
+	rec := recorder.NewRecorder()
 	f := &FakeCircleCI{
 		Handler:     r,
 		Recorder:    rec,

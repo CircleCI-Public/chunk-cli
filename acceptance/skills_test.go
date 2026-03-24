@@ -8,17 +8,18 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 )
 
 func TestSkillsInstall(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
 	claudeDir := filepath.Join(env.HomeDir, ".claude")
 	err := os.MkdirAll(claudeDir, 0o755)
 	assert.NilError(t, err)
 
-	result := testutil.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
@@ -31,9 +32,9 @@ func TestSkillsInstall(t *testing.T) {
 }
 
 func TestSkillsList(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 

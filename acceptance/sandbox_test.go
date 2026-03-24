@@ -10,8 +10,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
 func TestSandboxesListHappyPath(t *testing.T) {
@@ -23,10 +26,10 @@ func TestSandboxesListHappyPath(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "list", "--org-id", "org-aaa",
 	}, env, env.HomeDir)
 
@@ -50,10 +53,10 @@ func TestSandboxesListEmpty(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "list", "--org-id", "org-empty",
 	}, env, env.HomeDir)
 
@@ -72,10 +75,10 @@ func TestSandboxesListFiltersByOrg(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "list", "--org-id", "org-a",
 	}, env, env.HomeDir)
 
@@ -100,10 +103,10 @@ func TestSandboxesMissingToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := testutil.NewTestEnv(t)
+			env := testenv.NewTestEnv(t)
 			env.CircleToken = ""
 
-			result := testutil.RunCLI(t, tt.args, env, env.HomeDir)
+			result := binary.RunCLI(t, tt.args, env, env.HomeDir)
 			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 		})
 	}
@@ -114,10 +117,10 @@ func TestSandboxesCreateHappyPath(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "create",
 		"--org-id", "org-aaa",
 		"--name", "my-new-sandbox",
@@ -146,10 +149,10 @@ func TestSandboxesCreateWithImage(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "create",
 		"--org-id", "org-aaa",
 		"--name", "custom-sandbox",
@@ -180,10 +183,10 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "exec",
 		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
@@ -220,10 +223,10 @@ func TestSandboxesAddSshKeyFromString(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
 		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
@@ -254,7 +257,7 @@ func TestSandboxesAddSshKeyFromFile(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
 	// Write a fake public key file
@@ -262,7 +265,7 @@ func TestSandboxesAddSshKeyFromFile(t *testing.T) {
 	err := os.WriteFile(keyFile, []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTestingPurposesOnly123 test@test\n"), 0o644)
 	assert.NilError(t, err)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
 		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
@@ -288,14 +291,14 @@ func TestSandboxesAddSshKeyMutuallyExclusive(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
 	keyFile := filepath.Join(env.HomeDir, "test-key.pub")
 	err := os.WriteFile(keyFile, []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKey test@test\n"), 0o644)
 	assert.NilError(t, err)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
 		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
@@ -314,10 +317,10 @@ func TestSandboxesAddSshKeyNeitherProvided(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
 		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
@@ -334,7 +337,7 @@ func TestSandboxesAddSshKeyPrivateKeyRejected(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
 	// Write a fake private key file (detected by PRIVATE KEY marker)
@@ -342,7 +345,7 @@ func TestSandboxesAddSshKeyPrivateKeyRejected(t *testing.T) {
 	err := os.WriteFile(keyFile, []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nfakedata\n-----END OPENSSH PRIVATE KEY-----\n"), 0o644)
 	assert.NilError(t, err)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
 		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
@@ -356,9 +359,9 @@ func TestSandboxesAddSshKeyPrivateKeyRejected(t *testing.T) {
 }
 
 func TestSandboxesPrepareNotGitRepo(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "prepare",
 	}, env, env.HomeDir)
 
@@ -369,10 +372,10 @@ func TestSandboxesPrepareNotGitRepo(t *testing.T) {
 }
 
 func TestSandboxesPrepareDockerSudo(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
 	// --docker-sudo should be accepted as a flag; command fails for other reasons (not a git repo)
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "prepare", "--docker-sudo",
 	}, env, env.HomeDir)
 
@@ -402,10 +405,10 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 			srv := httptest.NewServer(cci)
 			defer srv.Close()
 
-			env := testutil.NewTestEnv(t)
+			env := testenv.NewTestEnv(t)
 			env.CircleCIURL = srv.URL
 
-			result := testutil.RunCLI(t, tt.args, env, env.HomeDir)
+			result := binary.RunCLI(t, tt.args, env, env.HomeDir)
 
 			// Verify access token request was made (proves flag was accepted)
 			reqs := cci.Recorder.AllRequests()
@@ -417,12 +420,12 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 }
 
 func TestSandboxesPrepareMissingApiKey(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "prepare",
 	}, env, workDir)
 
@@ -444,10 +447,10 @@ func TestSandboxesExecWithArgs(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "exec",
 		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
@@ -469,9 +472,9 @@ func TestSandboxesExecWithArgs(t *testing.T) {
 }
 
 func TestSandboxesCreateMissingName(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"sandboxes", "create",
 		"--org-id", "org-aaa",
 	}, env, env.HomeDir)
@@ -480,8 +483,8 @@ func TestSandboxesCreateMissingName(t *testing.T) {
 }
 
 // filterByMethod returns requests matching both method and path prefix.
-func filterByMethod(reqs []testutil.RecordedRequest, method, pathPrefix string) []testutil.RecordedRequest {
-	var out []testutil.RecordedRequest
+func filterByMethod(reqs []recorder.RecordedRequest, method, pathPrefix string) []recorder.RecordedRequest {
+	var out []recorder.RecordedRequest
 	for _, r := range reqs {
 		if r.Method == method && strings.HasPrefix(r.URL.Path, pathPrefix) {
 			out = append(out, r)

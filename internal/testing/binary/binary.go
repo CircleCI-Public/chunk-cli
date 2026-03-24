@@ -1,4 +1,4 @@
-package testutil
+package binary
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 )
 
 var (
@@ -62,14 +64,14 @@ type CLIResult struct {
 }
 
 // RunCLI executes the chunk binary with the given args, env, and working directory.
-func RunCLI(t *testing.T, args []string, env *TestEnv, workDir string) CLIResult {
+func RunCLI(t *testing.T, args []string, e *env.TestEnv, workDir string) CLIResult {
 	t.Helper()
-	return RunCLIWithStdin(t, args, env, workDir, nil)
+	return RunCLIWithStdin(t, args, e, workDir, nil)
 }
 
 // RunCLIWithStdin executes the chunk binary with the given args, env, working directory,
 // and optional stdin data.
-func RunCLIWithStdin(t *testing.T, args []string, env *TestEnv, workDir string, stdin []byte) CLIResult {
+func RunCLIWithStdin(t *testing.T, args []string, e *env.TestEnv, workDir string, stdin []byte) CLIResult {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -77,7 +79,7 @@ func RunCLIWithStdin(t *testing.T, args []string, env *TestEnv, workDir string, 
 
 	cmd := exec.CommandContext(ctx, binaryPath, args...)
 	cmd.Dir = workDir
-	cmd.Env = env.Environ()
+	cmd.Env = e.Environ()
 
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)

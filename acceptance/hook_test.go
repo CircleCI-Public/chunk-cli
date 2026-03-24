@@ -8,16 +8,18 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 // --- repo init ---
 
 func TestHookRepoInit(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "repo", "init", workDir,
 	}, env, workDir)
 
@@ -35,17 +37,17 @@ func TestHookRepoInit(t *testing.T) {
 }
 
 func TestHookRepoInitExistingFiles(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
 	// First init
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "repo", "init", workDir,
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "first init failed: %s", result.Stderr)
 
 	// Second init without --force should create .example files
-	result = testutil.RunCLI(t, []string{
+	result = binary.RunCLI(t, []string{
 		"hook", "repo", "init", workDir,
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "second init failed: %s", result.Stderr)
@@ -56,17 +58,17 @@ func TestHookRepoInitExistingFiles(t *testing.T) {
 }
 
 func TestHookRepoInitForce(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
 	// First init
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "repo", "init", workDir,
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "first init failed: %s", result.Stderr)
 
 	// Second init with --force should overwrite
-	result = testutil.RunCLI(t, []string{
+	result = binary.RunCLI(t, []string{
 		"hook", "repo", "init", workDir, "--force",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "second init with --force failed: %s", result.Stderr)
@@ -79,10 +81,10 @@ func TestHookRepoInitForce(t *testing.T) {
 // --- setup ---
 
 func TestHookSetupInvalidProfile(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "setup", workDir, "--profile", "bogus", "--skip-env",
 	}, env, workDir)
 
@@ -93,10 +95,10 @@ func TestHookSetupInvalidProfile(t *testing.T) {
 }
 
 func TestHookSetupHappyPath(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "setup", workDir, "--skip-env",
 	}, env, workDir)
 
@@ -113,17 +115,17 @@ func TestHookSetupHappyPath(t *testing.T) {
 }
 
 func TestHookSetupForce(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
 	// First setup
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "setup", workDir, "--skip-env",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "first setup failed: %s", result.Stderr)
 
 	// Second setup with --force
-	result = testutil.RunCLI(t, []string{
+	result = binary.RunCLI(t, []string{
 		"hook", "setup", workDir, "--skip-env", "--force",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "second setup with --force failed: %s", result.Stderr)
@@ -132,9 +134,9 @@ func TestHookSetupForce(t *testing.T) {
 // --- env update ---
 
 func TestHookEnvUpdateInvalidProfile(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "env", "update", "--profile", "bogus",
 	}, env, env.HomeDir)
 
@@ -145,9 +147,9 @@ func TestHookEnvUpdateInvalidProfile(t *testing.T) {
 }
 
 func TestHookEnvUpdateHappyPath(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "env", "update",
 	}, env, env.HomeDir)
 
@@ -158,10 +160,10 @@ func TestHookEnvUpdateHappyPath(t *testing.T) {
 }
 
 func TestHookEnvUpdateWithOptions(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	logDir := filepath.Join(env.HomeDir, "logs")
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "env", "update",
 		"--set-log-dir", logDir,
 		"--set-verbose",
@@ -173,10 +175,10 @@ func TestHookEnvUpdateWithOptions(t *testing.T) {
 // --- scope ---
 
 func TestHookScopeDeactivateNoSession(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
 	// Pipe empty stdin — no session ID available
-	result := testutil.RunCLIWithStdin(t, []string{
+	result := binary.RunCLIWithStdin(t, []string{
 		"hook", "scope", "deactivate",
 	}, env, env.HomeDir, []byte("{}"))
 
@@ -187,10 +189,10 @@ func TestHookScopeDeactivateNoSession(t *testing.T) {
 }
 
 func TestHookScopeActivateNoProject(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
 	// Activate with no project config — should still succeed (no-op)
-	result := testutil.RunCLIWithStdin(t, []string{
+	result := binary.RunCLIWithStdin(t, []string{
 		"hook", "scope", "activate",
 	}, env, env.HomeDir, []byte("{}"))
 
@@ -202,13 +204,13 @@ func TestHookScopeActivateNoProject(t *testing.T) {
 // --- state ---
 
 func TestHookStateLoadEmpty(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "state", "load", "--project", workDir,
 	}, env, workDir)
 
@@ -220,13 +222,13 @@ func TestHookStateLoadEmpty(t *testing.T) {
 }
 
 func TestHookStateClear(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
-	result := testutil.RunCLIWithStdin(t, []string{
+	result := binary.RunCLIWithStdin(t, []string{
 		"hook", "state", "clear", "--project", workDir,
 	}, env, workDir, []byte(`{"hook_event_name":"Stop","session_id":"sess-123"}`))
 
@@ -236,14 +238,14 @@ func TestHookStateClear(t *testing.T) {
 // --- exec ---
 
 func TestHookExecRunNotEnabled(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 	// Deliberately not setting CHUNK_HOOK_ENABLE or CHUNK_HOOK_ENABLE_TESTS
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "exec", "run", "tests", "--no-check", "--project", workDir,
 	}, env, workDir)
 
@@ -252,15 +254,15 @@ func TestHookExecRunNotEnabled(t *testing.T) {
 }
 
 func TestHookExecRunNoCheck(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_ENABLE"] = "1"
 	env.Extra["CHUNK_HOOK_ENABLE_TESTS"] = "1"
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "exec", "run", "tests", "--no-check", "--project", workDir,
 	}, env, workDir)
 
@@ -290,14 +292,14 @@ func TestHookExecRunFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+			workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 			if tt.useTriggers {
 				writeHookConfigWithTriggers(t, workDir)
 			} else {
 				writeHookConfig(t, workDir)
 			}
 
-			env := testutil.NewTestEnv(t)
+			env := testenv.NewTestEnv(t)
 			env.Extra["CHUNK_HOOK_ENABLE"] = "1"
 			env.Extra["CHUNK_HOOK_ENABLE_TESTS"] = "1"
 			env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
@@ -306,7 +308,7 @@ func TestHookExecRunFlags(t *testing.T) {
 			args = append(args, tt.flags...)
 			args = append(args, "--no-check", "--project", workDir)
 
-			result := testutil.RunCLI(t, args, env, workDir)
+			result := binary.RunCLI(t, args, env, workDir)
 			assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 		})
 	}
@@ -315,14 +317,14 @@ func TestHookExecRunFlags(t *testing.T) {
 // --- exec check flags ---
 
 func TestHookExecCheckFlagsAccepted(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfigWithTriggers(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 	// Not enabling — "not enabled" path exits 0 before reading stdin
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "exec", "check", "tests",
 		"--file-ext", ".go",
 		"--staged",
@@ -341,7 +343,7 @@ func TestHookExecCheckFlagsAccepted(t *testing.T) {
 // --- task check flags ---
 
 func TestHookTaskCheckFlagsAccepted(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfigWithTriggers(t, workDir)
 
 	// Write a dummy instructions file
@@ -353,11 +355,11 @@ func TestHookTaskCheckFlagsAccepted(t *testing.T) {
 	err = os.WriteFile(schemaFile, []byte(`{"type": "object"}`), 0o644)
 	assert.NilError(t, err)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 	// Not enabling — exits 0
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "task", "check", "review",
 		"--instructions", instrFile,
 		"--schema", schemaFile,
@@ -376,14 +378,14 @@ func TestHookTaskCheckFlagsAccepted(t *testing.T) {
 // --- sync check flags ---
 
 func TestHookSyncCheckFlagsAccepted(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfigWithTriggers(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 	// Not enabling — exits 0
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "sync", "check",
 		"exec:tests",
 		"--on", "go-files",
@@ -403,14 +405,14 @@ func TestHookSyncCheckFlagsAccepted(t *testing.T) {
 // --- state save/append with --project ---
 
 func TestHookStateSaveWithProject(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
 	stdinData := []byte(`{"hook_event_name":"UserPromptSubmit","session_id":"sess-456","prompt":"hello"}`)
-	result := testutil.RunCLIWithStdin(t, []string{
+	result := binary.RunCLIWithStdin(t, []string{
 		"hook", "state", "save", "--project", workDir,
 	}, env, workDir, stdinData)
 
@@ -418,14 +420,14 @@ func TestHookStateSaveWithProject(t *testing.T) {
 }
 
 func TestHookStateAppendWithProject(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeHookConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
 	stdinData := []byte(`{"hook_event_name":"UserPromptSubmit","session_id":"sess-789","prompt":"world"}`)
-	result := testutil.RunCLIWithStdin(t, []string{
+	result := binary.RunCLIWithStdin(t, []string{
 		"hook", "state", "append", "--project", workDir,
 	}, env, workDir, stdinData)
 
@@ -435,11 +437,11 @@ func TestHookStateAppendWithProject(t *testing.T) {
 // --- scope with --project ---
 
 func TestHookScopeActivateWithProject(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLIWithStdin(t, []string{
+	result := binary.RunCLIWithStdin(t, []string{
 		"hook", "scope", "activate", "--project", workDir,
 	}, env, workDir, []byte(`{"session_id":"sess-100"}`))
 
@@ -449,11 +451,11 @@ func TestHookScopeActivateWithProject(t *testing.T) {
 }
 
 func TestHookScopeDeactivateWithProject(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLIWithStdin(t, []string{
+	result := binary.RunCLIWithStdin(t, []string{
 		"hook", "scope", "deactivate", "--project", workDir,
 	}, env, workDir, []byte(`{"session_id":"sess-100"}`))
 
@@ -465,10 +467,10 @@ func TestHookScopeDeactivateWithProject(t *testing.T) {
 // --- env update flags ---
 
 func TestHookEnvUpdateEnvFile(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	customEnvFile := filepath.Join(env.HomeDir, "custom-chunk-env")
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "env", "update",
 		"--env-file", customEnvFile,
 	}, env, env.HomeDir)
@@ -481,9 +483,9 @@ func TestHookEnvUpdateEnvFile(t *testing.T) {
 }
 
 func TestHookEnvUpdateSetProjectRoot(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"hook", "env", "update",
 		"--set-project-root", "/my/workspace/root",
 	}, env, env.HomeDir)
