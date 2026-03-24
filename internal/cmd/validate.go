@@ -32,7 +32,7 @@ func newValidateCmd() *cobra.Command {
 
 			cfg, err := validate.LoadProjectConfig(workDir)
 			if err != nil || !cfg.HasCommands() {
-				return fmt.Errorf("No validate commands configured. Run validate init first")
+				return fmt.Errorf("no validate commands configured, run validate init first")
 			}
 
 			if dryRun {
@@ -97,13 +97,13 @@ func newValidateInitCmd() *cobra.Command {
 					for k := range validProfiles {
 						names = append(names, k)
 					}
-					return fmt.Errorf("Invalid profile %q. Valid profiles: %s", profile, strings.Join(names, ", "))
+					return fmt.Errorf("Invalid profile %q. Valid profiles: %s", profile, strings.Join(names, ", ")) //nolint:staticcheck // user-facing message
 				}
 			}
 
 			configPath := filepath.Join(workDir, ".chunk", "config.json")
 			if _, err := os.Stat(configPath); err == nil && !force {
-				fmt.Fprintln(cmd.OutOrStdout(), "Config already exists. Use --force to overwrite.")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Config already exists. Use --force to overwrite.")
 				return nil
 			}
 
@@ -153,7 +153,7 @@ func newValidateInitCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "Validation config initialized")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Validation config initialized")
 			_ = skipEnv
 			return nil
 		},

@@ -19,7 +19,7 @@ tasks:
   lint:
     desc: Run linters
     cmds:
-      - golangci-lint run ./...
+      - go tool golangci-lint run ./...
 
   fmt:
     desc: Format code

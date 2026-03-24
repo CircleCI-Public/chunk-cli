@@ -25,16 +25,16 @@ func newConfigShowCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rc := config.Resolve("", "")
 
-			fmt.Fprintf(cmd.OutOrStdout(), "model: %s (%s)\n", rc.Model, rc.ModelSource)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "model: %s (%s)\n", rc.Model, rc.ModelSource)
 
 			if rc.APIKey != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "apiKey: %s (%s)\n", config.MaskAPIKey(rc.APIKey), rc.APIKeySource)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "apiKey: %s (%s)\n", config.MaskAPIKey(rc.APIKey), rc.APIKeySource)
 			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "apiKey: (not set)")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "apiKey: (not set)")
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "analyzeModel: %s\n", rc.AnalyzeModel)
-			fmt.Fprintf(cmd.OutOrStdout(), "promptModel: %s\n", rc.PromptModel)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "analyzeModel: %s\n", rc.AnalyzeModel)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "promptModel: %s\n", rc.PromptModel)
 			return nil
 		},
 	}
@@ -49,7 +49,7 @@ func newConfigSetCmd() *cobra.Command {
 			key, value := args[0], args[1]
 
 			if !config.ValidConfigKeys[key] {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Unknown config key: %q\n", key)
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Unknown config key: %q\n", key)
 				os.Exit(2)
 			}
 

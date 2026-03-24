@@ -50,7 +50,7 @@ func GetDefinitionByNameOrID(cfg *RunConfig, nameOrID string) (string, *string, 
 		return nameOrID, nil, "main", nil
 	}
 
-	return "", nil, "", fmt.Errorf("Unknown definition %q. Available: %s", nameOrID, availableDefinitions(cfg))
+	return "", nil, "", fmt.Errorf("unknown definition %q, available: %s", nameOrID, availableDefinitions(cfg))
 }
 
 func availableDefinitions(cfg *RunConfig) string {

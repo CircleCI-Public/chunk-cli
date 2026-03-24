@@ -27,7 +27,7 @@ func (c *Client) FetchOrgRepos(ctx context.Context, org string, filterRepos []st
 			return nil, fmt.Errorf("fetch org repos: %w", err)
 		}
 		if hasResolutionError(resp.Errors) {
-			return nil, fmt.Errorf("Could not resolve organization %q", org)
+			return nil, fmt.Errorf("could not resolve organization %q", org)
 		}
 		if resp.Data == nil {
 			return nil, fmt.Errorf("no data in org repos response")

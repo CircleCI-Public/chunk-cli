@@ -48,6 +48,7 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 			timeout = 300
 		}
 	}
+	_ = timeout // TODO: wire up command timeout
 
 	startedAt := time.Now().UTC().Format(time.RFC3339)
 

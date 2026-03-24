@@ -12,7 +12,7 @@ func ValidateProfile(profile string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("Invalid profile %q. Valid profiles: %v", profile, ValidProfiles)
+	return fmt.Errorf("Invalid profile %q. Valid profiles: %v", profile, ValidProfiles) //nolint:staticcheck // user-facing
 }
 
 // RunSetup combines env update + repo init.

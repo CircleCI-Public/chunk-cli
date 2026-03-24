@@ -32,7 +32,7 @@ func newSkillsInstallCmd() *cobra.Command {
 			if err := skills.Install(home); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Skills installed successfully.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Skills installed successfully.")
 			return nil
 		},
 	}
@@ -50,7 +50,7 @@ func newSkillsListCmd() *cobra.Command {
 				if info.Installed {
 					status = "installed"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", info.Name, status)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", info.Name, status)
 			}
 		},
 	}

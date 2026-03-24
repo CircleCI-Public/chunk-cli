@@ -19,7 +19,7 @@ func ResolveOrgAndRepos(org string, repos string) (string, []string, error) {
 	repoList := splitRepos(repos)
 
 	if org != "" && len(repoList) == 0 {
-		return "", nil, fmt.Errorf("--repos is required when --org is provided. Omit --org to auto-detect from git remote.")
+		return "", nil, fmt.Errorf("--repos is required when --org is provided. Omit --org to auto-detect from git remote")
 	}
 
 	if org != "" {
@@ -229,7 +229,7 @@ func WritePRRankingsCSV(rankings []PRRankingRow, path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w := csv.NewWriter(f)
 	defer w.Flush()
@@ -321,10 +321,8 @@ func LimitCommentsPerReviewer(groups []ReviewerGroup, maxComments int) []Reviewe
 // BuildAnalysisPrompt builds the prompt for Claude to analyze review patterns.
 func BuildAnalysisPrompt(groups []ReviewerGroup) string {
 	totalComments := 0
-	var reviewerNames []string
 	for _, g := range groups {
 		totalComments += g.TotalComments
-		reviewerNames = append(reviewerNames, g.Reviewer)
 	}
 
 	var sb strings.Builder

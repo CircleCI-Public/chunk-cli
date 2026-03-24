@@ -40,7 +40,7 @@ func newCompletionInstallCmd() *cobra.Command {
 			// Check if already installed
 			if data, err := os.ReadFile(rcFile); err == nil {
 				if strings.Contains(string(data), completionTag) {
-					fmt.Fprintln(cmd.OutOrStdout(), "Completion already installed.")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Completion already installed.")
 					return nil
 				}
 			}
@@ -49,13 +49,13 @@ func newCompletionInstallCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open %s: %w", rcFile, err)
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 
 			if _, err := f.WriteString("\n" + line); err != nil {
 				return fmt.Errorf("write %s: %w", rcFile, err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "Completion installed.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Completion installed.")
 			return nil
 		},
 	}
@@ -86,7 +86,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 			data, err := os.ReadFile(rcFile)
 			if err != nil {
 				// Nothing to uninstall
-				fmt.Fprintln(cmd.OutOrStdout(), "Completion uninstalled.")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Completion uninstalled.")
 				return nil
 			}
 
@@ -111,7 +111,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 				return fmt.Errorf("write %s: %w", rcFile, err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "Completion uninstalled.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Completion uninstalled.")
 			return nil
 		},
 	}

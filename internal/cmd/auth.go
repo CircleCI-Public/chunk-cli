@@ -25,11 +25,11 @@ func newAuthStatusCmd() *cobra.Command {
 			rc := config.Resolve("", "")
 
 			if rc.APIKey == "" {
-				fmt.Fprintln(cmd.OutOrStdout(), "Not authenticated")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Not authenticated")
 				return nil
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Authenticated: %s (source: %s)\n",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Authenticated: %s (source: %s)\n",
 				config.MaskAPIKey(rc.APIKey), sourceLabel(rc.APIKeySource))
 			return nil
 		},
@@ -46,13 +46,13 @@ func newAuthLogoutCmd() *cobra.Command {
 				return err
 			}
 			if cfg.APIKey == "" {
-				fmt.Fprintln(cmd.OutOrStdout(), "No API key stored in config file")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No API key stored in config file")
 				return nil
 			}
 			if err := config.ClearAPIKey(); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "API key removed from config file")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "API key removed from config file")
 			return nil
 		},
 	}
