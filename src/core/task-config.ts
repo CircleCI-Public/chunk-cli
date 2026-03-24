@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { z } from "zod";
 import {
 	type CircleCICollaboration,
 	CircleCIError,
@@ -18,14 +19,9 @@ import type { CommandResult } from "../types";
 import { bold, cyan, dim, yellow } from "../ui/colors";
 import { formatStep, label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput, promptSelect } from "../ui/prompt";
+import { buildProjectSlug, mapVcsTypeToOrgType, sortProjectsByName } from "../utils/circleci";
 import { handleError, printError } from "../utils/errors";
 import { getCircleCIToken } from "../utils/tokens";
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidUuid(value: string): boolean {
-	return UUID_REGEX.test(value);
-}
 
 async function promptRequiredInput(message: string): Promise<string> {
 	while (true) {
@@ -43,7 +39,7 @@ async function promptUuid(message: string, required: boolean): Promise<string | 
 			console.log(yellow("  This field is required."));
 			continue;
 		}
-		if (!isValidUuid(value)) {
+		if (!z.string().uuid().safeParse(value).success) {
 			console.log(yellow("  Must be a valid UUID (e.g. 550e8400-e29b-41d4-a716-446655440000)."));
 			continue;
 		}
@@ -53,17 +49,6 @@ async function promptUuid(message: string, required: boolean): Promise<string | 
 
 const ANOTHER_PROJECT_SENTINEL = Symbol("another-project");
 type ProjectSelection = CircleCIProject | typeof ANOTHER_PROJECT_SENTINEL;
-
-export function mapVcsTypeToOrgType(vcsType: string | undefined): "github" | "circleci" {
-	const lower = vcsType?.toLowerCase();
-	if (lower === "github" || lower === "gh") return "github";
-	return "circleci";
-}
-
-export function buildProjectSlug(vcsType: string | undefined, org: string, repo: string): string {
-	const prefix = vcsType?.toLowerCase() === "bitbucket" ? "bb" : "gh";
-	return `${prefix}/${org}/${repo}`;
-}
 
 async function collectDefinition(): Promise<{ name: string; definition: RunDefinition }> {
 	const name = await promptRequiredInput("  Definition name (e.g. dev, prod): ");
@@ -96,7 +81,7 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 	if (!token) {
 		printError(
 			"CircleCI token not found",
-			"CIRCLE_TOKEN environment variable is required for setup.",
+			"CIRCLE_TOKEN (or CIRCLECI_TOKEN) environment variable is required for setup.",
 			"Export your CircleCI personal API token:\n  export CIRCLE_TOKEN=<your-token>",
 		);
 		return { exitCode: 2 };
@@ -174,9 +159,7 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 		projectId = await promptRequiredInput("Enter a project ID: ");
 	} else {
 		// Build selection list sorted alphabetically, plus "Another project" sentinel
-		const sortedProjects = [...projects].sort((a, b) =>
-			`${a.username}/${a.reponame}`.localeCompare(`${b.username}/${b.reponame}`),
-		);
+		const sortedProjects = sortProjectsByName(projects);
 		const selectionItems: ProjectSelection[] = [...sortedProjects, ANOTHER_PROJECT_SENTINEL];
 
 		const selected = await promptSelect<ProjectSelection>(

@@ -2,8 +2,8 @@ import type { Command } from "@commander-js/extra-typings";
 import { runTaskConfigWizard } from "../core/task-config";
 import { runTask } from "../core/task-run";
 
-export { buildProjectSlug, mapVcsTypeToOrgType } from "../core/task-config";
 export type { RunTaskOptions as RunCommandOptions } from "../core/task-run";
+export { buildProjectSlug, mapVcsTypeToOrgType } from "../utils/circleci";
 
 export function registerTaskCommands(program: Command): void {
 	const task = program.command("task").description("Assign and configure Chunk tasks from the CLI");
@@ -21,6 +21,7 @@ because it supplies the org and project IDs needed by the CircleCI API.
 
 Environment Variables:
   CIRCLE_TOKEN             Required. CircleCI personal API token.
+  CIRCLECI_TOKEN           Accepted as a fallback if CIRCLE_TOKEN is not set.
 
 Examples:
   # Assign a task using a configured definition name
@@ -58,7 +59,8 @@ The file stores your CircleCI org, project, and Chunk definition IDs
 so that "chunk task run" can assign tasks without extra flags.
 
 Environment Variables:
-  CIRCLE_TOKEN             Required. CircleCI personal API token.`,
+  CIRCLE_TOKEN             Required. CircleCI personal API token.
+  CIRCLECI_TOKEN           Accepted as a fallback if CIRCLE_TOKEN is not set.`,
 		)
 		.action(async () => process.exit((await runTaskConfigWizard()).exitCode));
 }
