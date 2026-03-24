@@ -20,14 +20,19 @@ func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string
 	err := os.MkdirAll(chunkDir, 0o755)
 	assert.NilError(t, err)
 
-	config := map[string]string{}
+	type command struct {
+		Name string `json:"name"`
+		Run  string `json:"run"`
+	}
+	var commands []command
 	if installCmd != "" {
-		config["installCommand"] = installCmd
+		commands = append(commands, command{Name: "install", Run: installCmd})
 	}
 	if testCmd != "" {
-		config["testCommand"] = testCmd
+		commands = append(commands, command{Name: "test", Run: testCmd})
 	}
 
+	config := map[string]interface{}{"commands": commands}
 	data, err := json.Marshal(config)
 	assert.NilError(t, err)
 	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644)
@@ -41,7 +46,7 @@ func TestValidateRunDryRun(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 
 	result := testutil.RunCLI(t, []string{
-		"validate", "run", "--dry-run",
+		"validate", "--dry-run",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -60,7 +65,7 @@ func TestValidateRunDryRunTestOnly(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 
 	result := testutil.RunCLI(t, []string{
-		"validate", "run", "--dry-run",
+		"validate", "--dry-run",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -78,7 +83,7 @@ func TestValidateRunDryRunNoConfig(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 
 	result := testutil.RunCLI(t, []string{
-		"validate", "run", "--dry-run",
+		"validate", "--dry-run",
 	}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
@@ -94,7 +99,7 @@ func TestValidateRunLocal(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 
 	result := testutil.RunCLI(t, []string{
-		"validate", "run",
+		"validate",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -112,7 +117,7 @@ func TestValidateRunLocalFailure(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 
 	result := testutil.RunCLI(t, []string{
-		"validate", "run",
+		"validate",
 	}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code for failing test command")
@@ -126,7 +131,7 @@ func TestValidateRunLocalSkipsAfterFailure(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 
 	result := testutil.RunCLI(t, []string{
-		"validate", "run",
+		"validate",
 	}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
@@ -142,7 +147,7 @@ func TestValidateRunRemoteMissingOrgId(t *testing.T) {
 	env := testutil.NewTestEnv(t)
 
 	result := testutil.RunCLI(t, []string{
-		"validate", "run", "--sandbox-id", "sandbox-123",
+		"validate", "--sandbox-id", "sandbox-123",
 	}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
@@ -170,7 +175,7 @@ func TestValidateRunRemote(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := testutil.RunCLI(t, []string{
-		"validate", "run",
+		"validate",
 		"--sandbox-id", "sandbox-123",
 		"--org-id", "org-456",
 	}, env, workDir)
@@ -256,8 +261,8 @@ func TestValidateInitHappyPath(t *testing.T) {
 	configPath := filepath.Join(workDir, ".chunk", "config.json")
 	data, err := os.ReadFile(configPath)
 	assert.NilError(t, err, "expected .chunk/config.json to exist")
-	assert.Assert(t, strings.Contains(string(data), "testCommand"),
-		"expected testCommand in config, got: %s", string(data))
+	assert.Assert(t, strings.Contains(string(data), `"name":"test"`) || strings.Contains(string(data), `"name": "test"`),
+		"expected test command entry in config, got: %s", string(data))
 
 	// Verify hook config was created
 	hookConfigPath := filepath.Join(workDir, ".chunk", "hook", "config.yml")
@@ -287,7 +292,7 @@ func TestValidateInitForce(t *testing.T) {
 	data, err := os.ReadFile(configPath)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(data), "npm test"),
-		"expected overwritten test command, got: %s", string(data))
+		"expected overwritten test command in config, got: %s", string(data))
 }
 
 func TestValidateInitMissingApiKey(t *testing.T) {

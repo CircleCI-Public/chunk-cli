@@ -9,7 +9,8 @@
 
 import { PROFILES } from "@chunk/hook";
 import type { Command } from "@commander-js/extra-typings";
-import { executeRun, listCommands, resolveRunCommand, saveCommand } from "../core/run";
+import { executeCommand, listCommands, resolveRunCommand, saveCommand } from "../core/run";
+import { DEFAULT_TIMEOUT } from "../core/run-config";
 import type { RunResult } from "../core/run-executor";
 import type { ValidateMode, ValidateStepResult } from "../core/validate";
 import { runValidate } from "../core/validate";
@@ -82,7 +83,7 @@ async function handleSingleCommand(
 	name: string,
 	opts: { cmd?: string; save?: boolean; force?: boolean; status?: boolean },
 ): Promise<number> {
-	const resolved = resolveRunCommand(projectDir, name, opts);
+	const resolved = resolveRunCommand(projectDir, name, opts, process.stdin.isTTY === true);
 
 	switch (resolved.type) {
 		case "status-cached": {
@@ -111,9 +112,9 @@ async function handleSingleCommand(
 			}
 			saveCommand(projectDir, name, trimmed);
 			console.log(`${green("✓")} Saved ${bold(name)} to .chunk/config.json\n`);
-			const result = executeRun(projectDir, name, trimmed, {
+			const result = executeCommand(projectDir, name, trimmed, {
 				force: opts.force,
-				timeout: 300,
+				timeout: DEFAULT_TIMEOUT,
 			});
 			renderExecution(name, result);
 			return result.exitCode !== 0 ? 1 : 0;

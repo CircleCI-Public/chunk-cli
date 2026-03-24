@@ -5,11 +5,17 @@
  */
 
 import { shouldPromptSave } from "./run.steps";
-import { listCommands, loadRunConfig, resolveCommand, saveCommand } from "./run-config";
+import {
+	DEFAULT_TIMEOUT,
+	listCommands,
+	loadRunConfig,
+	resolveCommand,
+	saveCommand,
+} from "./run-config";
 import type { RunResult } from "./run-executor";
 import { checkCache, executeCommand } from "./run-executor";
 
-export { listCommands, saveCommand };
+export { executeCommand, listCommands, saveCommand };
 
 export type RunCommandOpts = {
 	cmd?: string;
@@ -29,10 +35,10 @@ export function resolveRunCommand(
 	projectDir: string,
 	name: string,
 	opts: RunCommandOpts,
+	isTTY = false,
 ): RunCommandResult {
 	const { config } = loadRunConfig(projectDir);
 	const existingCommand = resolveCommand(name, config);
-	const isTTY = process.stdin.isTTY === true;
 
 	// --status: check cache only
 	if (opts.status) {
@@ -54,7 +60,7 @@ export function resolveRunCommand(
 
 		const result = executeCommand(projectDir, name, opts.cmd, {
 			force: opts.force,
-			timeout: 300,
+			timeout: DEFAULT_TIMEOUT,
 		});
 
 		return { type: "executed", name, result, saveAction };
@@ -75,13 +81,4 @@ export function resolveRunCommand(
 	}
 
 	return { type: "not-configured", name };
-}
-
-export function executeRun(
-	projectDir: string,
-	name: string,
-	commandStr: string,
-	opts: { force?: boolean; timeout?: number; fileExt?: string },
-): RunResult {
-	return executeCommand(projectDir, name, commandStr, opts);
 }

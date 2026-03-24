@@ -31,7 +31,7 @@ export type ResolvedCommand = {
 	fileExt: string;
 };
 
-const DEFAULT_TIMEOUT = 300;
+export const DEFAULT_TIMEOUT = 300;
 
 function configPath(projectDir: string): string {
 	return join(projectDir, CONFIG_DIR, CONFIG_FILE);

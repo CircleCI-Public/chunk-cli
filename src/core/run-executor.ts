@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { DEFAULT_TIMEOUT } from "./run-config";
 
 const MAX_OUTPUT_BYTES = 50 * 1024;
 
@@ -132,7 +133,7 @@ export function executeCommand(
 		if (cached) return cached;
 	}
 
-	const timeout = (opts.timeout ?? 300) * 1000;
+	const timeout = (opts.timeout ?? DEFAULT_TIMEOUT) * 1000;
 
 	const result = spawnSync("sh", ["-c", command], {
 		cwd: projectDir,
