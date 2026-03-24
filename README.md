@@ -14,7 +14,6 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 
 - **macOS** (arm64 or x86_64) or **Linux** (arm64 or x86_64)
 - **Fast path**: `gh` CLI installed and authenticated (`gh auth login`)
-- **Fallback**: Bun 1.3+ (auto-installed via mise if available)
 
 ## Installation
 
@@ -29,7 +28,8 @@ brew install CircleCI-Public/circleci/chunk
 To build and install from source:
 
 ```bash
-./install-local.sh
+task build
+cp dist/chunk ~/.local/bin/
 ```
 
 ## Quick Start
@@ -256,7 +256,7 @@ chunk upgrade         # Update to latest version
 
 The `chunk hook` subcommand provides configurable quality checks for
 [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code) — tests, lint, code review,
-and more. See [packages/hook/README.md](packages/hook/README.md) for full documentation.
+and more.
 
 ```bash
 # Configure shell environment (PATH, CHUNK_HOOK_* vars):
@@ -308,24 +308,17 @@ Cache tokens: writes 1.25x, reads 0.1x base input price.
 
 ### Prerequisites
 
-This repo uses [mise](https://mise.jdx.dev/) to manage tool versions.
-`.mise.toml` at the repo root pins the required versions of Bun and Node.
-
-Install mise (if you haven't already), then run:
-
-```bash
-mise install
-```
-
-With mise active, `bun` and `node` will resolve to the correct versions
-automatically when you're inside this directory.
+- Go 1.25+
+- [Task](https://taskfile.dev/) (task runner)
+- [golangci-lint](https://golangci-lint.run/) (optional, for linting)
 
 ### Building
 
 ```bash
-bun run build          # Build binaries for all platforms → dist/
-bun run typecheck      # Type check without building
-bun test               # Run test suite
+task build              # Build binary → dist/chunk
+task test               # Run tests
+task lint               # Run linters
+task acceptance-test    # Run acceptance tests
 ```
 
 ## Changelog
@@ -336,4 +329,4 @@ bun test               # Run test suite
 
 ---
 
-See [AGENTS.md](AGENTS.md) for AI agent instructions, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the target architecture, and [docs/CLI.md](docs/CLI.md) for the target command tree during the current refactor.
+See [AGENTS.md](AGENTS.md) for AI agent instructions.

@@ -3,35 +3,24 @@
 
 version: 2
 
-before:
-  hooks:
-    - bun install
-
 builds:
   - id: chunk
-    builder: bun
     binary: chunk
-    main: ./src/index.ts
+    main: ./cmd/chunk
 
-    # Targets for cross-platform builds
-    # Format: os-arch[-variant]
-    targets:
-      - linux-x64-modern
-      - linux-arm64
-      - darwin-x64
-      - darwin-arm64
-
-    # Additional flags for bun build --compile
-    flags:
-      - --compile
-      - --define
-      - VERSION="{{ .Version }}"
-      - --no-compile-autoload-dotenv
-      - --no-compile-autoload-bunfig
-
-    # Environment variables for the build
     env:
       - CGO_ENABLED=0
+
+    ldflags:
+      - "-s -w -X main.version={{.Version}}"
+
+    goos:
+      - linux
+      - darwin
+
+    goarch:
+      - amd64
+      - arm64
 
 archives:
   - id: default

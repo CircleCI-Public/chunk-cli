@@ -96,12 +96,15 @@ func newSandboxesExecCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "exec",
 		Short: "Execute a command in a sandbox",
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			resp, err := sandbox.Exec(cmd.Context(), client, orgID, sandboxID, command, execArgs)
+			// Combine --args flag values with positional args
+			allArgs := append(execArgs, args...)
+			resp, err := sandbox.Exec(cmd.Context(), client, orgID, sandboxID, command, allArgs)
 			if err != nil {
 				return err
 			}
@@ -118,7 +121,7 @@ func newSandboxesExecCmd() *cobra.Command {
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&command, "command", "", "Command to execute")
-	cmd.Flags().StringSliceVar(&execArgs, "args", nil, "Command arguments")
+	cmd.Flags().StringArrayVar(&execArgs, "args", nil, "Command arguments")
 	_ = cmd.MarkFlagRequired("org-id")
 	_ = cmd.MarkFlagRequired("sandbox-id")
 	_ = cmd.MarkFlagRequired("command")

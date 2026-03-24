@@ -23,6 +23,14 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	if err := ghClient.ValidateOrg(ctx, opts.Org); err != nil {
+		return err
+	}
+
+	if err := ghClient.CheckRateLimit(ctx); err != nil {
+		return err
+	}
+
 	repos, err := ghClient.FetchOrgRepos(ctx, opts.Org, opts.Repos)
 	if err != nil {
 		return err

@@ -7,11 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 )
-
-// now is a function variable for testing.
-var now = time.Now
 
 // StateSave reads event JSON from stdin and stores it keyed by event name.
 func StateSave(sentinelDir, projectDir string, stdin io.Reader) error {

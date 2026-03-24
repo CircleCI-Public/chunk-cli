@@ -52,3 +52,29 @@ func (c *Client) do(ctx context.Context, query string, vars map[string]any, dest
 	_, err := c.http.Call(ctx, req)
 	return err
 }
+
+// ValidateOrg checks that the org is accessible.
+func (c *Client) ValidateOrg(ctx context.Context, org string) error {
+	var resp graphQLResponse[struct {
+		Organization struct {
+			Login string `json:"login"`
+		} `json:"organization"`
+	}]
+
+	err := c.do(ctx, `query($org: String!) { organization(login: $org) { login } }`, map[string]any{"org": org}, &resp)
+	if err != nil {
+		return fmt.Errorf("validate org: %w", err)
+	}
+	if hasResolutionError(resp.Errors) {
+		return fmt.Errorf("organization %q not found or not accessible", org)
+	}
+	return nil
+}
+
+// CheckRateLimit queries the current rate limit status.
+func (c *Client) CheckRateLimit(ctx context.Context) error {
+	var resp graphQLResponse[struct {
+		RateLimit RateLimit `json:"rateLimit"`
+	}]
+	return c.do(ctx, `{ rateLimit { remaining resetAt } }`, nil, &resp)
+}

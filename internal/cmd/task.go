@@ -23,7 +23,7 @@ func newTaskCmd() *cobra.Command {
 
 func newTaskRunCmd() *cobra.Command {
 	var definition, prompt, branch string
-	var newBranch, pipelineAsTool bool
+	var newBranch, noPipelineAsTool bool
 
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -43,6 +43,8 @@ func newTaskRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			pipelineAsTool := !noPipelineAsTool
 
 			resp, err := task.TriggerRun(cmd.Context(), client, cfg, task.RunParams{
 				Definition:     definition,
@@ -65,7 +67,7 @@ func newTaskRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text")
 	cmd.Flags().StringVar(&branch, "branch", "", "Checkout branch override")
 	cmd.Flags().BoolVar(&newBranch, "new-branch", false, "Create a new branch")
-	cmd.Flags().BoolVar(&pipelineAsTool, "pipeline-as-tool", true, "Run pipeline as a tool")
+	cmd.Flags().BoolVar(&noPipelineAsTool, "no-pipeline-as-tool", false, "Disable running pipeline as a tool")
 
 	_ = cmd.MarkFlagRequired("definition")
 	_ = cmd.MarkFlagRequired("prompt")

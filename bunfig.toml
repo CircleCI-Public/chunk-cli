@@ -1,7 +1,0 @@
-env = false
-
-[define]
-VERSION = '"dev"'
-
-[loader]
-".md" = "text"

@@ -1,6 +1,36 @@
 version: '3'
 
 tasks:
+  build:
+    desc: Build the chunk binary
+    cmds:
+      - go build -o dist/chunk ./cmd/chunk
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - go test -race ./...
+
+  acceptance-test:
+    desc: Run acceptance tests
+    cmds:
+      - cd acceptance && go test -v -count=1 -race ./...
+
+  lint:
+    desc: Run linters
+    cmds:
+      - golangci-lint run ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - goimports -w .
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
   release:
     desc: Tag, build, and publish a release (tag → goreleaser → NUR)
     vars:
