@@ -15,7 +15,21 @@ import { rewriteColonSyntax } from "./utils/argv";
 import { isAuthError, isNetworkError, printError } from "./utils/errors";
 
 const program = new Command();
-program.name("chunk").version(VERSION).description("AI code review CLI").helpOption("-h, --help");
+program
+	.name("chunk")
+	.version(VERSION)
+	.description("Generate AI review context and trigger AI coding tasks")
+	.addHelpText(
+		"after",
+		`
+Getting started:
+  chunk auth login              Save your Anthropic API key
+  chunk build-prompt            Generate a review prompt from GitHub PR comments
+  chunk task config             Set up CircleCI task configuration
+  chunk task run --definition <name> --prompt "<task>"
+                                Trigger an AI coding task`,
+	)
+	.helpOption("-h, --help");
 
 async function main(): Promise<void> {
 	registerBuildPromptCommand(program);
@@ -27,9 +41,7 @@ async function main(): Promise<void> {
 	registerCompletionCommands(program);
 
 	// Hook commands — exec, task, sync, state, scope for AI agent hooks
-	const hook = program
-		.command("hook")
-		.description("Manage AI coding agent hooks (exec, task, sync, state, scope)");
+	const hook = program.command("hook").description("Configure AI coding agent lifecycle hooks");
 	registerHookCommands(hook);
 
 	registerSandboxCommands(program);

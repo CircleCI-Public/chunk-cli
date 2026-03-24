@@ -51,6 +51,7 @@ function threeMonthsAgo(): Date {
 export function registerBuildPromptCommand(program: Command): void {
 	program
 		.command("build-prompt")
+		.description("Analyze GitHub PR comments and generate a review prompt for AI coding agents")
 		.addHelpText(
 			"after",
 			`
