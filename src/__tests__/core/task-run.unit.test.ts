@@ -1,16 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type RunTaskOptions, runTask } from "../../core/task-run";
 import { saveRunConfig } from "../../storage/run-config";
 
 const mockFetch = mock();
+const originalFetch = global.fetch;
 // @ts-expect-error - Mock doesn't fully implement fetch type
 global.fetch = mockFetch;
 
 const testDir = path.join(process.cwd(), ".test-core-task-run");
 const originalCwd = process.cwd();
-const originalToken = process.env.CIRCLECI_TOKEN;
+const originalCircleToken = process.env.CIRCLE_TOKEN;
+const originalCircleCIToken = process.env.CIRCLECI_TOKEN;
 
 const mockConfig = {
 	org_id: "a37b44de-e4f8-4d09-956a-9c1148f3adf5",
@@ -43,16 +45,26 @@ describe("runTask", () => {
 	beforeEach(() => {
 		fs.mkdirSync(path.join(testDir, ".git"), { recursive: true });
 		process.chdir(testDir);
-		process.env.CIRCLECI_TOKEN = "test-token";
+		process.env.CIRCLE_TOKEN = "test-token";
+		delete process.env.CIRCLECI_TOKEN;
 		saveRunConfig(mockConfig);
 		mockFetch.mockReset();
+	});
+
+	afterAll(() => {
+		global.fetch = originalFetch;
 	});
 
 	afterEach(() => {
 		process.chdir(originalCwd);
 		fs.rmSync(testDir, { recursive: true, force: true });
-		if (originalToken !== undefined) {
-			process.env.CIRCLECI_TOKEN = originalToken;
+		if (originalCircleToken !== undefined) {
+			process.env.CIRCLE_TOKEN = originalCircleToken;
+		} else {
+			delete process.env.CIRCLE_TOKEN;
+		}
+		if (originalCircleCIToken !== undefined) {
+			process.env.CIRCLECI_TOKEN = originalCircleCIToken;
 		} else {
 			delete process.env.CIRCLECI_TOKEN;
 		}
@@ -65,7 +77,8 @@ describe("runTask", () => {
 		pipelineAsTool: true,
 	};
 
-	it("returns exitCode 2 when CIRCLECI_TOKEN is not set", async () => {
+	it("returns exitCode 2 when neither CIRCLE_TOKEN nor CIRCLECI_TOKEN is set", async () => {
+		delete process.env.CIRCLE_TOKEN;
 		delete process.env.CIRCLECI_TOKEN;
 
 		const result = await runTask(baseOptions);

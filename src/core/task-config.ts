@@ -19,6 +19,7 @@ import { bold, cyan, dim, yellow } from "../ui/colors";
 import { formatStep, label, printSuccess, printWarning } from "../ui/format";
 import { promptConfirm, promptInput, promptSelect } from "../ui/prompt";
 import { handleError, printError } from "../utils/errors";
+import { getCircleCIToken } from "../utils/tokens";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -90,13 +91,13 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 	console.log(`This wizard creates ${cyan(".chunk/run.json")} in your repository root.`);
 	console.log("");
 
-	// Check for CIRCLECI_TOKEN
-	const token = process.env.CIRCLECI_TOKEN;
+	// Check for CircleCI token
+	const token = getCircleCIToken();
 	if (!token) {
 		printError(
 			"CircleCI token not found",
-			"CIRCLECI_TOKEN environment variable is required for setup.",
-			"Export your CircleCI personal API token:\n  export CIRCLECI_TOKEN=<your-token>",
+			"CIRCLE_TOKEN environment variable is required for setup.",
+			"Export your CircleCI personal API token:\n  export CIRCLE_TOKEN=<your-token>",
 		);
 		return { exitCode: 2 };
 	}
@@ -141,7 +142,7 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 			printError(
 				"Failed to fetch CircleCI data",
 				error.message,
-				"Check your CIRCLECI_TOKEN and try again.",
+				"Check your CIRCLE_TOKEN and try again.",
 			);
 			return { exitCode: 2 };
 		}
@@ -218,7 +219,7 @@ export async function runTaskConfigWizard(): Promise<CommandResult> {
 					printError(
 						"Failed to fetch project details",
 						error.message,
-						"Check your CIRCLECI_TOKEN and try again.",
+						"Check your CIRCLE_TOKEN and try again.",
 					);
 					return { exitCode: 2 };
 				}
