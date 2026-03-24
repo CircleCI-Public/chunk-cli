@@ -198,6 +198,318 @@ func TestBuildPromptMissingAnthropicKey(t *testing.T) {
 		"expected error to mention API key, got: %s", combined)
 }
 
+func TestBuildPromptWithSinceFlag(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--since", "2025-01-01",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	assertFileExists(t, workDir, "review-prompt.md")
+}
+
+func TestBuildPromptWithMaxComments(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--max-comments", "1",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	assertFileExists(t, workDir, "review-prompt.md")
+}
+
+func TestBuildPromptWithIncludeAttribution(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--include-attribution",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	assertFileExists(t, workDir, "review-prompt.md")
+}
+
+func TestBuildPromptWithModelOverrides(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--analyze-model", "claude-haiku-4-5-20251001",
+		"--prompt-model", "claude-haiku-4-5-20251001",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+	assertFileExists(t, workDir, "review-prompt.md")
+
+	// Verify the Anthropic requests used the specified model
+	anthropicReqs := anthropic.Recorder.AllRequests()
+	messageReqs := filterByPath(anthropicReqs, "/v1/messages")
+	assert.Equal(t, len(messageReqs), 2, "expected 2 Anthropic /v1/messages requests")
+
+	for i, req := range messageReqs {
+		var body struct {
+			Model string `json:"model"`
+		}
+		err := json.Unmarshal(req.Body, &body)
+		assert.NilError(t, err, "failed to parse Anthropic request body %d", i)
+		assert.Equal(t, body.Model, "claude-haiku-4-5-20251001",
+			"expected model override in request %d", i)
+	}
+}
+
+func TestBuildPromptOrgWithoutRepos(t *testing.T) {
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code when --org without --repos")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "--repos"),
+		"expected error to mention --repos, got: %s", combined)
+}
+
+func TestBuildPromptBotFiltering(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityWithBotResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--top", "5",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+
+	// Verify bot comments are excluded from details JSON
+	detailsBytes, err := os.ReadFile(filepath.Join(workDir, "review-prompt-details.json"))
+	assert.NilError(t, err)
+
+	detailsStr := string(detailsBytes)
+	assert.Assert(t, !strings.Contains(detailsStr, "dependabot[bot]"),
+		"expected bot reviewer to be filtered out of details JSON")
+	assert.Assert(t, !strings.Contains(detailsStr, "This dependency update is safe to merge"),
+		"expected bot comment body to be filtered out of details JSON")
+
+	// Verify human reviewers ARE present
+	assert.Assert(t, strings.Contains(detailsStr, "reviewer-alice"),
+		"expected human reviewer alice in details JSON")
+	assert.Assert(t, strings.Contains(detailsStr, "reviewer-bob"),
+		"expected human reviewer bob in details JSON")
+}
+
+func TestBuildPromptFooter(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+
+	promptBytes, err := os.ReadFile(filepath.Join(workDir, "review-prompt.md"))
+	assert.NilError(t, err)
+	promptStr := string(promptBytes)
+
+	assert.Assert(t, strings.Contains(promptStr, "*Generated:"),
+		"expected footer with Generated timestamp, got: %s", promptStr)
+	assert.Assert(t, strings.Contains(promptStr, "*Model:"),
+		"expected footer with Model, got: %s", promptStr)
+	assert.Assert(t, strings.Contains(promptStr, "*Source:"),
+		"expected footer with Source path, got: %s", promptStr)
+}
+
+func TestBuildPromptSinceDateFormat(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	env := testutil.NewTestEnv(t)
+	env.GithubURL = ghSrv.URL
+	env.AnthropicURL = anthropicSrv.URL
+
+	result := testutil.RunCLI(t, []string{
+		"build-prompt",
+		"--org", "test-org",
+		"--repos", "test-repo",
+		"--since", "2025-06-15",
+		"--output", filepath.Join(workDir, "review-prompt.md"),
+	}, env, workDir)
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
+			result.ExitCode, result.Stdout, result.Stderr)
+	}
+
+	detailsBytes, err := os.ReadFile(filepath.Join(workDir, "review-prompt-details.json"))
+	assert.NilError(t, err)
+
+	var details struct {
+		Metadata struct {
+			Since string `json:"since"`
+		} `json:"metadata"`
+	}
+	assert.NilError(t, json.Unmarshal(detailsBytes, &details))
+	// MUT-014: .slice(0,10) gives YYYY-MM-DD, mutation to .slice(0,7) would give YYYY-MM
+	assert.Equal(t, details.Metadata.Since, "2025-06-15",
+		"expected since in YYYY-MM-DD format")
+}
+
 // helpers
 
 func assertFileExists(t *testing.T, dir, name string) {
