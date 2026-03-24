@@ -6,9 +6,10 @@ import (
 
 func NewRootCmd(version string) *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:     "chunk",
-		Short:   "CLI for generating AI agent context from real code review patterns",
-		Version: version,
+		Use:           "chunk",
+		Short:         "CLI for generating AI agent context from real code review patterns",
+		Version:       version,
+		SilenceErrors: true,
 	}
 
 	rootCmd.AddCommand(newAuthCmd())

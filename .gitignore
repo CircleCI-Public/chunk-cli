@@ -3,7 +3,7 @@
 # Build output
 bin/
 dist/
-chunk
+/chunk
 /chunk-*
 
 # Binaries

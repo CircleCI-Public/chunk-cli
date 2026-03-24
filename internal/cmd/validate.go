@@ -14,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
@@ -97,7 +98,10 @@ func newValidateInitCmd() *cobra.Command {
 					for k := range validProfiles {
 						names = append(names, k)
 					}
-					return fmt.Errorf("Invalid profile %q. Valid profiles: %s", profile, strings.Join(names, ", ")) //nolint:staticcheck // user-facing message
+					return usererr.New(
+					fmt.Sprintf("Invalid profile %q. Valid profiles: %s", profile, strings.Join(names, ", ")),
+					fmt.Errorf("invalid profile %q", profile),
+				)
 				}
 			}
 

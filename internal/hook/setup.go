@@ -1,6 +1,10 @@
 package hook
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
+)
 
 // ValidProfiles lists the allowed profile names.
 var ValidProfiles = []string{"disable", "enable", "tests-lint"}
@@ -12,7 +16,10 @@ func ValidateProfile(profile string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("Invalid profile %q. Valid profiles: %v", profile, ValidProfiles) //nolint:staticcheck // user-facing
+	return usererr.New(
+		fmt.Sprintf("Invalid profile %q. Valid profiles: %v", profile, ValidProfiles),
+		fmt.Errorf("invalid profile %q", profile),
+	)
 }
 
 // RunSetup combines env update + repo init.
