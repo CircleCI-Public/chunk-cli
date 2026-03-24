@@ -47,7 +47,7 @@ jobs:
 
   acceptance-test:
     docker:
-      - image: cimg/go:1.25
+      - image: cimg/go:1.26
     resource_class: medium
     steps:
       - checkout
