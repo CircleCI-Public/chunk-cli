@@ -3,38 +3,36 @@ package validate
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
 	"os/exec"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-func RunDryRun(cfg *ProjectConfig, w io.Writer) error {
+func RunDryRun(cfg *ProjectConfig, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
 		return fmt.Errorf("no validate commands configured, run validate init first")
 	}
 
 	for _, cmd := range cfg.Commands {
-		_, _ = fmt.Fprintf(w, "%s: %s\n", cmd.Name, cmd.Run)
+		streams.Printf("%s: %s\n", cmd.Name, cmd.Run)
 	}
 	return nil
 }
 
-func RunLocally(cfg *ProjectConfig, w io.Writer) error {
+func RunLocally(cfg *ProjectConfig, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
 		return fmt.Errorf("no validate commands configured, run validate init first")
 	}
 
 	for i, c := range cfg.Commands {
-		_, _ = fmt.Fprintf(w, "Running %s: %s\n", c.Name, c.Run)
+		streams.ErrPrintf("Running %s: %s\n", c.Name, c.Run)
 		cmd := exec.Command("sh", "-c", c.Run)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = streams.Out
+		cmd.Stderr = streams.Err
 		if err := cmd.Run(); err != nil {
-			// If a command fails, skip remaining commands
 			for j := i + 1; j < len(cfg.Commands); j++ {
-				_, _ = fmt.Fprintf(w, "%s: skipped (%s failed)\n", cfg.Commands[j].Name, c.Name)
+				streams.ErrPrintf("%s: skipped (%s failed)\n", cfg.Commands[j].Name, c.Name)
 			}
 			return fmt.Errorf("%s command failed: %w", c.Name, err)
 		}
@@ -43,7 +41,7 @@ func RunLocally(cfg *ProjectConfig, w io.Writer) error {
 	return nil
 }
 
-func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig, sandboxID, orgID string, w io.Writer) error {
+func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig, sandboxID, orgID string, streams iostream.Streams) error {
 	token, err := client.CreateAccessToken(ctx, sandboxID)
 	if err != nil {
 		return err
@@ -55,7 +53,7 @@ func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig,
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}
 		if resp.Stdout != "" {
-			_, _ = fmt.Fprint(w, resp.Stdout)
+			_, _ = fmt.Fprint(streams.Out, resp.Stdout)
 		}
 		if resp.ExitCode != 0 {
 			return fmt.Errorf("remote %s failed with exit code %d", c.Name, resp.ExitCode)

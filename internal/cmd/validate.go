@@ -14,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
@@ -26,6 +27,7 @@ func newValidateCmd() *cobra.Command {
 		Use:   "validate",
 		Short: "Run validation commands",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			streams := iostream.FromCmd(cmd)
 			workDir, err := os.Getwd()
 			if err != nil {
 				return err
@@ -37,7 +39,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if dryRun {
-				return validate.RunDryRun(cfg, cmd.OutOrStdout())
+				return validate.RunDryRun(cfg, streams)
 			}
 
 			if sandboxID != "" {
@@ -48,10 +50,10 @@ func newValidateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return validate.RunRemote(cmd.Context(), client, cfg, sandboxID, orgID, cmd.OutOrStdout())
+				return validate.RunRemote(cmd.Context(), client, cfg, sandboxID, orgID, streams)
 			}
 
-			return validate.RunLocally(cfg, cmd.OutOrStdout())
+			return validate.RunLocally(cfg, streams)
 		},
 	}
 
@@ -105,9 +107,10 @@ func newValidateInitCmd() *cobra.Command {
 				}
 			}
 
+			io := iostream.FromCmd(cmd)
 			configPath := filepath.Join(workDir, ".chunk", "config.json")
 			if _, err := os.Stat(configPath); err == nil && !force {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Config already exists. Use --force to overwrite.")
+				io.ErrPrintln("Config already exists. Use --force to overwrite.")
 				return nil
 			}
 
@@ -157,7 +160,7 @@ func newValidateInitCmd() *cobra.Command {
 				return err
 			}
 
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Validation config initialized")
+			io.ErrPrintln("Validation config initialized")
 			_ = skipEnv
 			return nil
 		},

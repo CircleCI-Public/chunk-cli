@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"fmt"
+	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/spf13/cobra"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 func newAuthCmd() *cobra.Command {
@@ -22,14 +22,15 @@ func newAuthStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Check authentication status",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			rc := config.Resolve("", "")
 
 			if rc.APIKey == "" {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Not authenticated")
+				io.Println("Not authenticated")
 				return nil
 			}
 
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Authenticated: %s (source: %s)\n",
+			io.Printf("Authenticated: %s (source: %s)\n",
 				config.MaskAPIKey(rc.APIKey), sourceLabel(rc.APIKeySource))
 			return nil
 		},
@@ -41,18 +42,19 @@ func newAuthLogoutCmd() *cobra.Command {
 		Use:   "logout",
 		Short: "Clear stored API key",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
 			if cfg.APIKey == "" {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "No API key stored in config file")
+				io.Println("No API key stored in config file")
 				return nil
 			}
 			if err := config.ClearAPIKey(); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "API key removed from config file")
+			io.Println("API key removed from config file")
 			return nil
 		},
 	}

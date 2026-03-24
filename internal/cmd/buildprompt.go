@@ -8,6 +8,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 func newBuildPromptCmd() *cobra.Command {
@@ -60,7 +61,7 @@ func newBuildPromptCmd() *cobra.Command {
 				IncludeAttribution: includeAttribution,
 			}
 
-			return buildprompt.Run(cmd.Context(), opts)
+			return buildprompt.Run(cmd.Context(), opts, iostream.FromCmd(cmd))
 		},
 	}
 

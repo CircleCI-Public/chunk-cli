@@ -1,11 +1,12 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/spf13/cobra"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -23,18 +24,19 @@ func newConfigShowCmd() *cobra.Command {
 		Use:   "show",
 		Short: "Display resolved configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			rc := config.Resolve("", "")
 
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "model: %s (%s)\n", rc.Model, rc.ModelSource)
+			io.Printf("model: %s (%s)\n", rc.Model, rc.ModelSource)
 
 			if rc.APIKey != "" {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "apiKey: %s (%s)\n", config.MaskAPIKey(rc.APIKey), rc.APIKeySource)
+				io.Printf("apiKey: %s (%s)\n", config.MaskAPIKey(rc.APIKey), rc.APIKeySource)
 			} else {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "apiKey: (not set)")
+				io.Println("apiKey: (not set)")
 			}
 
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "analyzeModel: %s\n", rc.AnalyzeModel)
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "promptModel: %s\n", rc.PromptModel)
+			io.Printf("analyzeModel: %s\n", rc.AnalyzeModel)
+			io.Printf("promptModel: %s\n", rc.PromptModel)
 			return nil
 		},
 	}
@@ -46,10 +48,11 @@ func newConfigSetCmd() *cobra.Command {
 		Short: "Set a config value",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			key, value := args[0], args[1]
 
 			if !config.ValidConfigKeys[key] {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Unknown config key: %q\n", key)
+				io.ErrPrintf("Unknown config key: %q\n", key)
 				os.Exit(2)
 			}
 

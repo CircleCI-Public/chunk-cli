@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 const completionTag = "# chunk shell completion"
@@ -29,6 +31,7 @@ func newCompletionInstallCmd() *cobra.Command {
 		Use:   "install",
 		Short: "Install shell completion",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			home := os.Getenv("HOME")
 			if home == "" {
 				return fmt.Errorf("HOME not set")
@@ -40,7 +43,7 @@ func newCompletionInstallCmd() *cobra.Command {
 			// Check if already installed
 			if data, err := os.ReadFile(rcFile); err == nil {
 				if strings.Contains(string(data), completionTag) {
-					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Completion already installed.")
+					io.ErrPrintln("Completion already installed.")
 					return nil
 				}
 			}
@@ -55,7 +58,7 @@ func newCompletionInstallCmd() *cobra.Command {
 				return fmt.Errorf("write %s: %w", rcFile, err)
 			}
 
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Completion installed.")
+			io.ErrPrintln("Completion installed.")
 			return nil
 		},
 	}
@@ -67,7 +70,7 @@ func newCompletionZshCmd() *cobra.Command {
 		Short:  "Generate zsh completion script",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Root().GenZshCompletion(cmd.OutOrStdout())
+			return cmd.Root().GenZshCompletion(iostream.FromCmd(cmd).Out)
 		},
 	}
 }
@@ -77,6 +80,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 		Use:   "uninstall",
 		Short: "Remove shell completion",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			home := os.Getenv("HOME")
 			if home == "" {
 				return fmt.Errorf("HOME not set")
@@ -86,7 +90,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 			data, err := os.ReadFile(rcFile)
 			if err != nil {
 				// Nothing to uninstall
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Completion uninstalled.")
+				io.ErrPrintln("Completion uninstalled.")
 				return nil
 			}
 
@@ -111,7 +115,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 				return fmt.Errorf("write %s: %w", rcFile, err)
 			}
 
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Completion uninstalled.")
+			io.ErrPrintln("Completion uninstalled.")
 			return nil
 		},
 	}

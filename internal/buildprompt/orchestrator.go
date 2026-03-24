@@ -9,14 +9,15 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 // Run executes the full build-prompt pipeline: discover, analyze, generate.
-func Run(ctx context.Context, opts Options) error {
+func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	paths := DeriveOutputPaths(opts.OutputPath)
 
 	// --- Step 1: Discover top reviewers ---
-	fmt.Println("Step 1/3: Discovering Top Reviewers")
+	streams.ErrPrintln("Step 1/3: Discovering Top Reviewers")
 
 	ghClient, err := github.New()
 	if err != nil {
@@ -37,7 +38,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	if len(repos) == 0 {
-		fmt.Println("No repositories found.")
+		streams.ErrPrintln("No repositories found.")
 		return nil
 	}
 
@@ -45,11 +46,11 @@ func Run(ctx context.Context, opts Options) error {
 	var allDetails [][]github.ReviewCommentDetail
 
 	for i, repo := range repos {
-		fmt.Printf("  [%d/%d] %s\n", i+1, len(repos), repo)
+		streams.ErrPrintf("  [%d/%d] %s\n", i+1, len(repos), repo)
 		result, err := ghClient.FetchReviewActivity(ctx, opts.Org, repo, opts.Since)
 		if err != nil {
 			if github.IsResolutionError(err) {
-				fmt.Printf("  Skipping %s: %v\n", repo, err)
+				streams.ErrPrintf("  Skipping %s: %v\n", repo, err)
 				continue
 			}
 			return err
@@ -80,11 +81,11 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("write PR rankings CSV: %w", err)
 	}
 
-	fmt.Printf("  Details written to %s\n", paths.DetailsPath)
-	fmt.Printf("  PR rankings written to %s\n", paths.CSVPath)
+	streams.ErrPrintf("  Details written to %s\n", paths.DetailsPath)
+	streams.ErrPrintf("  PR rankings written to %s\n", paths.CSVPath)
 
 	// --- Step 2: Analyze review patterns ---
-	fmt.Println("Step 2/3: Analyzing Review Patterns")
+	streams.ErrPrintln("Step 2/3: Analyzing Review Patterns")
 
 	anthropicClient, err := anthropic.New()
 	if err != nil {
@@ -116,10 +117,10 @@ func Run(ctx context.Context, opts Options) error {
 	if err := os.WriteFile(paths.AnalysisPath, []byte(report), 0o644); err != nil {
 		return fmt.Errorf("write analysis: %w", err)
 	}
-	fmt.Printf("  Analysis written to %s\n", paths.AnalysisPath)
+	streams.ErrPrintf("  Analysis written to %s\n", paths.AnalysisPath)
 
 	// --- Step 3: Generate review prompt ---
-	fmt.Println("Step 3/3: Generating PR Review Prompt")
+	streams.ErrPrintln("Step 3/3: Generating PR Review Prompt")
 
 	analysisContent, err := os.ReadFile(paths.AnalysisPath)
 	if err != nil {
@@ -139,7 +140,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err := os.WriteFile(paths.PromptPath, []byte(generatedPrompt+footer), 0o644); err != nil {
 		return fmt.Errorf("write prompt: %w", err)
 	}
-	fmt.Printf("  Prompt written to %s\n", paths.PromptPath)
+	streams.ErrPrintf("  Prompt written to %s\n", paths.PromptPath)
 
 	return nil
 }

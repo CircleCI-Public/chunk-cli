@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 )
 
@@ -35,6 +36,7 @@ func newSandboxesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List sandboxes",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -44,11 +46,11 @@ func newSandboxesListCmd() *cobra.Command {
 				return err
 			}
 			if len(sandboxes) == 0 {
-				fmt.Println("No sandboxes found")
+				io.ErrPrintln("No sandboxes found")
 				return nil
 			}
 			for _, s := range sandboxes {
-				fmt.Printf("%s  %s\n", s.ID, s.Name)
+				io.Printf("%s  %s\n", s.ID, s.Name)
 			}
 			return nil
 		},
@@ -67,6 +69,7 @@ func newSandboxesCreateCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a sandbox",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -75,7 +78,7 @@ func newSandboxesCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Created sandbox %s (%s)\n", sb.Name, sb.ID)
+			io.ErrPrintf("Created sandbox %s (%s)\n", sb.Name, sb.ID)
 			return nil
 		},
 	}
@@ -98,6 +101,7 @@ func newSandboxesExecCmd() *cobra.Command {
 		Short: "Execute a command in a sandbox",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -109,10 +113,10 @@ func newSandboxesExecCmd() *cobra.Command {
 				return err
 			}
 			if resp.Stdout != "" {
-				fmt.Print(resp.Stdout)
+				_, _ = fmt.Fprint(io.Out, resp.Stdout)
 			}
 			if resp.Stderr != "" {
-				fmt.Fprint(os.Stderr, resp.Stderr)
+				_, _ = fmt.Fprint(io.Err, resp.Stderr)
 			}
 			return nil
 		},
@@ -136,6 +140,7 @@ func newSandboxesAddSshKeyCmd() *cobra.Command {
 		Use:   "add-ssh-key",
 		Short: "Add an SSH public key to a sandbox",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -144,7 +149,7 @@ func newSandboxesAddSshKeyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("SSH key added. Sandbox URL: %s\n", resp.URL)
+			io.ErrPrintf("SSH key added. Sandbox URL: %s\n", resp.URL)
 			return nil
 		},
 	}

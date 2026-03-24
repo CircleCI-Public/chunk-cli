@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 // EnvUpdateOptions holds options for the env update command.
@@ -18,7 +20,7 @@ type EnvUpdateOptions struct {
 }
 
 // RunEnvUpdate writes the env file with profile-based configuration.
-func RunEnvUpdate(opts EnvUpdateOptions) error {
+func RunEnvUpdate(opts EnvUpdateOptions, streams iostream.Streams) error {
 	if opts.Profile == "" {
 		opts.Profile = "enable"
 	}
@@ -48,7 +50,7 @@ func RunEnvUpdate(opts EnvUpdateOptions) error {
 		return fmt.Errorf("write env file: %w", err)
 	}
 
-	fmt.Println("Configuration complete")
+	streams.ErrPrintln("Configuration complete")
 	return nil
 }
 

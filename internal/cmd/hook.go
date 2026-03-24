@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/hook"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +48,7 @@ func newHookRepoInitCmd() *cobra.Command {
 			if len(args) > 0 {
 				dir = args[0]
 			}
-			return hook.RunRepoInit(dir, force)
+			return hook.RunRepoInit(dir, force, iostream.FromCmd(cmd))
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing files")
@@ -73,7 +73,7 @@ func newHookSetupCmd() *cobra.Command {
 			if len(args) > 0 {
 				dir = args[0]
 			}
-			return hook.RunSetup(dir, profile, force, skipEnv, envFile)
+			return hook.RunSetup(dir, profile, force, skipEnv, envFile, iostream.FromCmd(cmd))
 		},
 	}
 	cmd.Flags().StringVar(&profile, "profile", "enable", "Environment profile")
@@ -112,7 +112,7 @@ func newHookEnvUpdateCmd() *cobra.Command {
 				LogDir:      logDir,
 				Verbose:     verbose,
 				ProjectRoot: projectRoot,
-			})
+			}, iostream.FromCmd(cmd))
 		},
 	}
 	cmd.Flags().StringVar(&profile, "profile", "enable", "Environment profile")
@@ -156,11 +156,7 @@ func newHookScopeDeactivateCmd() *cobra.Command {
 		Short: "Deactivate scope for a project",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projectDir := hook.ResolveProject(project)
-			if err := hook.DeactivateScope(projectDir, os.Stdin); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
-			}
-			return nil
+			return hook.DeactivateScope(projectDir, os.Stdin)
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Project directory")
@@ -224,7 +220,7 @@ func newHookStateLoadCmd() *cobra.Command {
 			if len(args) > 0 {
 				field = args[0]
 			}
-			return hook.StateLoad(cfg.SentinelDir, projectDir, field)
+			return hook.StateLoad(cfg.SentinelDir, projectDir, field, iostream.FromCmd(cmd))
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Project directory")

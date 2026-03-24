@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
 )
 
@@ -32,7 +33,7 @@ func newSkillsInstallCmd() *cobra.Command {
 			if err := skills.Install(home); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Skills installed successfully.")
+			iostream.FromCmd(cmd).ErrPrintln("Skills installed successfully.")
 			return nil
 		},
 	}
@@ -43,6 +44,7 @@ func newSkillsListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List available skills",
 		Run: func(cmd *cobra.Command, args []string) {
+			io := iostream.FromCmd(cmd)
 			home := os.Getenv("HOME")
 			infos := skills.List(home)
 			for _, info := range infos {
@@ -50,7 +52,7 @@ func newSkillsListCmd() *cobra.Command {
 				if info.Installed {
 					status = "installed"
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (%s)\n", info.Name, status)
+				io.Printf("  %s (%s)\n", info.Name, status)
 			}
 		},
 	}

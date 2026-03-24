@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 // StateSave reads event JSON from stdin and stores it keyed by event name.
@@ -79,12 +81,11 @@ func StateAppend(sentinelDir, projectDir string, stdin io.Reader) error {
 }
 
 // StateLoad outputs stored state as JSON.
-func StateLoad(sentinelDir, projectDir, field string) error {
+func StateLoad(sentinelDir, projectDir, field string, streams iostream.Streams) error {
 	state := readState(sentinelDir, projectDir)
 	if field != "" {
-		// Field-specific load not needed for acceptance tests
 		data, _ := json.Marshal(state)
-		fmt.Println(string(data))
+		streams.Println(string(data))
 		return nil
 	}
 
@@ -92,7 +93,7 @@ func StateLoad(sentinelDir, projectDir, field string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(data))
+	streams.Println(string(data))
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/task"
 )
 
@@ -57,8 +58,9 @@ func newTaskRunCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Run triggered: %s\n", resp.RunID)
-			fmt.Printf("Pipeline: %s\n", resp.PipelineID)
+			io := iostream.FromCmd(cmd)
+			io.Printf("Run triggered: %s\n", resp.RunID)
+			io.Printf("Pipeline: %s\n", resp.PipelineID)
 			return nil
 		},
 	}

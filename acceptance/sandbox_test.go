@@ -124,10 +124,10 @@ func TestSandboxesCreateHappyPath(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stdout, "sandbox-new-123"),
-		"expected sandbox ID in output, got: %s", result.Stdout)
-	assert.Assert(t, strings.Contains(result.Stdout, "my-new-sandbox"),
-		"expected sandbox name in output, got: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stderr, "sandbox-new-123"),
+		"expected sandbox ID in stderr, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "my-new-sandbox"),
+		"expected sandbox name in stderr, got: %s", result.Stderr)
 
 	// Verify request body
 	reqs := cci.Recorder.AllRequests()
@@ -231,8 +231,8 @@ func TestSandboxesAddSshKeyFromString(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stdout, "my-sandbox.dev.example.com"),
-		"expected sandbox domain in output, got: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stderr, "my-sandbox.dev.example.com"),
+		"expected sandbox domain in stderr, got: %s", result.Stderr)
 
 	// Verify access token and add-key requests
 	reqs := cci.Recorder.AllRequests()

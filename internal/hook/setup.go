@@ -3,6 +3,7 @@ package hook
 import (
 	"fmt"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
@@ -23,7 +24,7 @@ func ValidateProfile(profile string) error {
 }
 
 // RunSetup combines env update + repo init.
-func RunSetup(targetDir, profile string, force, skipEnv bool, envFile string) error {
+func RunSetup(targetDir, profile string, force, skipEnv bool, envFile string, streams iostream.Streams) error {
 	if profile == "" {
 		profile = "enable"
 	}
@@ -33,19 +34,19 @@ func RunSetup(targetDir, profile string, force, skipEnv bool, envFile string) er
 
 	if !skipEnv {
 		opts := EnvUpdateOptions{
-			Profile:  profile,
-			EnvFile:  envFile,
-			Verbose:  false,
+			Profile: profile,
+			EnvFile: envFile,
+			Verbose: false,
 		}
-		if err := RunEnvUpdate(opts); err != nil {
+		if err := RunEnvUpdate(opts, streams); err != nil {
 			return fmt.Errorf("env update: %w", err)
 		}
 	}
 
-	if err := RunRepoInit(targetDir, force); err != nil {
+	if err := RunRepoInit(targetDir, force, streams); err != nil {
 		return fmt.Errorf("repo init: %w", err)
 	}
 
-	fmt.Println("Setup complete")
+	streams.ErrPrintln("Setup complete")
 	return nil
 }
