@@ -1,10 +1,86 @@
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+)
 
 func newBuildPromptCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		org                string
+		repos              string
+		top                int
+		since              string
+		output             string
+		maxComments        int
+		analyzeModel       string
+		promptModel        string
+		includeAttribution bool
+	)
+
+	cmd := &cobra.Command{
 		Use:   "build-prompt",
 		Short: "Generate a review prompt from GitHub PR review patterns",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if top <= 0 {
+				return fmt.Errorf("--top must be a positive integer, got %d", top)
+			}
+
+			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos)
+			if err != nil {
+				return err
+			}
+
+			sinceTime, err := parseSince(since)
+			if err != nil {
+				return err
+			}
+
+			if analyzeModel == "" {
+				analyzeModel = config.AnalyzeModel
+			}
+			if promptModel == "" {
+				promptModel = config.PromptModel
+			}
+
+			opts := buildprompt.Options{
+				Org:                resolvedOrg,
+				Repos:              resolvedRepos,
+				Top:                top,
+				Since:              sinceTime,
+				OutputPath:         output,
+				MaxComments:        maxComments,
+				AnalyzeModel:       analyzeModel,
+				PromptModel:        promptModel,
+				IncludeAttribution: includeAttribution,
+			}
+
+			return buildprompt.Run(cmd.Context(), opts)
+		},
 	}
+
+	cmd.Flags().StringVar(&org, "org", "", "GitHub organization")
+	cmd.Flags().StringVar(&repos, "repos", "", "Comma-separated repository names")
+	cmd.Flags().IntVar(&top, "top", 5, "Number of top reviewers to include")
+	cmd.Flags().StringVar(&since, "since", defaultSince(), "Start date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&output, "output", ".chunk/context/review-prompt.md", "Output file path")
+	cmd.Flags().IntVar(&maxComments, "max-comments", 0, "Max comments per reviewer (0 = no limit)")
+	cmd.Flags().StringVar(&analyzeModel, "analyze-model", "", "Model for analysis step")
+	cmd.Flags().StringVar(&promptModel, "prompt-model", "", "Model for prompt generation step")
+	cmd.Flags().BoolVar(&includeAttribution, "include-attribution", false, "Include reviewer attribution in output")
+
+	return cmd
+}
+
+func parseSince(s string) (time.Time, error) {
+	return time.Parse("2006-01-02", s)
+}
+
+func defaultSince() string {
+	return time.Now().AddDate(0, -3, 0).Format("2006-01-02")
 }
