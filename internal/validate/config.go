@@ -42,3 +42,38 @@ func (c *ProjectConfig) FindCommand(name string) *Command {
 	}
 	return nil
 }
+
+// SaveProjectConfig writes the config back to .chunk/config.json.
+func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
+	dir := filepath.Join(workDir, ".chunk")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "config.json"), append(data, '\n'), 0o644)
+}
+
+// SaveCommand upserts a command in .chunk/config.json.
+func SaveCommand(workDir, name, command string) error {
+	cfg, err := LoadProjectConfig(workDir)
+	if err != nil {
+		cfg = &ProjectConfig{}
+	}
+
+	found := false
+	for i := range cfg.Commands {
+		if cfg.Commands[i].Name == name {
+			cfg.Commands[i].Run = command
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.Commands = append(cfg.Commands, Command{Name: name, Run: command})
+	}
+
+	return SaveProjectConfig(workDir, cfg)
+}

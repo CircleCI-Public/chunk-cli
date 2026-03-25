@@ -21,16 +21,67 @@ import (
 
 func newValidateCmd() *cobra.Command {
 	var sandboxID, orgID string
-	var dryRun bool
+	var dryRun, list, save, forceRun, status bool
+	var inlineCmd, projectDir string
 
 	cmd := &cobra.Command{
-		Use:   "validate",
+		Use:   "validate [name]",
 		Short: "Run validation commands",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			streams := iostream.FromCmd(cmd)
-			workDir, err := os.Getwd()
-			if err != nil {
-				return err
+
+			workDir := projectDir
+			if workDir == "" {
+				var err error
+				workDir, err = os.Getwd()
+				if err != nil {
+					return err
+				}
+			}
+
+			var name string
+			if len(args) == 1 {
+				name = args[0]
+			}
+
+			// Guard: deprecated "validate run" subcommand
+			if name == "run" {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), `"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`)
+				os.Exit(2)
+			}
+
+			// --list: show configured commands
+			if list {
+				cfg, err := validate.LoadProjectConfig(workDir)
+				if err != nil {
+					cfg = &validate.ProjectConfig{}
+				}
+				return validate.List(cfg, streams)
+			}
+
+			// --status: check cache only
+			if status {
+				cfg, err := validate.LoadProjectConfig(workDir)
+				if err != nil {
+					cfg = &validate.ProjectConfig{}
+				}
+				return validate.Status(workDir, name, cfg, streams)
+			}
+
+			// --cmd: run inline command
+			if inlineCmd != "" {
+				cmdName := name
+				if cmdName == "" {
+					cmdName = "custom"
+				}
+				if save {
+					if err := validate.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
+						return fmt.Errorf("save command: %w", err)
+					}
+					streams.ErrPrintf("Saved %s to .chunk/config.json\n", cmdName)
+				}
+				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, streams)
 			}
 
 			cfg, err := validate.LoadProjectConfig(workDir)
@@ -39,7 +90,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if dryRun {
-				return validate.RunDryRun(cfg, streams)
+				return validate.RunDryRun(cfg, name, streams)
 			}
 
 			if sandboxID != "" {
@@ -53,17 +104,42 @@ func newValidateCmd() *cobra.Command {
 				return validate.RunRemote(cmd.Context(), client, cfg, sandboxID, orgID, streams)
 			}
 
-			return validate.RunLocally(cfg, streams)
+			// Named command
+			if name != "" {
+				return validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, streams)
+			}
+
+			// Run all
+			return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, streams)
 		},
 	}
 
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
-	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print commands without executing")
+	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (required with --sandbox-id)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
+	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
+	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
+	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
+	cmd.Flags().BoolVar(&forceRun, "force-run", false, "Ignore cache, always run")
+	cmd.Flags().BoolVar(&status, "status", false, "Check cache only, don't execute")
+	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 
 	cmd.AddCommand(newValidateInitCmd())
+	cmd.AddCommand(newValidateRunCmd())
 
 	return cmd
+}
+
+func newValidateRunCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "run",
+		Short:  "Deprecated: use 'chunk validate' directly",
+		Hidden: true,
+		Run: func(cmd *cobra.Command, args []string) {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), `"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`)
+			os.Exit(2)
+		},
+	}
 }
 
 var validProfiles = map[string]bool{

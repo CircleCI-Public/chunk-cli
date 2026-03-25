@@ -150,7 +150,7 @@ func TestRunDryRun(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		if err := RunDryRun(cfg, streams); err != nil {
+		if err := RunDryRun(cfg, "", streams); err != nil {
 			t.Fatal(err)
 		}
 
@@ -167,7 +167,7 @@ func TestRunDryRun(t *testing.T) {
 		cfg := &ProjectConfig{}
 		streams, _, _ := newStreams()
 
-		err := RunDryRun(cfg, streams)
+		err := RunDryRun(cfg, "", streams)
 		if err == nil {
 			t.Fatal("expected error for empty config")
 		}
@@ -177,9 +177,9 @@ func TestRunDryRun(t *testing.T) {
 	})
 }
 
-// --- RunLocally tests ---
+// --- RunAll tests ---
 
-func TestRunLocally(t *testing.T) {
+func TestRunAll(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		cfg := &ProjectConfig{Commands: []Command{
 			{Name: "install", Run: "echo installed"},
@@ -187,7 +187,7 @@ func TestRunLocally(t *testing.T) {
 		}}
 		streams, out, errBuf := newStreams()
 
-		if err := RunLocally(cfg, streams); err != nil {
+		if err := RunAll(context.Background(), ".", true, cfg, streams); err != nil {
 			t.Fatal(err)
 		}
 
@@ -206,7 +206,7 @@ func TestRunLocally(t *testing.T) {
 		cfg := &ProjectConfig{}
 		streams, _, _ := newStreams()
 
-		err := RunLocally(cfg, streams)
+		err := RunAll(context.Background(), ".", true, cfg, streams)
 		if err == nil {
 			t.Fatal("expected error for empty config")
 		}
@@ -221,7 +221,7 @@ func TestRunLocally(t *testing.T) {
 		}}
 		streams, _, _ := newStreams()
 
-		err := RunLocally(cfg, streams)
+		err := RunAll(context.Background(), ".", true, cfg, streams)
 		if err == nil {
 			t.Fatal("expected error for failing command")
 		}
@@ -238,7 +238,7 @@ func TestRunLocally(t *testing.T) {
 		}}
 		streams, out, errBuf := newStreams()
 
-		err := RunLocally(cfg, streams)
+		err := RunAll(context.Background(), ".", true, cfg, streams)
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -264,7 +264,7 @@ func TestRunLocally(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		if err := RunLocally(cfg, streams); err != nil {
+		if err := RunAll(context.Background(), ".", true, cfg, streams); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(out.String(), "ok") {

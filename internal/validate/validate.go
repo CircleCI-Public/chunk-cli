@@ -1,46 +1,135 @@
 package validate
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-func RunDryRun(cfg *ProjectConfig, streams iostream.Streams) error {
+// List prints all configured command names and their run strings.
+func List(cfg *ProjectConfig, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
-		return fmt.Errorf("no validate commands configured, run validate init first")
+		streams.Println("No commands configured.")
+		streams.Println("Add commands with: chunk validate <name> --cmd \"your command\" --save")
+		return nil
 	}
-
-	for _, cmd := range cfg.Commands {
-		streams.Printf("%s: %s\n", cmd.Name, cmd.Run)
+	for _, c := range cfg.Commands {
+		streams.Printf("  %s: %s\n", c.Name, c.Run)
 	}
 	return nil
 }
 
-func RunLocally(cfg *ProjectConfig, streams iostream.Streams) error {
+// Status checks the cache for each command (or a single named command) and prints its status.
+func Status(workDir, name string, cfg *ProjectConfig, streams iostream.Streams) error {
+	commands := cfg.Commands
+	if name != "" {
+		c := cfg.FindCommand(name)
+		if c == nil {
+			return fmt.Errorf("command %q not configured", name)
+		}
+		commands = []Command{*c}
+	}
+
+	for _, c := range commands {
+		cached := CheckCache(workDir, c.Name)
+		if cached != nil {
+			streams.Printf("  %s: cached (%s)\n", c.Name, cached.Status)
+		} else {
+			streams.Printf("  %s: no cached result\n", c.Name)
+		}
+	}
+	return nil
+}
+
+// RunInline runs an inline command string, caching the result under the given name.
+func RunInline(ctx context.Context, workDir, name, command string, force bool, streams iostream.Streams) error {
+	if !force {
+		if cached := CheckCache(workDir, name); cached != nil {
+			streams.Printf("%s: cached (%s)\n", name, cached.Status)
+			if cached.ExitCode != 0 {
+				return fmt.Errorf("%s: cached failure", name)
+			}
+			return nil
+		}
+	}
+
+	return runAndCache(ctx, workDir, name, command, streams)
+}
+
+// RunNamed runs a single named command from config with caching.
+func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *ProjectConfig, streams iostream.Streams) error {
+	c := cfg.FindCommand(name)
+	if c == nil {
+		return fmt.Errorf("command %q not configured", name)
+	}
+
+	if !force {
+		if cached := CheckCache(workDir, c.Name); cached != nil {
+			streams.Printf("%s: cached (%s)\n", c.Name, cached.Status)
+			if cached.ExitCode != 0 {
+				return fmt.Errorf("%s: cached failure", c.Name)
+			}
+			return nil
+		}
+	}
+
+	return runAndCache(ctx, workDir, c.Name, c.Run, streams)
+}
+
+// RunAll runs all configured commands with optional cache bypass.
+func RunAll(ctx context.Context, workDir string, force bool, cfg *ProjectConfig, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
 		return fmt.Errorf("no validate commands configured, run validate init first")
 	}
 
 	for i, c := range cfg.Commands {
-		streams.ErrPrintf("Running %s: %s\n", c.Name, c.Run)
-		cmd := exec.Command("sh", "-c", c.Run)
-		cmd.Stdout = streams.Out
-		cmd.Stderr = streams.Err
-		if err := cmd.Run(); err != nil {
+		if !force {
+			if cached := CheckCache(workDir, c.Name); cached != nil {
+				streams.ErrPrintf("%s: cached (%s)\n", c.Name, cached.Status)
+				if cached.ExitCode != 0 {
+					return fmt.Errorf("%s: cached failure", c.Name)
+				}
+				continue
+			}
+		}
+
+		if err := runAndCache(ctx, workDir, c.Name, c.Run, streams); err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
 				streams.ErrPrintf("%s: skipped (%s failed)\n", cfg.Commands[j].Name, c.Name)
 			}
-			return fmt.Errorf("%s command failed: %w", c.Name, err)
+			return err
 		}
 	}
-
 	return nil
 }
 
+// RunDryRun prints commands without executing them.
+func RunDryRun(cfg *ProjectConfig, name string, streams iostream.Streams) error {
+	if !cfg.HasCommands() {
+		return fmt.Errorf("no validate commands configured, run validate init first")
+	}
+
+	commands := cfg.Commands
+	if name != "" {
+		c := cfg.FindCommand(name)
+		if c == nil {
+			return fmt.Errorf("command %q not configured", name)
+		}
+		commands = []Command{*c}
+	}
+
+	for _, c := range commands {
+		streams.Printf("%s: %s\n", c.Name, c.Run)
+	}
+	return nil
+}
+
+// RunRemote runs commands on a remote sandbox.
 func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig, sandboxID, orgID string, streams iostream.Streams) error {
 	for _, c := range cfg.Commands {
 		resp, err := client.Exec(ctx, sandboxID, "sh", []string{"-c", c.Run})
@@ -54,6 +143,33 @@ func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig,
 			return fmt.Errorf("remote %s failed with exit code %d", c.Name, resp.ExitCode)
 		}
 	}
+	return nil
+}
 
+func runAndCache(ctx context.Context, workDir, name, command string, streams iostream.Streams) error {
+	streams.ErrPrintf("Running %s: %s\n", name, command)
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Dir = workDir
+
+	var combined bytes.Buffer
+	cmd.Stdout = io.MultiWriter(streams.Out, &combined)
+	cmd.Stderr = io.MultiWriter(streams.Err, &combined)
+
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+
+	_ = WriteCache(workDir, name, exitCode, combined.String())
+
+	if exitCode != 0 {
+		return fmt.Errorf("%s command failed", name)
+	}
 	return nil
 }

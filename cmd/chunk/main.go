@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/cmd"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
@@ -12,6 +13,8 @@ import (
 var version = "dev"
 
 func main() {
+	rewriteColonSyntax()
+
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
 		var ue *usererr.Error
@@ -21,5 +24,24 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 		}
 		os.Exit(1)
+	}
+}
+
+// rewriteColonSyntax rewrites "validate:name" to "validate" "name" in os.Args
+// before cobra parses, matching the TypeScript CLI's colon syntax support.
+func rewriteColonSyntax() {
+	for i, arg := range os.Args {
+		if strings.HasPrefix(arg, "validate:") {
+			name := strings.TrimPrefix(arg, "validate:")
+			if name == "" {
+				continue
+			}
+			newArgs := make([]string, 0, len(os.Args)+1)
+			newArgs = append(newArgs, os.Args[:i]...)
+			newArgs = append(newArgs, "validate", name)
+			newArgs = append(newArgs, os.Args[i+1:]...)
+			os.Args = newArgs
+			return
+		}
 	}
 }
