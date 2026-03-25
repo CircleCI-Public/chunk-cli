@@ -10,8 +10,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 const runConfigJSON = `{
@@ -21,6 +23,7 @@ const runConfigJSON = `{
   "definitions": {
     "dev": {
       "definition_id": "e2016e4e-0172-47b3-a4ea-a3ee1a592dba",
+      "description": "Development environment",
       "chunk_environment_id": "b3c27e5f-1234-5678-9abc-def012345678",
       "default_branch": "develop"
     },
@@ -32,12 +35,29 @@ const runConfigJSON = `{
   }
 }`
 
+const runConfigCircleCIOrgJSON = `{
+  "org_id": "c48b55ef-f5g9-5e1a-a67b-0e2259g4beg6",
+  "project_id": "g5f5b476-eb2e-519g-a827-def123456789",
+  "org_type": "circleci",
+  "definitions": {
+    "dev": {
+      "definition_id": "e2016e4e-0172-47b3-a4ea-a3ee1a592dba",
+      "default_branch": "develop"
+    }
+  }
+}`
+
 func writeRunConfig(t *testing.T, workDir string) {
+	t.Helper()
+	writeRunConfigJSON(t, workDir, runConfigJSON)
+}
+
+func writeRunConfigJSON(t *testing.T, workDir, configJSON string) {
 	t.Helper()
 	chunkDir := filepath.Join(workDir, ".chunk")
 	err := os.MkdirAll(chunkDir, 0o755)
 	assert.NilError(t, err)
-	err = os.WriteFile(filepath.Join(chunkDir, "run.json"), []byte(runConfigJSON), 0o644)
+	err = os.WriteFile(filepath.Join(chunkDir, "run.json"), []byte(configJSON), 0o644)
 	assert.NilError(t, err)
 }
 
@@ -46,13 +66,13 @@ func TestTaskRunHappyPath(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Fix the flaky test",
@@ -93,13 +113,13 @@ func TestTaskRunBranchOverride(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Fix tests",
@@ -123,13 +143,13 @@ func TestTaskRunNewBranch(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Add types",
@@ -156,13 +176,13 @@ func TestTaskRunPipelineAsToolDefault(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Add types",
@@ -187,13 +207,13 @@ func TestTaskRunNoPipelineAsTool(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Add types",
@@ -219,13 +239,13 @@ func TestTaskRunProdDefinition(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "prod",
 		"--prompt", "Deploy fix",
@@ -252,14 +272,14 @@ func TestTaskRunRawUUID(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
 	rawUUID := "11111111-2222-3333-4444-555555555555"
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", rawUUID,
 		"--prompt", "Fix it",
@@ -278,13 +298,13 @@ func TestTaskRunRawUUID(t *testing.T) {
 }
 
 func TestTaskRunMissingToken(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleToken = "" // no token
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Fix it",
@@ -297,12 +317,12 @@ func TestTaskRunMissingToken(t *testing.T) {
 }
 
 func TestTaskRunMissingConfig(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	// No .chunk/run.json
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Fix it",
@@ -319,13 +339,13 @@ func TestTaskRunUnknownDefinition(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "staging",
 		"--prompt", "Fix it",
@@ -343,13 +363,13 @@ func TestTaskRunAPIError(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Fix it",
@@ -366,13 +386,13 @@ func TestTaskRunURLContainsOrgAndProject(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Fix it",
@@ -390,4 +410,73 @@ func TestTaskRunURLContainsOrgAndProject(t *testing.T) {
 		"expected org_id in URL path, got: %s", url)
 	assert.Assert(t, strings.Contains(url, "f4e4a365-da1d-408f-8f9c-0d4cc87d01cb"),
 		"expected project_id in URL path, got: %s", url)
+}
+
+func TestTaskRunWithDescription(t *testing.T) {
+	// Verify that a run config with description fields loads and works correctly
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Fix the flaky test",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
+	assert.Equal(t, len(runReqs), 1)
+
+	var body map[string]interface{}
+	err := json.Unmarshal(runReqs[0].Body, &body)
+	assert.NilError(t, err)
+	assert.Equal(t, body["definition_id"], "e2016e4e-0172-47b3-a4ea-a3ee1a592dba")
+	assert.Equal(t, body["checkout_branch"], "develop")
+}
+
+func TestTaskRunCircleCIOrgType(t *testing.T) {
+	// Verify that org_type "circleci" is accepted and the run succeeds
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfigJSON(t, workDir, runConfigCircleCIOrgJSON)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Fix it",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
+	assert.Equal(t, len(runReqs), 1)
+
+	// Verify the URL contains the circleci org's IDs
+	url := runReqs[0].URL.Path
+	assert.Assert(t, strings.Contains(url, "c48b55ef-f5g9-5e1a-a67b-0e2259g4beg6"),
+		"expected org_id in URL path, got: %s", url)
+	assert.Assert(t, strings.Contains(url, "g5f5b476-eb2e-519g-a827-def123456789"),
+		"expected project_id in URL path, got: %s", url)
+
+	var body map[string]interface{}
+	err := json.Unmarshal(runReqs[0].Body, &body)
+	assert.NilError(t, err)
+	assert.Equal(t, body["definition_id"], "e2016e4e-0172-47b3-a4ea-a3ee1a592dba")
+	assert.Equal(t, body["checkout_branch"], "develop")
 }

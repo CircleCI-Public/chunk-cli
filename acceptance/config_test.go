@@ -9,16 +9,17 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 )
 
 func TestConfigSetAndShow(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	setResult := testutil.RunCLI(t, []string{"config", "set", "model", "claude-haiku-4-5-20251001"}, env, env.HomeDir)
+	setResult := binary.RunCLI(t, []string{"config", "set", "model", "claude-haiku-4-5-20251001"}, env, env.HomeDir)
 	assert.Equal(t, setResult.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
 
-	showResult := testutil.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	showResult := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
 	assert.Equal(t, showResult.ExitCode, 0, "config show failed\nstdout: %s\nstderr: %s", showResult.Stdout, showResult.Stderr)
 
 	combined := showResult.Stdout + showResult.Stderr
@@ -27,9 +28,9 @@ func TestConfigSetAndShow(t *testing.T) {
 }
 
 func TestConfigShowDefaults(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
@@ -39,11 +40,11 @@ func TestConfigShowDefaults(t *testing.T) {
 
 // apiKey.slice(-4) not .slice(0,4) — verify last 4 chars shown, not first 4
 func TestConfigShowMasksLastFourChars(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	// Use a key where the first 4 and last 4 chars are distinct
 	env.AnthropicKey = "sk-ant-api03-AAAA-middle-ZZZZ"
 
-	result := testutil.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -58,14 +59,14 @@ func TestConfigShowMasksLastFourChars(t *testing.T) {
 
 // API key stored in config file (no env var) is resolved and shown
 func TestConfigShowFromConfigFile(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = "" // no env var
 
 	// Store key via config set
-	setResult := testutil.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-stored-key-ZZZZ"}, env, env.HomeDir)
+	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-stored-key-ZZZZ"}, env, env.HomeDir)
 	assert.Equal(t, setResult.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
 
-	result := testutil.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -77,9 +78,9 @@ func TestConfigShowFromConfigFile(t *testing.T) {
 
 // config set rejects invalid keys
 func TestConfigSetInvalidKey(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{"config", "set", "badkey", "somevalue"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"config", "set", "badkey", "somevalue"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 2, "expected exit code 2 for invalid key\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -90,9 +91,9 @@ func TestConfigSetInvalidKey(t *testing.T) {
 
 // verify config file permissions are 0o600 and dir is 0o700
 func TestConfigFilePermissions(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{"config", "set", "model", "test-model"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"config", "set", "model", "test-model"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	// Find the config file — it should be at XDG_CONFIG_HOME/chunk/config.json

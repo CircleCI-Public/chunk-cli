@@ -1,0 +1,54 @@
+package usererr_test
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
+)
+
+func TestError(t *testing.T) {
+	underlying := fmt.Errorf("connection refused")
+	ue := usererr.New("Could not reach the server.", underlying)
+
+	t.Run("Error delegates to wrapped", func(t *testing.T) {
+		got := ue.Error()
+		want := "connection refused"
+		if got != want {
+			t.Errorf("Error() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("UserMessage", func(t *testing.T) {
+		got := ue.UserMessage()
+		want := "Could not reach the server."
+		if got != want {
+			t.Errorf("UserMessage() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("Unwrap", func(t *testing.T) {
+		if ue.Unwrap() != underlying {
+			t.Error("Unwrap() did not return the underlying error")
+		}
+	})
+
+	t.Run("errors.Is", func(t *testing.T) {
+		if !errors.Is(ue, underlying) {
+			t.Error("errors.Is failed to match underlying error")
+		}
+	})
+
+	t.Run("errors.As", func(t *testing.T) {
+		// Wrap in another error to test errors.As unwrapping.
+		wrapped := fmt.Errorf("outer: %w", ue)
+		var target *usererr.Error
+		if !errors.As(wrapped, &target) {
+			t.Fatal("errors.As failed to find *usererr.Error")
+		}
+		if target.UserMessage() != "Could not reach the server." {
+			t.Errorf("UserMessage() = %q after errors.As", target.UserMessage())
+		}
+	})
+}

@@ -6,34 +6,19 @@ parameters:
     default: ""
     description: "Version to release (e.g. 1.2.3). Omit to auto-increment patch."
 
-executors:
-  releaser:
-    docker:
-      - image: circleci/cli-releaser:0.3.0
-
-commands:
-  install-deps:
-    description: "Install Node dependencies with caching"
-    steps:
-      - restore_cache:
-          keys:
-            - deps-v3-{{ checksum "bun.lock" }}
-      - run:
-          name: Install dependencies
-          command: bun install --frozen-lockfile
-      - save_cache:
-          key: deps-v3-{{ checksum "bun.lock" }}
-          paths:
-            - node_modules
-
 jobs:
   release:
-    executor: releaser
+    docker:
+      - image: cimg/go:1.26
     resource_class: medium
     steps:
       - checkout
-      - install-deps
-
+      - run:
+          name: Install goreleaser
+          command: go install github.com/goreleaser/goreleaser/v2@latest
+      - run:
+          name: Install task
+          command: go install github.com/go-task/task/v3/cmd/task@latest
       - run: task release VERSION=<< pipeline.parameters.version >>
 
 workflows:

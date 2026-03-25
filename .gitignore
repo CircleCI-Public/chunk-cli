@@ -1,20 +1,13 @@
 .env
-# Dependencies
-node_modules/
 
 # Build output
-dist/
-*.bun-build
-.*.bun-build
-
-# Binaries (never commit these - breaks git with large files)
 bin/
-chunk
+dist/
+/chunk
 /chunk-*
-*.backup
 
-# npm (using bun.lock instead)
-package-lock.json
+# Binaries
+*.backup
 
 # IDE
 .vscode/

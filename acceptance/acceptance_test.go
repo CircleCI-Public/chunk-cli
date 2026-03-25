@@ -5,11 +5,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 )
 
 func TestMain(m *testing.M) {
-	path, err := testutil.BuildBinary()
+	path, err := binary.BuildBinary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skipping acceptance tests: %v\n", err)
 		os.Exit(0)

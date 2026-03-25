@@ -10,8 +10,10 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string) {
@@ -40,12 +42,12 @@ func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string
 }
 
 func TestValidateRunDryRun(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo install", "echo test")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "--dry-run",
 	}, env, workDir)
 
@@ -59,12 +61,12 @@ func TestValidateRunDryRun(t *testing.T) {
 }
 
 func TestValidateRunDryRunTestOnly(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "", "echo test-only")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "--dry-run",
 	}, env, workDir)
 
@@ -77,12 +79,12 @@ func TestValidateRunDryRunTestOnly(t *testing.T) {
 }
 
 func TestValidateRunDryRunNoConfig(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	// No .chunk/config.json
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "--dry-run",
 	}, env, workDir)
 
@@ -93,12 +95,12 @@ func TestValidateRunDryRunNoConfig(t *testing.T) {
 }
 
 func TestValidateRunLocal(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo installed", "echo tested")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate",
 	}, env, workDir)
 
@@ -111,12 +113,12 @@ func TestValidateRunLocal(t *testing.T) {
 }
 
 func TestValidateRunLocalFailure(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "true", "false") // false exits non-zero
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate",
 	}, env, workDir)
 
@@ -124,13 +126,13 @@ func TestValidateRunLocalFailure(t *testing.T) {
 }
 
 func TestValidateRunLocalSkipsAfterFailure(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	// install fails, so test should be skipped
 	writeProjectConfig(t, workDir, "false", "echo should-not-run")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate",
 	}, env, workDir)
 
@@ -141,12 +143,12 @@ func TestValidateRunLocalSkipsAfterFailure(t *testing.T) {
 }
 
 func TestValidateRunRemoteMissingOrgId(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo install", "echo test")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "--sandbox-id", "sandbox-123",
 	}, env, workDir)
 
@@ -168,13 +170,13 @@ func TestValidateRunRemote(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo install", "echo test")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate",
 		"--sandbox-id", "sandbox-123",
 		"--org-id", "org-456",
@@ -182,26 +184,22 @@ func TestValidateRunRemote(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	// Verify access token was requested
-	reqs := cci.Recorder.AllRequests()
-	tokenReqs := filterByPath(reqs, "/api/v2/sandboxes/sandbox-123/access_token")
-	assert.Equal(t, len(tokenReqs), 1, "expected 1 access token request")
-
 	// Verify exec was called (2 commands: install + test)
-	execReqs := filterByPath(reqs, "/api/v2/sandboxes/exec")
+	reqs := cci.Recorder.AllRequests()
+	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sandbox-123/exec")
 	assert.Equal(t, len(execReqs), 2, "expected 2 exec requests (install + test)")
 
-	// Verify bearer auth on exec requests
+	// Verify Circle-Token auth on exec requests
 	for _, req := range execReqs {
-		assert.Assert(t, strings.HasPrefix(req.Header.Get("Authorization"), "Bearer "),
-			"expected Bearer auth on exec request")
+		assert.Assert(t, req.Header.Get("Circle-Token") != "",
+			"expected Circle-Token auth on exec request")
 	}
 }
 
 func TestValidateInitNotGitRepo(t *testing.T) {
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "init",
 	}, env, env.HomeDir)
 
@@ -212,10 +210,10 @@ func TestValidateInitNotGitRepo(t *testing.T) {
 }
 
 func TestValidateInitInvalidProfile(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "init", "--profile", "bogus",
 	}, env, workDir)
 
@@ -226,12 +224,12 @@ func TestValidateInitInvalidProfile(t *testing.T) {
 }
 
 func TestValidateInitExistingConfigNoForce(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo install", "echo test")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "init", "--skip-env",
 	}, env, workDir)
 
@@ -242,20 +240,27 @@ func TestValidateInitExistingConfigNoForce(t *testing.T) {
 }
 
 func TestValidateInitHappyPath(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
 	anthropic := fakes.NewFakeAnthropic("bun test")
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "init", "--skip-env",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	// Verify anthropic-version header was sent
+	anthropicReqs := anthropic.Recorder.AllRequests()
+	for _, req := range anthropicReqs {
+		assert.Equal(t, req.Header.Get("Anthropic-Version"), "2023-06-01",
+			"expected anthropic-version header on Anthropic request to %s", req.URL.Path)
+	}
 
 	// Verify config.json was created
 	configPath := filepath.Join(workDir, ".chunk", "config.json")
@@ -271,17 +276,17 @@ func TestValidateInitHappyPath(t *testing.T) {
 }
 
 func TestValidateInitForce(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo old-install", "echo old-test")
 
 	anthropic := fakes.NewFakeAnthropic("npm test")
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "init", "--force", "--skip-env",
 	}, env, workDir)
 
@@ -296,12 +301,12 @@ func TestValidateInitForce(t *testing.T) {
 }
 
 func TestValidateInitMissingApiKey(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"validate", "init", "--skip-env",
 	}, env, workDir)
 

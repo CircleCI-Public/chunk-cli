@@ -2,19 +2,6 @@
 #
 # Place this file at `.chunk/hook/config.yml` in your project root.
 # Edit the `command:` fields below to match your repo's tooling.
-#
-# Environment variable overrides (always win over this file):
-#   CHUNK_HOOK_ENABLE=1               Enable all commands
-#   CHUNK_HOOK_ENABLE_TESTS=1         Enable a specific exec by name
-#   CHUNK_HOOK_ENABLE_TESTS_CHANGED=1 Enable tests-changed exec by name
-#   CHUNK_HOOK_ENABLE_LINT=1          Enable lint exec by name
-#   CHUNK_HOOK_TIMEOUT_TESTS=120      Override timeout for an exec (seconds)
-#   CHUNK_HOOK_SENTINELS_DIR=/tmp/s   Override result-file directory
-#   CHUNK_HOOK_CONFIG=/path/to.yml    Use a different config file
-#   CHUNK_HOOK_VERBOSE=1              Verbose logging to stderr
-#   CHUNK_HOOK_LOG_DIR=/path/to/logs  Override log directory
-#   CHUNK_HOOK_PROJECT_ROOT=/path     Workspace root for multi-repo setups
-#   CHUNK_HOOK_MARKER_TTL_MS=300000   Override scope marker TTL (milliseconds)
 
 # --- Named trigger groups ---
 triggers:
@@ -25,31 +12,27 @@ triggers:
 # --- Exec definitions ---
 execs:
   tests:
-    command: "bun test"
-    fileExt: ".ts"
+    command: "task test"
+    fileExt: ".go"
     always: false
     timeout: 300
     limit: 3
 
   tests-changed:
-    # Supported placeholders:
-    #   {{CHANGED_FILES}}    — space-separated list of changed files
-    #   {{CHANGED_PACKAGES}} — space-separated list of changed workspace packages
-    #   {{<State.field>}}    — any dot-path into event-namespaced state
-    command: "bun test {{CHANGED_FILES}}"
-    fileExt: ".ts"
+    command: "task test"
+    fileExt: ".go"
     always: false
     timeout: 300
     limit: 3
 
   lint:
-    command: "bun run lint && bun run typecheck"
+    command: "task lint"
     always: false
     timeout: 60
     limit: 3
 
   format:
-    command: "bun run format"
+    command: "task fmt"
     always: true
     timeout: 30
     limit: 3

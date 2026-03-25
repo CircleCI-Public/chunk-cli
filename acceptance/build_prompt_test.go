@@ -10,9 +10,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil"
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil/fakes"
-	"github.com/CircleCI-Public/chunk-cli/acceptance/testutil/fixtures"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
+	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fixtures"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
 func TestBuildPromptHappyPath(t *testing.T) {
@@ -32,14 +35,14 @@ func TestBuildPromptHappyPath(t *testing.T) {
 	defer anthropicSrv.Close()
 
 	// Set up git repo and environment
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
 	// Run the CLI
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -104,6 +107,8 @@ func TestBuildPromptHappyPath(t *testing.T) {
 	for _, req := range anthropicReqs {
 		assert.Assert(t, req.Header.Get("X-Api-Key") != "",
 			"expected x-api-key header on Anthropic request")
+		assert.Equal(t, req.Header.Get("Anthropic-Version"), "2023-06-01",
+			"expected anthropic-version header on Anthropic request to %s", req.URL.Path)
 	}
 }
 
@@ -123,13 +128,13 @@ func TestBuildPromptAutoDetectOrg(t *testing.T) {
 	defer anthropicSrv.Close()
 
 	// Git remote determines org/repo
-	workDir := testutil.SetupGitRepo(t, "auto-org", "auto-repo")
+	workDir := gitrepo.SetupGitRepo(t, "auto-org", "auto-repo")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
@@ -153,12 +158,12 @@ func TestBuildPromptAutoDetectOrg(t *testing.T) {
 }
 
 func TestBuildPromptMissingGithubToken(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.GithubToken = "" // no token
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -178,13 +183,13 @@ func TestBuildPromptMissingAnthropicKey(t *testing.T) {
 	ghSrv := httptest.NewServer(gh)
 	defer ghSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicKey = "" // no key
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -224,8 +229,8 @@ func TestBuildPromptFlagVariants(t *testing.T) {
 			anthropicSrv := httptest.NewServer(anthropic)
 			defer anthropicSrv.Close()
 
-			workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-			env := testutil.NewTestEnv(t)
+			workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+			env := testenv.NewTestEnv(t)
 			env.GithubURL = ghSrv.URL
 			env.AnthropicURL = anthropicSrv.URL
 
@@ -237,7 +242,7 @@ func TestBuildPromptFlagVariants(t *testing.T) {
 			args = append(args, tt.extraArgs...)
 			args = append(args, "--output", filepath.Join(workDir, "review-prompt.md"))
 
-			result := testutil.RunCLI(t, args, env, workDir)
+			result := binary.RunCLI(t, args, env, workDir)
 
 			if result.ExitCode != 0 {
 				t.Fatalf("expected exit code 0, got %d\nstdout: %s\nstderr: %s",
@@ -263,12 +268,12 @@ func TestBuildPromptWithModelOverrides(t *testing.T) {
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -300,10 +305,10 @@ func TestBuildPromptWithModelOverrides(t *testing.T) {
 }
 
 func TestBuildPromptOrgWithoutRepos(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 	}, env, workDir)
@@ -329,12 +334,12 @@ func TestBuildPromptBotFiltering(t *testing.T) {
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -379,12 +384,12 @@ func TestBuildPromptFooter(t *testing.T) {
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -423,12 +428,12 @@ func TestBuildPromptSinceDateFormat(t *testing.T) {
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -472,12 +477,12 @@ func TestBuildPromptTopNFiltering(t *testing.T) {
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -556,12 +561,12 @@ func TestBuildPromptDefaultTop(t *testing.T) {
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -601,12 +606,12 @@ func TestBuildPromptReposOverride(t *testing.T) {
 	defer anthropicSrv.Close()
 
 	// Git remote points to "detected-repo", but we pass --repos "override-repo"
-	workDir := testutil.SetupGitRepo(t, "detected-org", "detected-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "detected-org", "detected-repo")
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--repos", "override-repo",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
@@ -649,12 +654,12 @@ func TestBuildPromptRepoResolutionError(t *testing.T) {
 	anthropicSrv := httptest.NewServer(anthropic)
 	defer anthropicSrv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "good-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "good-repo")
+	env := testenv.NewTestEnv(t)
 	env.GithubURL = ghSrv.URL
 	env.AnthropicURL = anthropicSrv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "good-repo,bad-repo",
@@ -671,10 +676,10 @@ func TestBuildPromptRepoResolutionError(t *testing.T) {
 
 // --top 0 is rejected by parsePositiveInt
 func TestBuildPromptTopZero(t *testing.T) {
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
-	env := testutil.NewTestEnv(t)
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
@@ -695,8 +700,8 @@ func assertFileExists(t *testing.T, dir, name string) {
 	assert.Assert(t, info.Size() > 0, "expected file %s to be non-empty", name)
 }
 
-func filterByPath(reqs []testutil.RecordedRequest, path string) []testutil.RecordedRequest {
-	var filtered []testutil.RecordedRequest
+func filterByPath(reqs []recorder.RecordedRequest, path string) []recorder.RecordedRequest {
+	var filtered []recorder.RecordedRequest
 	for _, r := range reqs {
 		if r.URL.Path == path {
 			filtered = append(filtered, r)
@@ -705,8 +710,8 @@ func filterByPath(reqs []testutil.RecordedRequest, path string) []testutil.Recor
 	return filtered
 }
 
-func filterByPathPrefix(reqs []testutil.RecordedRequest, prefix string) []testutil.RecordedRequest {
-	var filtered []testutil.RecordedRequest
+func filterByPathPrefix(reqs []recorder.RecordedRequest, prefix string) []recorder.RecordedRequest {
+	var filtered []recorder.RecordedRequest
 	for _, r := range reqs {
 		if strings.HasPrefix(r.URL.Path, prefix) {
 			filtered = append(filtered, r)

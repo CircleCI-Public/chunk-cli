@@ -1,7 +1,16 @@
 {
   "commands": [
-    { "name": "test", "run": "bun test" },
-    { "name": "typecheck", "run": "bun run typecheck" },
-    { "name": "lint", "run": "bun run lint" }
+    {
+      "name": "test",
+      "run": "task test"
+    },
+    {
+      "name": "acceptance test",
+      "run": "task acceptance-test"
+    },
+    {
+      "name": "lint",
+      "run": "task lint"
+    }
   ]
 }
