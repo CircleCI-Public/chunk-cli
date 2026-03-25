@@ -746,4 +746,3 @@ func TestCommandValidation(t *testing.T) {
 		t.Fatalf("expected BlockError, got: %T", err)
 	}
 }
-

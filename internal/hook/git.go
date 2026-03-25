@@ -10,18 +10,18 @@ import (
 // getChangedFiles returns files that have changed in the repo.
 // When stagedOnly is true, uses git diff --cached.
 // When fileExt is set, filters to files matching that extension.
-func getChangedFiles(cwd string, stagedOnly bool, fileExt string) ([]string, error) {
+func getChangedFiles(cwd string, stagedOnly bool, fileExt string) []string {
 	var cmd *exec.Cmd
 	if stagedOnly {
-		cmd = exec.Command("git", "diff", "--cached", "--name-only", "--diff-filter=ACMR")
+		cmd = exec.Command("git", "diff", "--cached", "--name-only", "--diff-filter=ACMR") //nolint:gosec // args are not user-controlled
 	} else {
-		cmd = exec.Command("sh", "-c",
+		cmd = exec.Command("sh", "-c", //nolint:gosec // pipeline is a fixed string
 			"git status --porcelain -uall | grep -vE '^D.|^.D' | cut -c4- | sed 's/.* -> //'")
 	}
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, nil // git errors treated as no changes
+		return nil // git errors treated as no changes
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
@@ -52,16 +52,13 @@ func getChangedFiles(cwd string, stagedOnly bool, fileExt string) ([]string, err
 		files = filtered
 	}
 
-	return files, nil
+	return files
 }
 
 // detectChanges checks whether there are relevant changes in the repo.
 func detectChanges(cwd string, fileExt string, staged bool) (bool, error) {
 	if fileExt != "" {
-		files, err := getChangedFiles(cwd, staged, fileExt)
-		if err != nil {
-			return false, err
-		}
+		files := getChangedFiles(cwd, staged, fileExt)
 		return len(files) > 0, nil
 	}
 
@@ -147,7 +144,7 @@ func getChangedPackages(files []string) []string {
 			dirs[dir] = true
 		}
 	}
-	var result []string
+	result := make([]string, 0, len(dirs))
 	for d := range dirs {
 		result = append(result, d)
 	}
@@ -158,7 +155,7 @@ func getChangedPackages(files []string) []string {
 func substitutePlaceholders(command string, files []string) string {
 	result := command
 	if strings.Contains(result, "{{CHANGED_FILES}}") {
-		var quoted []string
+		quoted := make([]string, 0, len(files))
 		for _, f := range files {
 			quoted = append(quoted, shellQuoteWrap(f))
 		}
@@ -166,7 +163,7 @@ func substitutePlaceholders(command string, files []string) string {
 	}
 	if strings.Contains(result, "{{CHANGED_PACKAGES}}") {
 		pkgs := getChangedPackages(files)
-		var quoted []string
+		quoted := make([]string, 0, len(pkgs))
 		for _, p := range pkgs {
 			quoted = append(quoted, shellQuoteWrap(p))
 		}

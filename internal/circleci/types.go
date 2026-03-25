@@ -24,11 +24,11 @@ type ExecResponse struct {
 	ExitCode  int    `json:"exit_code"`
 }
 
-type AddSshKeyRequest struct {
+type AddSSHKeyRequest struct {
 	PublicKey string `json:"public_key"`
 }
 
-type AddSshKeyResponse struct {
+type AddSSHKeyResponse struct {
 	URL string `json:"url"`
 }
 

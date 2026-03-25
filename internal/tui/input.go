@@ -36,9 +36,8 @@ func (m hiddenInputModel) Init() tea.Cmd {
 }
 
 func (m hiddenInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		switch msg.Type { //nolint:exhaustive
 		case tea.KeyEnter:
 			m.done = true
 			m.value = m.input.Value()

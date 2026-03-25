@@ -24,7 +24,7 @@ tasks:
   fmt:
     desc: Format code
     cmds:
-      - goimports -w .
+      - go tool goimports -w .
 
   tidy:
     desc: Tidy go modules

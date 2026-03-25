@@ -38,11 +38,15 @@ func NewFakeGitHub() *FakeGitHub {
 	return f
 }
 
-func (f *FakeGitHub) SetOrgValidation(resp string)               { f.set(func() { f.orgValidation = resp }) }
-func (f *FakeGitHub) SetOrgRepos(resp string)                    { f.set(func() { f.orgRepos = resp }) }
-func (f *FakeGitHub) SetReviewActivity(repo string, resp string) { f.set(func() { f.reviewActivity[repo] = resp }) }
-func (f *FakeGitHub) SetRateLimit(resp string)                   { f.set(func() { f.rateLimit = resp }) }
-func (f *FakeGitHub) SetRepoError(repo string, resp string)      { f.set(func() { f.errorRepos[repo] = resp }) }
+func (f *FakeGitHub) SetOrgValidation(resp string) { f.set(func() { f.orgValidation = resp }) }
+func (f *FakeGitHub) SetOrgRepos(resp string)      { f.set(func() { f.orgRepos = resp }) }
+func (f *FakeGitHub) SetReviewActivity(repo string, resp string) {
+	f.set(func() { f.reviewActivity[repo] = resp })
+}
+func (f *FakeGitHub) SetRateLimit(resp string) { f.set(func() { f.rateLimit = resp }) }
+func (f *FakeGitHub) SetRepoError(repo string, resp string) {
+	f.set(func() { f.errorRepos[repo] = resp })
+}
 
 func (f *FakeGitHub) set(fn func()) {
 	f.mu.Lock()

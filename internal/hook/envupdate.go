@@ -25,7 +25,7 @@ type EnvUpdateOptions struct {
 // ensures shell startup files source it, and migrates legacy paths.
 func RunEnvUpdate(opts EnvUpdateOptions, streams iostream.Streams) error {
 	if opts.Profile == "" {
-		opts.Profile = "enable"
+		opts.Profile = ProfileEnable
 	}
 	if err := ValidateProfile(opts.Profile); err != nil {
 		return err
@@ -130,7 +130,7 @@ func generateEnvContent(opts EnvUpdateOptions) string {
 	case "disable":
 		content += "# Profile: disable — all hooks disabled\n"
 		content += "export CHUNK_HOOK_ENABLE=0\n"
-	case "enable":
+	case ProfileEnable:
 		content += "# Profile: enable — all hooks enabled\n"
 		content += "export CHUNK_HOOK_ENABLE=1\n"
 	case "tests-lint":

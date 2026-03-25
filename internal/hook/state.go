@@ -171,18 +171,18 @@ func parsePath(path string) []interface{} {
 	for i < len(path) {
 		switch path[i] {
 		case '[':
-			close := strings.IndexByte(path[i:], ']')
-			if close == -1 {
+			closeIdx := strings.IndexByte(path[i:], ']')
+			if closeIdx == -1 {
 				return segments
 			}
 			idx := 0
-			for _, c := range path[i+1 : i+close] {
+			for _, c := range path[i+1 : i+closeIdx] {
 				if c >= '0' && c <= '9' {
 					idx = idx*10 + int(c-'0')
 				}
 			}
 			segments = append(segments, idx)
-			i += close + 1
+			i += closeIdx + 1
 			if i < len(path) && path[i] == '.' {
 				i++
 			}

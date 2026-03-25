@@ -29,7 +29,7 @@ func newBuildPromptCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build-prompt",
 		Short: "Analyze GitHub PR comments and generate a review prompt for AI coding agents",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if top <= 0 {
 				return fmt.Errorf("--top must be a positive integer, got %d", top)
 			}

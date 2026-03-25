@@ -476,9 +476,9 @@ func TestCacheWithFileExt(t *testing.T) {
 
 func TestCache(t *testing.T) {
 	tests := []struct {
-		name     string
-		exitCode int
-		output   string
+		name       string
+		exitCode   int
+		output     string
 		wantStatus string
 	}{
 		{"pass result", 0, "all good", "pass"},

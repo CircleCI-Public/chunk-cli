@@ -186,9 +186,9 @@ func TestHookEnvUpdateProfileContent(t *testing.T) {
 			absent:   []string{"export CHUNK_HOOK_ENABLE_TESTS"},
 		},
 		{
-			profile: "disable",
+			profile:  "disable",
 			contains: []string{"export CHUNK_HOOK_ENABLE=0", "Profile: disable"},
-			absent:  []string{"export CHUNK_HOOK_ENABLE_TESTS"},
+			absent:   []string{"export CHUNK_HOOK_ENABLE_TESTS"},
 		},
 		{
 			profile: "tests-lint",
@@ -484,8 +484,8 @@ func TestHookExecRunNoCheck(t *testing.T) {
 
 func TestHookExecRunFlags(t *testing.T) {
 	tests := []struct {
-		name       string
-		flags      []string
+		name        string
+		flags       []string
 		useTriggers bool
 	}{
 		{"cmd override", []string{"--cmd", "echo overridden"}, false},

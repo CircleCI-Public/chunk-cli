@@ -26,7 +26,7 @@ func newSkillsInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Install or update all skills into agent config directories",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := os.Getenv("HOME")
 			if home == "" {
 				return fmt.Errorf("HOME not set")
@@ -58,7 +58,7 @@ func newSkillsListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List bundled skills and their per-agent installation status",
-		Run: func(cmd *cobra.Command, args []string) {
+		Run: func(cmd *cobra.Command, _ []string) {
 			home := os.Getenv("HOME")
 			io := iostream.FromCmd(cmd)
 			statuses := skills.Status(home)
@@ -91,7 +91,8 @@ func stateDisplay(state skills.State) (icon, label string) {
 		return ui.Green("\u2713"), ui.Green("current")
 	case skills.StateOutdated:
 		return ui.Yellow("\u26a0"), ui.Yellow("outdated")
-	default:
+	case skills.StateMissing:
 		return ui.Dim("\u2717"), ui.Dim("missing")
 	}
+	return ui.Dim("?"), ui.Dim("unknown")
 }

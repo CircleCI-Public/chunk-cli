@@ -9,10 +9,10 @@ import (
 
 // Config is the top-level shape matching .chunk/hook/config.yml.
 type Config struct {
-	Triggers map[string]TriggerConfig `yaml:"triggers"`
-	Execs    map[string]ExecConfig    `yaml:"execs"`
-	Tasks    map[string]TaskConfig    `yaml:"tasks"`
-	Sentinels *SentinelsConfig        `yaml:"sentinels"`
+	Triggers  map[string]TriggerConfig `yaml:"triggers"`
+	Execs     map[string]ExecConfig    `yaml:"execs"`
+	Tasks     map[string]TaskConfig    `yaml:"tasks"`
+	Sentinels *SentinelsConfig         `yaml:"sentinels"`
 }
 
 // TriggerConfig holds trigger group patterns.

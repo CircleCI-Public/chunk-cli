@@ -10,10 +10,10 @@ import (
 
 func TestStreamsOutput(t *testing.T) {
 	tests := []struct {
-		name      string
-		call      func(iostream.Streams)
-		wantOut   string
-		wantErr   string
+		name    string
+		call    func(iostream.Streams)
+		wantOut string
+		wantErr string
 	}{
 		{
 			name:    "Println",

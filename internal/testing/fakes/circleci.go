@@ -73,7 +73,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	// Sandbox endpoints
 	r.GET("/api/v2/sandbox/instances", f.handleListSandboxes)
 	r.POST("/api/v2/sandbox/instances", f.handleCreateSandbox)
-	r.POST("/api/v2/sandbox/instances/:id/ssh/add-key", f.handleAddSshKey)
+	r.POST("/api/v2/sandbox/instances/:id/ssh/add-key", f.handleAddSSHKey)
 	r.POST("/api/v2/sandbox/instances/:id/exec", f.handleExec)
 
 	// Task run endpoint
@@ -158,7 +158,7 @@ func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
 	c.JSON(http.StatusCreated, sandbox)
 }
 
-func (f *FakeCircleCI) handleAddSshKey(c *gin.Context) {
+func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {
 	if !f.requireToken(c) {
 		return
 	}

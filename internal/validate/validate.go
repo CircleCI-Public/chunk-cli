@@ -3,6 +3,7 @@ package validate
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -135,7 +136,7 @@ func RunDryRun(cfg *ProjectConfig, name string, streams iostream.Streams) error 
 }
 
 // RunRemote runs commands on a remote sandbox.
-func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig, sandboxID, orgID string, streams iostream.Streams) error {
+func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig, sandboxID, _ string, streams iostream.Streams) error {
 	for _, c := range cfg.Commands {
 		resp, err := client.Exec(ctx, sandboxID, "sh", []string{"-c", c.Run})
 		if err != nil {
@@ -185,7 +186,8 @@ func runAndCache(ctx context.Context, workDir, name, command, fileExt string, ti
 			_ = WriteCache(workDir, name, fileExt, 1, combined.String())
 			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
 		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
 			exitCode = 1

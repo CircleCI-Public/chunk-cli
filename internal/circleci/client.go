@@ -65,11 +65,11 @@ func (c *Client) CreateSandbox(ctx context.Context, orgID, name, image string) (
 	return &resp, nil
 }
 
-func (c *Client) AddSshKey(ctx context.Context, sandboxID, publicKey string) (*AddSshKeyResponse, error) {
-	var resp AddSshKeyResponse
+func (c *Client) AddSSHKey(ctx context.Context, sandboxID, publicKey string) (*AddSSHKeyResponse, error) {
+	var resp AddSSHKeyResponse
 	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost,
 		fmt.Sprintf("/api/v2/sandbox/instances/%s/ssh/add-key", sandboxID),
-		httpcl.Body(AddSshKeyRequest{PublicKey: publicKey}),
+		httpcl.Body(AddSSHKeyRequest{PublicKey: publicKey}),
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {

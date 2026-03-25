@@ -29,7 +29,7 @@ func TestError(t *testing.T) {
 	})
 
 	t.Run("Unwrap", func(t *testing.T) {
-		if ue.Unwrap() != underlying {
+		if !errors.Is(ue.Unwrap(), underlying) {
 			t.Error("Unwrap() did not return the underlying error")
 		}
 	})

@@ -15,13 +15,13 @@ import (
 
 // maxCommentsPerReviewer returns the maximum comment count across all groups.
 func maxCommentsPerReviewer(groups []ReviewerGroup) int {
-	max := 0
+	highest := 0
 	for _, g := range groups {
-		if g.TotalComments > max {
-			max = g.TotalComments
+		if g.TotalComments > highest {
+			highest = g.TotalComments
 		}
 	}
-	return max
+	return highest
 }
 
 // analyzeWithRetry attempts analysis, binary-searching for a viable comment

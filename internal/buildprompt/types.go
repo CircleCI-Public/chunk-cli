@@ -74,9 +74,9 @@ type DetailsJSON struct {
 
 // DetailsMetadata is the metadata section of the details JSON.
 type DetailsMetadata struct {
-	Organization string `json:"organization"`
-	Since        string `json:"since,omitempty"`
-	AnalyzedAt   string `json:"analyzedAt"`
-	TotalRepos   int    `json:"totalReposAnalyzed"`
-	TotalComments int   `json:"totalComments"`
+	Organization  string `json:"organization"`
+	Since         string `json:"since,omitempty"`
+	AnalyzedAt    string `json:"analyzedAt"`
+	TotalRepos    int    `json:"totalReposAnalyzed"`
+	TotalComments int    `json:"totalComments"`
 }

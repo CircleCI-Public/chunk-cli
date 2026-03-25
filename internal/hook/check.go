@@ -152,29 +152,29 @@ func extractShellCommand(event map[string]interface{}) string {
 	return cmd
 }
 
-// HookResponse represents the action to take: allow or block.
-type HookResponse struct {
+// Response represents the action to take: allow or block.
+type Response struct {
 	Action  string // "allow" or "block"
 	Message string // block reason (only for "block")
 }
 
 // blockWithLimit blocks or auto-allows if limit exceeded.
 // Returns the response to emit.
-func blockWithLimit(cfg *ResolvedConfig, name string, limit int, reason string) HookResponse {
+func blockWithLimit(cfg *ResolvedConfig, name string, limit int, reason string) Response {
 	count := incrementBlockCount(cfg.SentinelDir, cfg.ProjectDir, name)
 	if limit > 0 && count > limit {
 		resetBlockCount(cfg.SentinelDir, cfg.ProjectDir, name)
-		return HookResponse{Action: "allow"}
+		return Response{Action: "allow"}
 	}
-	return HookResponse{
+	return Response{
 		Action:  "block",
 		Message: withProjectHeader(cfg.ProjectDir, reason),
 	}
 }
 
 // blockNoCount blocks without incrementing the counter.
-func blockNoCount(projectDir, reason string) HookResponse {
-	return HookResponse{
+func blockNoCount(projectDir, reason string) Response {
+	return Response{
 		Action:  "block",
 		Message: withProjectHeader(projectDir, reason),
 	}
@@ -186,7 +186,7 @@ func withProjectHeader(projectDir, reason string) string {
 
 // guardStopEvent guards against infinite recursion on Stop events.
 // Returns an allow response if recursion should be stopped, nil otherwise.
-func guardStopEvent(event map[string]interface{}, limit int) *HookResponse {
+func guardStopEvent(event map[string]interface{}, limit int) *Response {
 	if !isStopRecursion(event) {
 		return nil
 	}
@@ -194,7 +194,7 @@ func guardStopEvent(event map[string]interface{}, limit int) *HookResponse {
 		// Let blockWithLimit handle it
 		return nil
 	}
-	resp := HookResponse{Action: "allow"}
+	resp := Response{Action: "allow"}
 	return &resp
 }
 
@@ -205,7 +205,7 @@ func isStopRecursion(event map[string]interface{}) bool {
 }
 
 // emitResponse writes the hook response to stderr (for block) and exits.
-func emitResponse(resp HookResponse) error {
+func emitResponse(resp Response) error {
 	if resp.Action == "allow" {
 		return nil // exit 0
 	}

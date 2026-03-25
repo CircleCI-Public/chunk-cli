@@ -152,7 +152,7 @@ func TestCreateSandbox(t *testing.T) {
 	}
 }
 
-func TestAddSshKey(t *testing.T) {
+func TestAddSSHKey(t *testing.T) {
 	fake := fakes.NewFakeCircleCI()
 	fake.AddKeyURL = "sandbox-host.example.com"
 	srv := httptest.NewServer(fake)
@@ -161,7 +161,7 @@ func TestAddSshKey(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	resp, err := client.AddSshKey(ctx, "sb-1", "ssh-rsa AAAA...")
+	resp, err := client.AddSSHKey(ctx, "sb-1", "ssh-rsa AAAA...")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -362,8 +362,8 @@ func TestAuthRequired(t *testing.T) {
 		}
 	})
 
-	t.Run("AddSshKey", func(t *testing.T) {
-		_, err := client.AddSshKey(ctx, "sb-1", "ssh-rsa AAAA")
+	t.Run("AddSSHKey", func(t *testing.T) {
+		_, err := client.AddSSHKey(ctx, "sb-1", "ssh-rsa AAAA")
 		if err == nil {
 			t.Fatal("expected error")
 		}

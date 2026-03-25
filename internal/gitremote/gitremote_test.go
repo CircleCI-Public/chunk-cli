@@ -10,11 +10,11 @@ import (
 
 func TestParseRemoteURL(t *testing.T) {
 	tests := []struct {
-		name    string
-		url     string
-		wantOrg string
+		name     string
+		url      string
+		wantOrg  string
 		wantRepo string
-		wantErr bool
+		wantErr  bool
 	}{
 		{
 			name:     "ssh",

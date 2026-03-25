@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -41,10 +42,10 @@ type UserActivity struct {
 
 // ReviewCommentDetail is an enriched comment with PR metadata.
 type ReviewCommentDetail struct {
-	Reviewer  string              `json:"reviewer"`
-	Body      string              `json:"body"`
-	DiffHunk  string              `json:"diffHunk"`
-	CreatedAt string              `json:"createdAt"`
+	Reviewer  string                `json:"reviewer"`
+	Body      string                `json:"body"`
+	DiffHunk  string                `json:"diffHunk"`
+	CreatedAt string                `json:"createdAt"`
 	PR        ReviewCommentDetailPR `json:"pr"`
 }
 
@@ -127,8 +128,8 @@ func IsResolutionError(err error) bool {
 	if err == nil {
 		return false
 	}
-	_, ok := err.(*repoResolutionError)
-	if ok {
+	var resErr *repoResolutionError
+	if errors.As(err, &resErr) {
 		return true
 	}
 	return strings.Contains(err.Error(), "Could not resolve")
