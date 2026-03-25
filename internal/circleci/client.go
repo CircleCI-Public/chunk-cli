@@ -94,6 +94,28 @@ func (c *Client) Exec(ctx context.Context, sandboxID, command string, args []str
 	return &resp, nil
 }
 
+func (c *Client) DeleteSandbox(ctx context.Context, sandboxID string) error {
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodDelete,
+		fmt.Sprintf("/api/v2/sandbox/instances/%s", sandboxID),
+	))
+	if err != nil {
+		return fmt.Errorf("delete sandbox: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) GetCommand(ctx context.Context, commandID string) (*Command, error) {
+	var resp Command
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/v2/sandbox/commands/%s", commandID),
+		httpcl.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("get command: %w", err)
+	}
+	return &resp, nil
+}
+
 func (c *Client) TriggerRun(ctx context.Context, orgID, projectID string, body TriggerRunRequest) (*RunResponse, error) {
 	var resp RunResponse
 	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost,

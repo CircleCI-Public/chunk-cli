@@ -43,6 +43,15 @@ type ExecResponse struct {
 	ExitCode  int    `json:"exit_code"`
 }
 
+type Command struct {
+	ID       string `json:"id"`
+	PID      int    `json:"pid"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exit_code"`
+	Status   string `json:"status"`
+}
+
 // FakeCircleCI serves canned responses for the CircleCI API.
 type FakeCircleCI struct {
 	http.Handler
@@ -55,6 +64,7 @@ type FakeCircleCI struct {
 	RunResponse    *RunResponse
 	AddKeyURL      string
 	ExecResponse   *ExecResponse
+	CommandResponse *Command
 	RunStatusCode  int // override status code for trigger run endpoint
 }
 
@@ -73,8 +83,10 @@ func NewFakeCircleCI() *FakeCircleCI {
 	// Sandbox endpoints
 	r.GET("/api/v2/sandbox/instances", f.handleListSandboxes)
 	r.POST("/api/v2/sandbox/instances", f.handleCreateSandbox)
+	r.DELETE("/api/v2/sandbox/instances/:id", f.handleDeleteSandbox)
 	r.POST("/api/v2/sandbox/instances/:id/ssh/add-key", f.handleAddSSHKey)
 	r.POST("/api/v2/sandbox/instances/:id/exec", f.handleExec)
+	r.GET("/api/v2/sandbox/commands/:id", f.handleGetCommand)
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
@@ -187,6 +199,47 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 		Stdout:    "ok\n",
 		Stderr:    "",
 		ExitCode:  0,
+	})
+}
+
+func (f *FakeCircleCI) handleDeleteSandbox(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	id := c.Param("id")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	filtered := f.Sandboxes[:0]
+	for _, s := range f.Sandboxes {
+		if s.ID != id {
+			filtered = append(filtered, s)
+		}
+	}
+	f.Sandboxes = filtered
+	c.Status(http.StatusNoContent)
+}
+
+func (f *FakeCircleCI) handleGetCommand(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	id := c.Param("id")
+	f.mu.RLock()
+	resp := f.CommandResponse
+	f.mu.RUnlock()
+
+	if resp != nil {
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	c.JSON(http.StatusOK, Command{
+		ID:       id,
+		PID:      42,
+		Stdout:   "ok\n",
+		Stderr:   "",
+		ExitCode: 0,
+		Status:   "completed",
 	})
 }
 

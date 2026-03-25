@@ -57,3 +57,13 @@ type CreateSandboxRequest struct {
 	Name           string `json:"name"`
 	Image          string `json:"image,omitempty"`
 }
+
+type Command struct {
+	ID        string `json:"id"`
+	CommandID string `json:"command_id"`
+	PID       int    `json:"pid"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	ExitCode  int    `json:"exit_code"`
+	Status    string `json:"status"`
+}
