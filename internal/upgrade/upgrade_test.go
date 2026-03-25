@@ -9,17 +9,6 @@ import (
 	"testing"
 )
 
-func TestRunGhNotFound(t *testing.T) {
-	t.Setenv("PATH", "/nonexistent")
-	err := Run()
-	if err == nil {
-		t.Fatal("expected error when gh is not on PATH")
-	}
-	if !strings.Contains(err.Error(), "gh CLI not found") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
 // writeFakeGh creates a fake "gh" script in a temp directory that
 // records its arguments and returns the given exit code.
 // It returns the directory containing the fake.
@@ -50,38 +39,60 @@ exit 0
 	return dir
 }
 
-func TestRunGhNotAuthenticated(t *testing.T) {
-	dir := writeFakeGh(t, 1, 0)
-	t.Setenv("PATH", dir)
-
-	err := Run()
-	if err == nil {
-		t.Fatal("expected error when gh is not authenticated")
+func TestRun(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string // override PATH; empty means use writeFakeGh
+		authExit    int
+		upgradeExit int
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "gh not found",
+			path:        "/nonexistent",
+			wantErr:     true,
+			errContains: "gh CLI not found",
+		},
+		{
+			name:        "not authenticated",
+			authExit:    1,
+			wantErr:     true,
+			errContains: "not authenticated",
+		},
+		{
+			name: "success",
+		},
+		{
+			name:        "upgrade fails",
+			upgradeExit: 1,
+			wantErr:     true,
+			errContains: "upgrade failed",
+		},
 	}
-	if !strings.Contains(err.Error(), "not authenticated") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
 
-func TestRunSuccess(t *testing.T) {
-	dir := writeFakeGh(t, 0, 0)
-	t.Setenv("PATH", dir)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.path != "" {
+				t.Setenv("PATH", tt.path)
+			} else {
+				dir := writeFakeGh(t, tt.authExit, tt.upgradeExit)
+				t.Setenv("PATH", dir)
+			}
 
-	err := Run()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestRunUpgradeFails(t *testing.T) {
-	dir := writeFakeGh(t, 0, 1)
-	t.Setenv("PATH", dir)
-
-	err := Run()
-	if err == nil {
-		t.Fatal("expected error when upgrade command fails")
-	}
-	if !strings.Contains(err.Error(), "upgrade failed") {
-		t.Fatalf("unexpected error: %v", err)
+			err := Run()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }

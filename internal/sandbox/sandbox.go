@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 func List(ctx context.Context, client *circleci.Client, orgID string) ([]circleci.Sandbox, error) {
@@ -43,4 +44,29 @@ func AddSshKey(ctx context.Context, client *circleci.Client, sandboxID, publicKe
 	}
 
 	return client.AddSshKey(ctx, sandboxID, key)
+}
+
+// SSH opens a session and executes a command over SSH.
+func SSH(ctx context.Context, client *circleci.Client, sandboxID, identityFile string, args []string, io iostream.Streams) error {
+	session, err := OpenSession(ctx, client, sandboxID, identityFile)
+	if err != nil {
+		return err
+	}
+
+	command := ShellJoin(args)
+	result, err := ExecOverSSH(session, command, nil)
+	if err != nil {
+		return err
+	}
+
+	if result.Stdout != "" {
+		_, _ = fmt.Fprint(io.Out, result.Stdout)
+	}
+	if result.Stderr != "" {
+		_, _ = fmt.Fprint(io.Err, result.Stderr)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("command exited with status %d", result.ExitCode)
+	}
+	return nil
 }

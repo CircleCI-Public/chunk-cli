@@ -8,61 +8,49 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func TestStreams_Println(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	s := iostream.Streams{Out: &out, Err: &errBuf}
-
-	s.Println("hello", "world")
-
-	got := out.String()
-	want := "hello world\n"
-	if got != want {
-		t.Errorf("Println wrote %q, want %q", got, want)
+func TestStreamsOutput(t *testing.T) {
+	tests := []struct {
+		name      string
+		call      func(iostream.Streams)
+		wantOut   string
+		wantErr   string
+	}{
+		{
+			name:    "Println",
+			call:    func(s iostream.Streams) { s.Println("hello", "world") },
+			wantOut: "hello world\n",
+		},
+		{
+			name:    "Printf",
+			call:    func(s iostream.Streams) { s.Printf("count: %d", 42) },
+			wantOut: "count: 42",
+		},
+		{
+			name:    "ErrPrintln",
+			call:    func(s iostream.Streams) { s.ErrPrintln("warning") },
+			wantErr: "warning\n",
+		},
+		{
+			name:    "ErrPrintf",
+			call:    func(s iostream.Streams) { s.ErrPrintf("error: %s", "bad") },
+			wantErr: "error: bad",
+		},
 	}
-	if errBuf.Len() != 0 {
-		t.Errorf("Println wrote to Err: %q", errBuf.String())
-	}
-}
 
-func TestStreams_Printf(t *testing.T) {
-	var out bytes.Buffer
-	s := iostream.Streams{Out: &out}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errBuf bytes.Buffer
+			s := iostream.Streams{Out: &out, Err: &errBuf}
 
-	s.Printf("count: %d", 42)
+			tt.call(s)
 
-	got := out.String()
-	want := "count: 42"
-	if got != want {
-		t.Errorf("Printf wrote %q, want %q", got, want)
-	}
-}
-
-func TestStreams_ErrPrintln(t *testing.T) {
-	var out, errBuf bytes.Buffer
-	s := iostream.Streams{Out: &out, Err: &errBuf}
-
-	s.ErrPrintln("warning")
-
-	got := errBuf.String()
-	want := "warning\n"
-	if got != want {
-		t.Errorf("ErrPrintln wrote %q, want %q", got, want)
-	}
-	if out.Len() != 0 {
-		t.Errorf("ErrPrintln wrote to Out: %q", out.String())
-	}
-}
-
-func TestStreams_ErrPrintf(t *testing.T) {
-	var errBuf bytes.Buffer
-	s := iostream.Streams{Err: &errBuf}
-
-	s.ErrPrintf("error: %s", "bad")
-
-	got := errBuf.String()
-	want := "error: bad"
-	if got != want {
-		t.Errorf("ErrPrintf wrote %q, want %q", got, want)
+			if got := out.String(); got != tt.wantOut {
+				t.Errorf("Out = %q, want %q", got, tt.wantOut)
+			}
+			if got := errBuf.String(); got != tt.wantErr {
+				t.Errorf("Err = %q, want %q", got, tt.wantErr)
+			}
+		})
 	}
 }
 

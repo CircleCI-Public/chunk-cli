@@ -403,11 +403,11 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 
 			result := binary.RunCLI(t, tt.args, env, env.HomeDir)
 
-			// Commands should fail with "not yet implemented", not flag errors
-			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (not implemented)")
+			// Commands should fail at SSH key step, not at flag parsing
+			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
 			combined := result.Stdout + result.Stderr
-			assert.Assert(t, strings.Contains(combined, "not yet implemented"),
-				"expected 'not yet implemented' error, got: %s", combined)
+			assert.Assert(t, strings.Contains(combined, "SSH key not found"),
+				"expected SSH key error (proves flags accepted), got: %s", combined)
 		})
 	}
 }

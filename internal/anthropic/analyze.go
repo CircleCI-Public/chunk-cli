@@ -11,5 +11,5 @@ func (c *Client) AnalyzeReviews(ctx context.Context, prompt, model string) (stri
 	if model == "" {
 		model = config.AnalyzeModel
 	}
-	return c.sendMessage(ctx, model, 16000, prompt)
+	return c.Ask(ctx, model, 16000, prompt)
 }

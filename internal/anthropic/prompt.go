@@ -12,5 +12,5 @@ func (c *Client) GenerateReviewPrompt(ctx context.Context, analysis, model strin
 		model = config.PromptModel
 	}
 	prompt := buildPromptGenerationPrompt(analysis, includeAttribution)
-	return c.sendMessage(ctx, model, 8000, prompt)
+	return c.Ask(ctx, model, 8000, prompt)
 }

@@ -24,27 +24,48 @@ func newTestClient(t *testing.T, baseURL string) *Client {
 	return c
 }
 
-func TestNewMissingAPIKey(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	_, err := New()
-	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "ANTHROPIC_API_KEY"))
-}
+func TestNew(t *testing.T) {
+	tests := []struct {
+		name        string
+		apiKey      string
+		baseURL     string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "missing API key",
+			apiKey:      "",
+			wantErr:     true,
+			errContains: "ANTHROPIC_API_KEY",
+		},
+		{
+			name:   "default base URL",
+			apiKey: "test-key",
+		},
+		{
+			name:    "custom base URL",
+			apiKey:  "test-key",
+			baseURL: "http://custom:1234",
+		},
+	}
 
-func TestNewDefaultBaseURL(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-	t.Setenv("ANTHROPIC_BASE_URL", "")
-	c, err := New()
-	assert.NilError(t, err)
-	assert.Assert(t, c != nil)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ANTHROPIC_API_KEY", tt.apiKey)
+			t.Setenv("ANTHROPIC_BASE_URL", tt.baseURL)
 
-func TestNewCustomBaseURL(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-	t.Setenv("ANTHROPIC_BASE_URL", "http://custom:1234")
-	c, err := New()
-	assert.NilError(t, err)
-	assert.Assert(t, c != nil)
+			c, err := New()
+			if tt.wantErr {
+				assert.Assert(t, err != nil)
+				if tt.errContains != "" {
+					assert.Assert(t, strings.Contains(err.Error(), tt.errContains))
+				}
+				return
+			}
+			assert.NilError(t, err)
+			assert.Assert(t, c != nil)
+		})
+	}
 }
 
 func TestSendMessage(t *testing.T) {
@@ -53,7 +74,7 @@ func TestSendMessage(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	got, err := c.sendMessage(context.Background(), "test-model", 100, "say hello")
+	got, err := c.Ask(context.Background(), "test-model", 100, "say hello")
 	assert.NilError(t, err)
 	assert.Equal(t, got, "hello from claude")
 
@@ -81,20 +102,20 @@ func TestSendMessageQueuedResponses(t *testing.T) {
 	c := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	r1, err := c.sendMessage(ctx, "m", 10, "p1")
+	r1, err := c.Ask(ctx, "m", 10, "p1")
 	assert.NilError(t, err)
 	assert.Equal(t, r1, "first")
 
-	r2, err := c.sendMessage(ctx, "m", 10, "p2")
+	r2, err := c.Ask(ctx, "m", 10, "p2")
 	assert.NilError(t, err)
 	assert.Equal(t, r2, "second")
 
-	r3, err := c.sendMessage(ctx, "m", 10, "p3")
+	r3, err := c.Ask(ctx, "m", 10, "p3")
 	assert.NilError(t, err)
 	assert.Equal(t, r3, "third")
 
 	// Beyond queued responses falls back to "default response".
-	r4, err := c.sendMessage(ctx, "m", 10, "p4")
+	r4, err := c.Ask(ctx, "m", 10, "p4")
 	assert.NilError(t, err)
 	assert.Equal(t, r4, "default response")
 }
@@ -125,7 +146,7 @@ func TestSendMessageAuthError(t *testing.T) {
 	c, err := New()
 	assert.NilError(t, err)
 
-	_, err = c.sendMessage(context.Background(), "m", 10, "p")
+	_, err = c.Ask(context.Background(), "m", 10, "p")
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(err.Error(), "anthropic messages"))
 }
@@ -139,7 +160,7 @@ func TestSendMessageServerError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	_, err := c.sendMessage(context.Background(), "m", 10, "p")
+	_, err := c.Ask(context.Background(), "m", 10, "p")
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(err.Error(), "anthropic messages"))
 }
@@ -156,7 +177,7 @@ func TestSendMessageNoTextContent(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	_, err := c.sendMessage(context.Background(), "m", 10, "p")
+	_, err := c.Ask(context.Background(), "m", 10, "p")
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(err.Error(), "no text content"))
 }
@@ -170,7 +191,7 @@ func TestSendMessageNonTextBlock(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	got, err := c.sendMessage(context.Background(), "m", 10, "p")
+	got, err := c.Ask(context.Background(), "m", 10, "p")
 	assert.NilError(t, err)
 	assert.Equal(t, got, "found it")
 }
@@ -319,6 +340,6 @@ func TestCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	_, err := c.sendMessage(ctx, "m", 10, "p")
+	_, err := c.Ask(ctx, "m", 10, "p")
 	assert.Assert(t, err != nil)
 }

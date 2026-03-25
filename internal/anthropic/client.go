@@ -58,8 +58,8 @@ type contentBlock struct {
 	Text string `json:"text"`
 }
 
-// sendMessage sends a single user message and returns the assistant text.
-func (c *Client) sendMessage(ctx context.Context, model string, maxTokens int, prompt string) (string, error) {
+// Ask sends a single user message and returns the assistant text.
+func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt string) (string, error) {
 	var resp messagesResponse
 	req := httpcl.NewRequest("POST", "/v1/messages",
 		httpcl.Body(messagesRequest{

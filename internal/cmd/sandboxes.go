@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
@@ -168,15 +169,16 @@ func newSandboxesSshCmd() *cobra.Command {
 	var orgID, sandboxID, identityFile string
 
 	cmd := &cobra.Command{
-		Use:   "ssh",
+		Use:   "ssh [-- command...]",
 		Short: "SSH into a sandbox",
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := circleci.NewClient()
+			io := iostream.FromCmd(cmd)
+			client, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			_ = identityFile
-			return fmt.Errorf("ssh connection not yet implemented")
+			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, args, io)
 		},
 	}
 
@@ -197,14 +199,12 @@ func newSandboxesSyncCmd() *cobra.Command {
 		Use:   "sync",
 		Short: "Sync files to a sandbox",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, err := circleci.NewClient()
+			io := iostream.FromCmd(cmd)
+			client, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			_ = dest
-			_ = identityFile
-			_ = bootstrap
-			return fmt.Errorf("sync not yet implemented")
+			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, dest, bootstrap, io)
 		},
 	}
 
@@ -233,13 +233,13 @@ func newSandboxesPrepareCmd() *cobra.Command {
 				return fmt.Errorf("not a git repository")
 			}
 
-			apiKey := os.Getenv("ANTHROPIC_API_KEY")
-			if apiKey == "" {
-				return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required")
+			claude, err := anthropic.New()
+			if err != nil {
+				return err
 			}
 
-			_ = dockerSudo
-			return fmt.Errorf("prepare not yet implemented")
+			io := iostream.FromCmd(cmd)
+			return sandbox.Prepare(cmd.Context(), claude, dockerSudo, io, os.Stdin)
 		},
 	}
 
