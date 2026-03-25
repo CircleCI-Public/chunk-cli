@@ -53,6 +53,23 @@ func GetDefinitionByNameOrID(cfg *RunConfig, nameOrID string) (string, *string, 
 	return "", nil, "", fmt.Errorf("unknown definition %q, available: %s", nameOrID, availableDefinitions(cfg))
 }
 
+// SaveRunConfig writes run config to .chunk/run.json.
+func SaveRunConfig(workDir string, cfg *RunConfig) error {
+	dir := filepath.Join(workDir, ".chunk")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create .chunk directory: %w", err)
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal run config: %w", err)
+	}
+	path := filepath.Join(dir, "run.json")
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write run config: %w", err)
+	}
+	return nil
+}
+
 func availableDefinitions(cfg *RunConfig) string {
 	names := ""
 	for name := range cfg.Definitions {
