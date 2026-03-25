@@ -11,12 +11,14 @@ jobs:
     resource_class: medium
     steps:
       - checkout
+      - run: task mod-download
       - go/with-cache:
           golangci-lint: true
           steps:
-            - run:
-                name: Run lint
-                command: task lint
+            - run: task ci:lint
+            - store_test_results:
+                path: ./test-reports
+            - run: task ci:diff
 
   test:
     docker:
@@ -24,12 +26,15 @@ jobs:
     resource_class: medium
     steps:
       - checkout
+      - run: task mod-download
       - go/with-cache:
           steps:
             - run:
                 name: Run tests
-                command: task test
+                command: task ci:test
                 no_output_timeout: 90s
+      - store_test_results:
+          path: ./test-reports
 
   acceptance-test:
     docker:
@@ -37,12 +42,15 @@ jobs:
     resource_class: medium
     steps:
       - checkout
+      - run: task mod-download
       - go/with-cache:
           steps:
             - run:
                 name: Run acceptance tests
-                command: task acceptance-test
+                command: task ci:test -- ./acceptance/...
                 no_output_timeout: 120s
+      - store_test_results:
+          path: ./test-reports
 
   build-smoke-test:
     docker:
@@ -50,6 +58,7 @@ jobs:
     resource_class: medium
     steps:
       - checkout
+      - run: task mod-download
       - go/with-cache:
           steps:
             - run:
@@ -71,16 +80,12 @@ workflows:
       - test:
           context:
             - chunk-cli-test
-          requires:
-            - shellcheck/check
-            - lint
       - acceptance-test:
           context:
             - chunk-cli-test
-          requires:
-            - shellcheck/check
-            - lint
       - build-smoke-test:
           requires:
             - shellcheck/check
             - lint
+            - test
+            - acceptance-test

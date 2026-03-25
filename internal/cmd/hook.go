@@ -3,9 +3,10 @@ package cmd
 import (
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/hook"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/spf13/cobra"
 )
 
 // readStdinEvent reads and parses the stdin JSON event for hook commands.
