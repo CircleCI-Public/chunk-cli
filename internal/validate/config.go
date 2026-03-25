@@ -8,8 +8,10 @@ import (
 )
 
 type Command struct {
-	Name string `json:"name"`
-	Run  string `json:"run"`
+	Name    string `json:"name"`
+	Run     string `json:"run"`
+	FileExt string `json:"fileExt,omitempty"`
+	Timeout int    `json:"timeout,omitempty"`
 }
 
 type ProjectConfig struct {

@@ -37,7 +37,7 @@ func Status(workDir, name string, cfg *ProjectConfig, streams iostream.Streams) 
 	}
 
 	for _, c := range commands {
-		cached := CheckCache(workDir, c.Name)
+		cached := CheckCache(workDir, c.Name, c.FileExt)
 		if cached != nil {
 			streams.Printf("  %s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
 		} else {
@@ -50,7 +50,7 @@ func Status(workDir, name string, cfg *ProjectConfig, streams iostream.Streams) 
 // RunInline runs an inline command string, caching the result under the given name.
 func RunInline(ctx context.Context, workDir, name, command string, force bool, streams iostream.Streams) error {
 	if !force {
-		if cached := CheckCache(workDir, name); cached != nil {
+		if cached := CheckCache(workDir, name, ""); cached != nil {
 			streams.Printf("%s: cached (%s)\n", ui.Bold(name), colorStatus(cached.Status))
 			if cached.ExitCode != 0 {
 				return fmt.Errorf("%s: cached failure", name)
@@ -59,7 +59,7 @@ func RunInline(ctx context.Context, workDir, name, command string, force bool, s
 		}
 	}
 
-	return runAndCache(ctx, workDir, name, command, streams)
+	return runAndCache(ctx, workDir, name, command, "", streams)
 }
 
 // RunNamed runs a single named command from config with caching.
@@ -70,7 +70,7 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *Projec
 	}
 
 	if !force {
-		if cached := CheckCache(workDir, c.Name); cached != nil {
+		if cached := CheckCache(workDir, c.Name, c.FileExt); cached != nil {
 			streams.Printf("%s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
 			if cached.ExitCode != 0 {
 				return fmt.Errorf("%s: cached failure", c.Name)
@@ -79,7 +79,7 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *Projec
 		}
 	}
 
-	return runAndCache(ctx, workDir, c.Name, c.Run, streams)
+	return runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, streams)
 }
 
 // RunAll runs all configured commands with optional cache bypass.
@@ -90,7 +90,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *ProjectConfig,
 
 	for i, c := range cfg.Commands {
 		if !force {
-			if cached := CheckCache(workDir, c.Name); cached != nil {
+			if cached := CheckCache(workDir, c.Name, c.FileExt); cached != nil {
 				streams.ErrPrintf("%s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
 				if cached.ExitCode != 0 {
 					return fmt.Errorf("%s: cached failure", c.Name)
@@ -99,7 +99,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *ProjectConfig,
 			}
 		}
 
-		if err := runAndCache(ctx, workDir, c.Name, c.Run, streams); err != nil {
+		if err := runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, streams); err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
 				streams.ErrPrintf("%s: %s\n", ui.Bold(cfg.Commands[j].Name), ui.Yellow(fmt.Sprintf("skipped (%s failed)", c.Name)))
 			}
@@ -158,7 +158,7 @@ func colorStatus(status string) string {
 	}
 }
 
-func runAndCache(ctx context.Context, workDir, name, command string, streams iostream.Streams) error {
+func runAndCache(ctx context.Context, workDir, name, command, fileExt string, streams iostream.Streams) error {
 	streams.ErrPrintf("%s %s\n", ui.Dim("Running "+name+":"), ui.Gray(command))
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
@@ -178,7 +178,7 @@ func runAndCache(ctx context.Context, workDir, name, command string, streams ios
 		}
 	}
 
-	_ = WriteCache(workDir, name, exitCode, combined.String())
+	_ = WriteCache(workDir, name, fileExt, exitCode, combined.String())
 
 	if exitCode != 0 {
 		return fmt.Errorf("%s command failed", name)

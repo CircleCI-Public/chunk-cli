@@ -48,7 +48,7 @@ func safeName(name string) string {
 	return b.String()
 }
 
-func computeContentHash(workDir string) string {
+func computeContentHash(workDir, fileExt string) string {
 	h := sha256.New()
 
 	head, err := exec.Command("git", "-C", workDir, "rev-parse", "HEAD").Output()
@@ -60,7 +60,11 @@ func computeContentHash(workDir string) string {
 
 	h.Write([]byte("\n"))
 
-	diff, err := exec.Command("git", "-C", workDir, "diff", "HEAD").Output()
+	diffArgs := []string{"-C", workDir, "diff", "HEAD"}
+	if fileExt != "" {
+		diffArgs = append(diffArgs, "--", "*"+fileExt)
+	}
+	diff, err := exec.Command("git", diffArgs...).Output()
 	if err == nil {
 		h.Write(diff)
 	}
@@ -69,7 +73,8 @@ func computeContentHash(workDir string) string {
 }
 
 // CheckCache reads a cached result and returns it if the content hash still matches.
-func CheckCache(workDir, name string) *CachedResult {
+// fileExt optionally scopes the content hash to files matching the extension.
+func CheckCache(workDir, name, fileExt string) *CachedResult {
 	data, err := os.ReadFile(cachePath(workDir, name))
 	if err != nil {
 		return nil
@@ -78,7 +83,7 @@ func CheckCache(workDir, name string) *CachedResult {
 	if err := json.Unmarshal(data, &cr); err != nil {
 		return nil
 	}
-	current := computeContentHash(workDir)
+	current := computeContentHash(workDir, fileExt)
 	if cr.ContentHash != current {
 		return nil
 	}
@@ -86,7 +91,8 @@ func CheckCache(workDir, name string) *CachedResult {
 }
 
 // WriteCache writes a result sentinel to the cache directory.
-func WriteCache(workDir, name string, exitCode int, output string) error {
+// fileExt optionally scopes the content hash to files matching the extension.
+func WriteCache(workDir, name, fileExt string, exitCode int, output string) error {
 	dir := cacheDir(workDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -105,7 +111,7 @@ func WriteCache(workDir, name string, exitCode int, output string) error {
 		Status:      status,
 		ExitCode:    exitCode,
 		Output:      output,
-		ContentHash: computeContentHash(workDir),
+		ContentHash: computeContentHash(workDir, fileExt),
 		Timestamp:   time.Now().UnixMilli(),
 	}
 

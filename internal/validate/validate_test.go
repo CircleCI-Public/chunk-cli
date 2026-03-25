@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -375,4 +376,130 @@ func TestRunRemote(t *testing.T) {
 			t.Errorf("expected no stdout output, got: %s", out.String())
 		}
 	})
+}
+
+// --- Config with FileExt / Timeout tests ---
+
+func TestCommandFileExtRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	chunkDir := filepath.Join(dir, ".chunk")
+	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	raw := `{"commands":[{"name":"lint","run":"eslint .","fileExt":".ts","timeout":60}]}`
+	if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadProjectConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Commands) != 1 {
+		t.Fatalf("expected 1 command, got %d", len(cfg.Commands))
+	}
+	c := cfg.Commands[0]
+	if c.FileExt != ".ts" {
+		t.Errorf("expected FileExt %q, got %q", ".ts", c.FileExt)
+	}
+	if c.Timeout != 60 {
+		t.Errorf("expected Timeout 60, got %d", c.Timeout)
+	}
+
+	// Save and reload to verify round-trip
+	if err := SaveProjectConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := LoadProjectConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.Commands[0].FileExt != ".ts" {
+		t.Errorf("round-trip lost FileExt: got %q", cfg2.Commands[0].FileExt)
+	}
+}
+
+func TestCommandFileExtOmitted(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := &ProjectConfig{Commands: []Command{
+		{Name: "test", Run: "go test ./..."},
+	}}
+	if err := SaveProjectConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, ".chunk", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fileExt and timeout should not appear when empty/zero
+	if strings.Contains(string(data), "fileExt") {
+		t.Errorf("expected fileExt to be omitted from JSON, got: %s", data)
+	}
+	if strings.Contains(string(data), "timeout") {
+		t.Errorf("expected timeout to be omitted from JSON, got: %s", data)
+	}
+}
+
+// --- Cache with fileExt tests ---
+
+func TestCacheWithFileExt(t *testing.T) {
+	dir := t.TempDir()
+
+	// Initialize a git repo so computeContentHash works
+	initGitRepo(t, dir)
+
+	// Write cache with no fileExt
+	if err := WriteCache(dir, "test", "", 0, "passed"); err != nil {
+		t.Fatal(err)
+	}
+	cached := CheckCache(dir, "test", "")
+	if cached == nil {
+		t.Fatal("expected cache hit with no fileExt")
+	}
+	if cached.Status != "pass" {
+		t.Errorf("expected pass, got %s", cached.Status)
+	}
+
+	// Cache written with no fileExt should miss when checked with fileExt
+	// because the content hashes will differ (different git diff args)
+	if err := WriteCache(dir, "lint", ".ts", 0, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	cached = CheckCache(dir, "lint", ".ts")
+	if cached == nil {
+		t.Fatal("expected cache hit with matching fileExt")
+	}
+}
+
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@test.com"},
+		{"git", "config", "user.name", "Test"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git command %v failed: %s: %v", args, out, err)
+		}
+	}
+	// Create an initial commit so HEAD exists
+	readme := filepath.Join(dir, "README.md")
+	if err := os.WriteFile(readme, []byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "add", "."},
+		{"git", "commit", "-m", "init"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git command %v failed: %s: %v", args, out, err)
+		}
+	}
 }

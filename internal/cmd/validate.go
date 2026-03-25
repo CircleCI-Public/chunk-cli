@@ -1,8 +1,8 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,13 +10,14 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/hook"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
@@ -107,6 +108,33 @@ func newValidateCmd() *cobra.Command {
 
 			// Named command
 			if name != "" {
+				if cfg.FindCommand(name) == nil {
+					isTTY := term.IsTerminal(int(os.Stdin.Fd()))
+					if !isTTY {
+						return fmt.Errorf("command %q is not configured\nAdd %q to .chunk/config.json", name, name)
+					}
+					// Interactive setup: prompt for command
+					streams.ErrPrintf("Command %s is not configured yet.\n\n", ui.Bold(name))
+					streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
+					scanner := bufio.NewScanner(os.Stdin)
+					if !scanner.Scan() {
+						return fmt.Errorf("no input received")
+					}
+					input := strings.TrimSpace(scanner.Text())
+					if input == "" {
+						streams.ErrPrintln(ui.Dim("No command entered, aborting."))
+						return fmt.Errorf("no command entered")
+					}
+					if err := validate.SaveCommand(workDir, name, input); err != nil {
+						return fmt.Errorf("save command: %w", err)
+					}
+					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
+					// Reload config after save
+					cfg, err = validate.LoadProjectConfig(workDir)
+					if err != nil {
+						return err
+					}
+				}
 				return validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, streams)
 			}
 
@@ -143,22 +171,13 @@ func newValidateRunCmd() *cobra.Command {
 	}
 }
 
-var validProfiles = map[string]bool{
-	"node":   true,
-	"python": true,
-	"go":     true,
-	"ruby":   true,
-	"java":   true,
-	"rust":   true,
-}
-
 func newValidateInitCmd() *cobra.Command {
 	var profile string
 	var force, skipEnv bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize validation config",
+		Short: "Initialize hook config files and detect install/test commands",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workDir, err := os.Getwd()
 			if err != nil {
@@ -168,29 +187,30 @@ func newValidateInitCmd() *cobra.Command {
 			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
 			gitCmd.Dir = workDir
 			if err := gitCmd.Run(); err != nil {
-				return fmt.Errorf("not a git repository")
+				return fmt.Errorf("not a git repository, run this command from inside a git repo")
 			}
 
-			if profile != "" {
-				if !validProfiles[profile] {
-					names := make([]string, 0, len(validProfiles))
-					for k := range validProfiles {
-						names = append(names, k)
-					}
-					return usererr.New(
-					fmt.Sprintf("Invalid profile %q. Valid profiles: %s", profile, strings.Join(names, ", ")),
-					fmt.Errorf("invalid profile %q", profile),
-				)
+			if err := hook.ValidateProfile(profile); err != nil {
+				return err
+			}
+
+			streams := iostream.FromCmd(cmd)
+			configPath := filepath.Join(workDir, ".chunk", "config.json")
+			if _, err := os.Stat(configPath); err == nil && !force {
+				cfg, loadErr := validate.LoadProjectConfig(workDir)
+				if loadErr == nil && cfg.HasCommands() {
+					streams.ErrPrintf("Config already exists at %s\n", configPath)
+					streams.ErrPrintln(ui.Dim("To re-detect and overwrite: chunk validate init --force"))
+					return nil
 				}
 			}
 
-			io := iostream.FromCmd(cmd)
-			configPath := filepath.Join(workDir, ".chunk", "config.json")
-			if _, err := os.Stat(configPath); err == nil && !force {
-				io.ErrPrintln(ui.Warning("Config already exists. Use --force to overwrite."))
-				return nil
+			// Phase 1: hook setup (repo init + shell env)
+			if err := hook.RunSetup(workDir, profile, force, skipEnv, "", streams); err != nil {
+				return fmt.Errorf("hook setup: %w", err)
 			}
 
+			// Phase 2: detect commands
 			claude, err := anthropic.New()
 			if err != nil {
 				return err
@@ -201,49 +221,31 @@ func newValidateInitCmd() *cobra.Command {
 				return fmt.Errorf("detect test command: %w", err)
 			}
 
-			io.ErrPrintf("Detected test command: %s\n", ui.Bold(testCmd))
-			io.ErrPrintln(ui.Dim("Edit .chunk/config.json to change this later."))
+			streams.ErrPrintf("Detected test command: %s\n", ui.Bold(testCmd))
 
-			chunkDir := filepath.Join(workDir, ".chunk")
-			if err := os.MkdirAll(chunkDir, 0o755); err != nil {
-				return err
+			commands := []validate.Command{}
+			pm := detectPackageManager(workDir)
+			if pm != "" {
+				streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm))
+				commands = append(commands, validate.Command{Name: "install", Run: pm + " install"})
+			}
+			commands = append(commands, validate.Command{Name: "test", Run: testCmd})
+
+			cfg := &validate.ProjectConfig{Commands: commands}
+			if err := validate.SaveProjectConfig(workDir, cfg); err != nil {
+				return fmt.Errorf("write config: %w", err)
 			}
 
-			config := map[string]interface{}{
-				"commands": []map[string]string{
-					{"name": "test", "run": testCmd},
-				},
-			}
-
-			data, err := json.MarshalIndent(config, "", "  ")
-			if err != nil {
-				return err
-			}
-
-			if err := os.WriteFile(configPath, data, 0o644); err != nil {
-				return err
-			}
-
-			hookDir := filepath.Join(chunkDir, "hook")
-			if err := os.MkdirAll(hookDir, 0o755); err != nil {
-				return err
-			}
-
-			hookConfig := "# chunk hook configuration\nversion: 1\n"
-			hookConfigPath := filepath.Join(hookDir, "config.yml")
-			if err := os.WriteFile(hookConfigPath, []byte(hookConfig), 0o644); err != nil {
-				return err
-			}
-
-			io.ErrPrintln(ui.Success("Validation config initialized"))
-			_ = skipEnv
+			streams.ErrPrintf("Wrote %s\n", configPath)
+			streams.ErrPrintln(ui.Success("Validation config initialized"))
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&profile, "profile", "", "Language profile")
-	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing config")
-	cmd.Flags().BoolVar(&skipEnv, "skip-env", false, "Skip environment setup")
+	cmd.Flags().StringVar(&profile, "profile", "enable",
+		fmt.Sprintf("Shell environment profile (%s)", strings.Join(hook.ValidProfiles, ", ")))
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing files and config")
+	cmd.Flags().BoolVar(&skipEnv, "skip-env", false, "Skip shell environment update")
 
 	return cmd
 }
