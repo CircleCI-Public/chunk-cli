@@ -12,11 +12,10 @@ jobs:
     steps:
       - checkout
       - go/with-cache:
-          key: lint
-          mod: true
+          golangci-lint: true
           steps:
             - run:
-                name: Run golangci-lint
+                name: Run lint
                 command: task lint
 
   test:
@@ -26,8 +25,6 @@ jobs:
     steps:
       - checkout
       - go/with-cache:
-          key: test
-          mod: true
           steps:
             - run:
                 name: Run tests
@@ -41,8 +38,6 @@ jobs:
     steps:
       - checkout
       - go/with-cache:
-          key: acceptance
-          mod: true
           steps:
             - run:
                 name: Run acceptance tests
@@ -56,8 +51,6 @@ jobs:
     steps:
       - checkout
       - go/with-cache:
-          key: build
-          mod: true
           steps:
             - run:
                 name: Build binary
