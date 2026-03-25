@@ -1,12 +1,27 @@
 package cmd
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/hook"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/spf13/cobra"
 )
+
+// readStdinEvent reads and parses the stdin JSON event for hook commands.
+func readStdinEvent() map[string]interface{} {
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return map[string]interface{}{}
+	}
+	var event map[string]interface{}
+	if err := json.Unmarshal(data, &event); err != nil {
+		return map[string]interface{}{}
+	}
+	return event
+}
 
 func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -293,7 +308,8 @@ func newHookExecCheckCmd() *cobra.Command {
 			project, _ := cmd.Flags().GetString("project")
 			projectDir := hook.ResolveProject(project)
 			cfg := hook.LoadConfig(projectDir)
-			return hook.RunExecCheck(cfg, flags)
+			event := readStdinEvent()
+			return hook.RunExecCheck(cfg, flags, event)
 		},
 	}
 	cmd.Flags().IntVar(&flags.Timeout, "timeout", 0, "Timeout in seconds")
@@ -304,6 +320,7 @@ func newHookExecCheckCmd() *cobra.Command {
 	cmd.Flags().StringVar(&flags.Trigger, "trigger", "", "Inline trigger pattern")
 	cmd.Flags().IntVar(&flags.Limit, "limit", 0, "Max consecutive blocks")
 	cmd.Flags().StringVar(&flags.Matcher, "matcher", "", "Tool-name regex filter")
+	cmd.Flags().StringVar(&flags.Cmd, "cmd", "", "Command override")
 	cmd.Flags().String("project", "", "Project directory")
 	return cmd
 }
@@ -330,7 +347,8 @@ func newHookTaskCheckCmd() *cobra.Command {
 			project, _ := cmd.Flags().GetString("project")
 			projectDir := hook.ResolveProject(project)
 			cfg := hook.LoadConfig(projectDir)
-			return hook.RunTaskCheck(cfg, flags)
+			event := readStdinEvent()
+			return hook.RunTaskCheck(cfg, flags, event)
 		},
 	}
 	cmd.Flags().StringVar(&flags.Instructions, "instructions", "", "Instructions file")
@@ -379,6 +397,7 @@ func newHookSyncCheckCmd() *cobra.Command {
 			}
 			projectDir := hook.ResolveProject(project)
 			cfg := hook.LoadConfig(projectDir)
+			event := readStdinEvent()
 			return hook.RunSyncCheck(cfg, hook.SyncCheckFlags{
 				Specs:   specs,
 				On:      on,
@@ -389,7 +408,7 @@ func newHookSyncCheckCmd() *cobra.Command {
 				Always:  always,
 				OnFail:  onFail,
 				Bail:    bail,
-			})
+			}, event)
 		},
 	}
 	cmd.Flags().StringVar(&on, "on", "", "Trigger group name")
