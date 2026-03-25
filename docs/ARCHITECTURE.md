@@ -7,10 +7,8 @@ Module layout and dependency rules for the `chunk` Go CLI.
 ```
 chunk-cli/
 ├── main.go                    # Entry point: cobra bootstrap + usererr handling
-├── httpcl/                    # HTTP client library (JSON + retries)
-│   ├── client.go              # Retryable HTTP client (go-retryablehttp)
-│   ├── request.go             # Fluent request builder
-│   └── error.go               # HTTP error types
+├── skills/                    # Skill definitions (go:embed) and skill subdirectories
+├── acceptance/                # Acceptance tests
 └── internal/
     ├── cmd/                   # Cobra command definitions (thin wrappers)
     │   ├── root.go            # Root command, registers all subcommands
@@ -30,10 +28,16 @@ chunk-cli/
     ├── config/                # User config (~/.chunk/config.json)
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitremote/             # Git remote URL parsing for org/repo detection
+    ├── gitutil/               # Git utility helpers
     ├── hook/                  # Hook system: exec, task, sync, state, scope, env
+    ├── httpcl/                # HTTP client library (JSON + retries)
+    ├── iostream/              # I/O stream abstraction
     ├── sandbox/               # CircleCI sandbox operations
     ├── skills/                # Skill definitions (go:embed) and installation
     ├── task/                  # Task run config and CircleCI trigger
+    ├── testing/recorder/      # HTTP recorder for tests
+    ├── tui/                   # Terminal UI components (confirm, input, select)
+    ├── ui/                    # Colors, formatting, spinner
     ├── upgrade/               # CLI self-upgrade
     ├── usererr/               # User-facing error wrapper
     └── validate/              # Validation command logic
@@ -44,13 +48,13 @@ chunk-cli/
 Dependencies flow strictly downward:
 
 ```
-main.go → internal/cmd/ → internal/{business packages} → httpcl/
+main.go → internal/cmd/ → internal/{business packages} → internal/httpcl/
 ```
 
 - `main.go` creates the root command and handles top-level errors
 - `internal/cmd/` contains thin cobra wrappers that parse flags and delegate
 - Business packages (`buildprompt/`, `hook/`, `task/`, etc.) contain the logic
-- `httpcl/` is an independent library — no imports from `internal/`
+- `internal/httpcl/` is an independent library — no imports are allowed to other `internal/` packages
 - `config/` is a leaf — no imports from other `internal/` packages
 
 No upward or lateral imports between business packages, except where a
@@ -120,7 +124,7 @@ The hook subsystem lives entirely in `internal/hook/` and is exposed via
 through exec commands, task delegation, grouped checks, state persistence,
 and multi-repo scope management.
 
-## HTTP Client (`httpcl/`)
+## HTTP Client (`internal/httpcl/`)
 
 Shared HTTP infrastructure used by `anthropic/`, `circleci/`, and `github/`:
 

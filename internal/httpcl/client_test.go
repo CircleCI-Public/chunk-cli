@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 func TestCallJSONRoundTrip(t *testing.T) {
