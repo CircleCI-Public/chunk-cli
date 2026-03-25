@@ -1,0 +1,64 @@
+version: 2.1
+
+# CircleCI pipeline for building and publishing the Unikraft unikernel image.
+#
+
+executors:
+  machine-builder:
+    machine:
+      image: ubuntu-2204:current
+    resource_class: medium
+
+commands:
+  install-kraft:
+    description: "Install the KraftKit (kraft) CLI"
+    steps:
+      - restore_cache:
+          keys:
+            - kraft-bin-v1
+      - run:
+          name: Install kraft CLI
+          command: |
+            if ! command -v kraft &>/dev/null; then
+              curl --proto '=https' --tlsv1.2 -sSf https://get.kraftkit.sh | sh
+            fi
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+            source "$BASH_ENV"
+            kraft version
+      - save_cache:
+          key: kraft-bin-v1
+          paths:
+            - ~/.local/bin/kraft
+
+jobs:
+  build:
+    executor: machine-builder
+    steps:
+      - checkout
+      - install-kraft
+      - run:
+          name: Build unikernel image
+          command: task build-unikraft-image
+
+  publish:
+    executor: machine-builder
+    steps:
+      - checkout
+      - install-kraft
+      - run:
+          name: Build and publish unikernel image
+          command: task build-unikraft-image && task publish-unikraft-image
+
+workflows:
+  unikraft-build:
+    jobs:
+      - build
+
+      - publish:
+          requires:
+            - build
+          filters:
+            branches:
+              only: main
+          context:
+            - unikraft-cloud
