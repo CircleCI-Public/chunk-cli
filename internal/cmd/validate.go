@@ -225,9 +225,9 @@ func newValidateInitCmd() *cobra.Command {
 
 			commands := []validate.Command{}
 			pm := detectPackageManager(workDir)
-			if pm != "" {
-				streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm))
-				commands = append(commands, validate.Command{Name: "install", Run: pm + " install"})
+			if pm != nil {
+				streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.name))
+				commands = append(commands, validate.Command{Name: "install", Run: pm.installCommand})
 			}
 			commands = append(commands, validate.Command{Name: "test", Run: testCmd})
 
@@ -266,8 +266,8 @@ func detectTestCommand(ctx context.Context, claude *anthropic.Client, workDir st
 	pm := detectPackageManager(workDir)
 
 	var pmHint string
-	if pm != "" {
-		pmHint = fmt.Sprintf("Detected package manager: %s. Use %s to run tests (e.g. `%s test`).\n\n", pm, pm, pm)
+	if pm != nil {
+		pmHint = fmt.Sprintf("Detected package manager: %s. Use %s to run tests (e.g. `%s test`).\n\n", pm.name, pm.name, pm.name)
 	}
 
 	prompt := fmt.Sprintf(
@@ -364,23 +364,28 @@ func gatherRepoContext(workDir string, rootFiles []string) string {
 	return strings.Join(parts, "\n")
 }
 
-// detectPackageManager returns the package manager name based on lockfile presence.
-func detectPackageManager(workDir string) string {
+type packageManager struct {
+	name           string
+	installCommand string
+}
+
+// detectPackageManager returns the package manager and its CI-safe install command.
+func detectPackageManager(workDir string) *packageManager {
 	lockfiles := []struct {
 		file string
-		name string
+		pm   packageManager
 	}{
-		{"pnpm-lock.yaml", "pnpm"},
-		{"yarn.lock", "yarn"},
-		{"bun.lock", "bun"},
-		{"bun.lockb", "bun"},
-		{"package-lock.json", "npm"},
+		{"pnpm-lock.yaml", packageManager{"pnpm", "pnpm install --frozen-lockfile"}},
+		{"yarn.lock", packageManager{"yarn", "yarn install --frozen-lockfile"}},
+		{"bun.lock", packageManager{"bun", "bun install --frozen-lockfile"}},
+		{"bun.lockb", packageManager{"bun", "bun install --frozen-lockfile"}},
+		{"package-lock.json", packageManager{"npm", "npm ci"}},
 	}
 
 	for _, lf := range lockfiles {
 		if _, err := os.Stat(filepath.Join(workDir, lf.file)); err == nil {
-			return lf.name
+			return &lf.pm
 		}
 	}
-	return ""
+	return nil
 }

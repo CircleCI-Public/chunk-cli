@@ -474,6 +474,92 @@ func TestCacheWithFileExt(t *testing.T) {
 	}
 }
 
+func TestCache(t *testing.T) {
+	tests := []struct {
+		name     string
+		exitCode int
+		output   string
+		wantStatus string
+	}{
+		{"pass result", 0, "all good", "pass"},
+		{"fail result", 1, "FAIL: test_foo", "fail"},
+		{"exit code 2", 2, "error", "fail"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			initGitRepo(t, dir)
+
+			err := WriteCache(dir, "cmd", "", tt.exitCode, tt.output)
+			if err != nil {
+				t.Fatalf("WriteCache: %v", err)
+			}
+
+			cached := CheckCache(dir, "cmd", "")
+			if cached == nil {
+				t.Fatal("expected cache hit")
+			}
+			if cached.Status != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", cached.Status, tt.wantStatus)
+			}
+			if cached.ExitCode != tt.exitCode {
+				t.Fatalf("exitCode = %d, want %d", cached.ExitCode, tt.exitCode)
+			}
+			if cached.Output != tt.output {
+				t.Fatalf("output = %q, want %q", cached.Output, tt.output)
+			}
+		})
+	}
+}
+
+func TestCacheInvalidatedByChange(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+
+	if err := WriteCache(dir, "test", "", 0, "ok"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Modify a tracked file so the content hash changes
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cached := CheckCache(dir, "test", "")
+	if cached != nil {
+		t.Fatal("expected cache miss after file change")
+	}
+}
+
+func TestCacheMissForMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+
+	cached := CheckCache(dir, "nonexistent", "")
+	if cached != nil {
+		t.Fatal("expected nil for nonexistent cache")
+	}
+}
+
+func TestCacheOutputTruncation(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+
+	bigOutput := strings.Repeat("x", 100*1024) // 100KB, exceeds maxOutputBytes (50KB)
+	if err := WriteCache(dir, "big", "", 1, bigOutput); err != nil {
+		t.Fatal(err)
+	}
+
+	cached := CheckCache(dir, "big", "")
+	if cached == nil {
+		t.Fatal("expected cache hit")
+	}
+	if len(cached.Output) > maxOutputBytes {
+		t.Fatalf("output should be truncated to %d bytes, got %d", maxOutputBytes, len(cached.Output))
+	}
+}
+
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{

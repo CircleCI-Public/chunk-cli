@@ -43,6 +43,60 @@ func writeConfig(t *testing.T, dir, content string) {
 
 func strPtr(s string) *string { return &s }
 
+// --- MapVcsTypeToOrgType ---
+
+func TestMapVcsTypeToOrgType(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"github", "github"},
+		{"GitHub", "github"},
+		{"gh", "github"},
+		{"GH", "github"},
+		{"bitbucket", "circleci"},
+		{"Bitbucket", "circleci"},
+		{"circleci", "circleci"},
+		{"", "circleci"},
+		{"something-else", "circleci"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := MapVcsTypeToOrgType(tt.input)
+			if got != tt.want {
+				t.Fatalf("MapVcsTypeToOrgType(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- IsValidUUID ---
+
+func TestIsValidUUID(t *testing.T) {
+	if !IsValidUUID("550e8400-e29b-41d4-a716-446655440000") {
+		t.Fatal("expected valid UUID")
+	}
+	if IsValidUUID("not-a-uuid") {
+		t.Fatal("expected invalid UUID")
+	}
+	if IsValidUUID("") {
+		t.Fatal("expected empty string to be invalid")
+	}
+}
+
+// --- ConfigExists ---
+
+func TestConfigExists(t *testing.T) {
+	dir := t.TempDir()
+	if ConfigExists(dir) {
+		t.Fatal("expected false for missing config")
+	}
+	writeConfig(t, dir, testRunConfig)
+	if !ConfigExists(dir) {
+		t.Fatal("expected true for existing config")
+	}
+}
+
 // --- LoadRunConfig ---
 
 func TestLoadRunConfig(t *testing.T) {

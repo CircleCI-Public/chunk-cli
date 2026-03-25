@@ -3,12 +3,14 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/task"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
@@ -40,12 +42,16 @@ func newTaskRunCmd() *cobra.Command {
 				return err
 			}
 
-			workDir, err := os.Getwd()
+			cwd, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
+			repoRoot, err := gitutil.RepoRoot(cwd)
+			if err != nil {
+				return fmt.Errorf("not in a git repository: %w", err)
+			}
 
-			cfg, err := task.LoadRunConfig(workDir)
+			cfg, err := task.LoadRunConfig(repoRoot)
 			if err != nil {
 				return err
 			}
@@ -96,6 +102,29 @@ func newTaskConfigCmd() *cobra.Command {
 				return err
 			}
 
+			// Find git repo root instead of using cwd
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+			repoRoot, err := gitutil.RepoRoot(cwd)
+			if err != nil {
+				return fmt.Errorf("not in a git repository: %w", err)
+			}
+
+			// Check for existing config and prompt before overwriting
+			if task.ConfigExists(repoRoot) {
+				overwrite, err := tui.Confirm("Overwrite the existing configuration?", false)
+				if err != nil {
+					return nil
+				}
+				if !overwrite {
+					io.Println("\nSetup cancelled.")
+					return nil
+				}
+				io.Println("")
+			}
+
 			io.Println("")
 			io.Println(ui.Bold("Chunk Run Setup"))
 			io.Println("")
@@ -128,6 +157,13 @@ func newTaskConfigCmd() *cobra.Command {
 
 			var orgID, projectID, orgType string
 
+			// Sort projects alphabetically
+			sort.Slice(projects, func(i, j int) bool {
+				a := fmt.Sprintf("%s/%s", projects[i].Username, projects[i].Reponame)
+				b := fmt.Sprintf("%s/%s", projects[j].Username, projects[j].Reponame)
+				return a < b
+			})
+
 			// Build project selection list
 			items := make([]string, 0, len(projects)+1)
 			for _, p := range projects {
@@ -144,7 +180,7 @@ func newTaskConfigCmd() *cobra.Command {
 				// Selected a project from the list
 				p := projects[idx]
 				vcsPrefix := "gh"
-				if strings.Contains(p.VcsType, "bitbucket") {
+				if strings.EqualFold(p.VcsType, "bitbucket") {
 					vcsPrefix = "bb"
 				}
 				slug := fmt.Sprintf("%s/%s/%s", vcsPrefix, p.Username, p.Reponame)
@@ -157,10 +193,7 @@ func newTaskConfigCmd() *cobra.Command {
 
 				projectID = detail.ID
 				orgID = detail.OrgID
-				orgType = "github"
-				if strings.Contains(p.VcsType, "bitbucket") {
-					orgType = "bitbucket"
-				}
+				orgType = task.MapVcsTypeToOrgType(p.VcsType)
 			} else {
 				// Manual entry
 				if len(collabs) == 0 {
@@ -178,7 +211,7 @@ func newTaskConfigCmd() *cobra.Command {
 				}
 
 				orgID = collabs[orgIdx].ID
-				orgType = collabs[orgIdx].VcsType
+				orgType = task.MapVcsTypeToOrgType(collabs[orgIdx].VcsType)
 
 				projectID, err = tui.PromptText("Project ID (UUID)", "")
 				if err != nil {
@@ -201,12 +234,28 @@ func newTaskConfigCmd() *cobra.Command {
 					return fmt.Errorf("definition name is required")
 				}
 
-				defID, err := tui.PromptText("Definition ID (UUID)", "")
+				// Prompt for definition ID with UUID validation
+				var defID string
+				for {
+					defID, err = tui.PromptText("Definition ID (UUID)", "")
+					if err != nil {
+						return nil
+					}
+					if defID == "" {
+						io.Println(ui.Yellow("  This field is required."))
+						continue
+					}
+					if !task.IsValidUUID(defID) {
+						io.Println(ui.Yellow("  Must be a valid UUID (e.g. 550e8400-e29b-41d4-a716-446655440000)."))
+						continue
+					}
+					break
+				}
+
+				// Prompt for optional description
+				description, err := tui.PromptText("Description (optional)", "")
 				if err != nil {
 					return nil
-				}
-				if defID == "" {
-					return fmt.Errorf("definition ID is required")
 				}
 
 				defaultBranch, err := tui.PromptText("Default branch", "main")
@@ -214,13 +263,26 @@ func newTaskConfigCmd() *cobra.Command {
 					return nil
 				}
 
-				envID, err := tui.PromptText("Environment ID (optional UUID)", "")
-				if err != nil {
-					return nil
+				// Prompt for environment ID with optional UUID validation
+				var envID string
+				for {
+					envID, err = tui.PromptText("Environment ID (optional UUID)", "")
+					if err != nil {
+						return nil
+					}
+					if envID == "" {
+						break
+					}
+					if !task.IsValidUUID(envID) {
+						io.Println(ui.Yellow("  Must be a valid UUID (e.g. 550e8400-e29b-41d4-a716-446655440000)."))
+						continue
+					}
+					break
 				}
 
 				def := task.RunDefinition{
 					DefinitionID:  defID,
+					Description:   description,
 					DefaultBranch: defaultBranch,
 				}
 				if envID != "" {
@@ -235,11 +297,6 @@ func newTaskConfigCmd() *cobra.Command {
 				}
 			}
 
-			workDir, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
-			}
-
 			runCfg := &task.RunConfig{
 				OrgID:       orgID,
 				ProjectID:   projectID,
@@ -247,7 +304,7 @@ func newTaskConfigCmd() *cobra.Command {
 				Definitions: definitions,
 			}
 
-			if err := task.SaveRunConfig(workDir, runCfg); err != nil {
+			if err := task.SaveRunConfig(repoRoot, runCfg); err != nil {
 				return err
 			}
 

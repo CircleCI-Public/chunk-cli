@@ -132,7 +132,7 @@ func ReadMarker(projectDir string) *MarkerContent {
 // ActivateScope reads stdin JSON and activates scope if file paths reference the project.
 // Returns nil on success (always exits 0 for the hook).
 func ActivateScope(projectDir string, stdin io.Reader) error {
-	raw, err := readStdinJSON(stdin)
+	raw, err := ReadStdinJSON(stdin)
 	if err != nil {
 		return nil // No valid JSON, exit 0
 	}
@@ -178,7 +178,7 @@ func ActivateScope(projectDir string, stdin io.Reader) error {
 
 // DeactivateScope removes the scope marker. Session-aware: only removes if same session.
 func DeactivateScope(projectDir string, stdin io.Reader) error {
-	raw, err := readStdinJSON(stdin)
+	raw, err := ReadStdinJSON(stdin)
 	if err != nil {
 		return fmt.Errorf("failed to read stdin: session information required")
 	}
@@ -201,7 +201,8 @@ func DeactivateScope(projectDir string, stdin io.Reader) error {
 	return nil
 }
 
-func readStdinJSON(r io.Reader) (map[string]interface{}, error) {
+// ReadStdinJSON reads and parses a JSON object from r.
+func ReadStdinJSON(r io.Reader) (map[string]interface{}, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err

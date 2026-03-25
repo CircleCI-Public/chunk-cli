@@ -6,14 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type RunDefinition struct {
 	DefinitionID       string  `json:"definition_id"`
+	Description        string  `json:"description,omitempty"`
 	ChunkEnvironmentID *string `json:"chunk_environment_id"`
 	DefaultBranch      string  `json:"default_branch"`
+}
+
+// IsValidUUID checks if a string is a valid UUID format.
+func IsValidUUID(s string) bool {
+	return uuidRegex.MatchString(s)
 }
 
 type RunConfig struct {
@@ -68,6 +75,23 @@ func SaveRunConfig(workDir string, cfg *RunConfig) error {
 		return fmt.Errorf("write run config: %w", err)
 	}
 	return nil
+}
+
+// MapVcsTypeToOrgType maps a VCS type string to the org type used in run config.
+// "github" and "gh" map to "github"; everything else maps to "circleci".
+func MapVcsTypeToOrgType(vcsType string) string {
+	lower := strings.ToLower(vcsType)
+	if lower == "github" || lower == "gh" {
+		return "github"
+	}
+	return "circleci"
+}
+
+// ConfigExists checks whether .chunk/run.json exists at the given root directory.
+func ConfigExists(rootDir string) bool {
+	path := filepath.Join(rootDir, ".chunk", "run.json")
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func availableDefinitions(cfg *RunConfig) string {

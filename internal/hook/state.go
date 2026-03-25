@@ -1,7 +1,6 @@
 package hook
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,7 +13,7 @@ import (
 
 // StateSave reads event JSON from stdin and stores it keyed by event name.
 func StateSave(sentinelDir, projectDir string, stdin io.Reader) error {
-	raw, err := readStdinJSON(stdin)
+	raw, err := ReadStdinJSON(stdin)
 	if err != nil {
 		// No valid input — exit 0
 		return nil
@@ -47,7 +46,7 @@ func StateSave(sentinelDir, projectDir string, stdin io.Reader) error {
 
 // StateAppend reads event JSON from stdin and appends it to existing state.
 func StateAppend(sentinelDir, projectDir string, stdin io.Reader) error {
-	raw, err := readStdinJSON(stdin)
+	raw, err := ReadStdinJSON(stdin)
 	if err != nil {
 		return nil
 	}
@@ -203,7 +202,7 @@ func parsePath(path string) []interface{} {
 
 // StateClear clears state for the project.
 func StateClear(sentinelDir, projectDir string, stdin io.Reader) error {
-	raw, _ := readStdinJSON(stdin)
+	raw, _ := ReadStdinJSON(stdin)
 	sessionID, _ := raw["session_id"].(string)
 
 	if sessionID != "" {
@@ -222,8 +221,7 @@ func StateClear(sentinelDir, projectDir string, stdin io.Reader) error {
 }
 
 func stateHash(projectDir string) string {
-	h := sha256.Sum256([]byte(projectDir))
-	return fmt.Sprintf("%x", h[:8])
+	return hashID(projectDir)
 }
 
 func statePath(sentinelDir, projectDir string) string {
@@ -232,27 +230,15 @@ func statePath(sentinelDir, projectDir string) string {
 
 func readState(sentinelDir, projectDir string) map[string]interface{} {
 	path := statePath(sentinelDir, projectDir)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]interface{}{}
-	}
 	var state map[string]interface{}
-	if err := json.Unmarshal(data, &state); err != nil {
+	if !readJSONFile(path, &state) {
 		return map[string]interface{}{}
 	}
 	return state
 }
 
 func writeState(sentinelDir, projectDir string, state map[string]interface{}) error {
-	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
-		return err
-	}
-	path := statePath(sentinelDir, projectDir)
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return writeJSONFile(statePath(sentinelDir, projectDir), state)
 }
 
 func getSessionID(state map[string]interface{}) string {

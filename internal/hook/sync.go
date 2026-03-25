@@ -1,8 +1,6 @@
 package hook
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -65,8 +63,7 @@ func groupID(projectDir string, specs []CommandSpec) string {
 		keys = append(keys, s.Type+":"+s.Name)
 	}
 	key := strings.Join(keys, ",")
-	h := sha256.Sum256([]byte(projectDir + ":sync:" + key))
-	return fmt.Sprintf("sync-%x", h[:8])
+	return fmt.Sprintf("sync-%s", hashID(projectDir, "sync", key))
 }
 
 func groupSentinelPath(sentinelDir, projectDir string, specs []CommandSpec) string {
@@ -75,22 +72,16 @@ func groupSentinelPath(sentinelDir, projectDir string, specs []CommandSpec) stri
 
 func readGroupSentinel(sentinelDir, projectDir string, specs []CommandSpec) *groupSentinel {
 	path := groupSentinelPath(sentinelDir, projectDir, specs)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return &groupSentinel{}
-	}
 	var gs groupSentinel
-	if err := json.Unmarshal(data, &gs); err != nil {
+	if !readJSONFile(path, &gs) {
 		return &groupSentinel{}
 	}
 	return &gs
 }
 
 func writeGroupSentinel(sentinelDir, projectDir string, specs []CommandSpec, gs *groupSentinel) {
-	_ = os.MkdirAll(sentinelDir, 0o755)
 	path := groupSentinelPath(sentinelDir, projectDir, specs)
-	data, _ := json.MarshalIndent(gs, "", "  ")
-	_ = os.WriteFile(path, append(data, '\n'), 0o644)
+	_ = writeJSONFile(path, gs)
 }
 
 func removeGroupSentinel(sentinelDir, projectDir string, specs []CommandSpec) {

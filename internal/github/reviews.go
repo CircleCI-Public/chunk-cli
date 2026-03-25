@@ -78,7 +78,7 @@ func (c *Client) FetchReviewActivity(ctx context.Context, org, repo string, sinc
 		}
 
 		var resp graphQLResponse[RepoPRsData]
-		if err := c.do(ctx, reviewActivityQuery, vars, &resp); err != nil {
+		if err := c.doWithRetry(ctx, reviewActivityQuery, vars, &resp); err != nil {
 			return nil, err
 		}
 		if hasResolutionError(resp.Errors) {
@@ -104,6 +104,11 @@ func (c *Client) FetchReviewActivity(ctx context.Context, org, repo string, sinc
 			break
 		}
 		cursor = prData.PageInfo.EndCursor
+
+		// Throttle if rate limit is low
+		if err := waitForRateLimit(ctx, resp.Data.RateLimit); err != nil {
+			return nil, err
+		}
 	}
 
 	return &FetchReviewActivityResult{Activity: activityMap, Details: details}, nil

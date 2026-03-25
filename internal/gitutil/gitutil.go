@@ -2,9 +2,27 @@ package gitutil
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
+
+// RepoRoot returns the root directory of the current git repository
+// by walking up from the given directory looking for .git/.
+func RepoRoot(from string) (string, error) {
+	dir := from
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("not in a git repository")
+		}
+		dir = parent
+	}
+}
 
 // CurrentBranch returns the current git branch name.
 // Returns an error if in detached HEAD state or not in a git repo.

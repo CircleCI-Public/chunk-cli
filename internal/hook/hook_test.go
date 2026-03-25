@@ -24,30 +24,35 @@ func isBlockError(err error) bool {
 
 // --- config ---
 
-func TestLoadConfigMissingFile(t *testing.T) {
-	dir := t.TempDir()
-	cfg := LoadConfig(dir)
-
-	if cfg.ProjectDir != dir {
-		t.Fatalf("expected ProjectDir %q, got %q", dir, cfg.ProjectDir)
-	}
-	if len(cfg.Execs) != 0 {
-		t.Fatalf("expected no execs, got %d", len(cfg.Execs))
-	}
-	// Should always have the default pre-commit trigger
-	if _, ok := cfg.Triggers["pre-commit"]; !ok {
-		t.Fatal("expected default pre-commit trigger")
-	}
-}
-
-func TestLoadConfigFromYAML(t *testing.T) {
-	dir := t.TempDir()
-	hookDir := filepath.Join(dir, ".chunk", "hook")
-	if err := os.MkdirAll(hookDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	yaml := `
+func TestLoadConfig(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+		check func(t *testing.T, dir string, cfg *ResolvedConfig)
+	}{
+		{
+			name:  "missing file returns defaults",
+			setup: func(t *testing.T, dir string) {},
+			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
+				if cfg.ProjectDir != dir {
+					t.Fatalf("expected ProjectDir %q, got %q", dir, cfg.ProjectDir)
+				}
+				if len(cfg.Execs) != 0 {
+					t.Fatalf("expected no execs, got %d", len(cfg.Execs))
+				}
+				if _, ok := cfg.Triggers["pre-commit"]; !ok {
+					t.Fatal("expected default pre-commit trigger")
+				}
+			},
+		},
+		{
+			name: "valid YAML with execs tasks and triggers",
+			setup: func(t *testing.T, dir string) {
+				hookDir := filepath.Join(dir, ".chunk", "hook")
+				if err := os.MkdirAll(hookDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				yaml := `
 triggers:
   go-files:
     patterns:
@@ -65,90 +70,98 @@ tasks:
 sentinels:
   dir: /tmp/custom-sentinels
 `
-	if err := os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte(yaml), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := LoadConfig(dir)
-
-	if len(cfg.Execs) != 2 {
-		t.Fatalf("expected 2 execs, got %d", len(cfg.Execs))
-	}
-	if cfg.Execs["tests"].Timeout != 30 {
-		t.Fatalf("expected timeout 30, got %d", cfg.Execs["tests"].Timeout)
-	}
-	// lint has no timeout set, should get default 300
-	if cfg.Execs["lint"].Timeout != 300 {
-		t.Fatalf("expected default timeout 300 for lint, got %d", cfg.Execs["lint"].Timeout)
-	}
-	if len(cfg.Tasks) != 1 {
-		t.Fatalf("expected 1 task, got %d", len(cfg.Tasks))
-	}
-	// task defaults
-	if cfg.Tasks["review"].Limit != 3 {
-		t.Fatalf("expected default limit 3, got %d", cfg.Tasks["review"].Limit)
-	}
-	if cfg.Tasks["review"].Timeout != 600 {
-		t.Fatalf("expected default timeout 600, got %d", cfg.Tasks["review"].Timeout)
-	}
-	// custom trigger
-	patterns, ok := cfg.Triggers["go-files"]
-	if !ok {
-		t.Fatal("expected go-files trigger")
-	}
-	if len(patterns) != 2 {
-		t.Fatalf("expected 2 patterns, got %d", len(patterns))
-	}
-	// default trigger still present
-	if _, ok := cfg.Triggers["pre-commit"]; !ok {
-		t.Fatal("expected default pre-commit trigger to be preserved")
-	}
-}
-
-func TestLoadConfigSentinelDirFromEnv(t *testing.T) {
-	dir := t.TempDir()
-	sentDir := t.TempDir()
-	t.Setenv("CHUNK_HOOK_SENTINELS_DIR", sentDir)
-
-	cfg := LoadConfig(dir)
-	if cfg.SentinelDir != sentDir {
-		t.Fatalf("expected sentinel dir %q from env, got %q", sentDir, cfg.SentinelDir)
-	}
-}
-
-func TestLoadConfigCustomConfigPath(t *testing.T) {
-	dir := t.TempDir()
-	customPath := filepath.Join(dir, "custom-config.yml")
-	yaml := `execs:
+				if err := os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte(yaml), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
+				if len(cfg.Execs) != 2 {
+					t.Fatalf("expected 2 execs, got %d", len(cfg.Execs))
+				}
+				if cfg.Execs["tests"].Timeout != 30 {
+					t.Fatalf("expected timeout 30, got %d", cfg.Execs["tests"].Timeout)
+				}
+				if cfg.Execs["lint"].Timeout != 300 {
+					t.Fatalf("expected default timeout 300 for lint, got %d", cfg.Execs["lint"].Timeout)
+				}
+				if len(cfg.Tasks) != 1 {
+					t.Fatalf("expected 1 task, got %d", len(cfg.Tasks))
+				}
+				if cfg.Tasks["review"].Limit != 3 {
+					t.Fatalf("expected default limit 3, got %d", cfg.Tasks["review"].Limit)
+				}
+				if cfg.Tasks["review"].Timeout != 600 {
+					t.Fatalf("expected default timeout 600, got %d", cfg.Tasks["review"].Timeout)
+				}
+				patterns, ok := cfg.Triggers["go-files"]
+				if !ok {
+					t.Fatal("expected go-files trigger")
+				}
+				if len(patterns) != 2 {
+					t.Fatalf("expected 2 patterns, got %d", len(patterns))
+				}
+				if _, ok := cfg.Triggers["pre-commit"]; !ok {
+					t.Fatal("expected default pre-commit trigger to be preserved")
+				}
+			},
+		},
+		{
+			name: "sentinel dir from env",
+			setup: func(t *testing.T, dir string) {
+				t.Setenv("CHUNK_HOOK_SENTINELS_DIR", t.TempDir())
+			},
+			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
+				sentDir := os.Getenv("CHUNK_HOOK_SENTINELS_DIR")
+				if cfg.SentinelDir != sentDir {
+					t.Fatalf("expected sentinel dir %q from env, got %q", sentDir, cfg.SentinelDir)
+				}
+			},
+		},
+		{
+			name: "custom config path from env",
+			setup: func(t *testing.T, dir string) {
+				customPath := filepath.Join(dir, "custom-config.yml")
+				yaml := `execs:
   build:
     command: "make build"
 `
-	if err := os.WriteFile(customPath, []byte(yaml), 0o644); err != nil {
-		t.Fatal(err)
+				if err := os.WriteFile(customPath, []byte(yaml), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("CHUNK_HOOK_CONFIG", customPath)
+			},
+			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
+				if _, ok := cfg.Execs["build"]; !ok {
+					t.Fatal("expected build exec from custom config path")
+				}
+			},
+		},
+		{
+			name: "invalid YAML returns empty config",
+			setup: func(t *testing.T, dir string) {
+				hookDir := filepath.Join(dir, ".chunk", "hook")
+				if err := os.MkdirAll(hookDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte("{{invalid"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
+				if len(cfg.Execs) != 0 {
+					t.Fatalf("expected no execs from invalid yaml, got %d", len(cfg.Execs))
+				}
+			},
+		},
 	}
 
-	t.Setenv("CHUNK_HOOK_CONFIG", customPath)
-
-	cfg := LoadConfig(dir)
-	if _, ok := cfg.Execs["build"]; !ok {
-		t.Fatal("expected build exec from custom config path")
-	}
-}
-
-func TestLoadConfigInvalidYAML(t *testing.T) {
-	dir := t.TempDir()
-	hookDir := filepath.Join(dir, ".chunk", "hook")
-	if err := os.MkdirAll(hookDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte("{{invalid"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := LoadConfig(dir)
-	// Should return empty config, not panic
-	if len(cfg.Execs) != 0 {
-		t.Fatalf("expected no execs from invalid yaml, got %d", len(cfg.Execs))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tt.setup(t, dir)
+			cfg := LoadConfig(dir)
+			tt.check(t, dir, cfg)
+		})
 	}
 }
 

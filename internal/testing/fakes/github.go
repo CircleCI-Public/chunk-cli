@@ -25,10 +25,7 @@ type FakeGitHub struct {
 }
 
 func NewFakeGitHub() *FakeGitHub {
-	gin.SetMode(gin.ReleaseMode)
-	r := gin.New()
-	r.Use(gin.Recovery())
-	rec := recorder.NewRecorder()
+	r, rec := newRouter()
 	f := &FakeGitHub{
 		Handler:        r,
 		Recorder:       rec,
@@ -37,7 +34,6 @@ func NewFakeGitHub() *FakeGitHub {
 		rateLimit:      `{"remaining": 4999, "resetAt": "2099-01-01T00:00:00Z"}`,
 	}
 
-	r.Use(rec.GinMiddleware())
 	r.POST("/graphql", f.handleGraphQL)
 	return f
 }

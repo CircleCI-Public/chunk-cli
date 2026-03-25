@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
-	"io"
 	"os"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/hook"
@@ -12,12 +10,8 @@ import (
 
 // readStdinEvent reads and parses the stdin JSON event for hook commands.
 func readStdinEvent() map[string]interface{} {
-	data, err := io.ReadAll(os.Stdin)
+	event, err := hook.ReadStdinJSON(os.Stdin)
 	if err != nil {
-		return map[string]interface{}{}
-	}
-	var event map[string]interface{}
-	if err := json.Unmarshal(data, &event); err != nil {
 		return map[string]interface{}{}
 	}
 	return event

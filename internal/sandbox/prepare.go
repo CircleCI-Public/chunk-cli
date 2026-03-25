@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -134,11 +135,19 @@ func identifyCredentials(ctx context.Context, claude *anthropic.Client, model, r
 
 	scanner := bufio.NewScanner(stdin)
 	for _, c := range creds {
-		io.ErrPrintf("%s: ", c.BuildArg)
-		if !scanner.Scan() {
-			return nil, fmt.Errorf("reading credential %s: %w", c.BuildArg, scanner.Err())
+		if c.Sensitive {
+			value, err := tui.PromptHidden(c.BuildArg)
+			if err != nil {
+				return nil, fmt.Errorf("reading credential %s: %w", c.BuildArg, err)
+			}
+			collected[c.BuildArg] = value
+		} else {
+			io.ErrPrintf("%s: ", c.BuildArg)
+			if !scanner.Scan() {
+				return nil, fmt.Errorf("reading credential %s: %w", c.BuildArg, scanner.Err())
+			}
+			collected[c.BuildArg] = scanner.Text()
 		}
-		collected[c.BuildArg] = scanner.Text()
 	}
 	io.ErrPrintln("")
 	return collected, nil

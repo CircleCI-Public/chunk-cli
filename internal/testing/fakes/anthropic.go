@@ -25,17 +25,13 @@ type FakeAnthropic struct {
 }
 
 func NewFakeAnthropic(responses ...string) *FakeAnthropic {
-	gin.SetMode(gin.ReleaseMode)
-	r := gin.New()
-	r.Use(gin.Recovery())
-	rec := recorder.NewRecorder()
+	r, rec := newRouter()
 	f := &FakeAnthropic{
 		Handler:   r,
 		Recorder:  rec,
 		responses: responses,
 	}
 
-	r.Use(rec.GinMiddleware())
 	r.POST("/v1/messages", f.handleMessages)
 	r.POST("/v1/messages/count_tokens", f.handleCountTokens)
 	return f

@@ -165,9 +165,9 @@ func TestMaskAPIKey(t *testing.T) {
 		key  string
 		want string
 	}{
-		{"empty", "", ""},
-		{"short_3", "abc", "abc"},
-		{"exact_4", "abcd", "abcd"},
+		{"empty", "", "****"},
+		{"short_3", "abc", "****"},
+		{"exact_4", "abcd", "****"},
 		{"normal", "sk-ant-api03-AAAA-ZZZZ", "******************ZZZZ"},
 		{"five_chars", "12345", "*2345"},
 	}

@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
+
+// DefaultTimeout is the per-command execution timeout in seconds.
+const DefaultTimeout = 300
 
 // List prints all configured command names and their run strings.
 func List(cfg *ProjectConfig, streams iostream.Streams) error {
@@ -59,7 +63,7 @@ func RunInline(ctx context.Context, workDir, name, command string, force bool, s
 		}
 	}
 
-	return runAndCache(ctx, workDir, name, command, "", streams)
+	return runAndCache(ctx, workDir, name, command, "", 0, streams)
 }
 
 // RunNamed runs a single named command from config with caching.
@@ -79,7 +83,7 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *Projec
 		}
 	}
 
-	return runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, streams)
+	return runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, c.Timeout, streams)
 }
 
 // RunAll runs all configured commands with optional cache bypass.
@@ -99,7 +103,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *ProjectConfig,
 			}
 		}
 
-		if err := runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, streams); err != nil {
+		if err := runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, c.Timeout, streams); err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
 				streams.ErrPrintf("%s: %s\n", ui.Bold(cfg.Commands[j].Name), ui.Yellow(fmt.Sprintf("skipped (%s failed)", c.Name)))
 			}
@@ -158,8 +162,14 @@ func colorStatus(status string) string {
 	}
 }
 
-func runAndCache(ctx context.Context, workDir, name, command, fileExt string, streams iostream.Streams) error {
+func runAndCache(ctx context.Context, workDir, name, command, fileExt string, timeoutSec int, streams iostream.Streams) error {
 	streams.ErrPrintf("%s %s\n", ui.Dim("Running "+name+":"), ui.Gray(command))
+
+	if timeoutSec <= 0 {
+		timeoutSec = DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
@@ -171,6 +181,10 @@ func runAndCache(ctx context.Context, workDir, name, command, fileExt string, st
 	err := cmd.Run()
 	exitCode := 0
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			_ = WriteCache(workDir, name, fileExt, 1, combined.String())
+			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {

@@ -1,8 +1,6 @@
 package hook
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,9 +28,8 @@ type SentinelData struct {
 var safeNameRe = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 
 func sentinelID(projectDir, name string) string {
-	h := sha256.Sum256([]byte(projectDir + ":" + name))
 	safe := safeNameRe.ReplaceAllString(name, "-")
-	return fmt.Sprintf("%s-%x", safe, h[:8])
+	return fmt.Sprintf("%s-%s", safe, hashID(projectDir, name))
 }
 
 // SentinelPath returns the full path to a sentinel file.
@@ -41,26 +38,18 @@ func SentinelPath(sentinelDir, projectDir, name string) string {
 }
 
 func writeSentinel(sentinelDir, projectDir, name string, data SentinelData) error {
-	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
-		return fmt.Errorf("creating sentinel dir: %w", err)
-	}
 	path := SentinelPath(sentinelDir, projectDir, name)
-	jsonData, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshalling sentinel: %w", err)
+	if err := writeJSONFile(path, data); err != nil {
+		return fmt.Errorf("writing sentinel: %w", err)
 	}
-	return os.WriteFile(path, append(jsonData, '\n'), 0o644)
+	return nil
 }
 
 // readSentinel reads a sentinel file, returning nil if missing or malformed.
 func readSentinel(sentinelDir, projectDir, name string) *SentinelData {
 	path := SentinelPath(sentinelDir, projectDir, name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
 	var s SentinelData
-	if err := json.Unmarshal(data, &s); err != nil {
+	if !readJSONFile(path, &s) {
 		return nil
 	}
 	return &s

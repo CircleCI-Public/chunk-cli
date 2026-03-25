@@ -59,17 +59,12 @@ type FakeCircleCI struct {
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
-	gin.SetMode(gin.ReleaseMode)
-	r := gin.New()
-	r.Use(gin.Recovery())
-	rec := recorder.NewRecorder()
+	r, rec := newRouter()
 	f := &FakeCircleCI{
-		Handler:  r,
-		Recorder: rec,
+		Handler:   r,
+		Recorder:  rec,
 		AddKeyURL: "sandbox-abc.example.com",
 	}
-
-	r.Use(rec.GinMiddleware())
 
 	// Existing endpoints
 	r.GET("/api/v2/me/collaborations", f.handleCollaborations)

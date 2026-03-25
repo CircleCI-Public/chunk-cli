@@ -118,7 +118,7 @@ func Resolve(flagAPIKey, flagModel string) ResolvedConfig {
 // MaskAPIKey masks all but the last 4 characters with *.
 func MaskAPIKey(key string) string {
 	if len(key) <= 4 {
-		return key
+		return "****"
 	}
 	return strings.Repeat("*", len(key)-4) + key[len(key)-4:]
 }

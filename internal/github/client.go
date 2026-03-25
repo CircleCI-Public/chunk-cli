@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/httpcl"
 )
@@ -11,6 +12,10 @@ import (
 // Client is a GitHub GraphQL API client.
 type Client struct {
 	http *httpcl.Client
+
+	// retryDelayOverride, if non-zero, replaces the exponential backoff
+	// delay in doWithRetry. Intended for tests only.
+	retryDelayOverride time.Duration
 }
 
 // New creates a GitHub GraphQL client.

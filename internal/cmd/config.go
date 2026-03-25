@@ -71,7 +71,12 @@ func newConfigSetCmd() *cobra.Command {
 				cfg.APIKey = value
 			}
 
-			return config.Save(cfg)
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+
+			io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))
+			return nil
 		},
 	}
 }

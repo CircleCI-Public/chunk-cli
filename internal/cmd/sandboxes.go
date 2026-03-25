@@ -52,7 +52,7 @@ func newSandboxesListCmd() *cobra.Command {
 				return nil
 			}
 			for _, s := range sandboxes {
-				io.Printf("%s  %s\n", s.ID, s.Name)
+				io.Printf("%s  %s\n", s.Name, s.ID)
 			}
 			return nil
 		},
