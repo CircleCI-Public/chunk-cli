@@ -1,5 +1,10 @@
 version: '3'
 
+vars:
+  RESULTS_DIR: test-reports
+  TEST_REPORT: test-reports/tests.xml
+  LINT_REPORT: test-reports/lint.xml
+
 tasks:
   build:
     desc: Build the chunk binary
@@ -7,29 +12,31 @@ tasks:
       - go build -o dist/chunk .
 
   test:
-    desc: Run unit and package tests (excludes acceptance)
+    desc: Run the tests
+    vars:
+      ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
-      - go test -race $(go list ./... | grep -v /acceptance)
-
-  acceptance-test:
-    desc: Run acceptance tests
-    cmds:
-      - go test -v -count=1 -race ./acceptance/...
+      - go tool gotestsum -- -race {{.ARGS}}
 
   lint:
-    desc: Run linters
+    desc: Run `golangci-lint run` to lint the code
+    summary: Lint the project with golangci-lint
+    vars:
+      ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
-      - go tool golangci-lint run ./...
+      - go tool golangci-lint run {{.ARGS}}
 
   fmt:
-    desc: Format code
+    desc: Format the code
+    vars:
+      ARGS: '{{default "." .CLI_ARGS}}'
     cmds:
-      - go tool goimports -w .
+      - go tool gosimports -local "$(go list -m)" -w {{.ARGS}}
 
-  tidy:
-    desc: Tidy go modules
+  mod-tidy:
+    desc: Run 'go mod tidy' to clean up module files.
     cmds:
-      - go mod tidy
+      - go mod tidy -v
 
   release:
     desc: Tag, build, and publish a release (tag → goreleaser → NUR)
@@ -40,6 +47,18 @@ tasks:
         vars: { VERSION: '{{.VERSION}}' }
       - goreleaser release --clean
       - CHUNK_TAG=$(cat /tmp/chunk-release-tag) task nur:publish
+
+  generate:
+    desc: Run generation of any generated code
+    vars:
+      ARGS: '{{default "./..." .CLI_ARGS}}'
+    cmds:
+      - go generate -x {{.ARGS}}
+
+  mod-download:
+    desc: Run 'go mod download' to retrieve module files.
+    cmds:
+      - go mod download -x
 
   nur:publish:
     desc: Publish the Nix package to NUR (Nix User Repository)
@@ -87,6 +106,35 @@ tasks:
       - git -C {{.NUR_DIR}} add pkgs/chunk/default.nix
       - git -C {{.NUR_DIR}} commit -m "Update chunk to ${CHUNK_TAG}" || echo "No changes to commit"
       - git -C {{.NUR_DIR}} push https://${GITHUB_TOKEN}@github.com/CircleCI-Public/nur-packages.git main
+
+  # Tasks below here are intended mainly to be run as part of CI
+
+  ci:lint:
+    desc: Run `golangci-lint run` to lint the code, outputting a report.
+    cmds:
+      - mkdir -p "{{.RESULTS_DIR}}"
+      - task: lint
+        vars:
+          CLI_ARGS: |
+            ./... \
+            --output.junit-xml.path "{{.LINT_REPORT}}" --output.junit-xml.extended \
+            --output.text.path=stdout --output.text.colors=true
+
+  ci:test:
+    desc: Run the tests and output the test results
+    vars:
+      ARGS: '{{default "./..." .CLI_ARGS}}'
+    cmds:
+      - mkdir -p {{.RESULTS_DIR}}
+      - go tool gotestsum --junitfile="{{.TEST_REPORT}}" -- -race -count=1 {{.ARGS}}
+
+  ci:diff:
+    desc: Check no diffs
+    cmds:
+      - task: generate
+      - task: fmt
+      - task: mod-tidy
+      - git diff --exit-code
 
   tag:
     desc: Create the next git tag (vX.Y.Z), optionally specifying a version as X.Y.Z
