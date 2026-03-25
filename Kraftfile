@@ -1,0 +1,13 @@
+spec: v0.6
+
+runtime: base-compat:latest
+
+env:
+  HOME: /root
+  ANTHROPIC_API_KEY: ""
+  GITHUB_TOKEN: ""
+
+# Dockerfile lives at repo root so the build context includes all source files
+rootfs: ./Dockerfile
+
+cmd: ["/bin/bash"]

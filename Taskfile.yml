@@ -107,6 +107,16 @@ tasks:
       - git -C {{.NUR_DIR}} commit -m "Update chunk to ${CHUNK_TAG}" || echo "No changes to commit"
       - git -C {{.NUR_DIR}} push https://${GITHUB_TOKEN}@github.com/CircleCI-Public/nur-packages.git main
 
+  build-unikraft-image:
+    desc: Build the Unikraft unikernel image
+    cmds:
+      - kraft pkg --plat kraftcloud --arch x86_64 --name index.unikraft.io/circleci/chunk-sandbox:latest
+
+  publish-unikraft-image:
+    desc: Publish the Unikraft unikernel image
+    cmds:
+      - kraft pkg push index.unikraft.io/circleci/chunk-sandbox:latest
+
   # Tasks below here are intended mainly to be run as part of CI
 
   ci:lint:
