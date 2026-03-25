@@ -8,17 +8,30 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
+	embeddedSkills "github.com/CircleCI-Public/chunk-cli/skills"
 )
 
-var skillNames = []string{"chunk-review", "chunk-testing-gaps", "debug-ci-failures"}
+var skillNames = []string{"chunk-testing-gaps", "chunk-review", "debug-ci-failures"}
 
-func TestInstall(t *testing.T) {
+func TestInstallBothAgents(t *testing.T) {
 	home := t.TempDir()
 
-	err := skills.Install(home)
-	assert.NilError(t, err)
+	// Create both agent config dirs.
+	for _, dir := range []string{".claude", ".codex"} {
+		assert.NilError(t, os.MkdirAll(filepath.Join(home, dir), 0o755))
+	}
 
-	// Verify files exist in both .claude and .codex directories
+	results := skills.Install(home)
+	assert.Equal(t, len(results), 2)
+
+	for _, r := range results {
+		assert.Assert(t, !r.Skipped, "agent %s should not be skipped", r.Agent)
+		assert.Equal(t, len(r.Installed), len(skillNames),
+			"agent %s: expected %d installed, got %d", r.Agent, len(skillNames), len(r.Installed))
+		assert.Equal(t, len(r.Updated), 0)
+	}
+
+	// Verify files exist.
 	for _, dir := range []string{".claude", ".codex"} {
 		for _, name := range skillNames {
 			path := filepath.Join(home, dir, "skills", name, "SKILL.md")
@@ -29,32 +42,74 @@ func TestInstall(t *testing.T) {
 	}
 }
 
-func TestInstallIdempotent(t *testing.T) {
+func TestInstallSkipsAgentWithoutConfigDir(t *testing.T) {
 	home := t.TempDir()
 
-	err := skills.Install(home)
-	assert.NilError(t, err)
+	// Only create .claude, not .codex.
+	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
-	// Install again should succeed without error
-	err = skills.Install(home)
-	assert.NilError(t, err)
+	results := skills.Install(home)
+	assert.Equal(t, len(results), 2)
 
-	// Files should still be valid
-	for _, name := range skillNames {
-		path := filepath.Join(home, ".claude", "skills", name, "SKILL.md")
-		info, err := os.Stat(path)
-		assert.NilError(t, err)
-		assert.Assert(t, info.Size() > 0)
+	var claude, codex skills.AgentInstallResult
+	for _, r := range results {
+		switch r.Agent {
+		case "claude":
+			claude = r
+		case "codex":
+			codex = r
+		}
 	}
+
+	assert.Assert(t, !claude.Skipped)
+	assert.Equal(t, len(claude.Installed), len(skillNames))
+	assert.Assert(t, codex.Skipped, "codex should be skipped when .codex dir missing")
+	assert.Equal(t, len(codex.Installed), 0)
+
+	// Verify .codex skills dir was not created.
+	_, err := os.Stat(filepath.Join(home, ".codex", "skills"))
+	assert.Assert(t, os.IsNotExist(err), "should not create .codex/skills when .codex missing")
+}
+
+func TestInstallIdempotent(t *testing.T) {
+	home := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
+
+	results1 := skills.Install(home)
+	assert.Equal(t, len(results1[0].Installed), len(skillNames))
+
+	// Second install should report all up to date.
+	results2 := skills.Install(home)
+	assert.Equal(t, len(results2[0].Installed), 0, "should have no new installs")
+	assert.Equal(t, len(results2[0].Updated), 0, "should have no updates")
+}
+
+func TestInstallDetectsOutdated(t *testing.T) {
+	home := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
+
+	// First install.
+	skills.Install(home)
+
+	// Tamper with one skill file to make it outdated.
+	path := filepath.Join(home, ".claude", "skills", "chunk-review", "SKILL.md")
+	assert.NilError(t, os.WriteFile(path, []byte("old content"), 0o644))
+
+	results := skills.Install(home)
+	claude := results[0]
+	assert.Equal(t, len(claude.Installed), 0)
+	assert.Equal(t, len(claude.Updated), 1)
+	assert.Equal(t, claude.Updated[0], "chunk-review")
 }
 
 func TestInstallContentMatchesEmbedded(t *testing.T) {
 	home := t.TempDir()
+	for _, dir := range []string{".claude", ".codex"} {
+		assert.NilError(t, os.MkdirAll(filepath.Join(home, dir), 0o755))
+	}
 
-	err := skills.Install(home)
-	assert.NilError(t, err)
+	skills.Install(home)
 
-	// Verify .claude and .codex get identical content
 	for _, name := range skillNames {
 		claudePath := filepath.Join(home, ".claude", "skills", name, "SKILL.md")
 		codexPath := filepath.Join(home, ".codex", "skills", name, "SKILL.md")
@@ -69,59 +124,124 @@ func TestInstallContentMatchesEmbedded(t *testing.T) {
 	}
 }
 
-func TestListNotInstalled(t *testing.T) {
+func TestStatusNotInstalled(t *testing.T) {
 	home := t.TempDir()
 
-	infos := skills.List(home)
-	assert.Equal(t, len(infos), 3)
-	for _, info := range infos {
-		assert.Assert(t, !info.Installed, "expected %s not installed", info.Name)
-	}
-}
+	statuses := skills.Status(home)
+	assert.Equal(t, len(statuses), 2)
 
-func TestListAfterInstall(t *testing.T) {
-	home := t.TempDir()
-
-	err := skills.Install(home)
-	assert.NilError(t, err)
-
-	infos := skills.List(home)
-	assert.Equal(t, len(infos), 3)
-	for _, info := range infos {
-		assert.Assert(t, info.Installed, "expected %s installed", info.Name)
-	}
-}
-
-func TestListPartialInstall(t *testing.T) {
-	home := t.TempDir()
-
-	// Install only one skill manually
-	dir := filepath.Join(home, ".claude", "skills", "chunk-review")
-	err := os.MkdirAll(dir, 0o755)
-	assert.NilError(t, err)
-	err = os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("test"), 0o644)
-	assert.NilError(t, err)
-
-	infos := skills.List(home)
-	assert.Equal(t, len(infos), 3)
-
-	installedCount := 0
-	for _, info := range infos {
-		if info.Installed {
-			installedCount++
-			assert.Equal(t, info.Name, "chunk-review")
+	for _, agent := range statuses {
+		assert.Assert(t, !agent.Available, "agent %s should not be available", agent.Agent)
+		for _, s := range agent.Skills {
+			assert.Equal(t, s.State, skills.StateMissing,
+				"skill %s for %s should be missing", s.Name, agent.Agent)
 		}
 	}
-	assert.Equal(t, installedCount, 1)
 }
 
-func TestListReturnsAllSkillNames(t *testing.T) {
+func TestStatusCurrent(t *testing.T) {
+	home := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
+
+	skills.Install(home)
+
+	statuses := skills.Status(home)
+	var claude skills.AgentStatus
+	for _, s := range statuses {
+		if s.Agent == "claude" {
+			claude = s
+		}
+	}
+
+	assert.Assert(t, claude.Available)
+	for _, s := range claude.Skills {
+		assert.Equal(t, s.State, skills.StateCurrent,
+			"skill %s should be current after install", s.Name)
+	}
+}
+
+func TestStatusOutdated(t *testing.T) {
+	home := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
+
+	skills.Install(home)
+
+	// Tamper with a skill.
+	path := filepath.Join(home, ".claude", "skills", "chunk-review", "SKILL.md")
+	assert.NilError(t, os.WriteFile(path, []byte("tampered"), 0o644))
+
+	statuses := skills.Status(home)
+	var claude skills.AgentStatus
+	for _, s := range statuses {
+		if s.Agent == "claude" {
+			claude = s
+		}
+	}
+
+	for _, s := range claude.Skills {
+		if s.Name == "chunk-review" {
+			assert.Equal(t, s.State, skills.StateOutdated)
+		} else {
+			assert.Equal(t, s.State, skills.StateCurrent)
+		}
+	}
+}
+
+func TestStatusIncludesDescriptions(t *testing.T) {
 	home := t.TempDir()
 
-	infos := skills.List(home)
-	names := make([]string, len(infos))
-	for i, info := range infos {
-		names[i] = info.Name
+	statuses := skills.Status(home)
+	for _, agent := range statuses {
+		for _, s := range agent.Skills {
+			assert.Assert(t, s.Description != "",
+				"skill %s should have a description", s.Name)
+		}
 	}
-	assert.DeepEqual(t, names, skillNames)
+}
+
+func TestStatusAgentNotAvailable(t *testing.T) {
+	home := t.TempDir()
+	// Only create .claude.
+	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
+
+	statuses := skills.Status(home)
+	for _, agent := range statuses {
+		if agent.Agent == "claude" {
+			assert.Assert(t, agent.Available)
+		} else {
+			assert.Assert(t, !agent.Available, "codex should not be available")
+			for _, s := range agent.Skills {
+				assert.Equal(t, s.State, skills.StateMissing)
+			}
+		}
+	}
+}
+
+func TestSkillStateDetectsStates(t *testing.T) {
+	dir := t.TempDir()
+	s := skills.All[0] // chunk-testing-gaps
+
+	// Missing: no file at all.
+	assert.Equal(t, skills.SkillState(dir, s), skills.StateMissing)
+
+	// Install the file with correct content.
+	skillDir := filepath.Join(dir, s.Name)
+	assert.NilError(t, os.MkdirAll(skillDir, 0o755))
+	content, err := embeddedSkills.Content.ReadFile(filepath.Join(s.Name, "SKILL.md"))
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), content, 0o644))
+
+	assert.Equal(t, skills.SkillState(dir, s), skills.StateCurrent)
+
+	// Tamper to make outdated.
+	assert.NilError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("old"), 0o644))
+	assert.Equal(t, skills.SkillState(dir, s), skills.StateOutdated)
+}
+
+func TestAllSkillsHaveEmbeddedContent(t *testing.T) {
+	for _, s := range skills.All {
+		data, err := embeddedSkills.Content.ReadFile(filepath.Join(s.Name, "SKILL.md"))
+		assert.NilError(t, err, "embedded content missing for %s", s.Name)
+		assert.Assert(t, len(data) > 0, "embedded content empty for %s", s.Name)
+	}
 }
