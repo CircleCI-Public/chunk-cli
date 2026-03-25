@@ -6,7 +6,7 @@ version: 2
 builds:
   - id: chunk
     binary: chunk
-    main: ./cmd/chunk
+    main: .
 
     env:
       - CGO_ENABLED=0

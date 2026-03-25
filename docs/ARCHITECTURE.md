@@ -6,7 +6,7 @@ Module layout and dependency rules for the `chunk` Go CLI.
 
 ```
 chunk-cli/
-├── cmd/chunk/main.go          # Entry point: cobra bootstrap + usererr handling
+├── main.go                    # Entry point: cobra bootstrap + usererr handling
 ├── httpcl/                    # HTTP client library (JSON + retries)
 │   ├── client.go              # Retryable HTTP client (go-retryablehttp)
 │   ├── request.go             # Fluent request builder
@@ -44,10 +44,10 @@ chunk-cli/
 Dependencies flow strictly downward:
 
 ```
-cmd/chunk/main.go → internal/cmd/ → internal/{business packages} → httpcl/
+main.go → internal/cmd/ → internal/{business packages} → httpcl/
 ```
 
-- `cmd/chunk/main.go` creates the root command and handles top-level errors
+- `main.go` creates the root command and handles top-level errors
 - `internal/cmd/` contains thin cobra wrappers that parse flags and delegate
 - Business packages (`buildprompt/`, `hook/`, `task/`, etc.) contain the logic
 - `httpcl/` is an independent library — no imports from `internal/`
