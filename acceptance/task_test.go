@@ -418,13 +418,13 @@ func TestTaskRunWithDescription(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfig(t, workDir)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Fix the flaky test",
@@ -449,13 +449,13 @@ func TestTaskRunCircleCIOrgType(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	workDir := testutil.SetupGitRepo(t, "test-org", "test-repo")
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeRunConfigJSON(t, workDir, runConfigCircleCIOrgJSON)
 
-	env := testutil.NewTestEnv(t)
+	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := testutil.RunCLI(t, []string{
+	result := binary.RunCLI(t, []string{
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Fix it",
