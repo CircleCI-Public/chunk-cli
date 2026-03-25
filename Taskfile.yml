@@ -4,7 +4,7 @@ tasks:
   build:
     desc: Build the chunk binary
     cmds:
-      - go build -o dist/chunk ./cmd/chunk
+      - go build -o dist/chunk .
 
   test:
     desc: Run unit and package tests (excludes acceptance)

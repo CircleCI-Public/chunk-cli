@@ -40,7 +40,7 @@ func BuildBinary() (string, error) {
 			return
 		}
 
-		cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/chunk")
+		cmd := exec.Command("go", "build", "-o", binaryPath, ".")
 		cmd.Dir = repoRoot
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
