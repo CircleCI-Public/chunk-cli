@@ -17,7 +17,7 @@ jobs:
           steps:
             - run:
                 name: Run golangci-lint
-                command: go tool golangci-lint run ./...
+                command: task lint
 
   test:
     docker:
@@ -31,7 +31,7 @@ jobs:
           steps:
             - run:
                 name: Run tests
-                command: go test -race $(go list ./... | grep -v /acceptance)
+                command: task test
                 no_output_timeout: 90s
 
   acceptance-test:
@@ -46,7 +46,7 @@ jobs:
           steps:
             - run:
                 name: Run acceptance tests
-                command: go test -v -count=1 -race ./acceptance/...
+                command: task acceptance-test
                 no_output_timeout: 120s
 
   build-smoke-test:
@@ -61,7 +61,7 @@ jobs:
           steps:
             - run:
                 name: Build binary
-                command: go build -o dist/chunk ./cmd/chunk
+                command: task build
             - run:
                 name: Verify skill content is embedded
                 command: |

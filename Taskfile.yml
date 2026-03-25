@@ -7,9 +7,9 @@ tasks:
       - go build -o dist/chunk ./cmd/chunk
 
   test:
-    desc: Run unit tests
+    desc: Run unit and package tests (excludes acceptance)
     cmds:
-      - go test -race ./...
+      - go test -race $(go list ./... | grep -v /acceptance)
 
   acceptance-test:
     desc: Run acceptance tests
