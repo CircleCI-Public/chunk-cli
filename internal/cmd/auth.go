@@ -135,17 +135,48 @@ func newAuthStatusCmd() *cobra.Command {
 		Short: "Check authentication status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
+
+			io.Println("")
+			io.Println(ui.Bold("Chunk CLI - Authentication Status"))
+			io.Println("")
+
 			rc := config.Resolve("", "")
 
 			if rc.APIKey == "" {
 				io.Println(ui.Warning("Not authenticated"))
+				io.Println(ui.Dim("No API key found in config file or environment."))
+				io.Println("")
+				io.Println("To authenticate, run: chunk auth login")
+				io.Println("Or set the ANTHROPIC_API_KEY environment variable.")
+				io.Println("")
 				return nil
 			}
 
-			io.Printf("%s %s %s\n",
-				ui.Success("Authenticated:"),
-				config.MaskAPIKey(rc.APIKey),
-				ui.Dim("("+sourceLabel(rc.APIKeySource)+")"))
+			w := 15 // align to "API key source:"
+			switch rc.APIKeySource {
+			case "Config file (user config)":
+				io.Printf("%s Config file (%s)\n", ui.Label("API key source:", w), config.Path())
+			case "Environment variable":
+				io.Printf("%s Environment variable (ANTHROPIC_API_KEY)\n", ui.Label("API key source:", w))
+			default:
+				io.Printf("%s %s\n", ui.Label("API key source:", w), rc.APIKeySource)
+			}
+			io.Printf("%s %s\n", ui.Label("API key:", w), config.MaskAPIKey(rc.APIKey))
+
+			io.ErrPrintln(ui.Yellow("Validating API key..."))
+
+			if err := validateAPIKey(cmd.Context(), rc.APIKey); err != nil {
+				io.ErrPrintln("")
+				io.ErrPrintln(ui.FormatError(
+					"API key validation failed.",
+					"The API key could not be validated with the Anthropic API.",
+					"Run `chunk auth login` to set a new key.",
+				))
+				os.Exit(1)
+			}
+
+			io.Println("")
+			io.Println(ui.Success("API key is valid"))
 			return nil
 		},
 	}
@@ -154,7 +185,7 @@ func newAuthStatusCmd() *cobra.Command {
 func newAuthLogoutCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
-		Short: "Clear stored API key",
+		Short: "Remove stored credentials",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
 			cfg, err := config.Load()
@@ -162,13 +193,41 @@ func newAuthLogoutCmd() *cobra.Command {
 				return err
 			}
 			if cfg.APIKey == "" {
-				io.Println(ui.Dim("No API key stored in config file"))
+				io.Println(ui.Warning("No API key stored in config file."))
+				if os.Getenv("ANTHROPIC_API_KEY") != "" {
+					io.Println("Note: ANTHROPIC_API_KEY is set in your environment variables.")
+					io.Println("To remove it, unset the environment variable.")
+					io.Println("")
+				}
 				return nil
 			}
-			if err := config.ClearAPIKey(); err != nil {
-				return err
+
+			io.Println("")
+			io.Printf("This will remove your stored API key from %s\n", config.Path())
+			confirmed, err := tui.Confirm("Are you sure you want to logout?", false)
+			if err != nil {
+				io.Println("")
+				io.Println("Logout cancelled.")
+				io.Println("")
+				return nil
 			}
-			io.Println(ui.Success("API key removed from config file"))
+			if !confirmed {
+				io.Println("")
+				io.Println("Logout cancelled.")
+				io.Println("")
+				return nil
+			}
+
+			if err := config.ClearAPIKey(); err != nil {
+				io.ErrPrintln(ui.FormatError(
+					"Failed to remove API key.",
+					"An error occurred while trying to remove the API key from the config file.",
+					fmt.Sprintf("Check file permissions on %s", config.Path()),
+				))
+				os.Exit(2)
+			}
+
+			io.Println(ui.Success("API key removed successfully."))
 			return nil
 		},
 	}
