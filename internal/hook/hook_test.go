@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,8 +19,8 @@ func testStreams() (iostream.Streams, *bytes.Buffer, *bytes.Buffer) {
 }
 
 func isBlockError(err error) bool {
-	_, ok := err.(*BlockError)
-	return ok
+	var blockErr *BlockError
+	return errors.As(err, &blockErr)
 }
 
 // --- config ---

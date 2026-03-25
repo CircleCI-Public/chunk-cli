@@ -8,8 +8,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
+// ProfileEnable is the default hook profile.
+const ProfileEnable = "enable"
+
 // ValidProfiles lists the allowed profile names.
-var ValidProfiles = []string{"disable", "enable", "tests-lint"}
+var ValidProfiles = []string{"disable", ProfileEnable, "tests-lint"}
 
 // ValidateProfile returns an error if the profile name is not valid.
 func ValidateProfile(profile string) error {
@@ -27,7 +30,7 @@ func ValidateProfile(profile string) error {
 // RunSetup combines env update + repo init.
 func RunSetup(targetDir, profile string, force, skipEnv bool, envFile string, streams iostream.Streams) error {
 	if profile == "" {
-		profile = "enable"
+		profile = ProfileEnable
 	}
 	if err := ValidateProfile(profile); err != nil {
 		return err

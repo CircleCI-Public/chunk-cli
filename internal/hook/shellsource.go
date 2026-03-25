@@ -49,7 +49,7 @@ func ensureLoginSourcing(envFile string, startupFiles []string) []string {
 	}
 	sourceLine := "if [ -f '" + shellQuote(envFile) + "' ]; then . '" + shellQuote(envFile) + "'; fi"
 
-	var updated []string
+	updated := make([]string, 0, len(startupFiles))
 	for _, f := range startupFiles {
 		upsertManagedBlock(f, envMarker, sourceLine)
 		updated = append(updated, f)

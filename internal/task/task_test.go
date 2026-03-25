@@ -168,12 +168,12 @@ func TestGetDefinitionByNameOrID(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		input     string
-		wantDef   string
-		wantEnv   *string
+		name       string
+		input      string
+		wantDef    string
+		wantEnv    *string
 		wantBranch string
-		wantErr   bool
+		wantErr    bool
 	}{
 		{
 			name:       "by name with env",

@@ -31,7 +31,7 @@ func newCompletionInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Install shell completion",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			home := os.Getenv("HOME")
 			if home == "" {
@@ -70,7 +70,7 @@ func newCompletionZshCmd() *cobra.Command {
 		Use:    "zsh",
 		Short:  "Generate zsh completion script",
 		Hidden: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Root().GenZshCompletion(iostream.FromCmd(cmd).Out)
 		},
 	}
@@ -80,7 +80,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "uninstall",
 		Short: "Remove shell completion",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			home := os.Getenv("HOME")
 			if home == "" {

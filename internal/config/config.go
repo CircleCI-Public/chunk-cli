@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Model constants define the Claude models used for different operations.
 const (
 	DefaultModel    = "claude-sonnet-4-5-20250929"
 	AnalyzeModel    = "claude-sonnet-4-5-20250929"

@@ -103,11 +103,11 @@ func RunTaskCheck(cfg *ResolvedConfig, flags TaskCheckFlags, event map[string]in
 	result := evaluateSentinel(sentinel, currentSessionID, "")
 
 	switch result.Kind {
-	case "missing":
+	case verdictMissing:
 		reason := buildTaskCheckBlockMessage(cfg, event, flags, task)
 		return emitResponse(blockNoCount(cfg.ProjectDir, reason))
 
-	case "pending":
+	case verdictPending:
 		timeout := task.Timeout
 		if sentinel != nil && sentinel.StartedAt != "" && timeout > 0 {
 			started, err := time.Parse(time.RFC3339, sentinel.StartedAt)
@@ -126,12 +126,12 @@ func RunTaskCheck(cfg *ResolvedConfig, flags TaskCheckFlags, event map[string]in
 		reason := fmt.Sprintf("Task %q is still running. Wait for completion before retrying.", flags.Name)
 		return emitResponse(blockNoCount(cfg.ProjectDir, reason))
 
-	case "pass":
+	case verdictPass:
 		resetBlockCount(cfg.SentinelDir, cfg.ProjectDir, flags.Name)
 		return nil // allow
 
-	case "fail":
-		reason := "(no reason provided)"
+	case verdictFail:
+		reason := noReasonProvided
 		if result.Sentinel != nil && result.Sentinel.Details != "" {
 			reason = result.Sentinel.Details
 		}
@@ -173,19 +173,19 @@ func readTaskResult(sentinelDir, projectDir, name, sessionID string) *SentinelDa
 
 	// TaskResult format: {decision: "allow"|"block", reason: "..."}
 	decision, _ := raw["decision"].(string)
-	if decision != "allow" && decision != "block" {
+	if decision != decisionAllow && decision != decisionBlock {
 		return nil
 	}
 
 	reason, _ := raw["reason"].(string)
 	if reason == "" {
-		reason = "(no reason provided)"
+		reason = noReasonProvided
 	}
 
-	status := "pass"
+	status := verdictPass
 	exitCode := 0
-	if decision == "block" {
-		status = "fail"
+	if decision == decisionBlock {
+		status = verdictFail
 		exitCode = 1
 	}
 
@@ -214,7 +214,7 @@ func precomputeTaskNoChanges(cfg *ResolvedConfig) bool {
 	return true
 }
 
-func buildTaskCheckBlockMessage(cfg *ResolvedConfig, event map[string]interface{}, flags TaskCheckFlags, task TaskConfig) string {
+func buildTaskCheckBlockMessage(cfg *ResolvedConfig, _ map[string]interface{}, flags TaskCheckFlags, task TaskConfig) string {
 	resultPath := SentinelPath(cfg.SentinelDir, cfg.ProjectDir, flags.Name)
 
 	// Load instructions

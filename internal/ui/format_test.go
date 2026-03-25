@@ -1,12 +1,14 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
 
-func init() {
+func TestMain(m *testing.M) {
 	SetColorEnabled(false)
+	os.Exit(m.Run())
 }
 
 func TestSuccess(t *testing.T) {

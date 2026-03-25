@@ -16,6 +16,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
+const apiKeySourceEnvVar = "Environment variable"
+
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
@@ -31,7 +33,7 @@ func newAuthLoginCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "login",
 		Short: "Store API key for authentication",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
 			io.Println("")
@@ -133,7 +135,7 @@ func newAuthStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Check authentication status",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
 			io.Println("")
@@ -156,7 +158,7 @@ func newAuthStatusCmd() *cobra.Command {
 			switch rc.APIKeySource {
 			case "Config file (user config)":
 				io.Printf("%s Config file (%s)\n", ui.Label("API key source:", w), config.Path())
-			case "Environment variable":
+			case apiKeySourceEnvVar:
 				io.Printf("%s Environment variable (ANTHROPIC_API_KEY)\n", ui.Label("API key source:", w))
 			default:
 				io.Printf("%s %s\n", ui.Label("API key source:", w), rc.APIKeySource)
@@ -186,7 +188,7 @@ func newAuthLogoutCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
 		Short: "Remove stored credentials",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			cfg, err := config.Load()
 			if err != nil {
@@ -237,8 +239,8 @@ func sourceLabel(source string) string {
 	switch source {
 	case "Config file (user config)":
 		return "Config file"
-	case "Environment variable":
-		return "Environment variable"
+	case apiKeySourceEnvVar:
+		return apiKeySourceEnvVar
 	default:
 		return source
 	}

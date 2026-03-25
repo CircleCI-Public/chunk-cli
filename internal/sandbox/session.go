@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	defaultKeyName    = "chunk_ai"
-	defaultSSHUser    = "user"
-	defaultSSHPort    = 2222
-	knownHostsFile    = "chunk_ai_known_hosts"
+	defaultKeyName = "chunk_ai"
+	defaultSSHUser = "user"
+	defaultSSHPort = 2222
+	knownHostsFile = "chunk_ai_known_hosts"
 )
 
 // Session holds the info needed to SSH into a sandbox.
@@ -46,7 +46,7 @@ func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identi
 	}
 	pubKey := strings.TrimSpace(string(pubKeyData))
 
-	resp, err := client.AddSshKey(ctx, sandboxID, pubKey)
+	resp, err := client.AddSSHKey(ctx, sandboxID, pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("register SSH key: %w", err)
 	}

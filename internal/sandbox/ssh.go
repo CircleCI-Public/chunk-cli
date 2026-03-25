@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -89,7 +90,8 @@ func ExecOverSSH(session *Session, command string, stdin io.Reader) (*ExecResult
 
 	exitCode := 0
 	if err := sess.Run(command); err != nil {
-		if exitErr, ok := err.(*ssh.ExitError); ok {
+		var exitErr *ssh.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitStatus()
 		} else {
 			return nil, fmt.Errorf("SSH exec: %w", err)
@@ -105,7 +107,7 @@ func ExecOverSSH(session *Session, command string, stdin io.Reader) (*ExecResult
 
 // tofuHostKeyCallback implements trust-on-first-use host key verification.
 func tofuHostKeyCallback(knownHostsPath, host string) ssh.HostKeyCallback {
-	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		fingerprint := sha256.Sum256(key.Marshal())
 		fp := hex.EncodeToString(fingerprint[:])
 

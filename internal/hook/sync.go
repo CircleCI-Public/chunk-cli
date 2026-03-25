@@ -9,9 +9,27 @@ import (
 	"time"
 )
 
+const (
+	specTypeExec = "exec"
+	specTypeTask = "task"
+
+	verdictContinue = "continue"
+	verdictExit     = "exit"
+	verdictPass     = "pass"
+	verdictFail     = "fail"
+	verdictMissing  = "missing"
+	verdictPending  = "pending"
+	verdictTimeout  = "timeout"
+
+	decisionAllow = "allow"
+	decisionBlock = "block"
+
+	noReasonProvided = "(no reason provided)"
+)
+
 // CommandSpec is a parsed spec like "exec:tests" or "task:review".
 type CommandSpec struct {
-	Type string // "exec" or "task"
+	Type string // specTypeExec or specTypeTask
 	Name string
 }
 
@@ -28,7 +46,7 @@ func ParseSpecs(args []string) ([]CommandSpec, error) {
 		if name == "" {
 			return nil, fmt.Errorf("invalid spec %q: empty name", arg)
 		}
-		if typ != "exec" && typ != "task" {
+		if typ != specTypeExec && typ != specTypeTask {
 			return nil, fmt.Errorf("invalid spec type %q: must be exec or task", typ)
 		}
 		specs = append(specs, CommandSpec{Type: typ, Name: name})
@@ -58,7 +76,7 @@ type groupSentinel struct {
 }
 
 func groupID(projectDir string, specs []CommandSpec) string {
-	var keys []string
+	keys := make([]string, 0, len(specs))
 	for _, s := range specs {
 		keys = append(keys, s.Type+":"+s.Name)
 	}
@@ -118,6 +136,8 @@ type collectedIssue struct {
 }
 
 // RunSyncCheck performs a grouped sequential check.
+//
+//nolint:gocyclo // orchestration logic with many spec-type and verdict branches
 func RunSyncCheck(cfg *ResolvedConfig, flags SyncCheckFlags, event map[string]interface{}) error {
 	// Check global enable
 	enabled := false
@@ -133,7 +153,7 @@ func RunSyncCheck(cfg *ResolvedConfig, flags SyncCheckFlags, event map[string]in
 
 	// Validate all specs exist in config
 	for _, spec := range flags.Specs {
-		if spec.Type == "exec" {
+		if spec.Type == specTypeExec {
 			if _, ok := cfg.Execs[spec.Name]; !ok {
 				return fmt.Errorf("spec %q:%q not found in config", spec.Type, spec.Name)
 			}
@@ -187,7 +207,7 @@ func RunSyncCheck(cfg *ResolvedConfig, flags SyncCheckFlags, event map[string]in
 			continue
 		}
 
-		if spec.Type == "exec" {
+		if spec.Type == specTypeExec {
 			execCfg, ok := cfg.Execs[spec.Name]
 			if !ok {
 				continue
@@ -211,7 +231,7 @@ func RunSyncCheck(cfg *ResolvedConfig, flags SyncCheckFlags, event map[string]in
 			verdict := preEvaluateExec(cfg, event, execCfg, spec.Name, flags.Staged, "", "", hasChangesPtr, contentHash)
 
 			action := handleExecVerdict(cfg, flags, spec, specKey, group, groupLimit, verdict, &collected)
-			if action == "exit" {
+			if action == verdictExit {
 				return nil
 			}
 			continue
@@ -231,7 +251,7 @@ func RunSyncCheck(cfg *ResolvedConfig, flags SyncCheckFlags, event map[string]in
 		result := evaluateSentinel(sentinel, currentSessionID, "")
 
 		action := handleTaskVerdict(cfg, flags, spec, specKey, group, groupLimit, result, sentinel, &collected)
-		if action == "exit" {
+		if action == verdictExit {
 			return nil
 		}
 	}
@@ -242,7 +262,7 @@ func RunSyncCheck(cfg *ResolvedConfig, flags SyncCheckFlags, event map[string]in
 		hasCounted := false
 		var firstCountedKey string
 		for _, c := range collected {
-			if c.kind == "fail" || c.kind == "timeout" {
+			if c.kind == verdictFail || c.kind == verdictTimeout {
 				hasCounted = true
 				firstCountedKey = c.specKey
 				break
@@ -269,25 +289,25 @@ func handleExecVerdict(cfg *ResolvedConfig, flags SyncCheckFlags, spec CommandSp
 	case "skip-trigger", "skip-no-changes":
 		group.Passed = append(group.Passed, specKey)
 		writeGroupSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Specs, group)
-		return "continue"
+		return verdictContinue
 
-	case "pass":
+	case verdictPass:
 		group.Passed = append(group.Passed, specKey)
 		writeGroupSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Specs, group)
 		resetBlockCount(cfg.SentinelDir, cfg.ProjectDir, spec.Name)
-		return "continue"
+		return verdictContinue
 
-	case "missing":
+	case verdictMissing:
 		reason := fmt.Sprintf("%s has no results. Run it first:\n\n  %s\n\nRetry after the command completes.",
 			specLabel(spec), buildSyncRunCommand(spec, flags))
 		if flags.Bail {
 			_ = emitResponse(blockNoCount(cfg.ProjectDir, reason))
-			return "exit"
+			return verdictExit
 		}
-		*collected = append(*collected, collectedIssue{specKey: specKey, kind: "missing", reason: reason})
-		return "continue"
+		*collected = append(*collected, collectedIssue{specKey: specKey, kind: verdictMissing, reason: reason})
+		return verdictContinue
 
-	case "pending":
+	case verdictPending:
 		timeout := resolveSpecTimeout(cfg, spec)
 		sentinel := verdict.Sentinel
 		if sentinel != nil && sentinel.StartedAt != "" && timeout > 0 {
@@ -301,57 +321,57 @@ func handleExecVerdict(cfg *ResolvedConfig, flags SyncCheckFlags, spec CommandSp
 						specLabel(spec), int(math.Round(elapsed)), timeout, buildSyncRunCommand(spec, flags))
 					if flags.Bail {
 						_ = emitResponse(blockWithLimit(cfg, spec.Name, groupLimit, reason))
-						return "exit"
+						return verdictExit
 					}
 					// Re-read group after reset
 					*group = *readGroupSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Specs)
-					*collected = append(*collected, collectedIssue{specKey: specKey, kind: "timeout", reason: reason})
-					return "continue"
+					*collected = append(*collected, collectedIssue{specKey: specKey, kind: verdictTimeout, reason: reason})
+					return verdictContinue
 				}
 			}
 		}
 		pendingReason := fmt.Sprintf("%s is still running. Wait for completion before retrying.", specLabel(spec))
 		if flags.Bail {
 			_ = emitResponse(blockNoCount(cfg.ProjectDir, pendingReason))
-			return "exit"
+			return verdictExit
 		}
 		*collected = append(*collected, collectedIssue{specKey: specKey, kind: "pending", reason: pendingReason})
-		return "continue"
+		return verdictContinue
 
-	case "fail":
+	case verdictFail:
 		resetGroupOnFailure(cfg, flags, specKey)
 		removeSentinel(cfg.SentinelDir, cfg.ProjectDir, spec.Name)
 		reason := buildSyncFailMessage(spec, verdict.Sentinel)
 		if flags.Bail {
 			_ = emitResponse(blockWithLimit(cfg, spec.Name, groupLimit, reason))
-			return "exit"
+			return verdictExit
 		}
 		*group = *readGroupSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Specs)
-		*collected = append(*collected, collectedIssue{specKey: specKey, kind: "fail", reason: reason})
-		return "continue"
+		*collected = append(*collected, collectedIssue{specKey: specKey, kind: verdictFail, reason: reason})
+		return verdictContinue
 	}
 
-	return "continue"
+	return verdictContinue
 }
 
 func handleTaskVerdict(cfg *ResolvedConfig, flags SyncCheckFlags, spec CommandSpec, specKey string, group *groupSentinel, groupLimit int, result CheckResult, sentinel *SentinelData, collected *[]collectedIssue) string {
 	switch result.Kind {
-	case "pass":
+	case verdictPass:
 		group.Passed = append(group.Passed, specKey)
 		writeGroupSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Specs, group)
 		resetBlockCount(cfg.SentinelDir, cfg.ProjectDir, spec.Name)
-		return "continue"
+		return verdictContinue
 
-	case "missing":
+	case verdictMissing:
 		reason := buildSyncTaskMissingMessage(cfg, flags, spec)
 		if flags.Bail {
 			_ = emitResponse(blockNoCount(cfg.ProjectDir, reason))
-			return "exit"
+			return verdictExit
 		}
-		*collected = append(*collected, collectedIssue{specKey: specKey, kind: "missing", reason: reason})
-		return "continue"
+		*collected = append(*collected, collectedIssue{specKey: specKey, kind: verdictMissing, reason: reason})
+		return verdictContinue
 
-	case "pending":
+	case verdictPending:
 		timeout := resolveSpecTimeout(cfg, spec)
 		if sentinel != nil && sentinel.StartedAt != "" && timeout > 0 {
 			started, err := time.Parse(time.RFC3339, sentinel.StartedAt)
@@ -364,40 +384,40 @@ func handleTaskVerdict(cfg *ResolvedConfig, flags SyncCheckFlags, spec CommandSp
 						specLabel(spec), int(math.Round(elapsed)), timeout, buildSyncRunCommand(spec, flags))
 					if flags.Bail {
 						_ = emitResponse(blockWithLimit(cfg, spec.Name, groupLimit, reason))
-						return "exit"
+						return verdictExit
 					}
 					*group = *readGroupSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Specs)
-					*collected = append(*collected, collectedIssue{specKey: specKey, kind: "timeout", reason: reason})
-					return "continue"
+					*collected = append(*collected, collectedIssue{specKey: specKey, kind: verdictTimeout, reason: reason})
+					return verdictContinue
 				}
 			}
 		}
 		pendingReason := fmt.Sprintf("%s is still running. Wait for completion before retrying.", specLabel(spec))
 		if flags.Bail {
 			_ = emitResponse(blockNoCount(cfg.ProjectDir, pendingReason))
-			return "exit"
+			return verdictExit
 		}
 		*collected = append(*collected, collectedIssue{specKey: specKey, kind: "pending", reason: pendingReason})
-		return "continue"
+		return verdictContinue
 
-	case "fail":
+	case verdictFail:
 		resetGroupOnFailure(cfg, flags, specKey)
 		removeSentinel(cfg.SentinelDir, cfg.ProjectDir, spec.Name)
 		reason := buildSyncFailMessage(spec, result.Sentinel)
 		if flags.Bail {
 			_ = emitResponse(blockWithLimit(cfg, spec.Name, groupLimit, reason))
-			return "exit"
+			return verdictExit
 		}
 		*group = *readGroupSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Specs)
-		*collected = append(*collected, collectedIssue{specKey: specKey, kind: "fail", reason: reason})
-		return "continue"
+		*collected = append(*collected, collectedIssue{specKey: specKey, kind: verdictFail, reason: reason})
+		return verdictContinue
 	}
 
-	return "continue"
+	return verdictContinue
 }
 
 func buildCollectedMessage(issues []collectedIssue) string {
-	var sections []string
+	sections := make([]string, 0, 3+3*len(issues))
 	sections = append(sections, fmt.Sprintf("## Sync: %d issue(s) need attention\n", len(issues)))
 
 	for _, issue := range issues {
@@ -414,14 +434,14 @@ func buildCollectedMessage(issues []collectedIssue) string {
 }
 
 func specLabel(spec CommandSpec) string {
-	if spec.Type == "exec" {
+	if spec.Type == specTypeExec {
 		return fmt.Sprintf("Exec %q", spec.Name)
 	}
 	return fmt.Sprintf("Task %q", spec.Name)
 }
 
 func buildSyncRunCommand(spec CommandSpec, flags SyncCheckFlags) string {
-	if spec.Type == "exec" {
+	if spec.Type == specTypeExec {
 		parts := []string{"chunk hook exec run", spec.Name, "--no-check"}
 		if flags.Staged {
 			parts = append(parts, "--staged")
@@ -435,7 +455,7 @@ func buildSyncRunCommand(spec CommandSpec, flags SyncCheckFlags) string {
 }
 
 func buildSyncFailMessage(spec CommandSpec, sentinel *SentinelData) string {
-	if spec.Type == "exec" {
+	if spec.Type == specTypeExec {
 		cmd := spec.Name
 		exitCode := 1
 		output := "(no output)"
@@ -454,7 +474,7 @@ func buildSyncFailMessage(spec CommandSpec, sentinel *SentinelData) string {
 			specLabel(spec), exitCode, cmd, output)
 	}
 
-	reason := "(no reason provided)"
+	reason := noReasonProvided
 	if sentinel != nil {
 		if sentinel.Details != "" {
 			reason = sentinel.Details
@@ -467,7 +487,7 @@ func buildSyncFailMessage(spec CommandSpec, sentinel *SentinelData) string {
 	return fmt.Sprintf("Task blocked: issues found. Fix them before stopping.\n\n%s", agentDetails)
 }
 
-func buildSyncTaskMissingMessage(cfg *ResolvedConfig, flags SyncCheckFlags, spec CommandSpec) string {
+func buildSyncTaskMissingMessage(cfg *ResolvedConfig, _ SyncCheckFlags, spec CommandSpec) string {
 	task, ok := cfg.Tasks[spec.Name]
 	if !ok {
 		return fmt.Sprintf("Task %q is not configured. Add it to .chunk/hook/config.yml.", spec.Name)
@@ -495,7 +515,7 @@ func buildSyncTaskMissingMessage(cfg *ResolvedConfig, flags SyncCheckFlags, spec
 
 func resolveGroupLimit(cfg *ResolvedConfig, specs []CommandSpec) int {
 	for _, spec := range specs {
-		if spec.Type == "exec" {
+		if spec.Type == specTypeExec {
 			if exec, ok := cfg.Execs[spec.Name]; ok && exec.Limit > 0 {
 				return exec.Limit
 			}
@@ -509,7 +529,7 @@ func resolveGroupLimit(cfg *ResolvedConfig, specs []CommandSpec) int {
 }
 
 func resolveSpecTimeout(cfg *ResolvedConfig, spec CommandSpec) int {
-	if spec.Type == "exec" {
+	if spec.Type == specTypeExec {
 		if exec, ok := cfg.Execs[spec.Name]; ok {
 			return exec.Timeout
 		}
@@ -550,7 +570,7 @@ func precomputeChanges(cfg *ResolvedConfig, flags SyncCheckFlags) map[string]boo
 	seen := map[string]bool{}
 
 	for _, spec := range flags.Specs {
-		if spec.Type != "exec" {
+		if spec.Type != specTypeExec {
 			continue
 		}
 		execCfg, ok := cfg.Execs[spec.Name]
@@ -575,7 +595,7 @@ func precomputeFingerprints(cfg *ResolvedConfig, flags SyncCheckFlags, changeCac
 	seen := map[string]bool{}
 
 	for _, spec := range flags.Specs {
-		if spec.Type != "exec" {
+		if spec.Type != specTypeExec {
 			continue
 		}
 		execCfg, ok := cfg.Execs[spec.Name]

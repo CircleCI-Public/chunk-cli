@@ -10,9 +10,10 @@ import (
 // State describes the installation state of a skill for a specific agent.
 type State string
 
+// Skill installation states.
 const (
-	StateMissing State = "missing"
-	StateCurrent State = "current"
+	StateMissing  State = "missing"
+	StateCurrent  State = "current"
 	StateOutdated State = "outdated"
 )
 
@@ -180,4 +181,3 @@ func Status(homeDir string) []AgentStatus {
 	}
 	return results
 }
-

@@ -23,8 +23,8 @@ func newSandboxesCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxesListCmd())
 	cmd.AddCommand(newSandboxesCreateCmd())
 	cmd.AddCommand(newSandboxesExecCmd())
-	cmd.AddCommand(newSandboxesAddSshKeyCmd())
-	cmd.AddCommand(newSandboxesSshCmd())
+	cmd.AddCommand(newSandboxesAddSSHKeyCmd())
+	cmd.AddCommand(newSandboxesSSHCmd())
 	cmd.AddCommand(newSandboxesSyncCmd())
 	cmd.AddCommand(newSandboxesPrepareCmd())
 
@@ -37,7 +37,7 @@ func newSandboxesListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List sandboxes",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
@@ -70,7 +70,7 @@ func newSandboxesCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a sandbox",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
@@ -109,7 +109,9 @@ func newSandboxesExecCmd() *cobra.Command {
 				return err
 			}
 			// Combine --args flag values with positional args
-			allArgs := append(execArgs, args...)
+			allArgs := make([]string, 0, len(execArgs)+len(args))
+			allArgs = append(allArgs, execArgs...)
+			allArgs = append(allArgs, args...)
 			resp, err := sandbox.Exec(cmd.Context(), client, sandboxID, command, allArgs)
 			if err != nil {
 				return err
@@ -135,19 +137,19 @@ func newSandboxesExecCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesAddSshKeyCmd() *cobra.Command {
+func newSandboxesAddSSHKeyCmd() *cobra.Command {
 	var orgID, sandboxID, publicKey, publicKeyFile string
 
 	cmd := &cobra.Command{
 		Use:   "add-ssh-key",
 		Short: "Add an SSH public key to a sandbox",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			resp, err := sandbox.AddSshKey(cmd.Context(), client, sandboxID, publicKey, publicKeyFile)
+			resp, err := sandbox.AddSSHKey(cmd.Context(), client, sandboxID, publicKey, publicKeyFile)
 			if err != nil {
 				return err
 			}
@@ -166,7 +168,7 @@ func newSandboxesAddSshKeyCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSshCmd() *cobra.Command {
+func newSandboxesSSHCmd() *cobra.Command {
 	var orgID, sandboxID, identityFile string
 
 	cmd := &cobra.Command{
@@ -199,7 +201,7 @@ func newSandboxesSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Sync files to a sandbox",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
@@ -226,7 +228,7 @@ func newSandboxesPrepareCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prepare",
 		Short: "Prepare sandbox environment",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Check we're in a git repo
 			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
 			gitCmd.Dir = "."
@@ -248,4 +250,3 @@ func newSandboxesPrepareCmd() *cobra.Command {
 
 	return cmd
 }
-

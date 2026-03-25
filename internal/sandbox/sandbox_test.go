@@ -97,7 +97,7 @@ func TestExec(t *testing.T) {
 	assert.Assert(t, gotExecReq, "expected exec request at /api/v2/sandbox/instances/sb-1/exec")
 }
 
-func TestAddSshKey(t *testing.T) {
+func TestAddSSHKey(t *testing.T) {
 	t.Run("from string", func(t *testing.T) {
 		cci := fakes.NewFakeCircleCI()
 		cci.AddKeyURL = "sandbox.example.com"
@@ -107,7 +107,7 @@ func TestAddSshKey(t *testing.T) {
 		cl := newClient(t, srv.URL)
 		ctx := context.Background()
 
-		resp, err := sandbox.AddSshKey(ctx, cl, "sb-1", "ssh-ed25519 AAAA test@test", "")
+		resp, err := sandbox.AddSSHKey(ctx, cl, "sb-1", "ssh-ed25519 AAAA test@test", "")
 		assert.NilError(t, err)
 		assert.Equal(t, resp.URL, "sandbox.example.com")
 	})
@@ -126,7 +126,7 @@ func TestAddSshKey(t *testing.T) {
 		err := os.WriteFile(keyFile, []byte("ssh-ed25519 AAAA test@test\n"), 0o644)
 		assert.NilError(t, err)
 
-		resp, err := sandbox.AddSshKey(ctx, cl, "sb-1", "", keyFile)
+		resp, err := sandbox.AddSSHKey(ctx, cl, "sb-1", "", keyFile)
 		assert.NilError(t, err)
 		assert.Equal(t, resp.URL, "sandbox.example.com")
 	})
@@ -139,7 +139,7 @@ func TestAddSshKey(t *testing.T) {
 		cl := newClient(t, srv.URL)
 		ctx := context.Background()
 
-		_, err := sandbox.AddSshKey(ctx, cl, "sb-1", "ssh-ed25519 AAAA", "/some/file")
+		_, err := sandbox.AddSSHKey(ctx, cl, "sb-1", "ssh-ed25519 AAAA", "/some/file")
 		assert.ErrorContains(t, err, "mutually exclusive")
 	})
 
@@ -151,7 +151,7 @@ func TestAddSshKey(t *testing.T) {
 		cl := newClient(t, srv.URL)
 		ctx := context.Background()
 
-		_, err := sandbox.AddSshKey(ctx, cl, "sb-1", "", "")
+		_, err := sandbox.AddSSHKey(ctx, cl, "sb-1", "", "")
 		assert.ErrorContains(t, err, "required")
 	})
 
@@ -163,7 +163,7 @@ func TestAddSshKey(t *testing.T) {
 		cl := newClient(t, srv.URL)
 		ctx := context.Background()
 
-		_, err := sandbox.AddSshKey(ctx, cl, "sb-1", "-----BEGIN OPENSSH PRIVATE KEY-----\ndata\n-----END OPENSSH PRIVATE KEY-----", "")
+		_, err := sandbox.AddSSHKey(ctx, cl, "sb-1", "-----BEGIN OPENSSH PRIVATE KEY-----\ndata\n-----END OPENSSH PRIVATE KEY-----", "")
 		assert.ErrorContains(t, err, "private key")
 	})
 
@@ -180,7 +180,7 @@ func TestAddSshKey(t *testing.T) {
 		err := os.WriteFile(keyFile, []byte("-----BEGIN OPENSSH PRIVATE KEY-----\ndata\n-----END OPENSSH PRIVATE KEY-----\n"), 0o644)
 		assert.NilError(t, err)
 
-		_, err = sandbox.AddSshKey(ctx, cl, "sb-1", "", keyFile)
+		_, err = sandbox.AddSSHKey(ctx, cl, "sb-1", "", keyFile)
 		assert.ErrorContains(t, err, "private key")
 	})
 
@@ -192,7 +192,7 @@ func TestAddSshKey(t *testing.T) {
 		cl := newClient(t, srv.URL)
 		ctx := context.Background()
 
-		_, err := sandbox.AddSshKey(ctx, cl, "sb-1", "", "/nonexistent/key.pub")
+		_, err := sandbox.AddSSHKey(ctx, cl, "sb-1", "", "/nonexistent/key.pub")
 		assert.ErrorContains(t, err, "read public key file")
 	})
 }

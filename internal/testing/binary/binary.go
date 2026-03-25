@@ -3,6 +3,7 @@ package binary
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,8 +52,8 @@ func BuildBinary() (string, error) {
 	return binaryPath, buildErr
 }
 
-// BinaryPath returns the path to the compiled binary. Must call BuildBinary first.
-func BinaryPath() string {
+// Path returns the path to the compiled binary. Must call BuildBinary first.
+func Path() string {
 	return binaryPath
 }
 
@@ -93,7 +94,8 @@ func RunCLIWithStdin(t *testing.T, args []string, e *env.TestEnv, workDir string
 
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
 			t.Fatalf("failed to run CLI: %v", err)

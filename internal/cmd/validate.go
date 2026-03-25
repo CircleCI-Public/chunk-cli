@@ -164,7 +164,7 @@ func newValidateRunCmd() *cobra.Command {
 		Use:    "run",
 		Short:  "Deprecated: use 'chunk validate' directly",
 		Hidden: true,
-		Run: func(cmd *cobra.Command, args []string) {
+		Run: func(cmd *cobra.Command, _ []string) {
 			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), ui.Warning(`"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`))
 			os.Exit(2)
 		},
@@ -178,7 +178,7 @@ func newValidateInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize hook config files and detect install/test commands",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			workDir, err := os.Getwd()
 			if err != nil {
 				return err
@@ -252,7 +252,7 @@ func newValidateInitCmd() *cobra.Command {
 
 func detectTestCommand(ctx context.Context, claude *anthropic.Client, workDir string) (string, error) {
 	entries, _ := os.ReadDir(workDir)
-	var files []string
+	files := make([]string, 0, len(entries))
 	for _, e := range entries {
 		files = append(files, e.Name())
 	}

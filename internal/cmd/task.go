@@ -36,7 +36,7 @@ func newTaskRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Trigger a task run",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -89,11 +89,12 @@ func newTaskRunCmd() *cobra.Command {
 	return cmd
 }
 
+//nolint:gocyclo // cobra command wiring with many flags
 func newTaskConfigCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "config",
 		Short: "Set up .chunk/run.json for this repository",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			ctx := cmd.Context()
 

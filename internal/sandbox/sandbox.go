@@ -22,7 +22,7 @@ func Exec(ctx context.Context, client *circleci.Client, sandboxID, command strin
 	return client.Exec(ctx, sandboxID, command, args)
 }
 
-func AddSshKey(ctx context.Context, client *circleci.Client, sandboxID, publicKey, publicKeyFile string) (*circleci.AddSshKeyResponse, error) {
+func AddSSHKey(ctx context.Context, client *circleci.Client, sandboxID, publicKey, publicKeyFile string) (*circleci.AddSSHKeyResponse, error) {
 	if publicKey != "" && publicKeyFile != "" {
 		return nil, fmt.Errorf("--public-key and --public-key-file are mutually exclusive")
 	}
@@ -43,7 +43,7 @@ func AddSshKey(ctx context.Context, client *circleci.Client, sandboxID, publicKe
 		return nil, fmt.Errorf("the provided key appears to be a private key; please provide a public key instead")
 	}
 
-	return client.AddSshKey(ctx, sandboxID, key)
+	return client.AddSSHKey(ctx, sandboxID, key)
 }
 
 // SSH opens a session and executes a command over SSH.

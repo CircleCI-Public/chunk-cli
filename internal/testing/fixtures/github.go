@@ -160,7 +160,7 @@ func MultiReviewerResponse() string {
 							"reviewThreads": {
 								"nodes": [
 									{"comments": {"nodes": [{"author": {"login": "reviewer-alice"}, "body": "LGTM with nit", "diffHunk": "@@ -5,1 +5,1 @@\n-old\n+new", "createdAt": "2026-03-02T01:00:00Z"}]}},
-									{"comments": {"nodes": [{"author": {"login": "reviewer-bob"}, "body": "Typo here", "diffHunk": "@@ -8,1 +8,1 @@\n-teh\n+the", "createdAt": "2026-03-02T02:00:00Z"}]}}
+									{"comments": {"nodes": [{"author": {"login": "reviewer-bob"}, "body": "Typo here", "diffHunk": "@@ -8,1 +8,1 @@\n-colour\n+color", "createdAt": "2026-03-02T02:00:00Z"}]}}
 								]
 							}
 						}

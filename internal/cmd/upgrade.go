@@ -10,7 +10,7 @@ func newUpgradeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "upgrade",
 		Short: "Upgrade chunk to the latest version",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			return upgrade.Run()
 		},
 	}

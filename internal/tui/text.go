@@ -31,9 +31,8 @@ func (m textInputModel) Init() tea.Cmd {
 }
 
 func (m textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.Type { //nolint:exhaustive
 		case tea.KeyEnter:
 			m.done = true
 			m.value = m.input.Value()

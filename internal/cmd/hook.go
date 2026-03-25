@@ -114,7 +114,7 @@ func newHookEnvUpdateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update hook environment configuration",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return hook.RunEnvUpdate(hook.EnvUpdateOptions{
 				Profile:     profile,
 				EnvFile:     envFile,
@@ -149,7 +149,7 @@ func newHookScopeActivateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "activate",
 		Short: "Activate scope for a project",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			projectDir := hook.ResolveProject(project)
 			return hook.ActivateScope(projectDir, os.Stdin)
 		},
@@ -163,7 +163,7 @@ func newHookScopeDeactivateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deactivate",
 		Short: "Deactivate scope for a project",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			projectDir := hook.ResolveProject(project)
 			return hook.DeactivateScope(projectDir, os.Stdin)
 		},
@@ -191,7 +191,7 @@ func newHookStateSaveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "save",
 		Short: "Save event state",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			projectDir := hook.ResolveProject(project)
 			cfg := hook.LoadConfig(projectDir)
 			return hook.StateSave(cfg.SentinelDir, projectDir, os.Stdin)
@@ -206,7 +206,7 @@ func newHookStateAppendCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "append",
 		Short: "Append event state",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			projectDir := hook.ResolveProject(project)
 			cfg := hook.LoadConfig(projectDir)
 			return hook.StateAppend(cfg.SentinelDir, projectDir, os.Stdin)
@@ -241,7 +241,7 @@ func newHookStateClearCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clear",
 		Short: "Clear state",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			projectDir := hook.ResolveProject(project)
 			cfg := hook.LoadConfig(projectDir)
 			return hook.StateClear(cfg.SentinelDir, projectDir, os.Stdin)
@@ -384,7 +384,7 @@ func newHookSyncCheckCmd() *cobra.Command {
 		Use:   "check <specs...>",
 		Short: "Check a group of commands",
 		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, args []string) error {
 			specs, err := hook.ParseSpecs(args)
 			if err != nil {
 				return err

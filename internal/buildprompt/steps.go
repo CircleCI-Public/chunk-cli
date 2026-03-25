@@ -326,7 +326,7 @@ func EstimateTokenCount(text string) int {
 // BuildAnalysisPrompt builds the prompt for Claude to analyze review patterns.
 func BuildAnalysisPrompt(groups []ReviewerGroup) string {
 	totalComments := 0
-	var reviewerNames []string
+	reviewerNames := make([]string, 0, len(groups))
 	for _, g := range groups {
 		totalComments += g.TotalComments
 		reviewerNames = append(reviewerNames, g.Reviewer)

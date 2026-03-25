@@ -213,7 +213,7 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 		"expected Circle-Token auth on exec request")
 }
 
-func TestSandboxesAddSshKeyFromString(t *testing.T) {
+func TestSandboxesAddSSHKeyFromString(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = "my-sandbox.dev.example.com"
 	srv := httptest.NewServer(cci)
@@ -245,7 +245,7 @@ func TestSandboxesAddSshKeyFromString(t *testing.T) {
 		"expected public key in body, got: %v", body["public_key"])
 }
 
-func TestSandboxesAddSshKeyFromFile(t *testing.T) {
+func TestSandboxesAddSSHKeyFromFile(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -279,7 +279,7 @@ func TestSandboxesAddSshKeyFromFile(t *testing.T) {
 		"expected public key from file in body")
 }
 
-func TestSandboxesAddSshKeyMutuallyExclusive(t *testing.T) {
+func TestSandboxesAddSSHKeyMutuallyExclusive(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -305,7 +305,7 @@ func TestSandboxesAddSshKeyMutuallyExclusive(t *testing.T) {
 		"expected mutually exclusive error, got: %s", combined)
 }
 
-func TestSandboxesAddSshKeyNeitherProvided(t *testing.T) {
+func TestSandboxesAddSSHKeyNeitherProvided(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -325,7 +325,7 @@ func TestSandboxesAddSshKeyNeitherProvided(t *testing.T) {
 		"expected missing key error, got: %s", combined)
 }
 
-func TestSandboxesAddSshKeyPrivateKeyRejected(t *testing.T) {
+func TestSandboxesAddSSHKeyPrivateKeyRejected(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()

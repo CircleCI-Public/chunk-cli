@@ -20,9 +20,8 @@ func (m selectModel) Init() tea.Cmd {
 }
 
 func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.Type {
+	if msg, ok := msg.(tea.KeyMsg); ok {
+		switch msg.Type { //nolint:exhaustive
 		case tea.KeyCtrlC, tea.KeyEsc:
 			m.canceled = true
 			return m, tea.Quit
