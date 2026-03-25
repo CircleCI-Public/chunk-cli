@@ -223,6 +223,7 @@ func TestRunMissingAnthropicKey(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "fake-token")
 	t.Setenv("GITHUB_API_URL", ghSrv.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
 	err := Run(context.Background(), Options{
@@ -232,7 +233,7 @@ func TestRunMissingAnthropicKey(t *testing.T) {
 		OutputPath: filepath.Join(t.TempDir(), "prompt.md"),
 	}, streams)
 	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "ANTHROPIC_API_KEY"))
+	assert.Assert(t, strings.Contains(err.Error(), "ANTHROPIC_API_KEY") || strings.Contains(err.Error(), "config file"))
 }
 
 // --- ResolveOrgAndRepos ---

@@ -233,9 +233,10 @@ func TestRunEnvUpdate(t *testing.T) {
 		streams, _, _ := testStreams()
 
 		err := RunEnvUpdate(EnvUpdateOptions{
-			Profile: "enable",
-			EnvFile: envFile,
-			LogDir:  logDir,
+			Profile:      "enable",
+			EnvFile:      envFile,
+			LogDir:       logDir,
+			StartupFiles: []string{},
 		}, streams)
 		if err != nil {
 			t.Fatal(err)
@@ -258,9 +259,10 @@ func TestRunEnvUpdate(t *testing.T) {
 		streams, _, _ := testStreams()
 
 		err := RunEnvUpdate(EnvUpdateOptions{
-			Profile: "disable",
-			EnvFile: envFile,
-			LogDir:  logDir,
+			Profile:      "disable",
+			EnvFile:      envFile,
+			LogDir:       logDir,
+			StartupFiles: []string{},
 		}, streams)
 		if err != nil {
 			t.Fatal(err)
@@ -279,9 +281,10 @@ func TestRunEnvUpdate(t *testing.T) {
 		streams, _, _ := testStreams()
 
 		err := RunEnvUpdate(EnvUpdateOptions{
-			Profile: "tests-lint",
-			EnvFile: envFile,
-			LogDir:  logDir,
+			Profile:      "tests-lint",
+			EnvFile:      envFile,
+			LogDir:       logDir,
+			StartupFiles: []string{},
 		}, streams)
 		if err != nil {
 			t.Fatal(err)
@@ -312,8 +315,9 @@ func TestRunEnvUpdate(t *testing.T) {
 		streams, _, _ := testStreams()
 
 		err := RunEnvUpdate(EnvUpdateOptions{
-			EnvFile: envFile,
-			LogDir:  logDir,
+			EnvFile:      envFile,
+			LogDir:       logDir,
+			StartupFiles: []string{},
 		}, streams)
 		if err != nil {
 			t.Fatal(err)
@@ -332,9 +336,10 @@ func TestRunEnvUpdate(t *testing.T) {
 		streams, _, _ := testStreams()
 
 		err := RunEnvUpdate(EnvUpdateOptions{
-			EnvFile: envFile,
-			LogDir:  logDir,
-			Verbose: true,
+			EnvFile:      envFile,
+			LogDir:       logDir,
+			Verbose:      true,
+			StartupFiles: []string{},
 		}, streams)
 		if err != nil {
 			t.Fatal(err)
@@ -353,9 +358,10 @@ func TestRunEnvUpdate(t *testing.T) {
 		streams, _, _ := testStreams()
 
 		err := RunEnvUpdate(EnvUpdateOptions{
-			EnvFile:     envFile,
-			LogDir:      logDir,
-			ProjectRoot: "/my/projects",
+			EnvFile:      envFile,
+			LogDir:       logDir,
+			ProjectRoot:  "/my/projects",
+			StartupFiles: []string{},
 		}, streams)
 		if err != nil {
 			t.Fatal(err)
@@ -374,8 +380,9 @@ func TestRunEnvUpdate(t *testing.T) {
 		streams, _, _ := testStreams()
 
 		err := RunEnvUpdate(EnvUpdateOptions{
-			EnvFile: envFile,
-			LogDir:  logDir,
+			EnvFile:      envFile,
+			LogDir:       logDir,
+			StartupFiles: []string{},
 		}, streams)
 		if err != nil {
 			t.Fatal(err)

@@ -40,6 +40,7 @@ func (e *TestEnv) Environ() []string {
 		fmt.Sprintf("HOME=%s", e.HomeDir),
 		fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir),
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
+		"SHELL=/bin/zsh",
 		"NO_COLOR=1",
 		"TERM=dumb",
 	}

@@ -172,6 +172,215 @@ func TestHookEnvUpdateWithOptions(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 }
 
+// --- env update: TS parity ---
+
+func TestHookEnvUpdateProfileContent(t *testing.T) {
+	tests := []struct {
+		profile  string
+		contains []string
+		absent   []string
+	}{
+		{
+			profile:  "enable",
+			contains: []string{"export CHUNK_HOOK_ENABLE=1", "Profile: enable"},
+			absent:   []string{"export CHUNK_HOOK_ENABLE_TESTS"},
+		},
+		{
+			profile: "disable",
+			contains: []string{"export CHUNK_HOOK_ENABLE=0", "Profile: disable"},
+			absent:  []string{"export CHUNK_HOOK_ENABLE_TESTS"},
+		},
+		{
+			profile: "tests-lint",
+			contains: []string{
+				"export CHUNK_HOOK_ENABLE=0",
+				"export CHUNK_HOOK_ENABLE_TESTS=1",
+				"export CHUNK_HOOK_ENABLE_TESTS_CHANGED=1",
+				"export CHUNK_HOOK_ENABLE_LINT=1",
+				"Profile: tests-lint",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.profile, func(t *testing.T) {
+			env := testenv.NewTestEnv(t)
+			envFile := filepath.Join(env.HomeDir, "test-env")
+
+			result := binary.RunCLI(t, []string{
+				"hook", "env", "update",
+				"--profile", tt.profile,
+				"--env-file", envFile,
+			}, env, env.HomeDir)
+
+			assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+			data, err := os.ReadFile(envFile)
+			assert.NilError(t, err)
+			content := string(data)
+
+			for _, s := range tt.contains {
+				assert.Assert(t, strings.Contains(content, s),
+					"expected %q in env file, got:\n%s", s, content)
+			}
+			for _, s := range tt.absent {
+				assert.Assert(t, !strings.Contains(content, s),
+					"did not expect %q in env file, got:\n%s", s, content)
+			}
+		})
+	}
+}
+
+func TestHookEnvUpdateShellSourcing(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.Extra["SHELL"] = "/bin/zsh"
+
+	result := binary.RunCLI(t, []string{
+		"hook", "env", "update",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	// Verify shell startup files contain the sourcing block
+	for _, name := range []string{".zprofile", ".zshrc"} {
+		path := filepath.Join(env.HomeDir, name)
+		data, err := os.ReadFile(path)
+		assert.NilError(t, err, "expected %s to exist", name)
+		content := string(data)
+
+		assert.Assert(t, strings.Contains(content, "# chunk-hook env"),
+			"expected marker in %s, got:\n%s", name, content)
+		assert.Assert(t, strings.Contains(content, "if [ -f '"),
+			"expected sourcing line in %s, got:\n%s", name, content)
+	}
+}
+
+func TestHookEnvUpdateSourcingIdempotent(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.Extra["SHELL"] = "/bin/zsh"
+
+	// Run twice
+	for i := 0; i < 2; i++ {
+		result := binary.RunCLI(t, []string{
+			"hook", "env", "update",
+		}, env, env.HomeDir)
+		assert.Equal(t, result.ExitCode, 0, "run %d stderr: %s", i+1, result.Stderr)
+	}
+
+	// Verify no duplicate markers
+	zprofile := filepath.Join(env.HomeDir, ".zprofile")
+	data, err := os.ReadFile(zprofile)
+	assert.NilError(t, err)
+	content := string(data)
+
+	count := strings.Count(content, "# chunk-hook env")
+	assert.Equal(t, count, 1, "expected exactly 1 marker, got %d in:\n%s", count, content)
+}
+
+func TestHookEnvUpdateLegacyMigration(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	// Create legacy env file at ~/.config/chunk-hook/env
+	legacyDir := filepath.Join(env.HomeDir, ".config", "chunk-hook")
+	err := os.MkdirAll(legacyDir, 0o755)
+	assert.NilError(t, err)
+
+	legacyFile := filepath.Join(legacyDir, "env")
+	err = os.WriteFile(legacyFile, []byte("export CHUNK_HOOK_ENABLE=1\n"), 0o644)
+	assert.NilError(t, err)
+
+	// Run env update (uses default path which triggers migration)
+	result := binary.RunCLI(t, []string{
+		"hook", "env", "update",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	// Legacy file should be gone
+	_, err = os.Stat(legacyFile)
+	assert.Assert(t, os.IsNotExist(err), "expected legacy file to be removed")
+
+	// New file should exist at ~/.config/chunk/hook/env
+	newFile := filepath.Join(env.HomeDir, ".config", "chunk", "hook", "env")
+	_, err = os.Stat(newFile)
+	assert.NilError(t, err, "expected new env file to exist")
+}
+
+func TestHookEnvUpdateShellQuoting(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	envFile := filepath.Join(env.HomeDir, "test-env")
+	logDir := filepath.Join(env.HomeDir, "it's-a-log-dir")
+
+	result := binary.RunCLI(t, []string{
+		"hook", "env", "update",
+		"--env-file", envFile,
+		"--set-log-dir", logDir,
+		"--set-project-root", "/path/with'quote",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	data, err := os.ReadFile(envFile)
+	assert.NilError(t, err)
+	content := string(data)
+
+	// Single quotes in values should be escaped as '\''
+	assert.Assert(t, strings.Contains(content, `it'\''s-a-log-dir`),
+		"expected escaped log dir, got:\n%s", content)
+	assert.Assert(t, strings.Contains(content, `with'\''quote`),
+		"expected escaped project root, got:\n%s", content)
+}
+
+func TestHookEnvUpdateCommentedHints(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	envFile := filepath.Join(env.HomeDir, "test-env")
+
+	// Run without --set-verbose and without --set-project-root
+	result := binary.RunCLI(t, []string{
+		"hook", "env", "update",
+		"--env-file", envFile,
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	data, err := os.ReadFile(envFile)
+	assert.NilError(t, err)
+	content := string(data)
+
+	// Should have commented-out verbose hint
+	assert.Assert(t, strings.Contains(content, "# export CHUNK_HOOK_VERBOSE=1"),
+		"expected commented verbose hint, got:\n%s", content)
+
+	// Should have commented-out project root hint
+	assert.Assert(t, strings.Contains(content, "# export CHUNK_HOOK_PROJECT_ROOT="),
+		"expected commented project root hint, got:\n%s", content)
+
+	// Should have header with quick toggle examples
+	assert.Assert(t, strings.Contains(content, "Quick toggle examples"),
+		"expected quick toggle header, got:\n%s", content)
+}
+
+func TestHookEnvUpdateBashShell(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.Extra["SHELL"] = "/bin/bash"
+
+	result := binary.RunCLI(t, []string{
+		"hook", "env", "update",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	// On macOS, bash should use .bash_profile; verify .bashrc exists too
+	bashrc := filepath.Join(env.HomeDir, ".bashrc")
+	_, err := os.Stat(bashrc)
+	assert.NilError(t, err, "expected .bashrc to exist")
+
+	data, err := os.ReadFile(bashrc)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(data), "# chunk-hook env"),
+		"expected marker in .bashrc")
+}
+
 // --- scope ---
 
 func TestHookScopeDeactivateNoSession(t *testing.T) {

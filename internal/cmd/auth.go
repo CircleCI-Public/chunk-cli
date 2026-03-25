@@ -111,7 +111,7 @@ func validateAPIKey(ctx context.Context, apiKey string) error {
 		Model    string `json:"model"`
 		Messages []msg  `json:"messages"`
 	}{
-		Model:    config.DefaultModel,
+		Model:    config.ValidationModel,
 		Messages: []msg{{Role: "user", Content: "auth test"}},
 	}
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -9,6 +10,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func newBuildPromptCmd() *cobra.Command {
@@ -47,6 +49,14 @@ func newBuildPromptCmd() *cobra.Command {
 			}
 			if promptModel == "" {
 				promptModel = config.PromptModel
+			}
+
+			// Warn about legacy output paths
+			streams := iostream.FromCmd(cmd)
+			for _, legacy := range []string{"./review-prompt.md", ".chunk/review-prompt.md"} {
+				if _, err := os.Stat(legacy); err == nil {
+					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Found legacy output at %s — default output is now %s", legacy, output)))
+				}
 			}
 
 			opts := buildprompt.Options{

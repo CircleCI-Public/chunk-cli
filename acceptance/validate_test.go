@@ -255,6 +255,13 @@ func TestValidateInitHappyPath(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
+	// Verify anthropic-version header was sent
+	anthropicReqs := anthropic.Recorder.AllRequests()
+	for _, req := range anthropicReqs {
+		assert.Equal(t, req.Header.Get("Anthropic-Version"), "2023-06-01",
+			"expected anthropic-version header on Anthropic request to %s", req.URL.Path)
+	}
+
 	// Verify config.json was created
 	configPath := filepath.Join(workDir, ".chunk", "config.json")
 	data, err := os.ReadFile(configPath)

@@ -39,6 +39,12 @@ type TriggerRunRequest struct {
 	TriggerSource      string                 `json:"trigger_source"`
 	ChunkEnvironmentID *string                `json:"chunk_environment_id"`
 	Parameters         map[string]interface{} `json:"parameters"`
+	Stats              *TriggerRunStats       `json:"stats,omitempty"`
+}
+
+type TriggerRunStats struct {
+	Prompt         string `json:"prompt"`
+	CheckoutBranch string `json:"checkout_branch"`
 }
 
 type RunResponse struct {

@@ -211,7 +211,7 @@ func newSandboxesSyncCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
-	cmd.Flags().StringVar(&dest, "dest", "", "Destination path")
+	cmd.Flags().StringVar(&dest, "dest", "/workspace", "Destination path")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().BoolVar(&bootstrap, "bootstrap", false, "Bootstrap the sandbox")
 	_ = cmd.MarkFlagRequired("org-id")

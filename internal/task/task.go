@@ -33,9 +33,14 @@ func TriggerRun(ctx context.Context, client *circleci.Client, cfg *RunConfig, pa
 		TriggerSource:      "chunk-cli",
 		ChunkEnvironmentID: envID,
 		Parameters: map[string]interface{}{
-			"custom-prompt":            params.Prompt,
-			"run-pipeline-as-a-tool":   params.PipelineAsTool,
-			"create-new-branch":        params.NewBranch,
+			"agent-type":             "prompt",
+			"custom-prompt":          params.Prompt,
+			"run-pipeline-as-a-tool": params.PipelineAsTool,
+			"create-new-branch":      params.NewBranch,
+		},
+		Stats: &circleci.TriggerRunStats{
+			Prompt:         params.Prompt,
+			CheckoutBranch: branch,
 		},
 	}
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,8 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
@@ -191,20 +191,18 @@ func newValidateInitCmd() *cobra.Command {
 				return nil
 			}
 
-			apiKey := os.Getenv("ANTHROPIC_API_KEY")
-			if apiKey == "" {
-				return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required")
+			claude, err := anthropic.New()
+			if err != nil {
+				return err
 			}
 
-			baseURL := os.Getenv("ANTHROPIC_BASE_URL")
-			if baseURL == "" {
-				baseURL = "https://api.anthropic.com"
-			}
-
-			testCmd, err := detectTestCommand(cmd.Context(), baseURL, apiKey, workDir)
+			testCmd, err := detectTestCommand(cmd.Context(), claude, workDir)
 			if err != nil {
 				return fmt.Errorf("detect test command: %w", err)
 			}
+
+			io.ErrPrintf("Detected test command: %s\n", ui.Bold(testCmd))
+			io.ErrPrintln(ui.Dim("Edit .chunk/config.json to change this later."))
 
 			chunkDir := filepath.Join(workDir, ".chunk")
 			if err := os.MkdirAll(chunkDir, 0o755); err != nil {
@@ -250,62 +248,137 @@ func newValidateInitCmd() *cobra.Command {
 	return cmd
 }
 
-type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	Messages  []anthropicMessage `json:"messages"`
-}
-
-type anthropicContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type anthropicResponse struct {
-	Content []anthropicContentBlock `json:"content"`
-}
-
-func detectTestCommand(ctx context.Context, baseURL, apiKey, workDir string) (string, error) {
+func detectTestCommand(ctx context.Context, claude *anthropic.Client, workDir string) (string, error) {
 	entries, _ := os.ReadDir(workDir)
 	var files []string
 	for _, e := range entries {
 		files = append(files, e.Name())
 	}
 
-	reqBody := anthropicRequest{
-		Model:     "claude-sonnet-4-5-20250929",
-		MaxTokens: 256,
-		Messages: []anthropicMessage{
-			{
-				Role:    "user",
-				Content: fmt.Sprintf("Given a project with these files: %s\nWhat is the test command for this project? Reply with ONLY the command, no explanation.", strings.Join(files, ", ")),
-			},
-		},
+	// Check well-known files deterministically before asking Claude.
+	if cmd := detectTestCommandFromFiles(files); cmd != "" {
+		return cmd, nil
 	}
 
-	cl := httpcl.New(httpcl.Config{
-		BaseURL:    baseURL,
-		AuthToken:  apiKey,
-		AuthHeader: "x-api-key",
-	})
+	context := gatherRepoContext(workDir, files)
+	pm := detectPackageManager(workDir)
 
-	var resp anthropicResponse
-	_, err := cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/v1/messages",
-		httpcl.Body(reqBody),
-		httpcl.JSONDecoder(&resp),
-	))
+	var pmHint string
+	if pm != "" {
+		pmHint = fmt.Sprintf("Detected package manager: %s. Use %s to run tests (e.g. `%s test`).\n\n", pm, pm, pm)
+	}
+
+	prompt := fmt.Sprintf(
+		"You are analyzing a software repository to determine how tests are run.\n\n"+
+			"%s%s\n\n"+
+			"Based on the above, output ONLY the shell command used to run the test suite — "+
+			"nothing else. No explanation, no markdown. Just the command string.",
+		pmHint, context,
+	)
+
+	resp, err := claude.Ask(ctx, config.ValidationModel, 64, prompt)
 	if err != nil {
-		return "", fmt.Errorf("anthropic API: %w", err)
+		return "", fmt.Errorf("detect test command: %w", err)
 	}
 
-	if len(resp.Content) == 0 {
+	result := strings.TrimSpace(resp)
+	if result == "" {
 		return "npm test", nil
 	}
+	return result, nil
+}
 
-	return strings.TrimSpace(resp.Content[0].Text), nil
+func detectTestCommandFromFiles(files []string) string {
+	has := make(map[string]bool, len(files))
+	for _, f := range files {
+		has[f] = true
+	}
+
+	switch {
+	case has["Taskfile.yml"] || has["Taskfile.yaml"]:
+		return "task test"
+	case has["Makefile"]:
+		return "make test"
+	case has["go.mod"]:
+		return "go test ./..."
+	case has["Cargo.toml"]:
+		return "cargo test"
+	case has["pyproject.toml"]:
+		return "pytest"
+	case has["package.json"]:
+		return "npm test"
+	default:
+		return ""
+	}
+}
+
+// gatherRepoContext builds a rich context string with the root file listing
+// and contents of key config files, mirroring the TS implementation.
+func gatherRepoContext(workDir string, rootFiles []string) string {
+	var parts []string
+	parts = append(parts, "Root files:\n"+strings.Join(rootFiles, "\n"))
+
+	candidates := []string{
+		"package.json",
+		"Makefile",
+		"go.mod",
+		"pom.xml",
+		"build.gradle",
+		"build.gradle.kts",
+		"pyproject.toml",
+		"setup.py",
+		"pytest.ini",
+		"Cargo.toml",
+		"Taskfile.yml",
+		"Taskfile.yaml",
+		".chunk/hook/config.yml",
+		".npmrc",
+		".yarnrc",
+		".yarnrc.yml",
+		"requirements.txt",
+		"requirements-dev.txt",
+		"requirements-test.txt",
+		"Pipfile",
+		"Gemfile",
+		"go.sum",
+		"project.clj",
+		"deps.edn",
+	}
+
+	const maxBytes = 4000
+	for _, rel := range candidates {
+		full := filepath.Join(workDir, rel)
+		data, err := os.ReadFile(full)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		if len(content) > maxBytes {
+			content = content[:maxBytes]
+		}
+		parts = append(parts, fmt.Sprintf("\n--- %s ---\n%s", rel, content))
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// detectPackageManager returns the package manager name based on lockfile presence.
+func detectPackageManager(workDir string) string {
+	lockfiles := []struct {
+		file string
+		name string
+	}{
+		{"pnpm-lock.yaml", "pnpm"},
+		{"yarn.lock", "yarn"},
+		{"bun.lock", "bun"},
+		{"bun.lockb", "bun"},
+		{"package-lock.json", "npm"},
+	}
+
+	for _, lf := range lockfiles {
+		if _, err := os.Stat(filepath.Join(workDir, lf.file)); err == nil {
+			return lf.name
+		}
+	}
+	return ""
 }

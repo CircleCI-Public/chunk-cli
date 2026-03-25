@@ -53,6 +53,7 @@ func TestNew(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("ANTHROPIC_API_KEY", tt.apiKey)
 			t.Setenv("ANTHROPIC_BASE_URL", tt.baseURL)
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 			c, err := New()
 			if tt.wantErr {

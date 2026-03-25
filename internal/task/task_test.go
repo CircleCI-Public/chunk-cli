@@ -264,6 +264,9 @@ func TestTriggerRunHappyPath(t *testing.T) {
 	}
 
 	params := body["parameters"].(map[string]interface{})
+	if params["agent-type"] != "prompt" {
+		t.Fatalf("agent-type = %v, want prompt", params["agent-type"])
+	}
 	if params["custom-prompt"] != "Fix tests" {
 		t.Fatalf("custom-prompt = %v, want 'Fix tests'", params["custom-prompt"])
 	}

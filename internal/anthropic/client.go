@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/CircleCI-Public/chunk-cli/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // Client is an Anthropic Messages API client.
@@ -14,11 +15,13 @@ type Client struct {
 }
 
 // New creates an Anthropic API client.
-// It reads ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL from the environment.
+// It resolves the API key via config (env > config file) and reads
+// ANTHROPIC_BASE_URL from the environment.
 func New() (*Client, error) {
-	key := os.Getenv("ANTHROPIC_API_KEY")
+	rc := config.Resolve("", "")
+	key := rc.APIKey
 	if key == "" {
-		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable is required")
+		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable or config file is required")
 	}
 
 	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
@@ -67,6 +70,7 @@ func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt st
 			MaxTokens: maxTokens,
 			Messages:  []message{{Role: "user", Content: prompt}},
 		}),
+		httpcl.Header("anthropic-version", "2023-06-01"),
 		httpcl.JSONDecoder(&resp),
 	)
 

@@ -107,6 +107,8 @@ func TestBuildPromptHappyPath(t *testing.T) {
 	for _, req := range anthropicReqs {
 		assert.Assert(t, req.Header.Get("X-Api-Key") != "",
 			"expected x-api-key header on Anthropic request")
+		assert.Equal(t, req.Header.Get("Anthropic-Version"), "2023-06-01",
+			"expected anthropic-version header on Anthropic request to %s", req.URL.Path)
 	}
 }
 

@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	DefaultModel   = "claude-sonnet-4-5-20250929"
-	AnalyzeModel   = "claude-sonnet-4-5-20250929"
-	PromptModel    = "claude-opus-4-5-20251101"
-	dirPermission  = 0o700
-	filePermission = 0o600
+	DefaultModel    = "claude-sonnet-4-5-20250929"
+	AnalyzeModel    = "claude-sonnet-4-5-20250929"
+	PromptModel     = "claude-opus-4-5-20251101"
+	ValidationModel = "claude-haiku-4-5-20251001"
+	dirPermission   = 0o700
+	filePermission  = 0o600
 )
 
 // UserConfig is the on-disk JSON config.
@@ -72,8 +73,8 @@ func ClearAPIKey() error {
 }
 
 // Resolve computes the final config from flags, env, and file.
-// Priority for API key: config file > env > (none).
-// Priority for model: flag > config file > default.
+// Priority for API key: flag > env > config file > (none).
+// Priority for model: flag > CODE_REVIEW_CLI_MODEL env > config file > default.
 func Resolve(flagAPIKey, flagModel string) ResolvedConfig {
 	cfg, _ := Load()
 
@@ -82,24 +83,27 @@ func Resolve(flagAPIKey, flagModel string) ResolvedConfig {
 		PromptModel:  PromptModel,
 	}
 
-	// API key resolution: flag > config file > env
+	// API key resolution: flag > env > config file
 	switch {
 	case flagAPIKey != "":
 		rc.APIKey = flagAPIKey
 		rc.APIKeySource = "Flag"
-	case cfg.APIKey != "":
-		rc.APIKey = cfg.APIKey
-		rc.APIKeySource = "Config file (user config)"
 	case os.Getenv("ANTHROPIC_API_KEY") != "":
 		rc.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		rc.APIKeySource = "Environment variable"
+	case cfg.APIKey != "":
+		rc.APIKey = cfg.APIKey
+		rc.APIKeySource = "Config file (user config)"
 	}
 
-	// Model resolution: flag > config file > default
+	// Model resolution: flag > env > config file > default
 	switch {
 	case flagModel != "":
 		rc.Model = flagModel
 		rc.ModelSource = "Flag"
+	case os.Getenv("CODE_REVIEW_CLI_MODEL") != "":
+		rc.Model = os.Getenv("CODE_REVIEW_CLI_MODEL")
+		rc.ModelSource = "Environment variable"
 	case cfg.Model != "":
 		rc.Model = cfg.Model
 		rc.ModelSource = "Config file (user config)"

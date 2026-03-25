@@ -41,8 +41,8 @@ func TestAuthStatusNoKey(t *testing.T) {
 		"expected output to indicate no auth, got: %s", combined)
 }
 
-// config takes priority over env var when both are set
-func TestAuthStatusConfigPriority(t *testing.T) {
+// env var takes priority over config file when both are set
+func TestAuthStatusEnvOverridesConfig(t *testing.T) {
 	anthropic := fakes.NewFakeAnthropic()
 	srv := httptest.NewServer(anthropic)
 	defer srv.Close()
@@ -59,10 +59,10 @@ func TestAuthStatusConfigPriority(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Config file"),
-		"expected config source to take priority over env, got: %s", combined)
-	assert.Assert(t, !strings.Contains(combined, "Environment variable"),
-		"expected config source, not env, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Environment variable"),
+		"expected env to take priority over config file, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "Config file"),
+		"expected env source, not config file, got: %s", combined)
 }
 
 // auth status masks all but last 4 chars of API key

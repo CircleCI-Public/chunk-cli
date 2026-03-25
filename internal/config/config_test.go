@@ -202,15 +202,15 @@ func TestResolve_EnvKey(t *testing.T) {
 	assert.Equal(t, rc.APIKeySource, "Environment variable")
 }
 
-func TestResolve_ConfigFileOverridesEnv(t *testing.T) {
+func TestResolve_EnvOverridesConfigFile(t *testing.T) {
 	setupTempConfig(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
 
 	assert.NilError(t, Save(UserConfig{APIKey: "sk-from-file"}))
 
 	rc := Resolve("", "")
-	assert.Equal(t, rc.APIKey, "sk-from-file")
-	assert.Equal(t, rc.APIKeySource, "Config file (user config)")
+	assert.Equal(t, rc.APIKey, "sk-from-env")
+	assert.Equal(t, rc.APIKeySource, "Environment variable")
 }
 
 func TestResolve_FlagOverridesAll(t *testing.T) {

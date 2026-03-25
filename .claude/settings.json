@@ -35,25 +35,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "chunk hook exec check tests-changed --staged --on pre-commit --matcher 'Bash|Shell|run_in_terminal' --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
+            "command": "chunk hook exec check tests-changed --on pre-commit --matcher 'Bash|Shell|run_in_terminal' --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "chunk hook exec run lint --staged --on pre-commit --matcher 'Bash|Shell|run_in_terminal' --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
+            "command": "chunk hook exec run lint --on pre-commit --matcher 'Bash|Shell|run_in_terminal' --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
             "timeout": 60
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|replace_string_in_file|create_file|multi_replace_string_in_file",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "chunk hook exec run format --matcher 'Edit|Write|replace_string_in_file|create_file|multi_replace_string_in_file' --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
-            "timeout": 30
           }
         ]
       }
@@ -63,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "chunk hook sync check exec:tests --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
+            "command": "chunk hook exec check tests --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
             "timeout": 10
           },
           {

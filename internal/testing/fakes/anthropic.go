@@ -48,6 +48,15 @@ func (f *FakeAnthropic) handleMessages(c *gin.Context) {
 		return
 	}
 
+	if c.GetHeader("anthropic-version") == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":    "error",
+			"error":   gin.H{"type": "invalid_request_error", "message": "missing required header: anthropic-version"},
+			"message": "missing required header: anthropic-version",
+		})
+		return
+	}
+
 	f.mu.Lock()
 	idx := f.callIndex
 	f.callIndex++

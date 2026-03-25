@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
@@ -167,11 +168,19 @@ func identifyBaseImage(ctx context.Context, claude *anthropic.Client, model, rep
 	return parsed.Repository, nil
 }
 
+// validRepoComponent matches a valid Docker Hub namespace or image name.
+var validRepoComponent = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
 func fetchDockerHubTags(repository string) ([]string, error) {
 	namespace, image, _ := strings.Cut(repository, "/")
 	if image == "" {
 		image = namespace
 		namespace = "library"
+	}
+
+	// Validate components to prevent path traversal or query injection from LLM output.
+	if !validRepoComponent.MatchString(namespace) || !validRepoComponent.MatchString(image) {
+		return nil, fmt.Errorf("invalid Docker Hub repository: %s", repository)
 	}
 
 	var tags []string

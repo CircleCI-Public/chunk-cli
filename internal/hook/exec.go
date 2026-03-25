@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -36,7 +37,20 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 		}
 	}
 	if command == "" {
-		command = fmt.Sprintf("echo 'No command configured for exec: %s'", flags.Name)
+		// No shell execution needed for the fallback message — avoids shell injection via flags.Name.
+		msg := fmt.Sprintf("No command configured for exec: %s", flags.Name)
+		startedAt := time.Now().UTC().Format(time.RFC3339)
+		finishedAt := startedAt
+		_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Name, SentinelData{
+			Status:     "pass",
+			StartedAt:  startedAt,
+			FinishedAt: finishedAt,
+			ExitCode:   0,
+			Command:    "",
+			Output:     msg,
+			Project:    cfg.ProjectDir,
+		})
+		return nil
 	}
 
 	timeout := flags.Timeout
@@ -48,7 +62,6 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 			timeout = 300
 		}
 	}
-	_ = timeout // TODO: wire up command timeout
 
 	startedAt := time.Now().UTC().Format(time.RFC3339)
 
@@ -59,8 +72,11 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 		Project:   cfg.ProjectDir,
 	})
 
-	// Execute command
-	cmd := exec.Command("sh", "-c", command)
+	// Execute command with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = cfg.ProjectDir
 	output, err := cmd.CombinedOutput()
 
