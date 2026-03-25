@@ -41,18 +41,32 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 	}
 
 	resetCmd := fmt.Sprintf(
-		"git -C %s reset --hard %s && git -C %s clean -fd && git -C %s apply",
+		`sh -c "cd %s && git reset --hard %s && git clean -fd"`,
 		ShellEscape(dest), ShellEscape(base),
-		ShellEscape(dest),
-		ShellEscape(dest),
 	)
 
-	result, err := ExecOverSSH(session, resetCmd, strings.NewReader(patch))
+	resetResult, err := ExecOverSSH(session, resetCmd, nil)
 	if err != nil {
 		return err
 	}
-	if result.ExitCode != 0 {
-		detail := result.Stderr
+	if resetResult.ExitCode != 0 {
+		detail := resetResult.Stderr
+		if detail == "" {
+			detail = "git reset exited with a non-zero status"
+		}
+		return fmt.Errorf("sync failed: %s", detail)
+	}
+
+	applyCmd := fmt.Sprintf(
+		`git -C %s apply"`, ShellEscape(dest),
+	)
+
+	applyResult, err := ExecOverSSH(session, applyCmd, strings.NewReader(patch))
+	if err != nil {
+		return err
+	}
+	if applyResult.ExitCode != 0 {
+		detail := applyResult.Stderr
 		if detail == "" {
 			detail = "git apply exited with a non-zero status"
 		}
@@ -75,9 +89,8 @@ func bootstrapSandbox(session *Session, dest string, io iostream.Streams) error 
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
 
-	initCmd := fmt.Sprintf("git clone %s %s && git -C %s checkout %s",
-		ShellEscape(repoURL), ShellEscape(dest),
-		ShellEscape(dest), ShellEscape(branch),
+	initCmd := fmt.Sprintf("git clone --branch %s %s %s",
+		ShellEscape(branch), ShellEscape(repoURL), ShellEscape(dest),
 	)
 
 	io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Cloning %s/%s into %s...", org, repo, dest)))
