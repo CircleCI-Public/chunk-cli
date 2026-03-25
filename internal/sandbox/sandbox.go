@@ -17,12 +17,8 @@ func Create(ctx context.Context, client *circleci.Client, orgID, name, image str
 	return client.CreateSandbox(ctx, orgID, name, image)
 }
 
-func Exec(ctx context.Context, client *circleci.Client, orgID, sandboxID, command string, args []string) (*circleci.ExecResponse, error) {
-	token, err := client.CreateAccessToken(ctx, sandboxID)
-	if err != nil {
-		return nil, err
-	}
-	return client.Exec(ctx, token, sandboxID, command, args)
+func Exec(ctx context.Context, client *circleci.Client, sandboxID, command string, args []string) (*circleci.ExecResponse, error) {
+	return client.Exec(ctx, sandboxID, command, args)
 }
 
 func AddSshKey(ctx context.Context, client *circleci.Client, sandboxID, publicKey, publicKeyFile string) (*circleci.AddSshKeyResponse, error) {
@@ -46,10 +42,5 @@ func AddSshKey(ctx context.Context, client *circleci.Client, sandboxID, publicKe
 		return nil, fmt.Errorf("the provided key appears to be a private key; please provide a public key instead")
 	}
 
-	token, err := client.CreateAccessToken(ctx, sandboxID)
-	if err != nil {
-		return nil, err
-	}
-
-	return client.AddSshKey(ctx, token, key)
+	return client.AddSshKey(ctx, sandboxID, key)
 }

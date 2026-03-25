@@ -8,17 +8,12 @@ type Sandbox struct {
 }
 
 type listSandboxesResponse struct {
-	Sandboxes []Sandbox `json:"sandboxes"`
-}
-
-type AccessTokenResponse struct {
-	AccessToken string `json:"access_token"`
+	Items []Sandbox `json:"items"`
 }
 
 type ExecRequest struct {
-	SandboxID string   `json:"sandbox_id"`
-	Command   string   `json:"command"`
-	Args      []string `json:"args,omitempty"`
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
 }
 
 type ExecResponse struct {

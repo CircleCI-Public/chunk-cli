@@ -53,7 +53,6 @@ type FakeCircleCI struct {
 	Projects       []Project
 	Sandboxes      []Sandbox
 	RunResponse    *RunResponse
-	AccessToken    string
 	AddKeyURL      string
 	ExecResponse   *ExecResponse
 	RunStatusCode  int // override status code for trigger run endpoint
@@ -65,10 +64,9 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.Use(gin.Recovery())
 	rec := recorder.NewRecorder()
 	f := &FakeCircleCI{
-		Handler:     r,
-		Recorder:    rec,
-		AccessToken: "fake-access-token-123",
-		AddKeyURL:   "sandbox-abc.example.com",
+		Handler:  r,
+		Recorder: rec,
+		AddKeyURL: "sandbox-abc.example.com",
 	}
 
 	r.Use(rec.GinMiddleware())
@@ -78,11 +76,10 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.GET("/api/v1.1/projects", f.handleProjects)
 
 	// Sandbox endpoints
-	r.GET("/api/v2/sandboxes", f.handleListSandboxes)
-	r.POST("/api/v2/sandboxes", f.handleCreateSandbox)
-	r.POST("/api/v2/sandboxes/:id/access_token", f.handleAccessToken)
-	r.POST("/api/v2/sandboxes/ssh/add-key", f.handleAddSshKey)
-	r.POST("/api/v2/sandboxes/exec", f.handleExec)
+	r.GET("/api/v2/sandbox/instances", f.handleListSandboxes)
+	r.POST("/api/v2/sandbox/instances", f.handleCreateSandbox)
+	r.POST("/api/v2/sandbox/instances/:id/ssh/add-key", f.handleAddSshKey)
+	r.POST("/api/v2/sandbox/instances/:id/exec", f.handleExec)
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
@@ -93,15 +90,6 @@ func NewFakeCircleCI() *FakeCircleCI {
 func (f *FakeCircleCI) requireToken(c *gin.Context) bool {
 	token := c.GetHeader("Circle-Token")
 	if token == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"message": "Unauthorized"})
-		return false
-	}
-	return true
-}
-
-func (f *FakeCircleCI) requireBearer(c *gin.Context) bool {
-	auth := c.GetHeader("Authorization")
-	if auth == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "Unauthorized"})
 		return false
 	}
@@ -143,7 +131,7 @@ func (f *FakeCircleCI) handleListSandboxes(c *gin.Context) {
 	if filtered == nil {
 		filtered = []Sandbox{}
 	}
-	c.JSON(http.StatusOK, gin.H{"sandboxes": filtered})
+	c.JSON(http.StatusOK, gin.H{"items": filtered})
 }
 
 func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
@@ -172,29 +160,20 @@ func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
 	f.Sandboxes = append(f.Sandboxes, sandbox)
 	f.mu.Unlock()
 
-	c.JSON(http.StatusOK, sandbox)
+	c.JSON(http.StatusCreated, sandbox)
 }
 
-func (f *FakeCircleCI) handleAccessToken(c *gin.Context) {
+func (f *FakeCircleCI) handleAddSshKey(c *gin.Context) {
 	if !f.requireToken(c) {
 		return
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	c.JSON(http.StatusOK, gin.H{"access_token": f.AccessToken})
-}
-
-func (f *FakeCircleCI) handleAddSshKey(c *gin.Context) {
-	if !f.requireBearer(c) {
-		return
-	}
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	c.JSON(http.StatusOK, gin.H{"url": f.AddKeyURL})
+	c.JSON(http.StatusCreated, gin.H{"url": f.AddKeyURL})
 }
 
 func (f *FakeCircleCI) handleExec(c *gin.Context) {
-	if !f.requireBearer(c) {
+	if !f.requireToken(c) {
 		return
 	}
 	f.mu.RLock()

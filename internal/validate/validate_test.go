@@ -320,7 +320,7 @@ func TestRunRemote(t *testing.T) {
 		reqs := cci.Recorder.AllRequests()
 		var execCount int
 		for _, r := range reqs {
-			if r.URL.Path == "/api/v2/sandboxes/exec" {
+			if strings.HasPrefix(r.URL.Path, "/api/v2/sandbox/instances/") && strings.HasSuffix(r.URL.Path, "/exec") {
 				execCount++
 			}
 		}

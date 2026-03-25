@@ -184,19 +184,15 @@ func TestValidateRunRemote(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	// Verify access token was requested
-	reqs := cci.Recorder.AllRequests()
-	tokenReqs := filterByPath(reqs, "/api/v2/sandboxes/sandbox-123/access_token")
-	assert.Equal(t, len(tokenReqs), 1, "expected 1 access token request")
-
 	// Verify exec was called (2 commands: install + test)
-	execReqs := filterByPath(reqs, "/api/v2/sandboxes/exec")
+	reqs := cci.Recorder.AllRequests()
+	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sandbox-123/exec")
 	assert.Equal(t, len(execReqs), 2, "expected 2 exec requests (install + test)")
 
-	// Verify bearer auth on exec requests
+	// Verify Circle-Token auth on exec requests
 	for _, req := range execReqs {
-		assert.Assert(t, strings.HasPrefix(req.Header.Get("Authorization"), "Bearer "),
-			"expected Bearer auth on exec request")
+		assert.Assert(t, req.Header.Get("Circle-Token") != "",
+			"expected Circle-Token auth on exec request")
 	}
 }
 

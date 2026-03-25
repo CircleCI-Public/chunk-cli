@@ -81,24 +81,20 @@ func TestExec(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	resp, err := sandbox.Exec(ctx, cl, "org-1", "sb-1", "echo", []string{"hello"})
+	resp, err := sandbox.Exec(ctx, cl, "sb-1", "echo", []string{"hello"})
 	assert.NilError(t, err)
 	assert.Equal(t, resp.Stdout, "output\n")
 	assert.Equal(t, resp.ExitCode, 0)
 
-	// Verify access token was requested before exec
+	// Verify exec request was made with sandbox ID in path
 	reqs := cci.Recorder.AllRequests()
-	var gotTokenReq, gotExecReq bool
+	var gotExecReq bool
 	for _, r := range reqs {
-		if r.URL.Path == "/api/v2/sandboxes/sb-1/access_token" {
-			gotTokenReq = true
-		}
-		if r.URL.Path == "/api/v2/sandboxes/exec" {
+		if r.URL.Path == "/api/v2/sandbox/instances/sb-1/exec" {
 			gotExecReq = true
 		}
 	}
-	assert.Assert(t, gotTokenReq, "expected access token request")
-	assert.Assert(t, gotExecReq, "expected exec request")
+	assert.Assert(t, gotExecReq, "expected exec request at /api/v2/sandbox/instances/sb-1/exec")
 }
 
 func TestAddSshKey(t *testing.T) {

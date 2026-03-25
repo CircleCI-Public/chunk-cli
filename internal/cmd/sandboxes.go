@@ -108,7 +108,7 @@ func newSandboxesExecCmd() *cobra.Command {
 			}
 			// Combine --args flag values with positional args
 			allArgs := append(execArgs, args...)
-			resp, err := sandbox.Exec(cmd.Context(), client, orgID, sandboxID, command, allArgs)
+			resp, err := sandbox.Exec(cmd.Context(), client, sandboxID, command, allArgs)
 			if err != nil {
 				return err
 			}
@@ -171,16 +171,10 @@ func newSandboxesSshCmd() *cobra.Command {
 		Use:   "ssh",
 		Short: "SSH into a sandbox",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := circleci.NewClient()
+			_, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			token, err := client.CreateAccessToken(cmd.Context(), sandboxID)
-			if err != nil {
-				return err
-			}
-			// SSH connection would go here; for now fail indicating not fully implemented
-			_ = token
 			_ = identityFile
 			return fmt.Errorf("ssh connection not yet implemented")
 		},
@@ -203,15 +197,10 @@ func newSandboxesSyncCmd() *cobra.Command {
 		Use:   "sync",
 		Short: "Sync files to a sandbox",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := circleci.NewClient()
+			_, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			token, err := client.CreateAccessToken(cmd.Context(), sandboxID)
-			if err != nil {
-				return err
-			}
-			_ = token
 			_ = dest
 			_ = identityFile
 			_ = bootstrap

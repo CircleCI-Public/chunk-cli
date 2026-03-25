@@ -38,14 +38,14 @@ func NewClient() (*Client, error) {
 
 func (c *Client) ListSandboxes(ctx context.Context, orgID string) ([]Sandbox, error) {
 	var resp listSandboxesResponse
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v2/sandboxes",
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v2/sandbox/instances",
 		httpcl.QueryParam("org_id", orgID),
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
 		return nil, fmt.Errorf("list sandboxes: %w", err)
 	}
-	return resp.Sandboxes, nil
+	return resp.Items, nil
 }
 
 func (c *Client) CreateSandbox(ctx context.Context, orgID, name, image string) (*Sandbox, error) {
@@ -55,7 +55,7 @@ func (c *Client) CreateSandbox(ctx context.Context, orgID, name, image string) (
 		Image:          image,
 	}
 	var resp Sandbox
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/api/v2/sandboxes",
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/api/v2/sandbox/instances",
 		httpcl.Body(body),
 		httpcl.JSONDecoder(&resp),
 	))
@@ -65,24 +65,11 @@ func (c *Client) CreateSandbox(ctx context.Context, orgID, name, image string) (
 	return &resp, nil
 }
 
-func (c *Client) CreateAccessToken(ctx context.Context, sandboxID string) (string, error) {
-	var resp AccessTokenResponse
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost,
-		fmt.Sprintf("/api/v2/sandboxes/%s/access_token", sandboxID),
-		httpcl.JSONDecoder(&resp),
-	))
-	if err != nil {
-		return "", fmt.Errorf("create access token: %w", err)
-	}
-	return resp.AccessToken, nil
-}
-
-// AddSshKey calls the add-key endpoint using Bearer auth with the given token.
-func (c *Client) AddSshKey(ctx context.Context, bearerToken, publicKey string) (*AddSshKeyResponse, error) {
+func (c *Client) AddSshKey(ctx context.Context, sandboxID, publicKey string) (*AddSshKeyResponse, error) {
 	var resp AddSshKeyResponse
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/api/v2/sandboxes/ssh/add-key",
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v2/sandbox/instances/%s/ssh/add-key", sandboxID),
 		httpcl.Body(AddSshKeyRequest{PublicKey: publicKey}),
-		httpcl.Header("Authorization", "Bearer "+bearerToken),
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
@@ -91,16 +78,14 @@ func (c *Client) AddSshKey(ctx context.Context, bearerToken, publicKey string) (
 	return &resp, nil
 }
 
-// Exec calls the exec endpoint using Bearer auth with the given token.
-func (c *Client) Exec(ctx context.Context, bearerToken, sandboxID, command string, args []string) (*ExecResponse, error) {
+func (c *Client) Exec(ctx context.Context, sandboxID, command string, args []string) (*ExecResponse, error) {
 	var resp ExecResponse
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/api/v2/sandboxes/exec",
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v2/sandbox/instances/%s/exec", sandboxID),
 		httpcl.Body(ExecRequest{
-			SandboxID: sandboxID,
-			Command:   command,
-			Args:      args,
+			Command: command,
+			Args:    args,
 		}),
-		httpcl.Header("Authorization", "Bearer "+bearerToken),
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {

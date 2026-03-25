@@ -42,13 +42,8 @@ func RunLocally(cfg *ProjectConfig, streams iostream.Streams) error {
 }
 
 func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig, sandboxID, orgID string, streams iostream.Streams) error {
-	token, err := client.CreateAccessToken(ctx, sandboxID)
-	if err != nil {
-		return err
-	}
-
 	for _, c := range cfg.Commands {
-		resp, err := client.Exec(ctx, token, sandboxID, "sh", []string{"-c", c.Run})
+		resp, err := client.Exec(ctx, sandboxID, "sh", []string{"-c", c.Run})
 		if err != nil {
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}

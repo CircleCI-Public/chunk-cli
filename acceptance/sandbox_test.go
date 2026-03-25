@@ -43,7 +43,7 @@ func TestSandboxesListHappyPath(t *testing.T) {
 
 	// Verify org_id query param was sent
 	reqs := cci.Recorder.AllRequests()
-	listReqs := filterByPath(reqs, "/api/v2/sandboxes")
+	listReqs := filterByPath(reqs, "/api/v2/sandbox/instances")
 	assert.Assert(t, len(listReqs) >= 1, "expected at least 1 list request")
 	assert.Equal(t, listReqs[0].URL.Query().Get("org_id"), "org-aaa")
 }
@@ -134,7 +134,7 @@ func TestSandboxesCreateHappyPath(t *testing.T) {
 
 	// Verify request body
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByMethod(reqs, "POST", "/api/v2/sandboxes")
+	createReqs := filterByMethod(reqs, "POST", "/api/v2/sandbox/instances")
 	assert.Equal(t, len(createReqs), 1, "expected 1 create request")
 
 	var body map[string]interface{}
@@ -162,7 +162,7 @@ func TestSandboxesCreateWithImage(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByMethod(reqs, "POST", "/api/v2/sandboxes")
+	createReqs := filterByMethod(reqs, "POST", "/api/v2/sandbox/instances")
 	assert.Equal(t, len(createReqs), 1)
 
 	var body map[string]interface{}
@@ -198,13 +198,9 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stdout, "hello world"),
 		"expected command output, got: %s", result.Stdout)
 
-	// Verify access token request was made first
+	// Verify exec request with sandbox ID in path
 	reqs := cci.Recorder.AllRequests()
-	tokenReqs := filterByPath(reqs, "/api/v2/sandboxes/sb-111/access_token")
-	assert.Equal(t, len(tokenReqs), 1, "expected 1 access token request")
-
-	// Verify exec request
-	execReqs := filterByPath(reqs, "/api/v2/sandboxes/exec")
+	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-111/exec")
 	assert.Equal(t, len(execReqs), 1, "expected 1 exec request")
 
 	var body map[string]interface{}
@@ -212,9 +208,9 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, body["command"], "echo")
 
-	// Verify bearer auth on exec
-	assert.Assert(t, strings.HasPrefix(execReqs[0].Header.Get("Authorization"), "Bearer "),
-		"expected Bearer auth on exec request")
+	// Verify Circle-Token auth on exec (no more Bearer)
+	assert.Assert(t, execReqs[0].Header.Get("Circle-Token") != "",
+		"expected Circle-Token auth on exec request")
 }
 
 func TestSandboxesAddSshKeyFromString(t *testing.T) {
@@ -237,12 +233,9 @@ func TestSandboxesAddSshKeyFromString(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stderr, "my-sandbox.dev.example.com"),
 		"expected sandbox domain in stderr, got: %s", result.Stderr)
 
-	// Verify access token and add-key requests
+	// Verify add-key request with sandbox ID in path
 	reqs := cci.Recorder.AllRequests()
-	tokenReqs := filterByPath(reqs, "/api/v2/sandboxes/sb-111/access_token")
-	assert.Equal(t, len(tokenReqs), 1, "expected 1 access token request")
-
-	addKeyReqs := filterByPath(reqs, "/api/v2/sandboxes/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-111/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request")
 
 	var body map[string]interface{}
@@ -276,7 +269,7 @@ func TestSandboxesAddSshKeyFromFile(t *testing.T) {
 
 	// Verify the key was sent in the request
 	reqs := cci.Recorder.AllRequests()
-	addKeyReqs := filterByPath(reqs, "/api/v2/sandboxes/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-111/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1)
 
 	var body map[string]interface{}
@@ -410,11 +403,11 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 
 			result := binary.RunCLI(t, tt.args, env, env.HomeDir)
 
-			// Verify access token request was made (proves flag was accepted)
-			reqs := cci.Recorder.AllRequests()
-			tokenReqs := filterByPath(reqs, "/api/v2/sandboxes/sb-111/access_token")
-			assert.Equal(t, len(tokenReqs), 1, "expected access token request (flag accepted)")
-			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
+			// Commands should fail with "not yet implemented", not flag errors
+			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (not implemented)")
+			combined := result.Stdout + result.Stderr
+			assert.Assert(t, strings.Contains(combined, "not yet implemented"),
+				"expected 'not yet implemented' error, got: %s", combined)
 		})
 	}
 }
@@ -462,7 +455,7 @@ func TestSandboxesExecWithArgs(t *testing.T) {
 
 	// Verify exec request body has the command
 	reqs := cci.Recorder.AllRequests()
-	execReqs := filterByPath(reqs, "/api/v2/sandboxes/exec")
+	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-111/exec")
 	assert.Equal(t, len(execReqs), 1)
 
 	var body map[string]interface{}

@@ -152,31 +152,6 @@ func TestCreateSandbox(t *testing.T) {
 	}
 }
 
-func TestCreateAccessToken(t *testing.T) {
-	fake := fakes.NewFakeCircleCI()
-	fake.AccessToken = "my-access-token-xyz"
-	srv := httptest.NewServer(fake)
-	defer srv.Close()
-
-	client := newTestClient(t, srv.URL)
-	ctx := context.Background()
-
-	token, err := client.CreateAccessToken(ctx, "sandbox-abc")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if token != "my-access-token-xyz" {
-		t.Errorf("expected my-access-token-xyz, got %s", token)
-	}
-
-	// Verify the request path included the sandbox ID.
-	reqs := fake.Recorder.AllRequests()
-	last := reqs[len(reqs)-1]
-	if last.URL.Path != "/api/v2/sandboxes/sandbox-abc/access_token" {
-		t.Errorf("unexpected path: %s", last.URL.Path)
-	}
-}
-
 func TestAddSshKey(t *testing.T) {
 	fake := fakes.NewFakeCircleCI()
 	fake.AddKeyURL = "sandbox-host.example.com"
@@ -186,7 +161,7 @@ func TestAddSshKey(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	resp, err := client.AddSshKey(ctx, "bearer-tok", "ssh-rsa AAAA...")
+	resp, err := client.AddSshKey(ctx, "sb-1", "ssh-rsa AAAA...")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,11 +169,15 @@ func TestAddSshKey(t *testing.T) {
 		t.Errorf("expected sandbox-host.example.com, got %s", resp.URL)
 	}
 
-	// Verify Bearer auth header was sent.
+	// Verify Circle-Token auth header was sent.
 	reqs := fake.Recorder.AllRequests()
 	last := reqs[len(reqs)-1]
-	if got := last.Header.Get("Authorization"); got != "Bearer bearer-tok" {
-		t.Errorf("expected Bearer bearer-tok, got %s", got)
+	if got := last.Header.Get("Circle-Token"); got != "test-token" {
+		t.Errorf("expected Circle-Token test-token, got %s", got)
+	}
+	// Verify sandbox ID in URL path.
+	if last.URL.Path != "/api/v2/sandbox/instances/sb-1/ssh/add-key" {
+		t.Errorf("unexpected path: %s", last.URL.Path)
 	}
 }
 
@@ -211,7 +190,7 @@ func TestExec(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		ctx := context.Background()
 
-		resp, err := client.Exec(ctx, "bearer-tok", "sb-1", "ls", []string{"-la"})
+		resp, err := client.Exec(ctx, "sb-1", "ls", []string{"-la"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -241,7 +220,7 @@ func TestExec(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		ctx := context.Background()
 
-		resp, err := client.Exec(ctx, "tok", "sb-1", "echo", []string{"hello"})
+		resp, err := client.Exec(ctx, "sb-1", "echo", []string{"hello"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -256,7 +235,7 @@ func TestExec(t *testing.T) {
 		}
 	})
 
-	t.Run("sends bearer auth", func(t *testing.T) {
+	t.Run("sends sandbox ID in path", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
@@ -264,15 +243,15 @@ func TestExec(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		ctx := context.Background()
 
-		_, err := client.Exec(ctx, "my-bearer", "sb-1", "pwd", nil)
+		_, err := client.Exec(ctx, "sb-1", "pwd", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
 		reqs := fake.Recorder.AllRequests()
 		last := reqs[len(reqs)-1]
-		if got := last.Header.Get("Authorization"); got != "Bearer my-bearer" {
-			t.Errorf("expected Bearer my-bearer, got %s", got)
+		if last.URL.Path != "/api/v2/sandbox/instances/sb-1/exec" {
+			t.Errorf("expected /api/v2/sandbox/instances/sb-1/exec, got %s", last.URL.Path)
 		}
 	})
 }
@@ -351,7 +330,6 @@ func TestTriggerRun(t *testing.T) {
 
 func TestAuthRequired(t *testing.T) {
 	// Verify that the fake returns 401 when no Circle-Token header is present.
-	// This exercises the error path in the client for token-authed endpoints.
 	fake := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
@@ -377,8 +355,15 @@ func TestAuthRequired(t *testing.T) {
 		}
 	})
 
-	t.Run("CreateAccessToken", func(t *testing.T) {
-		_, err := client.CreateAccessToken(ctx, "sb-1")
+	t.Run("Exec", func(t *testing.T) {
+		_, err := client.Exec(ctx, "sb-1", "ls", nil)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("AddSshKey", func(t *testing.T) {
+		_, err := client.AddSshKey(ctx, "sb-1", "ssh-rsa AAAA")
 		if err == nil {
 			t.Fatal("expected error")
 		}
