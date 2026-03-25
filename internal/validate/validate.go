@@ -9,17 +9,18 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // List prints all configured command names and their run strings.
 func List(cfg *ProjectConfig, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
-		streams.Println("No commands configured.")
-		streams.Println("Add commands with: chunk validate <name> --cmd \"your command\" --save")
+		streams.Println(ui.Dim("No commands configured."))
+		streams.Println(ui.Dim("Add commands with: chunk validate <name> --cmd \"your command\" --save"))
 		return nil
 	}
 	for _, c := range cfg.Commands {
-		streams.Printf("  %s: %s\n", c.Name, c.Run)
+		streams.Printf("  %s: %s\n", ui.Bold(c.Name), ui.Gray(c.Run))
 	}
 	return nil
 }
@@ -38,9 +39,9 @@ func Status(workDir, name string, cfg *ProjectConfig, streams iostream.Streams) 
 	for _, c := range commands {
 		cached := CheckCache(workDir, c.Name)
 		if cached != nil {
-			streams.Printf("  %s: cached (%s)\n", c.Name, cached.Status)
+			streams.Printf("  %s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
 		} else {
-			streams.Printf("  %s: no cached result\n", c.Name)
+			streams.Printf("  %s: %s\n", ui.Bold(c.Name), ui.Dim("no cached result"))
 		}
 	}
 	return nil
@@ -50,7 +51,7 @@ func Status(workDir, name string, cfg *ProjectConfig, streams iostream.Streams) 
 func RunInline(ctx context.Context, workDir, name, command string, force bool, streams iostream.Streams) error {
 	if !force {
 		if cached := CheckCache(workDir, name); cached != nil {
-			streams.Printf("%s: cached (%s)\n", name, cached.Status)
+			streams.Printf("%s: cached (%s)\n", ui.Bold(name), colorStatus(cached.Status))
 			if cached.ExitCode != 0 {
 				return fmt.Errorf("%s: cached failure", name)
 			}
@@ -70,7 +71,7 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *Projec
 
 	if !force {
 		if cached := CheckCache(workDir, c.Name); cached != nil {
-			streams.Printf("%s: cached (%s)\n", c.Name, cached.Status)
+			streams.Printf("%s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
 			if cached.ExitCode != 0 {
 				return fmt.Errorf("%s: cached failure", c.Name)
 			}
@@ -90,7 +91,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *ProjectConfig,
 	for i, c := range cfg.Commands {
 		if !force {
 			if cached := CheckCache(workDir, c.Name); cached != nil {
-				streams.ErrPrintf("%s: cached (%s)\n", c.Name, cached.Status)
+				streams.ErrPrintf("%s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
 				if cached.ExitCode != 0 {
 					return fmt.Errorf("%s: cached failure", c.Name)
 				}
@@ -100,7 +101,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *ProjectConfig,
 
 		if err := runAndCache(ctx, workDir, c.Name, c.Run, streams); err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
-				streams.ErrPrintf("%s: skipped (%s failed)\n", cfg.Commands[j].Name, c.Name)
+				streams.ErrPrintf("%s: %s\n", ui.Bold(cfg.Commands[j].Name), ui.Yellow(fmt.Sprintf("skipped (%s failed)", c.Name)))
 			}
 			return err
 		}
@@ -124,7 +125,7 @@ func RunDryRun(cfg *ProjectConfig, name string, streams iostream.Streams) error 
 	}
 
 	for _, c := range commands {
-		streams.Printf("%s: %s\n", c.Name, c.Run)
+		streams.Printf("%s: %s\n", ui.Bold(c.Name), ui.Gray(c.Run))
 	}
 	return nil
 }
@@ -146,8 +147,19 @@ func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig,
 	return nil
 }
 
+func colorStatus(status string) string {
+	switch status {
+	case "pass":
+		return ui.Green("PASS")
+	case "fail":
+		return ui.Red("FAIL")
+	default:
+		return status
+	}
+}
+
 func runAndCache(ctx context.Context, workDir, name, command string, streams iostream.Streams) error {
-	streams.ErrPrintf("Running %s: %s\n", name, command)
+	streams.ErrPrintf("%s %s\n", ui.Dim("Running "+name+":"), ui.Gray(command))
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir

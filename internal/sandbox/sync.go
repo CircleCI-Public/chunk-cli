@@ -9,6 +9,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // Sync synchronises local changes to a sandbox over SSH.
@@ -35,7 +36,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		return err
 	}
 	if patch == "" {
-		io.ErrPrintln("No local changes relative to remote base.")
+		io.ErrPrintln(ui.Dim("No local changes relative to remote base."))
 		return nil
 	}
 
@@ -58,7 +59,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		return fmt.Errorf("sync failed: %s", detail)
 	}
 
-	io.ErrPrintln("Synced.")
+	io.ErrPrintln(ui.Success("Synced."))
 	return nil
 }
 
@@ -79,7 +80,7 @@ func bootstrapSandbox(session *Session, dest string, io iostream.Streams) error 
 		ShellEscape(dest), ShellEscape(branch),
 	)
 
-	io.ErrPrintf("Cloning %s/%s into %s...\n", org, repo, dest)
+	io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Cloning %s/%s into %s...", org, repo, dest)))
 	result, err := ExecOverSSH(session, initCmd, nil)
 	if err != nil {
 		return err

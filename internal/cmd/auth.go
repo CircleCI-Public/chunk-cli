@@ -13,6 +13,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func newAuthCmd() *cobra.Command {
@@ -34,10 +35,10 @@ func newAuthLoginCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 
 			io.Println("")
-			io.Println("Chunk CLI - API Key Setup")
+			io.Println(ui.Bold("Chunk CLI - API Key Setup"))
 			io.Println("")
 			io.Println("Enter your Anthropic API key (starts with sk-ant-).")
-			io.Println("The key will be stored securely and never displayed.")
+			io.Println(ui.Dim("The key will be stored securely and never displayed."))
 			io.Println("")
 
 			// Check for existing key
@@ -62,21 +63,18 @@ func newAuthLoginCmd() *cobra.Command {
 
 			key = strings.TrimSpace(key)
 			if key == "" {
-				io.ErrPrintln("API key cannot be empty.")
-				io.ErrPrintln("Get an API key from https://console.anthropic.com/")
+				io.ErrPrintln(ui.FormatError("API key cannot be empty.", "", "Get an API key from https://console.anthropic.com/"))
 				os.Exit(2)
 			}
 
 			if !strings.HasPrefix(key, "sk-ant-") {
-				io.ErrPrintln("Invalid API key format. Keys should start with \"sk-ant-\".")
-				io.ErrPrintln("Get a valid API key from https://console.anthropic.com/")
+				io.ErrPrintln(ui.FormatError("Invalid API key format.", "Keys should start with \"sk-ant-\".", "Get a valid API key from https://console.anthropic.com/"))
 				os.Exit(2)
 			}
 
-			io.ErrPrintln("Validating API key...")
+			io.ErrPrintln(ui.Dim("Validating API key..."))
 			if err := validateAPIKey(cmd.Context(), key); err != nil {
-				io.ErrPrintln("API key validation failed.")
-				io.ErrPrintln("Check that your key is correct and has not been revoked.")
+				io.ErrPrintln(ui.FormatError("API key validation failed.", "", "Check that your key is correct and has not been revoked."))
 				os.Exit(2)
 			}
 
@@ -86,8 +84,8 @@ func newAuthLoginCmd() *cobra.Command {
 				return fmt.Errorf("save API key: %w", err)
 			}
 
-			io.Printf("\nAPI key validated and saved to %s\n", config.Path())
-			io.Println("You can now run code reviews with: chunk build-prompt")
+			io.Printf("\n%s\n", ui.Success(fmt.Sprintf("API key validated and saved to %s", config.Path())))
+			io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
 			return nil
 		},
 	}
@@ -140,12 +138,14 @@ func newAuthStatusCmd() *cobra.Command {
 			rc := config.Resolve("", "")
 
 			if rc.APIKey == "" {
-				io.Println("Not authenticated")
+				io.Println(ui.Warning("Not authenticated"))
 				return nil
 			}
 
-			io.Printf("Authenticated: %s (source: %s)\n",
-				config.MaskAPIKey(rc.APIKey), sourceLabel(rc.APIKeySource))
+			io.Printf("%s %s %s\n",
+				ui.Success("Authenticated:"),
+				config.MaskAPIKey(rc.APIKey),
+				ui.Dim("("+sourceLabel(rc.APIKeySource)+")"))
 			return nil
 		},
 	}
@@ -162,13 +162,13 @@ func newAuthLogoutCmd() *cobra.Command {
 				return err
 			}
 			if cfg.APIKey == "" {
-				io.Println("No API key stored in config file")
+				io.Println(ui.Dim("No API key stored in config file"))
 				return nil
 			}
 			if err := config.ClearAPIKey(); err != nil {
 				return err
 			}
-			io.Println("API key removed from config file")
+			io.Println(ui.Success("API key removed from config file"))
 			return nil
 		},
 	}

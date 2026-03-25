@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // EnvUpdateOptions holds options for the env update command.
@@ -50,7 +51,7 @@ func RunEnvUpdate(opts EnvUpdateOptions, streams iostream.Streams) error {
 		return fmt.Errorf("write env file: %w", err)
 	}
 
-	streams.ErrPrintln("Configuration complete")
+	streams.ErrPrintln(ui.Success("Configuration complete"))
 	return nil
 }
 

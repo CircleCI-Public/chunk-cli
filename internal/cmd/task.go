@@ -12,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/task"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func newTaskCmd() *cobra.Command {
@@ -63,8 +64,9 @@ func newTaskRunCmd() *cobra.Command {
 			}
 
 			io := iostream.FromCmd(cmd)
-			io.Printf("Run triggered: %s\n", resp.RunID)
-			io.Printf("Pipeline: %s\n", resp.PipelineID)
+			w := 12
+			io.Printf("%s %s\n", ui.Label("Run triggered:", w), ui.Green(resp.RunID))
+			io.Printf("%s %s\n", ui.Label("Pipeline:", w), resp.PipelineID)
 			return nil
 		},
 	}
@@ -95,10 +97,10 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			io.Println("")
-			io.Println("Chunk Run Setup")
+			io.Println(ui.Bold("Chunk Run Setup"))
 			io.Println("")
 
-			io.ErrPrintln("Fetching your CircleCI projects...")
+			io.ErrPrintln(ui.Dim("Fetching your CircleCI projects..."))
 
 			// Fetch projects and collaborations in parallel
 			var projects []circleci.FollowedProject
@@ -147,7 +149,7 @@ func newTaskConfigCmd() *cobra.Command {
 				}
 				slug := fmt.Sprintf("%s/%s/%s", vcsPrefix, p.Username, p.Reponame)
 
-				io.ErrPrintf("Fetching project details for %s...\n", slug)
+				io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Fetching project details for %s...", slug)))
 				detail, err := client.GetProjectBySlug(ctx, slug)
 				if err != nil {
 					return fmt.Errorf("fetch project details: %w", err)
@@ -250,9 +252,9 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			io.Println("")
-			io.Println("Configuration saved to .chunk/run.json")
+			io.Println(ui.Success("Configuration saved to .chunk/run.json"))
 			io.Println("")
-			io.Println("Run a task with: chunk task run --definition <name> --prompt <text>")
+			io.Println(ui.Dim("Run a task with: chunk task run --definition <name> --prompt <text>"))
 			return nil
 		},
 	}

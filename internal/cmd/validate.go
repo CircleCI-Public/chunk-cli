@@ -15,6 +15,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
@@ -47,7 +48,7 @@ func newValidateCmd() *cobra.Command {
 
 			// Guard: deprecated "validate run" subcommand
 			if name == "run" {
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), `"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`)
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), ui.Warning(`"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`))
 				os.Exit(2)
 			}
 
@@ -79,7 +80,7 @@ func newValidateCmd() *cobra.Command {
 					if err := validate.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
 						return fmt.Errorf("save command: %w", err)
 					}
-					streams.ErrPrintf("Saved %s to .chunk/config.json\n", cmdName)
+					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 				}
 				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, streams)
 			}
@@ -136,7 +137,7 @@ func newValidateRunCmd() *cobra.Command {
 		Short:  "Deprecated: use 'chunk validate' directly",
 		Hidden: true,
 		Run: func(cmd *cobra.Command, args []string) {
-			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), `"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`)
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), ui.Warning(`"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`))
 			os.Exit(2)
 		},
 	}
@@ -186,7 +187,7 @@ func newValidateInitCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			configPath := filepath.Join(workDir, ".chunk", "config.json")
 			if _, err := os.Stat(configPath); err == nil && !force {
-				io.ErrPrintln("Config already exists. Use --force to overwrite.")
+				io.ErrPrintln(ui.Warning("Config already exists. Use --force to overwrite."))
 				return nil
 			}
 
@@ -236,7 +237,7 @@ func newValidateInitCmd() *cobra.Command {
 				return err
 			}
 
-			io.ErrPrintln("Validation config initialized")
+			io.ErrPrintln(ui.Success("Validation config initialized"))
 			_ = skipEnv
 			return nil
 		},

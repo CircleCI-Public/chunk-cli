@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
@@ -47,6 +48,6 @@ func RunSetup(targetDir, profile string, force, skipEnv bool, envFile string, st
 		return fmt.Errorf("repo init: %w", err)
 	}
 
-	streams.ErrPrintln("Setup complete")
+	streams.ErrPrintln(ui.Success("Setup complete"))
 	return nil
 }

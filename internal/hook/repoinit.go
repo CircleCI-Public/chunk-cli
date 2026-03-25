@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // RunRepoInit initializes a repository with hook configuration files.
@@ -33,14 +34,14 @@ func RunRepoInit(targetDir string, force bool, streams iostream.Streams) error {
 			if err := writeFile(examplePath, content); err != nil {
 				return fmt.Errorf("write example %s: %w", examplePath, err)
 			}
-			streams.ErrPrintf("%s already exists, wrote %s\n", tmpl.relativePath, filepath.Base(examplePath))
+			streams.ErrPrintf("%s %s\n", ui.Warning(tmpl.relativePath+" already exists,"), ui.Dim("wrote "+filepath.Base(examplePath)))
 			continue
 		}
 
 		if err := writeFile(dest, content); err != nil {
 			return fmt.Errorf("write %s: %w", dest, err)
 		}
-		streams.ErrPrintf("Created %s\n", tmpl.relativePath)
+		streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created %s", tmpl.relativePath)))
 	}
 
 	return nil

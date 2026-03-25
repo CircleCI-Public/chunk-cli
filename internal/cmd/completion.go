@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 const completionTag = "# chunk shell completion"
@@ -43,7 +44,7 @@ func newCompletionInstallCmd() *cobra.Command {
 			// Check if already installed
 			if data, err := os.ReadFile(rcFile); err == nil {
 				if strings.Contains(string(data), completionTag) {
-					io.ErrPrintln("Completion already installed.")
+					io.ErrPrintln(ui.Warning("Completion already installed."))
 					return nil
 				}
 			}
@@ -58,7 +59,7 @@ func newCompletionInstallCmd() *cobra.Command {
 				return fmt.Errorf("write %s: %w", rcFile, err)
 			}
 
-			io.ErrPrintln("Completion installed.")
+			io.ErrPrintln(ui.Success("Completion installed."))
 			return nil
 		},
 	}
@@ -90,7 +91,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 			data, err := os.ReadFile(rcFile)
 			if err != nil {
 				// Nothing to uninstall
-				io.ErrPrintln("Completion uninstalled.")
+				io.ErrPrintln(ui.Success("Completion uninstalled."))
 				return nil
 			}
 
@@ -115,7 +116,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 				return fmt.Errorf("write %s: %w", rcFile, err)
 			}
 
-			io.ErrPrintln("Completion uninstalled.")
+			io.ErrPrintln(ui.Success("Completion uninstalled."))
 			return nil
 		},
 	}

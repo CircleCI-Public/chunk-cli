@@ -10,6 +10,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // Run executes the full build-prompt pipeline: discover, analyze, generate.
@@ -17,7 +18,7 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	paths := DeriveOutputPaths(opts.OutputPath)
 
 	// --- Step 1: Discover top reviewers ---
-	streams.ErrPrintln("Step 1/3: Discovering Top Reviewers")
+	streams.ErrPrintln(ui.Step(1, 3, "Discovering Top Reviewers"))
 
 	ghClient, err := github.New()
 	if err != nil {
@@ -38,7 +39,7 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	}
 
 	if len(repos) == 0 {
-		streams.ErrPrintln("No repositories found.")
+		streams.ErrPrintln(ui.Warning("No repositories found."))
 		return nil
 	}
 
@@ -46,11 +47,11 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	var allDetails [][]github.ReviewCommentDetail
 
 	for i, repo := range repos {
-		streams.ErrPrintf("  [%d/%d] %s\n", i+1, len(repos), repo)
+		streams.ErrPrintf("  %s %s\n", ui.Dim(fmt.Sprintf("[%d/%d]", i+1, len(repos))), ui.Bold(repo))
 		result, err := ghClient.FetchReviewActivity(ctx, opts.Org, repo, opts.Since)
 		if err != nil {
 			if github.IsResolutionError(err) {
-				streams.ErrPrintf("  Skipping %s: %v\n", repo, err)
+				streams.ErrPrintf("  %s\n", ui.Warning(fmt.Sprintf("Skipping %s: %v", repo, err)))
 				continue
 			}
 			return err
@@ -81,11 +82,11 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 		return fmt.Errorf("write PR rankings CSV: %w", err)
 	}
 
-	streams.ErrPrintf("  Details written to %s\n", paths.DetailsPath)
-	streams.ErrPrintf("  PR rankings written to %s\n", paths.CSVPath)
+	streams.ErrPrintf("  %s\n", ui.Success(fmt.Sprintf("Details written to %s", paths.DetailsPath)))
+	streams.ErrPrintf("  %s\n", ui.Success(fmt.Sprintf("PR rankings written to %s", paths.CSVPath)))
 
 	// --- Step 2: Analyze review patterns ---
-	streams.ErrPrintln("Step 2/3: Analyzing Review Patterns")
+	streams.ErrPrintln(ui.Step(2, 3, "Analyzing Review Patterns"))
 
 	anthropicClient, err := anthropic.New()
 	if err != nil {
@@ -117,10 +118,10 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	if err := os.WriteFile(paths.AnalysisPath, []byte(report), 0o644); err != nil {
 		return fmt.Errorf("write analysis: %w", err)
 	}
-	streams.ErrPrintf("  Analysis written to %s\n", paths.AnalysisPath)
+	streams.ErrPrintf("  %s\n", ui.Success(fmt.Sprintf("Analysis written to %s", paths.AnalysisPath)))
 
 	// --- Step 3: Generate review prompt ---
-	streams.ErrPrintln("Step 3/3: Generating PR Review Prompt")
+	streams.ErrPrintln(ui.Step(3, 3, "Generating PR Review Prompt"))
 
 	analysisContent, err := os.ReadFile(paths.AnalysisPath)
 	if err != nil {
@@ -140,7 +141,7 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	if err := os.WriteFile(paths.PromptPath, []byte(generatedPrompt+footer), 0o644); err != nil {
 		return fmt.Errorf("write prompt: %w", err)
 	}
-	streams.ErrPrintf("  Prompt written to %s\n", paths.PromptPath)
+	streams.ErrPrintf("  %s\n", ui.Success(fmt.Sprintf("Prompt written to %s", paths.PromptPath)))
 
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 const maxBuildRetries = 3
@@ -33,7 +34,7 @@ type requiredCredential struct {
 
 // Prepare generates a Dockerfile, builds it, and runs tests inside the container.
 func Prepare(ctx context.Context, claude *anthropic.Client, dockerSudo bool, io iostream.Streams, stdin io.Reader) error {
-	io.ErrPrintln("preparing...")
+	io.ErrPrintln(ui.Dim("preparing..."))
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -44,13 +45,13 @@ func Prepare(ctx context.Context, claude *anthropic.Client, dockerSudo bool, io 
 	existingDockerfiles := gatherDockerfiles(cwd)
 	pm := detectPackageManager(cwd)
 	if pm != nil {
-		io.ErrPrintf("detected package manager: %s (%s)\n", pm.name, pm.lockfile)
+		io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("detected package manager: %s (%s)", pm.name, pm.lockfile)))
 	}
 
 	model := config.DefaultModel
 
 	// Identify required credentials
-	io.ErrPrintln("scanning for private dependencies...")
+	io.ErrPrintln(ui.Dim("scanning for private dependencies..."))
 	credentials, err := identifyCredentials(ctx, claude, model, repoContext, existingDockerfiles, io, stdin)
 	if err != nil {
 		return err
@@ -64,10 +65,10 @@ func Prepare(ctx context.Context, claude *anthropic.Client, dockerSudo bool, io 
 	if testCommand == "" {
 		return fmt.Errorf("could not determine test command")
 	}
-	io.ErrPrintf("test command: %s\n", testCommand)
+	io.ErrPrintf("test command: %s\n", ui.Bold(testCommand))
 
 	// Identify base image and fetch tags
-	io.ErrPrintln("resolving base image tags...")
+	io.ErrPrintln(ui.Dim("resolving base image tags..."))
 	baseImageRepo, err := identifyBaseImage(ctx, claude, model, repoContext, testCommand)
 	if err != nil {
 		return err
@@ -75,11 +76,11 @@ func Prepare(ctx context.Context, claude *anthropic.Client, dockerSudo bool, io 
 	var tags []string
 	if baseImageRepo != "" {
 		tags, _ = fetchDockerHubTags(baseImageRepo)
-		io.ErrPrintf("  %s: %d tags fetched from Docker Hub\n", baseImageRepo, len(tags))
+		io.ErrPrintf("  %s: %s\n", baseImageRepo, ui.Dim(fmt.Sprintf("%d tags fetched from Docker Hub", len(tags))))
 	}
 
 	// Generate Dockerfile
-	io.ErrPrintln("generating Dockerfile...")
+	io.ErrPrintln(ui.Dim("generating Dockerfile..."))
 	dockerfileContent, err := generateDockerfile(ctx, claude, model, testCommand, repoContext, existingDockerfiles, baseImageRepo, tags, credentials, pm)
 	if err != nil {
 		return err
@@ -94,7 +95,7 @@ func Prepare(ctx context.Context, claude *anthropic.Client, dockerSudo bool, io 
 	if err := os.WriteFile(dockerfilePath, []byte(dockerfileContent+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", dockerfileName, err)
 	}
-	io.ErrPrintf("wrote %s\n", dockerfileName)
+	io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("wrote %s", dockerfileName)))
 
 	// Build and test
 	success, err := buildAndTest(ctx, claude, model, cwd, dockerfileName, dockerfilePath, dockerfileContent, testCommand, repoContext, credentials, pm, dockerSudo, io)
@@ -126,7 +127,7 @@ func identifyCredentials(ctx context.Context, claude *anthropic.Client, model, r
 
 	io.ErrPrintf("\nFound %d credential(s) needed:\n\n", len(creds))
 	for _, c := range creds {
-		io.ErrPrintf("  %s: %s\n", c.BuildArg, c.Description)
+		io.ErrPrintf("  %s: %s\n", ui.Bold(c.BuildArg), ui.Dim(c.Description))
 	}
 	io.ErrPrintln("")
 
@@ -256,7 +257,7 @@ func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, doc
 
 	for attempt := 0; attempt <= maxBuildRetries; attempt++ {
 		if attempt > 0 {
-			io.ErrPrintf("\nfixing Dockerfile (attempt %d of %d)...\n", attempt, maxBuildRetries)
+			io.ErrPrintf("\n%s\n", ui.Yellow(fmt.Sprintf("fixing Dockerfile (attempt %d of %d)...", attempt, maxBuildRetries)))
 			if err := os.WriteFile(dockerfilePath, []byte(currentContent+"\n"), 0o644); err != nil {
 				return false, fmt.Errorf("write %s: %w", dockerfileName, err)
 			}
@@ -266,7 +267,7 @@ func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, doc
 		}
 
 		// Build
-		io.ErrPrintf("\nbuilding %s...\n", dockerfileName)
+		io.ErrPrintf("\n%s\n", ui.Dim(fmt.Sprintf("building %s...", dockerfileName)))
 		buildCmdArgs := []string{"build", "-f", dockerfileName, "-t", imageTag}
 		buildCmdArgs = append(buildCmdArgs, buildArgs...)
 		buildCmdArgs = append(buildCmdArgs, ".")
@@ -284,7 +285,7 @@ func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, doc
 
 		if buildErr != nil {
 			if attempt < maxBuildRetries {
-				io.ErrPrintln("Docker build failed. Asking Claude to fix the Dockerfile...")
+				io.ErrPrintln(ui.Yellow("Docker build failed. Asking Claude to fix the Dockerfile..."))
 				fixed, err := claude.Ask(ctx, model, 1024, dockerfileFixPrompt(currentContent, string(buildOutput), testCommand, repoContext, pm))
 				if err == nil && fixed != "" {
 					currentContent = strings.TrimSpace(fixed)
@@ -295,7 +296,7 @@ func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, doc
 		}
 
 		// Run tests
-		io.ErrPrintln("\nrunning test command in container...")
+		io.ErrPrintln("\n" + ui.Dim("running test command in container..."))
 		runCmdArgs := []string{"run", "--rm", imageTag, "sh", "-c", testCommand}
 		if dockerSudo {
 			runCmdArgs = append([]string{"docker"}, runCmdArgs...)
@@ -314,7 +315,7 @@ func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, doc
 		}
 
 		if attempt < maxBuildRetries {
-			io.ErrPrintln("Tests failed. Asking Claude to fix the Dockerfile...")
+			io.ErrPrintln(ui.Yellow("Tests failed. Asking Claude to fix the Dockerfile..."))
 			fixed, err := claude.Ask(ctx, model, 1024, dockerfileFixPrompt(currentContent, string(runOutput), testCommand, repoContext, pm))
 			if err == nil && fixed != "" {
 				currentContent = strings.TrimSpace(fixed)

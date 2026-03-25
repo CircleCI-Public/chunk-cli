@@ -8,6 +8,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func newSkillsCmd() *cobra.Command {
@@ -33,7 +34,7 @@ func newSkillsInstallCmd() *cobra.Command {
 			if err := skills.Install(home); err != nil {
 				return err
 			}
-			iostream.FromCmd(cmd).ErrPrintln("Skills installed successfully.")
+			iostream.FromCmd(cmd).ErrPrintln(ui.Success("Skills installed successfully."))
 			return nil
 		},
 	}
@@ -48,11 +49,11 @@ func newSkillsListCmd() *cobra.Command {
 			home := os.Getenv("HOME")
 			infos := skills.List(home)
 			for _, info := range infos {
-				status := "not installed"
+				status := ui.Dim("not installed")
 				if info.Installed {
-					status = "installed"
+					status = ui.Green("installed")
 				}
-				io.Printf("  %s (%s)\n", info.Name, status)
+				io.Printf("  %s (%s)\n", ui.Bold(info.Name), status)
 			}
 		},
 	}

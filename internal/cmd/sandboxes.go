@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func newSandboxesCmd() *cobra.Command {
@@ -47,7 +48,7 @@ func newSandboxesListCmd() *cobra.Command {
 				return err
 			}
 			if len(sandboxes) == 0 {
-				io.ErrPrintln("No sandboxes found")
+				io.ErrPrintln(ui.Dim("No sandboxes found"))
 				return nil
 			}
 			for _, s := range sandboxes {
@@ -79,7 +80,7 @@ func newSandboxesCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			io.ErrPrintf("Created sandbox %s (%s)\n", sb.Name, sb.ID)
+			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sb.Name, sb.ID)))
 			return nil
 		},
 	}
@@ -150,7 +151,7 @@ func newSandboxesAddSshKeyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			io.ErrPrintf("SSH key added. Sandbox URL: %s\n", resp.URL)
+			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("SSH key added. Sandbox URL: %s", resp.URL)))
 			return nil
 		},
 	}
