@@ -2,8 +2,10 @@ package anthropic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -85,4 +87,14 @@ func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt st
 		}
 	}
 	return "", fmt.Errorf("no text content in Anthropic response")
+}
+
+// IsTokenLimitError reports whether err is an Anthropic API error indicating
+// that the prompt exceeds the model's context window.
+func IsTokenLimitError(err error) bool {
+	var he *httpcl.HTTPError
+	if !errors.As(err, &he) {
+		return false
+	}
+	return strings.Contains(string(he.Body), "prompt is too long")
 }

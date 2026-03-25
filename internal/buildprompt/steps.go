@@ -318,14 +318,75 @@ func LimitCommentsPerReviewer(groups []ReviewerGroup, maxComments int) []Reviewe
 	return result
 }
 
+// EstimateTokenCount estimates the token count for a prompt using ~4 chars per token.
+func EstimateTokenCount(text string) int {
+	return (len(text) + 3) / 4
+}
+
 // BuildAnalysisPrompt builds the prompt for Claude to analyze review patterns.
 func BuildAnalysisPrompt(groups []ReviewerGroup) string {
 	totalComments := 0
+	var reviewerNames []string
 	for _, g := range groups {
 		totalComments += g.TotalComments
+		reviewerNames = append(reviewerNames, g.Reviewer)
 	}
 
+	reviewerData := formatReviewerData(groups)
+
+	return fmt.Sprintf(`You are analyzing code review feedback from senior engineers at CircleCI.
+
+# Context
+You have %d review comments from %d reviewer(s) across multiple repositories. Your goal is to identify:
+1. What patterns and practices each reviewer emphasizes
+2. What key principles they're trying to teach
+3. Recurring themes across their feedback
+
+# Data
+%s
+
+# Instructions
+Analyze the review comments and produce a structured report with these sections:
+
+## 1. Per-Reviewer Analysis
+For each reviewer (%s):
+
+### Key Practices
+Identify 3-7 patterns in their feedback. For each pattern:
+- **Name**: Short, descriptive title
+- **Description**: What principle/practice they're emphasizing
+- **Examples**: 2-3 concrete examples with code context and quotes
+
+Examples of patterns to look for:
+- Observability/instrumentation preferences (like preferring specific o11y methods)
+- Naming conventions (like "o11y" abbreviation, metric naming patterns)
+- Code organization principles
+- Testing approaches
+- Performance considerations
+- Architectural guidance
+- Error handling patterns
+
+### Notable Repos
+Identify which repositories have particularly instructive feedback and why.
+
+## 2. Cross-Cutting Themes
+Identify 2-4 themes that appear across multiple reviewers or are especially important
+
+## 3. Recommendations
+Based on the patterns, what could be:
+- Automated (linters, CI checks)
+- Documented (style guides, architectural docs)
+- Taught (onboarding, examples)
+
+# Output Format
+Use clear markdown with headers, bullet points, and code snippets where relevant.
+Keep it concise but specific - use actual quotes from the comments.`, totalComments, len(groups), reviewerData, strings.Join(reviewerNames, ", "))
+}
+
+// formatReviewerData formats reviewer groups for the analysis prompt.
+func formatReviewerData(groups []ReviewerGroup) string {
 	var sb strings.Builder
+
 	for _, g := range groups {
 		fmt.Fprintf(&sb, "\n## %s (%d comments)\n\n", g.Reviewer, g.TotalComments)
 
@@ -351,23 +412,7 @@ func BuildAnalysisPrompt(groups []ReviewerGroup) string {
 		}
 	}
 
-	return fmt.Sprintf(`You are analyzing code review feedback from senior engineers at CircleCI.
-
-# Context
-You have %d review comments from %d reviewer(s) across multiple repositories. Your goal is to identify:
-1. What patterns and practices each reviewer emphasizes
-2. What key principles they're trying to teach
-3. Recurring themes across their feedback
-
-# Data
-%s
-
-# Instructions
-Analyze the review comments and produce a structured report.
-
-# Output Format
-Use clear markdown with headers, bullet points, and code snippets where relevant.
-Keep it concise but specific - use actual quotes from the comments.`, totalComments, len(groups), sb.String())
+	return sb.String()
 }
 
 // FormatMarkdownReport formats the analysis into a markdown report.

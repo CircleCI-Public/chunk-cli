@@ -18,6 +18,10 @@ type FakeAnthropic struct {
 	mu        sync.Mutex
 	responses []string // queued text responses, dequeued in FIFO order
 	callIndex int
+
+	// tokenLimitErrors is the number of initial calls that return a
+	// "prompt is too long" error before succeeding.
+	tokenLimitErrors int
 }
 
 func NewFakeAnthropic(responses ...string) *FakeAnthropic {
@@ -35,6 +39,14 @@ func NewFakeAnthropic(responses ...string) *FakeAnthropic {
 	r.POST("/v1/messages", f.handleMessages)
 	r.POST("/v1/messages/count_tokens", f.handleCountTokens)
 	return f
+}
+
+// SetTokenLimitErrors configures the fake to return n consecutive "prompt is
+// too long" errors before returning normal responses.
+func (f *FakeAnthropic) SetTokenLimitErrors(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tokenLimitErrors = n
 }
 
 func (f *FakeAnthropic) handleMessages(c *gin.Context) {
@@ -58,9 +70,27 @@ func (f *FakeAnthropic) handleMessages(c *gin.Context) {
 	}
 
 	f.mu.Lock()
+	remainingErrors := f.tokenLimitErrors
+	if remainingErrors > 0 {
+		f.tokenLimitErrors--
+	}
 	idx := f.callIndex
-	f.callIndex++
+	if remainingErrors == 0 {
+		f.callIndex++
+	}
 	f.mu.Unlock()
+
+	if remainingErrors > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    "invalid_request_error",
+				"message": "prompt is too long: 200000 tokens > 100000 maximum",
+			},
+			"message": "prompt is too long: 200000 tokens > 100000 maximum",
+		})
+		return
+	}
 
 	text := "default response"
 	if idx < len(f.responses) {

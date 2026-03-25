@@ -198,6 +198,57 @@ func TestRunWithMaxComments(t *testing.T) {
 	assert.Assert(t, len(reqs) >= 2, "expected at least 2 anthropic requests")
 }
 
+func TestRunRetryOnTokenLimit(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.MultiReviewerResponse())
+
+	anthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+	// First 2 analysis attempts return token limit errors, third succeeds.
+	anthropic.SetTokenLimitErrors(2)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	t.Setenv("GITHUB_TOKEN", "fake-token")
+	t.Setenv("GITHUB_API_URL", ghSrv.URL)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
+
+	outDir := t.TempDir()
+	outputPath := filepath.Join(outDir, "prompt.md")
+
+	var stderr bytes.Buffer
+	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
+
+	err := Run(context.Background(), Options{
+		Org:          "test-org",
+		Repos:        []string{"test-repo"},
+		Top:          5,
+		Since:        time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		OutputPath:   outputPath,
+		AnalyzeModel: "claude-sonnet-4-5-20250929",
+		PromptModel:  "claude-sonnet-4-5-20250929",
+	}, streams)
+	assert.NilError(t, err)
+
+	// Verify retry messages appeared in stderr
+	assert.Assert(t, strings.Contains(stderr.String(), "Token limit exceeded"))
+
+	// Verify output files were created
+	paths := DeriveOutputPaths(outputPath)
+	for _, p := range []string{paths.PromptPath, paths.DetailsPath, paths.AnalysisPath} {
+		info, statErr := os.Stat(p)
+		assert.NilError(t, statErr, "expected file %s", p)
+		assert.Assert(t, info.Size() > 0)
+	}
+}
+
 func TestRunMissingGithubToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 
@@ -621,6 +672,14 @@ func TestBuildAnalysisPrompt(t *testing.T) {
 	assert.Assert(t, strings.Contains(prompt, "**PR**: [#42]"))
 	assert.Assert(t, strings.Contains(prompt, "**Code context:**"))
 	assert.Assert(t, strings.Contains(prompt, "> Handle nil"))
+
+	// Verify enriched instructions from TS parity
+	assert.Assert(t, strings.Contains(prompt, "Per-Reviewer Analysis"))
+	assert.Assert(t, strings.Contains(prompt, "For each reviewer (alice, bob)"))
+	assert.Assert(t, strings.Contains(prompt, "3-7 patterns"))
+	assert.Assert(t, strings.Contains(prompt, "Cross-Cutting Themes"))
+	assert.Assert(t, strings.Contains(prompt, "Recommendations"))
+	assert.Assert(t, strings.Contains(prompt, "Notable Repos"))
 }
 
 // --- FormatMarkdownReport ---

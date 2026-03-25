@@ -288,6 +288,13 @@ func TestBuildPromptGenerationPrompt(t *testing.T) {
 		assert.Assert(t, strings.Contains(got, "my analysis"))
 		assert.Assert(t, strings.Contains(got, "Do not include reviewer attribution"))
 		assert.Assert(t, strings.Contains(got, "transform a code review analysis report"))
+
+		// Verify enriched instructions from TS parity
+		assert.Assert(t, strings.Contains(got, "collapsible <details> blocks"))
+		assert.Assert(t, strings.Contains(got, "No Praise"))
+		assert.Assert(t, strings.Contains(got, "suggestion"))
+		assert.Assert(t, strings.Contains(got, "~100-150 lines"))
+		assert.Assert(t, strings.Contains(got, "GitHub Actions"))
 	})
 
 	t.Run("with attribution", func(t *testing.T) {
@@ -330,6 +337,40 @@ func TestFullWorkflow(t *testing.T) {
 	var body1 messagesRequest
 	assert.NilError(t, json.Unmarshal(reqs[1].Body, &body1))
 	assert.Assert(t, strings.Contains(body1.Messages[0].Content, fixtures.AnalysisResponse))
+}
+
+func TestIsTokenLimitError(t *testing.T) {
+	t.Run("returns true for prompt too long", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 200000 tokens > 100000 maximum"}}`))
+		}))
+		defer srv.Close()
+
+		c := newTestClient(t, srv.URL)
+		_, err := c.Ask(context.Background(), "m", 10, "p")
+		assert.Assert(t, err != nil)
+		assert.Assert(t, IsTokenLimitError(err))
+	})
+
+	t.Run("returns false for other errors", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"internal server error"}`))
+		}))
+		defer srv.Close()
+
+		c := newTestClient(t, srv.URL)
+		_, err := c.Ask(context.Background(), "m", 10, "p")
+		assert.Assert(t, err != nil)
+		assert.Assert(t, !IsTokenLimitError(err))
+	})
+
+	t.Run("returns false for nil error", func(t *testing.T) {
+		assert.Assert(t, !IsTokenLimitError(nil))
+	})
 }
 
 func TestCancelledContext(t *testing.T) {

@@ -13,6 +13,62 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
+// maxCommentsPerReviewer returns the maximum comment count across all groups.
+func maxCommentsPerReviewer(groups []ReviewerGroup) int {
+	max := 0
+	for _, g := range groups {
+		if g.TotalComments > max {
+			max = g.TotalComments
+		}
+	}
+	return max
+}
+
+// analyzeWithRetry attempts analysis, binary-searching for a viable comment
+// limit when the prompt exceeds the model's context window.
+func analyzeWithRetry(ctx context.Context, client *anthropic.Client, groups []ReviewerGroup, opts Options, streams iostream.Streams) (string, error) {
+	minComments := 1
+	currentMax := opts.MaxComments
+	if currentMax <= 0 {
+		currentMax = maxCommentsPerReviewer(groups)
+	}
+	currentLimit := currentMax
+
+	for {
+		groupsToAnalyze := groups
+		if currentLimit < maxCommentsPerReviewer(groups) {
+			groupsToAnalyze = LimitCommentsPerReviewer(groups, currentLimit)
+		}
+
+		prompt := BuildAnalysisPrompt(groupsToAnalyze)
+		estimatedTokens := EstimateTokenCount(prompt)
+		totalComments := 0
+		for _, g := range groupsToAnalyze {
+			totalComments += g.TotalComments
+		}
+
+		streams.ErrPrintf("  %s\n", ui.Dim(fmt.Sprintf("Sending %d comments (~%d tokens)", totalComments, estimatedTokens)))
+
+		analysis, err := client.AnalyzeReviews(ctx, prompt, opts.AnalyzeModel)
+		if err == nil {
+			return analysis, nil
+		}
+
+		if !anthropic.IsTokenLimitError(err) {
+			return "", err
+		}
+
+		// Binary search for a viable limit
+		currentMax = currentLimit
+		currentLimit = (minComments + currentMax) / 2
+		if currentLimit < minComments || currentLimit == currentMax {
+			return "", err
+		}
+
+		streams.ErrPrintf("  %s\n", ui.Warning(fmt.Sprintf("Token limit exceeded, reducing to %d comments per reviewer...", currentLimit)))
+	}
+}
+
 // Run executes the full build-prompt pipeline: discover, analyze, generate.
 func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	paths := DeriveOutputPaths(opts.OutputPath)
@@ -98,9 +154,7 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 		reviewerGroups = LimitCommentsPerReviewer(reviewerGroups, opts.MaxComments)
 	}
 
-	analysisPrompt := BuildAnalysisPrompt(reviewerGroups)
-
-	analysis, err := anthropicClient.AnalyzeReviews(ctx, analysisPrompt, opts.AnalyzeModel)
+	analysis, err := analyzeWithRetry(ctx, anthropicClient, reviewerGroups, opts, streams)
 	if err != nil {
 		return fmt.Errorf("analyze reviews: %w", err)
 	}
