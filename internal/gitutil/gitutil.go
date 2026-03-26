@@ -38,6 +38,17 @@ func CurrentBranch() (string, error) {
 	return branch, nil
 }
 
+// IsBranchPushed returns true if the current branch exists on the remote
+// (i.e. refs/remotes/origin/<branch> is present locally).
+func IsBranchPushed() bool {
+	branch, err := CurrentBranch()
+	if err != nil {
+		return false
+	}
+	ref := "refs/remotes/origin/" + branch
+	return exec.Command("git", "rev-parse", "--verify", ref).Run() == nil
+}
+
 // MergeBase returns a commit SHA that the remote is guaranteed to have.
 // Tries merge-base between upstream and origin/HEAD first, falls back to origin/HEAD.
 func MergeBase() (string, error) {

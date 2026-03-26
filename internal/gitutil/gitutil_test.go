@@ -113,6 +113,29 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func TestIsBranchPushed(t *testing.T) {
+	bare := t.TempDir()
+	gitRun(t, bare, "init", "--bare")
+
+	local := t.TempDir()
+	gitRun(t, local, "clone", bare, ".")
+	gitRun(t, local, "checkout", "-b", "main")
+	_ = os.WriteFile(filepath.Join(local, "file.txt"), []byte("hello\n"), 0o644)
+	gitRun(t, local, "add", "file.txt")
+	gitRun(t, local, "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	defer func() { _ = os.Chdir(origDir) }()
+	_ = os.Chdir(local)
+
+	// Branch not yet pushed
+	assert.Equal(t, IsBranchPushed(), false)
+
+	// Push and set upstream
+	gitRun(t, local, "push", "-u", "origin", "main")
+	assert.Equal(t, IsBranchPushed(), true)
+}
+
 func TestMergeBase(t *testing.T) {
 	// Set up a "remote" bare repo and a local clone so origin/HEAD exists.
 	bare := t.TempDir()
