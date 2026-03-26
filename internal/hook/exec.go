@@ -28,16 +28,17 @@ type ExecRunFlags struct {
 
 // ExecCheckFlags holds parsed flags for exec check.
 type ExecCheckFlags struct {
-	Name    string
-	Timeout int
-	FileExt string
-	Staged  bool
-	Always  bool
-	On      string
-	Trigger string
-	Limit   int
-	Matcher string
-	Cmd     string
+	Name         string
+	Timeout      int
+	FileExt      string
+	Staged       bool
+	Always       bool
+	On           string
+	Trigger      string
+	Limit        int
+	Matcher      string
+	Cmd          string
+	AllowMissing bool
 }
 
 // resolveExec merges flags with config to produce effective exec settings.
@@ -237,6 +238,9 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 	case "skip-no-changes":
 		return nil // allow
 	case verdictMissing:
+		if flags.AllowMissing {
+			return nil // nothing was run, nothing to enforce
+		}
 		verdict = executeAndSave(cfg, execCfg, name, flags.Staged)
 		return emitExecVerdict(cfg, flags, execCfg, verdict)
 	case "pending":

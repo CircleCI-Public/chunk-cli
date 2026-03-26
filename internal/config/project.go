@@ -7,10 +7,18 @@ import (
 	"path/filepath"
 )
 
+// Command roles determine hook placement in settings.json.
+const (
+	RoleGate     = "gate"     // enforce at Stop, run-and-record at PreToolUse
+	RolePrecheck = "precheck" // check at PreToolUse, enforce at Stop (changed-file variants)
+	RoleAutofix  = "autofix"  // run at PreToolUse, enforce at Stop (formatters)
+)
+
 // Command is a single validation command.
 type Command struct {
 	Name    string `json:"name"`
 	Run     string `json:"run"`
+	Role    string `json:"role,omitempty"`
 	FileExt string `json:"fileExt,omitempty"`
 	Timeout int    `json:"timeout,omitempty"`
 	Limit   int    `json:"limit,omitempty"`

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
@@ -400,7 +401,7 @@ func TestRunRepoInit(t *testing.T) {
 		dir := t.TempDir()
 		streams, _, _ := testStreams()
 
-		err := RunRepoInit(dir, false, streams)
+		err := RunRepoInit(dir, "", nil, false, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -426,7 +427,7 @@ func TestRunRepoInit(t *testing.T) {
 		}
 		streams, _, _ := testStreams()
 
-		err := RunRepoInit(projDir, false, streams)
+		err := RunRepoInit(projDir, "", nil, false, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -445,13 +446,13 @@ func TestRunRepoInit(t *testing.T) {
 		streams, _, errBuf := testStreams()
 
 		// First init
-		if err := RunRepoInit(dir, false, streams); err != nil {
+		if err := RunRepoInit(dir, "", nil, false, streams); err != nil {
 			t.Fatal(err)
 		}
 
 		// Second init without force
 		errBuf.Reset()
-		if err := RunRepoInit(dir, false, streams); err != nil {
+		if err := RunRepoInit(dir, "", nil, false, streams); err != nil {
 			t.Fatal(err)
 		}
 
@@ -476,13 +477,13 @@ func TestRunRepoInit(t *testing.T) {
 		streams, _, errBuf := testStreams()
 
 		// First init
-		if err := RunRepoInit(dir, false, streams); err != nil {
+		if err := RunRepoInit(dir, "", nil, false, streams); err != nil {
 			t.Fatal(err)
 		}
 
 		// Second init with force
 		errBuf.Reset()
-		if err := RunRepoInit(dir, true, streams); err != nil {
+		if err := RunRepoInit(dir, "", nil, true, streams); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1170,7 +1171,7 @@ func TestRunSetup(t *testing.T) {
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "enable", false, false, envFile, streams)
+		err := RunSetup(dir, "", "enable", false, false, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1191,7 +1192,7 @@ func TestRunSetup(t *testing.T) {
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "", false, true, envFile, streams)
+		err := RunSetup(dir, "", "", false, true, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1209,7 +1210,7 @@ func TestRunSetup(t *testing.T) {
 
 	t.Run("invalid profile returns error", func(t *testing.T) {
 		streams, _, _ := testStreams()
-		err := RunSetup(t.TempDir(), "nope", false, false, "", streams)
+		err := RunSetup(t.TempDir(), "", "nope", false, false, "", nil, streams)
 		if err == nil {
 			t.Fatal("expected error for invalid profile")
 		}
@@ -1220,7 +1221,7 @@ func TestRunSetup(t *testing.T) {
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "", false, false, envFile, streams)
+		err := RunSetup(dir, "", "", false, false, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1366,5 +1367,129 @@ func TestTemplateFilesNotEmpty(t *testing.T) {
 		if tf.content == "" {
 			t.Fatal("template file has empty content: " + tf.relativePath)
 		}
+	}
+}
+
+func TestBuildSettingsJSON(t *testing.T) {
+	t.Run("nil commands produces only infrastructure hooks", func(t *testing.T) {
+		result := BuildSettingsJSON("my-proj", nil)
+		if !strings.Contains(result, "SessionStart") {
+			t.Fatal("expected SessionStart hook")
+		}
+		if !strings.Contains(result, "SessionEnd") {
+			t.Fatal("expected SessionEnd hook")
+		}
+		if !strings.Contains(result, "UserPromptSubmit") {
+			t.Fatal("expected UserPromptSubmit hook")
+		}
+		if strings.Contains(result, "PreToolUse") {
+			t.Fatal("expected no PreToolUse hooks with nil commands")
+		}
+		if strings.Contains(result, "Stop") {
+			t.Fatal("expected no Stop hooks with nil commands")
+		}
+		if !strings.Contains(result, "my-proj") {
+			t.Fatal("expected project name in output")
+		}
+	})
+
+	t.Run("gate role produces no-check in PreToolUse and check allow-missing in Stop", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "test", Run: "go test ./...", Role: "gate", Timeout: 300},
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		if !strings.Contains(result, "chunk validate test --no-check --on pre-commit") {
+			t.Fatalf("expected gate PreToolUse --no-check hook, got:\n%s", result)
+		}
+		if !strings.Contains(result, "chunk validate test --check --allow-missing") {
+			t.Fatalf("expected gate Stop --check --allow-missing hook, got:\n%s", result)
+		}
+	})
+
+	t.Run("precheck role produces check in PreToolUse only", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "test-changed", Run: "go test {{CHANGED_PACKAGES}}", Role: "precheck", Timeout: 300},
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		if !strings.Contains(result, "chunk validate test-changed --check --on pre-commit") {
+			t.Fatalf("expected precheck PreToolUse --check hook, got:\n%s", result)
+		}
+		// Precheck commands should NOT appear in Stop — the full gate variant handles that
+		if strings.Contains(result, "Stop") {
+			t.Fatalf("expected no Stop hooks for precheck-only commands, got:\n%s", result)
+		}
+	})
+
+	t.Run("autofix role produces no-check in PreToolUse", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "format", Run: "gofmt -w .", Role: "autofix", Always: true, Timeout: 30},
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		if !strings.Contains(result, "chunk validate format --no-check --on pre-commit") {
+			t.Fatalf("expected autofix PreToolUse --no-check hook, got:\n%s", result)
+		}
+		if !strings.Contains(result, "chunk validate format --check --allow-missing") {
+			t.Fatalf("expected autofix Stop --check --allow-missing hook, got:\n%s", result)
+		}
+	})
+
+	t.Run("role inference from name and flags", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "test-changed", Run: "test changed"}, // inferred precheck from -changed suffix
+			{Name: "lint", Run: "lint", Always: true},   // inferred autofix from Always
+			{Name: "test", Run: "test"},                 // inferred gate (default)
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		// test-changed should be --check in PreToolUse (precheck)
+		if !strings.Contains(result, "chunk validate test-changed --check --on pre-commit") {
+			t.Fatalf("expected inferred precheck for test-changed, got:\n%s", result)
+		}
+		// lint should be --no-check in PreToolUse (autofix from Always)
+		if !strings.Contains(result, "chunk validate lint --no-check --on pre-commit") {
+			t.Fatalf("expected inferred autofix for lint with Always, got:\n%s", result)
+		}
+		// test should be --no-check in PreToolUse (gate)
+		if !strings.Contains(result, "chunk validate test --no-check --on pre-commit") {
+			t.Fatalf("expected inferred gate for test, got:\n%s", result)
+		}
+	})
+
+	t.Run("valid JSON output", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "test", Run: "go test", Role: "gate", Timeout: 300},
+			{Name: "lint", Run: "golangci-lint", Role: "gate", Timeout: 60},
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("expected valid JSON, got error: %v\n%s", err, result)
+		}
+	})
+}
+
+func TestInferRole(t *testing.T) {
+	tests := []struct {
+		cmd      config.Command
+		expected string
+	}{
+		{config.Command{Name: "test", Role: "gate"}, "gate"},
+		{config.Command{Name: "test-changed", Role: "precheck"}, "precheck"},
+		{config.Command{Name: "format", Role: "autofix"}, "autofix"},
+		// Inference when Role is empty
+		{config.Command{Name: "test-changed"}, "precheck"},
+		{config.Command{Name: "format", Always: true}, "autofix"},
+		{config.Command{Name: "test"}, "gate"},
+		{config.Command{Name: "lint"}, "gate"},
+		// Explicit role overrides inference
+		{config.Command{Name: "test-changed", Role: "gate"}, "gate"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cmd.Name+"/"+tt.cmd.Role, func(t *testing.T) {
+			got := inferRole(tt.cmd)
+			if got != tt.expected {
+				t.Fatalf("inferRole(%+v) = %q, want %q", tt.cmd, got, tt.expected)
+			}
+		})
 	}
 }

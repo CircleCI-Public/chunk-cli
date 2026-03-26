@@ -24,6 +24,7 @@ type validateHookFlags struct {
 	on, trigger, matcher string
 	limit                int
 	staged, always       bool
+	allowMissing         bool
 	onFail               string
 	bail                 bool
 	instructions, schema string
@@ -67,6 +68,7 @@ func runHookMode(f *validateHookFlags, name, workDir string) error {
 			Name: name, Staged: f.staged, Always: f.always,
 			On: f.on, Trigger: f.trigger, Limit: f.limit,
 			Matcher: f.matcher, Cmd: f.overrideCmd,
+			AllowMissing: f.allowMissing,
 		}, readStdinEvent())
 	}
 
@@ -235,11 +237,12 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&hf.instructions, "instructions", "", "Task instructions file")
 	cmd.Flags().StringVar(&hf.schema, "schema", "", "Task result schema file")
 	cmd.Flags().StringVar(&hf.overrideCmd, "override-cmd", "", "Override configured command (hook mode)")
+	cmd.Flags().BoolVar(&hf.allowMissing, "allow-missing", false, "Allow missing sentinel (exit 0 instead of running)")
 
 	hookFlags := []string{
 		"check", "no-check", "task", "sync", "on", "trigger", "matcher",
-		"limit", "staged", "always", "on-fail", "bail", "instructions",
-		"schema", "override-cmd",
+		"limit", "staged", "always", "allow-missing", "on-fail", "bail",
+		"instructions", "schema", "override-cmd",
 	}
 	for _, name := range hookFlags {
 		_ = cmd.Flags().MarkHidden(name)

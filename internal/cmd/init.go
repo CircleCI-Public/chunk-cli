@@ -110,23 +110,21 @@ commands, and generates hook config files.`,
 
 			// Step 3: Validate command detection
 			if !skipValidate {
-				claude, claudeErr := anthropic.New()
-				if claudeErr != nil {
-					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping validate setup: %v", claudeErr)))
+				claude, _ := anthropic.New() // nil if unavailable — static detection works without it
+				commands, detectErr := validate.DetectCommands(ctx, claude, workDir)
+				if detectErr != nil {
+					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", detectErr)))
 				} else {
-					testCmd, detectErr := validate.DetectTestCommand(ctx, claude, workDir)
-					if detectErr != nil {
-						streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect test command: %v", detectErr)))
-					} else {
-						streams.ErrPrintf("Detected test command: %s\n", ui.Bold(testCmd))
-						commands := []config.Command{}
-						pm := validate.DetectPackageManager(workDir)
-						if pm != nil {
-							streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
-							commands = append(commands, config.Command{Name: "install", Run: pm.InstallCommand})
-						}
-						commands = append(commands, config.Command{Name: "test", Run: testCmd})
-						cfg.Commands = commands
+					allCommands := []config.Command{}
+					pm := validate.DetectPackageManager(workDir)
+					if pm != nil {
+						streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
+						allCommands = append(allCommands, config.Command{Name: "install", Run: pm.InstallCommand})
+					}
+					allCommands = append(allCommands, commands...)
+					cfg.Commands = allCommands
+					for _, c := range commands {
+						streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
 					}
 				}
 			}
@@ -139,7 +137,11 @@ commands, and generates hook config files.`,
 
 			// Step 4: Hook setup
 			if !skipHooks {
-				if err := hook.RunSetup(workDir, profile, force, false, "", streams); err != nil {
+				projectName := ""
+				if cfg.VCS != nil && cfg.VCS.Repo != "" {
+					projectName = cfg.VCS.Repo
+				}
+				if err := hook.RunSetup(workDir, projectName, profile, force, false, "", cfg.Commands, streams); err != nil {
 					return fmt.Errorf("hook setup: %w", err)
 				}
 			}
