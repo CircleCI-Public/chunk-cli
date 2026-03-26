@@ -1152,7 +1152,7 @@ func TestRunExecCheck(t *testing.T) {
 		}
 	})
 
-	t.Run("enabled with no sentinel blocks", func(t *testing.T) {
+	t.Run("enabled with no sentinel auto-runs", func(t *testing.T) {
 		t.Setenv("CHUNK_HOOK_ENABLE", "1")
 		dir := t.TempDir()
 		cfg := &ResolvedConfig{
@@ -1166,15 +1166,10 @@ func TestRunExecCheck(t *testing.T) {
 		}
 
 		err := RunExecCheck(cfg, ExecCheckFlags{Name: "tests", Always: true}, nil)
-		// Should block because there's no sentinel
-		if err == nil {
-			t.Fatal("expected block error when no sentinel exists")
+		// Should auto-run and pass since "echo ok" succeeds
+		if err != nil {
+			t.Fatalf("expected auto-run to pass, got: %v", err)
 		}
-		var blockErr *BlockError
-		if !isBlockError(err) {
-			t.Fatalf("expected BlockError, got: %T: %v", err, err)
-		}
-		_ = blockErr
 	})
 }
 
