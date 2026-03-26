@@ -28,7 +28,7 @@ type CircleCIConfig struct {
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
-	Commands []Command       `json:"commands"`
+	Commands []Command       `json:"commands,omitempty"`
 	VCS      *VCSConfig      `json:"vcs,omitempty"`
 	CircleCI *CircleCIConfig `json:"circleci,omitempty"`
 }
