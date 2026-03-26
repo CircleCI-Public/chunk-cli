@@ -9,19 +9,13 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-// readStdinEvent reads and parses the stdin JSON event for hook commands.
-func readStdinEvent() map[string]interface{} {
-	event, err := hook.ReadStdinJSON(os.Stdin)
-	if err != nil {
-		return map[string]interface{}{}
-	}
-	return event
-}
-
 func newHookCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hook",
 		Short: "Configure AI coding agent lifecycle hooks",
+		PersistentPreRun: func(_ *cobra.Command, _ []string) {
+			initHookLog()
+		},
 	}
 
 	cmd.AddCommand(newHookRepoCmd())
@@ -32,6 +26,8 @@ func newHookCmd() *cobra.Command {
 	cmd.AddCommand(newHookExecCmd())
 	cmd.AddCommand(newHookTaskCmd())
 	cmd.AddCommand(newHookSyncCmd())
+
+	wrapRunE(cmd)
 
 	return cmd
 }

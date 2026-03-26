@@ -86,7 +86,11 @@ func newAuthLoginCmd() *cobra.Command {
 				return fmt.Errorf("save API key: %w", err)
 			}
 
-			io.Printf("\n%s\n", ui.Success(fmt.Sprintf("API key validated and saved to %s", config.Path())))
+			cfgPath, err := config.Path()
+			if err != nil {
+				return err
+			}
+			io.Printf("\n%s\n", ui.Success(fmt.Sprintf("API key validated and saved to %s", cfgPath)))
 			io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
 			return nil
 		},
@@ -157,7 +161,11 @@ func newAuthStatusCmd() *cobra.Command {
 			w := 15 // align to "API key source:"
 			switch rc.APIKeySource {
 			case "Config file (user config)":
-				io.Printf("%s Config file (%s)\n", ui.Label("API key source:", w), config.Path())
+				cfgPath, err := config.Path()
+				if err != nil {
+					return err
+				}
+				io.Printf("%s Config file (%s)\n", ui.Label("API key source:", w), cfgPath)
 			case apiKeySourceEnvVar:
 				io.Printf("%s Environment variable (ANTHROPIC_API_KEY)\n", ui.Label("API key source:", w))
 			default:
@@ -205,7 +213,11 @@ func newAuthLogoutCmd() *cobra.Command {
 			}
 
 			io.Println("")
-			io.Printf("This will remove your stored API key from %s\n", config.Path())
+			cfgPath, err := config.Path()
+			if err != nil {
+				return err
+			}
+			io.Printf("This will remove your stored API key from %s\n", cfgPath)
 			confirmed, err := tui.Confirm("Are you sure you want to logout?", false)
 			if err != nil {
 				io.Println("")
@@ -221,10 +233,11 @@ func newAuthLogoutCmd() *cobra.Command {
 			}
 
 			if err := config.ClearAPIKey(); err != nil {
+				errPath, _ := config.Path()
 				io.ErrPrintln(ui.FormatError(
 					"Failed to remove API key.",
 					"An error occurred while trying to remove the API key from the config file.",
-					fmt.Sprintf("Check file permissions on %s", config.Path()),
+					fmt.Sprintf("Check file permissions on %s", errPath),
 				))
 				os.Exit(2)
 			}
