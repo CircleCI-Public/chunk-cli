@@ -76,6 +76,20 @@ func TestConfigShowFromConfigFile(t *testing.T) {
 		"expected last 4 chars of stored key visible, got: %s", combined)
 }
 
+// config show must not display analyzeModel or promptModel
+func TestConfigShowNoModelConstants(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, !strings.Contains(combined, "analyzeModel"),
+		"analyzeModel should not appear in config show, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "promptModel"),
+		"promptModel should not appear in config show, got: %s", combined)
+}
+
 // config set rejects invalid keys
 func TestConfigSetInvalidKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
