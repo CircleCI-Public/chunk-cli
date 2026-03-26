@@ -22,6 +22,11 @@ type CachedResult struct {
 
 const maxOutputBytes = 50 * 1024
 
+const (
+	statusPass = "pass"
+	statusFail = "fail"
+)
+
 func cacheDir(workDir string) string {
 	abs, err := filepath.Abs(workDir)
 	if err != nil {
@@ -102,9 +107,9 @@ func WriteCache(workDir, name, fileExt string, exitCode int, output string) erro
 		output = output[len(output)-maxOutputBytes:]
 	}
 
-	status := "pass"
+	status := statusPass
 	if exitCode != 0 {
-		status = "fail"
+		status = statusFail
 	}
 
 	cr := CachedResult{
