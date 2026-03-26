@@ -185,7 +185,7 @@ by IDE-generated `.claude/settings.json`:
 
 - **`chunk hook scope activate/deactivate`** — marks active repo in IDE session
 - **`chunk hook state save/append/load/clear`** — cross-event state persistence
-- **`chunk hook setup`** / **`chunk hook repo init`** / **`chunk hook env update`** — setup (use `chunk init` instead)
+- **`chunk hook env update`** — update shell environment configuration
 
 ### `chunk hook scope activate` / `deactivate`
 

@@ -91,7 +91,7 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *config
 // RunAll runs all configured commands with optional cache bypass.
 func RunAll(ctx context.Context, workDir string, force bool, cfg *config.ProjectConfig, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
-		return fmt.Errorf("no validate commands configured, run validate init first")
+		return fmt.Errorf("no validate commands configured, run 'chunk init' first")
 	}
 
 	for i, c := range cfg.Commands {
@@ -118,7 +118,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *config.Project
 // RunDryRun prints commands without executing them.
 func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
-		return fmt.Errorf("no validate commands configured, run validate init first")
+		return fmt.Errorf("no validate commands configured, run 'chunk init' first")
 	}
 
 	commands := cfg.Commands

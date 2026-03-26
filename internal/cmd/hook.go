@@ -25,69 +25,10 @@ func newHookCmd() *cobra.Command {
 		Hidden: true,
 	}
 
-	cmd.AddCommand(newHookRepoCmd())
-	cmd.AddCommand(newHookSetupCmd())
 	cmd.AddCommand(newHookEnvCmd())
 	cmd.AddCommand(newHookScopeCmd())
 	cmd.AddCommand(newHookStateCmd())
 
-	return cmd
-}
-
-// --- repo ---
-
-func newHookRepoCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "repo",
-		Short: "Repository configuration",
-	}
-	cmd.AddCommand(newHookRepoInitCmd())
-	return cmd
-}
-
-func newHookRepoInitCmd() *cobra.Command {
-	var force bool
-	cmd := &cobra.Command{
-		Use:   "init [dir]",
-		Short: "Initialize hook configuration in a repository",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := "."
-			if len(args) > 0 {
-				dir = args[0]
-			}
-			return hook.RunRepoInit(dir, force, iostream.FromCmd(cmd))
-		},
-	}
-	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing files")
-	return cmd
-}
-
-// --- setup ---
-
-func newHookSetupCmd() *cobra.Command {
-	var (
-		profile string
-		skipEnv bool
-		force   bool
-		envFile string
-	)
-	cmd := &cobra.Command{
-		Use:   "setup [dir]",
-		Short: "One-shot hook setup (env + repo init)",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			dir := "."
-			if len(args) > 0 {
-				dir = args[0]
-			}
-			return hook.RunSetup(dir, profile, force, skipEnv, envFile, iostream.FromCmd(cmd))
-		},
-	}
-	cmd.Flags().StringVar(&profile, "profile", "enable", "Environment profile")
-	cmd.Flags().BoolVar(&skipEnv, "skip-env", false, "Skip env file creation")
-	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing files")
-	cmd.Flags().StringVar(&envFile, "env-file", "", "Custom env file path")
 	return cmd
 }
 

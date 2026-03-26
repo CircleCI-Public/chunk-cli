@@ -94,7 +94,7 @@ chunk
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
 - `config set` accepts only `model` and `apiKey` as keys.
-- `validate init` uses Claude to auto-detect the test command for the project.
+- `chunk init` uses Claude to auto-detect the test command for the project.
 - `validate --check`, `--no-check`, `--task`, and `--sync` flags activate hook
   mode for IDE lifecycle integration. See **[docs/HOOKS.md](HOOKS.md)**.
 - Session plumbing (`hook scope`, `hook state`) is hidden from `--help` but

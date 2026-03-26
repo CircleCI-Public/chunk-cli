@@ -4,14 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/hook"
@@ -121,12 +118,6 @@ func newValidateCmd() *cobra.Command {
 				return runHookMode(&hf, name, workDir)
 			}
 
-			// Guard: deprecated "validate run" subcommand
-			if name == "run" {
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), ui.Warning(`"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`))
-				os.Exit(2)
-			}
-
 			// --list: show configured commands
 			if list {
 				cfg, err := config.LoadProjectConfig(workDir)
@@ -162,7 +153,7 @@ func newValidateCmd() *cobra.Command {
 
 			cfg, err := config.LoadProjectConfig(workDir)
 			if err != nil || !cfg.HasCommands() {
-				return fmt.Errorf("no validate commands configured, run validate init first")
+				return fmt.Errorf("no validate commands configured, run 'chunk init' first")
 			}
 
 			if dryRun {
@@ -253,102 +244,6 @@ func newValidateCmd() *cobra.Command {
 	for _, name := range hookFlags {
 		_ = cmd.Flags().MarkHidden(name)
 	}
-
-	cmd.AddCommand(newValidateInitCmd())
-	cmd.AddCommand(newValidateRunCmd())
-
-	return cmd
-}
-
-func newValidateRunCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "run",
-		Short:  "Deprecated: use 'chunk validate' directly",
-		Hidden: true,
-		Run: func(cmd *cobra.Command, _ []string) {
-			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), ui.Warning(`"chunk validate run" is no longer a subcommand. Use "chunk validate" or "chunk validate <name>".`))
-			os.Exit(2)
-		},
-	}
-}
-
-func newValidateInitCmd() *cobra.Command {
-	var profile string
-	var force, skipEnv bool
-
-	cmd := &cobra.Command{
-		Use:        "init",
-		Short:      "Deprecated: use 'chunk init' instead",
-		Hidden:     true,
-		Deprecated: "use 'chunk init' instead",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			workDir, err := os.Getwd()
-			if err != nil {
-				return err
-			}
-
-			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
-			gitCmd.Dir = workDir
-			if err := gitCmd.Run(); err != nil {
-				return fmt.Errorf("not a git repository, run this command from inside a git repo")
-			}
-
-			if err := hook.ValidateProfile(profile); err != nil {
-				return err
-			}
-
-			streams := iostream.FromCmd(cmd)
-			configPath := filepath.Join(workDir, ".chunk", "config.json")
-			if _, err := os.Stat(configPath); err == nil && !force {
-				cfg, loadErr := config.LoadProjectConfig(workDir)
-				if loadErr == nil && cfg.HasCommands() {
-					streams.ErrPrintf("Config already exists at %s\n", configPath)
-					streams.ErrPrintln(ui.Dim("To re-detect and overwrite: chunk validate init --force"))
-					return nil
-				}
-			}
-
-			// Phase 1: hook setup (repo init + shell env)
-			if err := hook.RunSetup(workDir, profile, force, skipEnv, "", streams); err != nil {
-				return fmt.Errorf("hook setup: %w", err)
-			}
-
-			// Phase 2: detect commands
-			claude, err := anthropic.New()
-			if err != nil {
-				return err
-			}
-
-			testCmd, err := validate.DetectTestCommand(cmd.Context(), claude, workDir)
-			if err != nil {
-				return fmt.Errorf("detect test command: %w", err)
-			}
-
-			streams.ErrPrintf("Detected test command: %s\n", ui.Bold(testCmd))
-
-			commands := []config.Command{}
-			pm := validate.DetectPackageManager(workDir)
-			if pm != nil {
-				streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
-				commands = append(commands, config.Command{Name: "install", Run: pm.InstallCommand})
-			}
-			commands = append(commands, config.Command{Name: "test", Run: testCmd})
-
-			cfg := &config.ProjectConfig{Commands: commands}
-			if err := config.SaveProjectConfig(workDir, cfg); err != nil {
-				return fmt.Errorf("write config: %w", err)
-			}
-
-			streams.ErrPrintf("Wrote %s\n", configPath)
-			streams.ErrPrintln(ui.Success("Validation config initialized"))
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&profile, "profile", "enable",
-		fmt.Sprintf("Shell environment profile (%s)", strings.Join(hook.ValidProfiles, ", ")))
-	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing files and config")
-	cmd.Flags().BoolVar(&skipEnv, "skip-env", false, "Skip shell environment update")
 
 	return cmd
 }

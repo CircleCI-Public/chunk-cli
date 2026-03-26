@@ -21,7 +21,7 @@ chunk-cli/
     │   ├── skills.go          # skills install/list
     │   ├── task.go            # task run
     │   ├── upgrade.go         # upgrade
-    │   └── validate.go        # validate, validate init
+    │   └── validate.go        # validate
     ├── anthropic/             # Anthropic Messages API client
     ├── buildprompt/           # Three-step pipeline: discover → analyze → generate
     ├── circleci/              # CircleCI REST API client
