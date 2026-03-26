@@ -95,12 +95,14 @@ func executeAndSave(cfg *ResolvedConfig, execCfg ExecConfig, name string, staged
 	}
 
 	// Write pending sentinel
-	_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, name, SentinelData{
+	if err := writeSentinel(cfg.SentinelDir, cfg.ProjectDir, name, SentinelData{
 		Status:    "pending",
 		StartedAt: startedAt,
 		Project:   cfg.ProjectDir,
 		SessionID: sessionID,
-	})
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "chunk: warning: could not write sentinel for %q: %v\n", name, err)
+	}
 
 	// Build command with placeholder substitution
 	command := execCfg.Command
@@ -147,7 +149,9 @@ func executeAndSave(cfg *ResolvedConfig, execCfg ExecConfig, name string, staged
 		SessionID:         sessionID,
 		ContentHash:       contentHash,
 	}
-	_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, name, sentinel)
+	if err := writeSentinel(cfg.SentinelDir, cfg.ProjectDir, name, sentinel); err != nil {
+		fmt.Fprintf(os.Stderr, "chunk: warning: could not write sentinel for %q: %v\n", name, err)
+	}
 
 	return ExecCheckVerdict{Kind: status, Sentinel: &sentinel}
 }
@@ -171,7 +175,7 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 				sessionID = marker.SessionID
 			}
 			contentHash := computeFingerprint(cfg.ProjectDir, flags.Staged, execCfg.FileExt)
-			_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Name, SentinelData{
+			if err := writeSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Name, SentinelData{
 				Status:      "pass",
 				StartedAt:   startedAt,
 				FinishedAt:  time.Now().UTC().Format(time.RFC3339),
@@ -181,7 +185,9 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 				Project:     cfg.ProjectDir,
 				SessionID:   sessionID,
 				ContentHash: contentHash,
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "chunk: warning: could not write sentinel for %q: %v\n", flags.Name, err)
+			}
 			return nil
 		}
 	}

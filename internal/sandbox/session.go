@@ -52,6 +52,9 @@ func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identi
 			}, nil
 		}
 		// Agent not available — fall back to default key file.
+	}
+
+	if identityFile == "" {
 		identityFile = filepath.Join(sshDir, defaultKeyName)
 	}
 
