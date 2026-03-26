@@ -7,7 +7,7 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 - **Pattern Mining** - Discovers top reviewers in your GitHub org and fetches their review comments
 - **AI Analysis** - Uses Claude (Sonnet, Opus, or Haiku) to identify recurring patterns and team standards
 - **Context Generation** - Produces a markdown prompt file ready to use with AI coding agents
-- **Hook Automation** - Wires tests, lint, and AI code review into your agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
+- **Hook Automation** - Wires tests and lint into your agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
 - **Self-Updating** - Built-in upgrade command for binary updates
 
 ## Requirements
@@ -182,7 +182,7 @@ chunk task run --definition 550e8400-e29b-41d4-a716-446655440000 --prompt "Fix t
 
 ### Hook Automation
 
-`chunk hook` automates test, lint, and code-review tasks by wiring them into your AI coding agent's lifecycle events (Claude Code, Cursor, VS Code Copilot). Hooks fire at the right moments — blocking commits when tests fail, running lint before the agent stops, and triggering an AI review pass at session end.
+`chunk hook` automates test and lint tasks by wiring them into your AI coding agent's lifecycle events (Claude Code, Cursor, VS Code Copilot). Hooks fire at the right moments — blocking commits when tests fail and running lint before the agent stops.
 
 #### 1. Configure your shell environment
 
@@ -199,7 +199,6 @@ Available profiles:
 | `disable` | All hooks disabled |
 | `enable` | All hooks enabled |
 | `tests-lint` | Tests and lint only |
-| `review` | AI code review only |
 
 Restart your shell (or `source ~/.zprofile`) after running for the first time.
 
@@ -216,8 +215,6 @@ This creates:
 | File | Purpose |
 |------|---------|
 | `.chunk/hook/config.yml` | Per-repo hook configuration (commands, timeouts, triggers) |
-| `.chunk/hook/code-review-instructions.md` | AI reviewer prompt |
-| `.chunk/hook/code-review-schema.json` | Structured output schema for the review agent |
 | `.chunk/hook/.gitignore` | Excludes runtime state files from git |
 | `.claude/settings.json` | Hook wiring for Claude Code (and compatible IDEs) |
 
@@ -250,26 +247,6 @@ chunk auth login      # Set up API key
 chunk auth status     # Check authentication
 chunk config show     # Display current configuration
 chunk upgrade         # Update to latest version
-```
-
-### Hook Commands
-
-The `chunk hook` subcommand provides configurable quality checks for
-[Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code) — tests, lint, code review,
-and more.
-
-```bash
-# Configure shell environment (PATH, CHUNK_HOOK_* vars):
-chunk hook env update
-
-# Initialize a repo with hook config templates:
-chunk hook repo init
-
-# Run a named shell command (tests, lint, etc.):
-CHUNK_HOOK_ENABLE=1 echo '{}' | chunk hook exec run tests --cmd "go test ./..."
-
-# Grouped checks (tests + review on the same event):
-chunk hook sync check exec:tests task:review --on pre-commit
 ```
 
 ## Configuration
