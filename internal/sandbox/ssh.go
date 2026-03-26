@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 )
 
 // ExecResult holds the output of a command executed over SSH.
@@ -37,16 +39,28 @@ func ShellJoin(args []string) string {
 	return strings.Join(escaped, " ")
 }
 
-// ExecOverSSH connects to the sandbox via SSH-over-TLS and executes a command.
-func ExecOverSSH(session *Session, command string, stdin io.Reader) (*ExecResult, error) {
-	privateKeyData, err := os.ReadFile(session.IdentityFile)
-	if err != nil {
-		return nil, fmt.Errorf("read private key: %w", err)
-	}
+// sshConn wraps an SSH client with optional cleanup (e.g. agent connection).
+type sshConn struct {
+	*ssh.Client
+	cleanup func()
+}
 
-	signer, err := ssh.ParsePrivateKey(privateKeyData)
+func (c *sshConn) Close() error {
+	// ssh.Client.Close closes the underlying ssh.Conn, which in turn
+	// closes the TLS transport we passed to ssh.NewClientConn.
+	err := c.Client.Close()
+	if c.cleanup != nil {
+		c.cleanup()
+	}
+	return err
+}
+
+// dialSSH establishes an SSH client connection to the sandbox over TLS.
+// The caller must close the returned sshConn.
+func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
+	authMethod, cleanup, err := sshAuth(ctx, session)
 	if err != nil {
-		return nil, fmt.Errorf("parse private key: %w", err)
+		return nil, err
 	}
 
 	// TLS dial — self-signed cert on sandbox hosts, so skip verification.
@@ -55,23 +69,32 @@ func ExecOverSSH(session *Session, command string, stdin io.Reader) (*ExecResult
 		InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
 	})
 	if err != nil {
+		cleanup()
 		return nil, fmt.Errorf("TLS connect to %s:%d: %w", session.URL, defaultSSHPort, err)
 	}
-	defer func() { _ = tlsConn.Close() }()
 
 	hostKeyCallback := tofuHostKeyCallback(session.KnownHosts, session.URL)
 
 	conn, chans, reqs, err := ssh.NewClientConn(tlsConn, session.URL, &ssh.ClientConfig{
 		User:            defaultSSHUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: hostKeyCallback,
 	})
 	if err != nil {
+		_ = tlsConn.Close()
+		cleanup()
 		return nil, fmt.Errorf("SSH handshake: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
 
-	client := ssh.NewClient(conn, chans, reqs)
+	return &sshConn{Client: ssh.NewClient(conn, chans, reqs), cleanup: cleanup}, nil
+}
+
+// ExecOverSSH connects to the sandbox via SSH-over-TLS and executes a command.
+func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader) (*ExecResult, error) {
+	client, err := dialSSH(ctx, session)
+	if err != nil {
+		return nil, err
+	}
 	defer func() { _ = client.Close() }()
 
 	sess, err := client.NewSession()
@@ -103,6 +126,81 @@ func ExecOverSSH(session *Session, command string, stdin io.Reader) (*ExecResult
 		Stderr:   stderr.String(),
 		ExitCode: exitCode,
 	}, nil
+}
+
+// InteractiveShell opens an interactive shell session to the sandbox with PTY.
+func InteractiveShell(ctx context.Context, session *Session) error {
+	client, err := dialSSH(ctx, session)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = client.Close() }()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("SSH session: %w", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	// Put local terminal into raw mode so keystrokes pass through directly.
+	fd := int(os.Stdin.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		return fmt.Errorf("set terminal raw mode: %w", err)
+	}
+	defer func() { _ = term.Restore(fd, oldState) }()
+
+	w, h, err := term.GetSize(fd)
+	if err != nil {
+		w, h = 80, 24
+	}
+
+	if err := sess.RequestPty("xterm-256color", h, w, ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}); err != nil {
+		return fmt.Errorf("request PTY: %w", err)
+	}
+
+	sess.Stdin = os.Stdin
+	sess.Stdout = os.Stdout
+	sess.Stderr = os.Stderr
+
+	// Forward SIGWINCH to update remote terminal size.
+	done := make(chan struct{})
+	go watchWindowSize(fd, sess, done)
+	defer close(done)
+
+	if err := sess.Shell(); err != nil {
+		return fmt.Errorf("start shell: %w", err)
+	}
+
+	return sess.Wait()
+}
+
+// sshAuth returns the appropriate SSH auth method and a cleanup function.
+// The caller must call cleanup when the SSH session is done.
+func sshAuth(ctx context.Context, session *Session) (ssh.AuthMethod, func(), error) {
+	noop := func() {}
+
+	if session.UseAgent {
+		ag, conn, err := dialAgent(ctx, session.AuthSock)
+		if err != nil {
+			return nil, noop, err
+		}
+		return ssh.PublicKeysCallback(ag.Signers), func() { _ = conn.Close() }, nil
+	}
+
+	privateKeyData, err := os.ReadFile(session.IdentityFile)
+	if err != nil {
+		return nil, noop, fmt.Errorf("read private key: %w", err)
+	}
+	signer, err := ssh.ParsePrivateKey(privateKeyData)
+	if err != nil {
+		return nil, noop, fmt.Errorf("parse private key: %w", err)
+	}
+	return ssh.PublicKeys(signer), noop, nil
 }
 
 // tofuHostKeyCallback implements trust-on-first-use host key verification.

@@ -3,9 +3,13 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 )
@@ -20,15 +24,34 @@ const (
 // Session holds the info needed to SSH into a sandbox.
 type Session struct {
 	URL          string // sandbox domain
-	IdentityFile string // path to SSH private key
+	IdentityFile string // path to SSH private key (empty when using agent)
 	KnownHosts   string // path to known_hosts file
+	UseAgent     bool   // true when authenticating via ssh-agent
+	AuthSock     string // SSH_AUTH_SOCK path (only used when UseAgent is true)
 }
 
 // OpenSession registers an SSH key with the sandbox and returns session info.
-func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identityFile string) (*Session, error) {
+// authSock is the SSH_AUTH_SOCK path; when non-empty and no identityFile is
+// given, the agent is tried first.
+func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock string) (*Session, error) {
 	sshDir := filepath.Join(os.Getenv("HOME"), ".ssh")
 
-	if identityFile == "" {
+	// When no identity file is specified, try the ssh-agent first.
+	if identityFile == "" && authSock != "" {
+		pubKey, err := agentPublicKey(ctx, authSock)
+		if err == nil {
+			resp, err := client.AddSSHKey(ctx, sandboxID, pubKey)
+			if err != nil {
+				return nil, fmt.Errorf("register SSH key: %w", err)
+			}
+			return &Session{
+				URL:        resp.URL,
+				UseAgent:   true,
+				AuthSock:   authSock,
+				KnownHosts: filepath.Join(sshDir, knownHostsFile),
+			}, nil
+		}
+		// Agent not available — fall back to default key file.
 		identityFile = filepath.Join(sshDir, defaultKeyName)
 	}
 
@@ -56,4 +79,37 @@ func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identi
 		IdentityFile: identityFile,
 		KnownHosts:   filepath.Join(sshDir, knownHostsFile),
 	}, nil
+}
+
+// agentPublicKey returns the first public key from the running ssh-agent
+// in authorized_keys format, or an error if the agent is unavailable.
+func agentPublicKey(ctx context.Context, authSock string) (string, error) {
+	ag, conn, err := dialAgent(ctx, authSock)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = conn.Close() }()
+
+	keys, err := ag.List()
+	if err != nil {
+		return "", fmt.Errorf("list agent keys: %w", err)
+	}
+	if len(keys) == 0 {
+		return "", fmt.Errorf("ssh-agent has no keys")
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(keys[0]))), nil
+}
+
+// dialAgent connects to the ssh-agent at the given socket path and returns
+// the agent client and the underlying connection. The caller must close conn.
+func dialAgent(ctx context.Context, authSock string) (agent.ExtendedAgent, net.Conn, error) {
+	if authSock == "" {
+		return nil, nil, fmt.Errorf("SSH_AUTH_SOCK not set")
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", authSock)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect to ssh-agent: %w", err)
+	}
+	return agent.NewClient(conn), conn, nil
 }

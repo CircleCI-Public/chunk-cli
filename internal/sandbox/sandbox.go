@@ -46,15 +46,19 @@ func AddSSHKey(ctx context.Context, client *circleci.Client, sandboxID, publicKe
 	return client.AddSSHKey(ctx, sandboxID, key)
 }
 
-// SSH opens a session and executes a command over SSH.
-func SSH(ctx context.Context, client *circleci.Client, sandboxID, identityFile string, args []string, io iostream.Streams) error {
-	session, err := OpenSession(ctx, client, sandboxID, identityFile)
+// SSH opens a session and either runs a command or starts an interactive shell.
+func SSH(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock string, args []string, io iostream.Streams) error {
+	session, err := OpenSession(ctx, client, sandboxID, identityFile, authSock)
 	if err != nil {
 		return err
 	}
 
+	if len(args) == 0 {
+		return InteractiveShell(ctx, session)
+	}
+
 	command := ShellJoin(args)
-	result, err := ExecOverSSH(session, command, nil)
+	result, err := ExecOverSSH(ctx, session, command, nil)
 	if err != nil {
 		return err
 	}
