@@ -483,7 +483,7 @@ func TestHookExecRunFlags(t *testing.T) {
 		flags       []string
 		useTriggers bool
 	}{
-		{"cmd override", []string{"--cmd", "echo overridden"}, false},
+		{"cmd override", []string{"--override-cmd", "echo overridden"}, false},
 		{"always", []string{"--always"}, false},
 		{"staged", []string{"--staged"}, false},
 		{"on", []string{"--on", "go-files"}, true},

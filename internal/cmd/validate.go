@@ -30,6 +30,7 @@ type validateHookFlags struct {
 	onFail               string
 	bail                 bool
 	instructions, schema string
+	overrideCmd          string
 }
 
 // isHookMode reports whether any hook-mode flag is set.
@@ -38,7 +39,7 @@ func (f *validateHookFlags) isHookMode() bool {
 }
 
 // runHookMode dispatches to the appropriate hook handler.
-func runHookMode(f *validateHookFlags, name, workDir, inlineCmd string) error {
+func runHookMode(f *validateHookFlags, name, workDir string) error {
 	if len(f.syncSpecs) > 0 {
 		specs, err := hook.ParseSpecs(f.syncSpecs)
 		if err != nil {
@@ -68,13 +69,13 @@ func runHookMode(f *validateHookFlags, name, workDir, inlineCmd string) error {
 		return hook.RunExecCheck(cfg, hook.ExecCheckFlags{
 			Name: name, Staged: f.staged, Always: f.always,
 			On: f.on, Trigger: f.trigger, Limit: f.limit,
-			Matcher: f.matcher, Cmd: inlineCmd,
+			Matcher: f.matcher, Cmd: f.overrideCmd,
 		}, readStdinEvent())
 	}
 
 	if f.noCheck {
 		return hook.RunExecRun(cfg, hook.ExecRunFlags{
-			Name: name, Cmd: inlineCmd, Staged: f.staged, Always: f.always,
+			Name: name, Cmd: f.overrideCmd, Staged: f.staged, Always: f.always,
 			NoCheck: true, On: f.on, Trigger: f.trigger,
 			Limit: f.limit, Matcher: f.matcher,
 		})
@@ -116,7 +117,7 @@ func newValidateCmd() *cobra.Command {
 
 			// Hook modes: --check, --no-check, --task, --sync
 			if hf.isHookMode() {
-				return runHookMode(&hf, name, workDir, inlineCmd)
+				return runHookMode(&hf, name, workDir)
 			}
 
 			// Guard: deprecated "validate run" subcommand
@@ -226,7 +227,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&status, "status", false, "Check cache only, don't execute")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 
-	// Hook-mode flags
+	// Hook-mode flags (hidden — used by IDE-generated settings, not typed by humans)
 	cmd.Flags().BoolVar(&hf.check, "check", false, "Check saved sentinel result")
 	cmd.Flags().BoolVar(&hf.noCheck, "no-check", false, "Run and save sentinel without enforcing")
 	cmd.Flags().BoolVar(&hf.task, "task", false, "Check subagent task result")
@@ -241,6 +242,16 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&hf.bail, "bail", false, "Stop sync at first failure")
 	cmd.Flags().StringVar(&hf.instructions, "instructions", "", "Task instructions file")
 	cmd.Flags().StringVar(&hf.schema, "schema", "", "Task result schema file")
+	cmd.Flags().StringVar(&hf.overrideCmd, "override-cmd", "", "Override configured command (hook mode)")
+
+	hookFlags := []string{
+		"check", "no-check", "task", "sync", "on", "trigger", "matcher",
+		"limit", "staged", "always", "on-fail", "bail", "instructions",
+		"schema", "override-cmd",
+	}
+	for _, name := range hookFlags {
+		_ = cmd.Flags().MarkHidden(name)
+	}
 
 	cmd.AddCommand(newValidateInitCmd())
 	cmd.AddCommand(newValidateRunCmd())
