@@ -15,7 +15,7 @@ import (
 )
 
 // ResolveOrgAndRepos resolves the org and repos from flags or git remote.
-func ResolveOrgAndRepos(org string, repos string) (string, []string, error) {
+func ResolveOrgAndRepos(org string, repos string, workDir string) (string, []string, error) {
 	repoList := splitRepos(repos)
 
 	if org != "" && len(repoList) == 0 {
@@ -26,7 +26,7 @@ func ResolveOrgAndRepos(org string, repos string) (string, []string, error) {
 		return org, repoList, nil
 	}
 
-	detectedOrg, detectedRepo, err := gitremote.DetectOrgAndRepo()
+	detectedOrg, detectedRepo, err := gitremote.DetectOrgAndRepo(workDir)
 	if err != nil {
 		return "", nil, fmt.Errorf("auto-detect org from git remote: %w", err)
 	}

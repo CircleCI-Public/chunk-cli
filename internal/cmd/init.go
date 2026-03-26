@@ -54,8 +54,9 @@ commands, and generates hook config files.`,
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
-			if cfg, loadErr := config.LoadProjectConfig(workDir); loadErr == nil && !force {
-				hasData := cfg.HasCommands() || cfg.VCS != nil || cfg.CircleCI != nil
+			existingCfg, loadErr := config.LoadProjectConfig(workDir)
+			if loadErr == nil && !force {
+				hasData := existingCfg.HasCommands() || existingCfg.VCS != nil || existingCfg.CircleCI != nil
 				if hasData {
 					streams.ErrPrintln("Config already exists at .chunk/config.json")
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
@@ -63,10 +64,14 @@ commands, and generates hook config files.`,
 				}
 			}
 
+			// Seed from existing config when --force so skipped sections are preserved.
 			cfg := &config.ProjectConfig{}
+			if force && loadErr == nil {
+				cfg = existingCfg
+			}
 
 			// Step 1: VCS config from git remote
-			org, repo, err := gitremote.DetectOrgAndRepo()
+			org, repo, err := gitremote.DetectOrgAndRepo(workDir)
 			if err != nil {
 				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect VCS info: %v", err)))
 			} else {

@@ -109,6 +109,50 @@ func TestInitExistingConfigWithForce(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 }
 
+func TestInitForcePreservesSkippedSections(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "new-org", "new-repo")
+
+	// Write existing config with VCS, CircleCI, and Commands.
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	existing := `{"vcs":{"org":"old-org","repo":"old-repo"},"circleci":{"orgId":"abc-123"},"commands":[{"name":"test","run":"echo test"}]}`
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(existing), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	// --force re-runs init; --skip-circleci and --skip-validate skip those sections.
+	result := binary.RunCLI(t, []string{
+		"init", "--force", "--skip-hooks", "--skip-validate", "--skip-circleci",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	data, err := os.ReadFile(filepath.Join(chunkDir, "config.json"))
+	assert.NilError(t, err)
+
+	var cfg map[string]interface{}
+	assert.NilError(t, json.Unmarshal(data, &cfg))
+
+	// VCS should be re-detected from git remote.
+	vcs, ok := cfg["vcs"].(map[string]interface{})
+	assert.Assert(t, ok, "expected vcs section, got: %s", string(data))
+	assert.Equal(t, vcs["org"], "new-org")
+	assert.Equal(t, vcs["repo"], "new-repo")
+
+	// CircleCI should be preserved (--skip-circleci).
+	cci, ok := cfg["circleci"].(map[string]interface{})
+	assert.Assert(t, ok, "expected circleci section preserved, got: %s", string(data))
+	assert.Equal(t, cci["orgId"], "abc-123")
+
+	// Commands should be preserved (--skip-validate).
+	cmds, ok := cfg["commands"].([]interface{})
+	assert.Assert(t, ok && len(cmds) > 0, "expected commands preserved, got: %s", string(data))
+	cmd0 := cmds[0].(map[string]interface{})
+	assert.Equal(t, cmd0["name"], "test")
+	assert.Equal(t, cmd0["run"], "echo test")
+}
+
 func TestInitNotGitRepo(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 

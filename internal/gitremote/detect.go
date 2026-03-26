@@ -18,9 +18,11 @@ func ParseRemoteURL(url string) (org, repo string, err error) {
 	return m[1], m[2], nil
 }
 
-// DetectOrgAndRepo runs git remote get-url origin and parses the result.
-func DetectOrgAndRepo() (org, repo string, err error) {
-	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+// DetectOrgAndRepo runs git remote get-url origin in workDir and parses the result.
+func DetectOrgAndRepo(workDir string) (org, repo string, err error) {
+	cmd := exec.Command("git", "remote", "get-url", "origin")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("git remote get-url origin: %w", err)
 	}

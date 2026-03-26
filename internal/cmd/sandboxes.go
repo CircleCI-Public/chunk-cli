@@ -16,8 +16,6 @@ import (
 )
 
 func newSandboxesCmd() *cobra.Command {
-	authSock := os.Getenv("SSH_AUTH_SOCK")
-
 	cmd := &cobra.Command{
 		Use:   "sandboxes",
 		Short: "Manage sandboxes",
@@ -27,8 +25,8 @@ func newSandboxesCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxesCreateCmd())
 	cmd.AddCommand(newSandboxesExecCmd())
 	cmd.AddCommand(newSandboxesAddSSHKeyCmd())
-	cmd.AddCommand(newSandboxesSSHCmd(authSock))
-	cmd.AddCommand(newSandboxesSyncCmd(authSock))
+	cmd.AddCommand(newSandboxesSSHCmd())
+	cmd.AddCommand(newSandboxesSyncCmd())
 	cmd.AddCommand(newSandboxesPrepareCmd())
 
 	return cmd
@@ -189,7 +187,7 @@ func newSandboxesAddSSHKeyCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSSHCmd(authSock string) *cobra.Command {
+func newSandboxesSSHCmd() *cobra.Command {
 	var sandboxID, identityFile string
 
 	cmd := &cobra.Command{
@@ -197,6 +195,7 @@ func newSandboxesSSHCmd(authSock string) *cobra.Command {
 		Short: "SSH into a sandbox",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			authSock := os.Getenv("SSH_AUTH_SOCK")
 			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
@@ -213,7 +212,7 @@ func newSandboxesSSHCmd(authSock string) *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSyncCmd(authSock string) *cobra.Command {
+func newSandboxesSyncCmd() *cobra.Command {
 	var sandboxID, dest, identityFile string
 	var bootstrap bool
 
@@ -221,6 +220,7 @@ func newSandboxesSyncCmd(authSock string) *cobra.Command {
 		Use:   "sync",
 		Short: "Sync files to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			authSock := os.Getenv("SSH_AUTH_SOCK")
 			io := iostream.FromCmd(cmd)
 			client, err := circleci.NewClient()
 			if err != nil {
