@@ -3,7 +3,7 @@ module github.com/CircleCI-Public/chunk-cli
 go 1.25.3
 
 require (
-	github.com/charmbracelet/bubbles v1.0.0
+	github.com/charmbracelet/bubbles/v2 v2.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/gin-gonic/gin v1.12.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
