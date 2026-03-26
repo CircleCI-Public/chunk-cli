@@ -11,6 +11,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
+const defaultTestCommand = "npm test"
+
 // PackageManager holds the name and CI-safe install command for a detected package manager.
 type PackageManager struct {
 	Name           string
@@ -52,7 +54,7 @@ func DetectTestCommand(ctx context.Context, claude *anthropic.Client, workDir st
 
 	result := strings.TrimSpace(resp)
 	if result == "" {
-		return "npm test", nil
+		return defaultTestCommand, nil
 	}
 	return result, nil
 }
@@ -96,7 +98,7 @@ func detectTestCommandFromFiles(files []string) string {
 	case has["pyproject.toml"]:
 		return "pytest"
 	case has["package.json"]:
-		return "npm test"
+		return defaultTestCommand
 	default:
 		return ""
 	}

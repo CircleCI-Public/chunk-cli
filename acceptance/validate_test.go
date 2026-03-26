@@ -195,4 +195,3 @@ func TestValidateRunRemote(t *testing.T) {
 			"expected Circle-Token auth on exec request")
 	}
 }
-
