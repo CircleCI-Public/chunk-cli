@@ -46,7 +46,6 @@ tasks:
       - task: tag
         vars: { VERSION: '{{.VERSION}}' }
       - goreleaser release --clean
-      - CHUNK_TAG=$(cat /tmp/chunk-release-tag) task nur:publish
 
   generate:
     desc: Run generation of any generated code
