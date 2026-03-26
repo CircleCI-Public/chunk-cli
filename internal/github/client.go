@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 // Client is a GitHub GraphQL API client.

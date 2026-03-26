@@ -14,14 +14,14 @@ import (
 
 // Sync synchronises local changes to a sandbox over SSH.
 // If bootstrap is true it clones the repo on the sandbox first.
-func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile, dest string, bootstrap bool, io iostream.Streams) error {
-	session, err := OpenSession(ctx, client, sandboxID, identityFile)
+func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock, dest string, bootstrap bool, io iostream.Streams) error {
+	session, err := OpenSession(ctx, client, sandboxID, identityFile, authSock)
 	if err != nil {
 		return err
 	}
 
 	if bootstrap {
-		if err := bootstrapSandbox(session, dest, io); err != nil {
+		if err := bootstrapSandbox(ctx, session, dest, io); err != nil {
 			return err
 		}
 	}
@@ -46,6 +46,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 	)
 
 	resetResult, err := ExecOverSSH(session, resetCmd, nil)
+
 	if err != nil {
 		return err
 	}
@@ -77,7 +78,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 	return nil
 }
 
-func bootstrapSandbox(session *Session, dest string, io iostream.Streams) error {
+func bootstrapSandbox(ctx context.Context, session *Session, dest string, io iostream.Streams) error {
 	org, repo, err := gitremote.DetectOrgAndRepo()
 	if err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
@@ -94,7 +95,7 @@ func bootstrapSandbox(session *Session, dest string, io iostream.Streams) error 
 	)
 
 	io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Cloning %s/%s into %s...", org, repo, dest)))
-	result, err := ExecOverSSH(session, initCmd, nil)
+	result, err := ExecOverSSH(ctx, session, initCmd, nil)
 	if err != nil {
 		return err
 	}

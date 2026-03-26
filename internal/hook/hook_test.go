@@ -1143,6 +1143,7 @@ func TestRunExecRun(t *testing.T) {
 func TestRunExecCheck(t *testing.T) {
 	t.Run("not enabled returns nil", func(t *testing.T) {
 		t.Setenv("CHUNK_HOOK_ENABLE", "")
+		t.Setenv("CHUNK_HOOK_ENABLE_TESTS", "")
 		cfg := &ResolvedConfig{}
 
 		err := RunExecCheck(cfg, ExecCheckFlags{Name: "tests"}, nil)
@@ -1310,6 +1311,7 @@ func TestParseSpecs(t *testing.T) {
 func TestRunSyncCheck(t *testing.T) {
 	t.Run("not enabled returns nil", func(t *testing.T) {
 		t.Setenv("CHUNK_HOOK_ENABLE", "")
+		t.Setenv("CHUNK_HOOK_ENABLE_TESTS", "")
 		cfg := &ResolvedConfig{}
 
 		err := RunSyncCheck(cfg, SyncCheckFlags{

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/CircleCI-Public/chunk-cli/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 // FollowedProject represents a project returned by the v1.1 API.

@@ -158,9 +158,9 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 		}
 	}
 
-	status := "pass"
+	status := verdictPass
 	if exitCode != 0 {
-		status = "fail"
+		status = verdictFail
 	}
 
 	contentHash := computeFingerprint(cfg.ProjectDir, flags.Staged, execCfg.FileExt)
@@ -216,7 +216,7 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 		return nil // allow
 	case "skip-no-changes":
 		return nil // allow
-	case "missing":
+	case verdictMissing:
 		runnerCmd := buildRunnerCommand(name, flags.Cmd, flags.Timeout, flags.FileExt, flags.Staged, flags.Always)
 		reason := fmt.Sprintf("Exec %q has no results. Run it first:\n\n  %s\n\nRetry after the command completes.", name, runnerCmd)
 		return emitResponse(blockNoCount(cfg.ProjectDir, reason))
@@ -240,10 +240,10 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 		}
 		reason := fmt.Sprintf("Exec %q is still running. Wait for completion before retrying.", name)
 		return emitResponse(blockNoCount(cfg.ProjectDir, reason))
-	case "pass":
+	case verdictPass:
 		resetBlockCount(cfg.SentinelDir, cfg.ProjectDir, name)
 		return nil // allow
-	case "fail":
+	case verdictFail:
 		sentinel := verdict.Sentinel
 		cmd := execCfg.Command
 		exitCode := 1

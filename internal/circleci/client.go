@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/CircleCI-Public/chunk-cli/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 type Client struct {
