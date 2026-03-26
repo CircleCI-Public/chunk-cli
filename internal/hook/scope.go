@@ -14,6 +14,8 @@ import (
 // MarkerRel is the scope marker file path relative to project root.
 const MarkerRel = ".chunk/hook/.chunk-hook-active"
 
+const scopeMatch = "match"
+
 // defaultMarkerTTLMs is the default TTL for scope markers (5 minutes).
 const defaultMarkerTTLMs = 5 * 60 * 1000
 
@@ -93,7 +95,7 @@ func matchesProject(projectDir string, raw map[string]interface{}) string {
 	prefix := projectDir + "/"
 	for _, p := range paths {
 		if strings.HasPrefix(p, prefix) || p == projectDir {
-			return "match"
+			return scopeMatch
 		}
 	}
 	return "mismatch"
@@ -139,7 +141,7 @@ func ActivateScope(projectDir string, stdin io.Reader) error {
 
 	sessionID, _ := raw["session_id"].(string)
 	match := matchesProject(projectDir, raw)
-	shouldActivate := sessionID != "" && match == "match"
+	shouldActivate := sessionID != "" && match == scopeMatch
 
 	if shouldActivate {
 		// Subagent safety: preserve existing marker from different session unless expired

@@ -154,9 +154,9 @@ func RunRemote(ctx context.Context, client *circleci.Client, cfg *ProjectConfig,
 
 func colorStatus(status string) string {
 	switch status {
-	case "pass":
+	case statusPass:
 		return ui.Green("PASS")
-	case "fail":
+	case statusFail:
 		return ui.Red("FAIL")
 	default:
 		return status
