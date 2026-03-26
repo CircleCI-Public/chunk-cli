@@ -119,7 +119,7 @@ func newSandboxesCreateCmd() *cobra.Command {
 }
 
 func newSandboxesExecCmd() *cobra.Command {
-	var orgID, sandboxID, command string
+	var sandboxID, command string
 	var execArgs []string
 
 	cmd := &cobra.Command{
@@ -128,9 +128,6 @@ func newSandboxesExecCmd() *cobra.Command {
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			if _, err := resolveOrgID(orgID); err != nil {
-				return err
-			}
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -153,7 +150,6 @@ func newSandboxesExecCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&command, "command", "", "Command to execute")
 	cmd.Flags().StringArrayVar(&execArgs, "args", nil, "Command arguments")
@@ -164,16 +160,13 @@ func newSandboxesExecCmd() *cobra.Command {
 }
 
 func newSandboxesAddSSHKeyCmd() *cobra.Command {
-	var orgID, sandboxID, publicKey, publicKeyFile string
+	var sandboxID, publicKey, publicKeyFile string
 
 	cmd := &cobra.Command{
 		Use:   "add-ssh-key",
 		Short: "Add an SSH public key to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			if _, err := resolveOrgID(orgID); err != nil {
-				return err
-			}
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -187,7 +180,6 @@ func newSandboxesAddSSHKeyCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&publicKey, "public-key", "", "SSH public key string")
 	cmd.Flags().StringVar(&publicKeyFile, "public-key-file", "", "Path to SSH public key file")
@@ -197,7 +189,7 @@ func newSandboxesAddSSHKeyCmd() *cobra.Command {
 }
 
 func newSandboxesSSHCmd(authSock string) *cobra.Command {
-	var orgID, sandboxID, identityFile string
+	var sandboxID, identityFile string
 
 	cmd := &cobra.Command{
 		Use:   "ssh [flags] [-- command...]",
@@ -205,9 +197,6 @@ func newSandboxesSSHCmd(authSock string) *cobra.Command {
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			if _, err := resolveOrgID(orgID); err != nil {
-				return err
-			}
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -216,7 +205,6 @@ func newSandboxesSSHCmd(authSock string) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	_ = cmd.MarkFlagRequired("sandbox-id")
@@ -225,7 +213,7 @@ func newSandboxesSSHCmd(authSock string) *cobra.Command {
 }
 
 func newSandboxesSyncCmd(authSock string) *cobra.Command {
-	var orgID, sandboxID, dest, identityFile string
+	var sandboxID, dest, identityFile string
 	var bootstrap bool
 
 	cmd := &cobra.Command{
@@ -233,9 +221,6 @@ func newSandboxesSyncCmd(authSock string) *cobra.Command {
 		Short: "Sync files to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			if _, err := resolveOrgID(orgID); err != nil {
-				return err
-			}
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -244,7 +229,6 @@ func newSandboxesSyncCmd(authSock string) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&dest, "dest", "/workspace", "Destination path")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")

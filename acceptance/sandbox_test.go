@@ -188,7 +188,6 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"sandboxes", "exec",
-		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
 		"--command", "echo",
 		"--args", "hello", "world",
@@ -224,7 +223,6 @@ func TestSandboxesAddSSHKeyFromString(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
-		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
 		"--public-key", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTestingPurposesOnly123 test@test",
 	}, env, env.HomeDir)
@@ -260,7 +258,6 @@ func TestSandboxesAddSSHKeyFromFile(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
-		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
 		"--public-key-file", keyFile,
 	}, env, env.HomeDir)
@@ -293,7 +290,6 @@ func TestSandboxesAddSSHKeyMutuallyExclusive(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
-		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
 		"--public-key", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKey test@test",
 		"--public-key-file", keyFile,
@@ -315,7 +311,6 @@ func TestSandboxesAddSSHKeyNeitherProvided(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
-		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
 	}, env, env.HomeDir)
 
@@ -340,7 +335,6 @@ func TestSandboxesAddSSHKeyPrivateKeyRejected(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"sandboxes", "add-ssh-key",
-		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
 		"--public-key-file", keyFile,
 	}, env, env.HomeDir)
@@ -386,10 +380,10 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"ssh identity-file", []string{"sandboxes", "ssh", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync dest", []string{"sandboxes", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--dest", "/custom/path"}},
-		{"sync identity-file", []string{"sandboxes", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync bootstrap", []string{"sandboxes", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--bootstrap"}},
+		{"ssh identity-file", []string{"sandboxes", "ssh", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+		{"sync dest", []string{"sandboxes", "sync", "--sandbox-id", "sb-111", "--dest", "/custom/path"}},
+		{"sync identity-file", []string{"sandboxes", "sync", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+		{"sync bootstrap", []string{"sandboxes", "sync", "--sandbox-id", "sb-111", "--bootstrap"}},
 	}
 
 	for _, tt := range tests {
@@ -445,7 +439,6 @@ func TestSandboxesExecWithArgs(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"sandboxes", "exec",
-		"--org-id", "org-aaa",
 		"--sandbox-id", "sb-111",
 		"--command", "ls",
 		"--args", "-la", "/tmp",
