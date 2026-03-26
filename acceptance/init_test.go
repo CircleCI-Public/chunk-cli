@@ -125,10 +125,10 @@ func TestInitExistingConfigNoForce(t *testing.T) {
 		"init", "--skip-hooks", "--skip-validate", "--skip-circleci",
 	}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code when config exists\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Equal(t, result.ExitCode, 0, "expected clean exit when config exists without --force\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "already exists") || strings.Contains(combined, "--force"),
-		"expected existing config error, got: %s", combined)
+		"expected existing config message, got: %s", combined)
 }
 
 func TestInitExistingConfigWithForce(t *testing.T) {

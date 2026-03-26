@@ -49,13 +49,13 @@ commands, and generates hook config files.`,
 				return err
 			}
 
-			// Guard: fail early if config exists and --force not set
+			// Guard: exit cleanly if config exists and --force not set
 			if cfg, loadErr := config.LoadProjectConfig(workDir); loadErr == nil && !force {
 				hasData := cfg.HasCommands() || cfg.VCS != nil || cfg.CircleCI != nil
 				if hasData {
 					streams.ErrPrintln("Config already exists at .chunk/config.json")
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
-					return fmt.Errorf("config already exists, use --force to overwrite")
+					return nil
 				}
 			}
 

@@ -175,8 +175,10 @@ func newValidateInitCmd() *cobra.Command {
 	var force, skipEnv bool
 
 	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Initialize hook config files and detect install/test commands",
+		Use:        "init",
+		Short:      "Deprecated: use 'chunk init' instead",
+		Hidden:     true,
+		Deprecated: "use 'chunk init' instead",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			workDir, err := os.Getwd()
 			if err != nil {
