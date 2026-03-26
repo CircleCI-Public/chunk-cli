@@ -119,7 +119,7 @@ func gatherRepoContext(workDir string, rootFiles []string) string {
 		"Cargo.toml",
 		"Taskfile.yml",
 		"Taskfile.yaml",
-		".chunk/hook/config.yml",
+		".chunk/config.json",
 		".npmrc",
 		".yarnrc",
 		".yarnrc.yml",

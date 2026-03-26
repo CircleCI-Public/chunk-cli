@@ -152,7 +152,6 @@ Shared HTTP infrastructure used by `anthropic/`, `circleci/`, and `github/`:
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
 | `CHUNK_HOOK_ENABLE` | hook | Global hook enable (0/1) |
 | `CHUNK_HOOK_ENABLE_{NAME}` | hook | Per-command enable override |
-| `CHUNK_HOOK_CONFIG` | hook | Custom config file path |
 | `CHUNK_HOOK_SENTINELS_DIR` | hook | Custom sentinel directory |
 | `CHUNK_HOOK_PROJECT_ROOT` | hook | Multi-repo workspace root |
 | `CHUNK_HOOK_LOG_DIR` | hook | Log directory |

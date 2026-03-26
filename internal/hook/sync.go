@@ -490,7 +490,7 @@ func buildSyncFailMessage(spec CommandSpec, sentinel *SentinelData) string {
 func buildSyncTaskMissingMessage(cfg *ResolvedConfig, _ SyncCheckFlags, spec CommandSpec) string {
 	task, ok := cfg.Tasks[spec.Name]
 	if !ok {
-		return fmt.Sprintf("Task %q is not configured. Add it to .chunk/hook/config.yml.", spec.Name)
+		return fmt.Sprintf("Task %q is not configured. Add it to .chunk/config.json.", spec.Name)
 	}
 
 	resultPath := SentinelPath(cfg.SentinelDir, cfg.ProjectDir, spec.Name)

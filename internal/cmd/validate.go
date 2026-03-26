@@ -95,9 +95,10 @@ func newValidateCmd() *cobra.Command {
 	var hf validateHookFlags
 
 	cmd := &cobra.Command{
-		Use:   "validate [name]",
-		Short: "Run validation commands",
-		Args:  cobra.MaximumNArgs(1),
+		Use:          "validate [name]",
+		Short:        "Run validation commands",
+		SilenceUsage: true,
+		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			streams := iostream.FromCmd(cmd)
 
