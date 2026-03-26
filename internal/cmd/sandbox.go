@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -28,6 +31,8 @@ func newSandboxCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxSSHCmd())
 	cmd.AddCommand(newSandboxSyncCmd())
 	cmd.AddCommand(newSandboxPrepareCmd())
+	cmd.AddCommand(newSandboxEnvCmd())
+	cmd.AddCommand(newSandboxBuildCmd())
 
 	return cmd
 }
@@ -239,6 +244,13 @@ func newSandboxSyncCmd() *cobra.Command {
 	return cmd
 }
 
+func dockerExecCmd(ctx context.Context, args ...string) *exec.Cmd {
+	if os.Getenv("CHUNK_DOCKER_SUDO") != "" {
+		return exec.CommandContext(ctx, "sudo", append([]string{"docker"}, args...)...)
+	}
+	return exec.CommandContext(ctx, "docker", args...)
+}
+
 func newSandboxPrepareCmd() *cobra.Command {
 	var dockerSudo bool
 
@@ -259,11 +271,82 @@ func newSandboxPrepareCmd() *cobra.Command {
 			}
 
 			io := iostream.FromCmd(cmd)
-			return sandbox.Prepare(cmd.Context(), claude, dockerSudo, io, os.Stdin)
+			return sandbox.Prepare(cmd.Context(), claude, dockerSudo || os.Getenv("CHUNK_DOCKER_SUDO") != "", io, os.Stdin)
 		},
 	}
 
 	cmd.Flags().BoolVar(&dockerSudo, "docker-sudo", false, "Use sudo for docker commands")
+
+	return cmd
+}
+
+func newSandboxEnvCmd() *cobra.Command {
+	var dir string
+
+	cmd := &cobra.Command{
+		Use:   "env",
+		Short: "Detect tech stack and generate a test Dockerfile",
+		Long: `Analyse the repository at --dir, detect its tech stack, and write
+a Dockerfile.test ready for building a test image. Prints the detected
+environment as JSON to stdout.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			io.ErrPrintf("Detecting environment in %s...\n", dir)
+
+			env, err := envbuilder.DetectEnvironment(dir)
+			if err != nil {
+				return err
+			}
+
+			out, err := json.MarshalIndent(env, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshal environment: %w", err)
+			}
+			io.Printf("%s\n", out)
+			io.ErrPrintf("%s\n", ui.Success("Wrote "+env.DockerfilePath))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to detect environment in")
+
+	return cmd
+}
+
+func newSandboxBuildCmd() *cobra.Command {
+	var dir, tag string
+
+	cmd := &cobra.Command{
+		Use:   "build",
+		Short: "Build a Docker test image from a generated Dockerfile.test",
+		Long: `Build a Docker image from the Dockerfile.test in --dir. Run 'chunk sandboxes env' first to generate the Dockerfile.
+
+Set CHUNK_DOCKER_SUDO=1 to invoke docker via sudo.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			io.ErrPrintf("Building Docker image in %s...\n", dir)
+
+			args := []string{"build", "-f", "Dockerfile.test"}
+			if tag != "" {
+				args = append(args, "-t", tag)
+			}
+			args = append(args, ".")
+
+			dockerCmd := dockerExecCmd(cmd.Context(), args...)
+			dockerCmd.Dir = dir
+			dockerCmd.Stdout = io.Out
+			dockerCmd.Stderr = io.Err
+			if err := dockerCmd.Run(); err != nil {
+				return fmt.Errorf("docker build: %w", err)
+			}
+
+			io.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&dir, "dir", ".", "Directory containing the Dockerfile.test")
+	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
 
 	return cmd
 }
