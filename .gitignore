@@ -29,3 +29,6 @@ PLANS.md
 
 # sandbox sync scratch files
 .chunk/sandbox*.patch
+
+# unikraft
+.unikraft/

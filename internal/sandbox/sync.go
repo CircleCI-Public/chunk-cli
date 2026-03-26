@@ -90,9 +90,17 @@ func bootstrapSandbox(ctx context.Context, session *Session, dest string, io ios
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
 
-	initCmd := fmt.Sprintf("git clone --branch %s %s %s",
-		ShellEscape(branch), ShellEscape(repoURL), ShellEscape(dest),
-	)
+	var initCmd string
+	if gitutil.IsBranchPushed() {
+		initCmd = fmt.Sprintf("git clone --branch %s %s %s",
+			ShellEscape(branch), ShellEscape(repoURL), ShellEscape(dest),
+		)
+	} else {
+		io.ErrPrintf("%s\n", ui.Dim("Branch not pushed to remote; cloning default branch instead."))
+		initCmd = fmt.Sprintf("git clone %s %s",
+			ShellEscape(repoURL), ShellEscape(dest),
+		)
+	}
 
 	io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Cloning %s/%s into %s...", org, repo, dest)))
 	result, err := ExecOverSSH(ctx, session, initCmd, nil)
