@@ -15,6 +15,8 @@ import (
 )
 
 func newSandboxesCmd() *cobra.Command {
+	authSock := os.Getenv("SSH_AUTH_SOCK")
+
 	cmd := &cobra.Command{
 		Use:   "sandboxes",
 		Short: "Manage sandboxes",
@@ -24,8 +26,8 @@ func newSandboxesCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxesCreateCmd())
 	cmd.AddCommand(newSandboxesExecCmd())
 	cmd.AddCommand(newSandboxesAddSSHKeyCmd())
-	cmd.AddCommand(newSandboxesSSHCmd())
-	cmd.AddCommand(newSandboxesSyncCmd())
+	cmd.AddCommand(newSandboxesSSHCmd(authSock))
+	cmd.AddCommand(newSandboxesSyncCmd(authSock))
 	cmd.AddCommand(newSandboxesPrepareCmd())
 
 	return cmd
@@ -168,11 +170,11 @@ func newSandboxesAddSSHKeyCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSSHCmd() *cobra.Command {
+func newSandboxesSSHCmd(authSock string) *cobra.Command {
 	var orgID, sandboxID, identityFile string
 
 	cmd := &cobra.Command{
-		Use:   "ssh [-- command...]",
+		Use:   "ssh [flags] [-- command...]",
 		Short: "SSH into a sandbox",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -181,7 +183,7 @@ func newSandboxesSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, args, io)
+			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, io)
 		},
 	}
 
@@ -194,7 +196,7 @@ func newSandboxesSSHCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSyncCmd() *cobra.Command {
+func newSandboxesSyncCmd(authSock string) *cobra.Command {
 	var orgID, sandboxID, dest, identityFile string
 	var bootstrap bool
 
@@ -207,7 +209,7 @@ func newSandboxesSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, dest, bootstrap, io)
+			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, dest, bootstrap, io)
 		},
 	}
 
