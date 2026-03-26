@@ -475,6 +475,52 @@ func TestSandboxesCreateMissingName(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code for missing --name")
 }
 
+func TestSandboxesListFromConfig(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Sandboxes = []fakes.Sandbox{
+		{ID: "sb-999", Name: "config-sandbox", OrganizationID: "org-from-config"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeChunkConfig(t, workDir, "org-from-config")
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	// No --org-id flag; should read from config
+	result := binary.RunCLI(t, []string{"sandboxes", "list"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout, "config-sandbox"),
+		"expected sandbox from config org, got: %s", result.Stdout)
+}
+
+func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"sandboxes", "list"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t,
+		strings.Contains(combined, "--org-id") || strings.Contains(combined, "chunk init"),
+		"expected helpful error message, got: %s", combined)
+}
+
+func writeChunkConfig(t *testing.T, workDir, orgID string) {
+	t.Helper()
+	chunkDir := filepath.Join(workDir, ".chunk")
+	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"commands":[],"circleci":{"orgId":"` + orgID + `"}}`
+	if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // filterByMethod returns requests matching both method and path prefix.
 func filterByMethod(reqs []recorder.RecordedRequest, method, pathPrefix string) []recorder.RecordedRequest {
 	var out []recorder.RecordedRequest
