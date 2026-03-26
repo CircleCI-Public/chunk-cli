@@ -84,47 +84,18 @@ func resolveExec(cfg *ResolvedConfig, name, flagCmd, flagFileExt string, flagAlw
 	}
 }
 
-// RunExecRun executes a configured command, saves result as sentinel.
-func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
-	if !IsEnabled(flags.Name) {
-		return nil
-	}
-
-	execCfg := resolveExec(cfg, flags.Name, flags.Cmd, flags.FileExt, flags.Always, flags.Timeout, flags.Limit)
+// executeAndSave runs a command, writes the sentinel, and returns the verdict.
+func executeAndSave(cfg *ResolvedConfig, execCfg ExecConfig, name string, staged bool) ExecCheckVerdict {
 	startedAt := time.Now().UTC().Format(time.RFC3339)
 
-	// Read session ID from scope marker
 	marker := ReadMarker(cfg.ProjectDir)
 	sessionID := ""
 	if marker != nil {
 		sessionID = marker.SessionID
 	}
 
-	// Skip if no changes (unless always)
-	if !execCfg.Always {
-		hasChanges, _ := detectChanges(cfg.ProjectDir, execCfg.FileExt, flags.Staged)
-		if !hasChanges {
-			contentHash := computeFingerprint(cfg.ProjectDir, flags.Staged, execCfg.FileExt)
-			_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Name, SentinelData{
-				Status:      "pass",
-				StartedAt:   startedAt,
-				FinishedAt:  time.Now().UTC().Format(time.RFC3339),
-				ExitCode:    0,
-				Output:      "No changed files. Skipped.",
-				Skipped:     true,
-				Project:     cfg.ProjectDir,
-				SessionID:   sessionID,
-				ContentHash: contentHash,
-			})
-			if flags.NoCheck {
-				return nil
-			}
-			return nil
-		}
-	}
-
 	// Write pending sentinel
-	_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Name, SentinelData{
+	_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, name, SentinelData{
 		Status:    "pending",
 		StartedAt: startedAt,
 		Project:   cfg.ProjectDir,
@@ -134,7 +105,7 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 	// Build command with placeholder substitution
 	command := execCfg.Command
 	if strings.Contains(command, "{{CHANGED_FILES}}") || strings.Contains(command, "{{CHANGED_PACKAGES}}") {
-		files := getChangedFiles(cfg.ProjectDir, flags.Staged, execCfg.FileExt)
+		files := getChangedFiles(cfg.ProjectDir, staged, execCfg.FileExt)
 		command = substitutePlaceholders(command, files)
 	}
 
@@ -144,7 +115,6 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = cfg.ProjectDir
-	// Use a clean environment to avoid polluting the child process
 	cmd.Env = cleanEnv()
 	output, err := cmd.CombinedOutput()
 
@@ -163,9 +133,9 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 		status = verdictFail
 	}
 
-	contentHash := computeFingerprint(cfg.ProjectDir, flags.Staged, execCfg.FileExt)
+	contentHash := computeFingerprint(cfg.ProjectDir, staged, execCfg.FileExt)
 
-	_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Name, SentinelData{
+	sentinel := SentinelData{
 		Status:            status,
 		StartedAt:         startedAt,
 		FinishedAt:        time.Now().UTC().Format(time.RFC3339),
@@ -176,13 +146,57 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 		Project:           cfg.ProjectDir,
 		SessionID:         sessionID,
 		ContentHash:       contentHash,
-	})
+	}
+	_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, name, sentinel)
+
+	return ExecCheckVerdict{Kind: status, Sentinel: &sentinel}
+}
+
+// RunExecRun executes a configured command, saves result as sentinel.
+func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
+	if !IsEnabled(flags.Name) {
+		return nil
+	}
+
+	execCfg := resolveExec(cfg, flags.Name, flags.Cmd, flags.FileExt, flags.Always, flags.Timeout, flags.Limit)
+
+	// Skip if no changes (unless always)
+	if !execCfg.Always {
+		hasChanges, _ := detectChanges(cfg.ProjectDir, execCfg.FileExt, flags.Staged)
+		if !hasChanges {
+			startedAt := time.Now().UTC().Format(time.RFC3339)
+			marker := ReadMarker(cfg.ProjectDir)
+			sessionID := ""
+			if marker != nil {
+				sessionID = marker.SessionID
+			}
+			contentHash := computeFingerprint(cfg.ProjectDir, flags.Staged, execCfg.FileExt)
+			_ = writeSentinel(cfg.SentinelDir, cfg.ProjectDir, flags.Name, SentinelData{
+				Status:      "pass",
+				StartedAt:   startedAt,
+				FinishedAt:  time.Now().UTC().Format(time.RFC3339),
+				ExitCode:    0,
+				Output:      "No changed files. Skipped.",
+				Skipped:     true,
+				Project:     cfg.ProjectDir,
+				SessionID:   sessionID,
+				ContentHash: contentHash,
+			})
+			return nil
+		}
+	}
+
+	verdict := executeAndSave(cfg, execCfg, flags.Name, flags.Staged)
 
 	if flags.NoCheck {
 		return nil
 	}
 
-	if exitCode != 0 {
+	if verdict.Kind == verdictFail {
+		exitCode := 1
+		if verdict.Sentinel != nil {
+			exitCode = verdict.Sentinel.ExitCode
+		}
 		return fmt.Errorf("exec %q failed (exit %d)", flags.Name, exitCode)
 	}
 	return nil
@@ -217,9 +231,8 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 	case "skip-no-changes":
 		return nil // allow
 	case verdictMissing:
-		runnerCmd := buildRunnerCommand(name, flags.Cmd, flags.Timeout, flags.FileExt, flags.Staged, flags.Always)
-		reason := fmt.Sprintf("Exec %q has no results. Run it first:\n\n  %s\n\nRetry after the command completes.", name, runnerCmd)
-		return emitResponse(blockNoCount(cfg.ProjectDir, reason))
+		verdict = executeAndSave(cfg, execCfg, name, flags.Staged)
+		return emitExecVerdict(cfg, flags, execCfg, verdict)
 	case "pending":
 		sentinel := verdict.Sentinel
 		timeout := execCfg.Timeout

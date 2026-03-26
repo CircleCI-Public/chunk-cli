@@ -711,6 +711,71 @@ func TestGuardStopEvent(t *testing.T) {
 	})
 }
 
+func TestExecCheckAutoRunsOnMissing(t *testing.T) {
+	t.Setenv("CHUNK_HOOK_ENABLE", "1")
+	projDir := initGitRepo(t)
+	sentDir := t.TempDir()
+
+	cfg := &ResolvedConfig{
+		SentinelDir: sentDir,
+		ProjectDir:  projDir,
+		Execs: map[string]ExecConfig{
+			"tests": {Command: "echo ok", Timeout: 300, Always: true},
+		},
+		Tasks:    map[string]TaskConfig{},
+		Triggers: map[string][]string{},
+	}
+
+	// No prior RunExecRun — check should auto-run and pass
+	err := RunExecCheck(cfg, ExecCheckFlags{Name: "tests", Always: true}, nil)
+	if err != nil {
+		t.Fatalf("expected auto-run to pass, got: %v", err)
+	}
+
+	// Verify sentinel was created
+	s := readSentinel(sentDir, projDir, "tests")
+	if s == nil {
+		t.Fatal("expected sentinel to be written by auto-run")
+	}
+	if s.Status != "pass" {
+		t.Fatalf("expected pass, got %q", s.Status)
+	}
+}
+
+func TestExecCheckAutoRunsOnMissingFail(t *testing.T) {
+	t.Setenv("CHUNK_HOOK_ENABLE", "1")
+	projDir := initGitRepo(t)
+	sentDir := t.TempDir()
+
+	cfg := &ResolvedConfig{
+		SentinelDir: sentDir,
+		ProjectDir:  projDir,
+		Execs: map[string]ExecConfig{
+			"tests": {Command: "exit 1", Timeout: 300, Always: true},
+		},
+		Tasks:    map[string]TaskConfig{},
+		Triggers: map[string][]string{},
+	}
+
+	// No prior RunExecRun — check should auto-run and block on failure
+	err := RunExecCheck(cfg, ExecCheckFlags{Name: "tests", Always: true}, nil)
+	if err == nil {
+		t.Fatal("expected block error from auto-run failure")
+	}
+	if !isBlockError(err) {
+		t.Fatalf("expected BlockError, got: %T", err)
+	}
+
+	// Verify sentinel was created with failure
+	s := readSentinel(sentDir, projDir, "tests")
+	if s == nil {
+		t.Fatal("expected sentinel to be written by auto-run")
+	}
+	if s.Status != "fail" {
+		t.Fatalf("expected fail, got %q", s.Status)
+	}
+}
+
 func TestCommandValidation(t *testing.T) {
 	t.Setenv("CHUNK_HOOK_ENABLE", "1")
 	projDir := initGitRepo(t)
@@ -720,7 +785,7 @@ func TestCommandValidation(t *testing.T) {
 		SentinelDir: sentDir,
 		ProjectDir:  projDir,
 		Execs: map[string]ExecConfig{
-			"tests": {Command: "go test ./...", Timeout: 300, Always: true},
+			"tests": {Command: "echo correct-command", Timeout: 300, Always: true},
 		},
 		Tasks:    map[string]TaskConfig{},
 		Triggers: map[string][]string{},
@@ -737,12 +802,19 @@ func TestCommandValidation(t *testing.T) {
 		Project:           projDir,
 	})
 
-	// Check should treat as missing due to command mismatch
+	// Command mismatch triggers auto-run with the correct configured command.
+	// Since "echo correct-command" succeeds, check should pass.
 	err := RunExecCheck(cfg, ExecCheckFlags{Name: "tests", Always: true}, nil)
-	if err == nil {
-		t.Fatal("expected block due to command mismatch")
+	if err != nil {
+		t.Fatalf("expected pass after auto-run with correct command, got: %v", err)
 	}
-	if !isBlockError(err) {
-		t.Fatalf("expected BlockError, got: %T", err)
+
+	// Verify sentinel was rewritten with the correct command
+	s := readSentinel(sentDir, projDir, "tests")
+	if s == nil {
+		t.Fatal("expected sentinel")
+	}
+	if s.ConfiguredCommand != "echo correct-command" {
+		t.Fatalf("expected configured command to be updated, got %q", s.ConfiguredCommand)
 	}
 }
