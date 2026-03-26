@@ -45,7 +45,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		ShellEscape(dest), ShellEscape(base),
 	)
 
-	resetResult, err := ExecOverSSH(session, resetCmd, nil)
+	resetResult, err := ExecOverSSH(ctx, session, resetCmd, nil)
 
 	if err != nil {
 		return err
@@ -59,10 +59,10 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 	}
 
 	applyCmd := fmt.Sprintf(
-		`git -C %s apply"`, ShellEscape(dest),
+		`git -C %s apply`, ShellEscape(dest),
 	)
 
-	applyResult, err := ExecOverSSH(session, applyCmd, strings.NewReader(patch))
+	applyResult, err := ExecOverSSH(ctx, session, applyCmd, strings.NewReader(patch))
 	if err != nil {
 		return err
 	}
