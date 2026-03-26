@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 type selectModel struct {
@@ -20,11 +20,16 @@ func (m selectModel) Init() tea.Cmd {
 }
 
 func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
-		switch msg.Type { //nolint:exhaustive
-		case tea.KeyCtrlC, tea.KeyEsc:
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
+		switch msg.Code {
+		case tea.KeyEscape:
 			m.canceled = true
 			return m, tea.Quit
+		case 'c':
+			if msg.Mod == tea.ModCtrl {
+				m.canceled = true
+				return m, tea.Quit
+			}
 		case tea.KeyEnter:
 			m.done = true
 			return m, tea.Quit
@@ -36,8 +41,8 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(m.items)-1 {
 				m.cursor++
 			}
-		case tea.KeyRunes:
-			s := msg.String()
+		default:
+			s := msg.Text
 			if s == "k" && m.cursor > 0 {
 				m.cursor--
 			}
@@ -49,9 +54,9 @@ func (m selectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m selectModel) View() string {
+func (m selectModel) View() tea.View {
 	if m.done || m.canceled {
-		return ""
+		return tea.NewView("")
 	}
 
 	var b strings.Builder
@@ -64,7 +69,7 @@ func (m selectModel) View() string {
 		fmt.Fprintf(&b, "%s%s\n", cursor, item)
 	}
 	b.WriteString("\n(↑/↓ to move, Enter to select, Esc to cancel)\n")
-	return b.String()
+	return tea.NewView(b.String())
 }
 
 // SelectFromList presents a list of items and returns the selected index.

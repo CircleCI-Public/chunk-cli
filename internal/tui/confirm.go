@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 type confirmModel struct {
@@ -20,17 +20,22 @@ func (m confirmModel) Init() tea.Cmd {
 }
 
 func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
-		switch msg.Type { //nolint:exhaustive
-		case tea.KeyCtrlC, tea.KeyEsc:
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
+		switch msg.Code {
+		case tea.KeyEscape:
 			m.canceled = true
 			return m, tea.Quit
+		case 'c':
+			if msg.Mod == tea.ModCtrl {
+				m.canceled = true
+				return m, tea.Quit
+			}
 		case tea.KeyEnter:
 			m.done = true
 			m.result = m.defaultYes
 			return m, tea.Quit
-		case tea.KeyRunes:
-			s := strings.ToLower(msg.String())
+		default:
+			s := strings.ToLower(msg.Text)
 			if s == "y" {
 				m.done = true
 				m.result = true
@@ -46,15 +51,15 @@ func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m confirmModel) View() string {
+func (m confirmModel) View() tea.View {
 	if m.done || m.canceled {
-		return ""
+		return tea.NewView("")
 	}
 	hint := "[y/N]"
 	if m.defaultYes {
 		hint = "[Y/n]"
 	}
-	return fmt.Sprintf("%s %s ", m.label, hint)
+	return tea.NewView(fmt.Sprintf("%s %s ", m.label, hint))
 }
 
 // Confirm presents a y/n prompt and returns the boolean result.
