@@ -442,7 +442,7 @@ func specLabel(spec CommandSpec) string {
 
 func buildSyncRunCommand(spec CommandSpec, flags SyncCheckFlags) string {
 	if spec.Type == specTypeExec {
-		parts := []string{"chunk hook exec run", spec.Name, "--no-check"}
+		parts := []string{"chunk validate", spec.Name, "--no-check"}
 		if flags.Staged {
 			parts = append(parts, "--staged")
 		}

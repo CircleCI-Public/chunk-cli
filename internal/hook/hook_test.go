@@ -47,31 +47,25 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "valid YAML with execs tasks and triggers",
+			name: "valid JSON with execs tasks and triggers",
 			setup: func(t *testing.T, dir string) {
-				hookDir := filepath.Join(dir, ".chunk", "hook")
-				if err := os.MkdirAll(hookDir, 0o755); err != nil {
+				chunkDir := filepath.Join(dir, ".chunk")
+				if err := os.MkdirAll(chunkDir, 0o755); err != nil {
 					t.Fatal(err)
 				}
-				yaml := `
-triggers:
-  go-files:
-    patterns:
-      - "*.go"
-      - "**/*.go"
-execs:
-  tests:
-    command: "go test ./..."
-    timeout: 30
-  lint:
-    command: "golangci-lint run"
-tasks:
-  review:
-    instructions: "Review code"
-sentinels:
-  dir: /tmp/custom-sentinels
-`
-				if err := os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte(yaml), 0o644); err != nil {
+				configJSON := `{
+  "commands": [
+    {"name": "tests", "run": "go test ./...", "timeout": 30},
+    {"name": "lint", "run": "golangci-lint run"}
+  ],
+  "triggers": {
+    "go-files": ["*.go", "**/*.go"]
+  },
+  "tasks": {
+    "review": {"instructions": "Review code"}
+  }
+}`
+				if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(configJSON), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -119,38 +113,19 @@ sentinels:
 			},
 		},
 		{
-			name: "custom config path from env",
+			name: "invalid JSON returns empty config",
 			setup: func(t *testing.T, dir string) {
-				customPath := filepath.Join(dir, "custom-config.yml")
-				yaml := `execs:
-  build:
-    command: "make build"
-`
-				if err := os.WriteFile(customPath, []byte(yaml), 0o644); err != nil {
+				chunkDir := filepath.Join(dir, ".chunk")
+				if err := os.MkdirAll(chunkDir, 0o755); err != nil {
 					t.Fatal(err)
 				}
-				t.Setenv("CHUNK_HOOK_CONFIG", customPath)
-			},
-			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
-				if _, ok := cfg.Execs["build"]; !ok {
-					t.Fatal("expected build exec from custom config path")
-				}
-			},
-		},
-		{
-			name: "invalid YAML returns empty config",
-			setup: func(t *testing.T, dir string) {
-				hookDir := filepath.Join(dir, ".chunk", "hook")
-				if err := os.MkdirAll(hookDir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte("{{invalid"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte("{{invalid"), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			},
 			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
 				if len(cfg.Execs) != 0 {
-					t.Fatalf("expected no execs from invalid yaml, got %d", len(cfg.Execs))
+					t.Fatalf("expected no execs from invalid JSON, got %d", len(cfg.Execs))
 				}
 			},
 		},
@@ -432,7 +407,6 @@ func TestRunRepoInit(t *testing.T) {
 
 		expected := []string{
 			".chunk/hook/.gitignore",
-			".chunk/hook/config.yml",
 			".claude/settings.json",
 		}
 		for _, rel := range expected {
@@ -487,10 +461,13 @@ func TestRunRepoInit(t *testing.T) {
 			t.Fatalf("expected 'already exists' message, got: %s", errOutput)
 		}
 
-		// Check that an example file was created
-		exampleConfig := filepath.Join(dir, ".chunk", "hook", "config.example.yml")
-		if _, err := os.Stat(exampleConfig); err != nil {
-			t.Fatal("expected config.example.yml to exist")
+		// Check that an example file was created for one of the template files
+		exampleGitignore := filepath.Join(dir, ".chunk", "hook", ".example.gitignore")
+		exampleSettings := filepath.Join(dir, ".claude", "settings.example.json")
+		if _, err := os.Stat(exampleGitignore); err != nil {
+			if _, err2 := os.Stat(exampleSettings); err2 != nil {
+				t.Fatal("expected at least one .example file to exist")
+			}
 		}
 	})
 
@@ -1202,10 +1179,10 @@ func TestRunSetup(t *testing.T) {
 		if _, err := os.Stat(envFile); err != nil {
 			t.Fatal("expected env file")
 		}
-		// Config written
-		configPath := filepath.Join(dir, ".chunk", "hook", "config.yml")
-		if _, err := os.Stat(configPath); err != nil {
-			t.Fatal("expected config.yml")
+		// Gitignore written (template file)
+		gitignorePath := filepath.Join(dir, ".chunk", "hook", ".gitignore")
+		if _, err := os.Stat(gitignorePath); err != nil {
+			t.Fatal("expected .gitignore")
 		}
 	})
 
@@ -1223,10 +1200,10 @@ func TestRunSetup(t *testing.T) {
 		if _, err := os.Stat(envFile); !os.IsNotExist(err) {
 			t.Fatal("expected no env file with skip-env")
 		}
-		// Config should still exist
-		configPath := filepath.Join(dir, ".chunk", "hook", "config.yml")
-		if _, err := os.Stat(configPath); err != nil {
-			t.Fatal("expected config.yml")
+		// Gitignore should still exist (template file)
+		gitignorePath := filepath.Join(dir, ".chunk", "hook", ".gitignore")
+		if _, err := os.Stat(gitignorePath); err != nil {
+			t.Fatal("expected .gitignore")
 		}
 	})
 

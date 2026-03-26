@@ -285,16 +285,10 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 	return nil
 }
 
-func buildRunnerCommand(name, cmd string, timeout int, fileExt string, staged, always bool) string {
-	parts := []string{"chunk hook exec run", name, "--no-check"}
+func buildRunnerCommand(name, cmd string, _ int, _ string, staged, always bool) string {
+	parts := []string{"chunk validate", name, "--no-check"}
 	if cmd != "" {
 		parts = append(parts, fmt.Sprintf("--cmd '%s'", cmd))
-	}
-	if timeout > 0 {
-		parts = append(parts, fmt.Sprintf("--timeout %d", timeout))
-	}
-	if fileExt != "" {
-		parts = append(parts, fmt.Sprintf("--file-ext '%s'", fileExt))
 	}
 	if staged {
 		parts = append(parts, "--staged")

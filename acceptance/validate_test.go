@@ -269,10 +269,6 @@ func TestValidateInitHappyPath(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(data), `"name":"test"`) || strings.Contains(string(data), `"name": "test"`),
 		"expected test command entry in config, got: %s", string(data))
 
-	// Verify hook config was created
-	hookConfigPath := filepath.Join(workDir, ".chunk", "hook", "config.yml")
-	_, err = os.Stat(hookConfigPath)
-	assert.NilError(t, err, "expected .chunk/hook/config.yml to exist")
 }
 
 func TestValidateInitForce(t *testing.T) {

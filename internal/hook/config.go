@@ -4,43 +4,25 @@ import (
 	"os"
 	"path/filepath"
 
-	"gopkg.in/yaml.v3"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
-// Config is the top-level shape matching .chunk/hook/config.yml.
-type Config struct {
-	Triggers  map[string]TriggerConfig `yaml:"triggers"`
-	Execs     map[string]ExecConfig    `yaml:"execs"`
-	Tasks     map[string]TaskConfig    `yaml:"tasks"`
-	Sentinels *SentinelsConfig         `yaml:"sentinels"`
-}
-
-// TriggerConfig holds trigger group patterns.
-type TriggerConfig struct {
-	Patterns []string `yaml:"patterns"`
-}
-
-// ExecConfig holds per-exec configuration from the YAML execs section.
+// ExecConfig holds per-exec configuration.
 type ExecConfig struct {
-	Command string `yaml:"command"`
-	FileExt string `yaml:"fileExt"`
-	Always  bool   `yaml:"always"`
-	Timeout int    `yaml:"timeout"`
-	Limit   int    `yaml:"limit"`
+	Command string
+	FileExt string
+	Always  bool
+	Timeout int
+	Limit   int
 }
 
 // TaskConfig holds task command configuration.
 type TaskConfig struct {
-	Instructions string `yaml:"instructions"`
-	Schema       string `yaml:"schema"`
-	Limit        int    `yaml:"limit"`
-	Always       bool   `yaml:"always"`
-	Timeout      int    `yaml:"timeout"`
-}
-
-// SentinelsConfig holds sentinel directory configuration.
-type SentinelsConfig struct {
-	Dir string `yaml:"dir"`
+	Instructions string
+	Schema       string
+	Limit        int
+	Always       bool
+	Timeout      int
 }
 
 // ResolvedConfig is the merged configuration ready for use by commands.
@@ -58,48 +40,56 @@ func LoadConfig(projectDir string) *ResolvedConfig {
 		projectDir, _ = os.Getwd()
 	}
 
-	raw := readConfigFile(projectDir)
+	cfg, _ := config.LoadProjectConfig(projectDir)
+	if cfg == nil {
+		cfg = &config.ProjectConfig{}
+	}
 
 	triggers := map[string][]string{
 		"pre-commit": {"git commit", "git push"},
 	}
-	if raw.Triggers != nil {
-		for name, tc := range raw.Triggers {
-			triggers[name] = tc.Patterns
-		}
+	for name, patterns := range cfg.Triggers {
+		triggers[name] = patterns
 	}
 
 	execs := map[string]ExecConfig{}
-	if raw.Execs != nil {
-		for name, cfg := range raw.Execs {
-			if cfg.Timeout == 0 {
-				cfg.Timeout = 300
-			}
-			execs[name] = cfg
+	for _, cmd := range cfg.Commands {
+		timeout := cmd.Timeout
+		if timeout == 0 {
+			timeout = 300
+		}
+		execs[cmd.Name] = ExecConfig{
+			Command: cmd.Run,
+			FileExt: cmd.FileExt,
+			Always:  cmd.Always,
+			Timeout: timeout,
+			Limit:   cmd.Limit,
 		}
 	}
 
 	tasks := map[string]TaskConfig{}
-	if raw.Tasks != nil {
-		for name, cfg := range raw.Tasks {
-			if cfg.Limit == 0 {
-				cfg.Limit = 3
-			}
-			if cfg.Timeout == 0 {
-				cfg.Timeout = 600
-			}
-			tasks[name] = cfg
+	for name, t := range cfg.Tasks {
+		limit := t.Limit
+		if limit == 0 {
+			limit = 3
+		}
+		timeout := t.Timeout
+		if timeout == 0 {
+			timeout = 600
+		}
+		tasks[name] = TaskConfig{
+			Instructions: t.Instructions,
+			Schema:       t.Schema,
+			Limit:        limit,
+			Always:       t.Always,
+			Timeout:      timeout,
 		}
 	}
 
 	sentinelDir := SentinelsDir()
 	if sentinelDir == "" {
-		if raw.Sentinels != nil && raw.Sentinels.Dir != "" {
-			sentinelDir = raw.Sentinels.Dir
-		} else {
-			tmp := os.TempDir()
-			sentinelDir = filepath.Join(tmp, "chunk-hook", "sentinels")
-		}
+		tmp := os.TempDir()
+		sentinelDir = filepath.Join(tmp, "chunk-hook", "sentinels")
 	}
 
 	return &ResolvedConfig{
@@ -109,22 +99,4 @@ func LoadConfig(projectDir string) *ResolvedConfig {
 		SentinelDir: sentinelDir,
 		ProjectDir:  projectDir,
 	}
-}
-
-func readConfigFile(projectDir string) Config {
-	configPath := os.Getenv("CHUNK_HOOK_CONFIG")
-	if configPath == "" {
-		configPath = filepath.Join(projectDir, ".chunk", "hook", "config.yml")
-	}
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return Config{}
-	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return Config{}
-	}
-	return cfg
 }

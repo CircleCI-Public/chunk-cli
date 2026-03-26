@@ -20,10 +20,78 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
+// validateHookFlags groups all hook-mode flag values.
+type validateHookFlags struct {
+	check, noCheck, task bool
+	syncSpecs            []string
+	on, trigger, matcher string
+	limit                int
+	staged, always       bool
+	onFail               string
+	bail                 bool
+	instructions, schema string
+}
+
+// isHookMode reports whether any hook-mode flag is set.
+func (f *validateHookFlags) isHookMode() bool {
+	return f.check || f.noCheck || f.task || len(f.syncSpecs) > 0
+}
+
+// runHookMode dispatches to the appropriate hook handler.
+func runHookMode(f *validateHookFlags, name, workDir, inlineCmd string) error {
+	if len(f.syncSpecs) > 0 {
+		specs, err := hook.ParseSpecs(f.syncSpecs)
+		if err != nil {
+			return err
+		}
+		cfg := hook.LoadConfig(hook.ResolveProject(workDir))
+		return hook.RunSyncCheck(cfg, hook.SyncCheckFlags{
+			Specs: specs, On: f.on, Trigger: f.trigger, Matcher: f.matcher,
+			Limit: f.limit, Staged: f.staged, Always: f.always,
+			OnFail: f.onFail, Bail: f.bail,
+		}, readStdinEvent())
+	}
+
+	if name == "" {
+		flag := "--check"
+		if f.noCheck {
+			flag = "--no-check"
+		} else if f.task {
+			flag = "--task"
+		}
+		return fmt.Errorf("%s requires a command name", flag)
+	}
+
+	cfg := hook.LoadConfig(hook.ResolveProject(workDir))
+
+	if f.check {
+		return hook.RunExecCheck(cfg, hook.ExecCheckFlags{
+			Name: name, Staged: f.staged, Always: f.always,
+			On: f.on, Trigger: f.trigger, Limit: f.limit,
+			Matcher: f.matcher, Cmd: inlineCmd,
+		}, readStdinEvent())
+	}
+
+	if f.noCheck {
+		return hook.RunExecRun(cfg, hook.ExecRunFlags{
+			Name: name, Cmd: inlineCmd, Staged: f.staged, Always: f.always,
+			NoCheck: true, On: f.on, Trigger: f.trigger,
+			Limit: f.limit, Matcher: f.matcher,
+		})
+	}
+
+	return hook.RunTaskCheck(cfg, hook.TaskCheckFlags{
+		Name: name, Instructions: f.instructions, Schema: f.schema,
+		Always: f.always, Staged: f.staged, On: f.on, Trigger: f.trigger,
+		Matcher: f.matcher, Limit: f.limit,
+	}, readStdinEvent())
+}
+
 func newValidateCmd() *cobra.Command {
 	var sandboxID, orgID string
 	var dryRun, list, save, forceRun, status bool
 	var inlineCmd, projectDir string
+	var hf validateHookFlags
 
 	cmd := &cobra.Command{
 		Use:   "validate [name]",
@@ -44,6 +112,11 @@ func newValidateCmd() *cobra.Command {
 			var name string
 			if len(args) == 1 {
 				name = args[0]
+			}
+
+			// Hook modes: --check, --no-check, --task, --sync
+			if hf.isHookMode() {
+				return runHookMode(&hf, name, workDir, inlineCmd)
 			}
 
 			// Guard: deprecated "validate run" subcommand
@@ -142,6 +215,7 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 
+	// Original flags
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (required with --sandbox-id)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
@@ -151,6 +225,22 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&forceRun, "force-run", false, "Ignore cache, always run")
 	cmd.Flags().BoolVar(&status, "status", false, "Check cache only, don't execute")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
+
+	// Hook-mode flags
+	cmd.Flags().BoolVar(&hf.check, "check", false, "Check saved sentinel result")
+	cmd.Flags().BoolVar(&hf.noCheck, "no-check", false, "Run and save sentinel without enforcing")
+	cmd.Flags().BoolVar(&hf.task, "task", false, "Check subagent task result")
+	cmd.Flags().StringSliceVar(&hf.syncSpecs, "sync", nil, "Grouped sequential checks (e.g. exec:tests,task:review)")
+	cmd.Flags().StringVar(&hf.on, "on", "", "Trigger group name")
+	cmd.Flags().StringVar(&hf.trigger, "trigger", "", "Inline trigger pattern")
+	cmd.Flags().StringVar(&hf.matcher, "matcher", "", "Tool-name regex filter")
+	cmd.Flags().IntVar(&hf.limit, "limit", 0, "Max consecutive blocks")
+	cmd.Flags().BoolVar(&hf.staged, "staged", false, "Only staged files")
+	cmd.Flags().BoolVar(&hf.always, "always", false, "Run even without changes")
+	cmd.Flags().StringVar(&hf.onFail, "on-fail", "restart", "Sync failure strategy")
+	cmd.Flags().BoolVar(&hf.bail, "bail", false, "Stop sync at first failure")
+	cmd.Flags().StringVar(&hf.instructions, "instructions", "", "Task instructions file")
+	cmd.Flags().StringVar(&hf.schema, "schema", "", "Task result schema file")
 
 	cmd.AddCommand(newValidateInitCmd())
 	cmd.AddCommand(newValidateRunCmd())

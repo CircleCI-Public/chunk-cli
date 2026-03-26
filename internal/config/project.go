@@ -13,6 +13,18 @@ type Command struct {
 	Run     string `json:"run"`
 	FileExt string `json:"fileExt,omitempty"`
 	Timeout int    `json:"timeout,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	Always  bool   `json:"always,omitempty"`
+	Staged  bool   `json:"staged,omitempty"`
+}
+
+// TaskConfig holds task delegation configuration.
+type TaskConfig struct {
+	Instructions string `json:"instructions,omitempty"`
+	Schema       string `json:"schema,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Always       bool   `json:"always,omitempty"`
+	Timeout      int    `json:"timeout,omitempty"`
 }
 
 // VCSConfig holds VCS configuration for the project.
@@ -28,9 +40,11 @@ type CircleCIConfig struct {
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
-	Commands []Command       `json:"commands,omitempty"`
-	VCS      *VCSConfig      `json:"vcs,omitempty"`
-	CircleCI *CircleCIConfig `json:"circleci,omitempty"`
+	Commands []Command             `json:"commands,omitempty"`
+	Triggers map[string][]string   `json:"triggers,omitempty"`
+	Tasks    map[string]TaskConfig `json:"tasks,omitempty"`
+	VCS      *VCSConfig            `json:"vcs,omitempty"`
+	CircleCI *CircleCIConfig       `json:"circleci,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.
