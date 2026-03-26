@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 // Client is an Anthropic Messages API client.

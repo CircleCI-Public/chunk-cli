@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 func TestIsRetryable(t *testing.T) {
