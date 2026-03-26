@@ -21,7 +21,7 @@ import (
 
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipValidate, skipCircleCI bool
-	var profile string
+	var profile, projectDir string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -34,9 +34,13 @@ commands, and generates hook config files.`,
 			streams := iostream.FromCmd(cmd)
 			ctx := cmd.Context()
 
-			workDir, err := os.Getwd()
-			if err != nil {
-				return err
+			workDir := projectDir
+			if workDir == "" {
+				var err error
+				workDir, err = os.Getwd()
+				if err != nil {
+					return err
+				}
 			}
 
 			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
@@ -144,6 +148,7 @@ commands, and generates hook config files.`,
 	cmd.Flags().BoolVar(&skipHooks, "skip-hooks", false, "Skip hook file generation")
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCircleCI, "skip-circleci", false, "Skip CircleCI org picker")
+	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 	cmd.Flags().StringVar(&profile, "profile", "enable",
 		fmt.Sprintf("Shell environment profile (%s)", strings.Join(hook.ValidProfiles, ", ")))
 

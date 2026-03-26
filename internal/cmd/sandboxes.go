@@ -41,10 +41,11 @@ func resolveOrgID(orgID string) (string, error) {
 		return orgID, nil
 	}
 	cwd, err := os.Getwd()
-	if err == nil {
-		if projCfg, loadErr := config.LoadProjectConfig(cwd); loadErr == nil && projCfg.CircleCI != nil && projCfg.CircleCI.OrgID != "" {
-			return projCfg.CircleCI.OrgID, nil
-		}
+	if err != nil {
+		return "", fmt.Errorf("get working directory: %w", err)
+	}
+	if projCfg, loadErr := config.LoadProjectConfig(cwd); loadErr == nil && projCfg.CircleCI != nil && projCfg.CircleCI.OrgID != "" {
+		return projCfg.CircleCI.OrgID, nil
 	}
 	return "", fmt.Errorf("--org-id is required: pass --org-id or run 'chunk init' to store it in .chunk/config.json")
 }

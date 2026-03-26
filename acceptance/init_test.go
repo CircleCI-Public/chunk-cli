@@ -49,42 +49,6 @@ func TestInitWritesVCSConfig(t *testing.T) {
 	assert.Equal(t, vcs["repo"], "my-repo", "expected repo=my-repo, got: %v", vcs["repo"])
 }
 
-func TestInitWritesCircleCIConfig(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-
-	cci := fakes.NewFakeCircleCI()
-	cci.Collaborations = []fakes.Collaboration{
-		{ID: "org-aaa", Name: "my-org"},
-	}
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	env := testenv.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
-	// Pipe "0\n" to select first org in interactive picker - but since we can't
-	// do interactive selection in tests, we skip-circleci and verify vcs only.
-	// The circleci picker is tested separately.
-	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-validate", "--skip-circleci",
-	}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	configPath := filepath.Join(workDir, ".chunk", "config.json")
-	data, err := os.ReadFile(configPath)
-	assert.NilError(t, err)
-
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "initialized") || strings.Contains(combined, "Wrote"),
-		"expected success message, got: %s", combined)
-
-	// With --skip-circleci, no circleci section should be written
-	var cfg map[string]interface{}
-	assert.NilError(t, json.Unmarshal(data, &cfg))
-	_, hasCircleCI := cfg["circleci"]
-	assert.Assert(t, !hasCircleCI, "expected no circleci section with --skip-circleci, got: %s", string(data))
-}
-
 func TestInitSkipAllWritesOnlyVCS(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
