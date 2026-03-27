@@ -14,9 +14,12 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-func newSandboxesCmd() *cobra.Command {
-	authSock := os.Getenv("SSH_AUTH_SOCK")
+// sshAuthSock returns the SSH_AUTH_SOCK environment variable for agent-based auth.
+func sshAuthSock() string {
+	return os.Getenv("SSH_AUTH_SOCK")
+}
 
+func newSandboxesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sandboxes",
 		Short: "Manage sandboxes",
@@ -26,8 +29,8 @@ func newSandboxesCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxesCreateCmd())
 	cmd.AddCommand(newSandboxesExecCmd())
 	cmd.AddCommand(newSandboxesAddSSHKeyCmd())
-	cmd.AddCommand(newSandboxesSSHCmd(authSock))
-	cmd.AddCommand(newSandboxesSyncCmd(authSock))
+	cmd.AddCommand(newSandboxesSSHCmd())
+	cmd.AddCommand(newSandboxesSyncCmd())
 	cmd.AddCommand(newSandboxesPrepareCmd())
 
 	return cmd
@@ -170,7 +173,7 @@ func newSandboxesAddSSHKeyCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSSHCmd(authSock string) *cobra.Command {
+func newSandboxesSSHCmd() *cobra.Command {
 	var orgID, sandboxID, identityFile string
 
 	cmd := &cobra.Command{
@@ -183,7 +186,7 @@ func newSandboxesSSHCmd(authSock string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, io)
+			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, sshAuthSock(), args, io)
 		},
 	}
 
@@ -196,7 +199,7 @@ func newSandboxesSSHCmd(authSock string) *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSyncCmd(authSock string) *cobra.Command {
+func newSandboxesSyncCmd() *cobra.Command {
 	var orgID, sandboxID, dest, identityFile string
 	var bootstrap bool
 
@@ -209,7 +212,7 @@ func newSandboxesSyncCmd(authSock string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, dest, bootstrap, io)
+			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, sshAuthSock(), dest, bootstrap, io)
 		},
 	}
 

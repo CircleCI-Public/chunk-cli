@@ -65,9 +65,11 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		return nil, err
 	}
 
+	target := net.JoinHostPort(session.URL, fmt.Sprintf("%d", defaultSSHPort))
+
 	// TLS dial — self-signed cert on sandbox hosts, so skip verification.
 	// Trust is established via SSH host key pinning (TOFU) below.
-	tlsConn, err := tls.Dial("tcp", net.JoinHostPort(session.URL, fmt.Sprintf("%d", defaultSSHPort)), &tls.Config{
+	tlsConn, err := tls.Dial("tcp", target, &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
 	})
 	if err != nil {

@@ -4,16 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 func writeConfig(t *testing.T, dir string, commands []Command) string {
@@ -276,31 +273,13 @@ func TestRunAll(t *testing.T) {
 
 // --- RunRemote tests ---
 
-func newFakeClient(t *testing.T, cci *fakes.FakeCircleCI) (*circleci.Client, *httptest.Server) {
-	t.Helper()
-	srv := httptest.NewServer(cci)
-	t.Cleanup(srv.Close)
-
-	t.Setenv("CIRCLE_TOKEN", "fake-token")
-	t.Setenv("CIRCLECI_BASE_URL", srv.URL)
-
-	client, err := circleci.NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client, srv
-}
-
 func TestRunRemote(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		cci := fakes.NewFakeCircleCI()
-		cci.ExecResponse = &fakes.ExecResponse{
-			CommandID: "cmd-1",
-			PID:       1,
-			Stdout:    "remote output\n",
-			ExitCode:  0,
+		var execCount int
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			execCount++
+			return "remote output\n", "", 0, nil
 		}
-		client, _ := newFakeClient(t, cci)
 
 		cfg := &ProjectConfig{Commands: []Command{
 			{Name: "install", Run: "echo install"},
@@ -308,43 +287,29 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		err := RunRemote(context.Background(), client, cfg, "sandbox-1", "org-1", streams)
-		if err != nil {
+		if err := RunRemote(context.Background(), execFn, cfg, "/workspace", streams); err != nil {
 			t.Fatal(err)
 		}
 
 		if !strings.Contains(out.String(), "remote output") {
 			t.Errorf("expected remote output in stdout, got: %s", out.String())
 		}
-
-		// Verify both commands were executed
-		reqs := cci.Recorder.AllRequests()
-		var execCount int
-		for _, r := range reqs {
-			if strings.HasPrefix(r.URL.Path, "/api/v2/sandbox/instances/") && strings.HasSuffix(r.URL.Path, "/exec") {
-				execCount++
-			}
-		}
 		if execCount != 2 {
-			t.Errorf("expected 2 exec requests, got %d", execCount)
+			t.Errorf("expected 2 exec calls, got %d", execCount)
 		}
 	})
 
 	t.Run("non-zero exit code", func(t *testing.T) {
-		cci := fakes.NewFakeCircleCI()
-		cci.ExecResponse = &fakes.ExecResponse{
-			CommandID: "cmd-1",
-			PID:       1,
-			ExitCode:  1,
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 1, nil
 		}
-		client, _ := newFakeClient(t, cci)
 
 		cfg := &ProjectConfig{Commands: []Command{
 			{Name: "test", Run: "failing"},
 		}}
 		streams, _, _ := newStreams()
 
-		err := RunRemote(context.Background(), client, cfg, "sandbox-1", "org-1", streams)
+		err := RunRemote(context.Background(), execFn, cfg, "/workspace", streams)
 		if err == nil {
 			t.Fatal("expected error for non-zero exit code")
 		}
@@ -354,26 +319,40 @@ func TestRunRemote(t *testing.T) {
 	})
 
 	t.Run("empty stdout not written", func(t *testing.T) {
-		cci := fakes.NewFakeCircleCI()
-		cci.ExecResponse = &fakes.ExecResponse{
-			CommandID: "cmd-1",
-			PID:       1,
-			Stdout:    "",
-			ExitCode:  0,
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 0, nil
 		}
-		client, _ := newFakeClient(t, cci)
 
 		cfg := &ProjectConfig{Commands: []Command{
 			{Name: "test", Run: "silent"},
 		}}
 		streams, out, _ := newStreams()
 
-		err := RunRemote(context.Background(), client, cfg, "sandbox-1", "org-1", streams)
-		if err != nil {
+		if err := RunRemote(context.Background(), execFn, cfg, "/workspace", streams); err != nil {
 			t.Fatal(err)
 		}
 		if out.Len() != 0 {
 			t.Errorf("expected no stdout output, got: %s", out.String())
+		}
+	})
+
+	t.Run("script uses dest directory", func(t *testing.T) {
+		var capturedScript string
+		execFn := func(_ context.Context, script string) (string, string, int, error) {
+			capturedScript = script
+			return "", "", 0, nil
+		}
+
+		cfg := &ProjectConfig{Commands: []Command{
+			{Name: "test", Run: "go test ./..."},
+		}}
+		streams, _, _ := newStreams()
+
+		if err := RunRemote(context.Background(), execFn, cfg, "/custom/path", streams); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(capturedScript, "cd '/custom/path' &&") {
+			t.Errorf("expected script to cd into dest, got: %s", capturedScript)
 		}
 	})
 }
