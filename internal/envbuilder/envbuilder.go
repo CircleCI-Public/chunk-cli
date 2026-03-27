@@ -11,7 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/httpcl"
+	"github.com/BurntSushi/toml"
+	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 const (
@@ -441,74 +442,59 @@ func isTestRelatedExtra(name string) bool {
 	return true
 }
 
-// detectHatchTestDependencies reads pyproject.toml's [tool.hatch.envs.default.dependencies]
-// section and returns the list of dependencies (e.g. pytest, coverage, etc.).
-func detectHatchTestDependencies(dir string) []string {
-	pyprojectPath := filepath.Join(dir, "pyproject.toml")
-	data, err := os.ReadFile(pyprojectPath)
-	if err != nil {
-		return nil
-	}
-	content := string(data)
-
-	sectionRe := regexp.MustCompile(`(?m)^\[tool\.hatch\.envs\.default\]`)
-	sectionStart := sectionRe.FindStringIndex(content)
-	if sectionStart == nil {
-		return nil
-	}
-
-	sectionContent := content[sectionStart[1]:]
-	nextSectionRe := regexp.MustCompile(`(?m)^\[`)
-	if nextSection := nextSectionRe.FindStringIndex(sectionContent); nextSection != nil {
-		sectionContent = sectionContent[:nextSection[0]]
-	}
-
-	depsRe := regexp.MustCompile(`(?s)dependencies\s*=\s*\[([^\]]+)\]`)
-	depsMatch := depsRe.FindStringSubmatch(sectionContent)
-	if depsMatch == nil {
-		return nil
-	}
-
-	depRe := regexp.MustCompile(`"([^"]+)"`)
-	matches := depRe.FindAllStringSubmatch(depsMatch[1], -1)
-	var deps []string
-	for _, m := range matches {
-		deps = append(deps, m[1])
-	}
-	return deps
+// pyprojectTOML holds the fields we need from a pyproject.toml file.
+type pyprojectTOML struct {
+	Project struct {
+		Name                 string              `toml:"name"`
+		OptionalDependencies map[string][]string `toml:"optional-dependencies"`
+	} `toml:"project"`
+	Tool struct {
+		Hatch struct {
+			Envs struct {
+				Default struct {
+					Dependencies []string `toml:"dependencies"`
+				} `toml:"default"`
+			} `toml:"envs"`
+		} `toml:"hatch"`
+		UV struct {
+			Workspace struct {
+				Members []string `toml:"members"`
+			} `toml:"workspace"`
+		} `toml:"uv"`
+	} `toml:"tool"`
+	// DependencyGroups entries may be strings or inline tables ({include-group = "name"}).
+	DependencyGroups map[string][]any `toml:"dependency-groups"`
 }
 
-// detectUVTestExtras reads pyproject.toml and returns only test-relevant optional dependency groups.
-func detectUVTestExtras(dir string) []string {
-	pyprojectPath := filepath.Join(dir, "pyproject.toml")
-	data, err := os.ReadFile(pyprojectPath)
-	if err != nil {
+func parsePyproject(dir string) *pyprojectTOML {
+	var p pyprojectTOML
+	if _, err := toml.DecodeFile(filepath.Join(dir, "pyproject.toml"), &p); err != nil {
 		return nil
 	}
+	return &p
+}
 
-	content := string(data)
+// detectHatchTestDependencies returns the [tool.hatch.envs.default] dependencies from pyproject.toml.
+func detectHatchTestDependencies(dir string) []string {
+	p := parsePyproject(dir)
+	if p == nil {
+		return nil
+	}
+	return p.Tool.Hatch.Envs.Default.Dependencies
+}
 
+// detectUVTestExtras returns test-relevant optional dependency group names from pyproject.toml.
+func detectUVTestExtras(dir string) []string {
+	p := parsePyproject(dir)
+	if p == nil {
+		return nil
+	}
 	var extras []string
-	optionalDepsRe := regexp.MustCompile(`(?m)^\[project\.optional-dependencies\]`)
-	if optionalDepsRe.MatchString(content) {
-		extraNameRe := regexp.MustCompile(`(?m)^(\w+)\s*=\s*\[`)
-		sectionStart := optionalDepsRe.FindStringIndex(content)
-		if sectionStart != nil {
-			sectionContent := content[sectionStart[1]:]
-			nextSectionRe := regexp.MustCompile(`(?m)^\[`)
-			nextSection := nextSectionRe.FindStringIndex(sectionContent)
-			if nextSection != nil {
-				sectionContent = sectionContent[:nextSection[0]]
-			}
-			matches := extraNameRe.FindAllStringSubmatch(sectionContent, -1)
-			for _, m := range matches {
-				if isTestRelatedExtra(m[1]) {
-					extras = append(extras, m[1])
-				}
-			}
+	for name := range p.Project.OptionalDependencies {
+		if isTestRelatedExtra(name) {
+			extras = append(extras, name)
 		}
 	}
-
 	return extras
 }
 
@@ -535,89 +521,43 @@ func isStrictlyTestGroup(name string) bool {
 	return false
 }
 
-// extractDepsFromDependencyGroups reads pyproject.toml [dependency-groups] section and
-// returns the direct string package dependencies from test-related groups.
+// extractDepsFromDependencyGroups returns direct string dependencies from
+// test-related [dependency-groups] in pyproject.toml. Inline table entries
+// (e.g. {include-group = "name"}) are skipped.
 func extractDepsFromDependencyGroups(dir string) []string {
-	pyprojectPath := filepath.Join(dir, "pyproject.toml")
-	data, err := os.ReadFile(pyprojectPath)
-	if err != nil {
+	p := parsePyproject(dir)
+	if p == nil {
 		return nil
 	}
-
-	content := string(data)
-
-	sectionRe := regexp.MustCompile(`(?m)^\[dependency-groups\]`)
-	sectionStart := sectionRe.FindStringIndex(content)
-	if sectionStart == nil {
-		return nil
-	}
-
-	sectionContent := content[sectionStart[1]:]
-	nextSectionRe := regexp.MustCompile(`(?m)^\[`)
-	if nextSection := nextSectionRe.FindStringIndex(sectionContent); nextSection != nil {
-		sectionContent = sectionContent[:nextSection[0]]
-	}
-
-	groupRe := regexp.MustCompile(`(?ms)^(\w[\w-]*)\s*=\s*\[([^\]]+)\]`)
-	inlineTableRe := regexp.MustCompile(`\{[^}]*\}`)
-	depRe := regexp.MustCompile(`"([^"]+)"`)
-
-	var allDeps []string
 	seen := map[string]bool{}
-
-	for _, groupMatch := range groupRe.FindAllStringSubmatch(sectionContent, -1) {
-		groupName := groupMatch[1]
-		if !isStrictlyTestGroup(groupName) {
+	var allDeps []string
+	for name, entries := range p.DependencyGroups {
+		if !isStrictlyTestGroup(name) {
 			continue
 		}
-		groupContent := inlineTableRe.ReplaceAllString(groupMatch[2], "")
-		for _, depMatch := range depRe.FindAllStringSubmatch(groupContent, -1) {
-			dep := depMatch[1]
-			if !seen[dep] {
+		for _, entry := range entries {
+			if dep, ok := entry.(string); ok && !seen[dep] {
 				seen[dep] = true
 				allDeps = append(allDeps, dep)
 			}
 		}
 	}
-
 	return allDeps
 }
 
-// detectTestDependencyGroups reads pyproject.toml [dependency-groups] section and returns
-// only the group names that are test-related.
+// detectTestDependencyGroups returns the names of test-related [dependency-groups] from pyproject.toml.
 func detectTestDependencyGroups(dir string) []string {
-	pyprojectPath := filepath.Join(dir, "pyproject.toml")
-	data, err := os.ReadFile(pyprojectPath)
-	if err != nil {
+	p := parsePyproject(dir)
+	if p == nil {
 		return nil
 	}
-
-	content := string(data)
-
-	sectionRe := regexp.MustCompile(`(?m)^\[dependency-groups\]`)
-	sectionStart := sectionRe.FindStringIndex(content)
-	if sectionStart == nil {
-		return nil
-	}
-
-	sectionContent := content[sectionStart[1]:]
-	nextSectionRe := regexp.MustCompile(`(?m)^\[`)
-	nextSection := nextSectionRe.FindStringIndex(sectionContent)
-	if nextSection != nil {
-		sectionContent = sectionContent[:nextSection[0]]
-	}
-
-	groupNameRe := regexp.MustCompile(`(?m)^(\w[\w-]*)\s*=\s*\[`)
-	matches := groupNameRe.FindAllStringSubmatch(sectionContent, -1)
-
-	var testGroups []string
-	for _, m := range matches {
-		if isTestRelatedExtra(m[1]) {
-			testGroups = append(testGroups, m[1])
+	var groups []string
+	for name := range p.DependencyGroups {
+		if isTestRelatedExtra(name) {
+			groups = append(groups, name)
 		}
 	}
-
-	return testGroups
+	return groups
 }
 
 // hasRustWorkspaceMember returns true if any uv workspace member contains a Cargo.toml.
@@ -630,70 +570,22 @@ func hasRustWorkspaceMember(dir string) bool {
 	return false
 }
 
-// detectUVWorkspaceMembers reads pyproject.toml and returns the list of workspace member directories.
+// detectUVWorkspaceMembers returns the [tool.uv.workspace] members from pyproject.toml.
 func detectUVWorkspaceMembers(dir string) []string {
-	pyprojectPath := filepath.Join(dir, "pyproject.toml")
-	data, err := os.ReadFile(pyprojectPath)
-	if err != nil {
+	p := parsePyproject(dir)
+	if p == nil {
 		return nil
 	}
-
-	content := string(data)
-
-	sectionRe := regexp.MustCompile(`(?m)^\[tool\.uv\.workspace\]`)
-	sectionStart := sectionRe.FindStringIndex(content)
-	if sectionStart == nil {
-		return nil
-	}
-
-	sectionContent := content[sectionStart[1]:]
-	nextSectionRe := regexp.MustCompile(`(?m)^\[`)
-	if nextSection := nextSectionRe.FindStringIndex(sectionContent); nextSection != nil {
-		sectionContent = sectionContent[:nextSection[0]]
-	}
-
-	membersRe := regexp.MustCompile(`(?s)members\s*=\s*\[([^\]]+)\]`)
-	membersMatch := membersRe.FindStringSubmatch(sectionContent)
-	if membersMatch == nil {
-		return nil
-	}
-
-	memberRe := regexp.MustCompile(`"([^"]+)"`)
-	matches := memberRe.FindAllStringSubmatch(membersMatch[1], -1)
-	var members []string
-	for _, m := range matches {
-		members = append(members, m[1])
-	}
-	return members
+	return p.Tool.UV.Workspace.Members
 }
 
-// getPackageName reads the [project] section of a pyproject.toml and returns the package name.
+// getPackageName returns the [project] name from pyproject.toml.
 func getPackageName(dir string) string {
-	pyprojectPath := filepath.Join(dir, "pyproject.toml")
-	data, err := os.ReadFile(pyprojectPath)
-	if err != nil {
+	p := parsePyproject(dir)
+	if p == nil {
 		return ""
 	}
-
-	content := string(data)
-
-	projectRe := regexp.MustCompile(`(?m)^\[project\]`)
-	projectStart := projectRe.FindStringIndex(content)
-	if projectStart == nil {
-		return ""
-	}
-
-	sectionContent := content[projectStart[1]:]
-	nextSectionRe := regexp.MustCompile(`(?m)^\[`)
-	if nextSection := nextSectionRe.FindStringIndex(sectionContent); nextSection != nil {
-		sectionContent = sectionContent[:nextSection[0]]
-	}
-
-	nameRe := regexp.MustCompile(`(?m)^name\s*=\s*['"]([^'"]+)['"]`)
-	if m := nameRe.FindStringSubmatch(sectionContent); m != nil {
-		return m[1]
-	}
-	return ""
+	return p.Project.Name
 }
 
 // buildUVSyncCommand builds a uv sync command that avoids problematic extras/groups.
