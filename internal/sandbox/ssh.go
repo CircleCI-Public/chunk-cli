@@ -16,6 +16,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 )
 
 // ExecResult holds the output of a command executed over SSH.
@@ -208,7 +210,7 @@ func sshAuth(ctx context.Context, session *Session) (ssh.AuthMethod, func(), err
 
 // tofuHostKeyCallback implements trust-on-first-use host key verification.
 func tofuHostKeyCallback(knownHostsPath, host string) ssh.HostKeyCallback {
-	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	return func(_ string, _ net.Addr, key ssh.PublicKey) (err error) {
 		fingerprint := sha256.Sum256(key.Marshal())
 		fp := hex.EncodeToString(fingerprint[:])
 
@@ -243,7 +245,7 @@ func tofuHostKeyCallback(knownHostsPath, host string) ssh.HostKeyCallback {
 		if err != nil {
 			return fmt.Errorf("append known hosts: %w", err)
 		}
-		defer func() { _ = f.Close() }()
+		defer closer.ErrorHandler(f, &err)
 		_, err = fmt.Fprintf(f, "%s %s\n", host, fp)
 		return err
 	}

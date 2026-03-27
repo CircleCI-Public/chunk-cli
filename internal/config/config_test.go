@@ -20,18 +20,24 @@ func setupTempConfig(t *testing.T) string {
 
 func TestDir_XDGSet(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/custom-xdg")
-	assert.Equal(t, Dir(), "/tmp/custom-xdg/chunk")
+	d, err := Dir()
+	assert.NilError(t, err)
+	assert.Equal(t, d, "/tmp/custom-xdg/chunk")
 }
 
 func TestDir_XDGUnset(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	home, _ := os.UserHomeDir()
-	assert.Equal(t, Dir(), filepath.Join(home, ".config", "chunk"))
+	d, err := Dir()
+	assert.NilError(t, err)
+	assert.Equal(t, d, filepath.Join(home, ".config", "chunk"))
 }
 
 func TestPath(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg")
-	assert.Equal(t, Path(), "/tmp/xdg/chunk/config.json")
+	p, err := Path()
+	assert.NilError(t, err)
+	assert.Equal(t, p, "/tmp/xdg/chunk/config.json")
 }
 
 // --- Load ---
@@ -93,12 +99,14 @@ func TestSave_CreatesDir(t *testing.T) {
 	assert.Equal(t, info.Mode().Perm(), os.FileMode(0o700))
 
 	// Verify file permissions
-	finfo, err := os.Stat(Path())
+	p, err := Path()
+	assert.NilError(t, err)
+	finfo, err := os.Stat(p)
 	assert.NilError(t, err)
 	assert.Equal(t, finfo.Mode().Perm(), os.FileMode(0o600))
 
 	// Verify content
-	data, err := os.ReadFile(Path())
+	data, err := os.ReadFile(p)
 	assert.NilError(t, err)
 	var cfg UserConfig
 	assert.NilError(t, json.Unmarshal(data, &cfg))
@@ -111,7 +119,9 @@ func TestSave_OmitsEmptyFields(t *testing.T) {
 	err := Save(UserConfig{Model: "m1"})
 	assert.NilError(t, err)
 
-	data, err := os.ReadFile(Path())
+	p, err := Path()
+	assert.NilError(t, err)
+	data, err := os.ReadFile(p)
 	assert.NilError(t, err)
 
 	// apiKey should be omitted from JSON (omitempty)

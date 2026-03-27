@@ -3,8 +3,8 @@ package tui
 import (
 	"fmt"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 )
 
 type textInputModel struct {
@@ -31,15 +31,20 @@ func (m textInputModel) Init() tea.Cmd {
 }
 
 func (m textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		switch keyMsg.Type { //nolint:exhaustive
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
+		switch msg.Code {
 		case tea.KeyEnter:
 			m.done = true
 			m.value = m.input.Value()
 			return m, tea.Quit
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyEscape:
 			m.canceled = true
 			return m, tea.Quit
+		case 'c':
+			if msg.Mod == tea.ModCtrl {
+				m.canceled = true
+				return m, tea.Quit
+			}
 		}
 	}
 
@@ -48,11 +53,11 @@ func (m textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m textInputModel) View() string {
+func (m textInputModel) View() tea.View {
 	if m.done || m.canceled {
-		return ""
+		return tea.NewView("")
 	}
-	return fmt.Sprintf("%s: %s", m.label, m.input.View())
+	return tea.NewView(fmt.Sprintf("%s: %s", m.label, m.input.View()))
 }
 
 // PromptText prompts for text input with an optional default value shown as placeholder.

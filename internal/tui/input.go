@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 )
 
 // ErrCancelled is returned when the user cancels input (Ctrl+C or Esc).
@@ -36,15 +36,20 @@ func (m hiddenInputModel) Init() tea.Cmd {
 }
 
 func (m hiddenInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if msg, ok := msg.(tea.KeyMsg); ok {
-		switch msg.Type { //nolint:exhaustive
+	if msg, ok := msg.(tea.KeyPressMsg); ok {
+		switch msg.Code {
 		case tea.KeyEnter:
 			m.done = true
 			m.value = m.input.Value()
 			return m, tea.Quit
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyEscape:
 			m.canceled = true
 			return m, tea.Quit
+		case 'c':
+			if msg.Mod == tea.ModCtrl {
+				m.canceled = true
+				return m, tea.Quit
+			}
 		}
 	}
 
@@ -53,11 +58,11 @@ func (m hiddenInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m hiddenInputModel) View() string {
+func (m hiddenInputModel) View() tea.View {
 	if m.done || m.canceled {
-		return ""
+		return tea.NewView("")
 	}
-	return fmt.Sprintf("%s: %s", m.label, m.input.View())
+	return tea.NewView(fmt.Sprintf("%s: %s", m.label, m.input.View()))
 }
 
 // PromptHidden prompts the user for hidden input (e.g. API keys).

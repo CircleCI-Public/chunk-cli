@@ -36,7 +36,11 @@ type ResolvedConfig struct {
 
 // Load reads the config file. Returns empty config if not found.
 func Load() (UserConfig, error) {
-	data, err := os.ReadFile(Path())
+	p, err := Path()
+	if err != nil {
+		return UserConfig{}, err
+	}
+	data, err := os.ReadFile(p)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return UserConfig{}, nil
@@ -52,7 +56,10 @@ func Load() (UserConfig, error) {
 
 // Save writes the config file, creating the directory with 0o700 and file with 0o600.
 func Save(cfg UserConfig) error {
-	dir := Dir()
+	dir, err := Dir()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, dirPermission); err != nil {
 		return err
 	}
@@ -60,7 +67,11 @@ func Save(cfg UserConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(Path(), data, filePermission)
+	p, err := Path()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, data, filePermission)
 }
 
 // ClearAPIKey removes the stored API key from config.

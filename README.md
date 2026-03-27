@@ -7,7 +7,7 @@ CLI for generating AI agent context from real code review patterns. Mines PR rev
 - **Pattern Mining** - Discovers top reviewers in your GitHub org and fetches their review comments
 - **AI Analysis** - Uses Claude (Sonnet, Opus, or Haiku) to identify recurring patterns and team standards
 - **Context Generation** - Produces a markdown prompt file ready to use with AI coding agents
-- **Hook Automation** - Wires tests, lint, and AI code review into your agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
+- **Hook Automation** - Wires tests and lint into your agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
 - **Self-Updating** - Built-in upgrade command for binary updates
 
 ## Requirements
@@ -182,7 +182,7 @@ chunk task run --definition 550e8400-e29b-41d4-a716-446655440000 --prompt "Fix t
 
 ### Hook Automation
 
-`chunk hook` automates test, lint, and code-review tasks by wiring them into your AI coding agent's lifecycle events (Claude Code, Cursor, VS Code Copilot). Hooks fire at the right moments — blocking commits when tests fail, running lint before the agent stops, and triggering an AI review pass at session end.
+`chunk hook` automates test and lint tasks by wiring them into your AI coding agent's lifecycle events (Claude Code, Cursor, VS Code Copilot). Hooks fire at the right moments — blocking commits when tests fail and running lint before the agent stops.
 
 #### 1. Configure your shell environment
 
@@ -199,7 +199,6 @@ Available profiles:
 | `disable` | All hooks disabled |
 | `enable` | All hooks enabled |
 | `tests-lint` | Tests and lint only |
-| `review` | AI code review only |
 
 Restart your shell (or `source ~/.zprofile`) after running for the first time.
 
