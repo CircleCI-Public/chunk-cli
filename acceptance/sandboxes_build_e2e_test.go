@@ -128,10 +128,6 @@ func e2eRunBuild(t *testing.T, dir, tag string) (output string, exitCode int) {
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		"NO_COLOR=1",
 	}
-	if v := os.Getenv("CHUNK_DOCKER_SUDO"); v != "" {
-		cmd.Env = append(cmd.Env, "CHUNK_DOCKER_SUDO="+v)
-	}
-
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &outBuf
@@ -152,12 +148,7 @@ func e2eDockerRun(t *testing.T, tag string) (bool, string) {
 	defer cancel()
 
 	args := []string{"run", "--rm", tag}
-	var cmd *exec.Cmd
-	if os.Getenv("CHUNK_DOCKER_SUDO") != "" {
-		cmd = exec.CommandContext(ctx, "sudo", append([]string{"docker"}, args...)...)
-	} else {
-		cmd = exec.CommandContext(ctx, "docker", args...)
-	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	out, err := cmd.CombinedOutput()
 	return err == nil, string(out)
 }

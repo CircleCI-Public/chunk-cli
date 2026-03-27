@@ -35,7 +35,7 @@ type requiredCredential struct {
 }
 
 // Prepare generates a Dockerfile, builds it, and runs tests inside the container.
-func Prepare(ctx context.Context, claude *anthropic.Client, dockerSudo bool, io iostream.Streams, stdin io.Reader) error {
+func Prepare(ctx context.Context, claude *anthropic.Client, io iostream.Streams, stdin io.Reader) error {
 	io.ErrPrintln(ui.Dim("preparing..."))
 
 	cwd, err := os.Getwd()
@@ -100,7 +100,7 @@ func Prepare(ctx context.Context, claude *anthropic.Client, dockerSudo bool, io 
 	io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("wrote %s", dockerfileName)))
 
 	// Build and test
-	success, err := buildAndTest(ctx, claude, model, cwd, dockerfileName, dockerfilePath, dockerfileContent, testCommand, repoContext, credentials, pm, dockerSudo, io)
+	success, err := buildAndTest(ctx, claude, model, cwd, dockerfileName, dockerfilePath, dockerfileContent, testCommand, repoContext, credentials, pm, io)
 	if err != nil {
 		return err
 	}
@@ -239,12 +239,8 @@ func generateDockerfile(ctx context.Context, claude *anthropic.Client, model, te
 	return strings.TrimSpace(resp), nil
 }
 
-func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, dockerfileName, dockerfilePath, dockerfileContent, testCommand, repoContext string, credentials map[string]string, pm *packageManager, dockerSudo bool, io iostream.Streams) (bool, error) {
+func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, dockerfileName, dockerfilePath, dockerfileContent, testCommand, repoContext string, credentials map[string]string, pm *packageManager, io iostream.Streams) (bool, error) {
 	imageTag := "chunk-prep"
-	dockerCmd := "docker"
-	if dockerSudo {
-		dockerCmd = "sudo"
-	}
 
 	buildArgs := make([]string, 0, len(credentials)*2)
 	for k, v := range credentials {
@@ -289,11 +285,8 @@ func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, doc
 		buildCmdArgs := []string{"build", "-f", dockerfileName, "-t", imageTag}
 		buildCmdArgs = append(buildCmdArgs, buildArgs...)
 		buildCmdArgs = append(buildCmdArgs, ".")
-		if dockerSudo {
-			buildCmdArgs = append([]string{"docker"}, buildCmdArgs...)
-		}
 
-		buildExec := exec.CommandContext(ctx, dockerCmd, buildCmdArgs...)
+		buildExec := exec.CommandContext(ctx, "docker", buildCmdArgs...)
 		buildExec.Dir = buildContext
 		buildOutput, buildErr := buildExec.CombinedOutput()
 
@@ -316,11 +309,8 @@ func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, doc
 		// Run tests
 		io.ErrPrintln("\n" + ui.Dim("running test command in container..."))
 		runCmdArgs := []string{"run", "--rm", imageTag, "sh", "-c", testCommand}
-		if dockerSudo {
-			runCmdArgs = append([]string{"docker"}, runCmdArgs...)
-		}
 
-		runExec := exec.CommandContext(ctx, dockerCmd, runCmdArgs...)
+		runExec := exec.CommandContext(ctx, "docker", runCmdArgs...)
 		runExec.Dir = cwd
 		runOutput, runErr := runExec.CombinedOutput()
 

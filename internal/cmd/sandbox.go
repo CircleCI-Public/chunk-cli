@@ -245,15 +245,10 @@ func newSandboxSyncCmd() *cobra.Command {
 }
 
 func dockerExecCmd(ctx context.Context, args ...string) *exec.Cmd {
-	if os.Getenv("CHUNK_DOCKER_SUDO") != "" {
-		return exec.CommandContext(ctx, "sudo", append([]string{"docker"}, args...)...)
-	}
 	return exec.CommandContext(ctx, "docker", args...)
 }
 
 func newSandboxPrepareCmd() *cobra.Command {
-	var dockerSudo bool
-
 	cmd := &cobra.Command{
 		Use:   "prepare",
 		Short: "Prepare sandbox environment",
@@ -271,11 +266,9 @@ func newSandboxPrepareCmd() *cobra.Command {
 			}
 
 			io := iostream.FromCmd(cmd)
-			return sandbox.Prepare(cmd.Context(), claude, dockerSudo || os.Getenv("CHUNK_DOCKER_SUDO") != "", io, os.Stdin)
+			return sandbox.Prepare(cmd.Context(), claude, io, os.Stdin)
 		},
 	}
-
-	cmd.Flags().BoolVar(&dockerSudo, "docker-sudo", false, "Use sudo for docker commands")
 
 	return cmd
 }
@@ -319,9 +312,7 @@ func newSandboxBuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build",
 		Short: "Build a Docker test image from a generated Dockerfile.test",
-		Long: `Build a Docker image from the Dockerfile.test in --dir. Run 'chunk sandboxes env' first to generate the Dockerfile.
-
-Set CHUNK_DOCKER_SUDO=1 to invoke docker via sudo.`,
+		Long: `Build a Docker image from the Dockerfile.test in --dir. Run 'chunk sandboxes env' first to generate the Dockerfile.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			io.ErrPrintf("Building Docker image in %s...\n", dir)
