@@ -1,15 +1,17 @@
 package envbuilder
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/CircleCI-Public/chunk-cli/httpcl"
 )
 
 const (
@@ -88,6 +90,8 @@ var circleciImages = map[string]string{
 
 var versionTagRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
+var dockerHubClient = httpcl.New(httpcl.Config{})
+
 type dockerHubTagsResponse struct {
 	Results []struct {
 		Name string `json:"name"`
@@ -95,34 +99,22 @@ type dockerHubTagsResponse struct {
 	Next string `json:"next"`
 }
 
-func fetchAllImageVersions(image string) ([]string, error) {
+func fetchAllImageVersions(ctx context.Context, image string) ([]string, error) {
 	parts := strings.SplitN(image, "/", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid image name: %s", image)
 	}
 
 	var allTags []string
-	url := fmt.Sprintf(
+	route := fmt.Sprintf(
 		"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
 		parts[0], parts[1],
 	)
 
-	for url != "" && len(allTags) < 300 {
-		resp, err := http.Get(url) //nolint:gosec
-		if err != nil {
-			return nil, fmt.Errorf("docker hub request failed: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			_ = resp.Body.Close()
-			return nil, fmt.Errorf("docker hub returned %d for %s", resp.StatusCode, image)
-		}
-
+	for route != "" && len(allTags) < 300 {
 		var page dockerHubTagsResponse
-		decodeErr := json.NewDecoder(resp.Body).Decode(&page)
-		_ = resp.Body.Close()
-		if decodeErr != nil {
-			return nil, fmt.Errorf("failed to decode docker hub response: %w", decodeErr)
+		if _, err := dockerHubClient.Call(ctx, httpcl.NewRequest("GET", route, httpcl.JSONDecoder(&page))); err != nil {
+			return nil, fmt.Errorf("docker hub request failed: %w", err)
 		}
 
 		for _, tag := range page.Results {
@@ -130,7 +122,7 @@ func fetchAllImageVersions(image string) ([]string, error) {
 				allTags = append(allTags, tag.Name)
 			}
 		}
-		url = page.Next
+		route = page.Next
 	}
 
 	if len(allTags) == 0 {
@@ -140,16 +132,16 @@ func fetchAllImageVersions(image string) ([]string, error) {
 	return allTags, nil
 }
 
-func fetchLatestImageVersion(image string) (string, error) {
-	allTags, err := fetchAllImageVersions(image)
+func fetchLatestImageVersion(ctx context.Context, image string) (string, error) {
+	allTags, err := fetchAllImageVersions(ctx, image)
 	if err != nil {
 		return "", err
 	}
 	return highestVersion(allTags), nil
 }
 
-func fetchLatestImageVersionWithConstraint(image string, maxMajor int) (string, error) {
-	allTags, err := fetchAllImageVersions(image)
+func fetchLatestImageVersionWithConstraint(ctx context.Context, image string, maxMajor int) (string, error) {
+	allTags, err := fetchAllImageVersions(ctx, image)
 	if err != nil {
 		return "", err
 	}
@@ -176,8 +168,8 @@ func fetchLatestImageVersionWithConstraint(image string, maxMajor int) (string, 
 // whose major.minor is no greater than maxMajor.maxMinor. This is used to cap
 // language runtimes at a known-compatible minor release (e.g. Python 3.13 when
 // a dependency like uvloop does not yet support 3.14+).
-func fetchLatestImageVersionWithMajorMinorConstraint(image string, maxMajor, maxMinor int) (string, error) {
-	allTags, err := fetchAllImageVersions(image)
+func fetchLatestImageVersionWithMajorMinorConstraint(ctx context.Context, image string, maxMajor, maxMinor int) (string, error) {
+	allTags, err := fetchAllImageVersions(ctx, image)
 	if err != nil {
 		return "", err
 	}
@@ -1275,7 +1267,7 @@ func parseJavaVersionFromText(content string) int {
 
 // DetectEnvironment analyses the repository at dir and returns a detected Environment.
 // It also writes a Dockerfile.test to dir.
-func DetectEnvironment(dir string) (*Environment, error) {
+func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 	stack, err := detectStack(dir)
 	if err != nil {
 		return nil, err
@@ -1290,7 +1282,7 @@ func DetectEnvironment(dir string) (*Environment, error) {
 
 	imageVersion := stackUnknown
 	if image != stackUnknown {
-		imageVersion, err = detectImageVersion(dir, stack, image, install)
+		imageVersion, err = detectImageVersion(ctx, dir, stack, image, install)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch image version: %w", err)
 		}
@@ -1315,7 +1307,7 @@ func DetectEnvironment(dir string) (*Environment, error) {
 }
 
 // detectImageVersion fetches the appropriate CircleCI image version for the detected stack.
-func detectImageVersion(dir, stack, image, install string) (string, error) {
+func detectImageVersion(ctx context.Context, dir, stack, image, install string) (string, error) {
 	switch stack {
 	case stackGo:
 		// Cap to the major.minor declared in go.mod. Go 1.23 is used as a floor
@@ -1325,29 +1317,29 @@ func detectImageVersion(dir, stack, image, install string) (string, error) {
 			if major == 1 && minor < goMinorFloor {
 				minor = goMinorFloor
 			}
-			return fetchLatestImageVersionWithMajorMinorConstraint(image, major, minor)
+			return fetchLatestImageVersionWithMajorMinorConstraint(ctx, image, major, minor)
 		}
 
 	case stackJavaScript, stackTypeScript:
 		if fileExists(dir, "package.json") {
 			if maxNode := detectNodeMaxVersion(dir); maxNode > 0 {
-				return fetchLatestImageVersionWithConstraint(image, maxNode)
+				return fetchLatestImageVersionWithConstraint(ctx, image, maxNode)
 			}
 		}
 
 	case stackJava:
 		if fileExists(dir, "pom.xml") {
 			if maxJava := detectJavaMaxVersion(dir); maxJava > 0 {
-				return fetchLatestImageVersionWithConstraint(image, maxJava)
+				return fetchLatestImageVersionWithConstraint(ctx, image, maxJava)
 			}
 		}
 
 	case stackPython:
 		// uvloop is incompatible with Python 3.14+; cap at 3.13 when it's present.
 		if strings.Contains(install, "uvloop") {
-			return fetchLatestImageVersionWithMajorMinorConstraint(image, 3, 13)
+			return fetchLatestImageVersionWithMajorMinorConstraint(ctx, image, 3, 13)
 		}
 	}
 
-	return fetchLatestImageVersion(image)
+	return fetchLatestImageVersion(ctx, image)
 }

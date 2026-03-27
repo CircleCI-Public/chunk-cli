@@ -289,7 +289,7 @@ environment as JSON to stdout.`,
 			io := iostream.FromCmd(cmd)
 			io.ErrPrintf("Detecting environment in %s...\n", dir)
 
-			env, err := envbuilder.DetectEnvironment(dir)
+			env, err := envbuilder.DetectEnvironment(cmd.Context(), dir)
 			if err != nil {
 				return err
 			}
