@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 )
 
 const (
@@ -83,12 +84,12 @@ func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identi
 
 // agentPublicKey returns the first public key from the running ssh-agent
 // in authorized_keys format, or an error if the agent is unavailable.
-func agentPublicKey(ctx context.Context, authSock string) (string, error) {
+func agentPublicKey(ctx context.Context, authSock string) (_ string, err error) {
 	ag, conn, err := dialAgent(ctx, authSock)
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = conn.Close() }()
+	defer closer.ErrorHandler(conn, &err)
 
 	keys, err := ag.List()
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 )
@@ -220,7 +221,7 @@ func AggregatePRRankings(details []github.ReviewCommentDetail) []PRRankingRow {
 }
 
 // WritePRRankingsCSV writes the PR rankings CSV file.
-func WritePRRankingsCSV(rankings []PRRankingRow, path string) error {
+func WritePRRankingsCSV(rankings []PRRankingRow, path string) (err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -229,7 +230,7 @@ func WritePRRankingsCSV(rankings []PRRankingRow, path string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
+	defer closer.ErrorHandler(f, &err)
 
 	w := csv.NewWriter(f)
 	defer w.Flush()

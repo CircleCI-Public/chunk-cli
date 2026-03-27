@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -31,7 +32,7 @@ func newCompletionInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Install shell completion",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			io := iostream.FromCmd(cmd)
 			home := os.Getenv("HOME")
 			if home == "" {
@@ -53,7 +54,7 @@ func newCompletionInstallCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open %s: %w", rcFile, err)
 			}
-			defer func() { _ = f.Close() }()
+			defer closer.ErrorHandler(f, &err)
 
 			if _, err := f.WriteString("\n" + line); err != nil {
 				return fmt.Errorf("write %s: %w", rcFile, err)
