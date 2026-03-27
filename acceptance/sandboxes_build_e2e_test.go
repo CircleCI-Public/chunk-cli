@@ -50,9 +50,16 @@ func TestSandboxesBuildEndToEnd(t *testing.T) {
 		{"hugo", "https://github.com/gohugoio/hugo.git"},
 	}
 
+	cacheDir := os.Getenv("CHUNK_SANDBOX_CACHE_DIR")
+
 	for _, repo := range repos {
 		t.Run(repo.name, func(t *testing.T) {
-			cloneDir := "/var/tmp/chunk-sandbox-" + repo.name
+			var cloneDir string
+			if cacheDir != "" {
+				cloneDir = cacheDir + "/chunk-sandbox-" + repo.name
+			} else {
+				cloneDir = t.TempDir()
+			}
 			e2eCloneRepo(t, repo.url, cloneDir)
 
 			t.Log("Running chunk sandboxes env...")
@@ -82,7 +89,7 @@ func TestSandboxesBuildEndToEnd(t *testing.T) {
 
 func e2eCloneRepo(t *testing.T, url, dir string) {
 	t.Helper()
-	if _, err := os.Stat(dir); err == nil {
+	if _, err := os.Stat(dir + "/.git"); err == nil {
 		t.Logf("using existing clone at %s", dir)
 		return
 	}

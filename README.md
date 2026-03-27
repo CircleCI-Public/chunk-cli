@@ -290,6 +290,8 @@ task lint               # Run linters
 task acceptance-test    # Run acceptance tests
 ```
 
+Acceptance tests that clone repositories are skipped by default. Set `CHUNK_ENV_BUILDER_ACCEPTANCE=1` to enable them. To avoid re-cloning on repeated runs, set `CHUNK_SANDBOX_CACHE_DIR` to a persistent directory — clones will be reused if already present there.
+
 ## Changelog
 
 ### Unreleased
