@@ -31,13 +31,12 @@ const (
 
 // Environment describes the detected tech stack and build configuration for a repository.
 type Environment struct {
-	Stack          string   `json:"stack"`
-	Install        string   `json:"install"`
-	Test           string   `json:"test"`
-	SystemDeps     []string `json:"system_deps"`
-	Image          string   `json:"image"`
-	ImageVersion   string   `json:"image_version"`
-	DockerfilePath string   `json:"dockerfile_path"`
+	Stack        string   `json:"stack"`
+	Install      string   `json:"install"`
+	Test         string   `json:"test"`
+	SystemDeps   []string `json:"system_deps"`
+	Image        string   `json:"image"`
+	ImageVersion string   `json:"image_version"`
 }
 
 func fileExists(dir, name string) bool {
@@ -237,11 +236,11 @@ var extraDepInstalls = map[string]string{
 	"rst2html":    "apt-get update && apt-get install -y python3-docutils --no-install-recommends && rm -rf /var/lib/apt/lists/*",
 }
 
-func generateDockerfile(dir string, env *Environment) (string, error) {
+// dockerfileContent generates the Dockerfile.test content for the given environment.
+func dockerfileContent(dir string, env *Environment) string {
 	var sb strings.Builder
 
-	fromLine := "FROM " + env.Image + ":" + env.ImageVersion
-	sb.WriteString(fromLine + "\n")
+	sb.WriteString("FROM " + env.Image + ":" + env.ImageVersion + "\n")
 
 	for _, dep := range env.SystemDeps {
 		if cmd, ok := extraDepInstalls[dep]; ok {
@@ -312,8 +311,14 @@ func generateDockerfile(dir string, env *Environment) (string, error) {
 		sb.WriteString("\nCMD " + env.Test + "\n")
 	}
 
+	return sb.String()
+}
+
+// WriteDockerfile writes Dockerfile.test (and Dockerfile.test.dockerignore if needed)
+// to dir and returns the path to the written Dockerfile.
+func WriteDockerfile(dir string, env *Environment) (string, error) {
 	dockerfilePath := filepath.Join(dir, "Dockerfile.test")
-	if err := os.WriteFile(dockerfilePath, []byte(sb.String()), 0644); err != nil {
+	if err := os.WriteFile(dockerfilePath, []byte(dockerfileContent(dir, env)), 0644); err != nil {
 		return "", fmt.Errorf("failed to write Dockerfile: %w", err)
 	}
 
@@ -1162,7 +1167,6 @@ func parseJavaVersionFromText(content string) int {
 }
 
 // DetectEnvironment analyses the repository at dir and returns a detected Environment.
-// It also writes a Dockerfile.test to dir.
 func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 	stack, err := detectStack(dir)
 	if err != nil {
@@ -1184,22 +1188,14 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 		}
 	}
 
-	env := &Environment{
+	return &Environment{
 		Stack:        stack,
 		Install:      install,
 		Test:         test,
 		SystemDeps:   systemDeps,
 		Image:        image,
 		ImageVersion: imageVersion,
-	}
-
-	dockerfilePath, err := generateDockerfile(dir, env)
-	if err != nil {
-		return nil, err
-	}
-	env.DockerfilePath = dockerfilePath
-
-	return env, nil
+	}, nil
 }
 
 // detectImageVersion fetches the appropriate CircleCI image version for the detected stack.

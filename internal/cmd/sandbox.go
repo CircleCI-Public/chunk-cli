@@ -294,12 +294,17 @@ environment as JSON to stdout.`,
 				return err
 			}
 
+			dockerfilePath, err := envbuilder.WriteDockerfile(dir, env)
+			if err != nil {
+				return err
+			}
+
 			out, err := json.MarshalIndent(env, "", "  ")
 			if err != nil {
 				return fmt.Errorf("marshal environment: %w", err)
 			}
 			io.Printf("%s\n", out)
-			io.ErrPrintf("%s\n", ui.Success("Wrote "+env.DockerfilePath))
+			io.ErrPrintf("%s\n", ui.Success("Wrote "+dockerfilePath))
 			return nil
 		},
 	}
