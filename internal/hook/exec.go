@@ -247,25 +247,27 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 		verdict = executeAndSave(cfg, execCfg, name, flags.Staged)
 		return emitExecVerdict(cfg, flags, execCfg, verdict)
 	case "pending":
+		stillRunning := fmt.Sprintf("Exec %q is still running. Wait for completion before retrying.", name)
 		sentinel := verdict.Sentinel
 		timeout := execCfg.Timeout
-		if sentinel != nil && sentinel.StartedAt != "" && timeout > 0 {
-			started, err := time.Parse(time.RFC3339, sentinel.StartedAt)
-			if err == nil {
-				elapsed := time.Since(started).Seconds()
-				if elapsed > float64(timeout) {
-					runnerCmd := buildRunnerCommand(name, flags.Cmd, flags.Timeout, flags.FileExt, flags.Staged, flags.Always)
-					reason := fmt.Sprintf(
-						"Exec %q timed out after %ds (configured timeout: %ds).\n\n"+
-							"The previous run may have an issue (infinite loop, deadlock, etc.). "+
-							"Investigate and re-run:\n\n  %s",
-						name, int(math.Round(elapsed)), timeout, runnerCmd)
-					return emitResponse(blockWithLimit(cfg, name, limit, reason))
-				}
-			}
+		if sentinel == nil || sentinel.StartedAt == "" || timeout <= 0 {
+			return emitResponse(blockNoCount(cfg.ProjectDir, stillRunning))
 		}
-		reason := fmt.Sprintf("Exec %q is still running. Wait for completion before retrying.", name)
-		return emitResponse(blockNoCount(cfg.ProjectDir, reason))
+		started, err := time.Parse(time.RFC3339, sentinel.StartedAt)
+		if err != nil {
+			return emitResponse(blockNoCount(cfg.ProjectDir, stillRunning))
+		}
+		elapsed := time.Since(started).Seconds()
+		if elapsed <= float64(timeout) {
+			return emitResponse(blockNoCount(cfg.ProjectDir, stillRunning))
+		}
+		runnerCmd := buildRunnerCommand(name, flags.Cmd, flags.Timeout, flags.FileExt, flags.Staged, flags.Always)
+		reason := fmt.Sprintf(
+			"Exec %q timed out after %ds (configured timeout: %ds).\n\n"+
+				"The previous run may have an issue (infinite loop, deadlock, etc.). "+
+				"Investigate and re-run:\n\n  %s",
+			name, int(math.Round(elapsed)), timeout, runnerCmd)
+		return emitResponse(blockWithLimit(cfg, name, limit, reason))
 	case verdictPass:
 		resetBlockCount(cfg.SentinelDir, cfg.ProjectDir, name)
 		return nil // allow
@@ -274,16 +276,14 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 		cmd := execCfg.Command
 		exitCode := 1
 		output := "(no output)"
-		if sentinel != nil {
-			if sentinel.Command != "" {
-				cmd = sentinel.Command
-			}
-			if sentinel.ExitCode != 0 {
-				exitCode = sentinel.ExitCode
-			}
-			if sentinel.Output != "" {
-				output = sentinel.Output
-			}
+		if sentinel != nil && sentinel.Command != "" {
+			cmd = sentinel.Command
+		}
+		if sentinel != nil && sentinel.ExitCode != 0 {
+			exitCode = sentinel.ExitCode
+		}
+		if sentinel != nil && sentinel.Output != "" {
+			output = sentinel.Output
 		}
 		reason := formatFailureReason(name, cmd, exitCode, output)
 		return emitResponse(blockWithLimit(cfg, name, limit, reason))
