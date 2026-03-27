@@ -7,7 +7,7 @@ env:
   ANTHROPIC_API_KEY: ""
   GITHUB_TOKEN: ""
 
-# Dockerfile lives at repo root so the build context includes all source files
-rootfs: ./Dockerfile
+# Dockerfile.sandbox lives at repo root so the build context includes all source files
+rootfs: ./Dockerfile.sandbox
 
 cmd: ["/bin/bash"]

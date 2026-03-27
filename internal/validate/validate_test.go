@@ -16,6 +16,31 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
+func TestShellEscape(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain path", "/workspace/src", "'/workspace/src'"},
+		{"single quote", "it's", "'it'\\''s'"},
+		{"multiple single quotes", "a'b'c", "'a'\\''b'\\''c'"},
+		{"dollar sign", "$HOME", "'$HOME'"},
+		{"newline", "foo\nbar", "'foo\nbar'"},
+		{"backtick", "`cmd`", "'`cmd`'"},
+		{"backslash", `foo\bar`, `'foo\bar'`},
+		{"spaces", "hello world", "'hello world'"},
+		{"empty string", "", "''"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shellEscape(tt.input)
+			assert.Equal(t, got, tt.want)
+		})
+	}
+}
+
 func writeConfig(t *testing.T, dir string, commands []config.Command) string {
 	t.Helper()
 	chunkDir := filepath.Join(dir, ".chunk")

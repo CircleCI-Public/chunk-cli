@@ -104,7 +104,8 @@ func newValidateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, sshAuthSock())
+				authSock := os.Getenv("SSH_AUTH_SOCK")
+				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, authSock)
 				if err != nil {
 					return err
 				}

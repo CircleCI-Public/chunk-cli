@@ -15,11 +15,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-// sshAuthSock returns the SSH_AUTH_SOCK environment variable for agent-based auth.
-func sshAuthSock() string {
-	return os.Getenv("SSH_AUTH_SOCK")
-}
-
 func newSandboxesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sandboxes",
@@ -201,11 +196,12 @@ func newSandboxesSSHCmd() *cobra.Command {
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
+			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, sshAuthSock(), args, io)
+			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, io)
 		},
 	}
 
@@ -225,11 +221,12 @@ func newSandboxesSyncCmd() *cobra.Command {
 		Short: "Sync files to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
+			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, sshAuthSock(), dest, bootstrap, io)
+			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, dest, bootstrap, io)
 		},
 	}
 

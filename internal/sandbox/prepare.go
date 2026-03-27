@@ -402,7 +402,7 @@ func gatherDockerfiles(cwd string) string {
 		for _, e := range entries {
 			name := e.Name()
 			lower := strings.ToLower(name)
-			if !strings.HasPrefix(lower, "dockerfile") || strings.HasPrefix(name, "Dockerfile.chunk") {
+			if !strings.HasPrefix(lower, "dockerfile") || strings.HasPrefix(name, "Dockerfile.chunk") || strings.HasPrefix(name, "Dockerfile.sandbox") {
 				continue
 			}
 			rel := name

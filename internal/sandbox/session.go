@@ -23,6 +23,8 @@ const (
 )
 
 // Session holds the info needed to SSH into a sandbox.
+// It is a plain value type with no open connections or resources to close.
+// Each call to ExecOverSSH opens and closes its own SSH connection.
 type Session struct {
 	URL          string // sandbox domain
 	IdentityFile string // path to SSH private key (empty when using agent)
