@@ -5,11 +5,17 @@ import (
 )
 
 func NewRootCmd(version string) *cobra.Command {
+	cobra.EnableTraverseRunHooks = true
+
 	rootCmd := &cobra.Command{
 		Use:           "chunk",
 		Short:         "Generate AI review context and trigger AI coding tasks",
 		Version:       version,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			return nil
+		},
 	}
 
 	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + `
