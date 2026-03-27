@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 
 	"github.com/spf13/cobra"
 
@@ -244,6 +245,8 @@ func newSandboxSyncCmd() *cobra.Command {
 	return cmd
 }
 
+var validDockerTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*(:[a-zA-Z0-9._\-]+)?$`)
+
 func dockerExecCmd(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "docker", args...)
 }
@@ -314,6 +317,10 @@ func newSandboxBuildCmd() *cobra.Command {
 		Short: "Build a Docker test image from a generated Dockerfile.test",
 		Long: `Build a Docker image from the Dockerfile.test in --dir. Run 'chunk sandboxes env' first to generate the Dockerfile.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if tag != "" && !validDockerTag.MatchString(tag) {
+				return fmt.Errorf("invalid docker tag %q", tag)
+			}
+
 			io := iostream.FromCmd(cmd)
 			io.ErrPrintf("Building Docker image in %s...\n", dir)
 
