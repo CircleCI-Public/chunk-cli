@@ -12,17 +12,18 @@ import (
 	"testing"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
-func writeConfig(t *testing.T, dir string, commands []Command) string {
+func writeConfig(t *testing.T, dir string, commands []config.Command) string {
 	t.Helper()
 	chunkDir := filepath.Join(dir, ".chunk")
 	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := ProjectConfig{Commands: commands}
+	cfg := config.ProjectConfig{Commands: commands}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -44,12 +45,12 @@ func newStreams() (iostream.Streams, *bytes.Buffer, *bytes.Buffer) {
 func TestLoadProjectConfig(t *testing.T) {
 	t.Run("valid config", func(t *testing.T) {
 		dir := t.TempDir()
-		writeConfig(t, dir, []Command{
+		writeConfig(t, dir, []config.Command{
 			{Name: "install", Run: "npm install"},
 			{Name: "test", Run: "npm test"},
 		})
 
-		cfg, err := LoadProjectConfig(dir)
+		cfg, err := config.LoadProjectConfig(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,9 +67,9 @@ func TestLoadProjectConfig(t *testing.T) {
 
 	t.Run("empty commands", func(t *testing.T) {
 		dir := t.TempDir()
-		writeConfig(t, dir, []Command{})
+		writeConfig(t, dir, []config.Command{})
 
-		cfg, err := LoadProjectConfig(dir)
+		cfg, err := config.LoadProjectConfig(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +80,7 @@ func TestLoadProjectConfig(t *testing.T) {
 
 	t.Run("missing file", func(t *testing.T) {
 		dir := t.TempDir()
-		_, err := LoadProjectConfig(dir)
+		_, err := config.LoadProjectConfig(dir)
 		if err == nil {
 			t.Fatal("expected error for missing config")
 		}
@@ -98,7 +99,7 @@ func TestLoadProjectConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err := LoadProjectConfig(dir)
+		_, err := config.LoadProjectConfig(dir)
 		if err == nil {
 			t.Fatal("expected error for invalid json")
 		}
@@ -111,19 +112,19 @@ func TestLoadProjectConfig(t *testing.T) {
 // --- HasCommands / FindCommand tests ---
 
 func TestHasCommands(t *testing.T) {
-	empty := &ProjectConfig{}
+	empty := &config.ProjectConfig{}
 	if empty.HasCommands() {
 		t.Error("expected HasCommands() == false for empty config")
 	}
 
-	withCmd := &ProjectConfig{Commands: []Command{{Name: "test", Run: "go test"}}}
+	withCmd := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test"}}}
 	if !withCmd.HasCommands() {
 		t.Error("expected HasCommands() == true")
 	}
 }
 
 func TestFindCommand(t *testing.T) {
-	cfg := &ProjectConfig{Commands: []Command{
+	cfg := &config.ProjectConfig{Commands: []config.Command{
 		{Name: "install", Run: "npm install"},
 		{Name: "test", Run: "npm test"},
 	}}
@@ -145,7 +146,7 @@ func TestFindCommand(t *testing.T) {
 
 func TestRunDryRun(t *testing.T) {
 	t.Run("prints commands", func(t *testing.T) {
-		cfg := &ProjectConfig{Commands: []Command{
+		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "install", Run: "npm install"},
 			{Name: "test", Run: "npm test"},
 		}}
@@ -165,7 +166,7 @@ func TestRunDryRun(t *testing.T) {
 	})
 
 	t.Run("no commands", func(t *testing.T) {
-		cfg := &ProjectConfig{}
+		cfg := &config.ProjectConfig{}
 		streams, _, _ := newStreams()
 
 		err := RunDryRun(cfg, "", streams)
@@ -182,7 +183,7 @@ func TestRunDryRun(t *testing.T) {
 
 func TestRunAll(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		cfg := &ProjectConfig{Commands: []Command{
+		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "install", Run: "echo installed"},
 			{Name: "test", Run: "echo tested"},
 		}}
@@ -204,7 +205,7 @@ func TestRunAll(t *testing.T) {
 	})
 
 	t.Run("no commands", func(t *testing.T) {
-		cfg := &ProjectConfig{}
+		cfg := &config.ProjectConfig{}
 		streams, _, _ := newStreams()
 
 		err := RunAll(context.Background(), ".", true, cfg, streams)
@@ -217,7 +218,7 @@ func TestRunAll(t *testing.T) {
 	})
 
 	t.Run("command failure", func(t *testing.T) {
-		cfg := &ProjectConfig{Commands: []Command{
+		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "test", Run: "false"},
 		}}
 		streams, _, _ := newStreams()
@@ -232,7 +233,7 @@ func TestRunAll(t *testing.T) {
 	})
 
 	t.Run("skips remaining after failure", func(t *testing.T) {
-		cfg := &ProjectConfig{Commands: []Command{
+		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "install", Run: "false"},
 			{Name: "test", Run: "echo should-not-run"},
 			{Name: "lint", Run: "echo should-not-run-either"},
@@ -260,7 +261,7 @@ func TestRunAll(t *testing.T) {
 	})
 
 	t.Run("single command success", func(t *testing.T) {
-		cfg := &ProjectConfig{Commands: []Command{
+		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "test", Run: "echo ok"},
 		}}
 		streams, out, _ := newStreams()
@@ -302,7 +303,7 @@ func TestRunRemote(t *testing.T) {
 		}
 		client, _ := newFakeClient(t, cci)
 
-		cfg := &ProjectConfig{Commands: []Command{
+		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "install", Run: "echo install"},
 			{Name: "test", Run: "echo test"},
 		}}
@@ -339,7 +340,7 @@ func TestRunRemote(t *testing.T) {
 		}
 		client, _ := newFakeClient(t, cci)
 
-		cfg := &ProjectConfig{Commands: []Command{
+		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "test", Run: "failing"},
 		}}
 		streams, _, _ := newStreams()
@@ -363,7 +364,7 @@ func TestRunRemote(t *testing.T) {
 		}
 		client, _ := newFakeClient(t, cci)
 
-		cfg := &ProjectConfig{Commands: []Command{
+		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "test", Run: "silent"},
 		}}
 		streams, out, _ := newStreams()
@@ -392,7 +393,7 @@ func TestCommandFileExtRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadProjectConfig(dir)
+	cfg, err := config.LoadProjectConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,10 +409,10 @@ func TestCommandFileExtRoundTrip(t *testing.T) {
 	}
 
 	// Save and reload to verify round-trip
-	if err := SaveProjectConfig(dir, cfg); err != nil {
+	if err := config.SaveProjectConfig(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
-	cfg2, err := LoadProjectConfig(dir)
+	cfg2, err := config.LoadProjectConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,10 +424,10 @@ func TestCommandFileExtRoundTrip(t *testing.T) {
 func TestCommandFileExtOmitted(t *testing.T) {
 	dir := t.TempDir()
 
-	cfg := &ProjectConfig{Commands: []Command{
+	cfg := &config.ProjectConfig{Commands: []config.Command{
 		{Name: "test", Run: "go test ./..."},
 	}}
-	if err := SaveProjectConfig(dir, cfg); err != nil {
+	if err := config.SaveProjectConfig(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
 

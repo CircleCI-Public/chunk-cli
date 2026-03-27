@@ -1,4 +1,4 @@
-package validate
+package config
 
 import (
 	"encoding/json"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 )
 
+// Command is a single validation command.
 type Command struct {
 	Name    string `json:"name"`
 	Run     string `json:"run"`
@@ -14,10 +15,25 @@ type Command struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-type ProjectConfig struct {
-	Commands []Command `json:"commands"`
+// VCSConfig holds VCS configuration for the project.
+type VCSConfig struct {
+	Org  string `json:"org,omitempty"`
+	Repo string `json:"repo,omitempty"`
 }
 
+// CircleCIConfig holds CircleCI configuration for the project.
+type CircleCIConfig struct {
+	OrgID string `json:"orgId,omitempty"`
+}
+
+// ProjectConfig is the per-repo configuration stored in .chunk/config.json.
+type ProjectConfig struct {
+	Commands []Command       `json:"commands,omitempty"`
+	VCS      *VCSConfig      `json:"vcs,omitempty"`
+	CircleCI *CircleCIConfig `json:"circleci,omitempty"`
+}
+
+// LoadProjectConfig reads .chunk/config.json from workDir.
 func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
 	path := filepath.Join(workDir, ".chunk", "config.json")
 	data, err := os.ReadFile(path)
@@ -31,6 +47,7 @@ func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
 	return &cfg, nil
 }
 
+// HasCommands reports whether any commands are configured.
 func (c *ProjectConfig) HasCommands() bool {
 	return len(c.Commands) > 0
 }
