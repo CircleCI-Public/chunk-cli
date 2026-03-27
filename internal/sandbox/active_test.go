@@ -37,6 +37,9 @@ func TestLoadActiveWalksUpToParent(t *testing.T) {
 	child := filepath.Join(parent, "sub", "dir")
 	assert.NilError(t, os.MkdirAll(child, 0o755))
 
+	// Mark parent as a git root so the walk doesn't escape it.
+	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".git"), 0o755))
+
 	// Write .chunk/sandbox in parent
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
 	data := []byte(`{"sandbox_id":"sb-parent","name":"parent-box"}`)
@@ -49,6 +52,48 @@ func TestLoadActiveWalksUpToParent(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
 	assert.Equal(t, got.SandboxID, "sb-parent")
+}
+
+func TestLoadActiveStopsAtGitRoot(t *testing.T) {
+	// grandparent has .chunk/sandbox; parent has .git; cwd is child of parent.
+	// The walk should stop at parent and not find grandparent's file.
+	grandparent := t.TempDir()
+	parent := filepath.Join(grandparent, "repo")
+	child := filepath.Join(parent, "sub")
+	assert.NilError(t, os.MkdirAll(child, 0o755))
+
+	// .git lives in parent (the repo root)
+	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".git"), 0o755))
+
+	// .chunk/sandbox lives in grandparent (above the repo root)
+	assert.NilError(t, os.MkdirAll(filepath.Join(grandparent, ".chunk"), 0o755))
+	data := []byte(`{"sandbox_id":"sb-grandparent"}`)
+	assert.NilError(t, os.WriteFile(filepath.Join(grandparent, ".chunk", "sandbox"), data, 0o644))
+
+	t.Chdir(child)
+
+	got, err := LoadActive()
+	assert.NilError(t, err)
+	assert.Assert(t, got == nil, "walk should not cross the git root boundary")
+}
+
+func TestLoadActiveNoGitRepo(t *testing.T) {
+	// No .git anywhere — only the cwd itself is checked.
+	parent := t.TempDir()
+	child := filepath.Join(parent, "sub")
+	assert.NilError(t, os.MkdirAll(child, 0o755))
+
+	// .chunk/sandbox in parent but no .git anywhere
+	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
+	data := []byte(`{"sandbox_id":"sb-parent"}`)
+	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox"), data, 0o644))
+
+	t.Chdir(child)
+
+	// Without .git the walk stops at cwd, so the parent file is not found.
+	got, err := LoadActive()
+	assert.NilError(t, err)
+	assert.Assert(t, got == nil, "without a git repo the walk should not go above cwd")
 }
 
 func TestClearActive(t *testing.T) {
@@ -81,6 +126,9 @@ func TestSaveActiveUpdatesParentFile(t *testing.T) {
 	parent := t.TempDir()
 	child := filepath.Join(parent, "sub")
 	assert.NilError(t, os.MkdirAll(child, 0o755))
+
+	// Mark parent as the git root so the walk can reach it.
+	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".git"), 0o755))
 
 	// Write an existing .chunk/sandbox in parent
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
