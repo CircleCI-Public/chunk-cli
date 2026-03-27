@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,38 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
+
+// pickCircleCIOrg prompts the user to select a CircleCI organization.
+// Returns the selected org ID and name, or empty strings if selection is skipped.
+func pickCircleCIOrg(ctx context.Context, streams iostream.Streams) (orgID, orgName string) {
+	client, err := circleci.NewClient()
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping CircleCI setup: %v", err)))
+		return "", ""
+	}
+
+	streams.ErrPrintln(ui.Dim("Fetching CircleCI organizations..."))
+	collabs, err := client.ListCollaborations(ctx)
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not fetch organizations: %v", err)))
+		return "", ""
+	}
+	if len(collabs) == 0 {
+		streams.ErrPrintln(ui.Warning("No CircleCI organizations found"))
+		return "", ""
+	}
+
+	items := make([]string, len(collabs))
+	for i, c := range collabs {
+		items[i] = c.Name
+	}
+	idx, err := tui.SelectFromList("Select CircleCI organization:", items)
+	if err != nil {
+		streams.ErrPrintln(ui.Warning("Skipping CircleCI org selection"))
+		return "", ""
+	}
+	return collabs[idx].ID, collabs[idx].Name
+}
 
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipValidate, skipCircleCI bool
@@ -81,30 +114,9 @@ commands, and generates hook config files.`,
 
 			// Step 2: CircleCI org picker
 			if !skipCircleCI {
-				client, clientErr := circleci.NewClient()
-				if clientErr != nil {
-					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping CircleCI setup: %v", clientErr)))
-				} else {
-					streams.ErrPrintln(ui.Dim("Fetching CircleCI organizations..."))
-					collabs, listErr := client.ListCollaborations(ctx)
-					switch {
-					case listErr != nil:
-						streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not fetch organizations: %v", listErr)))
-					case len(collabs) == 0:
-						streams.ErrPrintln(ui.Warning("No CircleCI organizations found"))
-					default:
-						items := make([]string, len(collabs))
-						for i, c := range collabs {
-							items[i] = c.Name
-						}
-						idx, selectErr := tui.SelectFromList("Select CircleCI organization:", items)
-						if selectErr != nil {
-							streams.ErrPrintln(ui.Warning("Skipping CircleCI org selection"))
-						} else {
-							cfg.CircleCI = &config.CircleCIConfig{OrgID: collabs[idx].ID}
-							streams.ErrPrintf("Selected organization: %s\n", ui.Bold(collabs[idx].Name))
-						}
-					}
+				if orgID, orgName := pickCircleCIOrg(ctx, streams); orgID != "" {
+					cfg.CircleCI = &config.CircleCIConfig{OrgID: orgID}
+					streams.ErrPrintf("Selected organization: %s\n", ui.Bold(orgName))
 				}
 			}
 
