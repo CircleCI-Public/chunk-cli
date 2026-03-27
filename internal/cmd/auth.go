@@ -233,11 +233,14 @@ func newAuthLogoutCmd() *cobra.Command {
 			}
 
 			if err := config.ClearAPIKey(); err != nil {
-				errPath, _ := config.Path()
+				hint := "Check file permissions on the chunk config file"
+				if errPath, pathErr := config.Path(); pathErr == nil {
+					hint = fmt.Sprintf("Check file permissions on %s", errPath)
+				}
 				io.ErrPrintln(ui.FormatError(
 					"Failed to remove API key.",
 					"An error occurred while trying to remove the API key from the config file.",
-					fmt.Sprintf("Check file permissions on %s", errPath),
+					hint,
 				))
 				os.Exit(2)
 			}

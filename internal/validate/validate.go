@@ -7,13 +7,18 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
+
+// shellEscape wraps arg in single quotes for safe use in a POSIX sh -c command.
+func shellEscape(arg string) string {
+	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
+}
 
 // DefaultTimeout is the per-command execution timeout in seconds.
 const DefaultTimeout = 300
@@ -136,18 +141,23 @@ func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams)
 	return nil
 }
 
-// RunRemote runs commands on a remote sandbox.
-func RunRemote(ctx context.Context, client *circleci.Client, cfg *config.ProjectConfig, sandboxID, _ string, streams iostream.Streams) error {
+// RunRemote runs commands on a remote sandbox via SSH.
+// exec is called with each shell script and returns stdout, stderr, exit code, and any transport error.
+func RunRemote(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, dest string, streams iostream.Streams) error {
 	for _, c := range cfg.Commands {
-		resp, err := client.Exec(ctx, sandboxID, "sh", []string{"-c", c.Run})
+		script := "cd " + shellEscape(dest) + " && " + c.Run
+		stdout, stderr, exitCode, err := exec(ctx, script)
 		if err != nil {
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}
-		if resp.Stdout != "" {
-			_, _ = fmt.Fprint(streams.Out, resp.Stdout)
+		if stdout != "" {
+			_, _ = fmt.Fprint(streams.Out, stdout)
 		}
-		if resp.ExitCode != 0 {
-			return fmt.Errorf("remote %s failed with exit code %d", c.Name, resp.ExitCode)
+		if stderr != "" {
+			_, _ = fmt.Fprint(streams.Err, stderr)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
 	}
 	return nil

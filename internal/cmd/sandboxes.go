@@ -195,8 +195,8 @@ func newSandboxesSSHCmd() *cobra.Command {
 		Short: "SSH into a sandbox",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			authSock := os.Getenv("SSH_AUTH_SOCK")
 			io := iostream.FromCmd(cmd)
+			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -220,8 +220,8 @@ func newSandboxesSyncCmd() *cobra.Command {
 		Use:   "sync",
 		Short: "Sync files to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			authSock := os.Getenv("SSH_AUTH_SOCK")
 			io := iostream.FromCmd(cmd)
+			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
