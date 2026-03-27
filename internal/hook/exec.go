@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -160,6 +161,7 @@ func executeAndSave(cfg *ResolvedConfig, execCfg ExecConfig, name string, staged
 // RunExecRun executes a configured command, saves result as sentinel.
 func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 	if !IsEnabled(flags.Name) {
+		slog.Info("hook skipped", "name", flags.Name, "reason", "not enabled")
 		return nil
 	}
 
@@ -212,6 +214,7 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 // RunExecCheck reads a saved sentinel and enforces the result.
 func RunExecCheck(cfg *ResolvedConfig, flags ExecCheckFlags, event map[string]interface{}) error {
 	if !IsEnabled(flags.Name) {
+		slog.Info("hook skipped", "name", flags.Name, "reason", "not enabled")
 		return nil
 	}
 

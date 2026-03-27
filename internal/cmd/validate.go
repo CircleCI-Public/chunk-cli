@@ -38,6 +38,7 @@ func (f *validateHookFlags) isHookMode() bool {
 
 // runHookMode dispatches to the appropriate hook handler.
 func runHookMode(f *validateHookFlags, name, workDir string) error {
+	initHookLog()
 	if len(f.syncSpecs) > 0 {
 		specs, err := hook.ParseSpecs(f.syncSpecs)
 		if err != nil {
@@ -143,6 +144,10 @@ func newValidateCmd() *cobra.Command {
 				cmdName := name
 				if cmdName == "" {
 					cmdName = "custom"
+				}
+				if dryRun {
+					streams.Printf("%s: %s\n", ui.Bold(cmdName), ui.Gray(inlineCmd))
+					return nil
 				}
 				if save {
 					if err := config.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
