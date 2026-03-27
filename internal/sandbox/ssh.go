@@ -133,6 +133,9 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 }
 
 // InteractiveShell opens an interactive shell session to the sandbox with PTY.
+// It intentionally uses os.Stdin/os.Stdout/os.Stderr directly rather than
+// iostream.Streams: term.MakeRaw and term.GetSize require a real *os.File fd,
+// and PTY I/O must be wired to the process's actual terminal.
 func InteractiveShell(ctx context.Context, session *Session) error {
 	client, err := dialSSH(ctx, session)
 	if err != nil {

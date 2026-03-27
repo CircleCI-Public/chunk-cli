@@ -56,18 +56,18 @@ func newValidateCmd() *cobra.Command {
 
 			// --list: show configured commands
 			if list {
-				cfg, err := validate.LoadProjectConfig(workDir)
+				cfg, err := config.LoadProjectConfig(workDir)
 				if err != nil {
-					cfg = &validate.ProjectConfig{}
+					cfg = &config.ProjectConfig{}
 				}
 				return validate.List(cfg, streams)
 			}
 
 			// --status: check cache only
 			if status {
-				cfg, err := validate.LoadProjectConfig(workDir)
+				cfg, err := config.LoadProjectConfig(workDir)
 				if err != nil {
-					cfg = &validate.ProjectConfig{}
+					cfg = &config.ProjectConfig{}
 				}
 				return validate.Status(workDir, name, cfg, streams)
 			}
@@ -79,7 +79,7 @@ func newValidateCmd() *cobra.Command {
 					cmdName = "custom"
 				}
 				if save {
-					if err := validate.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
+					if err := config.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
 						return fmt.Errorf("save command: %w", err)
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
@@ -87,7 +87,7 @@ func newValidateCmd() *cobra.Command {
 				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, streams)
 			}
 
-			cfg, err := validate.LoadProjectConfig(workDir)
+			cfg, err := config.LoadProjectConfig(workDir)
 			if err != nil || !cfg.HasCommands() {
 				return fmt.Errorf("no validate commands configured, run validate init first")
 			}
@@ -109,7 +109,7 @@ func newValidateCmd() *cobra.Command {
 					return err
 				}
 				return validate.RunRemote(cmd.Context(), func(ctx context.Context, script string) (string, string, int, error) {
-					result, err := sandbox.ExecOverSSH(ctx, session, script, nil)
+					result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil)
 					if err != nil {
 						return "", "", 0, err
 					}
@@ -136,12 +136,12 @@ func newValidateCmd() *cobra.Command {
 						streams.ErrPrintln(ui.Dim("No command entered, aborting."))
 						return fmt.Errorf("no command entered")
 					}
-					if err := validate.SaveCommand(workDir, name, input); err != nil {
+					if err := config.SaveCommand(workDir, name, input); err != nil {
 						return fmt.Errorf("save command: %w", err)
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
 					// Reload config after save
-					cfg, err = validate.LoadProjectConfig(workDir)
+					cfg, err = config.LoadProjectConfig(workDir)
 					if err != nil {
 						return err
 					}
@@ -188,8 +188,10 @@ func newValidateInitCmd() *cobra.Command {
 	var force, skipEnv bool
 
 	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Initialize hook config files and detect install/test commands",
+		Use:        "init",
+		Short:      "Deprecated: use 'chunk init' instead",
+		Hidden:     true,
+		Deprecated: "use 'chunk init' instead",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			workDir, err := os.Getwd()
 			if err != nil {
@@ -209,7 +211,7 @@ func newValidateInitCmd() *cobra.Command {
 			streams := iostream.FromCmd(cmd)
 			configPath := filepath.Join(workDir, ".chunk", "config.json")
 			if _, err := os.Stat(configPath); err == nil && !force {
-				cfg, loadErr := validate.LoadProjectConfig(workDir)
+				cfg, loadErr := config.LoadProjectConfig(workDir)
 				if loadErr == nil && cfg.HasCommands() {
 					streams.ErrPrintf("Config already exists at %s\n", configPath)
 					streams.ErrPrintln(ui.Dim("To re-detect and overwrite: chunk validate init --force"))
@@ -228,23 +230,23 @@ func newValidateInitCmd() *cobra.Command {
 				return err
 			}
 
-			testCmd, err := detectTestCommand(cmd.Context(), claude, workDir)
+			testCmd, err := validate.DetectTestCommand(cmd.Context(), claude, workDir)
 			if err != nil {
 				return fmt.Errorf("detect test command: %w", err)
 			}
 
 			streams.ErrPrintf("Detected test command: %s\n", ui.Bold(testCmd))
 
-			commands := []validate.Command{}
-			pm := detectPackageManager(workDir)
+			commands := []config.Command{}
+			pm := validate.DetectPackageManager(workDir)
 			if pm != nil {
-				streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.name))
-				commands = append(commands, validate.Command{Name: "install", Run: pm.installCommand})
+				streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
+				commands = append(commands, config.Command{Name: "install", Run: pm.InstallCommand})
 			}
-			commands = append(commands, validate.Command{Name: "test", Run: testCmd})
+			commands = append(commands, config.Command{Name: "test", Run: testCmd})
 
-			cfg := &validate.ProjectConfig{Commands: commands}
-			if err := validate.SaveProjectConfig(workDir, cfg); err != nil {
+			cfg := &config.ProjectConfig{Commands: commands}
+			if err := config.SaveProjectConfig(workDir, cfg); err != nil {
 				return fmt.Errorf("write config: %w", err)
 			}
 
@@ -260,144 +262,4 @@ func newValidateInitCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipEnv, "skip-env", false, "Skip shell environment update")
 
 	return cmd
-}
-
-func detectTestCommand(ctx context.Context, claude *anthropic.Client, workDir string) (string, error) {
-	entries, _ := os.ReadDir(workDir)
-	files := make([]string, 0, len(entries))
-	for _, e := range entries {
-		files = append(files, e.Name())
-	}
-
-	// Check well-known files deterministically before asking Claude.
-	if cmd := detectTestCommandFromFiles(files); cmd != "" {
-		return cmd, nil
-	}
-
-	context := gatherRepoContext(workDir, files)
-	pm := detectPackageManager(workDir)
-
-	var pmHint string
-	if pm != nil {
-		pmHint = fmt.Sprintf("Detected package manager: %s. Use %s to run tests (e.g. `%s test`).\n\n", pm.name, pm.name, pm.name)
-	}
-
-	prompt := fmt.Sprintf(
-		"You are analyzing a software repository to determine how tests are run.\n\n"+
-			"%s%s\n\n"+
-			"Based on the above, output ONLY the shell command used to run the test suite — "+
-			"nothing else. No explanation, no markdown. Just the command string.",
-		pmHint, context,
-	)
-
-	resp, err := claude.Ask(ctx, config.ValidationModel, 64, prompt)
-	if err != nil {
-		return "", fmt.Errorf("detect test command: %w", err)
-	}
-
-	result := strings.TrimSpace(resp)
-	if result == "" {
-		return "npm test", nil
-	}
-	return result, nil
-}
-
-func detectTestCommandFromFiles(files []string) string {
-	has := make(map[string]bool, len(files))
-	for _, f := range files {
-		has[f] = true
-	}
-
-	switch {
-	case has["Taskfile.yml"] || has["Taskfile.yaml"]:
-		return "task test"
-	case has["Makefile"]:
-		return "make test"
-	case has["go.mod"]:
-		return "go test ./..."
-	case has["Cargo.toml"]:
-		return "cargo test"
-	case has["pyproject.toml"]:
-		return "pytest"
-	case has["package.json"]:
-		return "npm test"
-	default:
-		return ""
-	}
-}
-
-// gatherRepoContext builds a rich context string with the root file listing
-// and contents of key config files, mirroring the TS implementation.
-func gatherRepoContext(workDir string, rootFiles []string) string {
-	var parts []string
-	parts = append(parts, "Root files:\n"+strings.Join(rootFiles, "\n"))
-
-	candidates := []string{
-		"package.json",
-		"Makefile",
-		"go.mod",
-		"pom.xml",
-		"build.gradle",
-		"build.gradle.kts",
-		"pyproject.toml",
-		"setup.py",
-		"pytest.ini",
-		"Cargo.toml",
-		"Taskfile.yml",
-		"Taskfile.yaml",
-		".chunk/hook/config.yml",
-		".npmrc",
-		".yarnrc",
-		".yarnrc.yml",
-		"requirements.txt",
-		"requirements-dev.txt",
-		"requirements-test.txt",
-		"Pipfile",
-		"Gemfile",
-		"go.sum",
-		"project.clj",
-		"deps.edn",
-	}
-
-	const maxBytes = 4000
-	for _, rel := range candidates {
-		full := filepath.Join(workDir, rel)
-		data, err := os.ReadFile(full)
-		if err != nil {
-			continue
-		}
-		content := string(data)
-		if len(content) > maxBytes {
-			content = content[:maxBytes]
-		}
-		parts = append(parts, fmt.Sprintf("\n--- %s ---\n%s", rel, content))
-	}
-
-	return strings.Join(parts, "\n")
-}
-
-type packageManager struct {
-	name           string
-	installCommand string
-}
-
-// detectPackageManager returns the package manager and its CI-safe install command.
-func detectPackageManager(workDir string) *packageManager {
-	lockfiles := []struct {
-		file string
-		pm   packageManager
-	}{
-		{"pnpm-lock.yaml", packageManager{"pnpm", "pnpm install --frozen-lockfile"}},
-		{"yarn.lock", packageManager{"yarn", "yarn install --frozen-lockfile"}},
-		{"bun.lock", packageManager{"bun", "bun install --frozen-lockfile"}},
-		{"bun.lockb", packageManager{"bun", "bun install --frozen-lockfile"}},
-		{"package-lock.json", packageManager{"npm", "npm ci"}},
-	}
-
-	for _, lf := range lockfiles {
-		if _, err := os.Stat(filepath.Join(workDir, lf.file)); err == nil {
-			return &lf.pm
-		}
-	}
-	return nil
 }

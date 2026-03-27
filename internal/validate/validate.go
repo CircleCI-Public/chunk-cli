@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -23,7 +24,7 @@ func shellEscape(arg string) string {
 const DefaultTimeout = 300
 
 // List prints all configured command names and their run strings.
-func List(cfg *ProjectConfig, streams iostream.Streams) error {
+func List(cfg *config.ProjectConfig, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
 		streams.Println(ui.Dim("No commands configured."))
 		streams.Println(ui.Dim("Add commands with: chunk validate <name> --cmd \"your command\" --save"))
@@ -36,14 +37,14 @@ func List(cfg *ProjectConfig, streams iostream.Streams) error {
 }
 
 // Status checks the cache for each command (or a single named command) and prints its status.
-func Status(workDir, name string, cfg *ProjectConfig, streams iostream.Streams) error {
+func Status(workDir, name string, cfg *config.ProjectConfig, streams iostream.Streams) error {
 	commands := cfg.Commands
 	if name != "" {
 		c := cfg.FindCommand(name)
 		if c == nil {
 			return fmt.Errorf("command %q not configured", name)
 		}
-		commands = []Command{*c}
+		commands = []config.Command{*c}
 	}
 
 	for _, c := range commands {
@@ -73,7 +74,7 @@ func RunInline(ctx context.Context, workDir, name, command string, force bool, s
 }
 
 // RunNamed runs a single named command from config with caching.
-func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *ProjectConfig, streams iostream.Streams) error {
+func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *config.ProjectConfig, streams iostream.Streams) error {
 	c := cfg.FindCommand(name)
 	if c == nil {
 		return fmt.Errorf("command %q not configured", name)
@@ -93,7 +94,7 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *Projec
 }
 
 // RunAll runs all configured commands with optional cache bypass.
-func RunAll(ctx context.Context, workDir string, force bool, cfg *ProjectConfig, streams iostream.Streams) error {
+func RunAll(ctx context.Context, workDir string, force bool, cfg *config.ProjectConfig, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
 		return fmt.Errorf("no validate commands configured, run validate init first")
 	}
@@ -120,7 +121,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *ProjectConfig,
 }
 
 // RunDryRun prints commands without executing them.
-func RunDryRun(cfg *ProjectConfig, name string, streams iostream.Streams) error {
+func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
 		return fmt.Errorf("no validate commands configured, run validate init first")
 	}
@@ -131,7 +132,7 @@ func RunDryRun(cfg *ProjectConfig, name string, streams iostream.Streams) error 
 		if c == nil {
 			return fmt.Errorf("command %q not configured", name)
 		}
-		commands = []Command{*c}
+		commands = []config.Command{*c}
 	}
 
 	for _, c := range commands {
@@ -142,9 +143,8 @@ func RunDryRun(cfg *ProjectConfig, name string, streams iostream.Streams) error 
 
 // RunRemote runs commands on a remote sandbox via SSH.
 // exec is called with each shell script and returns stdout, stderr, exit code, and any transport error.
-func RunRemote(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *ProjectConfig, dest string, streams iostream.Streams) error {
+func RunRemote(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, dest string, streams iostream.Streams) error {
 	for _, c := range cfg.Commands {
-		streams.ErrPrintf("%s %s\n", ui.Dim("Running "+c.Name+":"), ui.Gray(c.Run))
 		script := "cd " + shellEscape(dest) + " && " + c.Run
 		stdout, stderr, exitCode, err := exec(ctx, script)
 		if err != nil {

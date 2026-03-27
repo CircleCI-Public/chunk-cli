@@ -291,27 +291,22 @@ func TestRunMissingAnthropicKey(t *testing.T) {
 
 func TestResolveOrgAndRepos(t *testing.T) {
 	t.Run("org with repos", func(t *testing.T) {
-		org, repos, err := ResolveOrgAndRepos("my-org", "repo-a,repo-b")
+		org, repos, err := ResolveOrgAndRepos("my-org", "repo-a,repo-b", "")
 		assert.NilError(t, err)
 		assert.Equal(t, org, "my-org")
 		assert.DeepEqual(t, repos, []string{"repo-a", "repo-b"})
 	})
 
 	t.Run("org without repos errors", func(t *testing.T) {
-		_, _, err := ResolveOrgAndRepos("my-org", "")
+		_, _, err := ResolveOrgAndRepos("my-org", "", "")
 		assert.Assert(t, err != nil)
 		assert.Assert(t, strings.Contains(err.Error(), "--repos"))
 	})
 
 	t.Run("auto-detect from git remote", func(t *testing.T) {
 		workDir := gitrepo.SetupGitRepo(t, "detected-org", "detected-repo")
-		// Must chdir so git remote works
-		origDir, err := os.Getwd()
-		assert.NilError(t, err)
-		assert.NilError(t, os.Chdir(workDir))
-		defer func() { _ = os.Chdir(origDir) }()
 
-		org, repos, resolveErr := ResolveOrgAndRepos("", "")
+		org, repos, resolveErr := ResolveOrgAndRepos("", "", workDir)
 		assert.NilError(t, resolveErr)
 		assert.Equal(t, org, "detected-org")
 		assert.DeepEqual(t, repos, []string{"detected-repo"})
@@ -319,12 +314,8 @@ func TestResolveOrgAndRepos(t *testing.T) {
 
 	t.Run("auto-detect org with explicit repos", func(t *testing.T) {
 		workDir := gitrepo.SetupGitRepo(t, "detected-org", "detected-repo")
-		origDir, err := os.Getwd()
-		assert.NilError(t, err)
-		assert.NilError(t, os.Chdir(workDir))
-		defer func() { _ = os.Chdir(origDir) }()
 
-		org, repos, resolveErr := ResolveOrgAndRepos("", "override-repo")
+		org, repos, resolveErr := ResolveOrgAndRepos("", "override-repo", workDir)
 		assert.NilError(t, resolveErr)
 		assert.Equal(t, org, "detected-org")
 		assert.DeepEqual(t, repos, []string{"override-repo"})
@@ -699,14 +690,14 @@ func TestFormatMarkdownReport(t *testing.T) {
 func TestSplitReposEdgeCases(t *testing.T) {
 	// Test via ResolveOrgAndRepos since splitRepos is unexported
 	t.Run("trims whitespace", func(t *testing.T) {
-		org, repos, err := ResolveOrgAndRepos("org", " repo-a , repo-b ")
+		org, repos, err := ResolveOrgAndRepos("org", " repo-a , repo-b ", "")
 		assert.NilError(t, err)
 		assert.Equal(t, org, "org")
 		assert.DeepEqual(t, repos, []string{"repo-a", "repo-b"})
 	})
 
 	t.Run("ignores empty segments", func(t *testing.T) {
-		org, repos, err := ResolveOrgAndRepos("org", "repo-a,,repo-b,")
+		org, repos, err := ResolveOrgAndRepos("org", "repo-a,,repo-b,", "")
 		assert.NilError(t, err)
 		assert.Equal(t, org, "org")
 		assert.DeepEqual(t, repos, []string{"repo-a", "repo-b"})

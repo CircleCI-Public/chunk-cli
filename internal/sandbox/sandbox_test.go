@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -21,6 +22,26 @@ func newClient(t *testing.T, serverURL string) *circleci.Client {
 	cl, err := circleci.NewClient()
 	assert.NilError(t, err)
 	return cl
+}
+
+func TestOpenSessionDefaultKeyFallback(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	// Use a temp dir as HOME so ~/.ssh/chunk_ai definitely doesn't exist.
+	t.Setenv("HOME", t.TempDir())
+
+	cl := newClient(t, srv.URL)
+	ctx := context.Background()
+
+	// Both identityFile and authSock are empty — should attempt default key path.
+	_, err := sandbox.OpenSession(ctx, cl, "sb-1", "", "")
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.Contains(err.Error(), "chunk_ai"),
+		"expected default key name in error, got: %v", err)
+	assert.Assert(t, !strings.Contains(err.Error(), "SSH key not found: \n"),
+		"error should not reference empty path, got: %v", err)
 }
 
 func TestList(t *testing.T) {

@@ -34,7 +34,11 @@ func newBuildPromptCmd() *cobra.Command {
 				return fmt.Errorf("--top must be a positive integer, got %d", top)
 			}
 
-			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos)
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos, cwd)
 			if err != nil {
 				return err
 			}

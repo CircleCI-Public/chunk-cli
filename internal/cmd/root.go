@@ -14,6 +14,7 @@ func NewRootCmd(version string) *cobra.Command {
 
 	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + `
 Getting started:
+  chunk init                    Initialize project configuration
   chunk auth login              Save your Anthropic API key
   chunk build-prompt            Generate a review prompt from GitHub PR comments
   chunk task config             Set up CircleCI task configuration
@@ -21,6 +22,7 @@ Getting started:
                                 Trigger an AI coding task
 `)
 
+	rootCmd.AddCommand(newInitCmd())
 	rootCmd.AddCommand(newAuthCmd())
 	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newBuildPromptCmd())

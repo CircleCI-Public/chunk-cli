@@ -1,7 +1,6 @@
 package gitremote_test
 
 import (
-	"os"
 	"testing"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
@@ -88,18 +87,7 @@ func TestParseRemoteURL(t *testing.T) {
 func TestDetectOrgAndRepo(t *testing.T) {
 	dir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	// DetectOrgAndRepo shells out to git, so we need to be in the repo dir.
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
-
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	org, repo, err := gitremote.DetectOrgAndRepo()
+	org, repo, err := gitremote.DetectOrgAndRepo(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,17 +103,7 @@ func TestDetectOrgAndRepo_NoRemote(t *testing.T) {
 	// Use a temp dir with no git repo — should fail.
 	dir := t.TempDir()
 
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
-
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-
-	_, _, err = gitremote.DetectOrgAndRepo()
+	_, _, err := gitremote.DetectOrgAndRepo(dir)
 	if err == nil {
 		t.Fatal("expected error when not in a git repo")
 	}

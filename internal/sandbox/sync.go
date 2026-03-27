@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -79,7 +80,11 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 }
 
 func bootstrapSandbox(ctx context.Context, session *Session, dest string, io iostream.Streams) error {
-	org, repo, err := gitremote.DetectOrgAndRepo()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("bootstrap failed: %w", err)
+	}
+	org, repo, err := gitremote.DetectOrgAndRepo(cwd)
 	if err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}

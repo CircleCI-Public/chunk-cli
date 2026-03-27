@@ -38,8 +38,6 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s\n", ui.Label("apiKey:", w), ui.Dim("(not set)"))
 			}
 
-			io.Printf("%s %s\n", ui.Label("analyzeModel:", w), rc.AnalyzeModel)
-			io.Printf("%s %s\n", ui.Label("promptModel:", w), rc.PromptModel)
 			return nil
 		},
 	}
