@@ -34,15 +34,11 @@ func newSandboxesCmd() *cobra.Command {
 
 // resolveOrgID returns orgID from the flag if set, otherwise falls back to
 // circleci.orgId in .chunk/config.json. Returns an error if neither is set.
-func resolveOrgID(orgID string) (string, error) {
+func resolveOrgID(orgID, workDir string) (string, error) {
 	if orgID != "" {
 		return orgID, nil
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
-	}
-	if projCfg, loadErr := config.LoadProjectConfig(cwd); loadErr == nil && projCfg.CircleCI != nil && projCfg.CircleCI.OrgID != "" {
+	if projCfg, loadErr := config.LoadProjectConfig(workDir); loadErr == nil && projCfg.CircleCI != nil && projCfg.CircleCI.OrgID != "" {
 		return projCfg.CircleCI.OrgID, nil
 	}
 	return "", fmt.Errorf("--org-id is required: pass --org-id or run 'chunk init' to store it in .chunk/config.json")
@@ -56,7 +52,11 @@ func newSandboxesListCmd() *cobra.Command {
 		Short: "List sandboxes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			resolvedOrgID, err := resolveOrgID(orgID)
+			workDir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			resolvedOrgID, err := resolveOrgID(orgID, workDir)
 			if err != nil {
 				return err
 			}
@@ -92,7 +92,11 @@ func newSandboxesCreateCmd() *cobra.Command {
 		Short: "Create a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			resolvedOrgID, err := resolveOrgID(orgID)
+			workDir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			resolvedOrgID, err := resolveOrgID(orgID, workDir)
 			if err != nil {
 				return err
 			}
@@ -222,11 +226,15 @@ func newSandboxesSyncCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			authSock := os.Getenv("SSH_AUTH_SOCK")
 			io := iostream.FromCmd(cmd)
+			workDir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, dest, bootstrap, io)
+			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, dest, bootstrap, workDir, io)
 		},
 	}
 

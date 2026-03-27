@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -40,8 +41,9 @@ func LoadConfig(projectDir string) *ResolvedConfig {
 		projectDir, _ = os.Getwd()
 	}
 
-	cfg, _ := config.LoadProjectConfig(projectDir)
-	if cfg == nil {
+	cfg, err := config.LoadProjectConfig(projectDir)
+	if err != nil {
+		slog.Warn("could not load project config", "dir", projectDir, "err", err)
 		cfg = &config.ProjectConfig{}
 	}
 

@@ -103,7 +103,7 @@ func executeAndSave(cfg *ResolvedConfig, execCfg ExecConfig, name string, staged
 		Project:   cfg.ProjectDir,
 		SessionID: sessionID,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "chunk: warning: could not write sentinel for %q: %v\n", name, err)
+		slog.Warn("could not write sentinel", "name", name, "err", err)
 	}
 
 	// Build command with placeholder substitution
@@ -152,7 +152,7 @@ func executeAndSave(cfg *ResolvedConfig, execCfg ExecConfig, name string, staged
 		ContentHash:       contentHash,
 	}
 	if err := writeSentinel(cfg.SentinelDir, cfg.ProjectDir, name, sentinel); err != nil {
-		fmt.Fprintf(os.Stderr, "chunk: warning: could not write sentinel for %q: %v\n", name, err)
+		slog.Warn("could not write sentinel", "name", name, "err", err)
 	}
 
 	return ExecCheckVerdict{Kind: status, Sentinel: &sentinel}
@@ -189,7 +189,7 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 				SessionID:   sessionID,
 				ContentHash: contentHash,
 			}); err != nil {
-				fmt.Fprintf(os.Stderr, "chunk: warning: could not write sentinel for %q: %v\n", flags.Name, err)
+				slog.Warn("could not write sentinel", "name", flags.Name, "err", err)
 			}
 			return nil
 		}
@@ -254,7 +254,7 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 			if err == nil {
 				elapsed := time.Since(started).Seconds()
 				if elapsed > float64(timeout) {
-					runnerCmd := buildRunnerCommand(name, flags.Cmd, flags.Timeout, flags.FileExt, flags.Staged, flags.Always)
+					runnerCmd := buildRunnerCommand(name, flags.Cmd, flags.Staged, flags.Always)
 					reason := fmt.Sprintf(
 						"Exec %q timed out after %ds (configured timeout: %ds).\n\n"+
 							"The previous run may have an issue (infinite loop, deadlock, etc.). "+
@@ -292,7 +292,7 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 	return nil
 }
 
-func buildRunnerCommand(name, cmd string, _ int, _ string, staged, always bool) string {
+func buildRunnerCommand(name, cmd string, staged, always bool) string {
 	parts := []string{"chunk validate", name, "--no-check"}
 	if cmd != "" {
 		parts = append(parts, fmt.Sprintf("--cmd '%s'", cmd))

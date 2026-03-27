@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -15,14 +14,14 @@ import (
 
 // Sync synchronises local changes to a sandbox over SSH.
 // If bootstrap is true it clones the repo on the sandbox first.
-func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock, dest string, bootstrap bool, io iostream.Streams) error {
+func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock, dest string, bootstrap bool, workDir string, io iostream.Streams) error {
 	session, err := OpenSession(ctx, client, sandboxID, identityFile, authSock)
 	if err != nil {
 		return err
 	}
 
 	if bootstrap {
-		if err := bootstrapSandbox(ctx, session, dest, io); err != nil {
+		if err := bootstrapSandbox(ctx, session, dest, workDir, io); err != nil {
 			return err
 		}
 	}
@@ -79,12 +78,8 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 	return nil
 }
 
-func bootstrapSandbox(ctx context.Context, session *Session, dest string, io iostream.Streams) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("bootstrap failed: %w", err)
-	}
-	org, repo, err := gitremote.DetectOrgAndRepo(cwd)
+func bootstrapSandbox(ctx context.Context, session *Session, dest, workDir string, io iostream.Streams) error {
+	org, repo, err := gitremote.DetectOrgAndRepo(workDir)
 	if err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}

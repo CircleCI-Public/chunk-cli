@@ -14,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/hook"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
@@ -42,7 +43,7 @@ func runHookMode(f *validateHookFlags, name, workDir string) error {
 	if len(f.syncSpecs) > 0 {
 		specs, err := hook.ParseSpecs(f.syncSpecs)
 		if err != nil {
-			return err
+			return usererr.New(fmt.Sprintf("invalid sync spec: %v", err), err)
 		}
 		cfg := hook.LoadConfig(hook.ResolveProject(workDir))
 		return hook.RunSyncCheck(cfg, hook.SyncCheckFlags{
@@ -59,7 +60,8 @@ func runHookMode(f *validateHookFlags, name, workDir string) error {
 		} else if f.task {
 			flag = "--task"
 		}
-		return fmt.Errorf("%s requires a command name", flag)
+		msg := fmt.Sprintf("%s requires a command name", flag)
+		return usererr.New(msg, fmt.Errorf("%s requires a command name", flag))
 	}
 
 	cfg := hook.LoadConfig(hook.ResolveProject(workDir))

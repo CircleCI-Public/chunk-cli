@@ -66,6 +66,8 @@ func (s settingsJSON) MarshalJSON() ([]byte, error) {
 		hookParts = append(hookParts, fmt.Sprintf("    %q: %s", entry.Key, val))
 	}
 
+	// json.MarshalIndent on map[string][]string sorts keys alphabetically (Go 1.12+),
+	// so permissions output is deterministic.
 	perms, _ := json.MarshalIndent(s.Permissions, "  ", "  ")
 
 	var hooksBlock string
