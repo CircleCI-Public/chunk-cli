@@ -1,7 +1,11 @@
-# chunk hook
+# chunk validate — Hook Mode
 
 Lifecycle hooks for AI coding agents. Enforces quality checks before commits,
 on stop, and at other agent events. Communicates via stdin JSON and exit codes.
+
+Hook functionality is accessed through `chunk validate` flags (`--check`,
+`--no-check`, `--task`, `--sync`). Session plumbing (`scope`, `state`) remains
+under the hidden `chunk hook` command, invoked by IDE-generated settings.
 
 ## Supported Environments
 
@@ -20,13 +24,13 @@ the same `.claude/settings.json` configuration.
 # 1. Install chunk (see README)
 chunk --version
 
-# 2. Configure environment and initialize repo hooks
-chunk hook setup
+# 2. Initialize project (sets up config, hooks, and env)
+chunk init
 
 # 3. Restart terminal (or source the env file)
 source ~/.config/chunk/hook/env
 
-# 4. Edit .chunk/hook/config.yml to set your test/lint commands
+# 4. Edit .chunk/config.json to set your test/lint commands
 ```
 
 ## Exit Code Protocol
@@ -53,47 +57,30 @@ Values `1`, `true`, `yes` (case-insensitive) are truthy.
 
 ## Configuration
 
-### Per-repo config: `.chunk/hook/config.yml`
+### Per-repo config: `.chunk/config.json`
 
-```yaml
-# Named trigger groups — patterns that activate hooks
-triggers:
-  pre-commit:
-    - "git commit"
-    - "git push"
+All hook configuration lives in `.chunk/config.json` alongside other project
+settings (VCS, CircleCI, validate commands):
 
-# Exec definitions — shell commands to run
-execs:
-  tests:
-    command: "npm test"
-    fileExt: ".js"
-    always: false
-    timeout: 300           # seconds (default: 300)
-    limit: 3               # max consecutive blocks
-
-  tests-changed:
-    command: "npm test -- --changed"
-    fileExt: ".js"
-    timeout: 300
-    limit: 3
-
-  lint:
-    command: "npm run lint"
-    always: false
-    timeout: 60
-    limit: 3
-
-# Task definitions — delegate complex work to subagents
-tasks:
-  review:
-    instructions: ".chunk/hook/review-instructions.md"
-    schema: ".chunk/hook/review-schema.json"
-    limit: 3               # max consecutive blocks (default: 3)
-    timeout: 600           # seconds (default: 600)
-
-# Override sentinel storage location
-sentinels:
-  dir: "/custom/path/to/sentinels"
+```json
+{
+  "commands": [
+    {"name": "tests", "run": "npm test", "fileExt": ".js", "timeout": 300, "limit": 3},
+    {"name": "tests-changed", "run": "npm test -- --changed", "fileExt": ".js", "timeout": 300, "limit": 3},
+    {"name": "lint", "run": "npm run lint", "timeout": 60, "limit": 3}
+  ],
+  "triggers": {
+    "pre-commit": ["git commit", "git push"]
+  },
+  "tasks": {
+    "review": {
+      "instructions": ".chunk/hook/review-instructions.md",
+      "schema": ".chunk/hook/review-schema.json",
+      "limit": 3,
+      "timeout": 600
+    }
+  }
+}
 ```
 
 ### Environment profiles
@@ -111,60 +98,15 @@ The env file is written to `$XDG_CONFIG_HOME/chunk/hook/env`
 
 ## Commands
 
-### `chunk hook setup [dir]`
+### `chunk validate <name> --no-check`
 
-One-shot setup: runs `env update` then `repo init`.
-
-| Flag | Default | Description |
-|---|---|---|
-| `--profile` | `enable` | Environment profile |
-| `--skip-env` | `false` | Skip env file creation |
-| `--force` | `false` | Overwrite existing files |
-| `--env-file` | auto | Custom env file path |
-
-### `chunk hook repo init [dir]`
-
-Creates template files in the target directory:
-
-- `.chunk/hook/.gitignore` — ignores runtime marker files
-- `.chunk/hook/config.yml` — per-repo hook configuration
-- `.claude/settings.json` — IDE hook definitions
-
-If files already exist and `--force` is not set, writes `.example` variants
-instead.
-
-| Flag | Default | Description |
-|---|---|---|
-| `--force` | `false` | Overwrite existing files |
-
-### `chunk hook env update`
-
-Writes the environment file with profile-based configuration.
-
-| Flag | Default | Description |
-|---|---|---|
-| `--profile` | `enable` | Profile: `disable`, `enable`, `tests-lint` |
-| `--env-file` | auto | Custom env file path |
-| `--set-log-dir` | auto | Override log directory |
-| `--set-verbose` | `false` | Enable verbose logging |
-| `--set-project-root` | — | Project root for multi-repo workspaces |
-
-Default log directories:
-- macOS: `~/Library/Logs/chunk-hook`
-- Linux: `~/.local/share/chunk-hook/logs`
-
-### `chunk hook exec run <name>`
-
-Execute a configured shell command and save the result as a sentinel file.
+Run a configured command and save the result as a sentinel file (exit 0 regardless).
 
 | Flag | Default | Description |
 |---|---|---|
 | `--cmd` | — | Command override (takes precedence over config) |
-| `--timeout` | `300` | Timeout in seconds |
-| `--file-ext` | — | File extension filter |
 | `--staged` | `false` | Only staged files |
 | `--always` | `false` | Run even without matching changes |
-| `--no-check` | `false` | Save result but always exit 0 |
 | `--on` | — | Trigger group name |
 | `--trigger` | — | Inline trigger pattern |
 | `--limit` | `0` | Max consecutive blocks |
@@ -177,22 +119,22 @@ Execute a configured shell command and save the result as a sentinel file.
 3. Write "pending" sentinel
 4. Execute via `sh -c` in project directory
 5. Write final sentinel (pass/fail, exit code, output)
-6. Exit 0 if `--no-check`; exit 1 if command failed
+6. Exit 0 (result saved but not enforced)
 
-### `chunk hook exec check <name>`
+### `chunk validate <name> --check`
 
 Read a saved sentinel and enforce the result.
 
-Same flags as `exec run` except `--cmd` and `--no-check`.
+Same flags as `--no-check` mode.
 
 **Delegation pattern:** For long-running commands that may exceed the hook
-timeout, use `check` as the hook entry point. On first call (no sentinel),
-`check` blocks with a directive telling the agent to run
-`chunk hook exec run <name> --no-check`. The agent runs the command in its
-own terminal (no timeout). On the next hook invocation, `check` reads the
+timeout, use `--check` as the hook entry point. On first call (no sentinel),
+it blocks with a directive telling the agent to run
+`chunk validate <name> --no-check`. The agent runs the command in its
+own terminal (no timeout). On the next hook invocation, `--check` reads the
 sentinel and enforces the result.
 
-### `chunk hook task check <name>`
+### `chunk validate <name> --task`
 
 Check a task result written by a subagent.
 
@@ -209,17 +151,17 @@ Check a task result written by a subagent.
 | `--project` | auto | Project directory |
 
 **Task delegation flow:**
-1. `task check <name>` is called by the hook
+1. `chunk validate <name> --task` is called by the hook
 2. On first call (no result file), blocks with a directive to spawn a subagent
 3. The subagent writes `{ "decision": "allow"|"block", "reason": "..." }` to
    the sentinel path
-4. On next invocation, `task check` reads and validates the result
+4. On next invocation, reads and validates the result
 
-### `chunk hook sync check <specs...>`
+### `chunk validate --sync <specs...>`
 
 Run multiple exec/task checks as a single ordered group.
 
-Specs use `type:name` format, e.g. `exec:tests task:review`.
+Specs use `type:name` format, e.g. `--sync exec:tests,task:review`.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -233,8 +175,17 @@ Specs use `type:name` format, e.g. `exec:tests task:review`.
 | `--bail` | `false` | Stop at first failure |
 | `--project` | auto | Project directory |
 
-Use `sync check` when two or more delegated checks share the same hook event
+Use `--sync` when two or more delegated checks share the same hook event
 (e.g. `exec:tests` + `task:review` on `Stop`). It ensures correct ordering.
+
+### Hidden session plumbing
+
+These commands remain under `chunk hook` (hidden from `--help`) and are invoked
+by IDE-generated `.claude/settings.json`:
+
+- **`chunk hook scope activate/deactivate`** — marks active repo in IDE session
+- **`chunk hook state save/append/load/clear`** — cross-event state persistence
+- **`chunk hook env update`** — update shell environment configuration
 
 ### `chunk hook scope activate` / `deactivate`
 
@@ -273,8 +224,7 @@ Sentinels are JSON files that track command execution status.
 
 Resolution order for sentinel directory:
 1. `CHUNK_HOOK_SENTINELS_DIR` env var
-2. `sentinels.dir` in config.yml
-3. `{TMPDIR}/chunk-hook/sentinels`
+2. `{TMPDIR}/chunk-hook/sentinels`
 
 **Sentinel ID**: `{safe_name}-{sha256(projectDir:name)[:8]}`
 
@@ -295,16 +245,16 @@ Resolution order for sentinel directory:
 
 ## IDE Integration
 
-`chunk hook repo init` generates `.claude/settings.json` with hook
-definitions for the following lifecycle events:
+`chunk init` generates `.claude/settings.json` with hook definitions for the
+following lifecycle events:
 
 | Event | Hooks |
 |---|---|
-| `SessionStart` | `scope deactivate` (clean up previous session) |
-| `UserPromptSubmit` | `state append` (capture prompt input) |
-| `PreToolUse` | `exec check tests-changed`, `exec run lint` (with matcher) |
-| `Stop` | `exec check tests`, `exec run lint` |
-| `SessionEnd` | `scope deactivate`, `state clear` |
+| `SessionStart` | `chunk hook scope deactivate` |
+| `UserPromptSubmit` | `chunk hook state append` |
+| `PreToolUse` | `chunk validate tests-changed --check`, `chunk validate lint --no-check` |
+| `Stop` | `chunk validate tests --check`, `chunk validate lint` |
+| `SessionEnd` | `chunk hook scope deactivate`, `chunk hook state clear` |
 
 The generated settings grant `Bash(chunk:*)` permission so hook commands
 run without prompting.
@@ -322,7 +272,6 @@ The `--project` flag resolves in this order:
 |---|---|
 | `CHUNK_HOOK_ENABLE` | Global enable/disable (0/1) |
 | `CHUNK_HOOK_ENABLE_{NAME}` | Per-command override |
-| `CHUNK_HOOK_CONFIG` | Custom config file path |
 | `CHUNK_HOOK_SENTINELS_DIR` | Custom sentinel directory |
 | `CHUNK_HOOK_PROJECT_ROOT` | Multi-repo workspace root |
 | `CHUNK_HOOK_LOG_DIR` | Log directory |

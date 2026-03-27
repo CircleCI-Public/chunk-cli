@@ -13,124 +13,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
-// --- repo init ---
-
-func TestHookRepoInit(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	env := testenv.NewTestEnv(t)
-
-	result := binary.RunCLI(t, []string{
-		"hook", "repo", "init", workDir,
-	}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	// Verify config.yml was created
-	configPath := filepath.Join(workDir, ".chunk", "hook", "config.yml")
-	_, err := os.Stat(configPath)
-	assert.NilError(t, err, "expected .chunk/hook/config.yml to exist")
-
-	// Verify settings.json was created
-	settingsPath := filepath.Join(workDir, ".claude", "settings.json")
-	_, err = os.Stat(settingsPath)
-	assert.NilError(t, err, "expected .claude/settings.json to exist")
-}
-
-func TestHookRepoInitExistingFiles(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	env := testenv.NewTestEnv(t)
-
-	// First init
-	result := binary.RunCLI(t, []string{
-		"hook", "repo", "init", workDir,
-	}, env, workDir)
-	assert.Equal(t, result.ExitCode, 0, "first init failed: %s", result.Stderr)
-
-	// Second init without --force should create .example files
-	result = binary.RunCLI(t, []string{
-		"hook", "repo", "init", workDir,
-	}, env, workDir)
-	assert.Equal(t, result.ExitCode, 0, "second init failed: %s", result.Stderr)
-
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "already exists") || strings.Contains(combined, "example"),
-		"expected existing file message, got: %s", combined)
-}
-
-func TestHookRepoInitForce(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	env := testenv.NewTestEnv(t)
-
-	// First init
-	result := binary.RunCLI(t, []string{
-		"hook", "repo", "init", workDir,
-	}, env, workDir)
-	assert.Equal(t, result.ExitCode, 0, "first init failed: %s", result.Stderr)
-
-	// Second init with --force should overwrite
-	result = binary.RunCLI(t, []string{
-		"hook", "repo", "init", workDir, "--force",
-	}, env, workDir)
-	assert.Equal(t, result.ExitCode, 0, "second init with --force failed: %s", result.Stderr)
-
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Created") || strings.Contains(combined, "initialized"),
-		"expected created message, got: %s", combined)
-}
-
-// --- setup ---
-
-func TestHookSetupInvalidProfile(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	env := testenv.NewTestEnv(t)
-
-	result := binary.RunCLI(t, []string{
-		"hook", "setup", workDir, "--profile", "bogus", "--skip-env",
-	}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Invalid profile") || strings.Contains(combined, "Valid profiles"),
-		"expected invalid profile error, got: %s", combined)
-}
-
-func TestHookSetupHappyPath(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	env := testenv.NewTestEnv(t)
-
-	result := binary.RunCLI(t, []string{
-		"hook", "setup", workDir, "--skip-env",
-	}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Setup complete") || strings.Contains(combined, "complete"),
-		"expected setup complete message, got: %s", combined)
-
-	// Verify config files created
-	configPath := filepath.Join(workDir, ".chunk", "hook", "config.yml")
-	_, err := os.Stat(configPath)
-	assert.NilError(t, err, "expected .chunk/hook/config.yml to exist")
-}
-
-func TestHookSetupForce(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	env := testenv.NewTestEnv(t)
-
-	// First setup
-	result := binary.RunCLI(t, []string{
-		"hook", "setup", workDir, "--skip-env",
-	}, env, workDir)
-	assert.Equal(t, result.ExitCode, 0, "first setup failed: %s", result.Stderr)
-
-	// Second setup with --force
-	result = binary.RunCLI(t, []string{
-		"hook", "setup", workDir, "--skip-env", "--force",
-	}, env, workDir)
-	assert.Equal(t, result.ExitCode, 0, "second setup with --force failed: %s", result.Stderr)
-}
-
 // --- env update ---
 
 func TestHookEnvUpdateInvalidProfile(t *testing.T) {
@@ -455,7 +337,7 @@ func TestHookExecRunNotEnabled(t *testing.T) {
 	// Deliberately not setting CHUNK_HOOK_ENABLE or CHUNK_HOOK_ENABLE_TESTS
 
 	result := binary.RunCLI(t, []string{
-		"hook", "exec", "run", "tests", "--no-check", "--project", workDir,
+		"validate", "tests", "--no-check", "--project", workDir,
 	}, env, workDir)
 
 	// Should allow (exit 0) when not enabled
@@ -472,7 +354,7 @@ func TestHookExecRunNoCheck(t *testing.T) {
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
 	result := binary.RunCLI(t, []string{
-		"hook", "exec", "run", "tests", "--no-check", "--project", workDir,
+		"validate", "tests", "--no-check", "--project", workDir,
 	}, env, workDir)
 
 	// --no-check should run the command and save result, exit 0
@@ -488,10 +370,8 @@ func TestHookExecRunFlags(t *testing.T) {
 		flags       []string
 		useTriggers bool
 	}{
-		{"cmd override", []string{"--cmd", "echo overridden"}, false},
-		{"timeout", []string{"--timeout", "60"}, false},
+		{"cmd override", []string{"--override-cmd", "echo overridden"}, false},
 		{"always", []string{"--always"}, false},
-		{"file-ext", []string{"--file-ext", ".go"}, false},
 		{"staged", []string{"--staged"}, false},
 		{"on", []string{"--on", "go-files"}, true},
 		{"trigger", []string{"--trigger", "*.ts"}, false},
@@ -513,7 +393,7 @@ func TestHookExecRunFlags(t *testing.T) {
 			env.Extra["CHUNK_HOOK_ENABLE_TESTS"] = "1"
 			env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
-			args := []string{"hook", "exec", "run", "tests"}
+			args := []string{"validate", "tests"}
 			args = append(args, tt.flags...)
 			args = append(args, "--no-check", "--project", workDir)
 
@@ -534,15 +414,13 @@ func TestHookExecCheckFlagsAccepted(t *testing.T) {
 	// Not enabling — "not enabled" path exits 0 before reading stdin
 
 	result := binary.RunCLI(t, []string{
-		"hook", "exec", "check", "tests",
-		"--file-ext", ".go",
+		"validate", "tests", "--check",
 		"--staged",
 		"--always",
 		"--on", "go-files",
 		"--trigger", "*.go",
 		"--matcher", "Write",
 		"--limit", "3",
-		"--timeout", "30",
 		"--project", workDir,
 	}, env, workDir)
 
@@ -569,7 +447,7 @@ func TestHookTaskCheckFlagsAccepted(t *testing.T) {
 	// Not enabling — exits 0
 
 	result := binary.RunCLI(t, []string{
-		"hook", "task", "check", "review",
+		"validate", "review", "--task",
 		"--instructions", instrFile,
 		"--schema", schemaFile,
 		"--always",
@@ -595,7 +473,7 @@ func TestHookSyncCheckFlagsAccepted(t *testing.T) {
 	// Not enabling — exits 0
 
 	result := binary.RunCLI(t, []string{
-		"hook", "sync", "check",
+		"validate", "--sync",
 		"exec:tests",
 		"--on", "go-files",
 		"--trigger", "*.ts",
@@ -706,42 +584,29 @@ func TestHookEnvUpdateSetProjectRoot(t *testing.T) {
 
 func writeHookConfig(t *testing.T, workDir string) {
 	t.Helper()
-	hookDir := filepath.Join(workDir, ".chunk", "hook")
-	err := os.MkdirAll(hookDir, 0o755)
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
 	assert.NilError(t, err)
 
-	config := `execs:
-  tests:
-    command: "echo passed"
-    timeout: 10
-tasks:
-  review:
-    instructions: "Review the code"
-    limit: 3
-`
-	err = os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte(config), 0o644)
+	config := `{
+  "commands": [{"name": "tests", "run": "echo passed", "timeout": 10}],
+  "tasks": {"review": {"instructions": "Review the code", "limit": 3}}
+}`
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(config), 0o644)
 	assert.NilError(t, err)
 }
 
 func writeHookConfigWithTriggers(t *testing.T, workDir string) {
 	t.Helper()
-	hookDir := filepath.Join(workDir, ".chunk", "hook")
-	err := os.MkdirAll(hookDir, 0o755)
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
 	assert.NilError(t, err)
 
-	config := `execs:
-  tests:
-    command: "echo passed"
-    timeout: 10
-tasks:
-  review:
-    instructions: "Review the code"
-    limit: 3
-triggers:
-  go-files:
-    patterns:
-      - "*.go"
-`
-	err = os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte(config), 0o644)
+	config := `{
+  "commands": [{"name": "tests", "run": "echo passed", "timeout": 10}],
+  "tasks": {"review": {"instructions": "Review the code", "limit": 3}},
+  "triggers": {"go-files": ["*.go"]}
+}`
+	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(config), 0o644)
 	assert.NilError(t, err)
 }

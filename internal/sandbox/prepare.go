@@ -363,7 +363,7 @@ func gatherRepoContext(cwd string) string {
 		"package.json", "Makefile", "go.mod", "pom.xml",
 		"build.gradle", "build.gradle.kts", "pyproject.toml",
 		"setup.py", "pytest.ini", "Cargo.toml",
-		".chunk/hook/config.yml",
+		".chunk/config.json",
 		".npmrc", ".yarnrc", ".yarnrc.yml",
 		"pip.conf", ".pip/pip.conf", ".cargo/config.toml",
 		"settings.xml", "gradle.properties",

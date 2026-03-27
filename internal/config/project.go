@@ -7,12 +7,32 @@ import (
 	"path/filepath"
 )
 
+// Command roles determine hook placement in settings.json.
+const (
+	RoleGate     = "gate"     // enforce at Stop, run-and-record at PreToolUse
+	RolePrecheck = "precheck" // check at PreToolUse, enforce at Stop (changed-file variants)
+	RoleAutofix  = "autofix"  // run at PreToolUse, enforce at Stop (formatters)
+)
+
 // Command is a single validation command.
 type Command struct {
 	Name    string `json:"name"`
 	Run     string `json:"run"`
+	Role    string `json:"role,omitempty"`
 	FileExt string `json:"fileExt,omitempty"`
 	Timeout int    `json:"timeout,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	Always  bool   `json:"always,omitempty"`
+	Staged  bool   `json:"staged,omitempty"`
+}
+
+// TaskConfig holds task delegation configuration.
+type TaskConfig struct {
+	Instructions string `json:"instructions,omitempty"`
+	Schema       string `json:"schema,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Always       bool   `json:"always,omitempty"`
+	Timeout      int    `json:"timeout,omitempty"`
 }
 
 // VCSConfig holds VCS configuration for the project.
@@ -28,9 +48,11 @@ type CircleCIConfig struct {
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
-	Commands []Command       `json:"commands,omitempty"`
-	VCS      *VCSConfig      `json:"vcs,omitempty"`
-	CircleCI *CircleCIConfig `json:"circleci,omitempty"`
+	Commands []Command             `json:"commands,omitempty"`
+	Triggers map[string][]string   `json:"triggers,omitempty"`
+	Tasks    map[string]TaskConfig `json:"tasks,omitempty"`
+	VCS      *VCSConfig            `json:"vcs,omitempty"`
+	CircleCI *CircleCIConfig       `json:"circleci,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.

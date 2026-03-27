@@ -204,42 +204,14 @@ Restart your shell (or `source ~/.zprofile`) after running for the first time.
 
 #### 2. Initialize your repository
 
-Run in your project root to scaffold the config files and wire up `.claude/settings.json`:
+Run in your project root to set up the config and wire up `.claude/settings.json`:
 
 ```bash
-chunk hook repo init
+chunk init
 ```
 
-This creates:
-
-| File | Purpose |
-|------|---------|
-| `.chunk/hook/config.yml` | Per-repo hook configuration (commands, timeouts, triggers) |
-| `.chunk/hook/.gitignore` | Excludes runtime state files from git |
-| `.claude/settings.json` | Hook wiring for Claude Code (and compatible IDEs) |
-
-If any of these files already exist, the template is saved as a `.example` variant alongside the original so nothing is overwritten.
-
-#### 3. Configure your commands
-
-Edit `.chunk/hook/config.yml` to set the test and lint commands for your repo:
-
-```yaml
-execs:
-  tests:
-    command: "go test ./..."   # your test command
-    fileExt: ".go"             # skip if no matching files changed
-  lint:
-    command: "golangci-lint run"
-    timeout: 60
-```
-
-#### Other hook commands
-
-```bash
-chunk hook env update --profile <name>   # Update shell environment profile
-chunk hook repo init --force             # Re-scaffold, overwriting existing files
-```
+This detects your VCS org/repo, prompts for CircleCI org, detects test commands,
+and generates `.chunk/config.json` and `.claude/settings.json`.
 ### Other Commands
 
 ```bash
@@ -247,6 +219,26 @@ chunk auth login      # Set up API key
 chunk auth status     # Check authentication
 chunk config show     # Display current configuration
 chunk upgrade         # Update to latest version
+```
+
+### Hook Commands
+
+The `chunk validate` command provides configurable quality checks for
+[Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code) — tests, lint, code review,
+and more.
+
+```bash
+# Configure shell environment (PATH, CHUNK_HOOK_* vars):
+chunk hook env update
+
+# Initialize a repo:
+chunk init
+
+# Run a named shell command (tests, lint, etc.):
+CHUNK_HOOK_ENABLE=1 echo '{}' | chunk validate tests --no-check --override-cmd "go test ./..."
+
+# Grouped checks (tests + review on the same event):
+chunk validate --sync exec:tests,task:review --on pre-commit
 ```
 
 ## Configuration

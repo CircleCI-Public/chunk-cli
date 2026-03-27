@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
@@ -47,31 +48,25 @@ func TestLoadConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "valid YAML with execs tasks and triggers",
+			name: "valid JSON with execs tasks and triggers",
 			setup: func(t *testing.T, dir string) {
-				hookDir := filepath.Join(dir, ".chunk", "hook")
-				if err := os.MkdirAll(hookDir, 0o755); err != nil {
+				chunkDir := filepath.Join(dir, ".chunk")
+				if err := os.MkdirAll(chunkDir, 0o755); err != nil {
 					t.Fatal(err)
 				}
-				yaml := `
-triggers:
-  go-files:
-    patterns:
-      - "*.go"
-      - "**/*.go"
-execs:
-  tests:
-    command: "go test ./..."
-    timeout: 30
-  lint:
-    command: "golangci-lint run"
-tasks:
-  review:
-    instructions: "Review code"
-sentinels:
-  dir: /tmp/custom-sentinels
-`
-				if err := os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte(yaml), 0o644); err != nil {
+				configJSON := `{
+  "commands": [
+    {"name": "tests", "run": "go test ./...", "timeout": 30},
+    {"name": "lint", "run": "golangci-lint run"}
+  ],
+  "triggers": {
+    "go-files": ["*.go", "**/*.go"]
+  },
+  "tasks": {
+    "review": {"instructions": "Review code"}
+  }
+}`
+				if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(configJSON), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -119,38 +114,19 @@ sentinels:
 			},
 		},
 		{
-			name: "custom config path from env",
+			name: "invalid JSON returns empty config",
 			setup: func(t *testing.T, dir string) {
-				customPath := filepath.Join(dir, "custom-config.yml")
-				yaml := `execs:
-  build:
-    command: "make build"
-`
-				if err := os.WriteFile(customPath, []byte(yaml), 0o644); err != nil {
+				chunkDir := filepath.Join(dir, ".chunk")
+				if err := os.MkdirAll(chunkDir, 0o755); err != nil {
 					t.Fatal(err)
 				}
-				t.Setenv("CHUNK_HOOK_CONFIG", customPath)
-			},
-			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
-				if _, ok := cfg.Execs["build"]; !ok {
-					t.Fatal("expected build exec from custom config path")
-				}
-			},
-		},
-		{
-			name: "invalid YAML returns empty config",
-			setup: func(t *testing.T, dir string) {
-				hookDir := filepath.Join(dir, ".chunk", "hook")
-				if err := os.MkdirAll(hookDir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(hookDir, "config.yml"), []byte("{{invalid"), 0o644); err != nil {
+				if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte("{{invalid"), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			},
 			check: func(t *testing.T, dir string, cfg *ResolvedConfig) {
 				if len(cfg.Execs) != 0 {
-					t.Fatalf("expected no execs from invalid yaml, got %d", len(cfg.Execs))
+					t.Fatalf("expected no execs from invalid JSON, got %d", len(cfg.Execs))
 				}
 			},
 		},
@@ -425,14 +401,13 @@ func TestRunRepoInit(t *testing.T) {
 		dir := t.TempDir()
 		streams, _, _ := testStreams()
 
-		err := RunRepoInit(dir, false, streams)
+		err := RunRepoInit(dir, "", nil, false, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		expected := []string{
 			".chunk/hook/.gitignore",
-			".chunk/hook/config.yml",
 			".claude/settings.json",
 		}
 		for _, rel := range expected {
@@ -452,7 +427,7 @@ func TestRunRepoInit(t *testing.T) {
 		}
 		streams, _, _ := testStreams()
 
-		err := RunRepoInit(projDir, false, streams)
+		err := RunRepoInit(projDir, "", nil, false, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -471,13 +446,13 @@ func TestRunRepoInit(t *testing.T) {
 		streams, _, errBuf := testStreams()
 
 		// First init
-		if err := RunRepoInit(dir, false, streams); err != nil {
+		if err := RunRepoInit(dir, "", nil, false, streams); err != nil {
 			t.Fatal(err)
 		}
 
 		// Second init without force
 		errBuf.Reset()
-		if err := RunRepoInit(dir, false, streams); err != nil {
+		if err := RunRepoInit(dir, "", nil, false, streams); err != nil {
 			t.Fatal(err)
 		}
 
@@ -487,10 +462,13 @@ func TestRunRepoInit(t *testing.T) {
 			t.Fatalf("expected 'already exists' message, got: %s", errOutput)
 		}
 
-		// Check that an example file was created
-		exampleConfig := filepath.Join(dir, ".chunk", "hook", "config.example.yml")
-		if _, err := os.Stat(exampleConfig); err != nil {
-			t.Fatal("expected config.example.yml to exist")
+		// Check that an example file was created for one of the template files
+		exampleGitignore := filepath.Join(dir, ".chunk", "hook", ".example.gitignore")
+		exampleSettings := filepath.Join(dir, ".claude", "settings.example.json")
+		if _, err := os.Stat(exampleGitignore); err != nil {
+			if _, err2 := os.Stat(exampleSettings); err2 != nil {
+				t.Fatal("expected at least one .example file to exist")
+			}
 		}
 	})
 
@@ -499,13 +477,13 @@ func TestRunRepoInit(t *testing.T) {
 		streams, _, errBuf := testStreams()
 
 		// First init
-		if err := RunRepoInit(dir, false, streams); err != nil {
+		if err := RunRepoInit(dir, "", nil, false, streams); err != nil {
 			t.Fatal(err)
 		}
 
 		// Second init with force
 		errBuf.Reset()
-		if err := RunRepoInit(dir, true, streams); err != nil {
+		if err := RunRepoInit(dir, "", nil, true, streams); err != nil {
 			t.Fatal(err)
 		}
 
@@ -1193,7 +1171,7 @@ func TestRunSetup(t *testing.T) {
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "enable", false, false, envFile, streams)
+		err := RunSetup(dir, "", "enable", false, false, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1202,10 +1180,10 @@ func TestRunSetup(t *testing.T) {
 		if _, err := os.Stat(envFile); err != nil {
 			t.Fatal("expected env file")
 		}
-		// Config written
-		configPath := filepath.Join(dir, ".chunk", "hook", "config.yml")
-		if _, err := os.Stat(configPath); err != nil {
-			t.Fatal("expected config.yml")
+		// Gitignore written (template file)
+		gitignorePath := filepath.Join(dir, ".chunk", "hook", ".gitignore")
+		if _, err := os.Stat(gitignorePath); err != nil {
+			t.Fatal("expected .gitignore")
 		}
 	})
 
@@ -1214,7 +1192,7 @@ func TestRunSetup(t *testing.T) {
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "", false, true, envFile, streams)
+		err := RunSetup(dir, "", "", false, true, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1223,16 +1201,16 @@ func TestRunSetup(t *testing.T) {
 		if _, err := os.Stat(envFile); !os.IsNotExist(err) {
 			t.Fatal("expected no env file with skip-env")
 		}
-		// Config should still exist
-		configPath := filepath.Join(dir, ".chunk", "hook", "config.yml")
-		if _, err := os.Stat(configPath); err != nil {
-			t.Fatal("expected config.yml")
+		// Gitignore should still exist (template file)
+		gitignorePath := filepath.Join(dir, ".chunk", "hook", ".gitignore")
+		if _, err := os.Stat(gitignorePath); err != nil {
+			t.Fatal("expected .gitignore")
 		}
 	})
 
 	t.Run("invalid profile returns error", func(t *testing.T) {
 		streams, _, _ := testStreams()
-		err := RunSetup(t.TempDir(), "nope", false, false, "", streams)
+		err := RunSetup(t.TempDir(), "", "nope", false, false, "", nil, streams)
 		if err == nil {
 			t.Fatal("expected error for invalid profile")
 		}
@@ -1243,7 +1221,7 @@ func TestRunSetup(t *testing.T) {
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "", false, false, envFile, streams)
+		err := RunSetup(dir, "", "", false, false, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1389,5 +1367,129 @@ func TestTemplateFilesNotEmpty(t *testing.T) {
 		if tf.content == "" {
 			t.Fatal("template file has empty content: " + tf.relativePath)
 		}
+	}
+}
+
+func TestBuildSettingsJSON(t *testing.T) {
+	t.Run("nil commands produces only infrastructure hooks", func(t *testing.T) {
+		result := BuildSettingsJSON("my-proj", nil)
+		if !strings.Contains(result, "SessionStart") {
+			t.Fatal("expected SessionStart hook")
+		}
+		if !strings.Contains(result, "SessionEnd") {
+			t.Fatal("expected SessionEnd hook")
+		}
+		if !strings.Contains(result, "UserPromptSubmit") {
+			t.Fatal("expected UserPromptSubmit hook")
+		}
+		if strings.Contains(result, "PreToolUse") {
+			t.Fatal("expected no PreToolUse hooks with nil commands")
+		}
+		if strings.Contains(result, "Stop") {
+			t.Fatal("expected no Stop hooks with nil commands")
+		}
+		if !strings.Contains(result, "my-proj") {
+			t.Fatal("expected project name in output")
+		}
+	})
+
+	t.Run("gate role produces no-check in PreToolUse and check allow-missing in Stop", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "test", Run: "go test ./...", Role: "gate", Timeout: 300},
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		if !strings.Contains(result, "chunk validate test --no-check --on pre-commit") {
+			t.Fatalf("expected gate PreToolUse --no-check hook, got:\n%s", result)
+		}
+		if !strings.Contains(result, "chunk validate test --check --allow-missing") {
+			t.Fatalf("expected gate Stop --check --allow-missing hook, got:\n%s", result)
+		}
+	})
+
+	t.Run("precheck role produces check in PreToolUse only", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "test-changed", Run: "go test {{CHANGED_PACKAGES}}", Role: "precheck", Timeout: 300},
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		if !strings.Contains(result, "chunk validate test-changed --check --on pre-commit") {
+			t.Fatalf("expected precheck PreToolUse --check hook, got:\n%s", result)
+		}
+		// Precheck commands should NOT appear in Stop — the full gate variant handles that
+		if strings.Contains(result, "Stop") {
+			t.Fatalf("expected no Stop hooks for precheck-only commands, got:\n%s", result)
+		}
+	})
+
+	t.Run("autofix role produces no-check in PreToolUse", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "format", Run: "gofmt -w .", Role: "autofix", Always: true, Timeout: 30},
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		if !strings.Contains(result, "chunk validate format --no-check --on pre-commit") {
+			t.Fatalf("expected autofix PreToolUse --no-check hook, got:\n%s", result)
+		}
+		if !strings.Contains(result, "chunk validate format --check --allow-missing") {
+			t.Fatalf("expected autofix Stop --check --allow-missing hook, got:\n%s", result)
+		}
+	})
+
+	t.Run("role inference from name and flags", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "test-changed", Run: "test changed"}, // inferred precheck from -changed suffix
+			{Name: "lint", Run: "lint", Always: true},   // inferred autofix from Always
+			{Name: "test", Run: "test"},                 // inferred gate (default)
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		// test-changed should be --check in PreToolUse (precheck)
+		if !strings.Contains(result, "chunk validate test-changed --check --on pre-commit") {
+			t.Fatalf("expected inferred precheck for test-changed, got:\n%s", result)
+		}
+		// lint should be --no-check in PreToolUse (autofix from Always)
+		if !strings.Contains(result, "chunk validate lint --no-check --on pre-commit") {
+			t.Fatalf("expected inferred autofix for lint with Always, got:\n%s", result)
+		}
+		// test should be --no-check in PreToolUse (gate)
+		if !strings.Contains(result, "chunk validate test --no-check --on pre-commit") {
+			t.Fatalf("expected inferred gate for test, got:\n%s", result)
+		}
+	})
+
+	t.Run("valid JSON output", func(t *testing.T) {
+		cmds := []config.Command{
+			{Name: "test", Run: "go test", Role: "gate", Timeout: 300},
+			{Name: "lint", Run: "golangci-lint", Role: "gate", Timeout: 60},
+		}
+		result := BuildSettingsJSON("proj", cmds)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("expected valid JSON, got error: %v\n%s", err, result)
+		}
+	})
+}
+
+func TestInferRole(t *testing.T) {
+	tests := []struct {
+		cmd      config.Command
+		expected string
+	}{
+		{config.Command{Name: "test", Role: "gate"}, "gate"},
+		{config.Command{Name: "test-changed", Role: "precheck"}, "precheck"},
+		{config.Command{Name: "format", Role: "autofix"}, "autofix"},
+		// Inference when Role is empty
+		{config.Command{Name: "test-changed"}, "precheck"},
+		{config.Command{Name: "format", Always: true}, "autofix"},
+		{config.Command{Name: "test"}, "gate"},
+		{config.Command{Name: "lint"}, "gate"},
+		// Explicit role overrides inference
+		{config.Command{Name: "test-changed", Role: "gate"}, "gate"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cmd.Name+"/"+tt.cmd.Role, func(t *testing.T) {
+			got := inferRole(tt.cmd)
+			if got != tt.expected {
+				t.Fatalf("inferRole(%+v) = %q, want %q", tt.cmd, got, tt.expected)
+			}
+		})
 	}
 }

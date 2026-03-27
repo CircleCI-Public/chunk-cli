@@ -93,7 +93,7 @@ func preEvaluateExec(cfg *ResolvedConfig, event map[string]interface{}, exec Exe
 	result := evaluateSentinel(sentinel, currentSessionID, contentHash)
 
 	// Command validation: prevent --cmd bypass
-	if (result.Kind == "pass" || result.Kind == "fail") && sentinel != nil {
+	if (result.Kind == verdictPass || result.Kind == verdictFail) && sentinel != nil {
 		sentinelCmd := sentinel.ConfiguredCommand
 		if sentinelCmd == "" {
 			sentinelCmd = sentinel.Command

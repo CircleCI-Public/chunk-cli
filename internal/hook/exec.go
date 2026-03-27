@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -28,16 +29,17 @@ type ExecRunFlags struct {
 
 // ExecCheckFlags holds parsed flags for exec check.
 type ExecCheckFlags struct {
-	Name    string
-	Timeout int
-	FileExt string
-	Staged  bool
-	Always  bool
-	On      string
-	Trigger string
-	Limit   int
-	Matcher string
-	Cmd     string
+	Name         string
+	Timeout      int
+	FileExt      string
+	Staged       bool
+	Always       bool
+	On           string
+	Trigger      string
+	Limit        int
+	Matcher      string
+	Cmd          string
+	AllowMissing bool
 }
 
 // resolveExec merges flags with config to produce effective exec settings.
@@ -159,6 +161,7 @@ func executeAndSave(cfg *ResolvedConfig, execCfg ExecConfig, name string, staged
 // RunExecRun executes a configured command, saves result as sentinel.
 func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 	if !IsEnabled(flags.Name) {
+		slog.Info("hook skipped", "name", flags.Name, "reason", "not enabled")
 		return nil
 	}
 
@@ -211,6 +214,7 @@ func RunExecRun(cfg *ResolvedConfig, flags ExecRunFlags) error {
 // RunExecCheck reads a saved sentinel and enforces the result.
 func RunExecCheck(cfg *ResolvedConfig, flags ExecCheckFlags, event map[string]interface{}) error {
 	if !IsEnabled(flags.Name) {
+		slog.Info("hook skipped", "name", flags.Name, "reason", "not enabled")
 		return nil
 	}
 
@@ -237,6 +241,9 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 	case "skip-no-changes":
 		return nil // allow
 	case verdictMissing:
+		if flags.AllowMissing {
+			return nil // nothing was run, nothing to enforce
+		}
 		verdict = executeAndSave(cfg, execCfg, name, flags.Staged)
 		return emitExecVerdict(cfg, flags, execCfg, verdict)
 	case "pending":
@@ -285,16 +292,10 @@ func emitExecVerdict(cfg *ResolvedConfig, flags ExecCheckFlags, execCfg ExecConf
 	return nil
 }
 
-func buildRunnerCommand(name, cmd string, timeout int, fileExt string, staged, always bool) string {
-	parts := []string{"chunk hook exec run", name, "--no-check"}
+func buildRunnerCommand(name, cmd string, _ int, _ string, staged, always bool) string {
+	parts := []string{"chunk validate", name, "--no-check"}
 	if cmd != "" {
 		parts = append(parts, fmt.Sprintf("--cmd '%s'", cmd))
-	}
-	if timeout > 0 {
-		parts = append(parts, fmt.Sprintf("--timeout %d", timeout))
-	}
-	if fileExt != "" {
-		parts = append(parts, fmt.Sprintf("--file-ext '%s'", fileExt))
 	}
 	if staged {
 		parts = append(parts, "--staged")
