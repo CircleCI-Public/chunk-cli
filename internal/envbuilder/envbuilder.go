@@ -88,7 +88,7 @@ var circleciImages = map[string]string{
 	stackPHP:        cimgPrefix + "php",
 }
 
-var versionTagRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+var versionTagRe = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
 
 var dockerHubClient = httpcl.New(httpcl.Config{})
 
@@ -206,11 +206,15 @@ func highestVersion(tags []string) string {
 }
 
 func compareVersions(a, b string) int {
-	pa := strings.Split(a, ".")
-	pb := strings.Split(b, ".")
+	ma := versionTagRe.FindStringSubmatch(a)
+	mb := versionTagRe.FindStringSubmatch(b)
+	if ma == nil || mb == nil {
+		fmt.Fprintf(os.Stderr, "chunk: compareVersions: malformed version %q or %q\n", a, b)
+		return 0
+	}
 	for i := range 3 {
-		na, _ := strconv.Atoi(pa[i])
-		nb, _ := strconv.Atoi(pb[i])
+		na, _ := strconv.Atoi(ma[i+1])
+		nb, _ := strconv.Atoi(mb[i+1])
 		if na != nb {
 			return na - nb
 		}
