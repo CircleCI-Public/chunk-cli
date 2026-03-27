@@ -11,18 +11,18 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-func newSkillsCmd() *cobra.Command {
+func newSkillCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "skills",
+		Use:   "skill",
 		Short: "Install and manage AI agent skills",
 	}
 
-	cmd.AddCommand(newSkillsInstallCmd())
-	cmd.AddCommand(newSkillsListCmd())
+	cmd.AddCommand(newSkillInstallCmd())
+	cmd.AddCommand(newSkillListCmd())
 	return cmd
 }
 
-func newSkillsInstallCmd() *cobra.Command {
+func newSkillInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Install or update all skills into agent config directories",
@@ -54,7 +54,7 @@ func newSkillsInstallCmd() *cobra.Command {
 	}
 }
 
-func newSkillsListCmd() *cobra.Command {
+func newSkillListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List bundled skills and their per-agent installation status",

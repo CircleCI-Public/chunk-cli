@@ -19,7 +19,7 @@ func TestSkillsInstall(t *testing.T) {
 	err := os.MkdirAll(claudeDir, 0o755)
 	assert.NilError(t, err)
 
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
@@ -43,7 +43,7 @@ func TestSkillsInstallSkipsUnavailableAgent(t *testing.T) {
 	claudeDir := filepath.Join(env.HomeDir, ".claude")
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -61,10 +61,10 @@ func TestSkillsInstallUpToDate(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// First install.
-	binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 
 	// Second install should show "up to date".
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -75,7 +75,7 @@ func TestSkillsInstallUpToDate(t *testing.T) {
 func TestSkillsList(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	result := binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
@@ -94,7 +94,7 @@ func TestSkillsList(t *testing.T) {
 func TestSkillsListShowsDescriptions(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	result := binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
