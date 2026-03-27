@@ -209,8 +209,7 @@ func compareVersions(a, b string) int {
 	ma := versionTagRe.FindStringSubmatch(a)
 	mb := versionTagRe.FindStringSubmatch(b)
 	if ma == nil || mb == nil {
-		fmt.Fprintf(os.Stderr, "chunk: compareVersions: malformed version %q or %q\n", a, b)
-		return 0
+		return 0 // malformed version — treated as equal
 	}
 	for i := range 3 {
 		na, _ := strconv.Atoi(ma[i+1])

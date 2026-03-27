@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -247,9 +246,6 @@ func newSandboxSyncCmd() *cobra.Command {
 
 var validDockerTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*(:[a-zA-Z0-9._\-]+)?$`)
 
-func dockerExecCmd(ctx context.Context, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, "docker", args...)
-}
 
 func newSandboxPrepareCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -335,7 +331,7 @@ func newSandboxBuildCmd() *cobra.Command {
 			}
 			args = append(args, ".")
 
-			dockerCmd := dockerExecCmd(cmd.Context(), args...)
+			dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
 			dockerCmd.Dir = dir
 			dockerCmd.Stdout = io.Out
 			dockerCmd.Stderr = io.Err
