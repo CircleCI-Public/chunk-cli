@@ -17,7 +17,7 @@ chunk-cli/
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set
     │   ├── hook.go            # hook repo/setup/env/scope/state/exec/task/sync
-    │   ├── sandboxes.go       # sandboxes list/create/exec/add-ssh-key/ssh/sync/prepare
+    │   ├── sandbox.go         # sandbox list/create/exec/add-ssh-key/ssh/sync/prepare
     │   ├── skills.go          # skills install/list
     │   ├── task.go            # task run
     │   ├── upgrade.go         # upgrade

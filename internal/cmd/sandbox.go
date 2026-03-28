@@ -15,19 +15,19 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-func newSandboxesCmd() *cobra.Command {
+func newSandboxCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "sandboxes",
+		Use:   "sandbox",
 		Short: "Manage sandboxes",
 	}
 
-	cmd.AddCommand(newSandboxesListCmd())
-	cmd.AddCommand(newSandboxesCreateCmd())
-	cmd.AddCommand(newSandboxesExecCmd())
-	cmd.AddCommand(newSandboxesAddSSHKeyCmd())
-	cmd.AddCommand(newSandboxesSSHCmd())
-	cmd.AddCommand(newSandboxesSyncCmd())
-	cmd.AddCommand(newSandboxesPrepareCmd())
+	cmd.AddCommand(newSandboxListCmd())
+	cmd.AddCommand(newSandboxCreateCmd())
+	cmd.AddCommand(newSandboxExecCmd())
+	cmd.AddCommand(newSandboxAddSSHKeyCmd())
+	cmd.AddCommand(newSandboxSSHCmd())
+	cmd.AddCommand(newSandboxSyncCmd())
+	cmd.AddCommand(newSandboxPrepareCmd())
 
 	return cmd
 }
@@ -48,7 +48,7 @@ func resolveOrgID(orgID string) (string, error) {
 	return "", fmt.Errorf("--org-id is required: pass --org-id or run 'chunk init' to store it in .chunk/config.json")
 }
 
-func newSandboxesListCmd() *cobra.Command {
+func newSandboxListCmd() *cobra.Command {
 	var orgID string
 
 	cmd := &cobra.Command{
@@ -84,7 +84,7 @@ func newSandboxesListCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesCreateCmd() *cobra.Command {
+func newSandboxCreateCmd() *cobra.Command {
 	var orgID, name, image string
 
 	cmd := &cobra.Command{
@@ -117,7 +117,7 @@ func newSandboxesCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesExecCmd() *cobra.Command {
+func newSandboxExecCmd() *cobra.Command {
 	var sandboxID, command string
 	var execArgs []string
 
@@ -158,7 +158,7 @@ func newSandboxesExecCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesAddSSHKeyCmd() *cobra.Command {
+func newSandboxAddSSHKeyCmd() *cobra.Command {
 	var sandboxID, publicKey, publicKeyFile string
 
 	cmd := &cobra.Command{
@@ -187,7 +187,7 @@ func newSandboxesAddSSHKeyCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSSHCmd() *cobra.Command {
+func newSandboxSSHCmd() *cobra.Command {
 	var sandboxID, identityFile string
 
 	cmd := &cobra.Command{
@@ -212,7 +212,7 @@ func newSandboxesSSHCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSyncCmd() *cobra.Command {
+func newSandboxSyncCmd() *cobra.Command {
 	var sandboxID, dest, identityFile string
 	var bootstrap bool
 
@@ -239,7 +239,7 @@ func newSandboxesSyncCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesPrepareCmd() *cobra.Command {
+func newSandboxPrepareCmd() *cobra.Command {
 	var dockerSudo bool
 
 	cmd := &cobra.Command{
