@@ -358,7 +358,6 @@ func TestSandboxesPrepareNotGitRepo(t *testing.T) {
 		"expected git repo error, got: %s", combined)
 }
 
-
 // TestSandboxesSshSyncFlags verifies that SSH/sync flags are accepted and
 // code progresses past flag parsing (fails at SSH step, not at parsing).
 func TestSandboxesSshSyncFlags(t *testing.T) {

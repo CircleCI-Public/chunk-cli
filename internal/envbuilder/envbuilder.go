@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 

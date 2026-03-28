@@ -282,7 +282,8 @@ func buildAndTest(ctx context.Context, claude *anthropic.Client, model, cwd, doc
 
 		// Build
 		io.ErrPrintf("\n%s\n", ui.Dim(fmt.Sprintf("building %s...", dockerfileName)))
-		buildCmdArgs := []string{"build", "-f", dockerfileName, "-t", imageTag}
+		buildCmdArgs := make([]string, 0, 5+len(buildArgs))
+		buildCmdArgs = append(buildCmdArgs, "build", "-f", dockerfileName, "-t", imageTag)
 		buildCmdArgs = append(buildCmdArgs, buildArgs...)
 		buildCmdArgs = append(buildCmdArgs, ".")
 

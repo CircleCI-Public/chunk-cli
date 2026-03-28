@@ -33,11 +33,12 @@ func TestCompareVersions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		got := compareVersions(tc.a, tc.b)
-		if tc.want > 0 && got <= 0 {
+		switch {
+		case tc.want > 0 && got <= 0:
 			t.Errorf("compareVersions(%q, %q) = %d, want > 0", tc.a, tc.b, got)
-		} else if tc.want < 0 && got >= 0 {
+		case tc.want < 0 && got >= 0:
 			t.Errorf("compareVersions(%q, %q) = %d, want < 0", tc.a, tc.b, got)
-		} else if tc.want == 0 && got != 0 {
+		case tc.want == 0 && got != 0:
 			t.Errorf("compareVersions(%q, %q) = %d, want 0", tc.a, tc.b, got)
 		}
 	}
@@ -104,11 +105,11 @@ func TestParseJavaVersionConstraint(t *testing.T) {
 		input string
 		want  int
 	}{
-		{"[17,22)", 21},  // exclusive upper bound
-		{"[17,22]", 22},  // inclusive upper bound
+		{"[17,22)", 21}, // exclusive upper bound
+		{"[17,22]", 22}, // inclusive upper bound
 		{"[11,18)", 17},
-		{"17", 17},       // single version — singleRe matches
-		{"[17,)", 17},    // no numeric upper — falls through to singleRe which captures 17
+		{"17", 17},    // single version — singleRe matches
+		{"[17,)", 17}, // no numeric upper — falls through to singleRe which captures 17
 		{"", -1},
 		{"  ", -1},
 		{"[8,21)", 20},
@@ -413,7 +414,7 @@ func TestDetectGoModuleName(t *testing.T) {
 func TestDetectGoVersion(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		gomod        string
+		gomod            string
 		wantMaj, wantMin int
 	}{
 		{"module foo\n\ngo 1.21\n", 1, 21},
@@ -428,9 +429,9 @@ func TestDetectGoVersion(t *testing.T) {
 			if tc.gomod != "" {
 				writeFile(t, dir, "go.mod", tc.gomod)
 			}
-			maj, min := detectGoVersion(dir)
-			if maj != tc.wantMaj || min != tc.wantMin {
-				t.Errorf("detectGoVersion = (%d, %d), want (%d, %d)", maj, min, tc.wantMaj, tc.wantMin)
+			maj, minor := detectGoVersion(dir)
+			if maj != tc.wantMaj || minor != tc.wantMin {
+				t.Errorf("detectGoVersion = (%d, %d), want (%d, %d)", maj, minor, tc.wantMaj, tc.wantMin)
 			}
 		})
 	}
