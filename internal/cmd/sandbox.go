@@ -287,12 +287,12 @@ environment as JSON to stdout.`,
 
 			env, err := envbuilder.DetectEnvironment(cmd.Context(), dir)
 			if err != nil {
-				return err
+				return fmt.Errorf("detect environment: %w", err)
 			}
 
 			dockerfilePath, err := envbuilder.WriteDockerfile(dir, env)
 			if err != nil {
-				return err
+				return fmt.Errorf("write dockerfile: %w", err)
 			}
 
 			out, err := json.MarshalIndent(env, "", "  ")

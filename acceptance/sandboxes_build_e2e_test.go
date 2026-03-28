@@ -108,6 +108,7 @@ func e2eRunEnv(t *testing.T, dir string) (stdout, stderr string, exitCode int) {
 	cmd := exec.CommandContext(ctx, binary.Path(), "sandboxes", "env", "--dir", dir)
 	cmd.Env = []string{
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
+		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
 		"NO_COLOR=1",
 	}
 
@@ -133,6 +134,7 @@ func e2eRunBuild(t *testing.T, dir, tag string) (output string, exitCode int) {
 	cmd := exec.CommandContext(ctx, binary.Path(), "sandboxes", "build", "--dir", dir, "--tag", tag)
 	cmd.Env = []string{
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
+		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
 		"NO_COLOR=1",
 	}
 	var outBuf bytes.Buffer
