@@ -180,7 +180,7 @@ func newValidateCmd() *cobra.Command {
 				authSock := os.Getenv("SSH_AUTH_SOCK")
 				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, authSock)
 				if err != nil {
-					return err
+					return fmt.Errorf("open session: %w", err)
 				}
 				return validate.RunRemote(cmd.Context(), func(ctx context.Context, script string) (string, string, int, error) {
 					result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil)

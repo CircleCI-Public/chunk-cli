@@ -46,9 +46,9 @@ func detectShell(home string) (shellConfig, error) {
 			source: "source <(chunk completion zsh)",
 		}, nil
 	case strings.HasSuffix(shell, "bash"):
-		rcFile := filepath.Join(home, ".bashrc")
-		if _, err := os.Stat(filepath.Join(home, ".bash_profile")); err == nil {
-			rcFile = filepath.Join(home, ".bash_profile")
+		rcFile := filepath.Join(home, ".bash_profile")
+		if _, err := os.Stat(filepath.Join(home, ".bashrc")); err == nil {
+			rcFile = filepath.Join(home, ".bashrc")
 		}
 		return shellConfig{
 			name:   "bash",
