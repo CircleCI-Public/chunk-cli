@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"gotest.tools/v3/assert"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
@@ -34,12 +36,12 @@ func TestCompareVersions(t *testing.T) {
 	for _, tc := range cases {
 		got := compareVersions(tc.a, tc.b)
 		switch {
-		case tc.want > 0 && got <= 0:
-			t.Errorf("compareVersions(%q, %q) = %d, want > 0", tc.a, tc.b, got)
-		case tc.want < 0 && got >= 0:
-			t.Errorf("compareVersions(%q, %q) = %d, want < 0", tc.a, tc.b, got)
-		case tc.want == 0 && got != 0:
-			t.Errorf("compareVersions(%q, %q) = %d, want 0", tc.a, tc.b, got)
+		case tc.want > 0:
+			assert.Assert(t, got > 0, "compareVersions(%q, %q) = %d, want > 0", tc.a, tc.b, got)
+		case tc.want < 0:
+			assert.Assert(t, got < 0, "compareVersions(%q, %q) = %d, want < 0", tc.a, tc.b, got)
+		default:
+			assert.Equal(t, got, 0, "compareVersions(%q, %q) = %d, want 0", tc.a, tc.b, got)
 		}
 	}
 }
@@ -57,9 +59,7 @@ func TestHighestVersion(t *testing.T) {
 	}
 	for _, tc := range cases {
 		got := highestVersion(tc.tags)
-		if got != tc.want {
-			t.Errorf("highestVersion(%v) = %q, want %q", tc.tags, got, tc.want)
-		}
+		assert.Equal(t, got, tc.want)
 	}
 }
 
@@ -70,14 +70,10 @@ func TestIsTestRelatedExtra(t *testing.T) {
 		"style", "release", "publish", "build", "mypy", "typing", "typecheck", "all"}
 
 	for _, name := range yes {
-		if !isTestRelatedExtra(name) {
-			t.Errorf("isTestRelatedExtra(%q) = false, want true", name)
-		}
+		assert.Assert(t, isTestRelatedExtra(name), "isTestRelatedExtra(%q) should be true", name)
 	}
 	for _, name := range no {
-		if isTestRelatedExtra(name) {
-			t.Errorf("isTestRelatedExtra(%q) = true, want false", name)
-		}
+		assert.Assert(t, !isTestRelatedExtra(name), "isTestRelatedExtra(%q) should be false", name)
 	}
 }
 
@@ -88,14 +84,10 @@ func TestIsStrictlyTestGroup(t *testing.T) {
 	no := []string{"dev", "lint", "docs", "extras", "all", "ci"}
 
 	for _, name := range yes {
-		if !isStrictlyTestGroup(name) {
-			t.Errorf("isStrictlyTestGroup(%q) = false, want true", name)
-		}
+		assert.Assert(t, isStrictlyTestGroup(name), "isStrictlyTestGroup(%q) should be true", name)
 	}
 	for _, name := range no {
-		if isStrictlyTestGroup(name) {
-			t.Errorf("isStrictlyTestGroup(%q) = true, want false", name)
-		}
+		assert.Assert(t, !isStrictlyTestGroup(name), "isStrictlyTestGroup(%q) should be false", name)
 	}
 }
 
@@ -116,9 +108,7 @@ func TestParseJavaVersionConstraint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		got := parseJavaVersionConstraint(tc.input)
-		if got != tc.want {
-			t.Errorf("parseJavaVersionConstraint(%q) = %d, want %d", tc.input, got, tc.want)
-		}
+		assert.Equal(t, got, tc.want, "parseJavaVersionConstraint(%q)", tc.input)
 	}
 }
 
@@ -127,12 +117,8 @@ func TestParseJavaVersionConstraint(t *testing.T) {
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	assert.NilError(t, os.MkdirAll(filepath.Dir(path), 0755))
+	assert.NilError(t, os.WriteFile(path, []byte(content), 0600))
 }
 
 func TestDetectStack(t *testing.T) {
@@ -192,12 +178,8 @@ func TestDetectStack(t *testing.T) {
 				writeFile(t, dir, name, content)
 			}
 			got, err := detectStack(dir)
-			if err != nil {
-				t.Fatalf("detectStack: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("detectStack = %q, want %q", got, tc.want)
-			}
+			assert.NilError(t, err)
+			assert.Equal(t, got, tc.want)
 		})
 	}
 }
@@ -207,9 +189,7 @@ func TestParsePyproject(t *testing.T) {
 
 	t.Run("missing file returns nil", func(t *testing.T) {
 		t.Parallel()
-		if parsePyproject(t.TempDir()) != nil {
-			t.Error("expected nil for missing file")
-		}
+		assert.Assert(t, parsePyproject(t.TempDir()) == nil)
 	})
 
 	t.Run("parses hatch deps", func(t *testing.T) {
@@ -220,9 +200,9 @@ func TestParsePyproject(t *testing.T) {
 dependencies = ["pytest", "pytest-cov"]
 `)
 		deps := detectHatchTestDependencies(dir)
-		if len(deps) != 2 || deps[0] != "pytest" || deps[1] != "pytest-cov" {
-			t.Errorf("unexpected hatch deps: %v", deps)
-		}
+		assert.Equal(t, len(deps), 2, "unexpected hatch deps: %v", deps)
+		assert.Equal(t, deps[0], "pytest")
+		assert.Equal(t, deps[1], "pytest-cov")
 	})
 
 	t.Run("parses optional-dependencies extras", func(t *testing.T) {
@@ -235,9 +215,8 @@ docs = ["sphinx"]
 lint = ["ruff"]
 `)
 		extras := detectUVTestExtras(dir)
-		if len(extras) != 1 || extras[0] != "test" {
-			t.Errorf("expected [test], got %v", extras)
-		}
+		assert.Equal(t, len(extras), 1, "expected [test], got %v", extras)
+		assert.Equal(t, extras[0], "test")
 	})
 
 	t.Run("parses dependency-groups", func(t *testing.T) {
@@ -249,16 +228,12 @@ test = ["pytest>=8", "pytest-cov"]
 dev = ["black"]
 `)
 		deps := extractDepsFromDependencyGroups(dir)
-		if len(deps) != 2 {
-			t.Errorf("expected 2 deps, got %v", deps)
-		}
+		assert.Equal(t, len(deps), 2, "expected 2 deps, got %v", deps)
 		seen := map[string]bool{}
 		for _, d := range deps {
 			seen[d] = true
 		}
-		if !seen["pytest>=8"] || !seen["pytest-cov"] {
-			t.Errorf("missing expected deps, got %v", deps)
-		}
+		assert.Assert(t, seen["pytest>=8"] && seen["pytest-cov"], "missing expected deps, got %v", deps)
 	})
 
 	t.Run("detects test dependency groups", func(t *testing.T) {
@@ -270,9 +245,8 @@ test = ["pytest"]
 docs = ["sphinx"]
 `)
 		groups := detectTestDependencyGroups(dir)
-		if len(groups) != 1 || groups[0] != "test" {
-			t.Errorf("expected [test], got %v", groups)
-		}
+		assert.Equal(t, len(groups), 1, "expected [test], got %v", groups)
+		assert.Equal(t, groups[0], "test")
 	})
 
 	t.Run("parses uv workspace members", func(t *testing.T) {
@@ -283,9 +257,7 @@ docs = ["sphinx"]
 members = ["packages/foo", "packages/bar"]
 `)
 		members := detectUVWorkspaceMembers(dir)
-		if len(members) != 2 {
-			t.Errorf("expected 2 members, got %v", members)
-		}
+		assert.Equal(t, len(members), 2, "expected 2 members, got %v", members)
 	})
 
 	t.Run("dependency-groups inline tables are skipped", func(t *testing.T) {
@@ -296,9 +268,8 @@ members = ["packages/foo", "packages/bar"]
 test = ["pytest", {include-group = "dev"}]
 `)
 		deps := extractDepsFromDependencyGroups(dir)
-		if len(deps) != 1 || deps[0] != "pytest" {
-			t.Errorf("expected [pytest] (inline table skipped), got %v", deps)
-		}
+		assert.Equal(t, len(deps), 1, "expected [pytest] (inline table skipped), got %v", deps)
+		assert.Equal(t, deps[0], "pytest")
 	})
 }
 
@@ -309,10 +280,7 @@ func TestBuildUVSyncCommand(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "pyproject.toml", `[project]\nname = "foo"\n`)
-		got := buildUVSyncCommand(dir)
-		if got != "uv sync" {
-			t.Errorf("got %q, want %q", got, "uv sync")
-		}
+		assert.Equal(t, buildUVSyncCommand(dir), "uv sync")
 	})
 
 	t.Run("with test group", func(t *testing.T) {
@@ -322,11 +290,7 @@ func TestBuildUVSyncCommand(t *testing.T) {
 [dependency-groups]
 test = ["pytest"]
 `)
-		got := buildUVSyncCommand(dir)
-		want := "uv sync --no-default-groups --group test"
-		if got != want {
-			t.Errorf("got %q, want %q", got, want)
-		}
+		assert.Equal(t, buildUVSyncCommand(dir), "uv sync --no-default-groups --group test")
 	})
 
 	t.Run("with optional dependency extra", func(t *testing.T) {
@@ -336,11 +300,7 @@ test = ["pytest"]
 [project.optional-dependencies]
 test = ["pytest"]
 `)
-		got := buildUVSyncCommand(dir)
-		want := "uv sync --extra test"
-		if got != want {
-			t.Errorf("got %q, want %q", got, want)
-		}
+		assert.Equal(t, buildUVSyncCommand(dir), "uv sync --extra test")
 	})
 }
 
@@ -351,9 +311,7 @@ func TestHasRustWorkspaceMember(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "pyproject.toml", `[project]\nname = "foo"\n`)
-		if hasRustWorkspaceMember(dir) {
-			t.Error("expected false for project with no workspace")
-		}
+		assert.Assert(t, !hasRustWorkspaceMember(dir))
 	})
 
 	t.Run("workspace with rust member", func(t *testing.T) {
@@ -364,9 +322,7 @@ func TestHasRustWorkspaceMember(t *testing.T) {
 members = ["crates/foo"]
 `)
 		writeFile(t, dir, "crates/foo/Cargo.toml", `[package]\nname="foo"\n`)
-		if !hasRustWorkspaceMember(dir) {
-			t.Error("expected true for workspace with Cargo.toml member")
-		}
+		assert.Assert(t, hasRustWorkspaceMember(dir))
 	})
 
 	t.Run("workspace without rust member", func(t *testing.T) {
@@ -376,12 +332,8 @@ members = ["crates/foo"]
 [tool.uv.workspace]
 members = ["packages/bar"]
 `)
-		if err := os.MkdirAll(filepath.Join(dir, "packages/bar"), 0755); err != nil {
-			t.Fatal(err)
-		}
-		if hasRustWorkspaceMember(dir) {
-			t.Error("expected false for workspace member without Cargo.toml")
-		}
+		assert.NilError(t, os.MkdirAll(filepath.Join(dir, "packages/bar"), 0755))
+		assert.Assert(t, !hasRustWorkspaceMember(dir))
 	})
 }
 
@@ -403,10 +355,7 @@ func TestDetectGoModuleName(t *testing.T) {
 			if tc.gomod != "" {
 				writeFile(t, dir, "go.mod", tc.gomod)
 			}
-			got := detectGoModuleName(dir)
-			if got != tc.want {
-				t.Errorf("detectGoModuleName = %q, want %q", got, tc.want)
-			}
+			assert.Equal(t, detectGoModuleName(dir), tc.want)
 		})
 	}
 }
@@ -430,9 +379,8 @@ func TestDetectGoVersion(t *testing.T) {
 				writeFile(t, dir, "go.mod", tc.gomod)
 			}
 			maj, minor := detectGoVersion(dir)
-			if maj != tc.wantMaj || minor != tc.wantMin {
-				t.Errorf("detectGoVersion = (%d, %d), want (%d, %d)", maj, minor, tc.wantMaj, tc.wantMin)
-			}
+			assert.Equal(t, maj, tc.wantMaj)
+			assert.Equal(t, minor, tc.wantMin)
 		})
 	}
 }
@@ -444,18 +392,14 @@ func TestDetectGoDartSassDep(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "go.mod", "module foo\n\nrequire (\n\tgithub.com/something/else v1.0.0\n)\n")
-		if detectGoDartSassDep(dir) {
-			t.Error("expected false")
-		}
+		assert.Assert(t, !detectGoDartSassDep(dir))
 	})
 
 	t.Run("godartsass dep", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "go.mod", "module foo\n\nrequire (\n\tgithub.com/bep/godartsass v1.0.0\n)\n")
-		if !detectGoDartSassDep(dir) {
-			t.Error("expected true for godartsass")
-		}
+		assert.Assert(t, detectGoDartSassDep(dir))
 	})
 }
 
@@ -466,10 +410,7 @@ func TestDetectNodeTestCommand(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "package.json", `{"scripts":{"test":"jest"}}`)
-		got := detectNodeTestCommand(dir, "npm")
-		if got != "npm test" {
-			t.Errorf("got %q, want %q", got, "npm test")
-		}
+		assert.Equal(t, detectNodeTestCommand(dir, "npm"), "npm test")
 	})
 
 	t.Run("nx project", func(t *testing.T) {
@@ -477,19 +418,13 @@ func TestDetectNodeTestCommand(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "package.json", `{"scripts":{}}`)
 		writeFile(t, dir, "nx.json", `{}`)
-		got := detectNodeTestCommand(dir, "npm")
-		if got != "npm nx run-many --target=test" {
-			t.Errorf("got %q, want %q", got, "npm nx run-many --target=test")
-		}
+		assert.Equal(t, detectNodeTestCommand(dir, "npm"), "npm nx run-many --target=test")
 	})
 
 	t.Run("no package.json falls back to pkgMgr test", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		got := detectNodeTestCommand(dir, "yarn")
-		if got != "yarn test" {
-			t.Errorf("got %q, want %q", got, "yarn test")
-		}
+		assert.Equal(t, detectNodeTestCommand(dir, "yarn"), "yarn test")
 	})
 }
 
@@ -511,10 +446,7 @@ func TestDetectNodeMaxVersion(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			writeFile(t, dir, "package.json", tc.pkg)
-			got := detectNodeMaxVersion(dir)
-			if got != tc.want {
-				t.Errorf("detectNodeMaxVersion = %d, want %d", got, tc.want)
-			}
+			assert.Equal(t, detectNodeMaxVersion(dir), tc.want)
 		})
 	}
 }
@@ -527,9 +459,7 @@ func TestDetectMavenSkipModules(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "pom.xml", `<project><modules><module>core</module><module>web</module></modules></project>`)
 		got := detectMavenSkipModules(dir)
-		if len(got) != 0 {
-			t.Errorf("expected no skip modules, got %v", got)
-		}
+		assert.Equal(t, len(got), 0, "expected no skip modules, got %v", got)
 	})
 
 	t.Run("skips graal and android modules", func(t *testing.T) {
@@ -545,9 +475,7 @@ func TestDetectMavenSkipModules(t *testing.T) {
   </modules>
 </project>`)
 		got := detectMavenSkipModules(dir)
-		if len(got) != 2 {
-			t.Errorf("expected 2 skip modules, got %v", got)
-		}
+		assert.Equal(t, len(got), 2, "expected 2 skip modules, got %v", got)
 	})
 }
 
@@ -563,10 +491,7 @@ func TestDetectJavaMaxVersion(t *testing.T) {
     <maven.compiler.source>17</maven.compiler.source>
   </properties>
 </project>`)
-		got := detectJavaMaxVersion(dir)
-		if got != 17 {
-			t.Errorf("got %d, want 17", got)
-		}
+		assert.Equal(t, detectJavaMaxVersion(dir), 17)
 	})
 
 	t.Run("enforcer plugin range", func(t *testing.T) {
@@ -589,18 +514,12 @@ func TestDetectJavaMaxVersion(t *testing.T) {
     </plugins>
   </build>
 </project>`)
-		got := detectJavaMaxVersion(dir)
-		if got != 21 {
-			t.Errorf("got %d, want 21", got)
-		}
+		assert.Equal(t, detectJavaMaxVersion(dir), 21)
 	})
 
 	t.Run("no pom.xml returns -1", func(t *testing.T) {
 		t.Parallel()
-		got := detectJavaMaxVersion(t.TempDir())
-		if got != -1 {
-			t.Errorf("got %d, want -1", got)
-		}
+		assert.Equal(t, detectJavaMaxVersion(t.TempDir()), -1)
 	})
 }
 
@@ -612,29 +531,18 @@ func TestDetectCommands(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "go.mod", "module github.com/foo/bar\n\ngo 1.22\n")
 		install, test, deps := detectCommands(dir, stackGo)
-		if install != "go mod download" {
-			t.Errorf("install = %q, want %q", install, "go mod download")
-		}
-		if test != "go test -p 1 ./..." {
-			t.Errorf("test = %q", test)
-		}
-		if len(deps) == 0 {
-			t.Error("expected system deps for go")
-		}
+		assert.Equal(t, install, "go mod download")
+		assert.Equal(t, test, "go test -p 1 ./...")
+		assert.Assert(t, len(deps) > 0, "expected system deps for go")
 	})
 
 	t.Run("python uv.lock", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		writeFile(t, dir, "uv.lock", "# uv lockfile\n")
-		install, testCmd, deps := detectCommands(dir, stackPython)
-		if install != "uv sync" {
-			t.Errorf("install = %q, want %q", install, "uv sync")
-		}
-		if testCmd != "uv run pytest" {
-			t.Errorf("test = %q", testCmd)
-		}
-		_ = deps
+		install, testCmd, _ := detectCommands(dir, stackPython)
+		assert.Equal(t, install, "uv sync")
+		assert.Equal(t, testCmd, "uv run pytest")
 	})
 
 	t.Run("python requirements.txt", func(t *testing.T) {
@@ -642,9 +550,7 @@ func TestDetectCommands(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "requirements.txt", "pytest\n")
 		install, _, _ := detectCommands(dir, stackPython)
-		if install != "pip install -r requirements.txt" {
-			t.Errorf("install = %q", install)
-		}
+		assert.Equal(t, install, "pip install -r requirements.txt")
 	})
 
 	t.Run("javascript yarn", func(t *testing.T) {
@@ -653,20 +559,15 @@ func TestDetectCommands(t *testing.T) {
 		writeFile(t, dir, "yarn.lock", "")
 		writeFile(t, dir, "package.json", `{"scripts":{"test":"jest"}}`)
 		install, testCmd, _ := detectCommands(dir, stackJavaScript)
-		if install != "yarn install" {
-			t.Errorf("install = %q", install)
-		}
-		if testCmd != "yarn test" {
-			t.Errorf("test = %q", testCmd)
-		}
+		assert.Equal(t, install, "yarn install")
+		assert.Equal(t, testCmd, "yarn test")
 	})
 
 	t.Run("unknown stack", func(t *testing.T) {
 		t.Parallel()
 		install, test, _ := detectCommands(t.TempDir(), stackUnknown)
-		if install != stackUnknown || test != stackUnknown {
-			t.Errorf("expected unknown commands for unknown stack, got install=%q test=%q", install, test)
-		}
+		assert.Equal(t, install, stackUnknown)
+		assert.Equal(t, test, stackUnknown)
 	})
 }
 
@@ -687,9 +588,13 @@ func TestDockerfileContent(t *testing.T) {
 		content := dockerfileContent(dir, env)
 		assertContains(t, content, "FROM cimg/go:1.22.3")
 		assertContains(t, content, "WORKDIR /app/bar") // last segment of module
-		assertContains(t, content, "COPY --chown=circleci:circleci . .")
+		// Split-COPY pattern: go.mod/go.sum first so the download layer is
+		// cached independently of source changes (e.g. Dockerfile.test, env.json).
+		assertContains(t, content, "COPY --chown=circleci:circleci go.mod go.sum ./")
 		assertContains(t, content, "RUN go mod download")
-		assertContains(t, content, "go list ./... | while IFS= read -r pkg")
+		assertContains(t, content, "COPY --chown=circleci:circleci . .")
+		// Dep-ordered per-package loop to bound peak GOTMPDIR usage.
+		assertContains(t, content, "go list -deps ./... | grep -Fxf")
 	})
 
 	t.Run("non-cimg image uses plain COPY", func(t *testing.T) {
@@ -704,9 +609,7 @@ func TestDockerfileContent(t *testing.T) {
 		content := dockerfileContent(t.TempDir(), env)
 		assertContains(t, content, "FROM python:3.12.0")
 		assertContains(t, content, "COPY . .")
-		if strings.Contains(content, "COPY --chown") {
-			t.Error("non-cimg image should not have --chown")
-		}
+		assert.Assert(t, !strings.Contains(content, "COPY --chown"), "non-cimg image should not have --chown")
 	})
 
 	t.Run("system dep injects RUN", func(t *testing.T) {
@@ -760,25 +663,22 @@ members = ["crates/mypkg"]
 
 // --- network tests (fake Docker Hub) ---
 
-// mockTransport routes HTTP requests to an in-process handler.
-type mockTransport struct {
+// fakeTransport routes HTTP requests to an in-process handler without opening
+// a real TCP connection, so tests don't need to intercept a real address.
+type fakeTransport struct {
 	handler http.Handler
 }
 
-func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	rr := httptest.NewRecorder()
-	m.handler.ServeHTTP(rr, req)
+	f.handler.ServeHTTP(rr, req)
 	return rr.Result(), nil
 }
 
-// withMockDockerHub replaces dockerHubClient for the duration of the test.
-func withMockDockerHub(t *testing.T, handler http.Handler) {
-	t.Helper()
-	original := dockerHubClient
-	dockerHubClient = httpcl.New(httpcl.Config{
-		Transport: &mockTransport{handler: handler},
-	})
-	t.Cleanup(func() { dockerHubClient = original })
+// newFakeDockerHubClient returns a *httpcl.Client whose HTTP calls are handled
+// by the provided handler instead of hitting the real Docker Hub.
+func newFakeDockerHubClient(handler http.Handler) *httpcl.Client {
+	return httpcl.New(httpcl.Config{Transport: &fakeTransport{handler: handler}})
 }
 
 func TestFetchAllImageVersions(t *testing.T) {
@@ -797,15 +697,10 @@ func TestFetchAllImageVersions(t *testing.T) {
 				},
 			})
 		})
-		withMockDockerHub(t, mux)
-
-		tags, err := fetchAllImageVersions(context.Background(), "cimg/go")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(tags) != 3 {
-			t.Errorf("expected 3 semver tags, got %v", tags)
-		}
+		client := newFakeDockerHubClient(mux)
+		tags, err := fetchAllImageVersions(context.Background(), client, "cimg/go")
+		assert.NilError(t, err)
+		assert.Equal(t, len(tags), 3, "expected 3 semver tags, got %v", tags)
 	})
 
 	t.Run("pagination", func(t *testing.T) {
@@ -827,29 +722,23 @@ func TestFetchAllImageVersions(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		})
-		withMockDockerHub(t, handler)
-
-		tags, err := fetchAllImageVersions(context.Background(), "cimg/go")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(tags) != 2 {
-			t.Errorf("expected 2 tags from 2 pages, got %v", tags)
-		}
-		if callCount != 2 {
-			t.Errorf("expected 2 HTTP calls for pagination, got %d", callCount)
-		}
+		client := newFakeDockerHubClient(handler)
+		tags, err := fetchAllImageVersions(context.Background(), client, "cimg/go")
+		assert.NilError(t, err)
+		assert.Equal(t, len(tags), 2, "expected 2 tags from 2 pages, got %v", tags)
+		assert.Equal(t, callCount, 2, "expected 2 HTTP calls for pagination, got %d", callCount)
 	})
 
 	t.Run("invalid image name", func(t *testing.T) {
-		_, err := fetchAllImageVersions(context.Background(), "noslash")
-		if err == nil {
-			t.Error("expected error for image without /")
-		}
+		client := newFakeDockerHubClient(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		_, err := fetchAllImageVersions(context.Background(), client, "noslash")
+		assert.Assert(t, err != nil, "expected error for image without /")
 	})
 
 	t.Run("no version tags returns error", func(t *testing.T) {
-		withMockDockerHub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		client := newFakeDockerHubClient(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(dockerHubTagsResponse{
 				Results: []struct {
@@ -857,15 +746,13 @@ func TestFetchAllImageVersions(t *testing.T) {
 				}{{"latest"}, {"edge"}},
 			})
 		}))
-		_, err := fetchAllImageVersions(context.Background(), "cimg/go")
-		if err == nil {
-			t.Error("expected error when no semver tags found")
-		}
+		_, err := fetchAllImageVersions(context.Background(), client, "cimg/go")
+		assert.Assert(t, err != nil, "expected error when no semver tags found")
 	})
 }
 
 func TestFetchLatestImageVersionWithConstraint(t *testing.T) {
-	withMockDockerHub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newFakeDockerHubClient(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(dockerHubTagsResponse{
 			Results: []struct {
@@ -876,17 +763,13 @@ func TestFetchLatestImageVersionWithConstraint(t *testing.T) {
 		})
 	}))
 
-	got, err := fetchLatestImageVersionWithConstraint(context.Background(), "cimg/node", 20)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "20.18.0" {
-		t.Errorf("got %q, want %q", got, "20.18.0")
-	}
+	got, err := fetchLatestImageVersionWithConstraint(context.Background(), client, "cimg/node", 20)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "20.18.0")
 }
 
 func TestFetchLatestImageVersionWithMajorMinorConstraint(t *testing.T) {
-	withMockDockerHub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newFakeDockerHubClient(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(dockerHubTagsResponse{
 			Results: []struct {
@@ -897,20 +780,14 @@ func TestFetchLatestImageVersionWithMajorMinorConstraint(t *testing.T) {
 		})
 	}))
 
-	got, err := fetchLatestImageVersionWithMajorMinorConstraint(context.Background(), "cimg/go", 1, 23)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "1.23.5" {
-		t.Errorf("got %q, want %q", got, "1.23.5")
-	}
+	got, err := fetchLatestImageVersionWithMajorMinorConstraint(context.Background(), client, "cimg/go", 1, 23)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "1.23.5")
 }
 
 // --- helpers ---
 
 func assertContains(t *testing.T, content, substr string) {
 	t.Helper()
-	if !strings.Contains(content, substr) {
-		t.Errorf("content does not contain %q\ncontent:\n%s", substr, content)
-	}
+	assert.Assert(t, strings.Contains(content, substr), "content does not contain %q\ncontent:\n%s", substr, content)
 }

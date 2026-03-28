@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -276,10 +277,10 @@ func newSandboxEnvCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "env",
-		Short: "Detect tech stack and generate a test Dockerfile",
-		Long: `Analyse the repository at --dir, detect its tech stack, and write
-a Dockerfile.test ready for building a test image. Prints the detected
-environment as JSON to stdout.`,
+		Short: "Detect tech stack and print environment spec as JSON",
+		Long: `Analyse the repository at --dir, detect its tech stack, and print
+a JSON environment spec to stdout. Pipe this into 'chunk sandbox build' to
+generate a Dockerfile and build a test image.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			io.ErrPrintf("Detecting environment in %s...\n", dir)
@@ -289,17 +290,11 @@ environment as JSON to stdout.`,
 				return fmt.Errorf("detect environment: %w", err)
 			}
 
-			dockerfilePath, err := envbuilder.WriteDockerfile(dir, env)
-			if err != nil {
-				return fmt.Errorf("write dockerfile: %w", err)
-			}
-
 			out, err := json.MarshalIndent(env, "", "  ")
 			if err != nil {
 				return fmt.Errorf("marshal environment: %w", err)
 			}
 			io.Printf("%s\n", out)
-			io.ErrPrintf("%s\n", ui.Success("Wrote "+dockerfilePath))
 			return nil
 		},
 	}
@@ -314,15 +309,44 @@ func newSandboxBuildCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "build",
-		Short: "Build a Docker test image from a generated Dockerfile.test",
-		Long:  `Build a Docker image from the Dockerfile.test in --dir. Run 'chunk sandboxes env' first to generate the Dockerfile.`,
+		Short: "Generate a Dockerfile from an environment spec and build a test image",
+		Long: `Read a JSON environment spec from stdin (produced by 'chunk sandbox env'),
+write Dockerfile.test to --dir, and build a Docker test image from it.
+
+Example:
+  chunk sandbox env --dir . | chunk sandbox build --dir .`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if tag != "" && !validDockerTag.MatchString(tag) {
 				return fmt.Errorf("invalid docker tag %q", tag)
 			}
 
-			io := iostream.FromCmd(cmd)
-			io.ErrPrintf("Building Docker image in %s...\n", dir)
+			streams := iostream.FromCmd(cmd)
+
+			// Guard against interactive use: if stdin is a terminal (not a pipe),
+			// fail fast with a helpful message rather than blocking silently.
+			// Check cmd.InOrStdin() so injected readers (e.g. in tests) are not blocked.
+			if f, ok := cmd.InOrStdin().(*os.File); ok {
+				if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+					return fmt.Errorf("no input on stdin — pipe a JSON env spec from 'chunk sandbox env'")
+				}
+			}
+
+			raw, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return fmt.Errorf("read environment spec: %w", err)
+			}
+			var env envbuilder.Environment
+			if err := json.Unmarshal(raw, &env); err != nil {
+				return fmt.Errorf("parse environment spec: %w", err)
+			}
+
+			dockerfilePath, err := envbuilder.WriteDockerfile(dir, &env)
+			if err != nil {
+				return fmt.Errorf("write dockerfile: %w", err)
+			}
+			streams.ErrPrintf("Wrote %s\n", dockerfilePath)
+
+			streams.ErrPrintf("Building Docker image in %s...\n", dir)
 
 			args := []string{"build", "-f", "Dockerfile.test"}
 			if tag != "" {
@@ -332,18 +356,18 @@ func newSandboxBuildCmd() *cobra.Command {
 
 			dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
 			dockerCmd.Dir = dir
-			dockerCmd.Stdout = io.Out
-			dockerCmd.Stderr = io.Err
+			dockerCmd.Stdout = streams.Out
+			dockerCmd.Stderr = streams.Err
 			if err := dockerCmd.Run(); err != nil {
 				return fmt.Errorf("docker build: %w", err)
 			}
 
-			io.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
+			streams.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&dir, "dir", ".", "Directory containing the Dockerfile.test")
+	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write Dockerfile.test and build from")
 	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
 
 	return cmd
