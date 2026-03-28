@@ -38,6 +38,13 @@ tasks:
     cmds:
       - go mod tidy -v
 
+  dev-install:
+    desc: Build from source and install to ~/.local/bin
+    cmds:
+      - task: build
+      - mkdir -p ${HOME}/.local/bin
+      - cp dist/chunk ${HOME}/.local/bin
+
   release:
     desc: Tag, build, and publish a release (tag → goreleaser → NUR)
     vars:
