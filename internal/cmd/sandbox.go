@@ -360,6 +360,14 @@ Example:
 			if tag != "" {
 				args = append(args, "-t", tag)
 			}
+			if env.NeedsNPMRC {
+				if home, err := os.UserHomeDir(); err == nil {
+					npmrcPath := filepath.Join(home, ".npmrc")
+					if _, statErr := os.Stat(npmrcPath); statErr == nil {
+						args = append(args, "--secret", "id=npmrc,src="+npmrcPath)
+					}
+				}
+			}
 			args = append(args, ".")
 
 			dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
