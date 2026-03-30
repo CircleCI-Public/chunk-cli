@@ -19,12 +19,7 @@ import (
 // --- exec error paths ---
 
 func TestSandboxExecMissingCommand(t *testing.T) {
-	cci := fakes.NewFakeCircleCI()
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
 	env := testenv.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
 		"sandbox", "exec",
