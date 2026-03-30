@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -16,8 +17,13 @@ var dangerousEnvVars = map[string]string{
 // DangerousEnvWarnings returns warning strings for any env var names in vars
 // that are known to be dangerous to forward into a sandbox.
 func DangerousEnvWarnings(vars map[string]string) []string {
-	var warnings []string
+	names := make([]string, 0, len(vars))
 	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var warnings []string
+	for _, name := range names {
 		if reason, ok := dangerousEnvVars[name]; ok {
 			warnings = append(warnings, fmt.Sprintf("Forwarding %s — %s", name, reason))
 		}

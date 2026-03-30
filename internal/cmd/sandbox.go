@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 func newSandboxCmd() *cobra.Command {
@@ -209,7 +210,7 @@ func newSandboxSSHCmd() *cobra.Command {
 			}
 			envVars, err := sandbox.ResolveEnvVars(forwardEnv, os.LookupEnv)
 			if err != nil {
-				return err
+				return usererr.New(fmt.Sprintf("invalid --forward-env: %s", err), err)
 			}
 			for _, w := range sandbox.DangerousEnvWarnings(envVars) {
 				io.ErrPrintln(ui.Warning(w))

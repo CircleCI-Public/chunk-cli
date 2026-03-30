@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -107,8 +108,13 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 	}
 	defer closer.ErrorHandler(sess, &err)
 
-	for name, value := range envVars {
-		if err := sess.Setenv(name, value); err != nil {
+	names := make([]string, 0, len(envVars))
+	for name := range envVars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := sess.Setenv(name, envVars[name]); err != nil {
 			return nil, fmt.Errorf("set env %s: %w", name, err)
 		}
 	}
@@ -185,8 +191,13 @@ func InteractiveShell(ctx context.Context, session *Session, envVars map[string]
 	go watchWindowSize(fd, sess, done)
 	defer close(done)
 
-	for name, value := range envVars {
-		if err := sess.Setenv(name, value); err != nil {
+	names := make([]string, 0, len(envVars))
+	for name := range envVars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := sess.Setenv(name, envVars[name]); err != nil {
 			return fmt.Errorf("set env %s: %w", name, err)
 		}
 	}
