@@ -12,6 +12,11 @@ jobs:
     steps:
       - checkout
       - run: task mod-download
+      - run:
+          name: Install uv
+          command: |
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
       - go/with-cache:
           golangci-lint: true
           steps:
