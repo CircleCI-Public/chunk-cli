@@ -36,6 +36,7 @@ const (
 
 	cimgPrefix  = "cimg/"
 	cmdDartTest = "dart test"
+	toolPytest  = "pytest"
 )
 
 // Environment describes the detected tech stack and build configuration for a repository.
@@ -923,7 +924,7 @@ func detectUVTestExtras(dir string) []string {
 // is test/coverage related.
 var testGroupNamePrefixes = []string{
 	"test", "tests", "testing",
-	"pytest",
+	toolPytest,
 	"coverage", "cov",
 	"check",
 }
@@ -1219,15 +1220,15 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 		switch {
 		case fileExists(dir, "uv.lock"):
 			install = buildUVSyncCommand(dir)
-			test = "uv run pytest"
+			test = "uv run " + toolPytest
 			systemDeps = []string{"uv"}
 		case fileExists(dir, "Pipfile"):
 			install = "pipenv install --dev"
-			test = "pipenv run pytest"
+			test = "pipenv run " + toolPytest
 			systemDeps = []string{stackPython, "pipenv"}
 		case fileExists(dir, "requirements.txt"):
 			install = "pip install -r requirements.txt"
-			test = "pytest"
+			test = toolPytest
 			systemDeps = []string{stackPython, "pip"}
 		default:
 			var installParts []string
@@ -1262,7 +1263,7 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 				installParts = append(installParts, "pip install "+strings.Join(quoted, " "))
 			}
 			install = strings.Join(installParts, " && ")
-			test = "pytest"
+			test = toolPytest
 			systemDeps = []string{stackPython, "pip"}
 		}
 
