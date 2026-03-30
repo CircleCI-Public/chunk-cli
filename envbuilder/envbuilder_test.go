@@ -808,6 +808,22 @@ members = ["crates/mypkg"]
 		assertContains(t, content, "ENV UV_CACHE_DIR=/tmp/uv-cache")
 	})
 
+	t.Run("js/ts stack sets CI=true and uses npmrc secret mount", func(t *testing.T) {
+		t.Parallel()
+		env := &Environment{
+			Stack:        stackTypeScript,
+			Install:      "pnpm install",
+			Test:         "pnpm test",
+			SystemDeps:   []string{"node", "pnpm"},
+			Image:        "cimg/node",
+			ImageVersion: "22.0",
+			NeedsNPMRC:   true,
+		}
+		content := dockerfileContent(t.TempDir(), env)
+		assertContains(t, content, "ENV CI=true")
+		assertContains(t, content, "--mount=type=secret,id=npmrc,required=false,mode=0444 NPM_CONFIG_USERCONFIG=/run/secrets/npmrc pnpm install")
+	})
+
 	t.Run("sudo apt-get for cimg system deps", func(t *testing.T) {
 		t.Parallel()
 		env := &Environment{

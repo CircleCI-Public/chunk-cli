@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 
 	"github.com/spf13/cobra"
@@ -348,6 +349,14 @@ Example:
 			args := []string{"build", "-f", "Dockerfile.test"}
 			if tag != "" {
 				args = append(args, "-t", tag)
+			}
+			if env.NeedsNPMRC {
+				if home, err := os.UserHomeDir(); err == nil {
+					npmrcPath := filepath.Join(home, ".npmrc")
+					if _, statErr := os.Stat(npmrcPath); statErr == nil {
+						args = append(args, "--secret", "id=npmrc,src="+npmrcPath)
+					}
+				}
 			}
 			args = append(args, ".")
 

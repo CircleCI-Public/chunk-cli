@@ -47,6 +47,7 @@ type Environment struct {
 	SystemDeps   []string `json:"system_deps"`
 	Image        string   `json:"image"`
 	ImageVersion string   `json:"image_version"`
+	NeedsNPMRC   bool     `json:"needs_npmrc,omitempty"`
 }
 
 func fileExists(dir, name string) bool {
@@ -562,6 +563,13 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 			sb.WriteString("COPY . .\n")
 		}
 	}
+	// pnpm aborts with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY when there is
+	// an existing node_modules directory and no TTY is present (i.e. inside Docker).
+	// Setting CI=true suppresses the interactive prompt. This is harmless for other
+	// JS/TS package managers and is a standard signal for CI environments.
+	if env.NeedsNPMRC {
+		sb.WriteString("\nENV CI=true\n")
+	}
 	// For .NET projects, the dotnet/sdk:N image on ARM64 only ships the N.0
 	// runtime — it does NOT bundle previous runtimes (contrary to the AMD64
 	// behaviour).  When global.json forces SDK version N but the test project
@@ -614,7 +622,18 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	// Go and Ruby already emitted their install steps inside the split-COPY
 	// block above.
 	if env.Stack != stackGo && env.Stack != stackRuby {
-		sb.WriteString("\nRUN " + env.Install + "\n")
+		if env.NeedsNPMRC {
+			// Mount ~/.npmrc as a BuildKit secret so private registry credentials
+			// are available during install without being baked into the image layer.
+			// required=false means the build succeeds even when no secret is provided
+			// (public-only repos don't need credentials).
+			// NPM_CONFIG_USERCONFIG points npm/pnpm/yarn at the secret's default
+			// mount path (/run/secrets/npmrc) so the credential lookup works regardless
+			// of which user the container runs as.
+			fmt.Fprintf(&sb, "\nRUN --mount=type=secret,id=npmrc,required=false,mode=0444 NPM_CONFIG_USERCONFIG=/run/secrets/npmrc %s\n", env.Install)
+		} else {
+			sb.WriteString("\nRUN " + env.Install + "\n")
+		}
 	}
 
 	// Elixir-specific fixups applied after deps are fetched:
@@ -1937,6 +1956,7 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 		SystemDeps:   systemDeps,
 		Image:        image,
 		ImageVersion: imageVersion,
+		NeedsNPMRC:   stack == stackJavaScript || stack == stackTypeScript,
 	}, nil
 }
 
