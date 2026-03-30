@@ -1109,11 +1109,12 @@ func TestBuildPromptAllReposFailResolution(t *testing.T) {
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
-	// The command should either succeed with warning or fail gracefully
+	// When all repos fail resolution the command should still exit
+	// without panicking. Check for a skip warning or non-zero exit.
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t,
-		strings.Contains(combined, "bad-repo") || result.ExitCode != 0,
-		"expected mention of bad-repo or non-zero exit, got code %d: %s",
+		strings.Contains(combined, "Skipping") || result.ExitCode != 0,
+		"expected skip warning or non-zero exit, got code %d: %s",
 		result.ExitCode, combined)
 }
 
@@ -1149,8 +1150,11 @@ func TestBuildPromptEmptyReviewActivity(t *testing.T) {
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
-	// Should handle gracefully without panicking
-	_ = result
+	// With zero comments the command should fail (no data to analyze)
+	// or succeed with a warning. Either way it must not panic.
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for empty review activity, got stdout: %s\nstderr: %s",
+		result.Stdout, result.Stderr)
 }
 
 // output directory creation for nested paths that don't exist
@@ -1333,8 +1337,8 @@ func TestBuildPromptLegacyOutputWarning(t *testing.T) {
 
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t,
-		strings.Contains(combined, "legacy") || strings.Contains(combined, "Legacy") || strings.Contains(combined, "review-prompt.md"),
-		"expected warning about legacy output file, got: %s", combined)
+		strings.Contains(combined, "legacy") || strings.Contains(combined, "Legacy"),
+		"expected legacy warning in output, got: %s", combined)
 }
 
 // helpers
