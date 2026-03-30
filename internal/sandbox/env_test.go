@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -64,5 +65,47 @@ func TestResolveEnvVars(t *testing.T) {
 		result, err := ResolveEnvVars("FOO,,BAR", lookup(map[string]string{"FOO": "a", "BAR": "b"}))
 		assert.NilError(t, err)
 		assert.Equal(t, len(result), 2)
+	})
+}
+
+func TestDangerousEnvWarnings(t *testing.T) {
+	t.Run("no warnings for safe vars", func(t *testing.T) {
+		warnings := DangerousEnvWarnings(map[string]string{
+			"OP_SERVICE_ACCOUNT_TOKEN": "secret",
+			"MY_API_KEY":               "key",
+		})
+		assert.Equal(t, len(warnings), 0)
+	})
+
+	t.Run("warns on LD_PRELOAD", func(t *testing.T) {
+		warnings := DangerousEnvWarnings(map[string]string{"LD_PRELOAD": "/tmp/evil.so"})
+		assert.Equal(t, len(warnings), 1)
+		assert.Assert(t, strings.Contains(warnings[0], "LD_PRELOAD"))
+	})
+
+	t.Run("warns on PATH", func(t *testing.T) {
+		warnings := DangerousEnvWarnings(map[string]string{"PATH": "/usr/bin"})
+		assert.Equal(t, len(warnings), 1)
+		assert.Assert(t, strings.Contains(warnings[0], "PATH"))
+	})
+
+	t.Run("warns on LD_LIBRARY_PATH", func(t *testing.T) {
+		warnings := DangerousEnvWarnings(map[string]string{"LD_LIBRARY_PATH": "/tmp"})
+		assert.Equal(t, len(warnings), 1)
+		assert.Assert(t, strings.Contains(warnings[0], "LD_LIBRARY_PATH"))
+	})
+
+	t.Run("multiple dangerous vars", func(t *testing.T) {
+		warnings := DangerousEnvWarnings(map[string]string{
+			"LD_PRELOAD": "/tmp/evil.so",
+			"PATH":       "/usr/bin",
+			"SAFE_VAR":   "ok",
+		})
+		assert.Equal(t, len(warnings), 2)
+	})
+
+	t.Run("nil map returns no warnings", func(t *testing.T) {
+		warnings := DangerousEnvWarnings(nil)
+		assert.Equal(t, len(warnings), 0)
 	})
 }

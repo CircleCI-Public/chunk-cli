@@ -211,6 +211,9 @@ func newSandboxSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			for _, w := range sandbox.DangerousEnvWarnings(envVars) {
+				io.ErrPrintln(ui.Warning(w))
+			}
 			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
 		},
 	}

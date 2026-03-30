@@ -155,12 +155,6 @@ func InteractiveShell(ctx context.Context, session *Session, envVars map[string]
 	}
 	defer closer.ErrorHandler(sess, &err)
 
-	for name, value := range envVars {
-		if err := sess.Setenv(name, value); err != nil {
-			return fmt.Errorf("set env %s: %w", name, err)
-		}
-	}
-
 	// Put local terminal into raw mode so keystrokes pass through directly.
 	fd := int(os.Stdin.Fd())
 	oldState, err := term.MakeRaw(fd)
@@ -190,6 +184,12 @@ func InteractiveShell(ctx context.Context, session *Session, envVars map[string]
 	done := make(chan struct{})
 	go watchWindowSize(fd, sess, done)
 	defer close(done)
+
+	for name, value := range envVars {
+		if err := sess.Setenv(name, value); err != nil {
+			return fmt.Errorf("set env %s: %w", name, err)
+		}
+	}
 
 	if err := sess.Shell(); err != nil {
 		return fmt.Errorf("start shell: %w", err)
