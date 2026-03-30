@@ -555,7 +555,7 @@ func TestHookEnvUpdateSetProjectRoot(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 }
 
-// --- env update: missing coverage ---
+// --- env update: options and shell variants ---
 
 func TestHookEnvUpdateXDGConfigHome(t *testing.T) {
 	env := testenv.NewTestEnv(t)
@@ -673,7 +673,7 @@ func TestHookEnvUpdateBashShellBashProfile(t *testing.T) {
 		"expected marker in .bash_profile")
 }
 
-// --- scope: missing coverage ---
+// --- scope activate ---
 
 func TestHookScopeActivateHappyPath(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
@@ -856,7 +856,7 @@ func TestHookScopeActivateClaudeProjectDirFallback(t *testing.T) {
 	assert.NilError(t, err, "expected marker via CLAUDE_PROJECT_DIR fallback")
 }
 
-// --- scope deactivate: missing coverage ---
+// --- scope deactivate ---
 
 func TestHookScopeDeactivateHappyPath(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
@@ -937,7 +937,7 @@ func TestHookScopeDeactivateClaudeProjectDirFallback(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err), "expected marker removed via CLAUDE_PROJECT_DIR fallback")
 }
 
-// --- state: missing coverage ---
+// --- state save/load ---
 
 func TestHookStateSaveLoadRoundTrip(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
@@ -1127,7 +1127,6 @@ func TestHookStateLoadDefaultEntriesSugar(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
-	// Append two entries
 	result := binary.RunCLIWithStdin(t, []string{
 		"hook", "state", "append", "--project", workDir,
 	}, env, workDir, []byte(`{"hook_event_name":"ToolUse","session_id":"sess-idx","tool":"Bash"}`))
@@ -1206,7 +1205,7 @@ func TestHookStateLoadNonexistentField(t *testing.T) {
 	assert.Equal(t, strings.TrimSpace(result.Stdout), "")
 }
 
-// --- state clear: missing coverage ---
+// --- state clear ---
 
 func TestHookStateClearVerifyFileDeletion(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
