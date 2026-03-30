@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -811,6 +812,8 @@ func TestHookScopeActivateSessionConflictExpired(t *testing.T) {
 		"hook", "scope", "activate", "--project", workDir,
 	}, env, workDir, []byte(stdinA))
 	assert.Equal(t, result.ExitCode, 0)
+
+	time.Sleep(2 * time.Millisecond) // ensure sess-A's marker is expired (TTL=1ms)
 
 	stdinB := fmt.Sprintf(`{
 		"session_id": "sess-B",

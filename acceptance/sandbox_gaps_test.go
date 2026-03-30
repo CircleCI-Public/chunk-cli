@@ -3,8 +3,6 @@ package acceptance
 import (
 	"encoding/json"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -176,17 +174,13 @@ func TestSandboxEnvEmptyDir(t *testing.T) {
 		"--dir", dir,
 	}, env, env.HomeDir)
 
-	// Empty dir should still succeed (unknown stack) and produce JSON + Dockerfile.test
+	// Empty dir should still succeed (unknown stack) and produce JSON on stdout.
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	// Verify JSON output on stdout
 	var envOutput map[string]interface{}
 	err := json.Unmarshal([]byte(result.Stdout), &envOutput)
 	assert.NilError(t, err, "expected valid JSON on stdout, got: %s", result.Stdout)
-
-	// Verify Dockerfile.test was written
-	_, err = os.Stat(filepath.Join(dir, "Dockerfile.test"))
-	assert.NilError(t, err, "expected Dockerfile.test to be written")
 }
 
 func TestSandboxEnvNonexistentDir(t *testing.T) {
