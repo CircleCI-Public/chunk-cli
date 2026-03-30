@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -54,7 +53,7 @@ func pickCircleCIOrg(ctx context.Context, streams iostream.Streams) (orgID, orgN
 
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipValidate, skipCircleCI bool
-	var profile, projectDir string
+	var projectDir string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -80,10 +79,6 @@ commands, and generates hook config files.`,
 			gitCmd.Dir = workDir
 			if err := gitCmd.Run(); err != nil {
 				return fmt.Errorf("not a git repository, run this command from inside a git repo")
-			}
-
-			if err := hook.ValidateProfile(profile); err != nil {
-				return err
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
@@ -153,7 +148,7 @@ commands, and generates hook config files.`,
 				if cfg.VCS != nil && cfg.VCS.Repo != "" {
 					projectName = cfg.VCS.Repo
 				}
-				if err := hook.RunSetup(workDir, projectName, profile, force, false, "", cfg.Commands, streams); err != nil {
+				if err := hook.RunSetup(workDir, projectName, force, false, "", cfg.Commands, streams); err != nil {
 					return fmt.Errorf("hook setup: %w", err)
 				}
 			}
@@ -168,8 +163,6 @@ commands, and generates hook config files.`,
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCircleCI, "skip-circleci", false, "Skip CircleCI org picker")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
-	cmd.Flags().StringVar(&profile, "profile", "enable",
-		fmt.Sprintf("Shell environment profile (%s)", strings.Join(hook.ValidProfiles, ", ")))
 
 	return cmd
 }

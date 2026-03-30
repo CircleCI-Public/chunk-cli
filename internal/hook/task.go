@@ -66,7 +66,7 @@ func resolveTask(cfg *ResolvedConfig, flags TaskCheckFlags) TaskConfig {
 
 // RunTaskCheck checks a task result. When not enabled, exits 0.
 func RunTaskCheck(cfg *ResolvedConfig, flags TaskCheckFlags, event map[string]interface{}) error {
-	if !IsEnabled(flags.Name) {
+	if !IsEnabled() {
 		return nil
 	}
 

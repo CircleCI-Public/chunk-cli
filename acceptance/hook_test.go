@@ -18,19 +18,6 @@ import (
 
 // --- env update ---
 
-func TestHookEnvUpdateInvalidProfile(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-
-	result := binary.RunCLI(t, []string{
-		"hook", "env", "update", "--profile", "bogus",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Invalid profile") || strings.Contains(combined, "Valid profiles"),
-		"expected invalid profile error, got: %s", combined)
-}
-
 func TestHookEnvUpdateHappyPath(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
@@ -55,65 +42,6 @@ func TestHookEnvUpdateWithOptions(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-}
-
-// --- env update: TS parity ---
-
-func TestHookEnvUpdateProfileContent(t *testing.T) {
-	tests := []struct {
-		profile  string
-		contains []string
-		absent   []string
-	}{
-		{
-			profile:  "enable",
-			contains: []string{"export CHUNK_HOOK_ENABLE=1", "Profile: enable"},
-			absent:   []string{"export CHUNK_HOOK_ENABLE_TESTS"},
-		},
-		{
-			profile:  "disable",
-			contains: []string{"export CHUNK_HOOK_ENABLE=0", "Profile: disable"},
-			absent:   []string{"export CHUNK_HOOK_ENABLE_TESTS"},
-		},
-		{
-			profile: "tests-lint",
-			contains: []string{
-				"export CHUNK_HOOK_ENABLE=0",
-				"export CHUNK_HOOK_ENABLE_TESTS=1",
-				"export CHUNK_HOOK_ENABLE_TESTS_CHANGED=1",
-				"export CHUNK_HOOK_ENABLE_LINT=1",
-				"Profile: tests-lint",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.profile, func(t *testing.T) {
-			env := testenv.NewTestEnv(t)
-			envFile := filepath.Join(env.HomeDir, "test-env")
-
-			result := binary.RunCLI(t, []string{
-				"hook", "env", "update",
-				"--profile", tt.profile,
-				"--env-file", envFile,
-			}, env, env.HomeDir)
-
-			assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-
-			data, err := os.ReadFile(envFile)
-			assert.NilError(t, err)
-			content := string(data)
-
-			for _, s := range tt.contains {
-				assert.Assert(t, strings.Contains(content, s),
-					"expected %q in env file, got:\n%s", s, content)
-			}
-			for _, s := range tt.absent {
-				assert.Assert(t, !strings.Contains(content, s),
-					"did not expect %q in env file, got:\n%s", s, content)
-			}
-		})
-	}
 }
 
 func TestHookEnvUpdateShellSourcing(t *testing.T) {
@@ -229,8 +157,9 @@ func TestHookEnvUpdateCommentedHints(t *testing.T) {
 	assert.Assert(t, strings.Contains(content, "# export CHUNK_HOOK_PROJECT_ROOT="),
 		"expected commented project root hint, got:\n%s", content)
 
-	assert.Assert(t, strings.Contains(content, "Quick toggle examples"),
-		"expected quick toggle header, got:\n%s", content)
+	// Should have CHUNK_HOOK_ENABLE=1
+	assert.Assert(t, strings.Contains(content, "export CHUNK_HOOK_ENABLE=1"),
+		"expected CHUNK_HOOK_ENABLE=1, got:\n%s", content)
 }
 
 func TestHookEnvUpdateBashShell(t *testing.T) {
@@ -320,6 +249,7 @@ func TestHookExecRunNotEnabled(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
+	// Deliberately not setting CHUNK_HOOK_ENABLE
 
 	result := binary.RunCLI(t, []string{
 		"validate", "tests", "--no-check", "--project", workDir,
@@ -334,7 +264,7 @@ func TestHookExecRunNoCheck(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.Extra["CHUNK_HOOK_ENABLE"] = "1"
-	env.Extra["CHUNK_HOOK_ENABLE_TESTS"] = "1"
+
 	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
 	result := binary.RunCLI(t, []string{
@@ -372,7 +302,7 @@ func TestHookExecRunFlags(t *testing.T) {
 
 			env := testenv.NewTestEnv(t)
 			env.Extra["CHUNK_HOOK_ENABLE"] = "1"
-			env.Extra["CHUNK_HOOK_ENABLE_TESTS"] = "1"
+
 			env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
 
 			args := []string{"validate", "tests"}

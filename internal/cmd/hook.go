@@ -41,7 +41,6 @@ func newHookEnvCmd() *cobra.Command {
 
 func newHookEnvUpdateCmd() *cobra.Command {
 	var (
-		profile     string
 		envFile     string
 		logDir      string
 		verbose     bool
@@ -52,7 +51,6 @@ func newHookEnvUpdateCmd() *cobra.Command {
 		Short: "Update hook environment configuration",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return hook.RunEnvUpdate(hook.EnvUpdateOptions{
-				Profile:     profile,
 				EnvFile:     envFile,
 				LogDir:      logDir,
 				Verbose:     verbose,
@@ -60,7 +58,6 @@ func newHookEnvUpdateCmd() *cobra.Command {
 			}, iostream.FromCmd(cmd))
 		},
 	}
-	cmd.Flags().StringVar(&profile, "profile", "enable", "Environment profile")
 	cmd.Flags().StringVar(&envFile, "env-file", "", "Custom env file path")
 	cmd.Flags().StringVar(&logDir, "set-log-dir", "", "Set log directory")
 	cmd.Flags().BoolVar(&verbose, "set-verbose", false, "Enable verbose logging")
