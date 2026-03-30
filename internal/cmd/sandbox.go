@@ -283,6 +283,9 @@ a JSON environment spec to stdout. Pipe this into 'chunk sandbox build' to
 generate a Dockerfile and build a test image.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
+			if _, err := os.Stat(dir); err != nil {
+				return fmt.Errorf("directory %q not found: %w", dir, err)
+			}
 			io.ErrPrintf("Detecting environment in %s...\n", dir)
 
 			env, err := envbuilder.DetectEnvironment(cmd.Context(), dir)
