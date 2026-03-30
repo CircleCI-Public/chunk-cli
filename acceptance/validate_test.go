@@ -5,10 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,28 +19,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
-
-func gitEnvForDir(dir string) []string {
-	return []string{
-		fmt.Sprintf("HOME=%s", dir),
-		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
-		"GIT_AUTHOR_NAME=Test",
-		"GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=Test",
-		"GIT_COMMITTER_EMAIL=test@test.com",
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_SYSTEM=/dev/null",
-	}
-}
-
-func gitAddFile(t *testing.T, workDir, filename string) {
-	t.Helper()
-	cmd := exec.Command("git", "add", filename)
-	cmd.Dir = workDir
-	cmd.Env = gitEnvForDir(workDir)
-	out, err := cmd.CombinedOutput()
-	assert.NilError(t, err, "git add %s failed: %s", filename, string(out))
-}
 
 func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string) {
 	t.Helper()
@@ -405,7 +381,7 @@ func TestValidateCacheInvalidationOnGitChange(t *testing.T) {
 
 	// Stage a new file so it appears in git diff HEAD
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "new-file.txt"), []byte("change"), 0o644))
-	gitAddFile(t, workDir, "new-file.txt")
+	gitrepo.AddFile(t, workDir, "new-file.txt")
 
 	// Second run: cache should be invalidated due to git diff change
 	result = binary.RunCLI(t, []string{"validate"}, env, workDir)
@@ -451,8 +427,16 @@ func TestValidateCacheFileExtScoping(t *testing.T) {
 	// Write config with fileExt scoping
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	configData := `{"commands": [{"name": "gotest", "run": "echo ran >> ` + marker + `", "fileExt": ".go"}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(configData), 0o644))
+	type extCmd struct {
+		Name    string `json:"name"`
+		Run     string `json:"run"`
+		FileExt string `json:"fileExt"`
+	}
+	configData, err := json.Marshal(map[string]interface{}{
+		"commands": []extCmd{{Name: "gotest", Run: "echo ran >> " + marker, FileExt: ".go"}},
+	})
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), configData, 0o644))
 
 	env := testenv.NewTestEnv(t)
 
@@ -462,7 +446,7 @@ func TestValidateCacheFileExtScoping(t *testing.T) {
 
 	// Stage a non-.go file: cache should still be valid (fileExt scopes to .go)
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "readme.txt"), []byte("text change"), 0o644))
-	gitAddFile(t, workDir, "readme.txt")
+	gitrepo.AddFile(t, workDir, "readme.txt")
 
 	result = binary.RunCLI(t, []string{"validate"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "second run stderr: %s", result.Stderr)
@@ -474,7 +458,7 @@ func TestValidateCacheFileExtScoping(t *testing.T) {
 
 	// Stage a .go file: cache should be invalidated
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main"), 0o644))
-	gitAddFile(t, workDir, "main.go")
+	gitrepo.AddFile(t, workDir, "main.go")
 
 	result = binary.RunCLI(t, []string{"validate"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "third run stderr: %s", result.Stderr)
