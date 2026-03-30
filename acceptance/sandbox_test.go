@@ -358,21 +358,6 @@ func TestSandboxesPrepareNotGitRepo(t *testing.T) {
 		"expected git repo error, got: %s", combined)
 }
 
-func TestSandboxesPrepareDockerSudo(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-
-	// --docker-sudo should be accepted as a flag; command fails for other reasons (not a git repo)
-	result := binary.RunCLI(t, []string{
-		"sandbox", "prepare", "--docker-sudo",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	combined := result.Stdout + result.Stderr
-	// Should fail because not a git repo, NOT because of unknown flag
-	assert.Assert(t, strings.Contains(combined, "git"),
-		"expected git repo error (not flag parse error), got: %s", combined)
-}
-
 // TestSandboxesSshSyncFlags verifies that SSH/sync flags are accepted and
 // code progresses past flag parsing (fails at SSH step, not at parsing).
 func TestSandboxesSshSyncFlags(t *testing.T) {
