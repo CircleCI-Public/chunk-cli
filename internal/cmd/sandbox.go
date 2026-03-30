@@ -360,7 +360,7 @@ Example:
 			if tag != "" {
 				args = append(args, "-t", tag)
 			}
-			if env.NeedsNPMRC {
+			if env.Stack == "javascript" || env.Stack == "typescript" {
 				if home, err := os.UserHomeDir(); err == nil {
 					npmrcPath := filepath.Join(home, ".npmrc")
 					if _, statErr := os.Stat(npmrcPath); statErr == nil {

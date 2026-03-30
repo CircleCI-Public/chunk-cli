@@ -817,7 +817,6 @@ members = ["crates/mypkg"]
 			SystemDeps:   []string{"node", "pnpm"},
 			Image:        "cimg/node",
 			ImageVersion: "22.0",
-			NeedsNPMRC:   true,
 		}
 		content := dockerfileContent(t.TempDir(), env)
 		assertContains(t, content, "ENV CI=true")

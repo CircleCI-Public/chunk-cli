@@ -47,7 +47,6 @@ type Environment struct {
 	SystemDeps   []string `json:"system_deps"`
 	Image        string   `json:"image"`
 	ImageVersion string   `json:"image_version"`
-	NeedsNPMRC   bool     `json:"needs_npmrc,omitempty"`
 }
 
 func fileExists(dir, name string) bool {
@@ -567,7 +566,7 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	// an existing node_modules directory and no TTY is present (i.e. inside Docker).
 	// Setting CI=true suppresses the interactive prompt. This is harmless for other
 	// JS/TS package managers and is a standard signal for CI environments.
-	if env.NeedsNPMRC {
+	if env.Stack == stackJavaScript || env.Stack == stackTypeScript {
 		sb.WriteString("\nENV CI=true\n")
 	}
 	// For .NET projects, the dotnet/sdk:N image on ARM64 only ships the N.0
@@ -622,7 +621,7 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	// Go and Ruby already emitted their install steps inside the split-COPY
 	// block above.
 	if env.Stack != stackGo && env.Stack != stackRuby {
-		if env.NeedsNPMRC {
+		if env.Stack == stackJavaScript || env.Stack == stackTypeScript {
 			// Mount ~/.npmrc as a BuildKit secret so private registry credentials
 			// are available during install without being baked into the image layer.
 			// required=false means the build succeeds even when no secret is provided
@@ -1956,7 +1955,6 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 		SystemDeps:   systemDeps,
 		Image:        image,
 		ImageVersion: imageVersion,
-		NeedsNPMRC:   stack == stackJavaScript || stack == stackTypeScript,
 	}, nil
 }
 
