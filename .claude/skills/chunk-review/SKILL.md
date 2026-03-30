@@ -13,6 +13,7 @@ Use the team's generated review prompt to review recent code changes with a two-
 1. **Load the review prompt**: Read `.chunk/review-prompt.md` from the root of the current project. If it does not exist, tell the user and suggest they run `chunk build-prompt` to generate one.
 
 2. **Determine the diff scope**: Use the following priority order to decide what to review:
+   - If the user specified a PR number (e.g. `PR#123` or `#123`) — use `gh pr diff <number>` to fetch the diff without checking out the branch
    - If the user specified a commit range, branch, or file list — use that
    - If there are staged changes (`git diff --cached`) — review those
    - Otherwise, review uncommitted changes against the main branch (`git diff main...HEAD` or `git diff origin/main...HEAD`)
