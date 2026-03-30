@@ -69,11 +69,17 @@ func (s settingsJSON) MarshalJSON() ([]byte, error) {
 
 	// json.MarshalIndent on map[string]string and map[string][]string sorts keys
 	// alphabetically (Go 1.12+), so output is deterministic.
-	perms, _ := json.MarshalIndent(s.Permissions, "  ", "  ")
+	perms, err := json.MarshalIndent(s.Permissions, "  ", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal permissions: %w", err)
+	}
 
 	var envBlock string
 	if len(s.Env) > 0 {
-		envJSON, _ := json.MarshalIndent(s.Env, "  ", "  ")
+		envJSON, err := json.MarshalIndent(s.Env, "  ", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("marshal env: %w", err)
+		}
 		envBlock = fmt.Sprintf(",\n  \"env\": %s", envJSON)
 	}
 
