@@ -56,6 +56,12 @@ type FakeCircleCI struct {
 	AddKeyURL      string
 	ExecResponse   *ExecResponse
 	RunStatusCode  int // override status code for trigger run endpoint
+
+	// Per-endpoint status code overrides for testing error responses.
+	ListStatusCode   int // override for GET /sandbox/instances
+	CreateStatusCode int // override for POST /sandbox/instances
+	ExecStatusCode   int // override for POST /sandbox/instances/:id/exec
+	AddKeyStatusCode int // override for POST /sandbox/instances/:id/ssh/add-key
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -116,6 +122,11 @@ func (f *FakeCircleCI) handleListSandboxes(c *gin.Context) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
+	if f.ListStatusCode != 0 {
+		c.JSON(f.ListStatusCode, gin.H{"message": "API error"})
+		return
+	}
+
 	orgID := c.Query("org_id")
 	var filtered []Sandbox
 	for _, s := range f.Sandboxes {
@@ -131,6 +142,14 @@ func (f *FakeCircleCI) handleListSandboxes(c *gin.Context) {
 
 func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
 	if !f.requireToken(c) {
+		return
+	}
+
+	f.mu.RLock()
+	statusCode := f.CreateStatusCode
+	f.mu.RUnlock()
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"message": "API error"})
 		return
 	}
 
@@ -164,6 +183,10 @@ func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+	if f.AddKeyStatusCode != 0 {
+		c.JSON(f.AddKeyStatusCode, gin.H{"message": "API error"})
+		return
+	}
 	c.JSON(http.StatusCreated, gin.H{"url": f.AddKeyURL})
 }
 
@@ -173,7 +196,13 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 	}
 	f.mu.RLock()
 	resp := f.ExecResponse
+	statusCode := f.ExecStatusCode
 	f.mu.RUnlock()
+
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"message": "API error"})
+		return
+	}
 
 	if resp != nil {
 		c.JSON(http.StatusOK, resp)
