@@ -94,7 +94,7 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 }
 
 // ExecOverSSH connects to the sandbox via SSH-over-TLS and executes a command.
-func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader) (_ *ExecResult, err error) {
+func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader, envVars map[string]string) (_ *ExecResult, err error) {
 	client, err := dialSSH(ctx, session)
 	if err != nil {
 		return nil, err
@@ -106,6 +106,12 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 		return nil, fmt.Errorf("SSH session: %w", err)
 	}
 	defer closer.ErrorHandler(sess, &err)
+
+	for name, value := range envVars {
+		if err := sess.Setenv(name, value); err != nil {
+			return nil, fmt.Errorf("set env %s: %w", name, err)
+		}
+	}
 
 	var stdout, stderr bytes.Buffer
 	sess.Stdout = &stdout
@@ -136,7 +142,7 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 // It intentionally uses os.Stdin/os.Stdout/os.Stderr directly rather than
 // iostream.Streams: term.MakeRaw and term.GetSize require a real *os.File fd,
 // and PTY I/O must be wired to the process's actual terminal.
-func InteractiveShell(ctx context.Context, session *Session) (err error) {
+func InteractiveShell(ctx context.Context, session *Session, envVars map[string]string) (err error) {
 	client, err := dialSSH(ctx, session)
 	if err != nil {
 		return err
@@ -148,6 +154,12 @@ func InteractiveShell(ctx context.Context, session *Session) (err error) {
 		return fmt.Errorf("SSH session: %w", err)
 	}
 	defer closer.ErrorHandler(sess, &err)
+
+	for name, value := range envVars {
+		if err := sess.Setenv(name, value); err != nil {
+			return fmt.Errorf("set env %s: %w", name, err)
+		}
+	}
 
 	// Put local terminal into raw mode so keystrokes pass through directly.
 	fd := int(os.Stdin.Fd())

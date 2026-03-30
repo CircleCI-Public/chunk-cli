@@ -487,6 +487,56 @@ func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
 		"expected helpful error message, got: %s", combined)
 }
 
+// TestSandboxesSSHForwardEnv verifies the --forward-env flag behaviour:
+//  1. A missing env var is detected before any SSH connection is attempted.
+//  2. A valid env var is resolved and the command proceeds past env resolution
+//     (failing at the SSH key stage, proving the flag was accepted).
+func TestSandboxesSSHForwardEnv(t *testing.T) {
+	t.Run("missing env var returns error before SSH", func(t *testing.T) {
+		cci := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(cci)
+		defer srv.Close()
+
+		env := testenv.NewTestEnv(t)
+		env.CircleCIURL = srv.URL
+		// __CHUNK_TEST_MISSING_VAR__ is intentionally not set in Extra.
+
+		result := binary.RunCLI(t, []string{
+			"sandbox", "ssh",
+			"--sandbox-id", "sb-111",
+			"--forward-env", "__CHUNK_TEST_MISSING_VAR__",
+		}, env, env.HomeDir)
+
+		assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+		combined := result.Stdout + result.Stderr
+		assert.Assert(t, strings.Contains(combined, "__CHUNK_TEST_MISSING_VAR__"),
+			"expected missing var name in error, got: %s", combined)
+	})
+
+	t.Run("valid env var progresses past env resolution", func(t *testing.T) {
+		cci := fakes.NewFakeCircleCI()
+		cci.AddKeyURL = "sandbox.dev.example.com"
+		srv := httptest.NewServer(cci)
+		defer srv.Close()
+
+		env := testenv.NewTestEnv(t)
+		env.CircleCIURL = srv.URL
+		env.Extra = map[string]string{"MY_TOKEN": "secret-value"}
+
+		result := binary.RunCLI(t, []string{
+			"sandbox", "ssh",
+			"--sandbox-id", "sb-111",
+			"--forward-env", "MY_TOKEN",
+		}, env, env.HomeDir)
+
+		// Should fail at SSH key step, not at env resolution.
+		assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
+		combined := result.Stdout + result.Stderr
+		assert.Assert(t, strings.Contains(combined, "SSH key not found"),
+			"expected SSH key error (proves env resolution passed), got: %s", combined)
+	})
+}
+
 func writeChunkConfig(t *testing.T, workDir, orgID string) {
 	t.Helper()
 	chunkDir := filepath.Join(workDir, ".chunk")

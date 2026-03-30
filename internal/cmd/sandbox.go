@@ -194,7 +194,7 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 }
 
 func newSandboxSSHCmd() *cobra.Command {
-	var sandboxID, identityFile string
+	var sandboxID, identityFile, forwardEnv string
 
 	cmd := &cobra.Command{
 		Use:   "ssh [flags] [-- command...]",
@@ -207,12 +207,17 @@ func newSandboxSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, io)
+			envVars, err := sandbox.ResolveEnvVars(forwardEnv, os.LookupEnv)
+			if err != nil {
+				return err
+			}
+			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
 		},
 	}
 
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
+	cmd.Flags().StringVar(&forwardEnv, "forward-env", "", "Comma-separated list of environment variable names to forward into the remote session")
 	_ = cmd.MarkFlagRequired("sandbox-id")
 
 	return cmd
