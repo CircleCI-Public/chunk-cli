@@ -636,14 +636,26 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	//    When mix.lock pins tzdata < 1.1.1 (e.g. 1.0.3) the bundled data is
 	//    already pre-2021b so no fixup is needed.
 	if env.Stack == stackElixir {
+		// When mix.lock pins tzdata >= 1.1.1, the bundled IANA database includes
+		// the 2021b revision which changed historical European LMT offsets (e.g.
+		// Europe/Copenhagen). Tests written against older data fail with the newer
+		// bundled database, so we download the pre-2021b ETS file from the tzdata
+		// 1.1.0 hex package and configure tzdata to read from it.
+		//
+		// The version pattern matches >= 1.1.1: double-digit patch (1.1.10+),
+		// future minor (1.2.x+), and future major (2.x+).
+		tzVersionCheck := `grep -qE '"(1\.1\.[1-9][0-9]*|1\.[2-9]|[2-9]\.)' mix.lock 2>/dev/null`
 		sb.WriteString("\nRUN if grep -q ':tzdata' mix.exs 2>/dev/null && " +
-			`grep -q '"1\.1\.[1-9]' mix.lock 2>/dev/null; then ` +
-			`elixir -e ':inets.start(); :ssl.start(); url = ~c"https://repo.hex.pm/tarballs/tzdata-1.1.0.tar"; {:ok, {{_, 200, _}, _, body}} = :httpc.request(:get, {url, []}, [{:timeout, 30000}, {:ssl, [{:verify, :verify_none}]}], []); {:ok, [{_, gz}]} = :erl_tar.extract({:binary, IO.iodata_to_binary(body)}, [:memory, {:files, [~c"contents.tar.gz"]}]); {:ok, [{_, data}]} = :erl_tar.extract({:binary, gz}, [:memory, :compressed, {:files, [~c"priv/release_ets/2020e.v2.ets"]}]); File.mkdir_p!(~c"/tz_data/release_ets"); File.write!(~c"/tz_data/release_ets/2020e.v2.ets", data)'; ` +
+			tzVersionCheck + "; then \\\n" +
+			"  curl -fsSL -o /tmp/tzdata-1.1.0.tar https://repo.hex.pm/tarballs/tzdata-1.1.0.tar && \\\n" +
+			"  mkdir -p /tz_data/release_ets && \\\n" +
+			"  tar -xOf /tmp/tzdata-1.1.0.tar contents.tar.gz | tar -xzO priv/release_ets/2020e.v2.ets > /tz_data/release_ets/2020e.v2.ets && \\\n" +
+			"  rm /tmp/tzdata-1.1.0.tar; \\\n" +
 			"fi\n")
 		sb.WriteString("\nRUN if grep -q ':tzdata' mix.exs 2>/dev/null && " +
-			`grep -q '"1\.1\.[1-9]' mix.lock 2>/dev/null; then ` +
-			"mkdir -p config && " +
-			`printf '\nimport Config\nconfig :tzdata, :autoupdate, :disabled\nconfig :tzdata, :data_dir, "/tz_data"\n' >> config/runtime.exs; ` +
+			tzVersionCheck + "; then \\\n" +
+			"  mkdir -p config && \\\n" +
+			`  printf '\nimport Config\nconfig :tzdata, :autoupdate, :disabled\nconfig :tzdata, :data_dir, "/tz_data"\n' >> config/runtime.exs; \` + "\n" +
 			"fi\n")
 	}
 
