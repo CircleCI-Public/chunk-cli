@@ -975,9 +975,9 @@ func TestDetectElixirVersionFromCI(t *testing.T) {
 
 	t.Run("no workflows dir", func(t *testing.T) {
 		t.Parallel()
-		maj, min, otp := detectElixirVersionFromCI(t.TempDir())
+		maj, minor, otp := detectElixirVersionFromCI(t.TempDir())
 		assert.Equal(t, maj, 0)
-		assert.Equal(t, min, 0)
+		assert.Equal(t, minor, 0)
 		assert.Equal(t, otp, 0)
 	})
 
@@ -992,9 +992,9 @@ jobs:
         elixir: ['1.18', '1.17']
         otp: ['26']
 `)
-		maj, min, otp := detectElixirVersionFromCI(dir)
+		maj, minor, otp := detectElixirVersionFromCI(dir)
 		assert.Equal(t, maj, 1)
-		assert.Equal(t, min, 18)
+		assert.Equal(t, minor, 18)
 		assert.Equal(t, otp, 26)
 	})
 
@@ -1037,9 +1037,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 `)
-		maj, min, otp := detectElixirVersionFromCI(dir)
+		maj, minor, otp := detectElixirVersionFromCI(dir)
 		assert.Equal(t, maj, 0)
-		assert.Equal(t, min, 0)
+		assert.Equal(t, minor, 0)
 		assert.Equal(t, otp, 0)
 	})
 }
@@ -1217,9 +1217,9 @@ func TestDetectHaskellGHCVersionFromCI(t *testing.T) {
 
 	t.Run("no workflows dir", func(t *testing.T) {
 		t.Parallel()
-		maj, min := detectHaskellGHCVersionFromCI(t.TempDir())
+		maj, minor := detectHaskellGHCVersionFromCI(t.TempDir())
 		assert.Equal(t, maj, 0)
-		assert.Equal(t, min, 0)
+		assert.Equal(t, minor, 0)
 	})
 
 	t.Run("ghc version in matrix", func(t *testing.T) {
@@ -1232,9 +1232,9 @@ jobs:
       matrix:
         ghc: ['9.10', '9.8']
 `)
-		maj, min := detectHaskellGHCVersionFromCI(dir)
+		maj, minor := detectHaskellGHCVersionFromCI(dir)
 		assert.Equal(t, maj, 9)
-		assert.Equal(t, min, 10)
+		assert.Equal(t, minor, 10)
 	})
 
 	t.Run("ghc-version key", func(t *testing.T) {
@@ -1248,9 +1248,9 @@ jobs:
         with:
           ghc-version: '9.10.1'
 `)
-		maj, min := detectHaskellGHCVersionFromCI(dir)
+		maj, minor := detectHaskellGHCVersionFromCI(dir)
 		assert.Equal(t, maj, 9)
-		assert.Equal(t, min, 10)
+		assert.Equal(t, minor, 10)
 	})
 
 	t.Run("picks highest version", func(t *testing.T) {
@@ -1263,9 +1263,9 @@ jobs:
       matrix:
         ghc: ['9.6', '9.8', '9.10']
 `)
-		maj, min := detectHaskellGHCVersionFromCI(dir)
+		maj, minor := detectHaskellGHCVersionFromCI(dir)
 		assert.Equal(t, maj, 9)
-		assert.Equal(t, min, 10)
+		assert.Equal(t, minor, 10)
 	})
 
 	t.Run("no ghc lines returns zeros", func(t *testing.T) {
@@ -1276,9 +1276,9 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 `)
-		maj, min := detectHaskellGHCVersionFromCI(dir)
+		maj, minor := detectHaskellGHCVersionFromCI(dir)
 		assert.Equal(t, maj, 0)
-		assert.Equal(t, min, 0)
+		assert.Equal(t, minor, 0)
 	})
 }
 
