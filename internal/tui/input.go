@@ -67,7 +67,11 @@ func (m hiddenInputModel) View() tea.View {
 
 // PromptHidden prompts the user for hidden input (e.g. API keys).
 // Returns ErrCancelled if the user presses Ctrl+C or Esc.
+// Returns ErrNoTTY if stdin is not a terminal.
 func PromptHidden(label string) (string, error) {
+	if err := requireTTY(); err != nil {
+		return "", err
+	}
 	model := newHiddenInputModel(label)
 	p := tea.NewProgram(model)
 	result, err := p.Run()
