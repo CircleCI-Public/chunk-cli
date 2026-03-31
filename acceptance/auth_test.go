@@ -224,6 +224,12 @@ func TestAuthLogoutWithStoredKey(t *testing.T) {
 	assert.Assert(t,
 		strings.Contains(combined, "remove") || strings.Contains(combined, "cancelled"),
 		"expected removal prompt or cancellation, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
+
+	// Key should not have been removed — cancelled logout leaves config intact.
+	showResult := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	assert.Equal(t, showResult.ExitCode, 0, "config show failed after cancelled logout: %s", showResult.Stderr)
+	assert.Assert(t, strings.Contains(showResult.Stdout, "1234"), "expected stored key (masked) in config output, got: %s", showResult.Stdout)
 }
 
 // auth logout with both env var and config key: running logout shows
@@ -245,6 +251,12 @@ func TestAuthLogoutWithEnvAndConfigKey(t *testing.T) {
 	assert.Assert(t,
 		strings.Contains(combined, "remove") || strings.Contains(combined, "cancelled"),
 		"expected removal prompt or cancellation, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
+
+	// Key should not have been removed — cancelled logout leaves config intact.
+	showResult := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	assert.Equal(t, showResult.ExitCode, 0, "config show failed after cancelled logout: %s", showResult.Stderr)
+	assert.Assert(t, strings.Contains(showResult.Stdout, "EEEE"), "expected env key (masked) in config output, got: %s", showResult.Stdout)
 }
 
 // auth login without TTY: prompts for key but bubbletea fails without terminal,
