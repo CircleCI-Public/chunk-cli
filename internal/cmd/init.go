@@ -39,6 +39,10 @@ func pickCircleCIOrg(ctx context.Context, streams iostream.Streams) (orgID, orgN
 		return "", ""
 	}
 
+	if len(collabs) == 1 {
+		return collabs[0].ID, collabs[0].Name
+	}
+
 	items := make([]string, len(collabs))
 	for i, c := range collabs {
 		items[i] = c.Name
