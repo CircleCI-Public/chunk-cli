@@ -155,34 +155,45 @@ type dockerHubTagsResponse struct {
 	Next string `json:"next"`
 }
 
-func fetchAllImageVersions(ctx context.Context, client *httpcl.Client, image string) ([]string, error) {
-	// Official Docker Hub images (e.g. "elixir", "ubuntu") have no namespace
-	// slash; they live under the "library" namespace in the Docker Hub API.
+// fetchRawTags paginates the Docker Hub tag API for image and returns all tag
+// name strings up to a limit of 300. Official single-component image names
+// (e.g. "elixir") are automatically mapped to "library/elixir".
+func fetchRawTags(ctx context.Context, client *httpcl.Client, image string) ([]string, error) {
 	apiImage := image
 	if !strings.Contains(image, "/") {
 		apiImage = "library/" + image
 	}
-
 	parts := strings.SplitN(apiImage, "/", 2)
 
-	var allTags []string
+	var tags []string
 	route := fmt.Sprintf(
 		"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
 		parts[0], parts[1],
 	)
-
-	for route != "" && len(allTags) < 300 {
+	for route != "" && len(tags) < 300 {
 		var page dockerHubTagsResponse
 		if _, err := client.Call(ctx, httpcl.NewRequest("GET", route, httpcl.JSONDecoder(&page))); err != nil {
 			return nil, fmt.Errorf("docker hub request failed: %w", err)
 		}
-
 		for _, tag := range page.Results {
-			if versionTagRe.MatchString(tag.Name) {
-				allTags = append(allTags, tag.Name)
-			}
+			tags = append(tags, tag.Name)
 		}
 		route = page.Next
+	}
+	return tags, nil
+}
+
+func fetchAllImageVersions(ctx context.Context, client *httpcl.Client, image string) ([]string, error) {
+	raw, err := fetchRawTags(ctx, client, image)
+	if err != nil {
+		return nil, err
+	}
+
+	var allTags []string
+	for _, name := range raw {
+		if versionTagRe.MatchString(name) {
+			allTags = append(allTags, name)
+		}
 	}
 
 	if len(allTags) == 0 {
@@ -263,26 +274,9 @@ func fetchLatestImageVersionWithMajorMinorConstraint(ctx context.Context, client
 // Falls back to fetchLatestImageVersionWithMajorMinorConstraint when no matching
 // OTP-specific tag is found.
 func fetchElixirOTPImageVersion(ctx context.Context, client *httpcl.Client, image string, maxMajor, maxMinor, otpMajor int) (string, error) {
-	apiImage := image
-	if !strings.Contains(image, "/") {
-		apiImage = "library/" + image
-	}
-	parts := strings.SplitN(apiImage, "/", 2)
-
-	var allTags []string
-	route := fmt.Sprintf(
-		"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
-		parts[0], parts[1],
-	)
-	for route != "" && len(allTags) < 300 {
-		var page dockerHubTagsResponse
-		if _, err := client.Call(ctx, httpcl.NewRequest("GET", route, httpcl.JSONDecoder(&page))); err != nil {
-			return "", fmt.Errorf("docker hub request failed: %w", err)
-		}
-		for _, tag := range page.Results {
-			allTags = append(allTags, tag.Name)
-		}
-		route = page.Next
+	allTags, err := fetchRawTags(ctx, client, image)
+	if err != nil {
+		return "", err
 	}
 
 	// Find the highest Elixir version tag matching the OTP constraint.
@@ -325,29 +319,16 @@ func fetchElixirOTPImageVersion(ctx context.Context, client *httpcl.Client, imag
 // fetchLatestCimgBaseDateVersion fetches the most recent cimg/base tag, which
 // uses a "YYYY.MM" or "YYYY.MM.N" date format rather than semver.
 func fetchLatestCimgBaseDateVersion(ctx context.Context, client *httpcl.Client, image string) (string, error) {
-	apiImage := image
-	if !strings.Contains(image, "/") {
-		apiImage = "library/" + image
+	raw, err := fetchRawTags(ctx, client, image)
+	if err != nil {
+		return "", err
 	}
-	parts := strings.SplitN(apiImage, "/", 2)
 
 	var dateTags []string
-	route := fmt.Sprintf(
-		"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
-		parts[0], parts[1],
-	)
-
-	for route != "" && len(dateTags) < 300 {
-		var page dockerHubTagsResponse
-		if _, err := client.Call(ctx, httpcl.NewRequest("GET", route, httpcl.JSONDecoder(&page))); err != nil {
-			return "", fmt.Errorf("docker hub request failed: %w", err)
+	for _, name := range raw {
+		if cimgBaseDateTagRe.MatchString(name) {
+			dateTags = append(dateTags, name)
 		}
-		for _, tag := range page.Results {
-			if cimgBaseDateTagRe.MatchString(tag.Name) {
-				dateTags = append(dateTags, tag.Name)
-			}
-		}
-		route = page.Next
 	}
 
 	if len(dateTags) == 0 {
