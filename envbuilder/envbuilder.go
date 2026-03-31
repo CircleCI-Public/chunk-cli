@@ -1748,7 +1748,7 @@ func detectGoRstDep(dir string) bool {
 // detectGoTestFileDep walks dir and returns true if any _test.go file contains needle.
 func detectGoTestFileDep(dir, needle string) bool {
 	found := false
-	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -1769,7 +1769,9 @@ func detectGoTestFileDep(dir, needle string) bool {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return false
+	}
 	return found
 }
 
@@ -2060,6 +2062,8 @@ func detectGradleToolchainJDKs(dir string) []string {
 	}
 
 	// 3. All Gradle build files – explicit JavaLanguageVersion.of(N) or jvmToolchain(N).
+	// Walk errors are non-fatal: per-entry errors are handled inside the callback and
+	// the outer error is always nil because the callback never returns a non-sentinel error.
 	jlvRe := regexp.MustCompile(`JavaLanguageVersion\.of\((\d+)\)`)
 	jvmTcRe := regexp.MustCompile(`jvmToolchain\s*[\(=]\s*(\d+)`)
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
@@ -2488,6 +2492,8 @@ func detectDotNetVersion(dir string) string {
 	// 2. Scan .csproj files for TargetFramework / TargetFrameworks.
 	//    Match patterns like "net8.0", "net6.0" but not "netstandard2.0" which
 	//    is not a runnable SDK version.
+	// Walk errors are non-fatal: if the walk fails entirely bestMajor stays 0
+	// and we fall through to the default below.
 	netRe := regexp.MustCompile(`\bnet(\d+)\.0\b`)
 	bestMajor := 0
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -2529,7 +2535,7 @@ func detectDotNetVersion(dir string) string {
 func detectDotNetTestFramework(dir string) string {
 	netRe := regexp.MustCompile(`\bnet(\d+)\.0\b`)
 	bestMajor := 0
-	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -2555,7 +2561,9 @@ func detectDotNetTestFramework(dir string) string {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return ""
+	}
 	if bestMajor >= 6 {
 		return fmt.Sprintf("net%d.0", bestMajor)
 	}
