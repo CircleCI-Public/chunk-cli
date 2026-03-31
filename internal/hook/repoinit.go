@@ -48,16 +48,21 @@ func RunRepoInit(targetDir, projectName string, commands []config.Command, force
 		streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created %s", tmpl.relativePath)))
 	}
 
-	// Generate and write settings.json dynamically from detected commands
-	settingsContent := BuildSettingsJSON(projectName, commands)
+	// Generate settings.json content from detected commands.
+	// settings.json is scaffold-once: never overwrite an existing file since users
+	// may have customized it. Always write the example so they have a current reference.
+	settingsContent, err := BuildSettingsJSON(projectName, commands)
+	if err != nil {
+		return fmt.Errorf("build settings.json: %w", err)
+	}
 	settingsPath := filepath.Join(targetDir, ".claude", "settings.json")
 
-	if !force && fileExists(settingsPath) {
+	if fileExists(settingsPath) {
 		examplePath := makeExamplePath(settingsPath)
 		if err := writeFile(examplePath, settingsContent); err != nil {
 			return fmt.Errorf("write example %s: %w", examplePath, err)
 		}
-		streams.ErrPrintf("%s %s\n", ui.Warning(".claude/settings.json already exists,"), ui.Dim("wrote "+filepath.Base(examplePath)))
+		streams.ErrPrintf("%s %s\n", ui.Warning(".claude/settings.json already exists,"), ui.Dim("wrote "+filepath.Base(examplePath)+" for reference"))
 	} else {
 		if err := writeFile(settingsPath, settingsContent); err != nil {
 			return fmt.Errorf("write %s: %w", settingsPath, err)

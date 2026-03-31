@@ -140,14 +140,7 @@ type collectedIssue struct {
 //nolint:gocyclo // orchestration logic with many spec-type and verdict branches
 func RunSyncCheck(cfg *ResolvedConfig, flags SyncCheckFlags, event map[string]interface{}) error {
 	// Check global enable
-	enabled := false
-	for _, spec := range flags.Specs {
-		if IsEnabled(spec.Name) {
-			enabled = true
-			break
-		}
-	}
-	if !enabled {
+	if !IsEnabled() {
 		return nil
 	}
 

@@ -148,37 +148,26 @@ func TestIsEnabled(t *testing.T) {
 	tests := []struct {
 		name     string
 		envVars  map[string]string
-		cmdName  string
 		expected bool
 	}{
-		{"disabled by default", nil, "tests", false},
-		{"global enable", map[string]string{"CHUNK_HOOK_ENABLE": "1"}, "tests", true},
-		{"global enable true", map[string]string{"CHUNK_HOOK_ENABLE": "true"}, "tests", true},
-		{"global enable yes", map[string]string{"CHUNK_HOOK_ENABLE": "yes"}, "tests", true},
-		{"global disable", map[string]string{"CHUNK_HOOK_ENABLE": "0"}, "tests", false},
-		{"per-cmd override enable", map[string]string{
-			"CHUNK_HOOK_ENABLE":       "0",
-			"CHUNK_HOOK_ENABLE_TESTS": "1",
-		}, "tests", true},
-		{"per-cmd override disable", map[string]string{
-			"CHUNK_HOOK_ENABLE":       "1",
-			"CHUNK_HOOK_ENABLE_TESTS": "0",
-		}, "tests", false},
+		{"disabled by default", nil, false},
+		{"global enable", map[string]string{"CHUNK_HOOK_ENABLE": "1"}, true},
+		{"global enable true", map[string]string{"CHUNK_HOOK_ENABLE": "true"}, true},
+		{"global enable yes", map[string]string{"CHUNK_HOOK_ENABLE": "yes"}, true},
+		{"global disable", map[string]string{"CHUNK_HOOK_ENABLE": "0"}, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clear relevant env vars
 			t.Setenv("CHUNK_HOOK_ENABLE", "")
-			t.Setenv("CHUNK_HOOK_ENABLE_TESTS", "")
 
 			for k, v := range tt.envVars {
 				t.Setenv(k, v)
 			}
 
-			got := IsEnabled(tt.cmdName)
+			got := IsEnabled()
 			if got != tt.expected {
-				t.Fatalf("IsEnabled(%q) = %v, want %v", tt.cmdName, got, tt.expected)
+				t.Fatalf("IsEnabled() = %v, want %v", got, tt.expected)
 			}
 		})
 	}
@@ -222,14 +211,13 @@ func TestResolveProject(t *testing.T) {
 // --- envupdate ---
 
 func TestRunEnvUpdate(t *testing.T) {
-	t.Run("writes env file with enable profile", func(t *testing.T) {
+	t.Run("writes env file with CHUNK_HOOK_ENABLE=1", func(t *testing.T) {
 		dir := t.TempDir()
 		envFile := filepath.Join(dir, "env")
 		logDir := filepath.Join(dir, "logs")
 		streams, _, _ := testStreams()
 
 		err := RunEnvUpdate(EnvUpdateOptions{
-			Profile:      "enable",
 			EnvFile:      envFile,
 			LogDir:       logDir,
 			StartupFiles: []string{},
@@ -245,83 +233,6 @@ func TestRunEnvUpdate(t *testing.T) {
 		content := string(data)
 		if !strings.Contains(content, "CHUNK_HOOK_ENABLE=1") {
 			t.Fatal("expected CHUNK_HOOK_ENABLE=1 in env file")
-		}
-	})
-
-	t.Run("writes disable profile", func(t *testing.T) {
-		dir := t.TempDir()
-		envFile := filepath.Join(dir, "env")
-		logDir := filepath.Join(dir, "logs")
-		streams, _, _ := testStreams()
-
-		err := RunEnvUpdate(EnvUpdateOptions{
-			Profile:      "disable",
-			EnvFile:      envFile,
-			LogDir:       logDir,
-			StartupFiles: []string{},
-		}, streams)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		data, _ := os.ReadFile(envFile)
-		if !strings.Contains(string(data), "CHUNK_HOOK_ENABLE=0") {
-			t.Fatal("expected CHUNK_HOOK_ENABLE=0 for disable profile")
-		}
-	})
-
-	t.Run("writes tests-lint profile", func(t *testing.T) {
-		dir := t.TempDir()
-		envFile := filepath.Join(dir, "env")
-		logDir := filepath.Join(dir, "logs")
-		streams, _, _ := testStreams()
-
-		err := RunEnvUpdate(EnvUpdateOptions{
-			Profile:      "tests-lint",
-			EnvFile:      envFile,
-			LogDir:       logDir,
-			StartupFiles: []string{},
-		}, streams)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		data, _ := os.ReadFile(envFile)
-		content := string(data)
-		if !strings.Contains(content, "CHUNK_HOOK_ENABLE_TESTS=1") {
-			t.Fatal("expected CHUNK_HOOK_ENABLE_TESTS=1")
-		}
-		if !strings.Contains(content, "CHUNK_HOOK_ENABLE_LINT=1") {
-			t.Fatal("expected CHUNK_HOOK_ENABLE_LINT=1")
-		}
-	})
-
-	t.Run("invalid profile", func(t *testing.T) {
-		streams, _, _ := testStreams()
-		err := RunEnvUpdate(EnvUpdateOptions{Profile: "bogus"}, streams)
-		if err == nil {
-			t.Fatal("expected error for invalid profile")
-		}
-	})
-
-	t.Run("defaults profile to enable", func(t *testing.T) {
-		dir := t.TempDir()
-		envFile := filepath.Join(dir, "env")
-		logDir := filepath.Join(dir, "logs")
-		streams, _, _ := testStreams()
-
-		err := RunEnvUpdate(EnvUpdateOptions{
-			EnvFile:      envFile,
-			LogDir:       logDir,
-			StartupFiles: []string{},
-		}, streams)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		data, _ := os.ReadFile(envFile)
-		if !strings.Contains(string(data), "CHUNK_HOOK_ENABLE=1") {
-			t.Fatal("expected default enable profile")
 		}
 	})
 
@@ -472,7 +383,7 @@ func TestRunRepoInit(t *testing.T) {
 		}
 	})
 
-	t.Run("force overwrites existing files", func(t *testing.T) {
+	t.Run("force overwrites template files but not settings.json", func(t *testing.T) {
 		dir := t.TempDir()
 		streams, _, errBuf := testStreams()
 
@@ -488,11 +399,13 @@ func TestRunRepoInit(t *testing.T) {
 		}
 
 		errOutput := errBuf.String()
-		if strings.Contains(errOutput, "already exists") {
-			t.Fatalf("force should overwrite, not create examples: %s", errOutput)
-		}
+		// Template files should be overwritten with force
 		if !strings.Contains(errOutput, "Created") {
-			t.Fatalf("expected 'Created' messages, got: %s", errOutput)
+			t.Fatalf("expected 'Created' messages for template files, got: %s", errOutput)
+		}
+		// settings.json is scaffold-once: always writes example, never overwrites
+		if !strings.Contains(errOutput, "already exists") {
+			t.Fatalf("expected settings.json 'already exists' message, got: %s", errOutput)
 		}
 	})
 }
@@ -1153,25 +1066,13 @@ func TestRunExecCheck(t *testing.T) {
 
 // --- setup ---
 
-func TestValidateProfile(t *testing.T) {
-	for _, p := range ValidProfiles {
-		if err := ValidateProfile(p); err != nil {
-			t.Fatalf("expected valid profile %q, got error: %s", p, err)
-		}
-	}
-
-	if err := ValidateProfile("bogus"); err == nil {
-		t.Fatal("expected error for invalid profile")
-	}
-}
-
 func TestRunSetup(t *testing.T) {
 	t.Run("combines env update and repo init", func(t *testing.T) {
 		dir := t.TempDir()
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "", "enable", false, false, envFile, nil, streams)
+		err := RunSetup(dir, "", false, false, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1192,7 +1093,7 @@ func TestRunSetup(t *testing.T) {
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "", "", false, true, envFile, nil, streams)
+		err := RunSetup(dir, "", false, true, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1208,27 +1109,19 @@ func TestRunSetup(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid profile returns error", func(t *testing.T) {
-		streams, _, _ := testStreams()
-		err := RunSetup(t.TempDir(), "", "nope", false, false, "", nil, streams)
-		if err == nil {
-			t.Fatal("expected error for invalid profile")
-		}
-	})
-
-	t.Run("defaults profile to enable", func(t *testing.T) {
+	t.Run("writes CHUNK_HOOK_ENABLE=1", func(t *testing.T) {
 		dir := t.TempDir()
 		envFile := filepath.Join(dir, "env")
 		streams, _, _ := testStreams()
 
-		err := RunSetup(dir, "", "", false, false, envFile, nil, streams)
+		err := RunSetup(dir, "", false, false, envFile, nil, streams)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		data, _ := os.ReadFile(envFile)
 		if !strings.Contains(string(data), "CHUNK_HOOK_ENABLE=1") {
-			t.Fatal("expected default enable profile")
+			t.Fatal("expected CHUNK_HOOK_ENABLE=1 in env file")
 		}
 	})
 }
@@ -1372,7 +1265,10 @@ func TestTemplateFilesNotEmpty(t *testing.T) {
 
 func TestBuildSettingsJSON(t *testing.T) {
 	t.Run("nil commands produces only infrastructure hooks", func(t *testing.T) {
-		result := BuildSettingsJSON("my-proj", nil)
+		result, err := BuildSettingsJSON("my-proj", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !strings.Contains(result, "SessionStart") {
 			t.Fatal("expected SessionStart hook")
 		}
@@ -1397,7 +1293,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 		cmds := []config.Command{
 			{Name: "test", Run: "go test ./...", Role: "gate", Timeout: 300},
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !strings.Contains(result, "chunk validate test --no-check --on pre-commit") {
 			t.Fatalf("expected gate PreToolUse --no-check hook, got:\n%s", result)
 		}
@@ -1410,7 +1309,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 		cmds := []config.Command{
 			{Name: "test-changed", Run: "go test {{CHANGED_PACKAGES}}", Role: "precheck", Timeout: 300},
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !strings.Contains(result, "chunk validate test-changed --check --on pre-commit") {
 			t.Fatalf("expected precheck PreToolUse --check hook, got:\n%s", result)
 		}
@@ -1424,7 +1326,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 		cmds := []config.Command{
 			{Name: "format", Run: "gofmt -w .", Role: "autofix", Always: true, Timeout: 30},
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !strings.Contains(result, "chunk validate format --no-check --on pre-commit") {
 			t.Fatalf("expected autofix PreToolUse --no-check hook, got:\n%s", result)
 		}
@@ -1439,7 +1344,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 			{Name: "lint", Run: "lint", Always: true},   // inferred autofix from Always
 			{Name: "test", Run: "test"},                 // inferred gate (default)
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		// test-changed should be --check in PreToolUse (precheck)
 		if !strings.Contains(result, "chunk validate test-changed --check --on pre-commit") {
 			t.Fatalf("expected inferred precheck for test-changed, got:\n%s", result)
@@ -1459,7 +1367,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 			{Name: "test", Run: "go test", Role: "gate", Timeout: 300},
 			{Name: "lint", Run: "golangci-lint", Role: "gate", Timeout: 60},
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		var parsed map[string]interface{}
 		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 			t.Fatalf("expected valid JSON, got error: %v\n%s", err, result)
