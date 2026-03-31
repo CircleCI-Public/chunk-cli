@@ -168,6 +168,51 @@ func TestDetectStack(t *testing.T) {
 			files: map[string]string{"pom.xml": "<project/>"},
 			want:  stackJava,
 		},
+		{
+			name:  "elixir mix.exs",
+			files: map[string]string{"mix.exs": "defmodule MyApp.MixProject do\nend\n"},
+			want:  stackElixir,
+		},
+		{
+			name:  "elixir source file tiebreak",
+			files: map[string]string{"lib/foo.ex": "", "lib/bar.ex": "", "lib/baz.ex": ""},
+			want:  stackElixir,
+		},
+		{
+			name:  "dotnet csproj",
+			files: map[string]string{"MyApp.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\"/>"},
+			want:  stackDotNet,
+		},
+		{
+			name:  "dotnet sln",
+			files: map[string]string{"MyApp.sln": ""},
+			want:  stackDotNet,
+		},
+		{
+			name:  "dart pubspec.yaml",
+			files: map[string]string{"pubspec.yaml": "name: my_package\n"},
+			want:  stackDart,
+		},
+		{
+			name:  "scala build.sbt",
+			files: map[string]string{"build.sbt": "name := \"myapp\"\n"},
+			want:  stackScala,
+		},
+		{
+			name:  "haskell stack.yaml",
+			files: map[string]string{"stack.yaml": "resolver: lts-21.0\n"},
+			want:  stackHaskell,
+		},
+		{
+			name:  "haskell cabal.project",
+			files: map[string]string{"cabal.project": "packages: .\n"},
+			want:  stackHaskell,
+		},
+		{
+			name:  "cpp CMakeLists.txt",
+			files: map[string]string{"CMakeLists.txt": "cmake_minimum_required(VERSION 3.20)\n"},
+			want:  stackCPP,
+		},
 	}
 
 	for _, tc := range cases {
@@ -563,6 +608,123 @@ func TestDetectCommands(t *testing.T) {
 		assert.Equal(t, testCmd, "yarn test")
 	})
 
+	t.Run("elixir", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "mix.exs", "defmodule MyApp.MixProject do\nend\n")
+		install, test, _ := detectCommands(dir, stackElixir)
+		assert.Assert(t, strings.Contains(install, "mix deps.get"), "expected mix deps.get in install, got: %s", install)
+		assert.Equal(t, test, "mix test")
+	})
+
+	t.Run("dotnet no subdir", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		install, test, _ := detectCommands(dir, stackDotNet)
+		assert.Equal(t, install, "dotnet restore")
+		assert.Assert(t, strings.HasPrefix(test, "dotnet test"), "expected dotnet test prefix, got: %s", test)
+	})
+
+	t.Run("dotnet with framework flag", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "MyTests.csproj", `<Project>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" />
+  </ItemGroup>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+</Project>`)
+		_, test, _ := detectCommands(dir, stackDotNet)
+		assert.Assert(t, strings.Contains(test, "--framework net8.0"), "expected --framework net8.0, got: %s", test)
+	})
+
+	t.Run("dart single package", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pubspec.yaml", "name: my_package\n")
+		install, test, _ := detectCommands(dir, stackDart)
+		assert.Equal(t, install, "dart pub get")
+		assert.Equal(t, test, cmdDartTest)
+	})
+
+	t.Run("dart monorepo with test dirs", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pkgs/foo/pubspec.yaml", "name: foo\n")
+		assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkgs", "foo", "test"), 0755))
+		writeFile(t, dir, "pkgs/bar/pubspec.yaml", "name: bar\n")
+		assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkgs", "bar", "test"), 0755))
+		install, test, _ := detectCommands(dir, stackDart)
+		assert.Assert(t, strings.Contains(install, "dart pub get"), "expected dart pub get in install, got: %s", install)
+		assert.Assert(t, strings.Contains(test, "dart test"), "expected dart test in test, got: %s", test)
+	})
+
+	t.Run("dart monorepo flutter package excluded", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pkgs/plain/pubspec.yaml", "name: plain\n")
+		assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkgs", "plain", "test"), 0755))
+		writeFile(t, dir, "pkgs/flutter_pkg/pubspec.yaml", "name: flutter_pkg\ndependencies:\n  flutter:\n    sdk: flutter\n")
+		install, _, _ := detectCommands(dir, stackDart)
+		assert.Assert(t, !strings.Contains(install, "flutter_pkg"), "flutter package should be excluded, got: %s", install)
+		assert.Assert(t, strings.Contains(install, "plain"), "plain package should be included, got: %s", install)
+	})
+
+	t.Run("haskell stack.yaml", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "stack.yaml", "resolver: lts-21.0\n")
+		install, test, _ := detectCommands(dir, stackHaskell)
+		assert.Equal(t, install, "stack build --only-dependencies --test")
+		assert.Equal(t, test, "stack test")
+	})
+
+	t.Run("haskell cabal", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "cabal.project", "packages: .\n")
+		install, test, _ := detectCommands(dir, stackHaskell)
+		assert.Assert(t, strings.Contains(install, "cabal"), "expected cabal in install, got: %s", install)
+		assert.Equal(t, test, "cabal test all")
+	})
+
+	t.Run("scala plain", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "build.sbt", "name := \"myapp\"\n")
+		install, test, _ := detectCommands(dir, stackScala)
+		assert.Equal(t, install, "sbt update")
+		assert.Equal(t, test, "sbt test")
+	})
+
+	t.Run("scala cross-platform (JSPlatform)", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "build.sbt", "lazy val foo = crossProject(JSPlatform, JVMPlatform)\n")
+		_, test, _ := detectCommands(dir, stackScala)
+		assert.Equal(t, test, "sbt rootJVM/test")
+	})
+
+	t.Run("cpp cmake", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "CMakeLists.txt", "cmake_minimum_required(VERSION 3.20)\n")
+		install, test, _ := detectCommands(dir, stackCPP)
+		assert.Assert(t, strings.Contains(install, "cmake"), "expected cmake in install, got: %s", install)
+		assert.Assert(t, strings.Contains(test, "ctest"), "expected ctest in test, got: %s", test)
+	})
+
+	t.Run("cpp meson (no cmake)", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "meson.build", "project('myapp', 'cpp')\n")
+		install, test, _ := detectCommands(dir, stackCPP)
+		assert.Assert(t, strings.Contains(install, "meson"), "expected meson in install, got: %s", install)
+		assert.Equal(t, test, "meson test -C build")
+	})
+
 	t.Run("unknown stack", func(t *testing.T) {
 		t.Parallel()
 		install, test, _ := detectCommands(t.TempDir(), stackUnknown)
@@ -783,6 +945,395 @@ func TestFetchLatestImageVersionWithMajorMinorConstraint(t *testing.T) {
 	got, err := fetchLatestImageVersionWithMajorMinorConstraint(context.Background(), client, "cimg/go", 1, 23)
 	assert.NilError(t, err)
 	assert.Equal(t, got, "1.23.5")
+}
+
+func TestRustMemberRequiresNightly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no feature attribute", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "src/lib.rs", "pub fn add(a: i32, b: i32) -> i32 { a + b }\n")
+		assert.Assert(t, !rustMemberRequiresNightly(dir))
+	})
+
+	t.Run("nightly feature attribute", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "src/lib.rs", "#![feature(async_closure)]\npub fn foo() {}\n")
+		assert.Assert(t, rustMemberRequiresNightly(dir))
+	})
+
+	t.Run("empty dir", func(t *testing.T) {
+		t.Parallel()
+		assert.Assert(t, !rustMemberRequiresNightly(t.TempDir()))
+	})
+}
+
+func TestDetectElixirVersionFromCI(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no workflows dir", func(t *testing.T) {
+		t.Parallel()
+		maj, min, otp := detectElixirVersionFromCI(t.TempDir())
+		assert.Equal(t, maj, 0)
+		assert.Equal(t, min, 0)
+		assert.Equal(t, otp, 0)
+	})
+
+	t.Run("explicit elixir and otp versions", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".github/workflows/ci.yml", `
+jobs:
+  test:
+    strategy:
+      matrix:
+        elixir: ['1.18', '1.17']
+        otp: ['26']
+`)
+		maj, min, otp := detectElixirVersionFromCI(dir)
+		assert.Equal(t, maj, 1)
+		assert.Equal(t, min, 18)
+		assert.Equal(t, otp, 26)
+	})
+
+	t.Run("otp latest only returns 0", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".github/workflows/ci.yml", `
+jobs:
+  test:
+    strategy:
+      matrix:
+        elixir: ['1.18']
+        otp: ['latest']
+`)
+		_, _, otp := detectElixirVersionFromCI(dir)
+		assert.Equal(t, otp, 0)
+	})
+
+	t.Run("mixed otp explicit and latest picks lowest explicit", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".github/workflows/ci.yml", `
+jobs:
+  test:
+    strategy:
+      matrix:
+        elixir: ['1.18']
+        otp: ['26', 'latest']
+`)
+		_, _, otp := detectElixirVersionFromCI(dir)
+		assert.Equal(t, otp, 26)
+	})
+
+	t.Run("no elixir version returns zeros", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".github/workflows/ci.yml", `
+jobs:
+  test:
+    steps:
+      - uses: actions/checkout@v4
+`)
+		maj, min, otp := detectElixirVersionFromCI(dir)
+		assert.Equal(t, maj, 0)
+		assert.Equal(t, min, 0)
+		assert.Equal(t, otp, 0)
+	})
+}
+
+func TestDetectGradleToolchainJDKs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no gradle files", func(t *testing.T) {
+		t.Parallel()
+		deps := detectGradleToolchainJDKs(t.TempDir())
+		assert.Equal(t, len(deps), 0)
+	})
+
+	t.Run("gradle.properties with toolchain version", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "gradle.properties", "java.mainToolchainVersion=8\n")
+		deps := detectGradleToolchainJDKs(dir)
+		assert.Equal(t, len(deps), 1)
+		assert.Equal(t, deps[0], "openjdk-8")
+	})
+
+	t.Run("build.gradle.kts with JavaLanguageVersion.of", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "build.gradle.kts", `
+kotlin {
+    jvmToolchain {
+        languageVersion.set(JavaLanguageVersion.of(11))
+    }
+}
+`)
+		deps := detectGradleToolchainJDKs(dir)
+		assert.Equal(t, len(deps), 1)
+		assert.Equal(t, deps[0], "openjdk-11")
+	})
+
+	t.Run("libs.versions.toml with java version", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "gradle/libs.versions.toml", `
+[versions]
+java = "8"
+kotlin = "1.9.22"
+`)
+		deps := detectGradleToolchainJDKs(dir)
+		assert.Equal(t, len(deps), 1)
+		assert.Equal(t, deps[0], "openjdk-8")
+	})
+
+	t.Run("only non-LTS versions not mapped", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		// Version 21 is not in the LTS mapping (only 8, 11, 17 are)
+		writeFile(t, dir, "gradle.properties", "java.toolchainVersion=21\n")
+		deps := detectGradleToolchainJDKs(dir)
+		assert.Equal(t, len(deps), 0)
+	})
+}
+
+func TestDetectDotNetVersion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("global.json sdk version", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "global.json", `{"sdk":{"version":"8.0.100"}}`)
+		assert.Equal(t, detectDotNetVersion(dir), "8.0")
+	})
+
+	t.Run("csproj TargetFramework net9", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "MyApp.csproj", `<Project><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>`)
+		assert.Equal(t, detectDotNetVersion(dir), "9.0")
+	})
+
+	t.Run("default 8.0 when nothing found", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, detectDotNetVersion(t.TempDir()), "8.0")
+	})
+
+	t.Run("netstandard not counted", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "MyLib.csproj", `<Project><PropertyGroup><TargetFramework>netstandard2.0</TargetFramework></PropertyGroup></Project>`)
+		assert.Equal(t, detectDotNetVersion(dir), "8.0")
+	})
+}
+
+func TestDetectDotNetTestFramework(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no csproj returns empty", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, detectDotNetTestFramework(t.TempDir()), "")
+	})
+
+	t.Run("csproj without test sdk returns empty", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "MyLib.csproj", `<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>`)
+		assert.Equal(t, detectDotNetTestFramework(dir), "")
+	})
+
+	t.Run("test csproj with net8.0", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "MyTests.csproj", `<Project>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" />
+  </ItemGroup>
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net6.0</TargetFrameworks>
+  </PropertyGroup>
+</Project>`)
+		assert.Equal(t, detectDotNetTestFramework(dir), "net8.0")
+	})
+
+	t.Run("multiple test projects picks highest", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "Tests1.csproj", `<Project>
+  <ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /></ItemGroup>
+  <PropertyGroup><TargetFramework>net6.0</TargetFramework></PropertyGroup>
+</Project>`)
+		writeFile(t, dir, "Tests2.csproj", `<Project>
+  <ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /></ItemGroup>
+  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+</Project>`)
+		assert.Equal(t, detectDotNetTestFramework(dir), "net8.0")
+	})
+}
+
+func TestDetectSBTTestCommand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no build.sbt returns sbt test", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, detectSBTTestCommand(t.TempDir()), "sbt test")
+	})
+
+	t.Run("plain build.sbt returns sbt test", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "build.sbt", "name := \"myapp\"\nscalaVersion := \"3.3.0\"\n")
+		assert.Equal(t, detectSBTTestCommand(dir), "sbt test")
+	})
+
+	t.Run("JSPlatform in build.sbt returns rootJVM", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "build.sbt", "lazy val core = crossProject(JSPlatform, JVMPlatform)\n")
+		assert.Equal(t, detectSBTTestCommand(dir), "sbt rootJVM/test")
+	})
+
+	t.Run("NativePlatform in build.sbt returns rootJVM", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "build.sbt", "lazy val core = crossProject(NativePlatform, JVMPlatform)\n")
+		assert.Equal(t, detectSBTTestCommand(dir), "sbt rootJVM/test")
+	})
+
+	t.Run("sbt-scalajs in plugins.sbt returns rootJVM", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "build.sbt", "name := \"myapp\"\n")
+		writeFile(t, dir, "project/plugins.sbt", "addSbtPlugin(\"org.scala-js\" % \"sbt-scalajs\" % \"1.15.0\")\n")
+		assert.Equal(t, detectSBTTestCommand(dir), "sbt rootJVM/test")
+	})
+}
+
+func TestDetectHaskellGHCVersionFromCI(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no workflows dir", func(t *testing.T) {
+		t.Parallel()
+		maj, min := detectHaskellGHCVersionFromCI(t.TempDir())
+		assert.Equal(t, maj, 0)
+		assert.Equal(t, min, 0)
+	})
+
+	t.Run("ghc version in matrix", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".github/workflows/ci.yml", `
+jobs:
+  test:
+    strategy:
+      matrix:
+        ghc: ['9.10', '9.8']
+`)
+		maj, min := detectHaskellGHCVersionFromCI(dir)
+		assert.Equal(t, maj, 9)
+		assert.Equal(t, min, 10)
+	})
+
+	t.Run("ghc-version key", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".github/workflows/ci.yml", `
+jobs:
+  test:
+    steps:
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.10.1'
+`)
+		maj, min := detectHaskellGHCVersionFromCI(dir)
+		assert.Equal(t, maj, 9)
+		assert.Equal(t, min, 10)
+	})
+
+	t.Run("picks highest version", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".github/workflows/ci.yml", `
+jobs:
+  test:
+    strategy:
+      matrix:
+        ghc: ['9.6', '9.8', '9.10']
+`)
+		maj, min := detectHaskellGHCVersionFromCI(dir)
+		assert.Equal(t, maj, 9)
+		assert.Equal(t, min, 10)
+	})
+
+	t.Run("no ghc lines returns zeros", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".github/workflows/ci.yml", `
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+`)
+		maj, min := detectHaskellGHCVersionFromCI(dir)
+		assert.Equal(t, maj, 0)
+		assert.Equal(t, min, 0)
+	})
+}
+
+func TestDetectDartPackages(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no packages dirs", func(t *testing.T) {
+		t.Parallel()
+		pkgs := detectDartPackages(t.TempDir())
+		assert.Equal(t, len(pkgs), 0)
+	})
+
+	t.Run("pkgs directory with packages", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pkgs/foo/pubspec.yaml", "name: foo\n")
+		writeFile(t, dir, "pkgs/bar/pubspec.yaml", "name: bar\n")
+		pkgs := detectDartPackages(dir)
+		assert.Equal(t, len(pkgs), 2)
+	})
+
+	t.Run("packages directory", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "packages/alpha/pubspec.yaml", "name: alpha\n")
+		pkgs := detectDartPackages(dir)
+		assert.Equal(t, len(pkgs), 1)
+		assert.Equal(t, pkgs[0], "packages/alpha")
+	})
+
+	t.Run("flutter packages excluded", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pkgs/plain/pubspec.yaml", "name: plain\n")
+		writeFile(t, dir, "pkgs/flutter_ui/pubspec.yaml", "name: flutter_ui\ndependencies:\n  flutter:\n    sdk: flutter\n")
+		pkgs := detectDartPackages(dir)
+		assert.Equal(t, len(pkgs), 1)
+		assert.Equal(t, pkgs[0], "pkgs/plain")
+	})
+
+	t.Run("native toolchain packages excluded", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pkgs/native_pkg/pubspec.yaml", "name: native_pkg\ndependencies:\n  native_toolchain_c: ^0.3.0\n")
+		pkgs := detectDartPackages(dir)
+		assert.Equal(t, len(pkgs), 0)
+	})
+
+	t.Run("dir without pubspec.yaml skipped", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkgs", "no_pubspec"), 0755))
+		pkgs := detectDartPackages(dir)
+		assert.Equal(t, len(pkgs), 0)
+	})
 }
 
 // --- helpers ---
