@@ -18,7 +18,7 @@ Read these when working in the relevant area:
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — module layering, dependency rules, data flow, environment variables
 - **[docs/CLI.md](docs/CLI.md)** — complete command tree, flag conventions, behavior decisions
-- **[docs/HOOKS.md](docs/HOOKS.md)** — hook system: exec, task, sync, state, scope, env, sentinel files, IDE integration
+- **[docs/HOOKS.md](docs/HOOKS.md)** — pre-commit hooks: runs fmt, lint, test before commits via `.claude/settings.json`
 
 ## Key Architectural Constraints
 
