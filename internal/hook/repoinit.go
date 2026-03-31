@@ -51,7 +51,10 @@ func RunRepoInit(targetDir, projectName string, commands []config.Command, force
 	// Generate settings.json content from detected commands.
 	// settings.json is scaffold-once: never overwrite an existing file since users
 	// may have customized it. Always write the example so they have a current reference.
-	settingsContent := BuildSettingsJSON(projectName, commands)
+	settingsContent, err := BuildSettingsJSON(projectName, commands)
+	if err != nil {
+		return fmt.Errorf("build settings.json: %w", err)
+	}
 	settingsPath := filepath.Join(targetDir, ".claude", "settings.json")
 
 	if fileExists(settingsPath) {

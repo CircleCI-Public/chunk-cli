@@ -50,7 +50,7 @@ type orderedEntry struct {
 type settingsJSON struct {
 	Schema      string              `json:"$schema"`
 	Comment     string              `json:"_comment"`
-	Env         map[string]string   `json:"env,omitempty"`
+	Env         map[string]string   `json:"-"` // serialized manually in MarshalJSON
 	Permissions map[string][]string `json:"permissions"`
 	HookOrder   []orderedEntry      `json:"-"` // serialized manually
 }
@@ -129,7 +129,7 @@ func projectVar(projectName string) string {
 }
 
 // BuildSettingsJSON generates the .claude/settings.json content from detected commands.
-func BuildSettingsJSON(projectName string, commands []config.Command) string {
+func BuildSettingsJSON(projectName string, commands []config.Command) (string, error) {
 	proj := projectVar(projectName)
 
 	settings := settingsJSON{
@@ -248,6 +248,9 @@ func BuildSettingsJSON(projectName string, commands []config.Command) string {
 		}},
 	})
 
-	data, _ := json.MarshalIndent(settings, "", "  ")
-	return string(data) + "\n"
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal settings: %w", err)
+	}
+	return string(data) + "\n", nil
 }

@@ -1265,7 +1265,10 @@ func TestTemplateFilesNotEmpty(t *testing.T) {
 
 func TestBuildSettingsJSON(t *testing.T) {
 	t.Run("nil commands produces only infrastructure hooks", func(t *testing.T) {
-		result := BuildSettingsJSON("my-proj", nil)
+		result, err := BuildSettingsJSON("my-proj", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !strings.Contains(result, "SessionStart") {
 			t.Fatal("expected SessionStart hook")
 		}
@@ -1290,7 +1293,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 		cmds := []config.Command{
 			{Name: "test", Run: "go test ./...", Role: "gate", Timeout: 300},
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !strings.Contains(result, "chunk validate test --no-check --on pre-commit") {
 			t.Fatalf("expected gate PreToolUse --no-check hook, got:\n%s", result)
 		}
@@ -1303,7 +1309,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 		cmds := []config.Command{
 			{Name: "test-changed", Run: "go test {{CHANGED_PACKAGES}}", Role: "precheck", Timeout: 300},
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !strings.Contains(result, "chunk validate test-changed --check --on pre-commit") {
 			t.Fatalf("expected precheck PreToolUse --check hook, got:\n%s", result)
 		}
@@ -1317,7 +1326,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 		cmds := []config.Command{
 			{Name: "format", Run: "gofmt -w .", Role: "autofix", Always: true, Timeout: 30},
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !strings.Contains(result, "chunk validate format --no-check --on pre-commit") {
 			t.Fatalf("expected autofix PreToolUse --no-check hook, got:\n%s", result)
 		}
@@ -1332,7 +1344,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 			{Name: "lint", Run: "lint", Always: true},   // inferred autofix from Always
 			{Name: "test", Run: "test"},                 // inferred gate (default)
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		// test-changed should be --check in PreToolUse (precheck)
 		if !strings.Contains(result, "chunk validate test-changed --check --on pre-commit") {
 			t.Fatalf("expected inferred precheck for test-changed, got:\n%s", result)
@@ -1352,7 +1367,10 @@ func TestBuildSettingsJSON(t *testing.T) {
 			{Name: "test", Run: "go test", Role: "gate", Timeout: 300},
 			{Name: "lint", Run: "golangci-lint", Role: "gate", Timeout: 60},
 		}
-		result := BuildSettingsJSON("proj", cmds)
+		result, err := BuildSettingsJSON("proj", cmds)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		var parsed map[string]interface{}
 		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 			t.Fatalf("expected valid JSON, got error: %v\n%s", err, result)
