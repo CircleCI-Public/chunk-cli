@@ -163,14 +163,15 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// First install.
-	binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "first install failed: %s", result.Stderr)
 
 	// Tamper with one skill file to make it outdated.
 	tampered := filepath.Join(claudeDir, "skills", "chunk-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(tampered, []byte("tampered content"), 0o644))
 
 	// Re-run install: should detect outdated and update.
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -234,7 +235,8 @@ func TestSkillsListStateLabels(t *testing.T) {
 		"expected codex agent in list output, got: %s", combined)
 
 	// Install skills.
-	binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "install failed: %s", result.Stderr)
 
 	// After install: skills should show "current".
 	result = binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
@@ -260,7 +262,8 @@ func TestSkillsListMixedStates(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// Install all skills first.
-	binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "install failed: %s", result.Stderr)
 
 	// Tamper one skill to make it outdated.
 	tampered := filepath.Join(claudeDir, "skills", "chunk-review", "SKILL.md")
@@ -270,7 +273,7 @@ func TestSkillsListMixedStates(t *testing.T) {
 	assert.NilError(t, os.RemoveAll(filepath.Join(claudeDir, "skills", "debug-ci-failures")))
 
 	// List should show current, outdated, and missing.
-	result := binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined := result.Stdout + result.Stderr
 
