@@ -443,6 +443,301 @@ func TestTaskRunWithDescription(t *testing.T) {
 	assert.Equal(t, body["checkout_branch"], "develop")
 }
 
+func TestTaskRunChunkEnvironmentIDNonNull(t *testing.T) {
+	// Verify chunk_environment_id is sent for the "dev" definition
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Check env ID",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
+	assert.Equal(t, len(runReqs), 1)
+
+	var body map[string]interface{}
+	err := json.Unmarshal(runReqs[0].Body, &body)
+	assert.NilError(t, err)
+	assert.Equal(t, body["chunk_environment_id"], "b3c27e5f-1234-5678-9abc-def012345678")
+}
+
+func TestTaskRunStatsField(t *testing.T) {
+	// Verify stats object is sent with prompt and checkout_branch
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Deploy the widget",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
+	assert.Equal(t, len(runReqs), 1)
+
+	var body map[string]interface{}
+	err := json.Unmarshal(runReqs[0].Body, &body)
+	assert.NilError(t, err)
+
+	stats, ok := body["stats"].(map[string]interface{})
+	assert.Assert(t, ok, "expected stats object in request body, got: %v", body["stats"])
+	assert.Equal(t, stats["prompt"], "Deploy the widget")
+	assert.Equal(t, stats["checkout_branch"], "develop")
+}
+
+func TestTaskRunStatsFieldWithBranchOverride(t *testing.T) {
+	// Verify stats.checkout_branch reflects the --branch override
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Fix it",
+		"--branch", "feature/custom",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
+	var body map[string]interface{}
+	err := json.Unmarshal(runReqs[0].Body, &body)
+	assert.NilError(t, err)
+
+	stats, ok := body["stats"].(map[string]interface{})
+	assert.Assert(t, ok, "expected stats object in request body, got: %v", body["stats"])
+	assert.Equal(t, stats["checkout_branch"], "feature/custom")
+}
+
+func TestTaskRunCircleCITokenFallback(t *testing.T) {
+	// Verify CIRCLECI_TOKEN works when CIRCLE_TOKEN is empty
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	env.CircleToken = "" // clear primary token
+	env.Extra["CIRCLECI_TOKEN"] = "fallback-circle-token"
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Test fallback",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
+	assert.Equal(t, len(runReqs), 1)
+	assert.Equal(t, runReqs[0].Header.Get("Circle-Token"), "fallback-circle-token")
+}
+
+func TestTaskRunMissingDefinitionFlag(t *testing.T) {
+	// Cobra required flag --definition omitted
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--prompt", "Fix it",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "definition"),
+		"expected error about missing definition flag, got: %s", combined)
+}
+
+func TestTaskRunMissingPromptFlag(t *testing.T) {
+	// Cobra required flag --prompt omitted
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "prompt"),
+		"expected error about missing prompt flag, got: %s", combined)
+}
+
+func TestTaskRunBranchAndNewBranch(t *testing.T) {
+	// Verify --branch and --new-branch work together
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Fix it",
+		"--branch", "feature/combined",
+		"--new-branch",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
+	assert.Equal(t, len(runReqs), 1)
+
+	var body map[string]interface{}
+	err := json.Unmarshal(runReqs[0].Body, &body)
+	assert.NilError(t, err)
+	assert.Equal(t, body["checkout_branch"], "feature/combined")
+
+	params, ok := body["parameters"].(map[string]interface{})
+	assert.Assert(t, ok, "expected parameters object in request body, got: %v", body["parameters"])
+	assert.Equal(t, params["create-new-branch"], true)
+}
+
+func TestTaskRunMalformedRunJSON(t *testing.T) {
+	// Corrupt run.json should produce a parse error
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfigJSON(t, workDir, `{not valid json}`)
+
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Fix it",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "run.json") || strings.Contains(combined, "parse"),
+		"expected parse error message, got: %s", combined)
+}
+
+func TestTaskRunMalformedRunJSONMissingDefs(t *testing.T) {
+	// run.json with empty definitions should fail for named definition
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfigJSON(t, workDir, `{"org_id": "abc", "project_id": "def", "definitions": {}}`)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Fix it",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for missing definition")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "dev") || strings.Contains(combined, "unknown"),
+		"expected unknown definition error, got: %s", combined)
+}
+
+func TestTaskRunNotInGitRepo(t *testing.T) {
+	// Running outside a git repository should fail
+	workDir := t.TempDir()
+	chunkDir := filepath.Join(workDir, ".chunk")
+	err := os.MkdirAll(chunkDir, 0o755)
+	assert.NilError(t, err)
+	err = os.WriteFile(filepath.Join(chunkDir, "run.json"), []byte(runConfigJSON), 0o644)
+	assert.NilError(t, err)
+
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Fix it",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "git") || strings.Contains(combined, "repository"),
+		"expected git repo error, got: %s", combined)
+}
+
+func TestTaskConfigMissingToken(t *testing.T) {
+	// task config without a token should fail
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+	env := testenv.NewTestEnv(t)
+	env.CircleToken = ""
+
+	result := binary.RunCLI(t, []string{
+		"task", "config",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "CIRCLE_TOKEN") || strings.Contains(combined, "token"),
+		"expected token error message, got: %s", combined)
+}
+
+func TestTaskConfigNotInGitRepo(t *testing.T) {
+	// task config outside a git repository should fail
+	workDir := t.TempDir()
+
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{
+		"task", "config",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "git") || strings.Contains(combined, "repository"),
+		"expected git repo error, got: %s", combined)
+}
+
 func TestTaskRunCircleCIOrgType(t *testing.T) {
 	// Verify that org_type "circleci" is accepted and the run succeeds
 	cci := fakes.NewFakeCircleCI()
