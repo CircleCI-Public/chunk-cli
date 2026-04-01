@@ -12,7 +12,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "chunk hook scope deactivate --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
+            "command": "chunk hook scope activate --project ${CLAUDE_PROJECT_DIR:-chunk-cli}",
             "timeout": 5
           }
         ]

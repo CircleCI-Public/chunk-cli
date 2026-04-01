@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/cmd"
+	"github.com/CircleCI-Public/chunk-cli/internal/hook"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
@@ -17,6 +18,10 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
+		var blockErr *hook.BlockError
+		if errors.As(err, &blockErr) {
+			os.Exit(2)
+		}
 		var ue *usererr.Error
 		if errors.As(err, &ue) {
 			fmt.Fprintln(os.Stderr, ue.UserMessage())
