@@ -39,6 +39,18 @@ const (
 	toolPytest  = "pytest"
 )
 
+// NeedsNPMRC reports whether the given stack requires an .npmrc secret mount
+// for private registry authentication during dependency installation.
+func NeedsNPMRC(stack string) bool {
+	return stack == stackJavaScript || stack == stackTypeScript
+}
+
+// NeedsNetRC reports whether the given stack requires a .netrc secret mount
+// for private dependency authentication during installation.
+func NeedsNetRC(stack string) bool {
+	return stack == stackPython || stack == stackGo
+}
+
 // Environment describes the detected tech stack and build configuration for a repository.
 type Environment struct {
 	Stack        string   `json:"stack"`
@@ -515,10 +527,12 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		sb.WriteString("COPY " + chown + "go.mod go.sum ./\n")
 		// Mount ~/.netrc as a BuildKit secret so private module credentials are
 		// available during download without being baked into the image layer.
-		// GONOSUMDB=* skips the checksum database for private modules that are
-		// not listed there. GOAUTH=netrc:... (Go 1.22+) tells the go command
-		// where to find the credentials file regardless of the container user.
-		fmt.Fprintf(&sb, "RUN --mount=type=secret,id=netrc,required=false,mode=0444 GONOSUMDB=* GOAUTH=netrc:/run/secrets/netrc %s\n", env.Install)
+		// GONOSUMDB defaults to * (skip checksum DB for all modules) but respects
+		// any narrower value already set via ENV in the base image, so users with
+		// GOPRIVATE or a scoped GONOSUMDB keep their tighter policy.
+		// GOAUTH=netrc:... (Go 1.22+) tells the go command where to find the
+		// credentials file regardless of the container user.
+		fmt.Fprintf(&sb, "RUN --mount=type=secret,id=netrc,required=false,mode=0444 GONOSUMDB=${GONOSUMDB:-*} GOAUTH=netrc:/run/secrets/netrc %s\n", env.Install)
 		sb.WriteString("\nCOPY " + chown + ". .\n")
 	case stackRuby:
 		// Use the split-COPY pattern (mirrors the Go approach) to avoid

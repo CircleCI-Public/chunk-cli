@@ -361,13 +361,13 @@ Example:
 				args = append(args, "-t", tag)
 			}
 			if home, err := os.UserHomeDir(); err == nil {
-				if env.Stack == "javascript" || env.Stack == "typescript" {
+				if envbuilder.NeedsNPMRC(env.Stack) {
 					npmrcPath := filepath.Join(home, ".npmrc")
 					if _, statErr := os.Stat(npmrcPath); statErr == nil {
 						args = append(args, "--secret", "id=npmrc,src="+npmrcPath)
 					}
 				}
-				if env.Stack == "python" || env.Stack == "go" {
+				if envbuilder.NeedsNetRC(env.Stack) {
 					netrcPath := filepath.Join(home, ".netrc")
 					if _, statErr := os.Stat(netrcPath); statErr == nil {
 						args = append(args, "--secret", "id=netrc,src="+netrcPath)
