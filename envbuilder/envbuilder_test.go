@@ -753,7 +753,7 @@ func TestDockerfileContent(t *testing.T) {
 		// Split-COPY pattern: go.mod/go.sum first so the download layer is
 		// cached independently of source changes (e.g. Dockerfile.test, env.json).
 		assertContains(t, content, "COPY --chown=circleci:circleci go.mod go.sum ./")
-		assertContains(t, content, "RUN go mod download")
+		assertContains(t, content, "RUN --mount=type=secret,id=netrc,required=false,mode=0444 GONOSUMDB=* GOAUTH=netrc:/run/secrets/netrc go mod download")
 		assertContains(t, content, "COPY --chown=circleci:circleci . .")
 		// Dep-ordered per-package loop to bound peak GOTMPDIR usage.
 		assertContains(t, content, "go list -deps ./... | grep -Fxf")

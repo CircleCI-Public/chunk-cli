@@ -513,7 +513,12 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 			chown = "--chown=circleci:circleci "
 		}
 		sb.WriteString("COPY " + chown + "go.mod go.sum ./\n")
-		sb.WriteString("RUN " + env.Install + "\n")
+		// Mount ~/.netrc as a BuildKit secret so private module credentials are
+		// available during download without being baked into the image layer.
+		// GONOSUMDB=* skips the checksum database for private modules that are
+		// not listed there. GOAUTH=netrc:... (Go 1.22+) tells the go command
+		// where to find the credentials file regardless of the container user.
+		fmt.Fprintf(&sb, "RUN --mount=type=secret,id=netrc,required=false,mode=0444 GONOSUMDB=* GOAUTH=netrc:/run/secrets/netrc %s\n", env.Install)
 		sb.WriteString("\nCOPY " + chown + ". .\n")
 	case stackRuby:
 		// Use the split-COPY pattern (mirrors the Go approach) to avoid
@@ -621,7 +626,8 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	// Go and Ruby already emitted their install steps inside the split-COPY
 	// block above.
 	if env.Stack != stackGo && env.Stack != stackRuby {
-		if env.Stack == stackJavaScript || env.Stack == stackTypeScript {
+		switch env.Stack {
+		case stackJavaScript, stackTypeScript:
 			// Mount ~/.npmrc as a BuildKit secret so private registry credentials
 			// are available during install without being baked into the image layer.
 			// required=false means the build succeeds even when no secret is provided
@@ -630,7 +636,13 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 			// mount path (/run/secrets/npmrc) so the credential lookup works regardless
 			// of which user the container runs as.
 			fmt.Fprintf(&sb, "\nRUN --mount=type=secret,id=npmrc,required=false,mode=0444 NPM_CONFIG_USERCONFIG=/run/secrets/npmrc %s\n", env.Install)
-		} else {
+		case stackPython:
+			// Mount ~/.netrc as a BuildKit secret for private PyPI credentials.
+			// pip (via the requests library) and uv both respect the NETRC env var
+			// to locate the credentials file, making this work regardless of which
+			// user the container runs as.
+			fmt.Fprintf(&sb, "\nRUN --mount=type=secret,id=netrc,required=false,mode=0444 NETRC=/run/secrets/netrc %s\n", env.Install)
+		default:
 			sb.WriteString("\nRUN " + env.Install + "\n")
 		}
 	}
