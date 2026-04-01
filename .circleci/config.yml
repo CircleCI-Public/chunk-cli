@@ -77,6 +77,18 @@ jobs:
                   echo "OK: skill content embedded correctly"
                   head -5 ~/.claude/skills/chunk-review/SKILL.md
 
+  test-homebrew-install:
+    macos:
+      xcode: "16.2.0"
+    resource_class: macos.m1.small.gen1
+    steps:
+      - run:
+          name: Install chunk via Homebrew
+          command: brew install CircleCI-Public/circleci/chunk
+      - run:
+          name: Verify installation
+          command: chunk --version
+
 workflows:
   ci:
     jobs:
@@ -94,3 +106,4 @@ workflows:
             - lint
             - test
             - acceptance-test
+      - test-homebrew-install
