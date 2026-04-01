@@ -21,9 +21,22 @@ jobs:
           command: go install github.com/go-task/task/v3/cmd/task@latest
       - run: task release VERSION=<< pipeline.parameters.version >>
 
+  test-homebrew-install:
+    macos:
+      xcode: "26.3.0"
+    resource_class: m4pro.medium
+    steps:
+      - run:
+          name: Install chunk via Homebrew
+          command: brew install CircleCI-Public/circleci/chunk
+      - run:
+          name: Verify installation
+          command: chunk --version
+
 workflows:
   release:
     jobs:
       - release:
           context:
             - chunk-cli-deploy
+      - test-homebrew-install
