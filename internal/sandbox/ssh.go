@@ -94,6 +94,21 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 	return &sshConn{Client: ssh.NewClient(conn, chans, reqs), cleanup: cleanup}, nil
 }
 
+// setSessionEnv sets environment variables on an SSH session in sorted key order.
+func setSessionEnv(sess *ssh.Session, vars map[string]string) error {
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := sess.Setenv(name, vars[name]); err != nil {
+			return fmt.Errorf("set env %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // ExecOverSSH connects to the sandbox via SSH-over-TLS and executes a command.
 func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader, envVars map[string]string) (_ *ExecResult, err error) {
 	client, err := dialSSH(ctx, session)
@@ -108,15 +123,8 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 	}
 	defer closer.ErrorHandler(sess, &err)
 
-	names := make([]string, 0, len(envVars))
-	for name := range envVars {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if err := sess.Setenv(name, envVars[name]); err != nil {
-			return nil, fmt.Errorf("set env %s: %w", name, err)
-		}
+	if err := setSessionEnv(sess, envVars); err != nil {
+		return nil, err
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -191,15 +199,8 @@ func InteractiveShell(ctx context.Context, session *Session, envVars map[string]
 	go watchWindowSize(fd, sess, done)
 	defer close(done)
 
-	names := make([]string, 0, len(envVars))
-	for name := range envVars {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if err := sess.Setenv(name, envVars[name]); err != nil {
-			return fmt.Errorf("set env %s: %w", name, err)
-		}
+	if err := setSessionEnv(sess, envVars); err != nil {
+		return err
 	}
 
 	if err := sess.Shell(); err != nil {

@@ -215,7 +215,11 @@ func newSandboxSSHCmd() *cobra.Command {
 			}
 			var envVars map[string]string
 			if len(forwardEnv) > 0 && !noEnvFile {
-				fileVars, err := sandbox.LoadEnvFile(".")
+				cwd, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("get working directory: %w", err)
+				}
+				fileVars, err := sandbox.LoadEnvFile(cwd)
 				if err != nil {
 					return usererr.New(fmt.Sprintf("load .env.local: %s", err), err)
 				}
@@ -231,7 +235,7 @@ func newSandboxSSHCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringArrayVar(&forwardEnv, "forward-env", nil, "KEY=VALUE pairs to set in the remote session (repeatable)")
-	cmd.Flags().BoolVar(&noEnvFile, "no-env-file", false, "Skip loading .env.local when --forward-env is used")
+	cmd.Flags().BoolVar(&noEnvFile, "no-env-file", false, "Skip automatic .env.local loading (only applies when --forward-env is set)")
 	_ = cmd.MarkFlagRequired("sandbox-id")
 
 	return cmd
