@@ -487,14 +487,14 @@ func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
 		"expected helpful error message, got: %s", combined)
 }
 
-// TestSandboxesSSHForwardEnv verifies the --env-vars flag behaviour:
+// TestSandboxesSSHEnvFlag verifies the --env / -e flag behaviour:
 //  1. An invalid entry (missing =) is rejected before any SSH connection.
 //  2. A valid KEY=VALUE pair is accepted and the command progresses past env
 //     resolution (failing at the SSH key stage).
-//  3. A .env.local file is automatically loaded when --env-vars is used,
+//  3. A .env.local file is automatically loaded when --env is used,
 //     with flag values overriding file values.
 //  4. --no-env-file skips .env.local loading.
-func TestSandboxesSSHForwardEnv(t *testing.T) {
+func TestSandboxesSSHEnvFlag(t *testing.T) {
 	t.Run("invalid entry without equals returns error", func(t *testing.T) {
 		cci := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(cci)
@@ -506,7 +506,7 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		result := binary.RunCLI(t, []string{
 			"sandbox", "ssh",
 			"--sandbox-id", "sb-111",
-			"--env-vars", "NOEQUALS",
+			"--env", "NOEQUALS",
 		}, env, env.HomeDir)
 
 		assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
@@ -527,7 +527,7 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		result := binary.RunCLI(t, []string{
 			"sandbox", "ssh",
 			"--sandbox-id", "sb-111",
-			"--env-vars", "MY_TOKEN=secret-value",
+			"--env", "MY_TOKEN=secret-value",
 		}, env, env.HomeDir)
 
 		// Should fail at SSH key step, not at env parsing.
@@ -553,7 +553,7 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		result := binary.RunCLI(t, []string{
 			"sandbox", "ssh",
 			"--sandbox-id", "sb-111",
-			"--env-vars", "FLAG_VAR=from-flag",
+			"--env", "FLAG_VAR=from-flag",
 		}, env, workDir)
 
 		// Should fail at SSH key step — proves .env.local was loaded without error.
@@ -561,6 +561,30 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		combined := result.Stdout + result.Stderr
 		assert.Assert(t, strings.Contains(combined, "SSH key not found"),
 			"expected SSH key error (proves .env.local loaded), got: %s", combined)
+	})
+
+	t.Run("multiple -e flags are accepted", func(t *testing.T) {
+		cci := fakes.NewFakeCircleCI()
+		cci.AddKeyURL = "sandbox.dev.example.com"
+		srv := httptest.NewServer(cci)
+		defer srv.Close()
+
+		env := testenv.NewTestEnv(t)
+		env.CircleCIURL = srv.URL
+
+		result := binary.RunCLI(t, []string{
+			"sandbox", "ssh",
+			"--sandbox-id", "sb-111",
+			"-e", "FOO=bar",
+			"-e", "BAZ=qux",
+			"--no-env-file",
+		}, env, env.HomeDir)
+
+		// Should fail at SSH key step, not at env parsing.
+		assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
+		combined := result.Stdout + result.Stderr
+		assert.Assert(t, strings.Contains(combined, "SSH key not found"),
+			"expected SSH key error (proves multiple -e flags parsed), got: %s", combined)
 	})
 
 	t.Run("no-env-file skips .env.local", func(t *testing.T) {
@@ -580,7 +604,7 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		result := binary.RunCLI(t, []string{
 			"sandbox", "ssh",
 			"--sandbox-id", "sb-111",
-			"--env-vars", "FOO=bar",
+			"--env", "FOO=bar",
 			"--no-env-file",
 		}, env, workDir)
 
