@@ -110,7 +110,7 @@ func TestSkillsInstallCodexPath(t *testing.T) {
 	codexDir := filepath.Join(env.HomeDir, ".codex")
 	assert.NilError(t, os.MkdirAll(codexDir, 0o755))
 
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -135,7 +135,7 @@ func TestSkillsInstallBothAgents(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 	assert.NilError(t, os.MkdirAll(codexDir, 0o755))
 
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -163,7 +163,7 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// First install.
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "first install failed: %s", result.Stderr)
 
 	// Tamper with one skill file to make it outdated.
@@ -171,7 +171,7 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 	assert.NilError(t, os.WriteFile(tampered, []byte("tampered content"), 0o644))
 
 	// Re-run install: should detect outdated and update.
-	result = binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -193,7 +193,7 @@ func TestSkillsInstallNoAgentDirs(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	// Don't create .claude or .codex.
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -207,7 +207,7 @@ func TestSkillsInstallHomeNotSet(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.HomeDir = ""
 
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, os.TempDir())
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, os.TempDir())
 	assert.Assert(t, result.ExitCode != 0,
 		"expected non-zero exit code when HOME is not set, got exit %d", result.ExitCode)
 
@@ -222,7 +222,7 @@ func TestSkillsListStateLabels(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// Before install: .claude exists so skills should show "missing".
-	result := binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "missing"),
@@ -235,11 +235,11 @@ func TestSkillsListStateLabels(t *testing.T) {
 		"expected codex agent in list output, got: %s", combined)
 
 	// Install skills.
-	result = binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "install failed: %s", result.Stderr)
 
 	// After install: skills should show "current".
-	result = binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined = result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "current"),
@@ -249,7 +249,7 @@ func TestSkillsListStateLabels(t *testing.T) {
 	tampered := filepath.Join(claudeDir, "skills", "chunk-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(tampered, []byte("tampered"), 0o644))
 
-	result = binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined = result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "outdated"),
@@ -262,7 +262,7 @@ func TestSkillsListMixedStates(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// Install all skills first.
-	result := binary.RunCLI(t, []string{"skills", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "install failed: %s", result.Stderr)
 
 	// Tamper one skill to make it outdated.
@@ -273,7 +273,7 @@ func TestSkillsListMixedStates(t *testing.T) {
 	assert.NilError(t, os.RemoveAll(filepath.Join(claudeDir, "skills", "debug-ci-failures")))
 
 	// List should show current, outdated, and missing.
-	result = binary.RunCLI(t, []string{"skills", "list"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined := result.Stdout + result.Stderr
 
