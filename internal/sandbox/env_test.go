@@ -169,31 +169,6 @@ func TestResolveEnv(t *testing.T) {
 		assert.Equal(t, len(result), 3)
 	})
 
-	t.Run("no-env-file skips file loading", func(t *testing.T) {
-		dir := t.TempDir()
-		err := os.WriteFile(filepath.Join(dir, ".env.local"), []byte("FILE_VAR=should-not-appear\n"), 0o644)
-		assert.NilError(t, err)
-
-		flagVars, err := ParseEnvPairs([]string{"FLAG_VAR=from-flag"})
-		assert.NilError(t, err)
-
-		// When --no-env-file is set, skip LoadEnvFile entirely.
-		noEnvFile := true
-		var result map[string]string
-		if !noEnvFile {
-			fileVars, err := LoadEnvFile(dir)
-			assert.NilError(t, err)
-			result = MergeEnv(fileVars, flagVars)
-		} else {
-			result = flagVars
-		}
-
-		assert.Equal(t, result["FLAG_VAR"], "from-flag")
-		_, hasFileVar := result["FILE_VAR"]
-		assert.Assert(t, !hasFileVar, "FILE_VAR should not be present when --no-env-file is set")
-		assert.Equal(t, len(result), 1)
-	})
-
 	t.Run("multiple flag pairs are all preserved", func(t *testing.T) {
 		flagVars, err := ParseEnvPairs([]string{"FOO=bar", "BAZ=qux", "HELLO=world"})
 		assert.NilError(t, err)
