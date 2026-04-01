@@ -45,6 +45,7 @@ func New() (*Client, error) {
 type messagesRequest struct {
 	Model     string    `json:"model"`
 	MaxTokens int       `json:"max_tokens"`
+	System    string    `json:"system,omitempty"`
 	Messages  []message `json:"messages"`
 }
 
@@ -64,14 +65,19 @@ type contentBlock struct {
 }
 
 // Ask sends a single user message and returns the assistant text.
-func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt string) (string, error) {
+// An optional system prompt can be passed as the last argument.
+func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt string, system ...string) (string, error) {
 	var resp messagesResponse
+	body := messagesRequest{
+		Model:     model,
+		MaxTokens: maxTokens,
+		Messages:  []message{{Role: "user", Content: prompt}},
+	}
+	if len(system) > 0 {
+		body.System = system[0]
+	}
 	req := httpcl.NewRequest("POST", "/v1/messages",
-		httpcl.Body(messagesRequest{
-			Model:     model,
-			MaxTokens: maxTokens,
-			Messages:  []message{{Role: "user", Content: prompt}},
-		}),
+		httpcl.Body(body),
 		httpcl.Header("anthropic-version", "2023-06-01"),
 		httpcl.JSONDecoder(&resp),
 	)
