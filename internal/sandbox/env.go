@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 )
 
 // ParseEnvPairs parses a slice of KEY=VALUE strings and returns a map.
@@ -69,7 +71,7 @@ func unquote(s string) string {
 
 // LoadEnvFile reads .env.local from dir. Returns nil, nil if the file does not
 // exist. Returns an error for permission or parse failures.
-func LoadEnvFile(dir string) (map[string]string, error) {
+func LoadEnvFile(dir string) (_ map[string]string, err error) {
 	path := filepath.Join(dir, ".env.local")
 	f, err := os.Open(path)
 	if err != nil {
@@ -78,7 +80,7 @@ func LoadEnvFile(dir string) (map[string]string, error) {
 		}
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
+	defer closer.ErrorHandler(f, &err)
 	vars, err := ParseEnvFile(f)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
