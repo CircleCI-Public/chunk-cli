@@ -79,8 +79,8 @@ jobs:
 
   test-homebrew-install:
     macos:
-      xcode: "26.4"
-    resource_class: macos.m1.small.gen1
+      xcode: "26.4.0"
+    resource_class: m4pro.medium
     steps:
       - run:
           name: Install chunk via Homebrew
