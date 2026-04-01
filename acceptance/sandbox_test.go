@@ -488,9 +488,11 @@ func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
 }
 
 // TestSandboxesSSHEnvFlag verifies the -e/--env flag rejects invalid input.
-// End-to-end verification of env vars over SSH is covered by manual testing
-// (see PR description). Direct env resolution logic is tested in
-// internal/sandbox/env_test.go (TestResolveEnv).
+// Direct env resolution logic is tested in internal/sandbox/env_test.go (TestResolveEnv).
+//
+// TODO: Once the fake SSH server from #188 lands, add tests that spin up the
+// fake server and assert on the actual env vars sent over the wire (valid pairs,
+// .env.local loading, multiple -e flags, --no-env-file).
 func TestSandboxesSSHEnvFlag(t *testing.T) {
 	t.Run("invalid entry without equals returns error", func(t *testing.T) {
 		cci := fakes.NewFakeCircleCI()
