@@ -195,33 +195,43 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 }
 
 func newSandboxSSHCmd() *cobra.Command {
-	var sandboxID, identityFile, forwardEnv string
+	var sandboxID, identityFile string
+	var forwardEnv []string
+	var noEnvFile bool
 
 	cmd := &cobra.Command{
 		Use:   "ssh [flags] [-- command...]",
 		Short: "SSH into a sandbox",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			io := iostream.FromCmd(cmd)
 			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
 			}
-			envVars, err := sandbox.ResolveEnvVars(forwardEnv, os.LookupEnv)
+			flagVars, err := sandbox.ParseEnvPairs(forwardEnv)
 			if err != nil {
 				return usererr.New(fmt.Sprintf("invalid --forward-env: %s", err), err)
 			}
-			for _, w := range sandbox.DangerousEnvWarnings(envVars) {
-				io.ErrPrintln(ui.Warning(w))
+			var envVars map[string]string
+			if len(forwardEnv) > 0 && !noEnvFile {
+				fileVars, err := sandbox.LoadEnvFile(".")
+				if err != nil {
+					return usererr.New(fmt.Sprintf("load .env.local: %s", err), err)
+				}
+				envVars = sandbox.MergeEnv(fileVars, flagVars)
+			} else {
+				envVars = flagVars
 			}
+			io := iostream.FromCmd(cmd)
 			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
 		},
 	}
 
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().StringVar(&forwardEnv, "forward-env", "", "Comma-separated list of environment variable names to forward into the remote session")
+	cmd.Flags().StringArrayVar(&forwardEnv, "forward-env", nil, "KEY=VALUE pairs to set in the remote session (repeatable)")
+	cmd.Flags().BoolVar(&noEnvFile, "no-env-file", false, "Skip loading .env.local when --forward-env is used")
 	_ = cmd.MarkFlagRequired("sandbox-id")
 
 	return cmd
