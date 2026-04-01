@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/hook"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
@@ -89,7 +91,7 @@ func runHookMode(f *validateHookFlags, name, workDir string) error {
 }
 
 func newValidateCmd() *cobra.Command {
-	var sandboxID, orgID string
+	var sandboxID, dest, identityFile string
 	var dryRun, list, save, forceRun, status bool
 	var inlineCmd, projectDir string
 	var hf validateHookFlags
@@ -168,14 +170,25 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if sandboxID != "" {
-				if orgID == "" {
-					return fmt.Errorf("--org-id is required when using --sandbox-id")
+				if dest == "" {
+					dest = "/workspace"
 				}
 				client, err := circleci.NewClient()
 				if err != nil {
 					return err
 				}
-				return validate.RunRemote(cmd.Context(), client, cfg, sandboxID, orgID, streams)
+				authSock := os.Getenv("SSH_AUTH_SOCK")
+				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, authSock)
+				if err != nil {
+					return fmt.Errorf("open session: %w", err)
+				}
+				return validate.RunRemote(cmd.Context(), func(ctx context.Context, script string) (string, string, int, error) {
+					result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil)
+					if err != nil {
+						return "", "", 0, err
+					}
+					return result.Stdout, result.Stderr, result.ExitCode, nil
+				}, cfg, dest, streams)
 			}
 
 			// Named command
@@ -217,7 +230,8 @@ func newValidateCmd() *cobra.Command {
 
 	// Original flags
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
-	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (required with --sandbox-id)")
+	cmd.Flags().StringVar(&dest, "dest", "", "Destination path on sandbox (default /workspace)")
+	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file (default ~/.ssh/chunk_ai)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
 	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")

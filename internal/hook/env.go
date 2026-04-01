@@ -6,15 +6,9 @@ import (
 	"strings"
 )
 
-// IsEnabled checks whether a specific command is enabled.
-// Resolution: CHUNK_HOOK_ENABLE_{NAME} > CHUNK_HOOK_ENABLE > false.
-func IsEnabled(name string) bool {
-	perCmd := os.Getenv("CHUNK_HOOK_ENABLE_" + strings.ToUpper(name))
-	if perCmd != "" {
-		return isTruthy(perCmd)
-	}
-	global := os.Getenv("CHUNK_HOOK_ENABLE")
-	return isTruthy(global)
+// IsEnabled reports whether hooks are globally enabled via CHUNK_HOOK_ENABLE.
+func IsEnabled() bool {
+	return isTruthy(os.Getenv("CHUNK_HOOK_ENABLE"))
 }
 
 func isTruthy(val string) bool {

@@ -30,7 +30,7 @@ func TestSandboxesListHappyPath(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "list", "--org-id", "org-aaa",
+		"sandbox", "list", "--org-id", "org-aaa",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -57,7 +57,7 @@ func TestSandboxesListEmpty(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "list", "--org-id", "org-empty",
+		"sandbox", "list", "--org-id", "org-empty",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -79,7 +79,7 @@ func TestSandboxesListFiltersByOrg(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "list", "--org-id", "org-a",
+		"sandbox", "list", "--org-id", "org-a",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -94,11 +94,11 @@ func TestSandboxesMissingToken(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"list", []string{"sandboxes", "list", "--org-id", "org-aaa"}},
-		{"create", []string{"sandboxes", "create", "--org-id", "org-aaa", "--name", "my-sandbox"}},
-		{"exec", []string{"sandboxes", "exec", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--command", "ls"}},
-		{"ssh", []string{"sandboxes", "ssh", "--org-id", "org-aaa", "--sandbox-id", "sb-111"}},
-		{"sync", []string{"sandboxes", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111"}},
+		{"list", []string{"sandbox", "list", "--org-id", "org-aaa"}},
+		{"create", []string{"sandbox", "create", "--org-id", "org-aaa", "--name", "my-sandbox"}},
+		{"exec", []string{"sandbox", "exec", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--command", "ls"}},
+		{"ssh", []string{"sandbox", "ssh", "--org-id", "org-aaa", "--sandbox-id", "sb-111"}},
+		{"sync", []string{"sandbox", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111"}},
 	}
 
 	for _, tt := range tests {
@@ -121,7 +121,7 @@ func TestSandboxesCreateHappyPath(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "create",
+		"sandbox", "create",
 		"--org-id", "org-aaa",
 		"--name", "my-new-sandbox",
 	}, env, env.HomeDir)
@@ -153,7 +153,7 @@ func TestSandboxesCreateWithImage(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "create",
+		"sandbox", "create",
 		"--org-id", "org-aaa",
 		"--name", "custom-sandbox",
 		"--image", "ubuntu:22.04",
@@ -187,7 +187,7 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "exec",
+		"sandbox", "exec",
 		"--sandbox-id", "sb-111",
 		"--command", "echo",
 		"--args", "hello", "world",
@@ -222,7 +222,7 @@ func TestSandboxesAddSSHKeyFromString(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "add-ssh-key",
+		"sandbox", "add-ssh-key",
 		"--sandbox-id", "sb-111",
 		"--public-key", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTestingPurposesOnly123 test@test",
 	}, env, env.HomeDir)
@@ -257,7 +257,7 @@ func TestSandboxesAddSSHKeyFromFile(t *testing.T) {
 	assert.NilError(t, err)
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "add-ssh-key",
+		"sandbox", "add-ssh-key",
 		"--sandbox-id", "sb-111",
 		"--public-key-file", keyFile,
 	}, env, env.HomeDir)
@@ -289,7 +289,7 @@ func TestSandboxesAddSSHKeyMutuallyExclusive(t *testing.T) {
 	assert.NilError(t, err)
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "add-ssh-key",
+		"sandbox", "add-ssh-key",
 		"--sandbox-id", "sb-111",
 		"--public-key", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKey test@test",
 		"--public-key-file", keyFile,
@@ -310,7 +310,7 @@ func TestSandboxesAddSSHKeyNeitherProvided(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "add-ssh-key",
+		"sandbox", "add-ssh-key",
 		"--sandbox-id", "sb-111",
 	}, env, env.HomeDir)
 
@@ -334,7 +334,7 @@ func TestSandboxesAddSSHKeyPrivateKeyRejected(t *testing.T) {
 	assert.NilError(t, err)
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "add-ssh-key",
+		"sandbox", "add-ssh-key",
 		"--sandbox-id", "sb-111",
 		"--public-key-file", keyFile,
 	}, env, env.HomeDir)
@@ -349,28 +349,13 @@ func TestSandboxesPrepareNotGitRepo(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "prepare",
+		"sandbox", "prepare",
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "git"),
 		"expected git repo error, got: %s", combined)
-}
-
-func TestSandboxesPrepareDockerSudo(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-
-	// --docker-sudo should be accepted as a flag; command fails for other reasons (not a git repo)
-	result := binary.RunCLI(t, []string{
-		"sandboxes", "prepare", "--docker-sudo",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	combined := result.Stdout + result.Stderr
-	// Should fail because not a git repo, NOT because of unknown flag
-	assert.Assert(t, strings.Contains(combined, "git"),
-		"expected git repo error (not flag parse error), got: %s", combined)
 }
 
 // TestSandboxesSshSyncFlags verifies that SSH/sync flags are accepted and
@@ -380,10 +365,10 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"ssh identity-file", []string{"sandboxes", "ssh", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync dest", []string{"sandboxes", "sync", "--sandbox-id", "sb-111", "--dest", "/custom/path"}},
-		{"sync identity-file", []string{"sandboxes", "sync", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync bootstrap", []string{"sandboxes", "sync", "--sandbox-id", "sb-111", "--bootstrap"}},
+		{"ssh identity-file", []string{"sandbox", "ssh", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+		{"sync dest", []string{"sandbox", "sync", "--sandbox-id", "sb-111", "--dest", "/custom/path"}},
+		{"sync identity-file", []string{"sandbox", "sync", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+		{"sync bootstrap", []string{"sandbox", "sync", "--sandbox-id", "sb-111", "--bootstrap"}},
 	}
 
 	for _, tt := range tests {
@@ -413,7 +398,7 @@ func TestSandboxesPrepareMissingApiKey(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "prepare",
+		"sandbox", "prepare",
 	}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
@@ -438,7 +423,7 @@ func TestSandboxesExecWithArgs(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "exec",
+		"sandbox", "exec",
 		"--sandbox-id", "sb-111",
 		"--command", "ls",
 		"--args", "-la", "/tmp",
@@ -461,7 +446,7 @@ func TestSandboxesCreateMissingName(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"sandboxes", "create",
+		"sandbox", "create",
 		"--org-id", "org-aaa",
 	}, env, env.HomeDir)
 
@@ -483,7 +468,7 @@ func TestSandboxesListFromConfig(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	// No --org-id flag; should read from config
-	result := binary.RunCLI(t, []string{"sandboxes", "list"}, env, workDir)
+	result := binary.RunCLI(t, []string{"sandbox", "list"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stdout, "config-sandbox"),
@@ -493,7 +478,7 @@ func TestSandboxesListFromConfig(t *testing.T) {
 func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	result := binary.RunCLI(t, []string{"sandboxes", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"sandbox", "list"}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	combined := result.Stdout + result.Stderr

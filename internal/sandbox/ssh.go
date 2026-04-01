@@ -65,9 +65,11 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		return nil, err
 	}
 
+	target := net.JoinHostPort(session.URL, fmt.Sprintf("%d", defaultSSHPort))
+
 	// TLS dial — self-signed cert on sandbox hosts, so skip verification.
 	// Trust is established via SSH host key pinning (TOFU) below.
-	tlsConn, err := tls.Dial("tcp", net.JoinHostPort(session.URL, fmt.Sprintf("%d", defaultSSHPort)), &tls.Config{
+	tlsConn, err := tls.Dial("tcp", target, &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
 	})
 	if err != nil {
@@ -92,18 +94,18 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 }
 
 // ExecOverSSH connects to the sandbox via SSH-over-TLS and executes a command.
-func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader) (*ExecResult, error) {
+func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader) (_ *ExecResult, err error) {
 	client, err := dialSSH(ctx, session)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = client.Close() }()
+	defer closer.ErrorHandler(client, &err)
 
 	sess, err := client.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("SSH session: %w", err)
 	}
-	defer func() { _ = sess.Close() }()
+	defer closer.ErrorHandler(sess, &err)
 
 	var stdout, stderr bytes.Buffer
 	sess.Stdout = &stdout
@@ -134,18 +136,18 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 // It intentionally uses os.Stdin/os.Stdout/os.Stderr directly rather than
 // iostream.Streams: term.MakeRaw and term.GetSize require a real *os.File fd,
 // and PTY I/O must be wired to the process's actual terminal.
-func InteractiveShell(ctx context.Context, session *Session) error {
+func InteractiveShell(ctx context.Context, session *Session) (err error) {
 	client, err := dialSSH(ctx, session)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = client.Close() }()
+	defer closer.ErrorHandler(client, &err)
 
 	sess, err := client.NewSession()
 	if err != nil {
 		return fmt.Errorf("SSH session: %w", err)
 	}
-	defer func() { _ = sess.Close() }()
+	defer closer.ErrorHandler(sess, &err)
 
 	// Put local terminal into raw mode so keystrokes pass through directly.
 	fd := int(os.Stdin.Fd())

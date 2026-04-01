@@ -1,10 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -19,9 +19,45 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
+// pickCircleCIOrg prompts the user to select a CircleCI organization.
+// Returns the selected org ID and name, or empty strings if selection is skipped.
+func pickCircleCIOrg(ctx context.Context, streams iostream.Streams) (orgID, orgName string) {
+	client, err := circleci.NewClient()
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping CircleCI setup: %v", err)))
+		return "", ""
+	}
+
+	streams.ErrPrintln(ui.Dim("Fetching CircleCI organizations..."))
+	collabs, err := client.ListCollaborations(ctx)
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not fetch organizations: %v", err)))
+		return "", ""
+	}
+	if len(collabs) == 0 {
+		streams.ErrPrintln(ui.Warning("No CircleCI organizations found"))
+		return "", ""
+	}
+
+	if len(collabs) == 1 {
+		return collabs[0].ID, collabs[0].Name
+	}
+
+	items := make([]string, len(collabs))
+	for i, c := range collabs {
+		items[i] = c.Name
+	}
+	idx, err := tui.SelectFromList("Select CircleCI organization:", items)
+	if err != nil {
+		streams.ErrPrintln(ui.Warning("Skipping CircleCI org selection"))
+		return "", ""
+	}
+	return collabs[idx].ID, collabs[idx].Name
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipValidate, skipCircleCI bool
-	var profile, projectDir string
+	var projectDir string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -47,10 +83,6 @@ commands, and generates hook config files.`,
 			gitCmd.Dir = workDir
 			if err := gitCmd.Run(); err != nil {
 				return fmt.Errorf("not a git repository, run this command from inside a git repo")
-			}
-
-			if err := hook.ValidateProfile(profile); err != nil {
-				return err
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
@@ -81,30 +113,9 @@ commands, and generates hook config files.`,
 
 			// Step 2: CircleCI org picker
 			if !skipCircleCI {
-				client, clientErr := circleci.NewClient()
-				if clientErr != nil {
-					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping CircleCI setup: %v", clientErr)))
-				} else {
-					streams.ErrPrintln(ui.Dim("Fetching CircleCI organizations..."))
-					collabs, listErr := client.ListCollaborations(ctx)
-					switch {
-					case listErr != nil:
-						streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not fetch organizations: %v", listErr)))
-					case len(collabs) == 0:
-						streams.ErrPrintln(ui.Warning("No CircleCI organizations found"))
-					default:
-						items := make([]string, len(collabs))
-						for i, c := range collabs {
-							items[i] = c.Name
-						}
-						idx, selectErr := tui.SelectFromList("Select CircleCI organization:", items)
-						if selectErr != nil {
-							streams.ErrPrintln(ui.Warning("Skipping CircleCI org selection"))
-						} else {
-							cfg.CircleCI = &config.CircleCIConfig{OrgID: collabs[idx].ID}
-							streams.ErrPrintf("Selected organization: %s\n", ui.Bold(collabs[idx].Name))
-						}
-					}
+				if orgID, orgName := pickCircleCIOrg(ctx, streams); orgID != "" {
+					cfg.CircleCI = &config.CircleCIConfig{OrgID: orgID}
+					streams.ErrPrintf("Selected organization: %s\n", ui.Bold(orgName))
 				}
 			}
 
@@ -141,7 +152,7 @@ commands, and generates hook config files.`,
 				if cfg.VCS != nil && cfg.VCS.Repo != "" {
 					projectName = cfg.VCS.Repo
 				}
-				if err := hook.RunSetup(workDir, projectName, profile, force, false, "", cfg.Commands, streams); err != nil {
+				if err := hook.RunSetup(workDir, projectName, force, false, "", cfg.Commands, streams); err != nil {
 					return fmt.Errorf("hook setup: %w", err)
 				}
 			}
@@ -156,8 +167,6 @@ commands, and generates hook config files.`,
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCircleCI, "skip-circleci", false, "Skip CircleCI org picker")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
-	cmd.Flags().StringVar(&profile, "profile", "enable",
-		fmt.Sprintf("Shell environment profile (%s)", strings.Join(hook.ValidProfiles, ", ")))
 
 	return cmd
 }

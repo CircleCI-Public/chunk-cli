@@ -25,6 +25,7 @@ tasks:
       ARGS: '{{default "./..." .CLI_ARGS}}'
     cmds:
       - go tool golangci-lint run {{.ARGS}}
+      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py
 
   fmt:
     desc: Format the code
@@ -37,6 +38,32 @@ tasks:
     desc: Run 'go mod tidy' to clean up module files.
     cmds:
       - go mod tidy -v
+
+  dev-install:
+    desc: Build from source and install to ~/.local/bin
+    cmds:
+      - task: build
+      - mkdir -p ${HOME}/.local/bin
+      - cp dist/chunk ${HOME}/.local/bin
+
+  acceptance-test:
+    desc: Run acceptance tests
+    vars:
+      ARGS: '{{default "./acceptance/..." .CLI_ARGS}}'
+    cmds:
+      - go tool gotestsum -- -race {{.ARGS}}
+
+  env-harness:
+    desc: |
+      Run chunk sandbox env/build against target repos, using Claude to improve
+      envbuilder on failure. Args are passed through to harness/environment.py.
+      Examples:
+        task env-harness                                       # all known repos
+        task env-harness -- --repo flask                      # single nickname
+        task env-harness -- --repo https://github.com/x/y    # any Git URL
+        task env-harness -- --repo flask --timeout 1200
+    cmds:
+      - uv run --project harness harness/environment.py {{.CLI_ARGS}}
 
   release:
     desc: Tag, build, and publish a release (tag → goreleaser → NUR)

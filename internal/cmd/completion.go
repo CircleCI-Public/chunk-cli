@@ -12,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 const completionTag = "# chunk shell completion"
@@ -25,7 +26,38 @@ func newCompletionCmd() *cobra.Command {
 	cmd.AddCommand(newCompletionInstallCmd())
 	cmd.AddCommand(newCompletionUninstallCmd())
 	cmd.AddCommand(newCompletionZshCmd())
+	cmd.AddCommand(newCompletionBashCmd())
 	return cmd
+}
+
+type shellConfig struct {
+	name   string
+	rcFile string
+	source string
+}
+
+func detectShell(home string) (shellConfig, error) {
+	shell := os.Getenv("SHELL")
+	switch {
+	case strings.HasSuffix(shell, "zsh"):
+		return shellConfig{
+			name:   "zsh",
+			rcFile: filepath.Join(home, ".zshrc"),
+			source: "source <(chunk completion zsh)",
+		}, nil
+	case strings.HasSuffix(shell, "bash"):
+		rcFile := filepath.Join(home, ".bash_profile")
+		if _, err := os.Stat(filepath.Join(home, ".bashrc")); err == nil {
+			rcFile = filepath.Join(home, ".bashrc")
+		}
+		return shellConfig{
+			name:   "bash",
+			rcFile: rcFile,
+			source: "source <(chunk completion bash)",
+		}, nil
+	default:
+		return shellConfig{}, usererr.New("Unsupported shell: set SHELL to bash or zsh.", fmt.Errorf("unsupported shell %q", shell))
+	}
 }
 
 func newCompletionInstallCmd() *cobra.Command {
@@ -39,25 +71,29 @@ func newCompletionInstallCmd() *cobra.Command {
 				return fmt.Errorf("HOME not set")
 			}
 
-			rcFile := filepath.Join(home, ".zshrc")
-			line := completionTag + "\nsource <(chunk completion zsh)\n"
+			sh, err := detectShell(home)
+			if err != nil {
+				return err
+			}
+
+			line := completionTag + "\n" + sh.source + "\n"
 
 			// Check if already installed
-			if data, err := os.ReadFile(rcFile); err == nil {
+			if data, err := os.ReadFile(sh.rcFile); err == nil {
 				if strings.Contains(string(data), completionTag) {
 					io.ErrPrintln(ui.Warning("Completion already installed."))
 					return nil
 				}
 			}
 
-			f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			f, err := os.OpenFile(sh.rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 			if err != nil {
-				return fmt.Errorf("open %s: %w", rcFile, err)
+				return fmt.Errorf("open %s: %w", sh.rcFile, err)
 			}
 			defer closer.ErrorHandler(f, &err)
 
 			if _, err := f.WriteString("\n" + line); err != nil {
-				return fmt.Errorf("write %s: %w", rcFile, err)
+				return fmt.Errorf("write %s: %w", sh.rcFile, err)
 			}
 
 			io.ErrPrintln(ui.Success("Completion installed."))
@@ -77,6 +113,17 @@ func newCompletionZshCmd() *cobra.Command {
 	}
 }
 
+func newCompletionBashCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "bash",
+		Short:  "Generate bash completion script",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return cmd.Root().GenBashCompletion(iostream.FromCmd(cmd).Out)
+		},
+	}
+}
+
 func newCompletionUninstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "uninstall",
@@ -88,8 +135,12 @@ func newCompletionUninstallCmd() *cobra.Command {
 				return fmt.Errorf("HOME not set")
 			}
 
-			rcFile := filepath.Join(home, ".zshrc")
-			data, err := os.ReadFile(rcFile)
+			sh, err := detectShell(home)
+			if err != nil {
+				return err
+			}
+
+			data, err := os.ReadFile(sh.rcFile)
 			if err != nil {
 				// Nothing to uninstall
 				io.ErrPrintln(ui.Success("Completion uninstalled."))
@@ -113,8 +164,8 @@ func newCompletionUninstallCmd() *cobra.Command {
 				lines = append(lines, line)
 			}
 
-			if err := os.WriteFile(rcFile, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", rcFile, err)
+			if err := os.WriteFile(sh.rcFile, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", sh.rcFile, err)
 			}
 
 			io.ErrPrintln(ui.Success("Completion uninstalled."))

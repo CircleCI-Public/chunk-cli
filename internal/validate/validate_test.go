@@ -4,34 +4,52 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"gotest.tools/v3/assert"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
+
+func TestShellEscape(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain path", "/workspace/src", "'/workspace/src'"},
+		{"single quote", "it's", "'it'\\''s'"},
+		{"multiple single quotes", "a'b'c", "'a'\\''b'\\''c'"},
+		{"dollar sign", "$HOME", "'$HOME'"},
+		{"newline", "foo\nbar", "'foo\nbar'"},
+		{"backtick", "`cmd`", "'`cmd`'"},
+		{"backslash", `foo\bar`, `'foo\bar'`},
+		{"spaces", "hello world", "'hello world'"},
+		{"empty string", "", "''"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shellEscape(tt.input)
+			assert.Equal(t, got, tt.want)
+		})
+	}
+}
 
 func writeConfig(t *testing.T, dir string, commands []config.Command) string {
 	t.Helper()
 	chunkDir := filepath.Join(dir, ".chunk")
-	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 	cfg := config.ProjectConfig{Commands: commands}
 	data, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
 	path := filepath.Join(chunkDir, "config.json")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, os.WriteFile(path, data, 0o644))
 	return path
 }
 
@@ -51,18 +69,12 @@ func TestLoadProjectConfig(t *testing.T) {
 		})
 
 		cfg, err := config.LoadProjectConfig(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(cfg.Commands) != 2 {
-			t.Fatalf("expected 2 commands, got %d", len(cfg.Commands))
-		}
-		if cfg.Commands[0].Name != "install" || cfg.Commands[0].Run != "npm install" {
-			t.Errorf("unexpected first command: %+v", cfg.Commands[0])
-		}
-		if cfg.Commands[1].Name != "test" || cfg.Commands[1].Run != "npm test" {
-			t.Errorf("unexpected second command: %+v", cfg.Commands[1])
-		}
+		assert.NilError(t, err)
+		assert.Equal(t, len(cfg.Commands), 2)
+		assert.Equal(t, cfg.Commands[0].Name, "install")
+		assert.Equal(t, cfg.Commands[0].Run, "npm install")
+		assert.Equal(t, cfg.Commands[1].Name, "test")
+		assert.Equal(t, cfg.Commands[1].Run, "npm test")
 	})
 
 	t.Run("empty commands", func(t *testing.T) {
@@ -70,42 +82,24 @@ func TestLoadProjectConfig(t *testing.T) {
 		writeConfig(t, dir, []config.Command{})
 
 		cfg, err := config.LoadProjectConfig(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(cfg.Commands) != 0 {
-			t.Fatalf("expected 0 commands, got %d", len(cfg.Commands))
-		}
+		assert.NilError(t, err)
+		assert.Equal(t, len(cfg.Commands), 0)
 	})
 
 	t.Run("missing file", func(t *testing.T) {
 		dir := t.TempDir()
 		_, err := config.LoadProjectConfig(dir)
-		if err == nil {
-			t.Fatal("expected error for missing config")
-		}
-		if !strings.Contains(err.Error(), "could not read config.json") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assert.ErrorContains(t, err, "could not read config.json")
 	})
 
 	t.Run("invalid json", func(t *testing.T) {
 		dir := t.TempDir()
 		chunkDir := filepath.Join(dir, ".chunk")
-		if err := os.MkdirAll(chunkDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte("{bad"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+		assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte("{bad"), 0o644))
 
 		_, err := config.LoadProjectConfig(dir)
-		if err == nil {
-			t.Fatal("expected error for invalid json")
-		}
-		if !strings.Contains(err.Error(), "parse config.json") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assert.ErrorContains(t, err, "parse config.json")
 	})
 }
 
@@ -113,14 +107,10 @@ func TestLoadProjectConfig(t *testing.T) {
 
 func TestHasCommands(t *testing.T) {
 	empty := &config.ProjectConfig{}
-	if empty.HasCommands() {
-		t.Error("expected HasCommands() == false for empty config")
-	}
+	assert.Assert(t, !empty.HasCommands())
 
 	withCmd := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test"}}}
-	if !withCmd.HasCommands() {
-		t.Error("expected HasCommands() == true")
-	}
+	assert.Assert(t, withCmd.HasCommands())
 }
 
 func TestFindCommand(t *testing.T) {
@@ -130,16 +120,9 @@ func TestFindCommand(t *testing.T) {
 	}}
 
 	found := cfg.FindCommand("test")
-	if found == nil {
-		t.Fatal("expected to find 'test' command")
-	}
-	if found.Run != "npm test" {
-		t.Errorf("expected 'npm test', got %q", found.Run)
-	}
-
-	if cfg.FindCommand("nonexistent") != nil {
-		t.Error("expected nil for nonexistent command")
-	}
+	assert.Assert(t, found != nil, "expected to find 'test' command")
+	assert.Equal(t, found.Run, "npm test")
+	assert.Assert(t, cfg.FindCommand("nonexistent") == nil)
 }
 
 // --- RunDryRun tests ---
@@ -152,17 +135,10 @@ func TestRunDryRun(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		if err := RunDryRun(cfg, "", streams); err != nil {
-			t.Fatal(err)
-		}
+		assert.NilError(t, RunDryRun(cfg, "", streams))
 
-		output := out.String()
-		if !strings.Contains(output, "install: npm install") {
-			t.Errorf("expected install command in output, got: %s", output)
-		}
-		if !strings.Contains(output, "test: npm test") {
-			t.Errorf("expected test command in output, got: %s", output)
-		}
+		assert.Assert(t, strings.Contains(out.String(), "install: npm install"), "got: %s", out.String())
+		assert.Assert(t, strings.Contains(out.String(), "test: npm test"), "got: %s", out.String())
 	})
 
 	t.Run("no commands", func(t *testing.T) {
@@ -170,12 +146,7 @@ func TestRunDryRun(t *testing.T) {
 		streams, _, _ := newStreams()
 
 		err := RunDryRun(cfg, "", streams)
-		if err == nil {
-			t.Fatal("expected error for empty config")
-		}
-		if !strings.Contains(err.Error(), "no validate commands") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assert.ErrorContains(t, err, "no validate commands")
 	})
 }
 
@@ -189,19 +160,10 @@ func TestRunAll(t *testing.T) {
 		}}
 		streams, out, errBuf := newStreams()
 
-		if err := RunAll(context.Background(), ".", true, cfg, streams); err != nil {
-			t.Fatal(err)
-		}
-
-		if !strings.Contains(out.String(), "installed") {
-			t.Errorf("expected 'installed' in stdout, got: %s", out.String())
-		}
-		if !strings.Contains(out.String(), "tested") {
-			t.Errorf("expected 'tested' in stdout, got: %s", out.String())
-		}
-		if !strings.Contains(errBuf.String(), "Running install") {
-			t.Errorf("expected status on stderr, got: %s", errBuf.String())
-		}
+		assert.NilError(t, RunAll(context.Background(), ".", true, cfg, streams))
+		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
+		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
+		assert.Assert(t, strings.Contains(errBuf.String(), "Running install"), "got: %s", errBuf.String())
 	})
 
 	t.Run("no commands", func(t *testing.T) {
@@ -209,12 +171,7 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 
 		err := RunAll(context.Background(), ".", true, cfg, streams)
-		if err == nil {
-			t.Fatal("expected error for empty config")
-		}
-		if !strings.Contains(err.Error(), "no validate commands") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assert.ErrorContains(t, err, "no validate commands")
 	})
 
 	t.Run("command failure", func(t *testing.T) {
@@ -224,12 +181,7 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 
 		err := RunAll(context.Background(), ".", true, cfg, streams)
-		if err == nil {
-			t.Fatal("expected error for failing command")
-		}
-		if !strings.Contains(err.Error(), "test command failed") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		assert.ErrorContains(t, err, "test command failed")
 	})
 
 	t.Run("skips remaining after failure", func(t *testing.T) {
@@ -241,23 +193,10 @@ func TestRunAll(t *testing.T) {
 		streams, out, errBuf := newStreams()
 
 		err := RunAll(context.Background(), ".", true, cfg, streams)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-
-		// The skipped commands should not produce stdout
-		if strings.Contains(out.String(), "should-not-run") {
-			t.Errorf("skipped command should not produce output, got: %s", out.String())
-		}
-
-		// Both remaining commands should be reported as skipped
-		stderr := errBuf.String()
-		if !strings.Contains(stderr, "test: skipped") {
-			t.Errorf("expected 'test: skipped' in stderr, got: %s", stderr)
-		}
-		if !strings.Contains(stderr, "lint: skipped") {
-			t.Errorf("expected 'lint: skipped' in stderr, got: %s", stderr)
-		}
+		assert.Assert(t, err != nil, "expected error")
+		assert.Assert(t, !strings.Contains(out.String(), "should-not-run"), "skipped command should not produce output, got: %s", out.String())
+		assert.Assert(t, strings.Contains(errBuf.String(), "test: skipped"), "got: %s", errBuf.String())
+		assert.Assert(t, strings.Contains(errBuf.String(), "lint: skipped"), "got: %s", errBuf.String())
 	})
 
 	t.Run("single command success", func(t *testing.T) {
@@ -266,42 +205,20 @@ func TestRunAll(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		if err := RunAll(context.Background(), ".", true, cfg, streams); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(out.String(), "ok") {
-			t.Errorf("expected 'ok' in output, got: %s", out.String())
-		}
+		assert.NilError(t, RunAll(context.Background(), ".", true, cfg, streams))
+		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
 	})
 }
 
 // --- RunRemote tests ---
 
-func newFakeClient(t *testing.T, cci *fakes.FakeCircleCI) (*circleci.Client, *httptest.Server) {
-	t.Helper()
-	srv := httptest.NewServer(cci)
-	t.Cleanup(srv.Close)
-
-	t.Setenv("CIRCLE_TOKEN", "fake-token")
-	t.Setenv("CIRCLECI_BASE_URL", srv.URL)
-
-	client, err := circleci.NewClient()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client, srv
-}
-
 func TestRunRemote(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		cci := fakes.NewFakeCircleCI()
-		cci.ExecResponse = &fakes.ExecResponse{
-			CommandID: "cmd-1",
-			PID:       1,
-			Stdout:    "remote output\n",
-			ExitCode:  0,
+		var execCount int
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			execCount++
+			return "remote output\n", "", 0, nil
 		}
-		client, _ := newFakeClient(t, cci)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "install", Run: "echo install"},
@@ -309,73 +226,53 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		err := RunRemote(context.Background(), client, cfg, "sandbox-1", "org-1", streams)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if !strings.Contains(out.String(), "remote output") {
-			t.Errorf("expected remote output in stdout, got: %s", out.String())
-		}
-
-		// Verify both commands were executed
-		reqs := cci.Recorder.AllRequests()
-		var execCount int
-		for _, r := range reqs {
-			if strings.HasPrefix(r.URL.Path, "/api/v2/sandbox/instances/") && strings.HasSuffix(r.URL.Path, "/exec") {
-				execCount++
-			}
-		}
-		if execCount != 2 {
-			t.Errorf("expected 2 exec requests, got %d", execCount)
-		}
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/workspace", streams))
+		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
+		assert.Equal(t, execCount, 2)
 	})
 
 	t.Run("non-zero exit code", func(t *testing.T) {
-		cci := fakes.NewFakeCircleCI()
-		cci.ExecResponse = &fakes.ExecResponse{
-			CommandID: "cmd-1",
-			PID:       1,
-			ExitCode:  1,
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 1, nil
 		}
-		client, _ := newFakeClient(t, cci)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "test", Run: "failing"},
 		}}
 		streams, _, _ := newStreams()
 
-		err := RunRemote(context.Background(), client, cfg, "sandbox-1", "org-1", streams)
-		if err == nil {
-			t.Fatal("expected error for non-zero exit code")
-		}
-		if !strings.Contains(err.Error(), "remote test failed") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		err := RunRemote(context.Background(), execFn, cfg, "/workspace", streams)
+		assert.ErrorContains(t, err, "remote test failed")
 	})
 
 	t.Run("empty stdout not written", func(t *testing.T) {
-		cci := fakes.NewFakeCircleCI()
-		cci.ExecResponse = &fakes.ExecResponse{
-			CommandID: "cmd-1",
-			PID:       1,
-			Stdout:    "",
-			ExitCode:  0,
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 0, nil
 		}
-		client, _ := newFakeClient(t, cci)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "test", Run: "silent"},
 		}}
 		streams, out, _ := newStreams()
 
-		err := RunRemote(context.Background(), client, cfg, "sandbox-1", "org-1", streams)
-		if err != nil {
-			t.Fatal(err)
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/workspace", streams))
+		assert.Equal(t, out.Len(), 0)
+	})
+
+	t.Run("script uses dest directory", func(t *testing.T) {
+		var capturedScript string
+		execFn := func(_ context.Context, script string) (string, string, int, error) {
+			capturedScript = script
+			return "", "", 0, nil
 		}
-		if out.Len() != 0 {
-			t.Errorf("expected no stdout output, got: %s", out.String())
-		}
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "go test ./..."},
+		}}
+		streams, _, _ := newStreams()
+
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/custom/path", streams))
+		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/custom/path' &&"), "got: %s", capturedScript)
 	})
 }
 
@@ -384,41 +281,24 @@ func TestRunRemote(t *testing.T) {
 func TestCommandFileExtRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	chunkDir := filepath.Join(dir, ".chunk")
-	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 
 	raw := `{"commands":[{"name":"lint","run":"eslint .","fileExt":".ts","timeout":60}]}`
-	if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(raw), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(raw), 0o644))
 
 	cfg, err := config.LoadProjectConfig(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.Commands) != 1 {
-		t.Fatalf("expected 1 command, got %d", len(cfg.Commands))
-	}
+	assert.NilError(t, err)
+	assert.Equal(t, len(cfg.Commands), 1)
+
 	c := cfg.Commands[0]
-	if c.FileExt != ".ts" {
-		t.Errorf("expected FileExt %q, got %q", ".ts", c.FileExt)
-	}
-	if c.Timeout != 60 {
-		t.Errorf("expected Timeout 60, got %d", c.Timeout)
-	}
+	assert.Equal(t, c.FileExt, ".ts")
+	assert.Equal(t, c.Timeout, 60)
 
 	// Save and reload to verify round-trip
-	if err := config.SaveProjectConfig(dir, cfg); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, config.SaveProjectConfig(dir, cfg))
 	cfg2, err := config.LoadProjectConfig(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg2.Commands[0].FileExt != ".ts" {
-		t.Errorf("round-trip lost FileExt: got %q", cfg2.Commands[0].FileExt)
-	}
+	assert.NilError(t, err)
+	assert.Equal(t, cfg2.Commands[0].FileExt, ".ts")
 }
 
 func TestCommandFileExtOmitted(t *testing.T) {
@@ -427,21 +307,13 @@ func TestCommandFileExtOmitted(t *testing.T) {
 	cfg := &config.ProjectConfig{Commands: []config.Command{
 		{Name: "test", Run: "go test ./..."},
 	}}
-	if err := config.SaveProjectConfig(dir, cfg); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, config.SaveProjectConfig(dir, cfg))
 
 	data, err := os.ReadFile(filepath.Join(dir, ".chunk", "config.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, err)
 	// fileExt and timeout should not appear when empty/zero
-	if strings.Contains(string(data), "fileExt") {
-		t.Errorf("expected fileExt to be omitted from JSON, got: %s", data)
-	}
-	if strings.Contains(string(data), "timeout") {
-		t.Errorf("expected timeout to be omitted from JSON, got: %s", data)
-	}
+	assert.Assert(t, !strings.Contains(string(data), "fileExt"), "expected fileExt to be omitted, got: %s", data)
+	assert.Assert(t, !strings.Contains(string(data), "timeout"), "expected timeout to be omitted, got: %s", data)
 }
 
 // --- Cache with fileExt tests ---
@@ -452,27 +324,16 @@ func TestCacheWithFileExt(t *testing.T) {
 	// Initialize a git repo so computeContentHash works
 	initGitRepo(t, dir)
 
-	// Write cache with no fileExt
-	if err := WriteCache(dir, "test", "", 0, "passed"); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, WriteCache(dir, "test", "", 0, "passed"))
 	cached := CheckCache(dir, "test", "")
-	if cached == nil {
-		t.Fatal("expected cache hit with no fileExt")
-	}
-	if cached.Status != "pass" {
-		t.Errorf("expected pass, got %s", cached.Status)
-	}
+	assert.Assert(t, cached != nil, "expected cache hit with no fileExt")
+	assert.Equal(t, cached.Status, "pass")
 
 	// Cache written with no fileExt should miss when checked with fileExt
 	// because the content hashes will differ (different git diff args)
-	if err := WriteCache(dir, "lint", ".ts", 0, "ok"); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, WriteCache(dir, "lint", ".ts", 0, "ok"))
 	cached = CheckCache(dir, "lint", ".ts")
-	if cached == nil {
-		t.Fatal("expected cache hit with matching fileExt")
-	}
+	assert.Assert(t, cached != nil, "expected cache hit with matching fileExt")
 }
 
 func TestCache(t *testing.T) {
@@ -492,24 +353,13 @@ func TestCache(t *testing.T) {
 			dir := t.TempDir()
 			initGitRepo(t, dir)
 
-			err := WriteCache(dir, "cmd", "", tt.exitCode, tt.output)
-			if err != nil {
-				t.Fatalf("WriteCache: %v", err)
-			}
+			assert.NilError(t, WriteCache(dir, "cmd", "", tt.exitCode, tt.output))
 
 			cached := CheckCache(dir, "cmd", "")
-			if cached == nil {
-				t.Fatal("expected cache hit")
-			}
-			if cached.Status != tt.wantStatus {
-				t.Fatalf("status = %q, want %q", cached.Status, tt.wantStatus)
-			}
-			if cached.ExitCode != tt.exitCode {
-				t.Fatalf("exitCode = %d, want %d", cached.ExitCode, tt.exitCode)
-			}
-			if cached.Output != tt.output {
-				t.Fatalf("output = %q, want %q", cached.Output, tt.output)
-			}
+			assert.Assert(t, cached != nil, "expected cache hit")
+			assert.Equal(t, cached.Status, tt.wantStatus)
+			assert.Equal(t, cached.ExitCode, tt.exitCode)
+			assert.Equal(t, cached.Output, tt.output)
 		})
 	}
 }
@@ -518,19 +368,13 @@ func TestCacheInvalidatedByChange(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
-	if err := WriteCache(dir, "test", "", 0, "ok"); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, WriteCache(dir, "test", "", 0, "ok"))
 
 	// Modify a tracked file so the content hash changes
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("changed"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("changed"), 0o644))
 
 	cached := CheckCache(dir, "test", "")
-	if cached != nil {
-		t.Fatal("expected cache miss after file change")
-	}
+	assert.Assert(t, cached == nil, "expected cache miss after file change")
 }
 
 func TestCacheMissForMissingFile(t *testing.T) {
@@ -538,9 +382,7 @@ func TestCacheMissForMissingFile(t *testing.T) {
 	initGitRepo(t, dir)
 
 	cached := CheckCache(dir, "nonexistent", "")
-	if cached != nil {
-		t.Fatal("expected nil for nonexistent cache")
-	}
+	assert.Assert(t, cached == nil, "expected nil for nonexistent cache")
 }
 
 func TestCacheOutputTruncation(t *testing.T) {
@@ -548,17 +390,12 @@ func TestCacheOutputTruncation(t *testing.T) {
 	initGitRepo(t, dir)
 
 	bigOutput := strings.Repeat("x", 100*1024) // 100KB, exceeds maxOutputBytes (50KB)
-	if err := WriteCache(dir, "big", "", 1, bigOutput); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, WriteCache(dir, "big", "", 1, bigOutput))
 
 	cached := CheckCache(dir, "big", "")
-	if cached == nil {
-		t.Fatal("expected cache hit")
-	}
-	if len(cached.Output) > maxOutputBytes {
-		t.Fatalf("output should be truncated to %d bytes, got %d", maxOutputBytes, len(cached.Output))
-	}
+	assert.Assert(t, cached != nil, "expected cache hit")
+	assert.Assert(t, len(cached.Output) <= maxOutputBytes,
+		"output should be truncated to %d bytes, got %d", maxOutputBytes, len(cached.Output))
 }
 
 func initGitRepo(t *testing.T, dir string) {
@@ -576,9 +413,7 @@ func initGitRepo(t *testing.T, dir string) {
 	}
 	// Create an initial commit so HEAD exists
 	readme := filepath.Join(dir, "README.md")
-	if err := os.WriteFile(readme, []byte("test"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	assert.NilError(t, os.WriteFile(readme, []byte("test"), 0o644))
 	for _, args := range [][]string{
 		{"git", "add", "."},
 		{"git", "commit", "-m", "init"},

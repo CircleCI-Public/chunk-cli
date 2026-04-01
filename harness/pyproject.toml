@@ -1,0 +1,23 @@
+[project]
+name = "chunk-scripts"
+version = "0.1.0"
+description = "Development scripts for chunk-cli"
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk",
+    "anyio",
+    "pylint",
+]
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-function-docstring",
+    "missing-class-docstring",
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "too-many-locals",
+    "broad-exception-caught",
+]

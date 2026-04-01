@@ -58,7 +58,7 @@ chunk
 │   --save                          # Save --cmd to config
 │   --force-run                     # Ignore cache, always run
 │
-├── sandboxes
+├── sandbox
 │   ├── list --org-id <id>          # List sandboxes
 │   ├── create                      # Create a sandbox
 │   │   --org-id <id>               # Organization ID (required)

@@ -5,11 +5,17 @@ import (
 )
 
 func NewRootCmd(version string) *cobra.Command {
+	cobra.EnableTraverseRunHooks = true
+
 	rootCmd := &cobra.Command{
 		Use:           "chunk",
 		Short:         "Generate AI review context and trigger AI coding tasks",
 		Version:       version,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			return nil
+		},
 	}
 
 	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + `
@@ -28,7 +34,7 @@ Getting started:
 	rootCmd.AddCommand(newBuildPromptCmd())
 	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newCompletionCmd())
-	rootCmd.AddCommand(newSandboxesCmd())
+	rootCmd.AddCommand(newSandboxCmd())
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newUpgradeCmd())

@@ -64,7 +64,11 @@ func (m confirmModel) View() tea.View {
 
 // Confirm presents a y/n prompt and returns the boolean result.
 // Returns ErrCancelled if the user presses Ctrl+C or Esc.
+// Returns ErrNoTTY if stdin is not a terminal.
 func Confirm(label string, defaultYes bool) (bool, error) {
+	if err := requireTTY(); err != nil {
+		return false, err
+	}
 	model := confirmModel{label: label, defaultYes: defaultYes}
 	p := tea.NewProgram(model)
 	result, err := p.Run()

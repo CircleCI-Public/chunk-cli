@@ -13,12 +13,14 @@ dist/
 .vscode/
 .idea/
 .cursor/
+.flox/
 
 # OS
 .DS_Store
 
 # Logs
 *.log
+harness/logs/
 
 # Execution plans (working documents)
 execplans/

@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,8 +35,10 @@ func TestConfigShowDefaults(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "model"),
-		"expected config show to mention model, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "claude-sonnet-4-5-20250929"),
+		"expected default model value in config show, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Default"),
+		"expected '(Default)' source annotation, got: %s", combined)
 }
 
 // apiKey.slice(-4) not .slice(0,4) — verify last 4 chars shown, not first 4
@@ -127,4 +130,97 @@ func TestConfigFilePermissions(t *testing.T) {
 	filePerm := fileInfo.Mode().Perm()
 	assert.Equal(t, filePerm, os.FileMode(0o600),
 		fmt.Sprintf("expected config file perm 0600, got %04o", filePerm))
+}
+
+func TestConfigShowModelFromEnvVar(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.Extra["CODE_REVIEW_CLI_MODEL"] = "claude-test-env-model"
+
+	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "claude-test-env-model"),
+		"expected model from env var, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Environment variable"),
+		"expected 'Environment variable' source, got: %s", combined)
+}
+
+func TestConfigShowAPIKeyEnvPrecedenceOverFile(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = "" // clear initially to set via file first
+
+	// Store key via config set
+	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-file-key-FILE"}, env, env.HomeDir)
+	assert.Equal(t, setResult.ExitCode, 0, "config set failed")
+
+	// Now set env var — it should win
+	env.AnthropicKey = "sk-ant-env-key-ENVK"
+	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "ENVK"),
+		"expected env key last 4 chars, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "FILE"),
+		"file key should not appear when env var is set, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Environment variable"),
+		"expected env var source, got: %s", combined)
+}
+
+func TestConfigShowModelEnvPrecedenceOverFile(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	// Set model via config file
+	setResult := binary.RunCLI(t, []string{"config", "set", "model", "file-model"}, env, env.HomeDir)
+	assert.Equal(t, setResult.ExitCode, 0, "config set failed")
+
+	// Set env var — it should win
+	env.Extra["CODE_REVIEW_CLI_MODEL"] = "env-model"
+	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "env-model"),
+		"expected env model, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "file-model"),
+		"file model should not appear when env var is set, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Environment variable"),
+		"expected env var source, got: %s", combined)
+}
+
+func TestConfigSetAPIKeyStoredInFile(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-stored-1234"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "config set failed")
+
+	// Read the config file directly
+	configFile := filepath.Join(env.HomeDir, ".config", "chunk", "config.json")
+	data, err := os.ReadFile(configFile)
+	assert.NilError(t, err, "config file should exist")
+
+	var cfg map[string]string
+	err = json.Unmarshal(data, &cfg)
+	assert.NilError(t, err, "config should be valid JSON")
+	assert.Equal(t, cfg["apiKey"], "sk-ant-stored-1234",
+		"expected stored apiKey value in config.json")
+}
+
+func TestConfigSetMissingValue(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	// "config set model" with no value — cobra ExactArgs(2) should reject
+	result := binary.RunCLI(t, []string{"config", "set", "model"}, env, env.HomeDir)
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for missing value\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+}
+
+func TestConfigSetMissingKeyAndValue(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	// "config set" with no args — cobra ExactArgs(2) should reject
+	result := binary.RunCLI(t, []string{"config", "set"}, env, env.HomeDir)
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for missing args\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
+// defaultTestCommand is used when no toolchain is detected and Claude is unavailable.
 const defaultTestCommand = "npm test"
 
 // PackageManager holds the name and CI-safe install command for a detected package manager.
@@ -89,6 +90,13 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 		}, nil
 	}
 
+	// Monorepo with no root package.json but a detectable package manager in subdirs.
+	if pm := DetectPackageManager(workDir); pm != nil {
+		return []config.Command{
+			{Name: "test", Run: pm.Name + " test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+		}, nil
+	}
+
 	// Unknown toolchain — ask Claude
 	if claude == nil {
 		return []config.Command{{Name: "test", Run: defaultTestCommand, Role: config.RoleGate}}, nil
@@ -108,7 +116,8 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 		pmHint, gatherRepoContext(workDir, files),
 	)
 
-	resp, err := claude.Ask(ctx, config.ValidationModel, 64, prompt)
+	resp, err := claude.Ask(ctx, config.ValidationModel, 64, prompt,
+		"Respond with ONLY a shell command string. No explanation, no reasoning, no markdown, no preamble. Output the command and nothing else.")
 	if err != nil {
 		return nil, fmt.Errorf("detect test command: %w", err)
 	}
@@ -133,9 +142,22 @@ func DetectPackageManager(workDir string) *PackageManager {
 		{"package-lock.json", PackageManager{"npm", "npm ci"}},
 	}
 
+	// Check root first, then one level deep for monorepos.
+	searchDirs := []string{workDir}
+	if entries, err := os.ReadDir(workDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+				searchDirs = append(searchDirs, filepath.Join(workDir, e.Name()))
+			}
+		}
+	}
+
 	for _, lf := range lockfiles {
-		if _, err := os.Stat(filepath.Join(workDir, lf.file)); err == nil {
-			return &lf.pm
+		for _, dir := range searchDirs {
+			if _, err := os.Stat(filepath.Join(dir, lf.file)); err == nil {
+				pm := lf.pm
+				return &pm
+			}
 		}
 	}
 	return nil

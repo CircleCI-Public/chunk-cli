@@ -1,33 +1,39 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"regexp"
 
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-func newSandboxesCmd() *cobra.Command {
+func newSandboxCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "sandboxes",
+		Use:   "sandbox",
 		Short: "Manage sandboxes",
 	}
 
-	cmd.AddCommand(newSandboxesListCmd())
-	cmd.AddCommand(newSandboxesCreateCmd())
-	cmd.AddCommand(newSandboxesExecCmd())
-	cmd.AddCommand(newSandboxesAddSSHKeyCmd())
-	cmd.AddCommand(newSandboxesSSHCmd())
-	cmd.AddCommand(newSandboxesSyncCmd())
-	cmd.AddCommand(newSandboxesPrepareCmd())
+	cmd.AddCommand(newSandboxListCmd())
+	cmd.AddCommand(newSandboxCreateCmd())
+	cmd.AddCommand(newSandboxExecCmd())
+	cmd.AddCommand(newSandboxAddSSHKeyCmd())
+	cmd.AddCommand(newSandboxSSHCmd())
+	cmd.AddCommand(newSandboxSyncCmd())
+	cmd.AddCommand(newSandboxPrepareCmd())
+	cmd.AddCommand(newSandboxEnvCmd())
+	cmd.AddCommand(newSandboxBuildCmd())
 
 	return cmd
 }
@@ -48,7 +54,7 @@ func resolveOrgID(orgID string) (string, error) {
 	return "", fmt.Errorf("--org-id is required: pass --org-id or run 'chunk init' to store it in .chunk/config.json")
 }
 
-func newSandboxesListCmd() *cobra.Command {
+func newSandboxListCmd() *cobra.Command {
 	var orgID string
 
 	cmd := &cobra.Command{
@@ -84,7 +90,7 @@ func newSandboxesListCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesCreateCmd() *cobra.Command {
+func newSandboxCreateCmd() *cobra.Command {
 	var orgID, name, image string
 
 	cmd := &cobra.Command{
@@ -117,7 +123,7 @@ func newSandboxesCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesExecCmd() *cobra.Command {
+func newSandboxExecCmd() *cobra.Command {
 	var sandboxID, command string
 	var execArgs []string
 
@@ -158,7 +164,7 @@ func newSandboxesExecCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesAddSSHKeyCmd() *cobra.Command {
+func newSandboxAddSSHKeyCmd() *cobra.Command {
 	var sandboxID, publicKey, publicKeyFile string
 
 	cmd := &cobra.Command{
@@ -187,7 +193,7 @@ func newSandboxesAddSSHKeyCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSSHCmd() *cobra.Command {
+func newSandboxSSHCmd() *cobra.Command {
 	var sandboxID, identityFile string
 
 	cmd := &cobra.Command{
@@ -195,8 +201,8 @@ func newSandboxesSSHCmd() *cobra.Command {
 		Short: "SSH into a sandbox",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			authSock := os.Getenv("SSH_AUTH_SOCK")
 			io := iostream.FromCmd(cmd)
+			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -212,7 +218,7 @@ func newSandboxesSSHCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesSyncCmd() *cobra.Command {
+func newSandboxSyncCmd() *cobra.Command {
 	var sandboxID, dest, identityFile string
 	var bootstrap bool
 
@@ -220,8 +226,8 @@ func newSandboxesSyncCmd() *cobra.Command {
 		Use:   "sync",
 		Short: "Sync files to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			authSock := os.Getenv("SSH_AUTH_SOCK")
 			io := iostream.FromCmd(cmd)
+			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -239,9 +245,9 @@ func newSandboxesSyncCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxesPrepareCmd() *cobra.Command {
-	var dockerSudo bool
+var validDockerTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*(:[a-zA-Z0-9._\-]+)?$`)
 
+func newSandboxPrepareCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prepare",
 		Short: "Prepare sandbox environment",
@@ -259,11 +265,113 @@ func newSandboxesPrepareCmd() *cobra.Command {
 			}
 
 			io := iostream.FromCmd(cmd)
-			return sandbox.Prepare(cmd.Context(), claude, dockerSudo, io, os.Stdin)
+			return sandbox.Prepare(cmd.Context(), claude, io, os.Stdin)
 		},
 	}
 
-	cmd.Flags().BoolVar(&dockerSudo, "docker-sudo", false, "Use sudo for docker commands")
+	return cmd
+}
+
+func newSandboxEnvCmd() *cobra.Command {
+	var dir string
+
+	cmd := &cobra.Command{
+		Use:   "env",
+		Short: "Detect tech stack and print environment spec as JSON",
+		Long: `Analyse the repository at --dir, detect its tech stack, and print
+a JSON environment spec to stdout. Pipe this into 'chunk sandbox build' to
+generate a Dockerfile and build a test image.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			if _, err := os.Stat(dir); err != nil {
+				return fmt.Errorf("directory %q not found: %w", dir, err)
+			}
+			io.ErrPrintf("Detecting environment in %s...\n", dir)
+
+			env, err := envbuilder.DetectEnvironment(cmd.Context(), dir)
+			if err != nil {
+				return fmt.Errorf("detect environment: %w", err)
+			}
+
+			out, err := json.MarshalIndent(env, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshal environment: %w", err)
+			}
+			io.Printf("%s\n", out)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to detect environment in")
+
+	return cmd
+}
+
+func newSandboxBuildCmd() *cobra.Command {
+	var dir, tag string
+
+	cmd := &cobra.Command{
+		Use:   "build",
+		Short: "Generate a Dockerfile from an environment spec and build a test image",
+		Long: `Read a JSON environment spec from stdin (produced by 'chunk sandbox env'),
+write Dockerfile.test to --dir, and build a Docker test image from it.
+
+Example:
+  chunk sandbox env --dir . | chunk sandbox build --dir .`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if tag != "" && !validDockerTag.MatchString(tag) {
+				return fmt.Errorf("invalid docker tag %q", tag)
+			}
+
+			streams := iostream.FromCmd(cmd)
+
+			// Guard against interactive use: if stdin is a terminal (not a pipe),
+			// fail fast with a helpful message rather than blocking silently.
+			// Check cmd.InOrStdin() so injected readers (e.g. in tests) are not blocked.
+			if f, ok := cmd.InOrStdin().(*os.File); ok {
+				if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+					return fmt.Errorf("no input on stdin — pipe a JSON env spec from 'chunk sandbox env'")
+				}
+			}
+
+			raw, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				return fmt.Errorf("read environment spec: %w", err)
+			}
+			var env envbuilder.Environment
+			if err := json.Unmarshal(raw, &env); err != nil {
+				return fmt.Errorf("parse environment spec: %w", err)
+			}
+
+			dockerfilePath, err := envbuilder.WriteDockerfile(dir, &env)
+			if err != nil {
+				return fmt.Errorf("write dockerfile: %w", err)
+			}
+			streams.ErrPrintf("Wrote %s\n", dockerfilePath)
+
+			streams.ErrPrintf("Building Docker image in %s...\n", dir)
+
+			args := []string{"build", "-f", "Dockerfile.test"}
+			if tag != "" {
+				args = append(args, "-t", tag)
+			}
+			args = append(args, ".")
+
+			dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
+			dockerCmd.Dir = dir
+			dockerCmd.Stdout = streams.Out
+			dockerCmd.Stderr = streams.Err
+			if err := dockerCmd.Run(); err != nil {
+				return fmt.Errorf("docker build: %w", err)
+			}
+
+			streams.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write Dockerfile.test and build from")
+	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
 
 	return cmd
 }
