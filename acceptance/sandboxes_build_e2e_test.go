@@ -15,6 +15,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 )
 
@@ -140,6 +141,20 @@ func TestSandboxesBuildEndToEnd(t *testing.T) {
 
 			_, err := os.Stat(cloneDir + "/Dockerfile.test")
 			assert.NilError(t, err, "Dockerfile.test not created")
+
+			dfContent, err := os.ReadFile(cloneDir + "/Dockerfile.test")
+			assert.NilError(t, err, "read Dockerfile.test")
+			var parsedEnv envbuilder.Environment
+			if jsonErr := json.Unmarshal([]byte(envJSON), &parsedEnv); jsonErr == nil {
+				if envbuilder.NeedsNPMRC(parsedEnv.Stack) {
+					assert.Assert(t, strings.Contains(string(dfContent), "--mount=type=secret,id=npmrc"),
+						"Dockerfile.test missing npmrc secret mount for stack %q", parsedEnv.Stack)
+				}
+				if envbuilder.NeedsNetRC(parsedEnv.Stack) {
+					assert.Assert(t, strings.Contains(string(dfContent), "--mount=type=secret,id=netrc"),
+						"Dockerfile.test missing netrc secret mount for stack %q", parsedEnv.Stack)
+				}
+			}
 
 			t.Log("Running tests in container...")
 			testsOK, testOutput := e2eDockerRun(t, tag)
