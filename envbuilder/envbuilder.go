@@ -51,6 +51,30 @@ func NeedsNetRC(stack string) bool {
 	return stack == stackPython || stack == stackGo
 }
 
+// DockerBuildSecrets returns docker --secret flag values needed for the
+// environment's stack, based on credential files present on the host.
+// Returns pairs like "id=npmrc,src=/Users/x/.npmrc".
+func DockerBuildSecrets(env *Environment) []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	var secrets []string
+	if NeedsNPMRC(env.Stack) {
+		p := filepath.Join(home, ".npmrc")
+		if _, err := os.Stat(p); err == nil {
+			secrets = append(secrets, "id=npmrc,src="+p)
+		}
+	}
+	if NeedsNetRC(env.Stack) {
+		p := filepath.Join(home, ".netrc")
+		if _, err := os.Stat(p); err == nil {
+			secrets = append(secrets, "id=netrc,src="+p)
+		}
+	}
+	return secrets
+}
+
 // Environment describes the detected tech stack and build configuration for a repository.
 type Environment struct {
 	Stack        string   `json:"stack"`
