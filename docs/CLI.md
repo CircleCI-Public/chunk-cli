@@ -33,7 +33,7 @@ chunk
 │       --new-branch                # Create a new branch
 │       --no-pipeline-as-tool       # Disable pipeline-as-tool mode
 │
-├── skills
+├── skill
 │   ├── install                     # Install all skills
 │   └── list                        # List skills and install status
 │

@@ -32,7 +32,7 @@ Getting started:
 	rootCmd.AddCommand(newAuthCmd())
 	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newBuildPromptCmd())
-	rootCmd.AddCommand(newSkillsCmd())
+	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newCompletionCmd())
 	rootCmd.AddCommand(newSandboxCmd())
 	rootCmd.AddCommand(newTaskCmd())

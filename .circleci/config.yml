@@ -73,7 +73,7 @@ jobs:
                 name: Verify skill content is embedded
                 command: |
                   mkdir -p ~/.claude
-                  ./dist/chunk skills install
+                  ./dist/chunk skill install
                   echo "OK: skill content embedded correctly"
                   head -5 ~/.claude/skills/chunk-review/SKILL.md
 
