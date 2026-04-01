@@ -77,7 +77,7 @@ chunk
 │   ├── ssh                         # SSH into sandbox
 │   │   --sandbox-id <id>           # Sandbox ID (required)
 │   │   --identity-file <path>      # SSH identity file
-│   │   --forward-env KEY=VALUE     # Set env var in remote session (repeatable)
+│   │   --env-vars KEY=VALUE        # Set env var in remote session (repeatable)
 │   │   --no-env-file               # Skip auto-loading .env.local
 │   ├── sync                        # Sync files to sandbox
 │   └── prepare                     # Prepare sandbox env (not yet implemented)

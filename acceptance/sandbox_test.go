@@ -487,11 +487,11 @@ func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
 		"expected helpful error message, got: %s", combined)
 }
 
-// TestSandboxesSSHForwardEnv verifies the --forward-env flag behaviour:
+// TestSandboxesSSHForwardEnv verifies the --env-vars flag behaviour:
 //  1. An invalid entry (missing =) is rejected before any SSH connection.
 //  2. A valid KEY=VALUE pair is accepted and the command progresses past env
 //     resolution (failing at the SSH key stage).
-//  3. A .env.local file is automatically loaded when --forward-env is used,
+//  3. A .env.local file is automatically loaded when --env-vars is used,
 //     with flag values overriding file values.
 //  4. --no-env-file skips .env.local loading.
 func TestSandboxesSSHForwardEnv(t *testing.T) {
@@ -506,7 +506,7 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		result := binary.RunCLI(t, []string{
 			"sandbox", "ssh",
 			"--sandbox-id", "sb-111",
-			"--forward-env", "NOEQUALS",
+			"--env-vars", "NOEQUALS",
 		}, env, env.HomeDir)
 
 		assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
@@ -527,7 +527,7 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		result := binary.RunCLI(t, []string{
 			"sandbox", "ssh",
 			"--sandbox-id", "sb-111",
-			"--forward-env", "MY_TOKEN=secret-value",
+			"--env-vars", "MY_TOKEN=secret-value",
 		}, env, env.HomeDir)
 
 		// Should fail at SSH key step, not at env parsing.
@@ -553,7 +553,7 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		result := binary.RunCLI(t, []string{
 			"sandbox", "ssh",
 			"--sandbox-id", "sb-111",
-			"--forward-env", "FLAG_VAR=from-flag",
+			"--env-vars", "FLAG_VAR=from-flag",
 		}, env, workDir)
 
 		// Should fail at SSH key step — proves .env.local was loaded without error.
@@ -580,7 +580,7 @@ func TestSandboxesSSHForwardEnv(t *testing.T) {
 		result := binary.RunCLI(t, []string{
 			"sandbox", "ssh",
 			"--sandbox-id", "sb-111",
-			"--forward-env", "FOO=bar",
+			"--env-vars", "FOO=bar",
 			"--no-env-file",
 		}, env, workDir)
 
