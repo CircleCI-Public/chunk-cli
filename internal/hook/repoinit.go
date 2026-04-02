@@ -48,6 +48,11 @@ func RunRepoInit(targetDir, projectName string, commands []config.Command, force
 		streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created %s", tmpl.relativePath)))
 	}
 
+	// Append chunk-managed entries to the project-root .gitignore if missing.
+	if err := ensureGitignoreEntries(targetDir, []string{".chunk/sandbox*"}, streams); err != nil {
+		return fmt.Errorf("update .gitignore: %w", err)
+	}
+
 	// Generate settings.json content from detected commands.
 	// settings.json is scaffold-once: never overwrite an existing file since users
 	// may have customized it. Always write the example so they have a current reference.
@@ -70,6 +75,48 @@ func RunRepoInit(targetDir, projectName string, commands []config.Command, force
 		streams.ErrPrintf("%s\n", ui.Success("Created .claude/settings.json"))
 	}
 
+	return nil
+}
+
+// ensureGitignoreEntries appends any entries not already present in the
+// project-root .gitignore. Existing content is never modified.
+func ensureGitignoreEntries(dir string, entries []string, streams iostream.Streams) error {
+	path := filepath.Join(dir, ".gitignore")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	var missing []string
+	for _, entry := range entries {
+		if !strings.Contains(string(existing), entry) {
+			missing = append(missing, entry)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	var buf strings.Builder
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		buf.WriteString("\n")
+	}
+	buf.WriteString("\n# chunk\n")
+	for _, e := range missing {
+		buf.WriteString(e + "\n")
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(buf.String()); err != nil {
+		return err
+	}
+
+	streams.ErrPrintf("%s\n", ui.Success("Updated .gitignore"))
 	return nil
 }
 
