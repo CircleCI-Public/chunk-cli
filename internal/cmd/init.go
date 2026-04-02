@@ -88,7 +88,7 @@ commands, and generates hook config files.`,
 			// Guard: exit cleanly if config exists and --force not set
 			existingCfg, loadErr := config.LoadProjectConfig(workDir)
 			if loadErr == nil && !force {
-				hasData := existingCfg.HasCommands() || existingCfg.VCS != nil || existingCfg.CircleCI != nil
+				hasData := existingCfg.HasCommands() || existingCfg.VCS != nil
 				if hasData {
 					streams.ErrPrintln("Config already exists at .chunk/config.json")
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
@@ -114,8 +114,10 @@ commands, and generates hook config files.`,
 			// Step 2: CircleCI org picker
 			if !skipCircleCI {
 				if orgID, orgName := pickCircleCIOrg(ctx, streams); orgID != "" {
-					cfg.CircleCI = &config.CircleCIConfig{OrgID: orgID}
 					streams.ErrPrintf("Selected organization: %s\n", ui.Bold(orgName))
+					if os.Getenv("CIRCLECI_ORG_ID") != orgID {
+						streams.ErrPrintf("\nSet your org ID as an environment variable:\n  export CIRCLECI_ORG_ID=%s\n\nAdd it to your shell profile (~/.zshrc or ~/.bashrc) to persist it.\n\n", orgID)
+					}
 				}
 			}
 

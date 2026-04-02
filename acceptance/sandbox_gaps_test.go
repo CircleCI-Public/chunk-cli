@@ -201,12 +201,12 @@ func TestSandboxCreateOrgIDFromConfig(t *testing.T) {
 	defer srv.Close()
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeChunkConfig(t, workDir, "org-from-config")
 
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
+	env.Extra["CIRCLECI_ORG_ID"] = "org-from-config"
 
-	// No --org-id flag; should read from config
+	// No --org-id flag; should read from CIRCLECI_ORG_ID
 	result := binary.RunCLI(t, []string{
 		"sandbox", "create",
 		"--name", "config-sandbox",

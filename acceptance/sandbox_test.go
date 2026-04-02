@@ -462,12 +462,12 @@ func TestSandboxesListFromConfig(t *testing.T) {
 	defer srv.Close()
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeChunkConfig(t, workDir, "org-from-config")
 
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
+	env.Extra["CIRCLECI_ORG_ID"] = "org-from-config"
 
-	// No --org-id flag; should read from config
+	// No --org-id flag; should read from CIRCLECI_ORG_ID
 	result := binary.RunCLI(t, []string{"sandbox", "list"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -513,18 +513,6 @@ func TestSandboxesSSHEnvFlag(t *testing.T) {
 		assert.Assert(t, strings.Contains(combined, "NOEQUALS"),
 			"expected invalid entry in error, got: %s", combined)
 	})
-}
-
-func writeChunkConfig(t *testing.T, workDir, orgID string) {
-	t.Helper()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	content := `{"commands":[],"circleci":{"orgId":"` + orgID + `"}}`
-	if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // filterByMethod returns requests matching both method and path prefix.
