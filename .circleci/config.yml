@@ -57,6 +57,13 @@ jobs:
       - store_test_results:
           path: ./test-reports
 
+  always-fail:
+    docker:
+      - image: cimg/go:1.26
+    resource_class: medium
+    steps:
+      - run: "false"
+
   build-smoke-test:
     docker:
       - image: cimg/go:1.26
@@ -88,6 +95,10 @@ workflows:
       - acceptance-test:
           context:
             - chunk-cli-test
+      - always-fail:
+          filters:
+            branches:
+              only: main
       - build-smoke-test:
           requires:
             - shellcheck/check
