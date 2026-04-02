@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
@@ -69,10 +68,9 @@ func unquote(s string) string {
 	return s
 }
 
-// LoadEnvFile reads .env.local from dir. Returns nil, nil if the file does not
-// exist. Returns an error for permission or parse failures.
-func LoadEnvFile(dir string) (_ map[string]string, err error) {
-	path := filepath.Join(dir, ".env.local")
+// LoadEnvFileAt reads the env file at path. Returns nil, nil if the file does
+// not exist. Returns an error for permission or parse failures.
+func LoadEnvFileAt(path string) (_ map[string]string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
