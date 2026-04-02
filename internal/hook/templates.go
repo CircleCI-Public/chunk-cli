@@ -147,7 +147,7 @@ func BuildSettingsJSON(projectName string, commands []config.Command) (string, e
 		Value: []hookGroup{{
 			Hooks: []hookEntry{{
 				Type:    "command",
-				Command: fmt.Sprintf("chunk hook scope deactivate --project %s", proj),
+				Command: fmt.Sprintf("chunk hook scope activate --project %s", proj),
 				Timeout: 5,
 			}},
 		}},
