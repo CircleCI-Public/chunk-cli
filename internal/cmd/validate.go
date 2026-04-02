@@ -183,7 +183,7 @@ func newValidateCmd() *cobra.Command {
 					return fmt.Errorf("open session: %w", err)
 				}
 				return validate.RunRemote(cmd.Context(), func(ctx context.Context, script string) (string, string, int, error) {
-					result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil)
+					result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
 					if err != nil {
 						return "", "", 0, err
 					}

@@ -487,6 +487,34 @@ func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
 		"expected helpful error message, got: %s", combined)
 }
 
+// TestSandboxesSSHEnvFlag verifies the -e/--env flag rejects invalid input.
+// Direct env resolution logic is tested in internal/sandbox/env_test.go (TestResolveEnv).
+//
+// TODO: Once the fake SSH server from #188 lands, add tests that spin up the
+// fake server and assert on the actual env vars sent over the wire (valid pairs,
+// .env.local loading, multiple -e flags, --no-env-file).
+func TestSandboxesSSHEnvFlag(t *testing.T) {
+	t.Run("invalid entry without equals returns error", func(t *testing.T) {
+		cci := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(cci)
+		defer srv.Close()
+
+		env := testenv.NewTestEnv(t)
+		env.CircleCIURL = srv.URL
+
+		result := binary.RunCLI(t, []string{
+			"sandbox", "ssh",
+			"--sandbox-id", "sb-111",
+			"--env", "NOEQUALS",
+		}, env, env.HomeDir)
+
+		assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+		combined := result.Stdout + result.Stderr
+		assert.Assert(t, strings.Contains(combined, "NOEQUALS"),
+			"expected invalid entry in error, got: %s", combined)
+	})
+}
+
 func writeChunkConfig(t *testing.T, workDir, orgID string) {
 	t.Helper()
 	chunkDir := filepath.Join(workDir, ".chunk")

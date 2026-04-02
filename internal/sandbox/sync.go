@@ -46,7 +46,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		ShellEscape(dest), ShellEscape(base),
 	)
 
-	resetResult, err := ExecOverSSH(ctx, session, resetCmd, nil)
+	resetResult, err := ExecOverSSH(ctx, session, resetCmd, nil, nil)
 
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		`git -C %s apply`, ShellEscape(dest),
 	)
 
-	applyResult, err := ExecOverSSH(ctx, session, applyCmd, strings.NewReader(patch))
+	applyResult, err := ExecOverSSH(ctx, session, applyCmd, strings.NewReader(patch), nil)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func bootstrapSandbox(ctx context.Context, session *Session, dest string, io ios
 	}
 
 	io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Cloning %s/%s into %s...", org, repo, dest)))
-	result, err := ExecOverSSH(ctx, session, initCmd, nil)
+	result, err := ExecOverSSH(ctx, session, initCmd, nil, nil)
 	if err != nil {
 		return err
 	}
