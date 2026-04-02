@@ -30,8 +30,12 @@ jobs:
           name: Install chunk via Homebrew
           command: brew install CircleCI-Public/circleci/chunk
       - run:
-          name: Verify installation
-          command: chunk --version
+          name: Verify installation of correct version
+          # `/tmp/chunk-release-tag` is written by `task tag` as part of `task release`,
+          # which we call above. The "v" prefix on the tag does not appear in the output
+          # of `chunk --version` so we need to strip that off before comparing the tagged
+          # version with the installed version.
+          command: chunk --version | grep -q $(cat /tmp/chunk-release-tag | sed 's/v//')
 
 workflows:
   release:
@@ -39,4 +43,6 @@ workflows:
       - release:
           context:
             - chunk-cli-deploy
-      - test-homebrew-install
+      - test-homebrew-install:
+          requires:
+            - release
