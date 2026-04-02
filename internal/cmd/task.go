@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/task"
@@ -224,13 +223,11 @@ func newTaskConfigCmd() *cobra.Command {
 				}
 			}
 
-			// Warn if selected org differs from stored circleci.orgId
-			if projCfg, loadErr := config.LoadProjectConfig(repoRoot); loadErr == nil &&
-				projCfg.CircleCI != nil && projCfg.CircleCI.OrgID != "" &&
-				projCfg.CircleCI.OrgID != orgID {
+			// Warn if selected org differs from CIRCLECI_ORG_ID
+			if envOrgID := os.Getenv("CIRCLECI_ORG_ID"); envOrgID != "" && envOrgID != orgID {
 				_, _ = fmt.Fprintln(io.Err, ui.Warning(fmt.Sprintf(
-					"Warning: selected project org (%s) differs from stored circleci.orgId (%s) in .chunk/config.json",
-					orgID, projCfg.CircleCI.OrgID,
+					"Warning: selected project org (%s) differs from CIRCLECI_ORG_ID (%s)",
+					orgID, envOrgID,
 				)))
 			}
 

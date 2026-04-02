@@ -13,7 +13,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
@@ -59,19 +58,15 @@ func resolveSandboxID(sandboxID *string) error {
 }
 
 // resolveOrgID returns orgID from the flag if set, otherwise falls back to
-// circleci.orgId in .chunk/config.json. Returns an error if neither is set.
+// the CIRCLECI_ORG_ID env var. Returns an error if neither is set.
 func resolveOrgID(orgID string) (string, error) {
 	if orgID != "" {
 		return orgID, nil
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
+	if envID := os.Getenv("CIRCLECI_ORG_ID"); envID != "" {
+		return envID, nil
 	}
-	if projCfg, loadErr := config.LoadProjectConfig(cwd); loadErr == nil && projCfg.CircleCI != nil && projCfg.CircleCI.OrgID != "" {
-		return projCfg.CircleCI.OrgID, nil
-	}
-	return "", fmt.Errorf("--org-id is required: pass --org-id or run 'chunk init' to store it in .chunk/config.json")
+	return "", fmt.Errorf("--org-id is required: pass --org-id or set CIRCLECI_ORG_ID")
 }
 
 func newSandboxListCmd() *cobra.Command {
