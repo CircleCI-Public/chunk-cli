@@ -115,6 +115,35 @@ func TestClearActive(t *testing.T) {
 	assert.Assert(t, got == nil)
 }
 
+func TestSessionKeyedSandbox(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	// Save without a session — generic file.
+	assert.NilError(t, SaveActive(ActiveSandbox{SandboxID: "sb-generic"}))
+
+	// With a session ID set, load should return nil (isolated from the generic file).
+	t.Setenv("CLAUDE_SESSION_ID", "sess-abc")
+	got, err := LoadActive()
+	assert.NilError(t, err)
+	assert.Assert(t, got == nil, "session-keyed load should not see generic file")
+
+	// Save under the session.
+	assert.NilError(t, SaveActive(ActiveSandbox{SandboxID: "sb-session"}))
+
+	got, err = LoadActive()
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil)
+	assert.Equal(t, got.SandboxID, "sb-session")
+
+	// Without the session env var, the original generic file is still intact.
+	t.Setenv("CLAUDE_SESSION_ID", "")
+	got, err = LoadActive()
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil)
+	assert.Equal(t, got.SandboxID, "sb-generic")
+}
+
 func TestClearActiveNoopWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

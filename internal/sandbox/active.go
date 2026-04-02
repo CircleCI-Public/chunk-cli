@@ -13,7 +13,15 @@ type ActiveSandbox struct {
 	Name      string `json:"name,omitempty"`
 }
 
-const sandboxFile = "sandbox"
+// sandboxFileName returns the name of the sandbox state file. When
+// CLAUDE_SESSION_ID is set the file is keyed to that session so concurrent
+// Claude sessions in the same repo each maintain their own active sandbox.
+func sandboxFileName() string {
+	if id := os.Getenv("CLAUDE_SESSION_ID"); id != "" {
+		return "sandbox." + id
+	}
+	return "sandbox"
+}
 
 // LoadActive walks up from cwd looking for .chunk/sandbox. Returns nil if not found.
 func LoadActive() (*ActiveSandbox, error) {
@@ -50,7 +58,7 @@ func SaveActive(a ActiveSandbox) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, sandboxFile), data, 0o644)
+	return os.WriteFile(filepath.Join(dir, sandboxFileName()), data, 0o644)
 }
 
 // saveDir returns the .chunk directory to write into. It prefers an existing
@@ -116,7 +124,7 @@ func findSandboxFile() (string, error) {
 	}
 	gitRoot, _ := findGitRoot()
 	for {
-		candidate := filepath.Join(dir, ".chunk", sandboxFile)
+		candidate := filepath.Join(dir, ".chunk", sandboxFileName())
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
