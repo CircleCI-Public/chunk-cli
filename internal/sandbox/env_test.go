@@ -100,29 +100,31 @@ BAZ=qux
 	})
 }
 
-func TestLoadEnvFile(t *testing.T) {
+func TestLoadEnvFileAt(t *testing.T) {
 	t.Run("file missing returns nil nil", func(t *testing.T) {
-		result, err := LoadEnvFile(t.TempDir())
+		result, err := LoadEnvFileAt(filepath.Join(t.TempDir(), ".env.local"))
 		assert.NilError(t, err)
 		assert.Assert(t, result == nil)
 	})
 
 	t.Run("file exists and is parsed", func(t *testing.T) {
 		dir := t.TempDir()
-		err := os.WriteFile(filepath.Join(dir, ".env.local"), []byte("FOO=bar\n"), 0o644)
+		path := filepath.Join(dir, ".env.local")
+		err := os.WriteFile(path, []byte("FOO=bar\n"), 0o644)
 		assert.NilError(t, err)
 
-		result, err := LoadEnvFile(dir)
+		result, err := LoadEnvFileAt(path)
 		assert.NilError(t, err)
 		assert.Equal(t, result["FOO"], "bar")
 	})
 
 	t.Run("parse error propagates", func(t *testing.T) {
 		dir := t.TempDir()
-		err := os.WriteFile(filepath.Join(dir, ".env.local"), []byte("BADLINE\n"), 0o644)
+		path := filepath.Join(dir, ".env.local")
+		err := os.WriteFile(path, []byte("BADLINE\n"), 0o644)
 		assert.NilError(t, err)
 
-		_, err = LoadEnvFile(dir)
+		_, err = LoadEnvFileAt(path)
 		assert.ErrorContains(t, err, ".env.local")
 	})
 }
@@ -159,7 +161,7 @@ func TestResolveEnv(t *testing.T) {
 		flagVars, err := ParseEnvPairs([]string{"FLAG_VAR=from-flag", "SHARED=from-flag"})
 		assert.NilError(t, err)
 
-		fileVars, err := LoadEnvFile(dir)
+		fileVars, err := LoadEnvFileAt(filepath.Join(dir, ".env.local"))
 		assert.NilError(t, err)
 
 		result := MergeEnv(fileVars, flagVars)
