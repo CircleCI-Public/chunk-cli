@@ -35,8 +35,27 @@ func newSandboxCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxPrepareCmd())
 	cmd.AddCommand(newSandboxEnvCmd())
 	cmd.AddCommand(newSandboxBuildCmd())
+	cmd.AddCommand(newSandboxUseCmd())
+	cmd.AddCommand(newSandboxCurrentCmd())
+	cmd.AddCommand(newSandboxForgetCmd())
 
 	return cmd
+}
+
+// resolveSandboxID fills in sandboxID from the active sandbox file if it is empty.
+func resolveSandboxID(sandboxID *string) error {
+	if *sandboxID != "" {
+		return nil
+	}
+	active, err := sandbox.LoadActive()
+	if err != nil {
+		return fmt.Errorf("load active sandbox: %w", err)
+	}
+	if active == nil {
+		return fmt.Errorf("--sandbox-id is required (no active sandbox set; run 'chunk sandbox use <id>' or 'chunk sandbox create')")
+	}
+	*sandboxID = active.SandboxID
+	return nil
 }
 
 // resolveOrgID returns orgID from the flag if set, otherwise falls back to
@@ -112,6 +131,11 @@ func newSandboxCreateCmd() *cobra.Command {
 				return err
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sb.Name, sb.ID)))
+			if err := sandbox.SaveActive(sandbox.ActiveSandbox{SandboxID: sb.ID, Name: sb.Name}); err != nil {
+				io.ErrPrintf("warning: could not save active sandbox: %v\n", err)
+			} else {
+				io.ErrPrintf("Set %s as active sandbox\n", sb.ID)
+			}
 			return nil
 		},
 	}
@@ -134,6 +158,9 @@ func newSandboxExecCmd() *cobra.Command {
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
+			if err := resolveSandboxID(&sandboxID); err != nil {
+				return err
+			}
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -156,10 +183,9 @@ func newSandboxExecCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
+	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
 	cmd.Flags().StringVar(&command, "command", "", "Command to execute")
 	cmd.Flags().StringArrayVar(&execArgs, "args", nil, "Command arguments")
-	_ = cmd.MarkFlagRequired("sandbox-id")
 	_ = cmd.MarkFlagRequired("command")
 
 	return cmd
@@ -173,6 +199,9 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 		Short: "Add an SSH public key to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
+			if err := resolveSandboxID(&sandboxID); err != nil {
+				return err
+			}
 			client, err := circleci.NewClient()
 			if err != nil {
 				return err
@@ -186,10 +215,9 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
+	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
 	cmd.Flags().StringVar(&publicKey, "public-key", "", "SSH public key string")
 	cmd.Flags().StringVar(&publicKeyFile, "public-key-file", "", "Path to SSH public key file")
-	_ = cmd.MarkFlagRequired("sandbox-id")
 
 	return cmd
 }
@@ -204,6 +232,9 @@ func newSandboxSSHCmd() *cobra.Command {
 		Short: "SSH into a sandbox",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := resolveSandboxID(&sandboxID); err != nil {
+				return err
+			}
 			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
@@ -232,11 +263,10 @@ func newSandboxSSHCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
+	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in the remote session (repeatable)")
 	cmd.Flags().BoolVar(&noEnvFile, "no-env-file", false, "Skip automatic .env.local loading (only applies with -e/--env)")
-	_ = cmd.MarkFlagRequired("sandbox-id")
 
 	return cmd
 }
@@ -250,6 +280,9 @@ func newSandboxSyncCmd() *cobra.Command {
 		Short: "Sync files to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
+			if err := resolveSandboxID(&sandboxID); err != nil {
+				return err
+			}
 			authSock := os.Getenv("SSH_AUTH_SOCK")
 			client, err := circleci.NewClient()
 			if err != nil {
@@ -259,13 +292,67 @@ func newSandboxSyncCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
+	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
 	cmd.Flags().StringVar(&dest, "dest", "/workspace", "Destination path")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().BoolVar(&bootstrap, "bootstrap", false, "Bootstrap the sandbox")
-	_ = cmd.MarkFlagRequired("sandbox-id")
 
 	return cmd
+}
+
+func newSandboxUseCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "use <sandbox-id>",
+		Short: "Set the active sandbox for this project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
+			if err := sandbox.SaveActive(sandbox.ActiveSandbox{SandboxID: args[0]}); err != nil {
+				return err
+			}
+			io.ErrPrintf("Set %s as active sandbox\n", args[0])
+			return nil
+		},
+	}
+}
+
+func newSandboxCurrentCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "current",
+		Short: "Show the active sandbox",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			active, err := sandbox.LoadActive()
+			if err != nil {
+				return err
+			}
+			if active == nil {
+				io.ErrPrintln("No active sandbox")
+				return nil
+			}
+			if active.Name != "" {
+				io.Printf("%s  %s\n", active.Name, active.SandboxID)
+			} else {
+				io.Printf("%s\n", active.SandboxID)
+			}
+			return nil
+		},
+	}
+}
+
+func newSandboxForgetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "forget",
+		Short: "Clear the active sandbox",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			if err := sandbox.ClearActive(); err != nil {
+				return err
+			}
+			io.ErrPrintln("Active sandbox cleared")
+			return nil
+		},
+	}
 }
 
 var validDockerTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*(:[a-zA-Z0-9._\-]+)?$`)
