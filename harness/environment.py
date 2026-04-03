@@ -416,11 +416,13 @@ def normalize_env(env: dict) -> dict:
         segments = [s.strip() for s in cmd.split("&&")]
         return " && ".join(sort_segment(s) for s in segments)
 
+    def normalize_step(s: dict) -> dict:
+        return {"name": s["name"], "command": sort_args(s.get("command", ""))}
+
     return {
         **env,
-        "install": sort_args(env.get("install", "")),
-        "test": sort_args(env.get("test", "")),
-        "system_deps": sorted(env.get("system_deps", [])),
+        "steps": [normalize_step(s) for s in sorted(env.get("steps", []), key=lambda s: s["name"])],
+        "test":  sort_args(env.get("test", "")),
     }
 
 
