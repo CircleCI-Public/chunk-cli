@@ -59,6 +59,13 @@ ENVBUILDER_SOURCE = REPO_ROOT / "internal" / "envbuilder" / "envbuilder.go"
 MAX_ITERATIONS = 5
 MAX_OUTPUT_CHARS = 40_000
 
+EXPECTED_SECRET_MOUNTS = {
+    "javascript": "--mount=type=secret,id=npmrc",
+    "typescript": "--mount=type=secret,id=npmrc",
+    "python":     "--mount=type=secret,id=netrc",
+    "go":         "--mount=type=secret,id=netrc",
+}
+
 # Only one Claude agent may edit envbuilder.go at a time.
 _envbuilder_lock = threading.Lock()
 
@@ -103,6 +110,7 @@ class IterationRecord:
     tests_ok: bool
     test_output: str
     envbuilder_updated: bool
+    secret_mount_errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -209,6 +217,17 @@ def read_dockerfile(repo: TargetRepo, cache_dir: Path) -> str:
     if path.exists():
         return path.read_text()
     return "(Dockerfile.test not found)"
+
+
+def validate_dockerfile_secrets(dockerfile: str, env: dict) -> list[str]:
+    """Return error strings if expected secret mounts are missing from the Dockerfile."""
+    stack = (env or {}).get("stack", "")
+    expected = EXPECTED_SECRET_MOUNTS.get(stack)
+    if expected is None:
+        return []
+    if expected not in dockerfile:
+        return [f"Dockerfile missing expected secret mount for stack '{stack}': {expected}"]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +497,20 @@ def run_repo(repo: TargetRepo, timeout: int, max_iterations: int, persistent_cac
             tests_ok, test_output = run_acceptance_test(repo, cache_dir, timeout)
             dockerfile = read_dockerfile(repo, cache_dir)
 
+            # Read the env.json written by the acceptance test (fall back to
+            # the cached spec) so we can validate Dockerfile secret mounts.
+            env_json_path = clone_dir / "env.json"
+            try:
+                current_env = json.loads(env_json_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                current_env = repo.env or {}
+
+            secret_errors = validate_dockerfile_secrets(dockerfile, current_env)
+            if secret_errors:
+                print("  Secret mount validation errors:\n  " + "\n  ".join(secret_errors))
+                test_output = test_output + "\n" + "\n".join(secret_errors)
+                tests_ok = False
+
             if tests_ok:
                 print(f"\n✓ [{repo.name}] Tests passed on iteration {iteration}!")
                 record.passed = True
@@ -487,14 +520,8 @@ def run_repo(repo: TargetRepo, timeout: int, max_iterations: int, persistent_cac
                     tests_ok=True,
                     test_output=test_output,
                     envbuilder_updated=False,
+                    secret_mount_errors=secret_errors,
                 ))
-                # Read the env.json the acceptance test just wrote — this
-                # reflects any envbuilder fixes applied during the loop.
-                env_json_path = clone_dir / "env.json"
-                try:
-                    current_env = json.loads(env_json_path.read_text())
-                except (OSError, json.JSONDecodeError):
-                    pass
                 if normalize_env(current_env) != normalize_env(repo.env or {}):
                     update_repos_json(repo.name, current_env)
                     repo.env = current_env
@@ -511,6 +538,7 @@ def run_repo(repo: TargetRepo, timeout: int, max_iterations: int, persistent_cac
                 tests_ok=False,
                 test_output=test_output,
                 envbuilder_updated=updated,
+                secret_mount_errors=secret_errors,
             ))
     finally:
         if own_cache:
@@ -546,6 +574,10 @@ def print_report(records: list[RepoRecord]) -> None:
             print("\n    Dockerfile.test:")
             for line in it.dockerfile.strip().splitlines():
                 print(f"      {line}")
+
+            if it.secret_mount_errors:
+                print("\n    Secret mount validation errors:\n      " +
+                      "\n      ".join(it.secret_mount_errors))
 
             if not it.tests_ok and it.test_output:
                 snippet = it.test_output.strip().splitlines()[-15:]

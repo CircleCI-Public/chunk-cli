@@ -349,6 +349,9 @@ Example:
 			if tag != "" {
 				args = append(args, "-t", tag)
 			}
+			for _, secret := range envbuilder.DockerBuildSecrets(&env) {
+				args = append(args, "--secret", secret)
+			}
 			args = append(args, ".")
 
 			dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)

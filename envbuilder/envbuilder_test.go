@@ -753,7 +753,7 @@ func TestDockerfileContent(t *testing.T) {
 		// Split-COPY pattern: go.mod/go.sum first so the download layer is
 		// cached independently of source changes (e.g. Dockerfile.test, env.json).
 		assertContains(t, content, "COPY --chown=circleci:circleci go.mod go.sum ./")
-		assertContains(t, content, "RUN go mod download")
+		assertContains(t, content, "RUN --mount=type=secret,id=netrc,required=false,mode=0444 GONOSUMDB=${GONOSUMDB:-*} GOAUTH=netrc:/run/secrets/netrc go mod download")
 		assertContains(t, content, "COPY --chown=circleci:circleci . .")
 		// Dep-ordered per-package loop to bound peak GOTMPDIR usage.
 		assertContains(t, content, "go list -deps ./... | grep -Fxf")
@@ -806,6 +806,34 @@ members = ["crates/mypkg"]
 		content := dockerfileContent(dir, env)
 		assertContains(t, content, "ENV CARGO_TARGET_DIR=/tmp/cargo-target")
 		assertContains(t, content, "ENV UV_CACHE_DIR=/tmp/uv-cache")
+	})
+
+	t.Run("js/ts stack sets CI=true and uses npmrc secret mount", func(t *testing.T) {
+		t.Parallel()
+		env := &Environment{
+			Stack:        stackTypeScript,
+			Install:      "pnpm install",
+			Test:         "pnpm test",
+			SystemDeps:   []string{"node", "pnpm"},
+			Image:        "cimg/node",
+			ImageVersion: "22.0",
+		}
+		content := dockerfileContent(t.TempDir(), env)
+		assertContains(t, content, "ENV CI=true")
+		assertContains(t, content, "--mount=type=secret,id=npmrc,required=false,mode=0444 NPM_CONFIG_USERCONFIG=/run/secrets/npmrc pnpm install")
+	})
+
+	t.Run("python stack uses netrc secret mount", func(t *testing.T) {
+		t.Parallel()
+		env := &Environment{
+			Stack:        stackPython,
+			Install:      "pip install -r requirements.txt",
+			Test:         "pytest",
+			Image:        "cimg/python",
+			ImageVersion: "3.12.0",
+		}
+		content := dockerfileContent(t.TempDir(), env)
+		assertContains(t, content, "--mount=type=secret,id=netrc,required=false,mode=0444 NETRC=/run/secrets/netrc pip install -r requirements.txt")
 	})
 
 	t.Run("sudo apt-get for cimg system deps", func(t *testing.T) {

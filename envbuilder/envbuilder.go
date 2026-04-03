@@ -39,6 +39,42 @@ const (
 	toolPytest  = "pytest"
 )
 
+// NeedsNPMRC reports whether the given stack requires an .npmrc secret mount
+// for private registry authentication during dependency installation.
+func NeedsNPMRC(stack string) bool {
+	return stack == stackJavaScript || stack == stackTypeScript
+}
+
+// NeedsNetRC reports whether the given stack requires a .netrc secret mount
+// for private dependency authentication during installation.
+func NeedsNetRC(stack string) bool {
+	return stack == stackPython || stack == stackGo
+}
+
+// DockerBuildSecrets returns docker --secret flag values needed for the
+// environment's stack, based on credential files present on the host.
+// Returns pairs like "id=npmrc,src=/Users/x/.npmrc".
+func DockerBuildSecrets(env *Environment) []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	var secrets []string
+	if NeedsNPMRC(env.Stack) {
+		p := filepath.Join(home, ".npmrc")
+		if _, err := os.Stat(p); err == nil {
+			secrets = append(secrets, "id=npmrc,src="+p)
+		}
+	}
+	if NeedsNetRC(env.Stack) {
+		p := filepath.Join(home, ".netrc")
+		if _, err := os.Stat(p); err == nil {
+			secrets = append(secrets, "id=netrc,src="+p)
+		}
+	}
+	return secrets
+}
+
 // Environment describes the detected tech stack and build configuration for a repository.
 type Environment struct {
 	Stack        string   `json:"stack"`
@@ -513,7 +549,14 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 			chown = "--chown=circleci:circleci "
 		}
 		sb.WriteString("COPY " + chown + "go.mod go.sum ./\n")
-		sb.WriteString("RUN " + env.Install + "\n")
+		// Mount ~/.netrc as a BuildKit secret so private module credentials are
+		// available during download without being baked into the image layer.
+		// GONOSUMDB defaults to * (skip checksum DB for all modules) but respects
+		// any narrower value already set via ENV in the base image, so users with
+		// GOPRIVATE or a scoped GONOSUMDB keep their tighter policy.
+		// GOAUTH=netrc:... (Go 1.22+) tells the go command where to find the
+		// credentials file regardless of the container user.
+		fmt.Fprintf(&sb, "RUN --mount=type=secret,id=netrc,required=false,mode=0444 GONOSUMDB=${GONOSUMDB:-*} GOAUTH=netrc:/run/secrets/netrc %s\n", env.Install)
 		sb.WriteString("\nCOPY " + chown + ". .\n")
 	case stackRuby:
 		// Use the split-COPY pattern (mirrors the Go approach) to avoid
@@ -561,6 +604,13 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		} else {
 			sb.WriteString("COPY . .\n")
 		}
+	}
+	// pnpm aborts with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY when there is
+	// an existing node_modules directory and no TTY is present (i.e. inside Docker).
+	// Setting CI=true suppresses the interactive prompt. This is harmless for other
+	// JS/TS package managers and is a standard signal for CI environments.
+	if env.Stack == stackJavaScript || env.Stack == stackTypeScript {
+		sb.WriteString("\nENV CI=true\n")
 	}
 	// For .NET projects, the dotnet/sdk:N image on ARM64 only ships the N.0
 	// runtime — it does NOT bundle previous runtimes (contrary to the AMD64
@@ -614,7 +664,25 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	// Go and Ruby already emitted their install steps inside the split-COPY
 	// block above.
 	if env.Stack != stackGo && env.Stack != stackRuby {
-		sb.WriteString("\nRUN " + env.Install + "\n")
+		switch env.Stack {
+		case stackJavaScript, stackTypeScript:
+			// Mount ~/.npmrc as a BuildKit secret so private registry credentials
+			// are available during install without being baked into the image layer.
+			// required=false means the build succeeds even when no secret is provided
+			// (public-only repos don't need credentials).
+			// NPM_CONFIG_USERCONFIG points npm/pnpm/yarn at the secret's default
+			// mount path (/run/secrets/npmrc) so the credential lookup works regardless
+			// of which user the container runs as.
+			fmt.Fprintf(&sb, "\nRUN --mount=type=secret,id=npmrc,required=false,mode=0444 NPM_CONFIG_USERCONFIG=/run/secrets/npmrc %s\n", env.Install)
+		case stackPython:
+			// Mount ~/.netrc as a BuildKit secret for private PyPI credentials.
+			// pip (via the requests library) and uv both respect the NETRC env var
+			// to locate the credentials file, making this work regardless of which
+			// user the container runs as.
+			fmt.Fprintf(&sb, "\nRUN --mount=type=secret,id=netrc,required=false,mode=0444 NETRC=/run/secrets/netrc %s\n", env.Install)
+		default:
+			sb.WriteString("\nRUN " + env.Install + "\n")
+		}
 	}
 
 	// Elixir-specific fixups applied after deps are fetched:
