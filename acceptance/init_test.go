@@ -425,19 +425,12 @@ func TestInitCreatesHookFiles(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	// .chunk/hook/.gitignore should exist
-	gitignorePath := filepath.Join(workDir, ".chunk", "hook", ".gitignore")
-	_, err := os.Stat(gitignorePath)
-	assert.NilError(t, err, "expected .chunk/hook/.gitignore to exist")
-
-	// .claude/settings.json should exist with project name from repo
+	// .claude/settings.json should exist with hooks
 	settingsPath := filepath.Join(workDir, ".claude", "settings.json")
 	data, err := os.ReadFile(settingsPath)
 	assert.NilError(t, err, "expected .claude/settings.json to exist")
 
 	settingsContent := string(data)
-	assert.Assert(t, strings.Contains(settingsContent, "my-repo"),
-		"expected project name my-repo in settings.json, got: %s", settingsContent)
 	assert.Assert(t, strings.Contains(settingsContent, "hooks"),
 		"expected hooks section in settings.json, got: %s", settingsContent)
 }

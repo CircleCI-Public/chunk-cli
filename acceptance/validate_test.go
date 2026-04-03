@@ -469,44 +469,6 @@ func TestValidateCacheFileExtScoping(t *testing.T) {
 		"expected command to run twice after .go change, got: %s", string(data))
 }
 
-// --- hook error paths ---
-
-func TestValidateCheckRequiresName(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeHookConfig(t, workDir)
-
-	env := testenv.NewTestEnv(t)
-	env.Extra["CHUNK_HOOK_ENABLE"] = "1"
-	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
-
-	result := binary.RunCLI(t, []string{
-		"validate", "--check", "--project", workDir,
-	}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "requires a command name"),
-		"expected 'requires a command name' error, got: %s", combined)
-}
-
-func TestValidateNoCheckRequiresName(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeHookConfig(t, workDir)
-
-	env := testenv.NewTestEnv(t)
-	env.Extra["CHUNK_HOOK_ENABLE"] = "1"
-	env.Extra["CHUNK_HOOK_SENTINELS_DIR"] = t.TempDir()
-
-	result := binary.RunCLI(t, []string{
-		"validate", "--no-check", "--project", workDir,
-	}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "requires a command name"),
-		"expected 'requires a command name' error, got: %s", combined)
-}
-
 func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	// Verify that validate --sandbox-id uses the SSH path (AddSSHKey) rather than HTTP exec.
 	// We can't complete the SSH handshake in this test, but we verify the code reaches

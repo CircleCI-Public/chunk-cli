@@ -38,7 +38,7 @@ Getting started:
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
-	rootCmd.AddCommand(newHookCmd())
+
 	rootCmd.AddCommand(newCommandsCmd())
 
 	return rootCmd
