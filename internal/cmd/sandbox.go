@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
-	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -32,7 +31,6 @@ func newSandboxCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxAddSSHKeyCmd())
 	cmd.AddCommand(newSandboxSSHCmd())
 	cmd.AddCommand(newSandboxSyncCmd())
-	cmd.AddCommand(newSandboxPrepareCmd())
 	cmd.AddCommand(newSandboxEnvCmd())
 	cmd.AddCommand(newSandboxBuildCmd())
 
@@ -269,31 +267,6 @@ func newSandboxSyncCmd() *cobra.Command {
 }
 
 var validDockerTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*(:[a-zA-Z0-9._\-]+)?$`)
-
-func newSandboxPrepareCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "prepare",
-		Short: "Prepare sandbox environment",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Check we're in a git repo
-			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
-			gitCmd.Dir = "."
-			if err := gitCmd.Run(); err != nil {
-				return fmt.Errorf("not a git repository")
-			}
-
-			claude, err := anthropic.New()
-			if err != nil {
-				return err
-			}
-
-			io := iostream.FromCmd(cmd)
-			return sandbox.Prepare(cmd.Context(), claude, io, os.Stdin)
-		},
-	}
-
-	return cmd
-}
 
 func newSandboxEnvCmd() *cobra.Command {
 	var dir string

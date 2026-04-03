@@ -345,19 +345,6 @@ func TestSandboxesAddSSHKeyPrivateKeyRejected(t *testing.T) {
 		"expected private key error, got: %s", combined)
 }
 
-func TestSandboxesPrepareNotGitRepo(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-
-	result := binary.RunCLI(t, []string{
-		"sandbox", "prepare",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "git"),
-		"expected git repo error, got: %s", combined)
-}
-
 // TestSandboxesSshSyncFlags verifies that SSH/sync flags are accepted and
 // code progresses past flag parsing (fails at SSH step, not at parsing).
 func TestSandboxesSshSyncFlags(t *testing.T) {
@@ -389,22 +376,6 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 				"expected SSH key error (proves flags accepted), got: %s", combined)
 		})
 	}
-}
-
-func TestSandboxesPrepareMissingApiKey(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-
-	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = ""
-
-	result := binary.RunCLI(t, []string{
-		"sandbox", "prepare",
-	}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "ANTHROPIC_API_KEY"),
-		"expected API key error, got: %s", combined)
 }
 
 func TestSandboxesExecWithArgs(t *testing.T) {

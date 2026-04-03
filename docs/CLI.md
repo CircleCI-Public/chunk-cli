@@ -79,8 +79,7 @@ chunk
 │   │   --identity-file <path>      # SSH identity file
 │   │   --env-vars KEY=VALUE        # Set env var in remote session (repeatable)
 │   │   --no-env-file               # Skip auto-loading .env.local
-│   ├── sync                        # Sync files to sandbox
-│   └── prepare                     # Prepare sandbox env (not yet implemented)
+│   └── sync                        # Sync files to sandbox
 │
 ├── completion
 │   ├── install                     # Install zsh completion
