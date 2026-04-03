@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -93,8 +94,23 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 	return &sshConn{Client: ssh.NewClient(conn, chans, reqs), cleanup: cleanup}, nil
 }
 
+// setSessionEnv sets environment variables on an SSH session in sorted key order.
+func setSessionEnv(sess *ssh.Session, vars map[string]string) error {
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := sess.Setenv(name, vars[name]); err != nil {
+			return fmt.Errorf("set env %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // ExecOverSSH connects to the sandbox via SSH-over-TLS and executes a command.
-func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader) (_ *ExecResult, err error) {
+func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader, envVars map[string]string) (_ *ExecResult, err error) {
 	client, err := dialSSH(ctx, session)
 	if err != nil {
 		return nil, err
@@ -106,6 +122,10 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 		return nil, fmt.Errorf("SSH session: %w", err)
 	}
 	defer closer.ErrorHandler(sess, &err)
+
+	if err := setSessionEnv(sess, envVars); err != nil {
+		return nil, err
+	}
 
 	var stdout, stderr bytes.Buffer
 	sess.Stdout = &stdout
@@ -136,7 +156,7 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 // It intentionally uses os.Stdin/os.Stdout/os.Stderr directly rather than
 // iostream.Streams: term.MakeRaw and term.GetSize require a real *os.File fd,
 // and PTY I/O must be wired to the process's actual terminal.
-func InteractiveShell(ctx context.Context, session *Session) (err error) {
+func InteractiveShell(ctx context.Context, session *Session, envVars map[string]string) (err error) {
 	client, err := dialSSH(ctx, session)
 	if err != nil {
 		return err
@@ -178,6 +198,10 @@ func InteractiveShell(ctx context.Context, session *Session) (err error) {
 	done := make(chan struct{})
 	go watchWindowSize(fd, sess, done)
 	defer close(done)
+
+	if err := setSessionEnv(sess, envVars); err != nil {
+		return err
+	}
 
 	if err := sess.Shell(); err != nil {
 		return fmt.Errorf("start shell: %w", err)

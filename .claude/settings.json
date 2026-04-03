@@ -6,6 +6,9 @@
       "Bash(chunk:*)"
     ]
   },
+  "env": {
+    "CHUNK_HOOK_ENABLE": "1"
+  },
   "hooks": {
     "PreToolUse": [
       {
