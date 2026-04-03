@@ -19,7 +19,7 @@ import (
 )
 
 func newValidateCmd() *cobra.Command {
-	var sandboxID, dest, identityFile string
+	var sandboxID, identityFile, workdir string
 	var dryRun, list, save, forceRun, status bool
 	var inlineCmd, projectDir string
 
@@ -92,9 +92,6 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if sandboxID != "" {
-				if dest == "" {
-					dest = "/workspace"
-				}
 				client, err := circleci.NewClient()
 				if err != nil {
 					return err
@@ -103,6 +100,10 @@ func newValidateCmd() *cobra.Command {
 				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, authSock)
 				if err != nil {
 					return fmt.Errorf("open session: %w", err)
+				}
+				dest := workdir
+				if dest == "" {
+					dest = "/workspace"
 				}
 				return validate.RunRemote(cmd.Context(), func(ctx context.Context, script string) (string, string, int, error) {
 					result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
@@ -151,8 +152,8 @@ func newValidateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
-	cmd.Flags().StringVar(&dest, "dest", "", "Destination path on sandbox (default /workspace)")
-	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file (default ~/.ssh/chunk_ai)")
+	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sandbox (auto-detected as /workspace/<repo> when omitted)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
 	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")

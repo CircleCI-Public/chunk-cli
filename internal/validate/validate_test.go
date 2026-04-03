@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,8 +13,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 func TestShellEscape(t *testing.T) {
@@ -210,72 +214,6 @@ func TestRunAll(t *testing.T) {
 	})
 }
 
-// --- RunRemote tests ---
-
-func TestRunRemote(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		var execCount int
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			execCount++
-			return "remote output\n", "", 0, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "install", Run: "echo install"},
-			{Name: "test", Run: "echo test"},
-		}}
-		streams, out, _ := newStreams()
-
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/workspace", streams))
-		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
-		assert.Equal(t, execCount, 2)
-	})
-
-	t.Run("non-zero exit code", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 1, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "failing"},
-		}}
-		streams, _, _ := newStreams()
-
-		err := RunRemote(context.Background(), execFn, cfg, "/workspace", streams)
-		assert.ErrorContains(t, err, "remote test failed")
-	})
-
-	t.Run("empty stdout not written", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 0, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "silent"},
-		}}
-		streams, out, _ := newStreams()
-
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/workspace", streams))
-		assert.Equal(t, out.Len(), 0)
-	})
-
-	t.Run("script uses dest directory", func(t *testing.T) {
-		var capturedScript string
-		execFn := func(_ context.Context, script string) (string, string, int, error) {
-			capturedScript = script
-			return "", "", 0, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "go test ./..."},
-		}}
-		streams, _, _ := newStreams()
-
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/custom/path", streams))
-		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/custom/path' &&"), "got: %s", capturedScript)
-	})
-}
-
 // --- Config with FileExt / Timeout tests ---
 
 func TestCommandFileExtRoundTrip(t *testing.T) {
@@ -396,6 +334,171 @@ func TestCacheOutputTruncation(t *testing.T) {
 	assert.Assert(t, cached != nil, "expected cache hit")
 	assert.Assert(t, len(cached.Output) <= maxOutputBytes,
 		"output should be truncated to %d bytes, got %d", maxOutputBytes, len(cached.Output))
+}
+
+// --- RunRemote tests ---
+
+func TestRunRemote(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		var execCount int
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			execCount++
+			return "remote output\n", "", 0, nil
+		}
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "install", Run: "echo install"},
+			{Name: "test", Run: "echo test"},
+		}}
+		streams, out, _ := newStreams()
+
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/workspace", streams))
+		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
+		assert.Equal(t, execCount, 2)
+	})
+
+	t.Run("non-zero exit code", func(t *testing.T) {
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 1, nil
+		}
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "failing"},
+		}}
+		streams, _, _ := newStreams()
+
+		err := RunRemote(context.Background(), execFn, cfg, "/workspace", streams)
+		assert.ErrorContains(t, err, "remote test failed")
+	})
+
+	t.Run("empty stdout not written", func(t *testing.T) {
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 0, nil
+		}
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "silent"},
+		}}
+		streams, out, _ := newStreams()
+
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/workspace", streams))
+		assert.Equal(t, out.Len(), 0)
+	})
+
+	t.Run("script uses dest directory", func(t *testing.T) {
+		var capturedScript string
+		execFn := func(_ context.Context, script string) (string, string, int, error) {
+			capturedScript = script
+			return "", "", 0, nil
+		}
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "go test ./..."},
+		}}
+		streams, _, _ := newStreams()
+
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "/custom/path", streams))
+		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/custom/path' &&"), "got: %s", capturedScript)
+	})
+}
+
+// TestRunRemoteSSH tests RunRemote end-to-end with a real fake SSH server,
+// verifying the exec callback correctly passes stdout/stderr/exitCode through.
+func TestRunRemoteSSH(t *testing.T) {
+	newCCIClient := func(t *testing.T, serverURL string) *circleci.Client {
+		t.Helper()
+		t.Setenv("CIRCLECI_BASE_URL", serverURL)
+		t.Setenv("CIRCLE_TOKEN", "test-token")
+		client, err := circleci.NewClient()
+		assert.NilError(t, err)
+		return client
+	}
+
+	execCallback := func(t *testing.T, session *sandbox.Session) func(context.Context, string) (string, string, int, error) {
+		t.Helper()
+		return func(ctx context.Context, script string) (string, string, int, error) {
+			result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
+			if err != nil {
+				return "", "", 0, err
+			}
+			return result.Stdout, result.Stderr, result.ExitCode, nil
+		}
+	}
+
+	t.Run("success", func(t *testing.T) {
+		keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+		sshSrv := fakes.NewSSHServer(t, pubKey)
+		sshSrv.SetResult("hello from remote\n", 0)
+
+		cci := fakes.NewFakeCircleCI()
+		cci.AddKeyURL = sshSrv.Addr()
+		cciSrv := httptest.NewServer(cci)
+		defer cciSrv.Close()
+
+		t.Setenv("HOME", t.TempDir())
+		client := newCCIClient(t, cciSrv.URL)
+		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
+		assert.NilError(t, err)
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "echo hello"},
+		}}
+		streams, out, _ := newStreams()
+
+		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "/workspace/repo", streams))
+		assert.Assert(t, strings.Contains(out.String(), "hello from remote"), "got: %s", out.String())
+		assert.Equal(t, len(sshSrv.Commands()), 1)
+	})
+
+	t.Run("non-zero exit code", func(t *testing.T) {
+		keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+		sshSrv := fakes.NewSSHServer(t, pubKey)
+		sshSrv.SetResult("", 1)
+
+		cci := fakes.NewFakeCircleCI()
+		cci.AddKeyURL = sshSrv.Addr()
+		cciSrv := httptest.NewServer(cci)
+		defer cciSrv.Close()
+
+		t.Setenv("HOME", t.TempDir())
+		client := newCCIClient(t, cciSrv.URL)
+		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
+		assert.NilError(t, err)
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "false"},
+		}}
+		streams, _, _ := newStreams()
+
+		err = RunRemote(context.Background(), execCallback(t, session), cfg, "/workspace/repo", streams)
+		assert.ErrorContains(t, err, "remote test failed")
+	})
+
+	t.Run("multiple commands stop on first failure", func(t *testing.T) {
+		keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+		sshSrv := fakes.NewSSHServer(t, pubKey)
+		sshSrv.SetResult("", 1)
+
+		cci := fakes.NewFakeCircleCI()
+		cci.AddKeyURL = sshSrv.Addr()
+		cciSrv := httptest.NewServer(cci)
+		defer cciSrv.Close()
+
+		t.Setenv("HOME", t.TempDir())
+		client := newCCIClient(t, cciSrv.URL)
+		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
+		assert.NilError(t, err)
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "install", Run: "npm install"},
+			{Name: "test", Run: "npm test"},
+		}}
+		streams, _, _ := newStreams()
+
+		err = RunRemote(context.Background(), execCallback(t, session), cfg, "/workspace/repo", streams)
+		assert.ErrorContains(t, err, "remote install failed")
+		assert.Equal(t, len(sshSrv.Commands()), 1)
+	})
 }
 
 func initGitRepo(t *testing.T, dir string) {
