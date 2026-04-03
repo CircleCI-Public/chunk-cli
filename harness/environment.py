@@ -377,25 +377,42 @@ Common issues to consider:
 # ---------------------------------------------------------------------------
 
 def normalize_env(env: dict) -> dict:
-    """Normalize an env spec so argument order doesn't affect equality checks."""
+    """Normalize an env spec so that equivalent specs compare equal.
+
+    Sorts --flag [value] pairs within each &&-segment so that two commands
+    that differ only in flag ordering compare as equal.  The command name and
+    any leading subcommands (non-flag tokens) are kept in their original
+    positions; flag-value pairs are sorted as a unit so values stay attached
+    to their flags.  system_deps is sorted because slice order can vary.
+    """
+    def sort_segment(segment: str) -> str:
+        tokens = segment.split()
+        if len(tokens) <= 1:
+            return segment
+
+        # Keep leading non-flag tokens (command + subcommands) in place.
+        i = 0
+        while i < len(tokens) and not tokens[i].startswith("-"):
+            i += 1
+        prefix = tokens[:i]
+        rest = tokens[i:]
+
+        # Group each flag with its value token (if the next token is not a flag).
+        groups: list[tuple[str, ...]] = []
+        j = 0
+        while j < len(rest):
+            if rest[j].startswith("-") and j + 1 < len(rest) and not rest[j + 1].startswith("-"):
+                groups.append((rest[j], rest[j + 1]))
+                j += 2
+            else:
+                groups.append((rest[j],))
+                j += 1
+
+        groups.sort()
+        flat = [tok for group in groups for tok in group]
+        return " ".join(prefix + flat)
+
     def sort_args(cmd: str) -> str:
-        """Sort arguments within each &&-separated segment independently.
-        Also sort comma-separated lists inside [...] within each token."""
-        def normalize_token(token: str) -> str:
-            # Sort comma-separated items inside [...] e.g. ".[b,a,c]" → ".[a,b,c]"
-            if "[" in token and "]" in token:
-                pre, rest = token.split("[", 1)
-                items, post = rest.split("]", 1)
-                return pre + "[" + ",".join(sorted(items.split(","))) + "]" + post
-            return token
-
-        def sort_segment(segment: str) -> str:
-            tokens = segment.split()
-            if len(tokens) <= 1:
-                return segment
-            normalized = [normalize_token(t) for t in tokens[1:]]
-            return tokens[0] + " " + " ".join(sorted(normalized))
-
         segments = [s.strip() for s in cmd.split("&&")]
         return " && ".join(sort_segment(s) for s in segments)
 

@@ -155,34 +155,45 @@ type dockerHubTagsResponse struct {
 	Next string `json:"next"`
 }
 
-func fetchAllImageVersions(ctx context.Context, client *httpcl.Client, image string) ([]string, error) {
-	// Official Docker Hub images (e.g. "elixir", "ubuntu") have no namespace
-	// slash; they live under the "library" namespace in the Docker Hub API.
+// fetchRawTags paginates the Docker Hub tag API for image and returns all tag
+// name strings up to a limit of 300. Official single-component image names
+// (e.g. "elixir") are automatically mapped to "library/elixir".
+func fetchRawTags(ctx context.Context, client *httpcl.Client, image string) ([]string, error) {
 	apiImage := image
 	if !strings.Contains(image, "/") {
 		apiImage = "library/" + image
 	}
-
 	parts := strings.SplitN(apiImage, "/", 2)
 
-	var allTags []string
+	var tags []string
 	route := fmt.Sprintf(
 		"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
 		parts[0], parts[1],
 	)
-
-	for route != "" && len(allTags) < 300 {
+	for route != "" && len(tags) < 300 {
 		var page dockerHubTagsResponse
 		if _, err := client.Call(ctx, httpcl.NewRequest("GET", route, httpcl.JSONDecoder(&page))); err != nil {
 			return nil, fmt.Errorf("docker hub request failed: %w", err)
 		}
-
 		for _, tag := range page.Results {
-			if versionTagRe.MatchString(tag.Name) {
-				allTags = append(allTags, tag.Name)
-			}
+			tags = append(tags, tag.Name)
 		}
 		route = page.Next
+	}
+	return tags, nil
+}
+
+func fetchAllImageVersions(ctx context.Context, client *httpcl.Client, image string) ([]string, error) {
+	raw, err := fetchRawTags(ctx, client, image)
+	if err != nil {
+		return nil, err
+	}
+
+	var allTags []string
+	for _, name := range raw {
+		if versionTagRe.MatchString(name) {
+			allTags = append(allTags, name)
+		}
 	}
 
 	if len(allTags) == 0 {
@@ -263,26 +274,9 @@ func fetchLatestImageVersionWithMajorMinorConstraint(ctx context.Context, client
 // Falls back to fetchLatestImageVersionWithMajorMinorConstraint when no matching
 // OTP-specific tag is found.
 func fetchElixirOTPImageVersion(ctx context.Context, client *httpcl.Client, image string, maxMajor, maxMinor, otpMajor int) (string, error) {
-	apiImage := image
-	if !strings.Contains(image, "/") {
-		apiImage = "library/" + image
-	}
-	parts := strings.SplitN(apiImage, "/", 2)
-
-	var allTags []string
-	route := fmt.Sprintf(
-		"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
-		parts[0], parts[1],
-	)
-	for route != "" && len(allTags) < 300 {
-		var page dockerHubTagsResponse
-		if _, err := client.Call(ctx, httpcl.NewRequest("GET", route, httpcl.JSONDecoder(&page))); err != nil {
-			return "", fmt.Errorf("docker hub request failed: %w", err)
-		}
-		for _, tag := range page.Results {
-			allTags = append(allTags, tag.Name)
-		}
-		route = page.Next
+	allTags, err := fetchRawTags(ctx, client, image)
+	if err != nil {
+		return "", err
 	}
 
 	// Find the highest Elixir version tag matching the OTP constraint.
@@ -325,29 +319,16 @@ func fetchElixirOTPImageVersion(ctx context.Context, client *httpcl.Client, imag
 // fetchLatestCimgBaseDateVersion fetches the most recent cimg/base tag, which
 // uses a "YYYY.MM" or "YYYY.MM.N" date format rather than semver.
 func fetchLatestCimgBaseDateVersion(ctx context.Context, client *httpcl.Client, image string) (string, error) {
-	apiImage := image
-	if !strings.Contains(image, "/") {
-		apiImage = "library/" + image
+	raw, err := fetchRawTags(ctx, client, image)
+	if err != nil {
+		return "", err
 	}
-	parts := strings.SplitN(apiImage, "/", 2)
 
 	var dateTags []string
-	route := fmt.Sprintf(
-		"https://hub.docker.com/v2/repositories/%s/%s/tags?page_size=100&ordering=last_updated",
-		parts[0], parts[1],
-	)
-
-	for route != "" && len(dateTags) < 300 {
-		var page dockerHubTagsResponse
-		if _, err := client.Call(ctx, httpcl.NewRequest("GET", route, httpcl.JSONDecoder(&page))); err != nil {
-			return "", fmt.Errorf("docker hub request failed: %w", err)
+	for _, name := range raw {
+		if cimgBaseDateTagRe.MatchString(name) {
+			dateTags = append(dateTags, name)
 		}
-		for _, tag := range page.Results {
-			if cimgBaseDateTagRe.MatchString(tag.Name) {
-				dateTags = append(dateTags, tag.Name)
-			}
-		}
-		route = page.Next
 	}
 
 	if len(dateTags) == 0 {
@@ -655,14 +636,26 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	//    When mix.lock pins tzdata < 1.1.1 (e.g. 1.0.3) the bundled data is
 	//    already pre-2021b so no fixup is needed.
 	if env.Stack == stackElixir {
+		// When mix.lock pins tzdata >= 1.1.1, the bundled IANA database includes
+		// the 2021b revision which changed historical European LMT offsets (e.g.
+		// Europe/Copenhagen). Tests written against older data fail with the newer
+		// bundled database, so we download the pre-2021b ETS file from the tzdata
+		// 1.1.0 hex package and configure tzdata to read from it.
+		//
+		// The version pattern matches >= 1.1.1: double-digit patch (1.1.10+),
+		// future minor (1.2.x+), and future major (2.x+).
+		tzVersionCheck := `grep -qE '"(1\.1\.[1-9][0-9]*|1\.[2-9]|[2-9]\.)' mix.lock 2>/dev/null`
 		sb.WriteString("\nRUN if grep -q ':tzdata' mix.exs 2>/dev/null && " +
-			`grep -q '"1\.1\.[1-9]' mix.lock 2>/dev/null; then ` +
-			`elixir -e ':inets.start(); :ssl.start(); url = ~c"https://repo.hex.pm/tarballs/tzdata-1.1.0.tar"; {:ok, {{_, 200, _}, _, body}} = :httpc.request(:get, {url, []}, [{:timeout, 30000}, {:ssl, [{:verify, :verify_none}]}], []); {:ok, [{_, gz}]} = :erl_tar.extract({:binary, IO.iodata_to_binary(body)}, [:memory, {:files, [~c"contents.tar.gz"]}]); {:ok, [{_, data}]} = :erl_tar.extract({:binary, gz}, [:memory, :compressed, {:files, [~c"priv/release_ets/2020e.v2.ets"]}]); File.mkdir_p!(~c"/tz_data/release_ets"); File.write!(~c"/tz_data/release_ets/2020e.v2.ets", data)'; ` +
+			tzVersionCheck + "; then \\\n" +
+			"  curl -fsSL -o /tmp/tzdata-1.1.0.tar https://repo.hex.pm/tarballs/tzdata-1.1.0.tar && \\\n" +
+			"  mkdir -p /tz_data/release_ets && \\\n" +
+			"  tar -xOf /tmp/tzdata-1.1.0.tar contents.tar.gz | tar -xzO priv/release_ets/2020e.v2.ets > /tz_data/release_ets/2020e.v2.ets && \\\n" +
+			"  rm /tmp/tzdata-1.1.0.tar; \\\n" +
 			"fi\n")
 		sb.WriteString("\nRUN if grep -q ':tzdata' mix.exs 2>/dev/null && " +
-			`grep -q '"1\.1\.[1-9]' mix.lock 2>/dev/null; then ` +
-			"mkdir -p config && " +
-			`printf '\nimport Config\nconfig :tzdata, :autoupdate, :disabled\nconfig :tzdata, :data_dir, "/tz_data"\n' >> config/runtime.exs; ` +
+			tzVersionCheck + "; then \\\n" +
+			"  mkdir -p config && \\\n" +
+			`  printf '\nimport Config\nconfig :tzdata, :autoupdate, :disabled\nconfig :tzdata, :data_dir, "/tz_data"\n' >> config/runtime.exs; \` + "\n" +
 			"fi\n")
 	}
 
@@ -1767,7 +1760,7 @@ func detectGoRstDep(dir string) bool {
 // detectGoTestFileDep walks dir and returns true if any _test.go file contains needle.
 func detectGoTestFileDep(dir, needle string) bool {
 	found := false
-	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -1788,7 +1781,9 @@ func detectGoTestFileDep(dir, needle string) bool {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return false
+	}
 	return found
 }
 
@@ -2079,6 +2074,8 @@ func detectGradleToolchainJDKs(dir string) []string {
 	}
 
 	// 3. All Gradle build files – explicit JavaLanguageVersion.of(N) or jvmToolchain(N).
+	// Walk errors are non-fatal: per-entry errors are handled inside the callback and
+	// the outer error is always nil because the callback never returns a non-sentinel error.
 	jlvRe := regexp.MustCompile(`JavaLanguageVersion\.of\((\d+)\)`)
 	jvmTcRe := regexp.MustCompile(`jvmToolchain\s*[\(=]\s*(\d+)`)
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
@@ -2507,6 +2504,8 @@ func detectDotNetVersion(dir string) string {
 	// 2. Scan .csproj files for TargetFramework / TargetFrameworks.
 	//    Match patterns like "net8.0", "net6.0" but not "netstandard2.0" which
 	//    is not a runnable SDK version.
+	// Walk errors are non-fatal: if the walk fails entirely bestMajor stays 0
+	// and we fall through to the default below.
 	netRe := regexp.MustCompile(`\bnet(\d+)\.0\b`)
 	bestMajor := 0
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -2548,7 +2547,7 @@ func detectDotNetVersion(dir string) string {
 func detectDotNetTestFramework(dir string) string {
 	netRe := regexp.MustCompile(`\bnet(\d+)\.0\b`)
 	bestMajor := 0
-	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+	if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -2574,7 +2573,9 @@ func detectDotNetTestFramework(dir string) string {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return ""
+	}
 	if bestMajor >= 6 {
 		return fmt.Sprintf("net%d.0", bestMajor)
 	}
