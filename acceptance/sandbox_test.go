@@ -366,9 +366,7 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 		args []string
 	}{
 		{"ssh identity-file", []string{"sandbox", "ssh", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync dest", []string{"sandbox", "sync", "--sandbox-id", "sb-111", "--dest", "/custom/path"}},
 		{"sync identity-file", []string{"sandbox", "sync", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync bootstrap", []string{"sandbox", "sync", "--sandbox-id", "sb-111", "--bootstrap"}},
 	}
 
 	for _, tt := range tests {

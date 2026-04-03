@@ -242,8 +242,7 @@ func newSandboxSSHCmd() *cobra.Command {
 }
 
 func newSandboxSyncCmd() *cobra.Command {
-	var sandboxID, dest, identityFile string
-	var bootstrap bool
+	var sandboxID, identityFile, workdir string
 
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -255,14 +254,13 @@ func newSandboxSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, dest, bootstrap, io)
+			return sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, workdir, io)
 		},
 	}
 
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
-	cmd.Flags().StringVar(&dest, "dest", "/workspace", "Destination path")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().BoolVar(&bootstrap, "bootstrap", false, "Bootstrap the sandbox")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sandbox (auto-detected as /workspace/<repo> when omitted)")
 	_ = cmd.MarkFlagRequired("sandbox-id")
 
 	return cmd

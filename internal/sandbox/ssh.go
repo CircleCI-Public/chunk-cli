@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -66,21 +67,28 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		return nil, err
 	}
 
-	target := net.JoinHostPort(session.URL, fmt.Sprintf("%d", defaultSSHPort))
+	// Parse host and port from session.URL. Production URLs are bare hostnames,
+	// but tests may include a port (e.g. "127.0.0.1:54321").
+	host, port, splitErr := net.SplitHostPort(session.URL)
+	if splitErr != nil {
+		host = session.URL
+		port = strconv.Itoa(defaultSSHPort)
+	}
+	addr := net.JoinHostPort(host, port)
 
 	// TLS dial — self-signed cert on sandbox hosts, so skip verification.
 	// Trust is established via SSH host key pinning (TOFU) below.
-	tlsConn, err := tls.Dial("tcp", target, &tls.Config{
+	tlsConn, err := tls.Dial("tcp", addr, &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
 	})
 	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("TLS connect to %s:%d: %w", session.URL, defaultSSHPort, err)
+		return nil, fmt.Errorf("TLS connect to %s: %w", addr, err)
 	}
 
-	hostKeyCallback := tofuHostKeyCallback(session.KnownHosts, session.URL)
+	hostKeyCallback := tofuHostKeyCallback(session.KnownHosts, host)
 
-	conn, chans, reqs, err := ssh.NewClientConn(tlsConn, session.URL, &ssh.ClientConfig{
+	conn, chans, reqs, err := ssh.NewClientConn(tlsConn, host, &ssh.ClientConfig{
 		User:            defaultSSHUser,
 		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: hostKeyCallback,
@@ -121,7 +129,7 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 	if err != nil {
 		return nil, fmt.Errorf("SSH session: %w", err)
 	}
-	defer closer.ErrorHandler(sess, &err)
+	defer func() { _ = sess.Close() }()
 
 	if err := setSessionEnv(sess, envVars); err != nil {
 		return nil, err

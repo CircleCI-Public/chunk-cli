@@ -142,7 +142,6 @@ func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams)
 }
 
 // RunRemote runs commands on a remote sandbox via SSH.
-// exec is called with each shell script and returns stdout, stderr, exit code, and any transport error.
 func RunRemote(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, dest string, streams iostream.Streams) error {
 	for _, c := range cfg.Commands {
 		script := "cd " + shellEscape(dest) + " && " + c.Run

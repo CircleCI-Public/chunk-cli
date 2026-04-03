@@ -76,6 +76,9 @@ func TestLoad_InvalidJSON(t *testing.T) {
 }
 
 func TestLoad_Unreadable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping: root bypasses file permission checks")
+	}
 	dir := setupTempConfig(t)
 	chunkDir := filepath.Join(dir, "chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
