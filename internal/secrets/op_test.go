@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"context"
 	"os/exec"
 	"testing"
 )
@@ -19,7 +20,7 @@ func TestOpResolver_Resolve_NotInstalled(t *testing.T) {
 		r.lookErr = exec.ErrNotFound
 	})
 
-	_, err := r.Resolve("op://vault/item/field")
+	_, err := r.Resolve(context.Background(), "op://vault/item/field")
 	if err == nil {
 		t.Fatal("expected error when op not installed")
 	}

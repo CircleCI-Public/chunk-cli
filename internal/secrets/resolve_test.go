@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -29,7 +30,7 @@ type fakeResolver struct {
 	err  error
 }
 
-func (f *fakeResolver) Resolve(ref string) (string, error) {
+func (f *fakeResolver) Resolve(_ context.Context, ref string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
@@ -41,7 +42,7 @@ func (f *fakeResolver) Resolve(ref string) (string, error) {
 
 func TestResolveAll_NoRefs(t *testing.T) {
 	in := map[string]string{"FOO": "bar", "BAZ": "qux"}
-	out, err := ResolveAll(in, nil)
+	out, err := ResolveAll(context.Background(), in, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestResolveAll_NoRefs(t *testing.T) {
 }
 
 func TestResolveAll_NilMap(t *testing.T) {
-	out, err := ResolveAll(nil, nil)
+	out, err := ResolveAll(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +68,7 @@ func TestResolveAll_NilMap(t *testing.T) {
 }
 
 func TestResolveAll_EmptyMap(t *testing.T) {
-	out, err := ResolveAll(map[string]string{}, nil)
+	out, err := ResolveAll(context.Background(), map[string]string{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestResolveAll_MixedRefs(t *testing.T) {
 		"PLAIN":  "value",
 		"SECRET": "op://vault/item/key",
 	}
-	out, err := ResolveAll(in, resolver)
+	out, err := ResolveAll(context.Background(), in, resolver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ func TestResolveAll_MixedRefs(t *testing.T) {
 func TestResolveAll_ErrorPropagation(t *testing.T) {
 	resolver := &fakeResolver{err: errors.New("not signed in")}
 	in := map[string]string{"KEY": "op://vault/item/field"}
-	_, err := ResolveAll(in, resolver)
+	_, err := ResolveAll(context.Background(), in, resolver)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -115,7 +116,7 @@ func TestResolveAll_ErrorPropagation(t *testing.T) {
 
 func TestResolveAll_NilResolverUsesOpResolver(t *testing.T) {
 	// With no refs, nil resolver should be fine (fast path).
-	out, err := ResolveAll(map[string]string{"X": "y"}, nil)
+	out, err := ResolveAll(context.Background(), map[string]string{"X": "y"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

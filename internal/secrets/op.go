@@ -18,7 +18,7 @@ type OpResolver struct {
 	lookErr error
 }
 
-func (r *OpResolver) Resolve(ref string) (string, error) {
+func (r *OpResolver) Resolve(ctx context.Context, ref string) (string, error) {
 	r.once.Do(func() {
 		r.opPath, r.lookErr = exec.LookPath("op")
 	})
@@ -26,7 +26,7 @@ func (r *OpResolver) Resolve(ref string) (string, error) {
 		return "", fmt.Errorf("op CLI not found — install it from https://developer.1password.com/docs/cli/get-started/: %w", r.lookErr)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	ctx, cancel := context.WithTimeout(ctx, opTimeout)
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer

@@ -232,7 +232,7 @@ func newSandboxSSHCmd() *cobra.Command {
 			} else {
 				envVars = flagVars
 			}
-			resolved, err := secrets.ResolveAll(envVars, nil)
+			resolved, err := secrets.ResolveAll(cmd.Context(), envVars, nil)
 			if err != nil {
 				return usererr.New(fmt.Sprintf("resolve secrets: %s", err), err)
 			}

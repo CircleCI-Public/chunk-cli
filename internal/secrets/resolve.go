@@ -1,10 +1,13 @@
 package secrets
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // Resolver resolves secret reference URIs to plaintext values.
 type Resolver interface {
-	Resolve(ref string) (string, error)
+	Resolve(ctx context.Context, ref string) (string, error)
 }
 
 // IsSecretRef reports whether value is a secret reference (op:// prefix).
@@ -14,7 +17,7 @@ func IsSecretRef(value string) bool {
 
 // ResolveAll resolves op:// references in a map. Non-reference values pass through unchanged.
 // If resolver is nil, uses OpResolver. Returns the original map if no references are found.
-func ResolveAll(vars map[string]string, resolver Resolver) (map[string]string, error) {
+func ResolveAll(ctx context.Context, vars map[string]string, resolver Resolver) (map[string]string, error) {
 	if len(vars) == 0 {
 		return vars, nil
 	}
@@ -38,7 +41,7 @@ func ResolveAll(vars map[string]string, resolver Resolver) (map[string]string, e
 	out := make(map[string]string, len(vars))
 	for k, v := range vars {
 		if IsSecretRef(v) {
-			resolved, err := resolver.Resolve(v)
+			resolved, err := resolver.Resolve(ctx, v)
 			if err != nil {
 				return nil, &resolveError{key: k, cause: err}
 			}
