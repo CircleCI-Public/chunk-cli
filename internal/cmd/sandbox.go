@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 
 	"github.com/spf13/cobra"
@@ -15,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
+	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
@@ -193,9 +195,8 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 }
 
 func newSandboxSSHCmd() *cobra.Command {
-	var sandboxID, identityFile string
+	var sandboxID, identityFile, envFile string
 	var envVarsFlag []string
-	var noEnvFile bool
 
 	cmd := &cobra.Command{
 		Use:   "ssh [flags] [-- command...]",
@@ -212,19 +213,28 @@ func newSandboxSSHCmd() *cobra.Command {
 				return usererr.New(fmt.Sprintf("invalid --env value: %s", err), err)
 			}
 			var envVars map[string]string
-			if len(envVarsFlag) > 0 && !noEnvFile {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return fmt.Errorf("get working directory: %w", err)
+			if envFile != "" {
+				path := envFile
+				if !filepath.IsAbs(path) {
+					cwd, err := os.Getwd()
+					if err != nil {
+						return fmt.Errorf("get working directory: %w", err)
+					}
+					path = filepath.Join(cwd, path)
 				}
-				fileVars, err := sandbox.LoadEnvFile(cwd)
+				fileVars, err := sandbox.LoadEnvFileAt(path)
 				if err != nil {
-					return usererr.New(fmt.Sprintf("load .env.local: %s", err), err)
+					return usererr.New(fmt.Sprintf("load %s: %s", envFile, err), err)
 				}
 				envVars = sandbox.MergeEnv(fileVars, flagVars)
 			} else {
 				envVars = flagVars
 			}
+			resolved, err := secrets.ResolveAll(cmd.Context(), envVars, nil)
+			if err != nil {
+				return usererr.New(fmt.Sprintf("resolve secrets: %s", err), err)
+			}
+			envVars = resolved
 			io := iostream.FromCmd(cmd)
 			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
 		},
@@ -233,7 +243,8 @@ func newSandboxSSHCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in the remote session (repeatable)")
-	cmd.Flags().BoolVar(&noEnvFile, "no-env-file", false, "Skip automatic .env.local loading (only applies with -e/--env)")
+	cmd.Flags().StringVar(&envFile, "env-file", "", "Env file to load (default .env.local when flag is present)")
+	cmd.Flags().Lookup("env-file").NoOptDefVal = ".env.local"
 	_ = cmd.MarkFlagRequired("sandbox-id")
 
 	return cmd
