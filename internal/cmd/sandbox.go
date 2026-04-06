@@ -321,6 +321,9 @@ func newSandboxBuildCmd() *cobra.Command {
 		Long: `Read a JSON environment spec from stdin (produced by 'chunk sandbox env'),
 write Dockerfile.test to --dir, and build a Docker test image from it.
 
+When CHUNK_BUILD_COMMANDS is set, the ordered setup steps from the environment
+spec are run directly as shell commands instead of building a Docker image.
+
 Example:
   chunk sandbox env --dir . | chunk sandbox build --dir .`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -348,30 +351,10 @@ Example:
 				return fmt.Errorf("parse environment spec: %w", err)
 			}
 
-			dockerfilePath, err := envbuilder.WriteDockerfile(dir, &env)
-			if err != nil {
-				return fmt.Errorf("write dockerfile: %w", err)
+			if os.Getenv("CHUNK_BUILD_COMMANDS") != "" {
+				return runBuildSteps(cmd, dir, &env, streams)
 			}
-			streams.ErrPrintf("Wrote %s\n", dockerfilePath)
-
-			streams.ErrPrintf("Building Docker image in %s...\n", dir)
-
-			args := []string{"build", "-f", "Dockerfile.test"}
-			if tag != "" {
-				args = append(args, "-t", tag)
-			}
-			args = append(args, ".")
-
-			dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
-			dockerCmd.Dir = dir
-			dockerCmd.Stdout = streams.Out
-			dockerCmd.Stderr = streams.Err
-			if err := dockerCmd.Run(); err != nil {
-				return fmt.Errorf("docker build: %w", err)
-			}
-
-			streams.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
-			return nil
+			return runDockerBuild(cmd, dir, tag, &env, streams)
 		},
 	}
 
@@ -379,4 +362,51 @@ Example:
 	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
 
 	return cmd
+}
+
+// runDockerBuild writes Dockerfile.test and runs docker build.
+func runDockerBuild(cmd *cobra.Command, dir, tag string, env *envbuilder.Environment, streams iostream.Streams) error {
+	dockerfilePath, err := envbuilder.WriteDockerfile(dir, env)
+	if err != nil {
+		return fmt.Errorf("write dockerfile: %w", err)
+	}
+	streams.ErrPrintf("Wrote %s\n", dockerfilePath)
+	streams.ErrPrintf("Building Docker image in %s...\n", dir)
+
+	args := []string{"build", "-f", "Dockerfile.test"}
+	if tag != "" {
+		args = append(args, "-t", tag)
+	}
+	args = append(args, ".")
+
+	dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
+	dockerCmd.Dir = dir
+	dockerCmd.Stdout = streams.Out
+	dockerCmd.Stderr = streams.Err
+	if err := dockerCmd.Run(); err != nil {
+		return fmt.Errorf("docker build: %w", err)
+	}
+
+	streams.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
+	return nil
+}
+
+// runBuildSteps runs each environment setup step directly as a shell command.
+func runBuildSteps(cmd *cobra.Command, dir string, env *envbuilder.Environment, streams iostream.Streams) error {
+	if len(env.Steps) == 0 {
+		streams.ErrPrintln(ui.Dim("No build steps to run."))
+		return nil
+	}
+	for _, step := range env.Steps {
+		streams.ErrPrintf("%s %s\n", ui.Dim("Running:"), ui.Gray(step.Command))
+		c := exec.CommandContext(cmd.Context(), "sh", "-c", step.Command)
+		c.Dir = dir
+		c.Stdout = streams.Out
+		c.Stderr = streams.Err
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("step %q: %w", step.Name, err)
+		}
+	}
+	streams.ErrPrintf("%s\n", ui.Success("Build steps completed successfully"))
+	return nil
 }

@@ -3,6 +3,7 @@ package acceptance
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -124,6 +125,62 @@ func TestSandboxExecAPIError(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for 500 response")
+}
+
+// --- build mode: CHUNK_BUILD_COMMANDS ---
+
+func TestSandboxBuildCommandsMode(t *testing.T) {
+	dir := t.TempDir()
+	envSpec := `{"stack":"go","image":"cimg/go:1.22","steps":[{"name":"greet","command":"echo hello from steps"}]}`
+
+	env := testenv.NewTestEnv(t)
+	env.Extra["CHUNK_BUILD_COMMANDS"] = "1"
+	result := binary.RunCLIWithStdin(t, []string{"sandbox", "build", "--dir", dir}, env, env.HomeDir, []byte(envSpec))
+
+	assert.Equal(t, result.ExitCode, 0, "expected zero exit: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "hello from steps"), "expected step output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "completed successfully"), "expected success message, got: %s", combined)
+}
+
+func TestSandboxBuildCommandsModeStepFailure(t *testing.T) {
+	dir := t.TempDir()
+	envSpec := `{"stack":"go","image":"cimg/go:1.22","steps":[{"name":"fail","command":"exit 1"}]}`
+
+	env := testenv.NewTestEnv(t)
+	env.Extra["CHUNK_BUILD_COMMANDS"] = "1"
+	result := binary.RunCLIWithStdin(t, []string{"sandbox", "build", "--dir", dir}, env, env.HomeDir, []byte(envSpec))
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for failing step")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "fail"), "expected step name in error, got: %s", combined)
+}
+
+func TestSandboxBuildCommandsModeNoSteps(t *testing.T) {
+	dir := t.TempDir()
+	envSpec := `{"stack":"go","image":"cimg/go:1.22","steps":[]}`
+
+	env := testenv.NewTestEnv(t)
+	env.Extra["CHUNK_BUILD_COMMANDS"] = "1"
+	result := binary.RunCLIWithStdin(t, []string{"sandbox", "build", "--dir", dir}, env, env.HomeDir, []byte(envSpec))
+
+	assert.Equal(t, result.ExitCode, 0, "expected zero exit for empty steps: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "No build steps"), "expected no-steps message, got: %s", combined)
+}
+
+// TestSandboxBuildDockerfileWritten verifies that without CHUNK_BUILD_COMMANDS the
+// Dockerfile path is taken: Dockerfile.test is written before docker build runs.
+func TestSandboxBuildDockerfileWritten(t *testing.T) {
+	dir := t.TempDir()
+	envSpec := `{"stack":"go","image":"cimg/go:1.22","steps":[{"name":"install","command":"go mod download"}]}`
+
+	env := testenv.NewTestEnv(t)
+	// docker build will fail (no docker in test env), but Dockerfile.test should be written first.
+	binary.RunCLIWithStdin(t, []string{"sandbox", "build", "--dir", dir}, env, env.HomeDir, []byte(envSpec))
+
+	_, err := os.Stat(dir + "/Dockerfile.test")
+	assert.NilError(t, err, "expected Dockerfile.test to be written")
 }
 
 // --- build error paths ---

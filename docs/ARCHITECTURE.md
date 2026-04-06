@@ -157,3 +157,4 @@ Shared HTTP infrastructure used by `anthropic/`, `circleci/`, and `github/`:
 | `CHUNK_HOOK_LOG_DIR` | hook | Log directory |
 | `CHUNK_HOOK_VERBOSE` | hook | Verbose logging |
 | `CLAUDE_PROJECT_DIR` | hook | IDE-provided project directory |
+| `CHUNK_BUILD_COMMANDS` | sandbox build | When set, run env steps as shell commands instead of building a Docker image |
