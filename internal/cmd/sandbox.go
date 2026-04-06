@@ -324,6 +324,10 @@ write Dockerfile.test to --dir, and build a Docker test image from it.
 When CHUNK_BUILD_COMMANDS is set, the ordered setup steps from the environment
 spec are run directly as shell commands instead of building a Docker image.
 
+When CHUNK_CAPTURE_COMMANDS is set to a file path, the steps are written as
+JSON to that file without executing anything. Set to "1" to write to
+build-steps.json in --dir.
+
 Example:
   chunk sandbox env --dir . | chunk sandbox build --dir .`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -351,6 +355,12 @@ Example:
 				return fmt.Errorf("parse environment spec: %w", err)
 			}
 
+			if dest := os.Getenv("CHUNK_CAPTURE_COMMANDS"); dest != "" {
+				if dest == "1" {
+					dest = filepath.Join(dir, "build-steps.json")
+				}
+				return captureCommands(dest, &env, streams)
+			}
 			if os.Getenv("CHUNK_BUILD_COMMANDS") != "" {
 				return runBuildSteps(cmd, dir, &env, streams)
 			}
@@ -408,5 +418,18 @@ func runBuildSteps(cmd *cobra.Command, dir string, env *envbuilder.Environment, 
 		}
 	}
 	streams.ErrPrintf("%s\n", ui.Success("Build steps completed successfully"))
+	return nil
+}
+
+// captureCommands writes the environment steps to a JSON file without executing them.
+func captureCommands(dest string, env *envbuilder.Environment, streams iostream.Streams) error {
+	out, err := json.MarshalIndent(env.Steps, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal steps: %w", err)
+	}
+	if err := os.WriteFile(dest, out, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", dest, err)
+	}
+	streams.ErrPrintf("Wrote %s\n", dest)
 	return nil
 }

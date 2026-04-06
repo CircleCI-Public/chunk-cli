@@ -158,3 +158,4 @@ Shared HTTP infrastructure used by `anthropic/`, `circleci/`, and `github/`:
 | `CHUNK_HOOK_VERBOSE` | hook | Verbose logging |
 | `CLAUDE_PROJECT_DIR` | hook | IDE-provided project directory |
 | `CHUNK_BUILD_COMMANDS` | sandbox build | When set, run env steps as shell commands instead of building a Docker image |
+| `CHUNK_CAPTURE_COMMANDS` | sandbox build | When set to a path, write steps as JSON to that file without executing. Set to `1` to write to `build-steps.json` in `--dir` |
