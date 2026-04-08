@@ -8,6 +8,6 @@
     "gomodUpdateImportPaths"
   ],
   "lockFileMaintenance": {
-    enabled: true,
+    "enabled": true,
   },
 }
