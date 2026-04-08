@@ -7,7 +7,7 @@
     "gomodTidy",
     "gomodUpdateImportPaths"
   ],
-  "lockFileMaintenance": {
-    "enabled": true,
+  "vulnerabilityAlerts": {
+    "enabled": true
   },
 }
