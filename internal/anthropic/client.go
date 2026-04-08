@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
@@ -36,6 +37,7 @@ func New() (*Client, error) {
 		AuthToken:  key,
 		AuthHeader: "x-api-key",
 		UserAgent:  "chunk-cli",
+		Timeout:    120 * time.Second,
 	})
 
 	return &Client{http: c}, nil
