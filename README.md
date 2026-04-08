@@ -1,14 +1,14 @@
 # chunk
 
-CLI for generating AI agent context from code review patterns and managing cloud sandbox development environments.
+CLI for managing cloud sandbox development environments and generating AI agent context from code review patterns.
 
 ## Features
 
-- **Context Generation** — Mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to your team's standards
 - **Sandbox Environments** — Create, sync, and SSH into cloud dev sandboxes on CircleCI
 - **Environment Detection** — Auto-detect tech stack, generate Dockerfiles, and set up sandboxes with the right dependencies
 - **Hook Automation** — Wire tests and lint into your AI coding agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
 - **Skills** — Install bundled AI agent skills into your editor
+- **Context Generation** — Mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to your team's standards
 - **Self-Updating** — Built-in upgrade command
 
 ## Requirements
@@ -24,29 +24,14 @@ brew install CircleCI-Public/circleci/chunk
 
 ## Quick Start
 
-### Context Generation
-
-Generate a review context prompt from your org's GitHub PR comments:
-
-```bash
-# Authenticate
-chunk auth login
-
-# From inside a git repo — org and repos are auto-detected
-chunk build-prompt
-
-# Or specify explicitly
-chunk build-prompt --org myorg --repos api,backend --top 10
-
-# Output lands in .chunk/context/review-prompt.md
-# AI agents (Claude Code, Cursor) pick it up automatically
-```
-
 ### Sandbox Environments
 
 Create and work in cloud sandbox environments:
 
 ```bash
+# Authenticate
+chunk auth login
+
 # Create a sandbox
 chunk sandbox create --name my-sandbox --image ubuntu:22.04
 
@@ -96,19 +81,34 @@ chunk validate tests        # specific command
 chunk validate --list       # list configured commands
 ```
 
+### Context Generation
+
+Generate a review context prompt from your org's GitHub PR comments:
+
+```bash
+# From inside a git repo — org and repos are auto-detected
+chunk build-prompt
+
+# Or specify explicitly
+chunk build-prompt --org myorg --repos api,backend --top 10
+
+# Output lands in .chunk/context/review-prompt.md
+# AI agents (Claude Code, Cursor) pick it up automatically
+```
+
 ## Commands
 
 ```
 chunk auth login|status|logout       Authentication
-chunk build-prompt                   Generate review context from PR comments
-chunk init                           Initialize project configuration
 chunk sandbox list|create|exec|ssh   Manage cloud sandbox environments
 chunk sandbox sync|env|build         Sync files, detect env, build images
 chunk sandbox env setup              Create sandbox and run setup steps
 chunk sandbox template create        Create sandbox templates
+chunk init                           Initialize project configuration
+chunk validate [name]                Run quality checks
 chunk skill install|list             Manage AI agent skills
 chunk task config|run                Configure and trigger CI tasks
-chunk validate [name]                Run quality checks
+chunk build-prompt                   Generate review context from PR comments
 chunk completion install|uninstall   Shell completions
 chunk upgrade                        Update CLI
 ```
