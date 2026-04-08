@@ -4,10 +4,10 @@ CLI for remote validation of changes — run code in a cloud environment before 
 
 ## Features
 
-- **Sandbox Environments** — Validate changes in a clean cloud environment on CircleCI
-- **Environment Detection** — Auto-detect tech stack, generate Dockerfiles, and set up sandboxes with the right dependencies
-- **Hook Automation** — Wire tests and lint into your AI coding agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
 - **Context Generation** — Mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to your team's standards
+- **Hook Automation** — Wire tests and lint into your AI coding agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
+- **Environment Detection** — Auto-detect tech stack, generate Dockerfiles, and set up sandboxes with the right dependencies
+- **Sandbox Environments** — Validate changes in a clean cloud environment on CircleCI
 
 ## Requirements
 
@@ -22,7 +22,39 @@ brew install CircleCI-Public/circleci/chunk
 
 ## Quick Start
 
-### Sandbox Environments
+### Project Setup
+
+Initialize your project for hook automation and validation:
+
+```bash
+# Detect test commands, configure hooks, set up .claude/settings.json
+chunk init
+
+# Run configured validations
+chunk validate              # all commands
+chunk validate tests        # specific command
+chunk validate --list       # list configured commands
+```
+
+### Context Generation
+
+Generate a review context prompt from your org's GitHub PR comments:
+
+```bash
+# From inside a git repo — org and repos are auto-detected
+chunk build-prompt
+
+# Or specify explicitly
+chunk build-prompt --org myorg --repos api,backend --top 10
+
+# Output lands in .chunk/context/review-prompt.md
+# AI agents (Claude Code, Cursor) pick it up automatically
+
+# Enhance your agent's review skills
+chunk skill install
+```
+
+### Sandbox Environments (private preview, email ai-feedback@circleci.com)
 
 Create and work in cloud sandbox environments:
 
@@ -63,35 +95,6 @@ Create reusable sandbox templates from container images:
 ```bash
 chunk sandbox template create --image ubuntu:22.04 --tag my-template
 chunk sandbox create --name my-sandbox --template-id <template-id>
-```
-
-### Project Setup
-
-Initialize your project for hook automation and validation:
-
-```bash
-# Detect test commands, configure hooks, set up .claude/settings.json
-chunk init
-
-# Run configured validations
-chunk validate              # all commands
-chunk validate tests        # specific command
-chunk validate --list       # list configured commands
-```
-
-### Context Generation
-
-Generate a review context prompt from your org's GitHub PR comments:
-
-```bash
-# From inside a git repo — org and repos are auto-detected
-chunk build-prompt
-
-# Or specify explicitly
-chunk build-prompt --org myorg --repos api,backend --top 10
-
-# Output lands in .chunk/context/review-prompt.md
-# AI agents (Claude Code, Cursor) pick it up automatically
 ```
 
 ## Commands
