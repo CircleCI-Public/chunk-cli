@@ -1,15 +1,13 @@
 # chunk
 
-CLI for managing cloud sandbox development environments and generating AI agent context from code review patterns.
+CLI for remote validation of changes — run code in a cloud environment before pushing — and generating agent context from code review patterns.
 
 ## Features
 
-- **Sandbox Environments** — Create, sync, and SSH into cloud dev sandboxes on CircleCI
+- **Sandbox Environments** — Validate changes in a clean cloud environment on CircleCI
 - **Environment Detection** — Auto-detect tech stack, generate Dockerfiles, and set up sandboxes with the right dependencies
 - **Hook Automation** — Wire tests and lint into your AI coding agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
-- **Skills** — Install bundled AI agent skills into your editor
 - **Context Generation** — Mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to your team's standards
-- **Self-Updating** — Built-in upgrade command
 
 ## Requirements
 
