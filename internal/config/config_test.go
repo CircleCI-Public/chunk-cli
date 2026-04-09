@@ -244,7 +244,7 @@ func TestResolve_ModelFromConfig(t *testing.T) {
 
 	rc := Resolve("", "")
 	assert.Equal(t, rc.Model, "config-model")
-	assert.Equal(t, rc.ModelSource, "Config file (user config)")
+	assert.Equal(t, rc.ModelSource, SourceConfigFile)
 }
 
 // --- ValidConfigKeys ---
