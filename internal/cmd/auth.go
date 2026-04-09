@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -18,15 +20,120 @@ import (
 
 const apiKeySourceEnvVar = "Environment variable"
 
+// ErrSilent is returned when a command has already reported its error to the user
+// and wants to exit non-zero without printing anything further.
+var ErrSilent = errors.New("silent")
+
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
 		Short: "Manage authentication",
 	}
+	cmd.AddCommand(newAuthSetCmd())
 	cmd.AddCommand(newAuthLoginCmd())
 	cmd.AddCommand(newAuthStatusCmd())
 	cmd.AddCommand(newAuthLogoutCmd())
 	return cmd
+}
+
+func newAuthSetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:       "set <provider>",
+		Short:     "Store credentials for a provider",
+		Args:      cobra.ExactArgs(1),
+		ValidArgs: []string{"circleci"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			provider := args[0]
+			io := iostream.FromCmd(cmd)
+			switch provider {
+			case "circleci":
+				return authSetCircleCI(cmd.Context(), io)
+			default:
+				return fmt.Errorf("unknown provider %q: valid providers are circleci", provider)
+			}
+		},
+	}
+}
+
+func authSetCircleCI(ctx context.Context, io iostream.Streams) error {
+	io.Println("")
+	io.Println(ui.Bold("Chunk CLI - CircleCI Token Setup"))
+	io.Println("")
+	io.Println("Create a CircleCI token at https://app.circleci.com/settings/user/tokens")
+	io.Println("")
+
+	if os.Getenv("CIRCLE_TOKEN") != "" || os.Getenv("CIRCLECI_TOKEN") != "" {
+		io.Println(ui.Warning("A CircleCI token is set in environment variables (CIRCLE_TOKEN/CIRCLECI_TOKEN)."))
+		io.Println(ui.Dim("Environment variables take precedence over stored config."))
+		io.Println("")
+	}
+
+	cfg, _ := config.Load()
+	if cfg.CircleCIToken != "" {
+		io.Printf("A CircleCI token is already stored in config.\n")
+		replace, err := tui.Confirm("Do you want to replace it?", false)
+		if err != nil {
+			io.Println("Cancelled.")
+			return nil
+		}
+		if !replace {
+			io.Println("Keeping existing token.")
+			return nil
+		}
+	}
+
+	token, err := tui.PromptHidden("CircleCI Token")
+	if err != nil {
+		return nil
+	}
+
+	token = strings.TrimSpace(token)
+	if token == "" {
+		io.ErrPrintln(ui.FormatError("Token cannot be empty.", "", "Create a token at https://app.circleci.com/settings/user/tokens"))
+		return ErrSilent
+	}
+
+	if err := saveCircleCIToken(ctx, token, io); err != nil {
+		return ErrSilent
+	}
+	return nil
+}
+
+// saveCircleCIToken validates and saves a CircleCI token to user config.
+func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams) error {
+	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
+	if err := validateCircleCIToken(ctx, token); err != nil {
+		streams.ErrPrintln(ui.FormatError("CircleCI token validation failed.", "", "Check that your token is correct."))
+		return fmt.Errorf("validate token: %w", err)
+	}
+
+	cfg, _ := config.Load()
+	cfg.CircleCIToken = token
+	if err := config.Save(cfg); err != nil {
+		streams.ErrPrintln(ui.FormatError("Failed to save CircleCI token.", "", "Check that your config file is writable."))
+		return fmt.Errorf("save token: %w", err)
+	}
+
+	cfgPath, err := config.Path()
+	if err != nil {
+		return err
+	}
+	streams.ErrPrintf("\n%s\n", ui.Success(fmt.Sprintf("CircleCI token validated and saved to %s", cfgPath)))
+	return nil
+}
+
+func validateCircleCIToken(ctx context.Context, token string) error {
+	cl, err := circleci.NewClientWithToken(token, os.Getenv("CIRCLECI_BASE_URL"))
+	if err != nil {
+		return err
+	}
+	if err := cl.GetCurrentUser(ctx); err != nil {
+		if httpcl.HasStatusCode(err, http.StatusTooManyRequests) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func newAuthLoginCmd() *cobra.Command {
