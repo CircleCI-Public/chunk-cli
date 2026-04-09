@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
@@ -67,7 +66,7 @@ func newSandboxListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client, err := circleci.NewClient()
+			client, err := newCircleCIClient()
 			if err != nil {
 				return err
 			}
@@ -103,7 +102,7 @@ func newSandboxCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			client, err := circleci.NewClient()
+			client, err := newCircleCIClient()
 			if err != nil {
 				return err
 			}
@@ -134,7 +133,7 @@ func newSandboxExecCmd() *cobra.Command {
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := circleci.NewClient()
+			client, err := newCircleCIClient()
 			if err != nil {
 				return err
 			}
@@ -173,7 +172,7 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 		Short: "Add an SSH public key to a sandbox",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := circleci.NewClient()
+			client, err := newCircleCIClient()
 			if err != nil {
 				return err
 			}
@@ -204,7 +203,7 @@ func newSandboxSSHCmd() *cobra.Command {
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			authSock := os.Getenv("SSH_AUTH_SOCK")
-			client, err := circleci.NewClient()
+			client, err := newCircleCIClient()
 			if err != nil {
 				return err
 			}
@@ -259,7 +258,7 @@ func newSandboxSyncCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			authSock := os.Getenv("SSH_AUTH_SOCK")
-			client, err := circleci.NewClient()
+			client, err := newCircleCIClient()
 			if err != nil {
 				return err
 			}
