@@ -96,8 +96,8 @@ Three-step pipeline orchestrated by `buildprompt.Run()`:
 
 ### Model defaults
 
-- Analysis step: `claude-sonnet-4-5-20250929`
-- Generation step: `claude-opus-4-5-20251101`
+- Analysis step: `claude-sonnet-4-6`
+- Generation step: `claude-opus-4-6`
 - Overridable via `--analyze-model` / `--prompt-model` flags
 
 ## Configuration Resolution
@@ -107,7 +107,7 @@ User config lives at `~/.chunk/config.json`:
 ```json
 {
   "apiKey": "sk-...",
-  "model": "claude-sonnet-4-5-20250929"
+  "model": "claude-sonnet-4-6"
 }
 ```
 

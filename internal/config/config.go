@@ -10,9 +10,9 @@ import (
 
 // Model constants define the Claude models used for different operations.
 const (
-	DefaultModel    = "claude-sonnet-4-5-20250929"
-	AnalyzeModel    = "claude-sonnet-4-5-20250929"
-	PromptModel     = "claude-opus-4-5-20251101"
+	DefaultModel    = "claude-sonnet-4-6"
+	AnalyzeModel    = "claude-sonnet-4-6"
+	PromptModel     = "claude-opus-4-6"
 	ValidationModel = "claude-haiku-4-5-20251001"
 	dirPermission   = 0o700
 	filePermission  = 0o600

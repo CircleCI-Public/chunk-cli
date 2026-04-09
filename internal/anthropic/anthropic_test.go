@@ -212,7 +212,7 @@ func TestAnalyzeReviews(t *testing.T) {
 	assert.Equal(t, len(reqs), 1)
 	var body messagesRequest
 	assert.NilError(t, json.Unmarshal(reqs[0].Body, &body))
-	assert.Equal(t, body.Model, "claude-sonnet-4-5-20250929") // config.AnalyzeModel
+	assert.Equal(t, body.Model, "claude-sonnet-4-6") // config.AnalyzeModel
 	assert.Equal(t, body.MaxTokens, 16000)
 }
 
@@ -245,7 +245,7 @@ func TestGenerateReviewPrompt(t *testing.T) {
 	assert.Equal(t, len(reqs), 1)
 	var body messagesRequest
 	assert.NilError(t, json.Unmarshal(reqs[0].Body, &body))
-	assert.Equal(t, body.Model, "claude-opus-4-5-20251101") // config.PromptModel
+	assert.Equal(t, body.Model, "claude-opus-4-6") // config.PromptModel
 	assert.Equal(t, body.MaxTokens, 8000)
 
 	// Verify the prompt includes the analysis and no-attribution instruction.
