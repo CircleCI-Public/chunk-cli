@@ -80,7 +80,7 @@ func TestCreate(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	sb, err := sandbox.Create(ctx, cl, "org-1", "my-sandbox", "ubuntu:22.04")
+	sb, err := sandbox.Create(ctx, cl, "org-1", "my-sandbox", "", "ubuntu:22.04")
 	assert.NilError(t, err)
 	assert.Equal(t, sb.ID, "sandbox-new-123")
 	assert.Equal(t, sb.Name, "my-sandbox")

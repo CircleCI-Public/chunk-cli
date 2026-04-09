@@ -48,10 +48,11 @@ func (c *Client) ListSandboxes(ctx context.Context, orgID string) ([]Sandbox, er
 	return resp.Items, nil
 }
 
-func (c *Client) CreateSandbox(ctx context.Context, orgID, name, image string) (*Sandbox, error) {
+func (c *Client) CreateSandbox(ctx context.Context, orgID, name, provider, image string) (*Sandbox, error) {
 	body := CreateSandboxRequest{
 		OrganizationID: orgID,
 		Name:           name,
+		Provider:       provider,
 		Image:          image,
 	}
 	var resp Sandbox

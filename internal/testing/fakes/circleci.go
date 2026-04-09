@@ -27,6 +27,7 @@ type Sandbox struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
 	OrganizationID string `json:"organization_id"`
+	Provider       string `json:"provider,omitempty"`
 	Image          string `json:"image,omitempty"`
 }
 
@@ -156,6 +157,7 @@ func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
 	var body struct {
 		OrganizationID string `json:"organization_id"`
 		Name           string `json:"name"`
+		Provider       string `json:"provider,omitempty"`
 		Image          string `json:"image,omitempty"`
 	}
 	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil {

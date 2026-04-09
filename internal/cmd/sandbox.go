@@ -92,7 +92,7 @@ func newSandboxListCmd() *cobra.Command {
 }
 
 func newSandboxCreateCmd() *cobra.Command {
-	var orgID, name, image string
+	var orgID, name, provider, image string
 
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -107,7 +107,7 @@ func newSandboxCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, image)
+			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, provider, image)
 			if err != nil {
 				return err
 			}
@@ -118,7 +118,8 @@ func newSandboxCreateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&name, "name", "", "Sandbox name")
-	cmd.Flags().StringVar(&image, "image", "", "Container image")
+	cmd.Flags().StringVar(&provider, "provider", "", `Sandbox provider ("unikraft" or "e2b")`)
+	cmd.Flags().StringVar(&image, "image", "", `Container image (unikraft) or E2B template ID (e2b)`)
 	_ = cmd.MarkFlagRequired("name")
 
 	return cmd

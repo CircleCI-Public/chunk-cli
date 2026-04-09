@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,6 +60,25 @@ func (c *sshConn) Close() error {
 	return err
 }
 
+// parseSSHAddr extracts host and port from a sandbox URL. The URL may be a
+// bare hostname, a host:port pair, or a full URL with scheme (e.g. e2b returns
+// "https://8000-<id>.e2b.app"). Falls back to defaultSSHPort when no port is present.
+func parseSSHAddr(raw string) (host, port string) {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		host = u.Hostname()
+		if p := u.Port(); p != "" {
+			return host, p
+		}
+		return host, strconv.Itoa(defaultSSHPort)
+	}
+	// Bare hostname or host:port without scheme.
+	h, p, err := net.SplitHostPort(raw)
+	if err != nil {
+		return raw, strconv.Itoa(defaultSSHPort)
+	}
+	return h, p
+}
+
 // dialSSH establishes an SSH client connection to the sandbox over TLS.
 // The caller must close the returned sshConn.
 func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
@@ -67,13 +87,9 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		return nil, err
 	}
 
-	// Parse host and port from session.URL. Production URLs are bare hostnames,
-	// but tests may include a port (e.g. "127.0.0.1:54321").
-	host, port, splitErr := net.SplitHostPort(session.URL)
-	if splitErr != nil {
-		host = session.URL
-		port = strconv.Itoa(defaultSSHPort)
-	}
+	// Parse host and port from session.URL. The URL may be a bare hostname,
+	// a host:port pair (e.g. tests), or a full URL with scheme (e.g. e2b).
+	host, port := parseSSHAddr(session.URL)
 	addr := net.JoinHostPort(host, port)
 
 	// TLS dial — self-signed cert on sandbox hosts, so skip verification.
