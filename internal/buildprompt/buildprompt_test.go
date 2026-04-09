@@ -55,8 +55,8 @@ func TestRunHappyPath(t *testing.T) {
 		Top:          5,
 		Since:        time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		OutputPath:   outputPath,
-		AnalyzeModel: "claude-sonnet-4-5-20250929",
-		PromptModel:  "claude-sonnet-4-5-20250929",
+		AnalyzeModel: "claude-sonnet-4-6",
+		PromptModel:  "claude-sonnet-4-6",
 	}, streams)
 	assert.NilError(t, err)
 
@@ -150,8 +150,8 @@ func TestRunSkipsRepoResolutionErrors(t *testing.T) {
 		Repos:        []string{"good-repo", "bad-repo"},
 		Top:          5,
 		OutputPath:   outputPath,
-		AnalyzeModel: "claude-sonnet-4-5-20250929",
-		PromptModel:  "claude-sonnet-4-5-20250929",
+		AnalyzeModel: "claude-sonnet-4-6",
+		PromptModel:  "claude-sonnet-4-6",
 	}, streams)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(stderr.String(), "Skipping bad-repo"))
@@ -188,8 +188,8 @@ func TestRunWithMaxComments(t *testing.T) {
 		Top:          5,
 		MaxComments:  1,
 		OutputPath:   outputPath,
-		AnalyzeModel: "claude-sonnet-4-5-20250929",
-		PromptModel:  "claude-sonnet-4-5-20250929",
+		AnalyzeModel: "claude-sonnet-4-6",
+		PromptModel:  "claude-sonnet-4-6",
 	}, streams)
 	assert.NilError(t, err)
 
@@ -232,8 +232,8 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 		Top:          5,
 		Since:        time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		OutputPath:   outputPath,
-		AnalyzeModel: "claude-sonnet-4-5-20250929",
-		PromptModel:  "claude-sonnet-4-5-20250929",
+		AnalyzeModel: "claude-sonnet-4-6",
+		PromptModel:  "claude-sonnet-4-6",
 	}, streams)
 	assert.NilError(t, err)
 

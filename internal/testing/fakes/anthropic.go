@@ -97,7 +97,7 @@ func (f *FakeAnthropic) handleMessages(c *gin.Context) {
 		"id":          fmt.Sprintf("msg_%03d", idx),
 		"type":        "message",
 		"role":        "assistant",
-		"model":       "claude-sonnet-4-5-20250929",
+		"model":       "claude-sonnet-4-6",
 		"stop_reason": "end_turn",
 		"content": []gin.H{
 			{"type": "text", "text": text},

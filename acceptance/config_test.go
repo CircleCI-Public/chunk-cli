@@ -35,7 +35,7 @@ func TestConfigShowDefaults(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "claude-sonnet-4-5-20250929"),
+	assert.Assert(t, strings.Contains(combined, "claude-sonnet-4-6"),
 		"expected default model value in config show, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "Default"),
 		"expected '(Default)' source annotation, got: %s", combined)

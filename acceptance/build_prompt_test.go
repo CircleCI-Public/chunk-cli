@@ -1070,22 +1070,22 @@ func TestBuildPromptDefaultModels(t *testing.T) {
 	messageReqs := filterByPath(anthropicReqs, "/v1/messages")
 	assert.Equal(t, len(messageReqs), 2, "expected 2 Anthropic /v1/messages requests")
 
-	// First request: analysis step uses AnalyzeModel (claude-sonnet-4-5-20250929)
+	// First request: analysis step uses AnalyzeModel (claude-sonnet-4-6)
 	var analysisBody struct {
 		Model string `json:"model"`
 	}
 	err := json.Unmarshal(messageReqs[0].Body, &analysisBody)
 	assert.NilError(t, err)
-	assert.Equal(t, analysisBody.Model, "claude-sonnet-4-5-20250929",
+	assert.Equal(t, analysisBody.Model, "claude-sonnet-4-6",
 		"expected default analyze model")
 
-	// Second request: prompt step uses PromptModel (claude-opus-4-5-20251101)
+	// Second request: prompt step uses PromptModel (claude-opus-4-6)
 	var promptBody struct {
 		Model string `json:"model"`
 	}
 	err = json.Unmarshal(messageReqs[1].Body, &promptBody)
 	assert.NilError(t, err)
-	assert.Equal(t, promptBody.Model, "claude-opus-4-5-20251101",
+	assert.Equal(t, promptBody.Model, "claude-opus-4-6",
 		"expected default prompt model")
 }
 
