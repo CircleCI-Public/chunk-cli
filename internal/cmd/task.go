@@ -38,7 +38,7 @@ func newTaskRunCmd() *cobra.Command {
 		Use:   "run",
 		Short: "Trigger a task run",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := circleci.NewClient()
+			client, err := newCircleCIClient()
 			if err != nil {
 				return err
 			}
@@ -99,7 +99,7 @@ func newTaskConfigCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			ctx := cmd.Context()
 
-			client, err := circleci.NewClient()
+			client, err := newCircleCIClient()
 			if err != nil {
 				return err
 			}

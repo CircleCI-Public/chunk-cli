@@ -18,7 +18,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-const apiKeySourceEnvVar = "Environment variable"
+const (
+	apiKeySourceEnvVar = "Environment variable"
+	providerCircleCI   = "circleci"
+	providerAnthropic  = "anthropic"
+)
 
 // ErrSilent is returned when a command has already reported its error to the user
 // and wants to exit non-zero without printing anything further.
@@ -30,26 +34,30 @@ func newAuthCmd() *cobra.Command {
 		Short: "Manage authentication",
 	}
 	cmd.AddCommand(newAuthSetCmd())
-	cmd.AddCommand(newAuthLoginCmd())
 	cmd.AddCommand(newAuthStatusCmd())
-	cmd.AddCommand(newAuthLogoutCmd())
+	cmd.AddCommand(newAuthRemoveCmd())
 	return cmd
 }
 
 func newAuthSetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:       "set <provider>",
-		Short:     "Store credentials for a provider",
-		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{"circleci"},
+		Use:       "set [provider]",
+		Short:     "Store credentials (default: circleci)",
+		Args:      cobra.MaximumNArgs(1),
+		ValidArgs: []string{"circleci", "anthropic"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			provider := args[0]
+			provider := providerCircleCI
+			if len(args) > 0 {
+				provider = args[0]
+			}
 			io := iostream.FromCmd(cmd)
 			switch provider {
-			case "circleci":
+			case providerCircleCI:
 				return authSetCircleCI(cmd.Context(), io)
+			case providerAnthropic:
+				return authSetAnthropic(cmd.Context(), io)
 			default:
-				return fmt.Errorf("unknown provider %q: valid providers are circleci", provider)
+				return fmt.Errorf("unknown provider %q: valid providers are circleci, anthropic", provider)
 			}
 		},
 	}
@@ -99,7 +107,66 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams) error {
 	return nil
 }
 
+func authSetAnthropic(ctx context.Context, io iostream.Streams) error {
+	io.Println("")
+	io.Println(ui.Bold("Chunk CLI - Anthropic API Key Setup"))
+	io.Println("")
+	io.Println("Enter your Anthropic API key (starts with sk-ant-).")
+	io.Println(ui.Dim("The key will be stored securely and never displayed."))
+	io.Println("")
+
+	rc := config.Resolve("", "")
+	if rc.APIKey != "" {
+		io.Printf("An API key is already configured (source: %s)\n", sourceLabel(rc.APIKeySource))
+		replace, err := tui.Confirm("Do you want to replace it?", false)
+		if err != nil {
+			return nil
+		}
+		if !replace {
+			io.Println("Keeping existing API key.")
+			return nil
+		}
+	}
+
+	key, err := tui.PromptHidden("API Key")
+	if err != nil {
+		return nil
+	}
+
+	key = strings.TrimSpace(key)
+	if key == "" {
+		io.ErrPrintln(ui.FormatError("API key cannot be empty.", "", "Get an API key from https://console.anthropic.com/"))
+		return ErrSilent
+	}
+
+	if !strings.HasPrefix(key, "sk-ant-") {
+		io.ErrPrintln(ui.FormatError("Invalid API key format.", "Keys should start with \"sk-ant-\".", "Get a valid API key from https://console.anthropic.com/"))
+		return ErrSilent
+	}
+
+	io.ErrPrintln(ui.Dim("Validating API key..."))
+	if err := validateAPIKey(ctx, key); err != nil {
+		io.ErrPrintln(ui.FormatError("API key validation failed.", "", "Check that your key is correct and has not been revoked."))
+		return ErrSilent
+	}
+
+	cfg, _ := config.Load()
+	cfg.APIKey = key
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("save API key: %w", err)
+	}
+
+	cfgPath, err := config.Path()
+	if err != nil {
+		return err
+	}
+	io.Printf("\n%s\n", ui.Success(fmt.Sprintf("API key validated and saved to %s", cfgPath)))
+	io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
+	return nil
+}
+
 // saveCircleCIToken validates and saves a CircleCI token to user config.
+// It prints status messages to streams and returns an error if anything fails.
 func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams) error {
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
 	if err := validateCircleCIToken(ctx, token); err != nil {
@@ -136,72 +203,190 @@ func validateCircleCIToken(ctx context.Context, token string) error {
 	return nil
 }
 
-func newAuthLoginCmd() *cobra.Command {
+func newAuthStatusCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "login",
-		Short: "Store API key for authentication",
+		Use:   "status",
+		Short: "Check authentication status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
 			io.Println("")
-			io.Println(ui.Bold("Chunk CLI - API Key Setup"))
-			io.Println("")
-			io.Println("Enter your Anthropic API key (starts with sk-ant-).")
-			io.Println(ui.Dim("The key will be stored securely and never displayed."))
+			io.Println(ui.Bold("Chunk CLI - Authentication Status"))
 			io.Println("")
 
-			// Check for existing key
 			rc := config.Resolve("", "")
-			if rc.APIKey != "" {
-				io.Printf("An API key is already configured (source: %s)\n",
-					sourceLabel(rc.APIKeySource))
-				replace, err := tui.Confirm("Do you want to replace it?", false)
-				if err != nil {
-					return nil
+
+			hasFailure := false
+
+			// CircleCI section
+			io.Println(ui.Bold("CircleCI"))
+			if rc.CircleCIToken == "" {
+				io.Println("  Not set")
+			} else {
+				io.Printf("  Source: %s\n", rc.CircleCITokenSource)
+				io.Printf("  Token:  %s\n", config.MaskAPIKey(rc.CircleCIToken))
+				io.ErrPrintln(ui.Dim("Validating CircleCI token..."))
+				if err := validateCircleCIToken(cmd.Context(), rc.CircleCIToken); err != nil {
+					io.ErrPrintln(ui.FormatError(
+						"CircleCI token validation failed.",
+						"",
+						"Run `chunk auth set circleci` to set a new token.",
+					))
+					hasFailure = true
+				} else {
+					io.Println(ui.Success("Valid"))
 				}
-				if !replace {
-					io.Println("Keeping existing API key.")
-					return nil
+			}
+			io.Println("")
+
+			// Anthropic section
+			io.Println(ui.Bold("Anthropic"))
+			if rc.APIKey == "" {
+				io.Println("  Not set")
+			} else {
+				io.Printf("  Source: %s\n", sourceLabel(rc.APIKeySource))
+				io.Printf("  Key:    %s\n", config.MaskAPIKey(rc.APIKey))
+				io.ErrPrintln(ui.Dim("Validating API key..."))
+				if err := validateAPIKey(cmd.Context(), rc.APIKey); err != nil {
+					io.ErrPrintln(ui.FormatError(
+						"API key validation failed.",
+						"The API key could not be validated with the Anthropic API.",
+						"Run `chunk auth set anthropic` to set a new key.",
+					))
+					hasFailure = true
+				} else {
+					io.Println(ui.Success("Valid"))
 				}
 			}
+			io.Println("")
 
-			key, err := tui.PromptHidden("API Key")
-			if err != nil {
-				return nil
+			// GitHub section
+			io.Println(ui.Bold("GitHub"))
+			if os.Getenv("GITHUB_TOKEN") != "" {
+				io.Println("  Set (via GITHUB_TOKEN)")
+			} else {
+				io.Println("  Not set")
 			}
+			io.Println("")
 
-			key = strings.TrimSpace(key)
-			if key == "" {
-				io.ErrPrintln(ui.FormatError("API key cannot be empty.", "", "Get an API key from https://console.anthropic.com/"))
-				os.Exit(2)
+			if hasFailure {
+				return ErrSilent
 			}
-
-			if !strings.HasPrefix(key, "sk-ant-") {
-				io.ErrPrintln(ui.FormatError("Invalid API key format.", "Keys should start with \"sk-ant-\".", "Get a valid API key from https://console.anthropic.com/"))
-				os.Exit(2)
-			}
-
-			io.ErrPrintln(ui.Dim("Validating API key..."))
-			if err := validateAPIKey(cmd.Context(), key); err != nil {
-				io.ErrPrintln(ui.FormatError("API key validation failed.", "", "Check that your key is correct and has not been revoked."))
-				os.Exit(2)
-			}
-
-			cfg, _ := config.Load()
-			cfg.APIKey = key
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("save API key: %w", err)
-			}
-
-			cfgPath, err := config.Path()
-			if err != nil {
-				return err
-			}
-			io.Printf("\n%s\n", ui.Success(fmt.Sprintf("API key validated and saved to %s", cfgPath)))
-			io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
 			return nil
 		},
 	}
+}
+
+func newAuthRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:       "remove <provider>",
+		Short:     "Remove stored credentials",
+		Args:      cobra.ExactArgs(1),
+		ValidArgs: []string{"circleci", "anthropic"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			provider := args[0]
+			io := iostream.FromCmd(cmd)
+			switch provider {
+			case providerCircleCI:
+				return authRemoveCircleCI(io)
+			case providerAnthropic:
+				return authRemoveAnthropic(io)
+			default:
+				return fmt.Errorf("unknown provider %q: valid providers are circleci, anthropic", provider)
+			}
+		},
+	}
+}
+
+func authRemoveCircleCI(io iostream.Streams) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.CircleCIToken == "" {
+		io.Println(ui.Warning("No CircleCI token stored in config file."))
+		if os.Getenv("CIRCLE_TOKEN") != "" || os.Getenv("CIRCLECI_TOKEN") != "" {
+			io.Println("Note: A CircleCI token is set in environment variables.")
+			io.Println("To remove it, unset the environment variable.")
+			io.Println("")
+		}
+		return nil
+	}
+
+	io.Println("")
+	cfgPath, err := config.Path()
+	if err != nil {
+		return err
+	}
+	io.Printf("This will remove your stored CircleCI token from %s\n", cfgPath)
+	confirmed, err := tui.Confirm("Are you sure?", false)
+	if err != nil || !confirmed {
+		io.Println("")
+		io.Println("Cancelled.")
+		io.Println("")
+		return nil
+	}
+
+	if err := config.ClearCircleCIToken(); err != nil {
+		hint := "Check file permissions on the chunk config file"
+		if errPath, pathErr := config.Path(); pathErr == nil {
+			hint = fmt.Sprintf("Check file permissions on %s", errPath)
+		}
+		io.ErrPrintln(ui.FormatError("Failed to remove CircleCI token.", "An error occurred while trying to remove the token from the config file.", hint))
+		return ErrSilent
+	}
+
+	io.Println(ui.Success("CircleCI token removed successfully."))
+	if os.Getenv("CIRCLE_TOKEN") != "" || os.Getenv("CIRCLECI_TOKEN") != "" {
+		io.Println(ui.Warning("Note: CIRCLE_TOKEN/CIRCLECI_TOKEN is still set in your environment variables."))
+	}
+	return nil
+}
+
+func authRemoveAnthropic(io iostream.Streams) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.APIKey == "" {
+		io.Println(ui.Warning("No API key stored in config file."))
+		if os.Getenv("ANTHROPIC_API_KEY") != "" {
+			io.Println("Note: ANTHROPIC_API_KEY is set in your environment variables.")
+			io.Println("To remove it, unset the environment variable.")
+			io.Println("")
+		}
+		return nil
+	}
+
+	io.Println("")
+	cfgPath, err := config.Path()
+	if err != nil {
+		return err
+	}
+	io.Printf("This will remove your stored API key from %s\n", cfgPath)
+	confirmed, err := tui.Confirm("Are you sure?", false)
+	if err != nil || !confirmed {
+		io.Println("")
+		io.Println("Cancelled.")
+		io.Println("")
+		return nil
+	}
+
+	if err := config.ClearAPIKey(); err != nil {
+		hint := "Check file permissions on the chunk config file"
+		if errPath, pathErr := config.Path(); pathErr == nil {
+			hint = fmt.Sprintf("Check file permissions on %s", errPath)
+		}
+		io.ErrPrintln(ui.FormatError(
+			"Failed to remove API key.",
+			"An error occurred while trying to remove the API key from the config file.",
+			hint,
+		))
+		return ErrSilent
+	}
+
+	io.Println(ui.Success("API key removed successfully."))
+	return nil
 }
 
 func validateAPIKey(ctx context.Context, apiKey string) error {
@@ -233,7 +418,6 @@ func validateAPIKey(ctx context.Context, apiKey string) error {
 		httpcl.Header("anthropic-version", "2023-06-01"),
 	))
 	if err != nil {
-		// Rate limit means the key is valid
 		if httpcl.HasStatusCode(err, http.StatusTooManyRequests) {
 			return nil
 		}
@@ -242,125 +426,9 @@ func validateAPIKey(ctx context.Context, apiKey string) error {
 	return nil
 }
 
-func newAuthStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Check authentication status",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			io := iostream.FromCmd(cmd)
-
-			io.Println("")
-			io.Println(ui.Bold("Chunk CLI - Authentication Status"))
-			io.Println("")
-
-			rc := config.Resolve("", "")
-
-			if rc.APIKey == "" {
-				io.Println(ui.Warning("Not authenticated"))
-				io.Println(ui.Dim("No API key found in config file or environment."))
-				io.Println("")
-				io.Println("To authenticate, run: chunk auth login")
-				io.Println("Or set the ANTHROPIC_API_KEY environment variable.")
-				io.Println("")
-				return nil
-			}
-
-			w := 15 // align to "API key source:"
-			switch rc.APIKeySource {
-			case "Config file (user config)":
-				cfgPath, err := config.Path()
-				if err != nil {
-					return err
-				}
-				io.Printf("%s Config file (%s)\n", ui.Label("API key source:", w), cfgPath)
-			case apiKeySourceEnvVar:
-				io.Printf("%s Environment variable (ANTHROPIC_API_KEY)\n", ui.Label("API key source:", w))
-			default:
-				io.Printf("%s %s\n", ui.Label("API key source:", w), rc.APIKeySource)
-			}
-			io.Printf("%s %s\n", ui.Label("API key:", w), config.MaskAPIKey(rc.APIKey))
-
-			io.ErrPrintln(ui.Yellow("Validating API key..."))
-
-			if err := validateAPIKey(cmd.Context(), rc.APIKey); err != nil {
-				io.ErrPrintln("")
-				io.ErrPrintln(ui.FormatError(
-					"API key validation failed.",
-					"The API key could not be validated with the Anthropic API.",
-					"Run `chunk auth login` to set a new key.",
-				))
-				os.Exit(1)
-			}
-
-			io.Println("")
-			io.Println(ui.Success("API key is valid"))
-			return nil
-		},
-	}
-}
-
-func newAuthLogoutCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "logout",
-		Short: "Remove stored credentials",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			io := iostream.FromCmd(cmd)
-			cfg, err := config.Load()
-			if err != nil {
-				return err
-			}
-			if cfg.APIKey == "" {
-				io.Println(ui.Warning("No API key stored in config file."))
-				if os.Getenv("ANTHROPIC_API_KEY") != "" {
-					io.Println("Note: ANTHROPIC_API_KEY is set in your environment variables.")
-					io.Println("To remove it, unset the environment variable.")
-					io.Println("")
-				}
-				return nil
-			}
-
-			io.Println("")
-			cfgPath, err := config.Path()
-			if err != nil {
-				return err
-			}
-			io.Printf("This will remove your stored API key from %s\n", cfgPath)
-			confirmed, err := tui.Confirm("Are you sure you want to logout?", false)
-			if err != nil {
-				io.Println("")
-				io.Println("Logout cancelled.")
-				io.Println("")
-				return nil
-			}
-			if !confirmed {
-				io.Println("")
-				io.Println("Logout cancelled.")
-				io.Println("")
-				return nil
-			}
-
-			if err := config.ClearAPIKey(); err != nil {
-				hint := "Check file permissions on the chunk config file"
-				if errPath, pathErr := config.Path(); pathErr == nil {
-					hint = fmt.Sprintf("Check file permissions on %s", errPath)
-				}
-				io.ErrPrintln(ui.FormatError(
-					"Failed to remove API key.",
-					"An error occurred while trying to remove the API key from the config file.",
-					hint,
-				))
-				os.Exit(2)
-			}
-
-			io.Println(ui.Success("API key removed successfully."))
-			return nil
-		},
-	}
-}
-
 func sourceLabel(source string) string {
 	switch source {
-	case "Config file (user config)":
+	case config.SourceConfigFile:
 		return "Config file"
 	case apiKeySourceEnvVar:
 		return apiKeySourceEnvVar

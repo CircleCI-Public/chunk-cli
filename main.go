@@ -41,7 +41,7 @@ func errorSuggestion(err error) string {
 	case strings.Contains(lower, "authentication") ||
 		strings.Contains(lower, "invalid api key") ||
 		strings.Contains(lower, "401"):
-		return "Hint: Run `chunk auth login` to set up your API key."
+		return "Hint: Run `chunk auth set` to set up your API key."
 	case strings.Contains(lower, "no such host") ||
 		strings.Contains(lower, "connection refused") ||
 		strings.Contains(lower, "network is unreachable") ||
