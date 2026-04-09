@@ -10,13 +10,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
+	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
@@ -52,7 +53,7 @@ type sshConn struct {
 
 func (c *sshConn) Close() error {
 	// ssh.Client.Close closes the underlying ssh.Conn, which in turn
-	// closes the TLS transport we passed to ssh.NewClientConn.
+	// closes the WebSocket transport we passed to ssh.NewClientConn.
 	err := c.Client.Close()
 	if c.cleanup != nil {
 		c.cleanup()
@@ -60,26 +61,41 @@ func (c *sshConn) Close() error {
 	return err
 }
 
-// parseSSHAddr extracts host and port from a sandbox URL. The URL may be a
-// bare hostname, a host:port pair, or a full URL with scheme (e.g. e2b returns
-// "https://8000-<id>.e2b.app"). Falls back to defaultSSHPort when no port is present.
-func parseSSHAddr(raw string) (host, port string) {
-	if u, err := url.Parse(raw); err == nil && u.Host != "" {
-		host = u.Hostname()
-		if p := u.Port(); p != "" {
-			return host, p
-		}
-		return host, strconv.Itoa(defaultSSHPort)
+// toWebSocketURL normalises a sandbox URL into a WebSocket URL with the
+// /ssh/tunnel path appended. It returns the normalised URL string and the
+// hostname (for SSH host key TOFU), avoiding a second url.Parse in the caller.
+//
+// The API may return bare hostnames, http://, or https:// URLs depending on
+// the provider (e.g. e2b returns "https://<host>"). This converts:
+//
+//	http://host  →  ws://host/ssh/tunnel
+//	https://host →  wss://host/ssh/tunnel
+//	ws://host    →  ws://host/ssh/tunnel
+//	wss://host   →  wss://host/ssh/tunnel
+func toWebSocketURL(raw string) (wsURL, host string, err error) {
+	// url.Parse rejects bare host:port strings (no scheme) with "first path
+	// segment cannot contain colon". Prepend ws:// so it parses correctly; the
+	// scheme will be overwritten below if an explicit one was already present.
+	if !strings.Contains(raw, "://") {
+		raw = "ws://" + raw
 	}
-	// Bare hostname or host:port without scheme.
-	h, p, err := net.SplitHostPort(raw)
+	u, err := url.Parse(raw)
 	if err != nil {
-		return raw, strconv.Itoa(defaultSSHPort)
+		return "", "", fmt.Errorf("parse URL: %w", err)
 	}
-	return h, p
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	if !strings.HasSuffix(u.Path, "/ssh/tunnel") {
+		u.Path = strings.TrimRight(u.Path, "/") + "/ssh/tunnel"
+	}
+	return u.String(), u.Hostname(), nil
 }
 
-// dialSSH establishes an SSH client connection to the sandbox over TLS.
+// dialSSH establishes an SSH client connection to the sandbox over a WebSocket tunnel.
 // The caller must close the returned sshConn.
 func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 	authMethod, cleanup, err := sshAuth(ctx, session)
@@ -87,30 +103,45 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		return nil, err
 	}
 
-	// Parse host and port from session.URL. The URL may be a bare hostname,
-	// a host:port pair (e.g. tests), or a full URL with scheme (e.g. e2b).
-	host, port := parseSSHAddr(session.URL)
-	addr := net.JoinHostPort(host, port)
-
-	// TLS dial — self-signed cert on sandbox hosts, so skip verification.
-	// Trust is established via SSH host key pinning (TOFU) below.
-	tlsConn, err := tls.Dial("tcp", addr, &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
-	})
+	wsURL, host, err := toWebSocketURL(session.URL)
 	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("TLS connect to %s: %w", addr, err)
+		return nil, fmt.Errorf("build tunnel URL: %w", err)
 	}
 
+	// Dial the WebSocket tunnel. For wss:// URLs, skip TLS verification since
+	// trust is established via SSH host key pinning (TOFU) below.
+	dialOpts := &websocket.DialOptions{}
+	if strings.HasPrefix(wsURL, "wss://") {
+		dialOpts.HTTPClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
+				},
+			},
+		}
+	}
+
+	wsConn, resp, err := websocket.Dial(ctx, wsURL, dialOpts)
+	if err != nil {
+		if resp != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+		cleanup()
+		return nil, fmt.Errorf("WebSocket connect to %s: %w", wsURL, err)
+	}
+
+	netConn := websocket.NetConn(ctx, wsConn, websocket.MessageBinary)
 	hostKeyCallback := tofuHostKeyCallback(session.KnownHosts, host)
 
-	conn, chans, reqs, err := ssh.NewClientConn(tlsConn, host, &ssh.ClientConfig{
+	conn, chans, reqs, err := ssh.NewClientConn(netConn, host, &ssh.ClientConfig{
 		User:            defaultSSHUser,
 		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: hostKeyCallback,
 	})
 	if err != nil {
-		_ = tlsConn.Close()
+		_ = netConn.Close()
 		cleanup()
 		return nil, fmt.Errorf("SSH handshake: %w", err)
 	}

@@ -2,28 +2,29 @@ package fakes
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/binary"
 	"encoding/pem"
-	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
-	"time"
 
+	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 )
 
-// SSHServer is a TLS+SSH server for testing SSH-based sandbox interactions.
+// SSHServer is a WebSocket+SSH server for testing SSH-based sandbox interactions.
 // It accepts a single authorized public key and records exec requests.
 type SSHServer struct {
-	listener net.Listener
+	srv      *httptest.Server
 	mu       sync.Mutex
 	stdout   string
 	exitCode int
@@ -67,20 +68,13 @@ func GenerateSSHKeypair(t *testing.T) (keyFile string, pubKey ssh.PublicKey) {
 	return keyPath, sshPub
 }
 
-// NewSSHServer starts a TLS+SSH server that accepts connections authenticated
-// with authorizedKey. The server is shut down automatically when the test ends.
+// NewSSHServer starts a WebSocket+SSH server that accepts connections
+// authenticated with authorizedKey. The server is shut down automatically
+// when the test ends.
 func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 	t.Helper()
 
-	tlsCert := generateSelfSignedCert(t)
 	hostSigner := generateHostKey(t)
-
-	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	sshCfg := &ssh.ServerConfig{
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
@@ -92,16 +86,31 @@ func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 	}
 	sshCfg.AddHostKey(hostSigner)
 
-	srv := &SSHServer{listener: listener}
-	go srv.serve(sshCfg)
-	t.Cleanup(func() { _ = listener.Close() })
+	srv := &SSHServer{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ssh/tunnel", func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Logf("websocket accept: %v", err)
+			return
+		}
+		// Use context.Background() so the SSH session outlives the HTTP handler.
+		conn := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
+		go srv.handleConn(conn, sshCfg)
+	})
+
+	srv.srv = httptest.NewServer(mux)
+	t.Cleanup(srv.srv.Close)
 
 	return srv
 }
 
 // Addr returns the "host:port" address the server is listening on.
+// sandbox.OpenSession stores this as Session.URL; toWebSocketURL converts it
+// to ws://host:port/ssh/tunnel before dialling.
 func (s *SSHServer) Addr() string {
-	return s.listener.Addr().String()
+	return strings.TrimPrefix(s.srv.URL, "http://")
 }
 
 // SetResult configures the stdout output and exit code returned for exec requests.
@@ -121,18 +130,8 @@ func (s *SSHServer) Commands() []string {
 	return out
 }
 
-func (s *SSHServer) serve(cfg *ssh.ServerConfig) {
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			return // listener closed
-		}
-		go s.handleConn(conn, cfg)
-	}
-}
-
 func (s *SSHServer) handleConn(conn net.Conn, cfg *ssh.ServerConfig) {
-	defer func() { _ = conn.Close() }()
+	defer conn.Close() //nolint:errcheck
 
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, cfg)
 	if err != nil {
@@ -159,7 +158,13 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 	defer func() { _ = ch.Close() }()
 
 	for req := range requests {
-		if req.Type != "exec" {
+		switch req.Type {
+		case "env":
+			_ = req.Reply(true, nil)
+			continue
+		case "exec":
+			// handled below
+		default:
 			if req.WantReply {
 				_ = req.Reply(false, nil)
 			}
@@ -190,50 +195,14 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		if req.WantReply {
 			_ = req.Reply(true, nil)
 		}
-
 		if stdout != "" {
 			_, _ = ch.Write([]byte(stdout))
 		}
-
 		exitPayload := make([]byte, 4)
 		binary.BigEndian.PutUint32(exitPayload, uint32(exitCode)) //nolint:gosec // exit codes are 0-255
 		_, _ = ch.SendRequest("exit-status", false, exitPayload)
 		return // one exec per session
 	}
-}
-
-func generateSelfSignedCert(t *testing.T) tls.Certificate {
-	t.Helper()
-
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cert, err := tls.X509KeyPair(
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cert
 }
 
 func generateHostKey(t *testing.T) ssh.Signer {
