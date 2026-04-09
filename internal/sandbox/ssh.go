@@ -122,8 +122,12 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		}
 	}
 
-	wsConn, _, err := websocket.Dial(ctx, wsURL, dialOpts)
+	wsConn, resp, err := websocket.Dial(ctx, wsURL, dialOpts)
 	if err != nil {
+		if resp != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
 		cleanup()
 		return nil, fmt.Errorf("WebSocket connect to %s: %w", wsURL, err)
 	}
