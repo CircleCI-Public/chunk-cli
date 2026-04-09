@@ -10,12 +10,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
+	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
@@ -51,7 +53,7 @@ type sshConn struct {
 
 func (c *sshConn) Close() error {
 	// ssh.Client.Close closes the underlying ssh.Conn, which in turn
-	// closes the TLS transport we passed to ssh.NewClientConn.
+	// closes the WebSocket transport we passed to ssh.NewClientConn.
 	err := c.Client.Close()
 	if c.cleanup != nil {
 		c.cleanup()
@@ -59,7 +61,7 @@ func (c *sshConn) Close() error {
 	return err
 }
 
-// dialSSH establishes an SSH client connection to the sandbox over TLS.
+// dialSSH establishes an SSH client connection to the sandbox over a WebSocket tunnel.
 // The caller must close the returned sshConn.
 func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 	authMethod, cleanup, err := sshAuth(ctx, session)
@@ -67,34 +69,43 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		return nil, err
 	}
 
-	// Parse host and port from session.URL. Production URLs are bare hostnames,
-	// but tests may include a port (e.g. "127.0.0.1:54321").
-	host, port, splitErr := net.SplitHostPort(session.URL)
-	if splitErr != nil {
-		host = session.URL
-		port = strconv.Itoa(defaultSSHPort)
-	}
-	addr := net.JoinHostPort(host, port)
-
-	// TLS dial — self-signed cert on sandbox hosts, so skip verification.
-	// Trust is established via SSH host key pinning (TOFU) below.
-	tlsConn, err := tls.Dial("tcp", addr, &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
-	})
+	// Parse host from WebSocket URL for SSH host key TOFU verification.
+	u, err := url.Parse(session.URL)
 	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("TLS connect to %s: %w", addr, err)
+		return nil, fmt.Errorf("parse tunnel URL: %w", err)
+	}
+	host := u.Hostname()
+
+	// Dial the WebSocket tunnel. For wss:// URLs, skip TLS verification since
+	// trust is established via SSH host key pinning (TOFU) below.
+	dialOpts := &websocket.DialOptions{}
+	if u.Scheme == "wss" {
+		dialOpts.HTTPClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
+				},
+			},
+		}
 	}
 
+	wsConn, _, err := websocket.Dial(ctx, session.URL, dialOpts)
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("WebSocket connect to %s: %w", session.URL, err)
+	}
+
+	netConn := websocket.NetConn(ctx, wsConn, websocket.MessageBinary)
 	hostKeyCallback := tofuHostKeyCallback(session.KnownHosts, host)
 
-	conn, chans, reqs, err := ssh.NewClientConn(tlsConn, host, &ssh.ClientConfig{
+	conn, chans, reqs, err := ssh.NewClientConn(netConn, host, &ssh.ClientConfig{
 		User:            defaultSSHUser,
 		Auth:            []ssh.AuthMethod{authMethod},
 		HostKeyCallback: hostKeyCallback,
 	})
 	if err != nil {
-		_ = tlsConn.Close()
+		_ = netConn.Close()
 		cleanup()
 		return nil, fmt.Errorf("SSH handshake: %w", err)
 	}
