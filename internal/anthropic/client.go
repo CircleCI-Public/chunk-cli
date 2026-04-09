@@ -37,7 +37,7 @@ func New() (*Client, error) {
 		AuthToken:  key,
 		AuthHeader: "x-api-key",
 		UserAgent:  "chunk-cli",
-		Timeout:    120 * time.Second,
+		Timeout:    5 * time.Minute,
 	})
 
 	return &Client{http: c}, nil
