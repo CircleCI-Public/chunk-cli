@@ -231,7 +231,7 @@ func TestInitDetectsTaskfileGoCommands(t *testing.T) {
 
 	cfg := readInitConfig(t, workDir)
 	names := commandNames(cfg)
-	assert.Assert(t, len(names) >= 3, "expected at least test, test-changed, lint, format; got: %v", names)
+	assert.Assert(t, len(names) == 3, "expected test, lint, format; got: %v", names)
 
 	test := commandByName(cfg, "test")
 	assert.Assert(t, test != nil, "expected test command")
@@ -245,10 +245,7 @@ func TestInitDetectsTaskfileGoCommands(t *testing.T) {
 	assert.Assert(t, format != nil, "expected format command")
 	assert.Equal(t, format["run"], "task fmt")
 
-	testChanged := commandByName(cfg, "test-changed")
-	assert.Assert(t, testChanged != nil, "expected test-changed command")
-	assert.Assert(t, strings.Contains(testChanged["run"].(string), "task test"),
-		"expected test-changed to use task test, got: %s", testChanged["run"])
+	assert.Assert(t, commandByName(cfg, "test-changed") == nil, "test-changed should not be detected")
 }
 
 func TestInitDetectsMakefileGoCommands(t *testing.T) {

@@ -42,7 +42,6 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 		if isGo {
 			return []config.Command{
 				{Name: "test", Run: "task test", Role: config.RoleGate, FileExt: ".go", Timeout: 300, Limit: 3},
-				{Name: "test-changed", Run: "task test -- {{CHANGED_PACKAGES}}", Role: config.RolePrecheck, FileExt: ".go", Timeout: 300, Limit: 3},
 				{Name: "lint", Run: "task lint", Role: config.RoleGate, FileExt: ".go", Timeout: 60, Limit: 3},
 				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Always: true, Timeout: 30, Limit: 3},
 			}, nil
