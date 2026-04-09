@@ -14,8 +14,8 @@ func List(ctx context.Context, client *circleci.Client, orgID string) ([]circlec
 	return client.ListSandboxes(ctx, orgID)
 }
 
-func Create(ctx context.Context, client *circleci.Client, orgID, name, image string) (*circleci.Sandbox, error) {
-	return client.CreateSandbox(ctx, orgID, name, image)
+func Create(ctx context.Context, client *circleci.Client, orgID, name, provider, image string) (*circleci.Sandbox, error) {
+	return client.CreateSandbox(ctx, orgID, name, provider, image)
 }
 
 func Exec(ctx context.Context, client *circleci.Client, sandboxID, command string, args []string) (*circleci.ExecResponse, error) {
