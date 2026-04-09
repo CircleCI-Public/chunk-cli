@@ -33,7 +33,7 @@ func TestToWebSocketURL(t *testing.T) {
 		{"https://host/already/has/path", "wss://host/already/has/path/ssh/tunnel"},
 	}
 	for _, tc := range cases {
-		got, err := toWebSocketURL(tc.in)
+		got, _, err := toWebSocketURL(tc.in)
 		assert.NilError(t, err, "input: %s", tc.in)
 		assert.Equal(t, got, tc.want, "input: %s", tc.in)
 	}

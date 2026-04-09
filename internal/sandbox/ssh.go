@@ -62,7 +62,8 @@ func (c *sshConn) Close() error {
 }
 
 // toWebSocketURL normalises a sandbox URL into a WebSocket URL with the
-// /ssh/tunnel path appended.
+// /ssh/tunnel path appended. It returns the normalised URL string and the
+// hostname (for SSH host key TOFU), avoiding a second url.Parse in the caller.
 //
 // The API may return bare hostnames, http://, or https:// URLs depending on
 // the provider (e.g. e2b returns "https://<host>"). This converts:
@@ -71,7 +72,7 @@ func (c *sshConn) Close() error {
 //	https://host →  wss://host/ssh/tunnel
 //	ws://host    →  ws://host/ssh/tunnel
 //	wss://host   →  wss://host/ssh/tunnel
-func toWebSocketURL(raw string) (string, error) {
+func toWebSocketURL(raw string) (wsURL, host string, err error) {
 	// url.Parse rejects bare host:port strings (no scheme) with "first path
 	// segment cannot contain colon". Prepend ws:// so it parses correctly; the
 	// scheme will be overwritten below if an explicit one was already present.
@@ -80,7 +81,7 @@ func toWebSocketURL(raw string) (string, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("parse URL: %w", err)
+		return "", "", fmt.Errorf("parse URL: %w", err)
 	}
 	switch u.Scheme {
 	case "http":
@@ -91,7 +92,7 @@ func toWebSocketURL(raw string) (string, error) {
 	if !strings.HasSuffix(u.Path, "/ssh/tunnel") {
 		u.Path = strings.TrimRight(u.Path, "/") + "/ssh/tunnel"
 	}
-	return u.String(), nil
+	return u.String(), u.Hostname(), nil
 }
 
 // dialSSH establishes an SSH client connection to the sandbox over a WebSocket tunnel.
@@ -102,23 +103,16 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		return nil, err
 	}
 
-	wsURL, err := toWebSocketURL(session.URL)
+	wsURL, host, err := toWebSocketURL(session.URL)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("build tunnel URL: %w", err)
 	}
 
-	u, err := url.Parse(wsURL)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("parse tunnel URL: %w", err)
-	}
-	host := u.Hostname()
-
 	// Dial the WebSocket tunnel. For wss:// URLs, skip TLS verification since
 	// trust is established via SSH host key pinning (TOFU) below.
 	dialOpts := &websocket.DialOptions{}
-	if u.Scheme == "wss" {
+	if strings.HasPrefix(wsURL, "wss://") {
 		dialOpts.HTTPClient = &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{

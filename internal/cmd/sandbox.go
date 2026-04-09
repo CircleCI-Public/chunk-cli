@@ -91,12 +91,21 @@ func newSandboxListCmd() *cobra.Command {
 	return cmd
 }
 
+const (
+	defaultProvider = "e2b"
+	providerEnvVar  = "CHUNK_SANDBOX_PROVIDER"
+)
+
 func newSandboxCreateCmd() *cobra.Command {
 	var orgID, name, image string
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a sandbox",
+		Long: `Create a sandbox.
+
+The sandbox backend defaults to e2b. Override with the CHUNK_SANDBOX_PROVIDER
+environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			resolvedOrgID, err := resolveOrgID(orgID)
@@ -107,7 +116,11 @@ func newSandboxCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, image)
+			provider := os.Getenv(providerEnvVar)
+			if provider == "" {
+				provider = defaultProvider
+			}
+			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, provider, image)
 			if err != nil {
 				return err
 			}
