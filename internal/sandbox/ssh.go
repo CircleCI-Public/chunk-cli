@@ -61,6 +61,39 @@ func (c *sshConn) Close() error {
 	return err
 }
 
+// toWebSocketURL normalises a sandbox URL into a WebSocket URL with the
+// /ssh/tunnel path appended.
+//
+// The API may return bare hostnames, http://, or https:// URLs depending on
+// the provider (e.g. e2b returns "https://<host>"). This converts:
+//
+//	http://host  →  ws://host/ssh/tunnel
+//	https://host →  wss://host/ssh/tunnel
+//	ws://host    →  ws://host/ssh/tunnel
+//	wss://host   →  wss://host/ssh/tunnel
+func toWebSocketURL(raw string) (string, error) {
+	// url.Parse rejects bare host:port strings (no scheme) with "first path
+	// segment cannot contain colon". Prepend ws:// so it parses correctly; the
+	// scheme will be overwritten below if an explicit one was already present.
+	if !strings.Contains(raw, "://") {
+		raw = "ws://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse URL: %w", err)
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	if !strings.HasSuffix(u.Path, "/ssh/tunnel") {
+		u.Path = strings.TrimRight(u.Path, "/") + "/ssh/tunnel"
+	}
+	return u.String(), nil
+}
+
 // dialSSH establishes an SSH client connection to the sandbox over a WebSocket tunnel.
 // The caller must close the returned sshConn.
 func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
@@ -69,8 +102,13 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		return nil, err
 	}
 
-	// Parse host from WebSocket URL for SSH host key TOFU verification.
-	u, err := url.Parse(session.URL)
+	wsURL, err := toWebSocketURL(session.URL)
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("build tunnel URL: %w", err)
+	}
+
+	u, err := url.Parse(wsURL)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("parse tunnel URL: %w", err)
@@ -90,10 +128,10 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		}
 	}
 
-	wsConn, _, err := websocket.Dial(ctx, session.URL, dialOpts)
+	wsConn, _, err := websocket.Dial(ctx, wsURL, dialOpts)
 	if err != nil {
 		cleanup()
-		return nil, fmt.Errorf("WebSocket connect to %s: %w", session.URL, err)
+		return nil, fmt.Errorf("WebSocket connect to %s: %w", wsURL, err)
 	}
 
 	netConn := websocket.NetConn(ctx, wsConn, websocket.MessageBinary)

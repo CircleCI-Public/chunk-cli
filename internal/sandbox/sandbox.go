@@ -14,7 +14,17 @@ func List(ctx context.Context, client *circleci.Client, orgID string) ([]circlec
 	return client.ListSandboxes(ctx, orgID)
 }
 
-func Create(ctx context.Context, client *circleci.Client, orgID, name, provider, image string) (*circleci.Sandbox, error) {
+const defaultProvider = "e2b"
+
+// providerEnvVar is the environment variable users can set to override the
+// sandbox backend. Defaults to "e2b" when unset.
+const providerEnvVar = "CHUNK_SANDBOX_PROVIDER"
+
+func Create(ctx context.Context, client *circleci.Client, orgID, name, image string) (*circleci.Sandbox, error) {
+	provider := os.Getenv(providerEnvVar)
+	if provider == "" {
+		provider = defaultProvider
+	}
 	return client.CreateSandbox(ctx, orgID, name, provider, image)
 }
 
