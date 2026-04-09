@@ -73,6 +73,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	}
 
 	// Existing endpoints
+	r.GET("/api/v2/me", f.handleGetCurrentUser)
 	r.GET("/api/v2/me/collaborations", f.handleCollaborations)
 	r.GET("/api/v1.1/projects", f.handleProjects)
 
@@ -86,6 +87,13 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
 
 	return f
+}
+
+func (f *FakeCircleCI) handleGetCurrentUser(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": "user-123", "login": "testuser"})
 }
 
 func (f *FakeCircleCI) requireToken(c *gin.Context) bool {

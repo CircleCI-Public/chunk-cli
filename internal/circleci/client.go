@@ -19,10 +19,14 @@ func NewClient() (*Client, error) {
 		token = os.Getenv("CIRCLECI_TOKEN")
 	}
 	if token == "" {
-		return nil, fmt.Errorf("CIRCLE_TOKEN or CIRCLECI_TOKEN environment variable is required")
+		return nil, fmt.Errorf("circleci token not found: set CIRCLE_TOKEN or run 'chunk auth set'")
 	}
+	return NewClientWithToken(token, os.Getenv("CIRCLECI_BASE_URL"))
+}
 
-	baseURL := os.Getenv("CIRCLECI_BASE_URL")
+// NewClientWithToken creates a Client using the provided token and base URL.
+// If baseURL is empty it defaults to "https://circleci.com".
+func NewClientWithToken(token, baseURL string) (*Client, error) {
 	if baseURL == "" {
 		baseURL = "https://circleci.com"
 	}
@@ -34,6 +38,12 @@ func NewClient() (*Client, error) {
 	})
 
 	return &Client{cl: cl}, nil
+}
+
+// GetCurrentUser calls GET /api/v2/me to validate the token.
+func (c *Client) GetCurrentUser(ctx context.Context) error {
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v2/me"))
+	return err
 }
 
 func (c *Client) ListSandboxes(ctx context.Context, orgID string) ([]Sandbox, error) {
