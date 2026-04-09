@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
@@ -92,7 +91,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if sandboxID != "" {
-				client, err := circleci.NewClient()
+				client, err := newCircleCIClient()
 				if err != nil {
 					return err
 				}

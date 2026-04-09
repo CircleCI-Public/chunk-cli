@@ -7,8 +7,9 @@ Complete command reference for the `chunk` CLI.
 ```
 chunk
 ├── auth
-│   ├── status                      # Check authentication status
-│   └── logout                      # Clear stored API key
+│   ├── set [provider]              # Store credential (default: circleci)
+│   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
+│   └── remove <provider>           # Remove stored credential (circleci | anthropic)
 │
 ├── build-prompt                    # Mine PR comments → analyze → generate prompt
 │   --org <org>                     # GitHub org (auto-detected from git remote)
@@ -96,7 +97,7 @@ chunk
 - `build-prompt --since` defaults to 3 months before the current date.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
-- `config set` accepts only `model` and `apiKey` as keys.
+- `config set` accepts `model`, `apiKey`, and `circleCIToken` as keys.
 - `chunk init` uses Claude to auto-detect the test command for the project.
 - `validate --check`, `--no-check`, `--task`, and `--sync` flags activate hook
   mode for IDE lifecycle integration. See **[docs/HOOKS.md](HOOKS.md)**.

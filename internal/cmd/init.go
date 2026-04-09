@@ -3,15 +3,16 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -23,7 +24,7 @@ import (
 // pickCircleCIOrg prompts the user to select a CircleCI organization.
 // Returns the selected org ID and name, or empty strings if selection is skipped.
 func pickCircleCIOrg(ctx context.Context, streams iostream.Streams) (orgID, orgName string) {
-	client, err := circleci.NewClient()
+	client, err := newCircleCIClient()
 	if err != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping CircleCI setup: %v", err)))
 		return "", ""
@@ -205,8 +206,27 @@ commands, and generates hook config files.`,
 				streams.ErrPrintf("Detected repository: %s\n", ui.Bold(fmt.Sprintf("%s/%s", org, repo)))
 			}
 
-			// Step 2: CircleCI org picker
+			// Step 2: CircleCI token prompt + org picker
 			if !skipCircleCI {
+				rc := config.Resolve("", "")
+				if rc.CircleCIToken == "" {
+					streams.ErrPrintln("A CircleCI token is needed for task runs and sandboxes.")
+					streams.ErrPrintln(ui.Dim("Create one at https://app.circleci.com/settings/user/tokens"))
+					token, err := tui.PromptHidden("CircleCI Token (press Enter to skip)")
+					if errors.Is(err, tui.ErrNoTTY) {
+						streams.ErrPrintf("%s\n", ui.Warning("No CircleCI token configured. Set CIRCLE_TOKEN or run 'chunk auth set'."))
+					} else if err == nil {
+						token = strings.TrimSpace(token)
+						if token != "" {
+							if saveErr := saveCircleCIToken(ctx, token, streams); saveErr != nil {
+								streams.ErrPrintf("%s\n", ui.Warning("Skipping CircleCI setup due to token error."))
+							}
+						} else {
+							streams.ErrPrintln(ui.Dim("Skipping CircleCI token setup."))
+						}
+					}
+				}
+
 				if orgID, orgName := pickCircleCIOrg(ctx, streams); orgID != "" {
 					cfg.CircleCI = &config.CircleCIConfig{OrgID: orgID}
 					streams.ErrPrintf("Selected organization: %s\n", ui.Bold(orgName))
