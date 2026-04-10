@@ -97,7 +97,7 @@ chunk
 - `build-prompt --since` defaults to 3 months before the current date.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
-- `config set` accepts `model`, `apiKey`, and `circleCIToken` as keys.
+- `config set` accepts only `model` and `apiKey` as keys.
 - `chunk init` uses Claude to auto-detect the test command for the project.
 - `validate --check`, `--no-check`, `--task`, and `--sync` flags activate hook
   mode for IDE lifecycle integration. See **[docs/HOOKS.md](HOOKS.md)**.
