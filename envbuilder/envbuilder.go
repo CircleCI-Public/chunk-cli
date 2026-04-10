@@ -39,14 +39,31 @@ const (
 	toolPytest  = "pytest"
 )
 
+// Step is a named shell command in the environment setup sequence.
+type Step struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+}
+
 // Environment describes the detected tech stack and build configuration for a repository.
 type Environment struct {
-	Stack        string   `json:"stack"`
-	Install      string   `json:"install"`
-	Test         string   `json:"test"`
-	SystemDeps   []string `json:"system_deps"`
-	Image        string   `json:"image"`
-	ImageVersion string   `json:"image_version"`
+	Stack        string `json:"stack"`
+	Steps        []Step `json:"steps"`
+	Test         string `json:"test"`
+	Image        string `json:"image"`
+	ImageVersion string `json:"image_version"`
+}
+
+// ResolvedImage returns the fully qualified image string (image:version),
+// or an empty string if no image was detected.
+func (e *Environment) ResolvedImage() string {
+	if e.Image == "" {
+		return ""
+	}
+	if e.ImageVersion != "" {
+		return e.Image + ":" + e.ImageVersion
+	}
+	return e.Image
 }
 
 func fileExists(dir, name string) bool {
@@ -432,23 +449,64 @@ var extraDepInstalls = map[string]string{
 	"openjdk-17": "ARCH=$(uname -m) && case \"$ARCH\" in x86_64) JDK_ARCH=x64 ;; aarch64) JDK_ARCH=aarch64 ;; *) echo \"Unsupported arch: $ARCH\" && exit 1 ;; esac && curl -fsSL \"https://api.adoptium.net/v3/binary/latest/17/ga/linux/${JDK_ARCH}/jdk/hotspot/normal/eclipse\" -o /tmp/jdk17.tar.gz && sudo mkdir -p /usr/lib/jvm/java-17-temurin && sudo tar -xzf /tmp/jdk17.tar.gz -C /usr/lib/jvm/java-17-temurin --strip-components=1 && rm /tmp/jdk17.tar.gz",
 }
 
+// addCimgSudo rewrites an install command for cimg/* images, which run as a
+// non-root user (circleci) and therefore require sudo for system-level writes.
+func addCimgSudo(cmd string) string {
+	cmd = strings.ReplaceAll(cmd, "apt-get", "sudo apt-get")
+	cmd = strings.ReplaceAll(cmd, "rm -rf /var/lib/apt/lists/*", "sudo rm -rf /var/lib/apt/lists/*")
+	cmd = strings.ReplaceAll(cmd, "locale-gen", "sudo locale-gen")
+	cmd = strings.ReplaceAll(cmd, "update-locale", "sudo update-locale")
+	return cmd
+}
+
+// buildSteps converts systemDeps and an install command into an ordered []Step.
+// cimg sudo substitution is applied here so that Steps carry fully-resolved
+// commands regardless of which consumer (Dockerfile, JSON, etc.) uses them.
+func buildSteps(systemDeps []string, install, image string) []Step {
+	var steps []Step
+	for _, dep := range systemDeps {
+		if cmd, ok := extraDepInstalls[dep]; ok {
+			if strings.HasPrefix(image, cimgPrefix) {
+				cmd = addCimgSudo(cmd)
+			}
+			steps = append(steps, Step{Name: dep, Command: cmd})
+		}
+	}
+	if install != "" {
+		steps = append(steps, Step{Name: "install", Command: install})
+	}
+	return steps
+}
+
+// installCommand returns the command for the "install" step, or "" if absent.
+func (e *Environment) installCommand() string {
+	for _, s := range e.Steps {
+		if s.Name == "install" {
+			return s.Command
+		}
+	}
+	return ""
+}
+
+// systemDepSteps returns all steps that are not the "install" step.
+func (e *Environment) systemDepSteps() []Step {
+	var out []Step
+	for _, s := range e.Steps {
+		if s.Name != "install" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // dockerfileContent generates the Dockerfile.test content for the given environment.
 func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	var sb strings.Builder
 
 	sb.WriteString("FROM " + env.Image + ":" + env.ImageVersion + "\n")
 
-	for _, dep := range env.SystemDeps {
-		if cmd, ok := extraDepInstalls[dep]; ok {
-			// cimg/* images run as a non-root user (circleci), so apt-get requires sudo.
-			if strings.HasPrefix(env.Image, cimgPrefix) {
-				cmd = strings.ReplaceAll(cmd, "apt-get", "sudo apt-get")
-				cmd = strings.ReplaceAll(cmd, "rm -rf /var/lib/apt/lists/*", "sudo rm -rf /var/lib/apt/lists/*")
-				cmd = strings.ReplaceAll(cmd, "locale-gen", "sudo locale-gen")
-				cmd = strings.ReplaceAll(cmd, "update-locale", "sudo update-locale")
-			}
-			sb.WriteString("\nRUN " + cmd + "\n")
-		}
+	for _, step := range env.systemDepSteps() {
+		sb.WriteString("\nRUN " + step.Command + "\n")
 	}
 
 	// When a Python project has Rust workspace members (e.g. maturin extensions like
@@ -513,7 +571,7 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 			chown = "--chown=circleci:circleci "
 		}
 		sb.WriteString("COPY " + chown + "go.mod go.sum ./\n")
-		sb.WriteString("RUN " + env.Install + "\n")
+		sb.WriteString("RUN " + env.installCommand() + "\n")
 		sb.WriteString("\nCOPY " + chown + ". .\n")
 	case stackRuby:
 		// Use the split-COPY pattern (mirrors the Go approach) to avoid
@@ -553,7 +611,7 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		if hasGemspec && fileExists(dir, "lib") {
 			sb.WriteString("COPY " + chown + "lib/ lib/\n")
 		}
-		sb.WriteString("RUN " + env.Install + "\n")
+		sb.WriteString("RUN " + env.installCommand() + "\n")
 		sb.WriteString("\nCOPY " + chown + ". .\n")
 	default:
 		if strings.HasPrefix(env.Image, cimgPrefix) {
@@ -607,14 +665,14 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	// cache under ~/.gradle/wrapper/dists/, but /home/circleci may not be
 	// writable in the Docker build context.  Redirect GRADLE_USER_HOME to
 	// /tmp so the wrapper can always unpack and lock its distribution files.
-	if env.Stack == stackJava && strings.Contains(env.Install, "gradlew") {
+	if env.Stack == stackJava && strings.Contains(env.installCommand(), "gradlew") {
 		sb.WriteString("\nENV GRADLE_USER_HOME=/tmp/.gradle\n")
 	}
 
 	// Go and Ruby already emitted their install steps inside the split-COPY
 	// block above.
 	if env.Stack != stackGo && env.Stack != stackRuby {
-		sb.WriteString("\nRUN " + env.Install + "\n")
+		sb.WriteString("\nRUN " + env.installCommand() + "\n")
 	}
 
 	// Elixir-specific fixups applied after deps are fetched:
@@ -1932,9 +1990,8 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 
 	return &Environment{
 		Stack:        stack,
-		Install:      install,
+		Steps:        buildSteps(systemDeps, install, image),
 		Test:         test,
-		SystemDeps:   systemDeps,
 		Image:        image,
 		ImageVersion: imageVersion,
 	}, nil

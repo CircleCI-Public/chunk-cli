@@ -17,6 +17,26 @@ import (
 
 // --- pure function tests ---
 
+func TestResolvedImage(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		env  Environment
+		want string
+	}{
+		{"empty", Environment{}, ""},
+		{"image only", Environment{Image: "ubuntu"}, "ubuntu"},
+		{"image with version", Environment{Image: "ubuntu", ImageVersion: "22.04"}, "ubuntu:22.04"},
+		{"version without image", Environment{ImageVersion: "22.04"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.env.ResolvedImage(), tc.want)
+		})
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -742,7 +762,7 @@ func TestDockerfileContent(t *testing.T) {
 		writeFile(t, dir, "go.mod", "module github.com/foo/bar\n\ngo 1.22\n")
 		env := &Environment{
 			Stack:        stackGo,
-			Install:      "go mod download",
+			Steps:        []Step{{Name: "install", Command: "go mod download"}},
 			Test:         "go test ./...",
 			Image:        "cimg/go",
 			ImageVersion: "1.22.3",
@@ -763,7 +783,7 @@ func TestDockerfileContent(t *testing.T) {
 		t.Parallel()
 		env := &Environment{
 			Stack:        stackPython,
-			Install:      "pip install -r requirements.txt",
+			Steps:        []Step{{Name: "install", Command: "pip install -r requirements.txt"}},
 			Test:         "pytest",
 			Image:        "python",
 			ImageVersion: "3.12.0",
@@ -777,10 +797,12 @@ func TestDockerfileContent(t *testing.T) {
 	t.Run("system dep injects RUN", func(t *testing.T) {
 		t.Parallel()
 		env := &Environment{
-			Stack:        stackPython,
-			Install:      "pip install uv",
+			Stack: stackPython,
+			Steps: []Step{
+				{Name: "uv", Command: "pip install uv"},
+				{Name: "install", Command: "uv sync"},
+			},
 			Test:         "uv run pytest",
-			SystemDeps:   []string{"uv"},
 			Image:        "cimg/python",
 			ImageVersion: "3.12.0",
 		}
@@ -798,7 +820,7 @@ members = ["crates/mypkg"]
 		writeFile(t, dir, "crates/mypkg/Cargo.toml", `[package]\nname="mypkg"\n`)
 		env := &Environment{
 			Stack:        stackPython,
-			Install:      "uv sync",
+			Steps:        []Step{{Name: "install", Command: "uv sync"}},
 			Test:         "uv run pytest",
 			Image:        "cimg/python",
 			ImageVersion: "3.12.0",
@@ -811,15 +833,65 @@ members = ["crates/mypkg"]
 	t.Run("sudo apt-get for cimg system deps", func(t *testing.T) {
 		t.Parallel()
 		env := &Environment{
-			Stack:        stackGo,
-			Install:      "go mod download",
+			Stack: stackGo,
+			Steps: []Step{
+				{Name: "git", Command: addCimgSudo(extraDepInstalls["git"])},
+				{Name: "install", Command: "go mod download"},
+			},
 			Test:         "go test ./...",
-			SystemDeps:   []string{"git"},
 			Image:        "cimg/go",
 			ImageVersion: "1.22.0",
 		}
 		content := dockerfileContent(t.TempDir(), env)
 		assertContains(t, content, "sudo apt-get")
+	})
+}
+
+func TestBuildSteps(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no deps no install", func(t *testing.T) {
+		t.Parallel()
+		steps := buildSteps(nil, "", "cimg/go")
+		assert.Equal(t, len(steps), 0)
+	})
+
+	t.Run("install only", func(t *testing.T) {
+		t.Parallel()
+		steps := buildSteps(nil, "cargo fetch", "cimg/rust")
+		assert.Equal(t, len(steps), 1)
+		assert.Equal(t, steps[0].Name, "install")
+		assert.Equal(t, steps[0].Command, "cargo fetch")
+	})
+
+	t.Run("known dep produces step", func(t *testing.T) {
+		t.Parallel()
+		steps := buildSteps([]string{"uv"}, "uv sync", "python")
+		assert.Equal(t, len(steps), 2)
+		assert.Equal(t, steps[0].Name, "uv")
+		assert.Equal(t, steps[0].Command, "pip install uv")
+		assert.Equal(t, steps[1].Name, "install")
+	})
+
+	t.Run("unknown dep is skipped", func(t *testing.T) {
+		t.Parallel()
+		steps := buildSteps([]string{"go", "python"}, "go mod download", "cimg/go")
+		assert.Equal(t, len(steps), 1) // only install, no step for "go" or "python"
+		assert.Equal(t, steps[0].Name, "install")
+	})
+
+	t.Run("cimg image adds sudo to apt-get commands", func(t *testing.T) {
+		t.Parallel()
+		steps := buildSteps([]string{"git"}, "go mod download", "cimg/go")
+		assert.Equal(t, len(steps), 2)
+		assert.Assert(t, strings.Contains(steps[0].Command, "sudo apt-get"), "expected sudo apt-get in %q", steps[0].Command)
+	})
+
+	t.Run("non-cimg image does not add sudo", func(t *testing.T) {
+		t.Parallel()
+		steps := buildSteps([]string{"git"}, "go mod download", "golang")
+		assert.Equal(t, len(steps), 2)
+		assert.Assert(t, !strings.Contains(steps[0].Command, "sudo apt-get"), "unexpected sudo apt-get in %q", steps[0].Command)
 	})
 }
 

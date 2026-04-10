@@ -5,11 +5,11 @@
     "ref": "7ef2946fb5151b745df30201b8c27790cac53875",
     "env": {
       "stack": "python",
-      "install": "uv sync --no-default-groups --group pre-commit --group tests --group dev --group gha-update --extra async --extra dotenv",
-      "test": "uv run pytest",
-      "system_deps": [
-        "uv"
+      "steps": [
+        {"name": "uv", "command": "pip install uv"},
+        {"name": "install", "command": "uv sync --no-default-groups --group pre-commit --group tests --group dev --group gha-update --extra async --extra dotenv"}
       ],
+      "test": "uv run pytest",
       "image": "cimg/python",
       "image_version": "3.14.3"
     }
@@ -20,9 +20,10 @@
     "ref": "fa7da4a93567ed347ad0735c28e439fca688ef26",
     "env": {
       "stack": "rust",
-      "install": "cargo fetch",
+      "steps": [
+        {"name": "install", "command": "cargo fetch"}
+      ],
       "test": "cargo test --workspace --exclude serde --exclude serde_core --exclude serde_test_suite",
-      "system_deps": [],
       "image": "cimg/rust",
       "image_version": "1.94.1"
     }
@@ -33,12 +34,11 @@
     "ref": "1fa9b7a0a994b006b3be00e2df9de778e71e6807",
     "env": {
       "stack": "java",
-      "install": "mvn install -DskipTests -pl '!test-jpms,!test-graal-native-image,!test-shrinker' --also-make",
-      "test": "mvn test -pl '!test-jpms,!test-graal-native-image,!test-shrinker' --also-make",
-      "system_deps": [
-        "java",
-        "mvn"
+      "steps": [
+        {"name": "mvn", "command": "curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | sudo tar -xz -C /opt && sudo ln -s /opt/apache-maven-3.9.6/bin/mvn /usr/local/bin/mvn"},
+        {"name": "install", "command": "mvn install -DskipTests -pl '!test-jpms,!test-graal-native-image,!test-shrinker' --also-make"}
       ],
+      "test": "mvn test -pl '!test-jpms,!test-graal-native-image,!test-shrinker' --also-make",
       "image": "cimg/openjdk",
       "image_version": "21.0.9"
     }
@@ -49,12 +49,11 @@
     "ref": "c7805073fef5b6b8857307c3d4b3597a70613bc2",
     "env": {
       "stack": "typescript",
-      "install": "pnpm install",
-      "test": "pnpm test",
-      "system_deps": [
-        "node",
-        "pnpm"
+      "steps": [
+        {"name": "pnpm", "command": "sudo npm install -g pnpm"},
+        {"name": "install", "command": "pnpm install"}
       ],
+      "test": "pnpm test",
       "image": "cimg/node",
       "image_version": "25.8.2"
     }
@@ -65,12 +64,11 @@
     "ref": "a17e3ac882581ddf4503a27762b355b7c7961eb2",
     "env": {
       "stack": "go",
-      "install": "go mod download",
-      "test": "go test -p 1 ./...",
-      "system_deps": [
-        "go",
-        "git"
+      "steps": [
+        {"name": "git", "command": "sudo apt-get update && sudo apt-get install -y git --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"},
+        {"name": "install", "command": "go mod download"}
       ],
+      "test": "go test -p 1 ./...",
       "image": "cimg/go",
       "image_version": "1.23.12"
     }
@@ -81,11 +79,11 @@
     "ref": "ac249284616890d91c746dc890fb0f6407df2843",
     "env": {
       "stack": "python",
-      "install": "uv sync --no-default-groups --group testing-extra --group dev --extra email --extra timezone && uv sync --package pydantic_core --no-default-groups --group testing-extra",
-      "test": "uv run pytest",
-      "system_deps": [
-        "uv"
+      "steps": [
+        {"name": "uv", "command": "pip install uv"},
+        {"name": "install", "command": "uv sync --no-default-groups --group testing-extra --group dev --extra email --extra timezone && uv sync --package pydantic_core --no-default-groups --group testing-extra"}
       ],
+      "test": "uv run pytest",
       "image": "cimg/python",
       "image_version": "3.14.3"
     }
@@ -96,12 +94,10 @@
     "ref": "9e969ddc31863a5c353b3f4e8f69d2aca05e36ae",
     "env": {
       "stack": "python",
-      "install": "pip install -e \".[colorama,uvloop,d,jupyter]\" && pip install \"coverage>=5.3\" \"pytest-cov>=4.1.0\" \"pytest>=7\" \"pytest-xdist>=3.0.2\"",
-      "test": "pytest",
-      "system_deps": [
-        "python",
-        "pip"
+      "steps": [
+        {"name": "install", "command": "pip install -e \".[colorama,uvloop,d,jupyter]\" && pip install \"coverage>=5.3\" \"pytest-cov>=4.1.0\" \"pytest>=7\" \"pytest-xdist>=3.0.2\""}
       ],
+      "test": "pytest",
       "image": "cimg/python",
       "image_version": "3.13.12"
     }
@@ -112,12 +108,11 @@
     "ref": "816eaa1d8b0ab1f5d16b671337dbb447e3845ce0",
     "env": {
       "stack": "java",
-      "install": "mvn install -DskipTests -pl '!guava-gwt' --also-make",
-      "test": "mvn test -pl '!guava-gwt' --also-make",
-      "system_deps": [
-        "java",
-        "mvn"
+      "steps": [
+        {"name": "mvn", "command": "curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | sudo tar -xz -C /opt && sudo ln -s /opt/apache-maven-3.9.6/bin/mvn /usr/local/bin/mvn"},
+        {"name": "install", "command": "mvn install -DskipTests -pl '!guava-gwt' --also-make"}
       ],
+      "test": "mvn test -pl '!guava-gwt' --also-make",
       "image": "cimg/openjdk",
       "image_version": "25.0.1"
     }
@@ -128,12 +123,11 @@
     "ref": "c15b37f81ba5f5abea8c872b0189a70b150df4cb",
     "env": {
       "stack": "typescript",
-      "install": "yarn install",
-      "test": "yarn workspace @rxjs/observable test",
-      "system_deps": [
-        "node",
-        "yarn"
+      "steps": [
+        {"name": "yarn", "command": "sudo npm install -g yarn"},
+        {"name": "install", "command": "yarn install"}
       ],
+      "test": "yarn workspace @rxjs/observable test",
       "image": "cimg/node",
       "image_version": "20.20.2"
     }
@@ -144,9 +138,10 @@
     "ref": "a6b82fca094b0c0975e6323131a50f53703bb367",
     "env": {
       "stack": "rust",
-      "install": "cargo fetch",
+      "steps": [
+        {"name": "install", "command": "cargo fetch"}
+      ],
       "test": "cargo test --workspace --exclude rayon-demo",
-      "system_deps": [],
       "image": "cimg/rust",
       "image_version": "1.94.1"
     }
@@ -157,16 +152,15 @@
     "ref": "df520e315087210e069050a873fb5e208659af91",
     "env": {
       "stack": "go",
-      "install": "go mod download",
-      "test": "go test -p 1 ./...",
-      "system_deps": [
-        "go",
-        "git",
-        "dart-sass",
-        "asciidoctor",
-        "pandoc",
-        "rst2html"
+      "steps": [
+        {"name": "git", "command": "sudo apt-get update && sudo apt-get install -y git --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"},
+        {"name": "dart-sass", "command": "sudo apt-get update && sudo apt-get install -y curl --no-install-recommends && sudo rm -rf /var/lib/apt/lists/* && ARCH=$(uname -m) && case \"$ARCH\" in x86_64) SASS_ARCH=linux-x64 ;; aarch64) SASS_ARCH=linux-arm64 ;; *) echo \"Unsupported arch: $ARCH\" && exit 1 ;; esac && curl -fsSL \"https://github.com/sass/dart-sass/releases/download/1.80.3/dart-sass-1.80.3-${SASS_ARCH}.tar.gz\" | sudo tar -xz -C /usr/local && sudo chmod -R 755 /usr/local/dart-sass && printf '#!/bin/sh\\nexec /usr/local/dart-sass/sass \"$@\"\\n' | sudo tee /usr/local/bin/sass > /dev/null && sudo chmod +x /usr/local/bin/sass"},
+        {"name": "asciidoctor", "command": "sudo apt-get update && sudo apt-get install -y asciidoctor --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"},
+        {"name": "pandoc", "command": "sudo apt-get update && sudo apt-get install -y pandoc --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"},
+        {"name": "rst2html", "command": "sudo apt-get update && sudo apt-get install -y python3-docutils --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"},
+        {"name": "install", "command": "go mod download"}
       ],
+      "test": "go test -p 1 ./...",
       "image": "cimg/go",
       "image_version": "1.25.8"
     }
@@ -177,12 +171,10 @@
     "ref": "97dc620fec5cadf53eaa6f4f4fd52390701877da",
     "env": {
       "stack": "ruby",
-      "install": "bundle install",
-      "test": "bundle exec rspec",
-      "system_deps": [
-        "ruby",
-        "bundle"
+      "steps": [
+        {"name": "install", "command": "bundle install"}
       ],
+      "test": "bundle exec rspec",
       "image": "cimg/ruby",
       "image_version": "4.0.2"
     }
@@ -193,9 +185,10 @@
     "ref": "078e50d8ca92533e3185b674e9cd5223a18a36bf",
     "env": {
       "stack": "elixir",
-      "install": "mix local.hex --force && mix local.rebar --force && mix deps.get",
+      "steps": [
+        {"name": "install", "command": "mix local.hex --force && mix local.rebar --force && mix deps.get"}
+      ],
       "test": "mix test",
-      "system_deps": [],
       "image": "elixir",
       "image_version": "1.11.4"
     }
@@ -206,9 +199,10 @@
     "ref": "4f73e74372445108d2c1bda37b36e6f5e43402e0",
     "env": {
       "stack": "dotnet",
-      "install": "cd Src && dotnet restore",
+      "steps": [
+        {"name": "install", "command": "cd Src && dotnet restore"}
+      ],
       "test": "cd Src && dotnet test --framework net8.0 --filter \"FullyQualifiedName!~BufferErroringWithInvalidSize&FullyQualifiedName!~MemoryTraceWriter&FullyQualifiedName!~Issue1619&FullyQualifiedName!~SerializeFormattedDateTimeNewZealandCulture\"",
-      "system_deps": [],
       "image": "mcr.microsoft.com/dotnet/sdk",
       "image_version": "9.0"
     }
@@ -219,15 +213,14 @@
     "ref": "e5136b341dfde10dac63f3c8ce8ea175b10f7e6c",
     "env": {
       "stack": "php",
-      "install": "composer install",
-      "test": "faketime '@1718452800' vendor/bin/phpunit",
-      "system_deps": [
-        "php",
-        "composer",
-        "locales",
-        "tzdata",
-        "faketime"
+      "steps": [
+        {"name": "composer", "command": "php -r \"copy('https://getcomposer.org/installer', 'composer-setup.php');\" && sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer && php -r \"unlink('composer-setup.php');\""},
+        {"name": "locales", "command": "sudo apt-get update && sudo apt-get install -y locales --no-install-recommends && sudo locale-gen fr_FR.UTF-8 && sudo update-locale && sudo rm -rf /var/lib/apt/lists/*"},
+        {"name": "tzdata", "command": "DEBIAN_FRONTEND=noninteractive sudo apt-get update && sudo apt-get install -y tzdata --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"},
+        {"name": "faketime", "command": "sudo apt-get update && sudo apt-get install -y faketime --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"},
+        {"name": "install", "command": "composer install"}
       ],
+      "test": "faketime '@1718452800' vendor/bin/phpunit",
       "image": "cimg/php",
       "image_version": "8.5.4"
     }
@@ -238,13 +231,12 @@
     "ref": "8af8dd8791b9473309b650626850eb974ecae445",
     "env": {
       "stack": "java",
-      "install": "./gradlew dependencies",
-      "test": "./gradlew test",
-      "system_deps": [
-        "java",
-        "openjdk-8",
-        "openjdk-11"
+      "steps": [
+        {"name": "openjdk-8", "command": "ARCH=$(uname -m) && case \"$ARCH\" in x86_64) JDK_ARCH=x64 ;; aarch64) JDK_ARCH=aarch64 ;; *) echo \"Unsupported arch: $ARCH\" && exit 1 ;; esac && curl -fsSL \"https://api.adoptium.net/v3/binary/latest/8/ga/linux/${JDK_ARCH}/jdk/hotspot/normal/eclipse\" -o /tmp/jdk8.tar.gz && sudo mkdir -p /usr/lib/jvm/java-8-temurin && sudo tar -xzf /tmp/jdk8.tar.gz -C /usr/lib/jvm/java-8-temurin --strip-components=1 && rm /tmp/jdk8.tar.gz"},
+        {"name": "openjdk-11", "command": "ARCH=$(uname -m) && case \"$ARCH\" in x86_64) JDK_ARCH=x64 ;; aarch64) JDK_ARCH=aarch64 ;; *) echo \"Unsupported arch: $ARCH\" && exit 1 ;; esac && curl -fsSL \"https://api.adoptium.net/v3/binary/latest/11/ga/linux/${JDK_ARCH}/jdk/hotspot/normal/eclipse\" -o /tmp/jdk11.tar.gz && sudo mkdir -p /usr/lib/jvm/java-11-temurin && sudo tar -xzf /tmp/jdk11.tar.gz -C /usr/lib/jvm/java-11-temurin --strip-components=1 && rm /tmp/jdk11.tar.gz"},
+        {"name": "install", "command": "./gradlew dependencies"}
       ],
+      "test": "./gradlew test",
       "image": "cimg/openjdk",
       "image_version": "21.0.9"
     }
@@ -255,9 +247,10 @@
     "ref": "9a737481aed085fd289f82dff1fa8c3c66627a7e",
     "env": {
       "stack": "cpp",
-      "install": "cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build && sudo cmake --install build",
+      "steps": [
+        {"name": "install", "command": "cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build && sudo cmake --install build"}
+      ],
       "test": "cd build && ctest --output-on-failure",
-      "system_deps": [],
       "image": "cimg/base",
       "image_version": "2026.03"
     }
@@ -268,12 +261,11 @@
     "ref": "94463ffb54482427fd9b31f264b06bff6dcfd557",
     "env": {
       "stack": "java",
-      "install": "mvn install -DskipTests",
-      "test": "mvn test",
-      "system_deps": [
-        "java",
-        "mvn"
+      "steps": [
+        {"name": "mvn", "command": "curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | sudo tar -xz -C /opt && sudo ln -s /opt/apache-maven-3.9.6/bin/mvn /usr/local/bin/mvn"},
+        {"name": "install", "command": "mvn install -DskipTests"}
       ],
+      "test": "mvn test",
       "image": "cimg/openjdk",
       "image_version": "25.0.1"
     }
@@ -284,9 +276,10 @@
     "ref": "ba5f36800879af15f0531a0c5723e9baef7a0a57",
     "env": {
       "stack": "dart",
-      "install": "(cd pkgs/http && dart pub get) && (cd pkgs/http2 && dart pub get) && (cd pkgs/http_client_conformance_tests && dart pub get) && (cd pkgs/http_multi_server && dart pub get) && (cd pkgs/http_parser && dart pub get) && (cd pkgs/http_profile && dart pub get) && (cd pkgs/web_socket && dart pub get) && (cd pkgs/web_socket_channel && dart pub get) && (cd pkgs/web_socket_conformance_tests && dart pub get)",
+      "steps": [
+        {"name": "install", "command": "(cd pkgs/http && dart pub get) && (cd pkgs/http2 && dart pub get) && (cd pkgs/http_client_conformance_tests && dart pub get) && (cd pkgs/http_multi_server && dart pub get) && (cd pkgs/http_parser && dart pub get) && (cd pkgs/http_profile && dart pub get) && (cd pkgs/web_socket && dart pub get) && (cd pkgs/web_socket_channel && dart pub get) && (cd pkgs/web_socket_conformance_tests && dart pub get)"}
+      ],
       "test": "(cd pkgs/http && dart test) && (cd pkgs/http2 && dart test) && (cd pkgs/http_multi_server && dart test) && (cd pkgs/http_parser && dart test) && (cd pkgs/http_profile && dart test) && (cd pkgs/web_socket && dart test) && (cd pkgs/web_socket_channel && dart test)",
-      "system_deps": [],
       "image": "dart",
       "image_version": "3.11.2"
     }
@@ -297,11 +290,11 @@
     "ref": "6b6956a5f62b512a019fa70ecf50e7f4d5bec3ea",
     "env": {
       "stack": "scala",
-      "install": "sbt update",
-      "test": "sbt rootJVM/test",
-      "system_deps": [
-        "sbt"
+      "steps": [
+        {"name": "sbt", "command": "curl -fsSL https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz | sudo tar -xz -C /usr/local && sudo ln -sf /usr/local/sbt/bin/sbt /usr/local/bin/sbt"},
+        {"name": "install", "command": "sbt update"}
       ],
+      "test": "sbt rootJVM/test",
       "image": "cimg/openjdk",
       "image_version": "17.0.17"
     }
@@ -312,9 +305,10 @@
     "ref": "45d31f1bd9a0edbd6ba55fbcdd5082b159d33106",
     "env": {
       "stack": "haskell",
-      "install": "cabal update && cabal build --enable-tests all",
+      "steps": [
+        {"name": "install", "command": "cabal update && cabal build --enable-tests all"}
+      ],
       "test": "cabal test all",
-      "system_deps": [],
       "image": "haskell",
       "image_version": "9.12.2"
     }

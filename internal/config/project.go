@@ -48,11 +48,12 @@ type CircleCIConfig struct {
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
-	Commands []Command             `json:"commands,omitempty"`
-	Triggers map[string][]string   `json:"triggers,omitempty"`
-	Tasks    map[string]TaskConfig `json:"tasks,omitempty"`
-	VCS      *VCSConfig            `json:"vcs,omitempty"`
-	CircleCI *CircleCIConfig       `json:"circleci,omitempty"`
+	Commands    []Command             `json:"commands,omitempty"`
+	Triggers    map[string][]string   `json:"triggers,omitempty"`
+	Tasks       map[string]TaskConfig `json:"tasks,omitempty"`
+	VCS         *VCSConfig            `json:"vcs,omitempty"`
+	CircleCI    *CircleCIConfig       `json:"circleci,omitempty"`
+	Environment json.RawMessage       `json:"environment,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,6 +57,18 @@ func resolveSandboxID(sandboxID *string) error {
 	}
 	*sandboxID = active.SandboxID
 	return nil
+}
+
+// resolveProvider returns the provider from the flag if set, otherwise the
+// CHUNK_SANDBOX_PROVIDER env var, otherwise the default ("e2b").
+func resolveProvider(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if v := os.Getenv(providerEnvVar); v != "" {
+		return v
+	}
+	return defaultProvider
 }
 
 // resolveOrgID returns orgID from the flag if set, otherwise falls back to
@@ -116,7 +129,8 @@ const (
 )
 
 func newSandboxCreateCmd() *cobra.Command {
-	var orgID, name, image string
+	var orgID, name, provider, image string
+	var quiet bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -135,18 +149,17 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 			if err != nil {
 				return err
 			}
-			provider := os.Getenv(providerEnvVar)
-			if provider == "" {
-				provider = defaultProvider
-			}
-			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, provider, image)
+			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, resolveProvider(provider), image)
 			if err != nil {
 				return err
 			}
-			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sb.Name, sb.ID)))
 			if err := sandbox.SaveActive(sandbox.ActiveSandbox{SandboxID: sb.ID, Name: sb.Name}); err != nil {
 				io.ErrPrintf("warning: could not save active sandbox: %v\n", err)
+			}
+			if quiet {
+				io.Printf("%s\n", sb.ID)
 			} else {
+				io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sb.Name, sb.ID)))
 				io.ErrPrintf("Set %s as active sandbox\n", sb.ID)
 			}
 			return nil
@@ -155,7 +168,9 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&name, "name", "", "Sandbox name")
+	cmd.Flags().StringVar(&provider, "provider", "", `Sandbox provider ("unikraft" or "e2b")`)
 	cmd.Flags().StringVar(&image, "image", "", "E2B template ID or container image")
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Print only the sandbox ID")
 	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
@@ -252,33 +267,10 @@ func newSandboxSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			flagVars, err := sandbox.ParseEnvPairs(envVarsFlag)
+			envVars, err := resolveEnvVars(cmd.Context(), envVarsFlag, envFile)
 			if err != nil {
-				return usererr.New(fmt.Sprintf("invalid --env value: %s", err), err)
+				return err
 			}
-			var envVars map[string]string
-			if envFile != "" {
-				path := envFile
-				if !filepath.IsAbs(path) {
-					cwd, err := os.Getwd()
-					if err != nil {
-						return fmt.Errorf("get working directory: %w", err)
-					}
-					path = filepath.Join(cwd, path)
-				}
-				fileVars, err := sandbox.LoadEnvFileAt(path)
-				if err != nil {
-					return usererr.New(fmt.Sprintf("load %s: %s", envFile, err), err)
-				}
-				envVars = sandbox.MergeEnv(fileVars, flagVars)
-			} else {
-				envVars = flagVars
-			}
-			resolved, err := secrets.ResolveAll(cmd.Context(), envVars, nil)
-			if err != nil {
-				return usererr.New(fmt.Sprintf("resolve secrets: %s", err), err)
-			}
-			envVars = resolved
 			io := iostream.FromCmd(cmd)
 			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
 		},
@@ -384,8 +376,11 @@ func newSandboxEnvCmd() *cobra.Command {
 		Use:   "env",
 		Short: "Detect tech stack and print environment spec as JSON",
 		Long: `Analyse the repository at --dir, detect its tech stack, and print
-a JSON environment spec to stdout. Pipe this into 'chunk sandbox build' to
-generate a Dockerfile and build a test image.`,
+a JSON environment spec to stdout. The result is also saved to
+.chunk/config.json for use by 'chunk sandbox env setup'.
+
+Pipe the output into 'chunk sandbox build' to generate a Dockerfile and
+build a test image.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if _, err := os.Stat(dir); err != nil {
@@ -398,6 +393,21 @@ generate a Dockerfile and build a test image.`,
 				return fmt.Errorf("detect environment: %w", err)
 			}
 
+			// Persist to .chunk/config.json.
+			envJSON, err := json.Marshal(env)
+			if err != nil {
+				return fmt.Errorf("marshal environment: %w", err)
+			}
+			cfg, _ := config.LoadProjectConfig(dir)
+			if cfg == nil {
+				cfg = &config.ProjectConfig{}
+			}
+			cfg.Environment = json.RawMessage(envJSON)
+			if err := config.SaveProjectConfig(dir, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+			io.ErrPrintf("Saved environment to .chunk/config.json\n")
+
 			out, err := json.MarshalIndent(env, "", "  ")
 			if err != nil {
 				return fmt.Errorf("marshal environment: %w", err)
@@ -408,6 +418,8 @@ generate a Dockerfile and build a test image.`,
 	}
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to detect environment in")
+
+	cmd.AddCommand(newSandboxEnvSetupCmd())
 
 	return cmd
 }
@@ -421,6 +433,13 @@ func newSandboxBuildCmd() *cobra.Command {
 		Long: `Read a JSON environment spec from stdin (produced by 'chunk sandbox env'),
 write Dockerfile.test to --dir, and build a Docker test image from it.
 
+When CHUNK_BUILD_COMMANDS is set, the ordered setup steps from the environment
+spec are run directly as shell commands instead of building a Docker image.
+
+When CHUNK_CAPTURE_COMMANDS is set to a file path, the steps are written as
+JSON to that file without executing anything. Set to "1" to write to
+build-steps.json in --dir.
+
 Example:
   chunk sandbox env --dir . | chunk sandbox build --dir .`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -432,11 +451,8 @@ Example:
 
 			// Guard against interactive use: if stdin is a terminal (not a pipe),
 			// fail fast with a helpful message rather than blocking silently.
-			// Check cmd.InOrStdin() so injected readers (e.g. in tests) are not blocked.
-			if f, ok := cmd.InOrStdin().(*os.File); ok {
-				if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
-					return fmt.Errorf("no input on stdin — pipe a JSON env spec from 'chunk sandbox env'")
-				}
+			if stdinIsTerminal(cmd) {
+				return fmt.Errorf("no input on stdin — pipe a JSON env spec from 'chunk sandbox env'")
 			}
 
 			raw, err := io.ReadAll(cmd.InOrStdin())
@@ -448,35 +464,276 @@ Example:
 				return fmt.Errorf("parse environment spec: %w", err)
 			}
 
-			dockerfilePath, err := envbuilder.WriteDockerfile(dir, &env)
-			if err != nil {
-				return fmt.Errorf("write dockerfile: %w", err)
+			if dest := os.Getenv("CHUNK_CAPTURE_COMMANDS"); dest != "" {
+				if dest == "1" {
+					dest = filepath.Join(dir, "build-steps.json")
+				}
+				return captureCommands(dest, &env, streams)
 			}
-			streams.ErrPrintf("Wrote %s\n", dockerfilePath)
-
-			streams.ErrPrintf("Building Docker image in %s...\n", dir)
-
-			args := []string{"build", "-f", "Dockerfile.test"}
-			if tag != "" {
-				args = append(args, "-t", tag)
+			if os.Getenv("CHUNK_BUILD_COMMANDS") != "" {
+				return runBuildSteps(cmd, dir, &env, streams)
 			}
-			args = append(args, ".")
-
-			dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
-			dockerCmd.Dir = dir
-			dockerCmd.Stdout = streams.Out
-			dockerCmd.Stderr = streams.Err
-			if err := dockerCmd.Run(); err != nil {
-				return fmt.Errorf("docker build: %w", err)
-			}
-
-			streams.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
-			return nil
+			return runDockerBuild(cmd, dir, tag, &env, streams)
 		},
 	}
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write Dockerfile.test and build from")
 	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
+
+	return cmd
+}
+
+// runDockerBuild writes Dockerfile.test and runs docker build.
+func runDockerBuild(cmd *cobra.Command, dir, tag string, env *envbuilder.Environment, streams iostream.Streams) error {
+	dockerfilePath, err := envbuilder.WriteDockerfile(dir, env)
+	if err != nil {
+		return fmt.Errorf("write dockerfile: %w", err)
+	}
+	streams.ErrPrintf("Wrote %s\n", dockerfilePath)
+	streams.ErrPrintf("Building Docker image in %s...\n", dir)
+
+	args := []string{"build", "-f", "Dockerfile.test"}
+	if tag != "" {
+		args = append(args, "-t", tag)
+	}
+	args = append(args, ".")
+
+	dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
+	dockerCmd.Dir = dir
+	dockerCmd.Stdout = streams.Out
+	dockerCmd.Stderr = streams.Err
+	if err := dockerCmd.Run(); err != nil {
+		return fmt.Errorf("docker build: %w", err)
+	}
+
+	streams.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
+	return nil
+}
+
+// runBuildSteps runs each environment setup step directly as a shell command.
+func runBuildSteps(cmd *cobra.Command, dir string, env *envbuilder.Environment, streams iostream.Streams) error {
+	if len(env.Steps) == 0 {
+		streams.ErrPrintln(ui.Dim("No build steps to run."))
+		return nil
+	}
+	for _, step := range env.Steps {
+		streams.ErrPrintf("%s %s\n", ui.Dim("Running:"), ui.Gray(step.Command))
+		c := exec.CommandContext(cmd.Context(), "bash", "-l", "-c", step.Command)
+		c.Dir = dir
+		c.Stdout = streams.Out
+		c.Stderr = streams.Err
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("step %q: %w", step.Name, err)
+		}
+	}
+	streams.ErrPrintf("%s\n", ui.Success("Build steps completed successfully"))
+	return nil
+}
+
+// captureCommands writes the environment steps to a JSON file without executing them.
+func captureCommands(dest string, env *envbuilder.Environment, streams iostream.Streams) error {
+	out, err := json.MarshalIndent(env.Steps, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal steps: %w", err)
+	}
+	if err := os.WriteFile(dest, out, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", dest, err)
+	}
+	streams.ErrPrintf("Wrote %s\n", dest)
+	return nil
+}
+
+// resolveEnvVars parses env flags, optionally loads an env file, merges them,
+// and resolves any secret references (e.g. op:// URIs).
+func resolveEnvVars(ctx context.Context, envVarsFlag []string, envFile string) (map[string]string, error) {
+	flagVars, err := sandbox.ParseEnvPairs(envVarsFlag)
+	if err != nil {
+		return nil, usererr.New(fmt.Sprintf("invalid --env value: %s", err), err)
+	}
+	var envVars map[string]string
+	if envFile != "" {
+		path := envFile
+		if !filepath.IsAbs(path) {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return nil, fmt.Errorf("get working directory: %w", err)
+			}
+			path = filepath.Join(cwd, path)
+		}
+		fileVars, err := sandbox.LoadEnvFileAt(path)
+		if err != nil {
+			return nil, usererr.New(fmt.Sprintf("load %s: %s", envFile, err), err)
+		}
+		envVars = sandbox.MergeEnv(fileVars, flagVars)
+	} else {
+		envVars = flagVars
+	}
+	resolved, err := secrets.ResolveAll(ctx, envVars, nil)
+	if err != nil {
+		return nil, usererr.New(fmt.Sprintf("resolve secrets: %s", err), err)
+	}
+	return resolved, nil
+}
+
+// stdinIsTerminal returns true when stdin is an interactive terminal (not a pipe).
+func stdinIsTerminal(cmd *cobra.Command) bool {
+	f, ok := cmd.InOrStdin().(*os.File)
+	if !ok {
+		return false // injected reader (e.g. tests)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return true
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// resolveEnvironment reads the environment spec from stdin (if piped) or
+// from .chunk/config.json in the given directory.
+func resolveEnvironment(cmd *cobra.Command, dir string) (envbuilder.Environment, error) {
+	var env envbuilder.Environment
+	if !stdinIsTerminal(cmd) {
+		raw, err := io.ReadAll(cmd.InOrStdin())
+		if err != nil {
+			return env, fmt.Errorf("read environment spec: %w", err)
+		}
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return env, fmt.Errorf("parse environment spec: %w", err)
+		}
+		return env, nil
+	}
+
+	detectDir := dir
+	if detectDir == "" {
+		detectDir = "."
+	}
+	projCfg, err := config.LoadProjectConfig(detectDir)
+	if err != nil {
+		return env, fmt.Errorf("no config found — run 'chunk sandbox env' first: %w", err)
+	}
+	if projCfg.Environment == nil {
+		return env, fmt.Errorf("no environment in .chunk/config.json — run 'chunk sandbox env' first")
+	}
+	if err := json.Unmarshal(projCfg.Environment, &env); err != nil {
+		return env, fmt.Errorf("parse environment from config: %w", err)
+	}
+	return env, nil
+}
+
+func newSandboxEnvSetupCmd() *cobra.Command {
+	var orgID, name, provider, image, dir, identityFile, envFile string
+	var envVarsFlag []string
+
+	cmd := &cobra.Command{
+		Use:   "setup [flags] [-- command...]",
+		Short: "Create a sandbox, run setup steps, then execute a command or open a shell",
+		Long: `Create a sandbox from an image or template, run the environment setup
+steps from .chunk/config.json (written by 'chunk sandbox env'), then either
+run the given command or drop into an interactive SSH session.
+
+The environment spec is read from .chunk/config.json by default. You can
+override it by piping a JSON spec from stdin.
+
+Example:
+  chunk sandbox env --dir .                                # detect and save
+  chunk sandbox env setup --name my-sandbox -- make test   # read from config
+  chunk sandbox env | chunk sandbox env setup --name my-sandbox`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			streams := iostream.FromCmd(cmd)
+			resolvedOrgID, err := resolveOrgID(orgID)
+			if err != nil {
+				return err
+			}
+
+			env, err := resolveEnvironment(cmd, dir)
+			if err != nil {
+				return err
+			}
+
+			// Resolve image from flags or env spec.
+			if image == "" {
+				image = env.ResolvedImage()
+				if image == "" {
+					return fmt.Errorf("--image is required when environment has no image")
+				}
+			}
+			envVars, err := resolveEnvVars(cmd.Context(), envVarsFlag, envFile)
+			if err != nil {
+				return err
+			}
+
+			// Create sandbox.
+			client, err := circleci.NewClient()
+			if err != nil {
+				return err
+			}
+			streams.ErrPrintf("Creating sandbox...\n")
+			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, resolveProvider(provider), image)
+			if err != nil {
+				return usererr.New(fmt.Sprintf("Failed to create sandbox. Check your network connection and that --org-id is correct.\n  %s", err), err)
+			}
+			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sb.Name, sb.ID)))
+
+			// Run setup steps via exec API.
+			if len(env.Steps) > 0 {
+				streams.ErrPrintf("Running %d setup steps...\n", len(env.Steps))
+				for i, s := range env.Steps {
+					streams.ErrPrintf("[%d/%d] %s\n", i+1, len(env.Steps), s.Name)
+					result, err := sandbox.RunStep(cmd.Context(), client, sb.ID, s)
+					if err != nil {
+						return usererr.New(fmt.Sprintf("Setup failed (sandbox %s still running).\n  %s", sb.ID, err), err)
+					}
+					if result.Stdout != "" {
+						_, _ = fmt.Fprint(streams.Out, result.Stdout)
+					}
+					if result.Stderr != "" {
+						_, _ = fmt.Fprint(streams.Err, result.Stderr)
+					}
+					if result.ExitCode != 0 {
+						streams.ErrPrintf("Sandbox %s is still running. Clean up with: chunk sandbox delete --sandbox-id %s\n", sb.ID, sb.ID)
+						return &sandbox.ExitError{Code: result.ExitCode}
+					}
+				}
+				streams.ErrPrintf("%s\n", ui.Success("Setup steps completed"))
+			}
+
+			// Run command via exec API, or drop into interactive SSH shell.
+			if len(args) > 0 {
+				command := sandbox.ShellJoin(args)
+				resp, err := sandbox.Exec(cmd.Context(), client, sb.ID, "bash", []string{"-l", "-c", command})
+				if err != nil {
+					return usererr.New(fmt.Sprintf("Failed to execute command in sandbox.\n  %s", err), err)
+				}
+				if resp.Stdout != "" {
+					_, _ = fmt.Fprint(streams.Out, resp.Stdout)
+				}
+				if resp.Stderr != "" {
+					_, _ = fmt.Fprint(streams.Err, resp.Stderr)
+				}
+				if resp.ExitCode != 0 {
+					return &sandbox.ExitError{Code: resp.ExitCode}
+				}
+				return nil
+			}
+			authSock := os.Getenv("SSH_AUTH_SOCK")
+			if err := sandbox.SSH(cmd.Context(), client, sb.ID, identityFile, authSock, nil, envVars, streams); err != nil {
+				return usererr.New(fmt.Sprintf("Failed to open SSH session to sandbox.\n  %s", err), err)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
+	cmd.Flags().StringVar(&name, "name", "", "Sandbox name")
+	cmd.Flags().StringVar(&provider, "provider", "", `Sandbox provider ("unikraft" or "e2b")`)
+	cmd.Flags().StringVar(&image, "image", "", `Container image (unikraft) or E2B template ID (e2b)`)
+	cmd.Flags().StringVar(&dir, "dir", "", "Directory to detect environment in (default: current directory)")
+	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
+	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in the remote session (repeatable)")
+	cmd.Flags().StringVar(&envFile, "env-file", "", "Env file to load (default .env.local when flag is present)")
+	cmd.Flags().Lookup("env-file").NoOptDefVal = ".env.local"
+	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
 }

@@ -6,9 +6,21 @@ import (
 	"os"
 	"strings"
 
+	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
+
+// ExitError represents a remote command that exited with a non-zero status.
+type ExitError struct {
+	Code int
+}
+
+func (e *ExitError) Error() string {
+	return fmt.Sprintf("command exited with status %d", e.Code)
+}
+
+func (e *ExitError) ExitCode() int { return e.Code }
 
 func List(ctx context.Context, client *circleci.Client, orgID string) ([]circleci.Sandbox, error) {
 	return client.ListSandboxes(ctx, orgID)
@@ -46,6 +58,28 @@ func AddSSHKey(ctx context.Context, client *circleci.Client, sandboxID, publicKe
 	return client.AddSSHKey(ctx, sandboxID, key)
 }
 
+// StepResult holds the output from executing a single setup step.
+type StepResult struct {
+	Name     string
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+// RunStep executes a single setup step and returns its result.
+func RunStep(ctx context.Context, client *circleci.Client, sandboxID string, step envbuilder.Step) (*StepResult, error) {
+	resp, err := client.Exec(ctx, sandboxID, "bash", []string{"-l", "-c", step.Command})
+	if err != nil {
+		return nil, fmt.Errorf("step %q: %w", step.Name, err)
+	}
+	return &StepResult{
+		Name:     step.Name,
+		Stdout:   resp.Stdout,
+		Stderr:   resp.Stderr,
+		ExitCode: resp.ExitCode,
+	}, nil
+}
+
 // SSH opens a session and either runs a command or starts an interactive shell.
 func SSH(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock string, args []string, envVars map[string]string, io iostream.Streams) error {
 	session, err := OpenSession(ctx, client, sandboxID, identityFile, authSock)
@@ -70,7 +104,7 @@ func SSH(ctx context.Context, client *circleci.Client, sandboxID, identityFile, 
 		_, _ = fmt.Fprint(io.Err, result.Stderr)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("command exited with status %d", result.ExitCode)
+		return &ExitError{Code: result.ExitCode}
 	}
 	return nil
 }

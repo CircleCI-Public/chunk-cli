@@ -10,6 +10,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
+type exitCoder interface {
+	ExitCode() int
+}
+
 var version = "dev"
 
 func main() {
@@ -17,6 +21,9 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
+		if ec, ok := err.(exitCoder); ok {
+			os.Exit(ec.ExitCode())
+		}
 		var ue *usererr.Error
 		if errors.As(err, &ue) {
 			fmt.Fprintln(os.Stderr, ue.UserMessage())
