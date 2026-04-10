@@ -24,6 +24,7 @@ func TestNewClient(t *testing.T) {
 	t.Run("missing token", func(t *testing.T) {
 		t.Setenv("CIRCLE_TOKEN", "")
 		t.Setenv("CIRCLECI_TOKEN", "")
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 		_, err := NewClient()
 		if err == nil {
@@ -61,7 +62,7 @@ func TestNewClient(t *testing.T) {
 
 	t.Run("custom base URL", func(t *testing.T) {
 		t.Setenv("CIRCLE_TOKEN", "tok")
-		t.Setenv("CIRCLECI_BASE_URL", "https://custom.example.com")
+		t.Setenv("CIRCLECI_BASE_URL", "")
 
 		c, err := NewClient()
 		if err != nil {
@@ -69,6 +70,25 @@ func TestNewClient(t *testing.T) {
 		}
 		if c == nil {
 			t.Fatal("expected non-nil client")
+		}
+	})
+
+	t.Run("validates token against server", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+
+		t.Setenv("CIRCLE_TOKEN", "test-token")
+		t.Setenv("CIRCLECI_BASE_URL", srv.URL)
+
+		c, err := NewClient()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		ctx := context.Background()
+		if err := c.GetCurrentUser(ctx); err != nil {
+			t.Fatalf("GetCurrentUser failed: %v", err)
 		}
 	})
 }

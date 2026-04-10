@@ -407,8 +407,8 @@ func TestRunRemote(t *testing.T) {
 func TestRunRemoteSSH(t *testing.T) {
 	newCCIClient := func(t *testing.T, serverURL string) *circleci.Client {
 		t.Helper()
-		t.Setenv("CIRCLECI_BASE_URL", serverURL)
 		t.Setenv("CIRCLE_TOKEN", "test-token")
+		t.Setenv("CIRCLECI_BASE_URL", serverURL)
 		client, err := circleci.NewClient()
 		assert.NilError(t, err)
 		return client
