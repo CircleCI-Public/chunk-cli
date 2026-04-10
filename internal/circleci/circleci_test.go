@@ -60,7 +60,7 @@ func TestNewClient(t *testing.T) {
 		}
 	})
 
-	t.Run("custom base URL", func(t *testing.T) {
+	t.Run("default base URL", func(t *testing.T) {
 		t.Setenv("CIRCLE_TOKEN", "tok")
 		t.Setenv("CIRCLECI_BASE_URL", "")
 
