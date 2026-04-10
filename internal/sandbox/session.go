@@ -18,7 +18,6 @@ import (
 const (
 	defaultKeyName = "chunk_ai"
 	defaultSSHUser = "user"
-	defaultSSHPort = 2222
 	knownHostsFile = "chunk_ai_known_hosts"
 )
 
@@ -26,7 +25,7 @@ const (
 // It is a plain value type with no open connections or resources to close.
 // Each call to ExecOverSSH opens and closes its own SSH connection.
 type Session struct {
-	URL          string // sandbox domain
+	URL          string // WebSocket tunnel URL (ws:// or wss://)
 	IdentityFile string // path to SSH private key (empty when using agent)
 	KnownHosts   string // path to known_hosts file
 	UseAgent     bool   // true when authenticating via ssh-agent

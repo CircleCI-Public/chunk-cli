@@ -55,5 +55,6 @@ type RunResponse struct {
 type CreateSandboxRequest struct {
 	OrganizationID string `json:"organization_id"`
 	Name           string `json:"name"`
+	Provider       string `json:"provider,omitempty"`
 	Image          string `json:"image,omitempty"`
 }

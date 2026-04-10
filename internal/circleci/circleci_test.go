@@ -134,7 +134,7 @@ func TestCreateSandbox(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	sb, err := client.CreateSandbox(ctx, "org-1", "my-sandbox", "ubuntu:22.04")
+	sb, err := client.CreateSandbox(ctx, "org-1", "my-sandbox", "", "ubuntu:22.04")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestAuthRequired(t *testing.T) {
 	})
 
 	t.Run("CreateSandbox", func(t *testing.T) {
-		_, err := client.CreateSandbox(ctx, "org-1", "name", "image")
+		_, err := client.CreateSandbox(ctx, "org-1", "name", "", "image")
 		if err == nil {
 			t.Fatal("expected error")
 		}
