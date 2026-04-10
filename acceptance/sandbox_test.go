@@ -484,6 +484,170 @@ func TestSandboxesSSHEnvFlag(t *testing.T) {
 	})
 }
 
+func TestSandboxesCreateSetsActiveSandbox(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	workDir := t.TempDir()
+
+	result := binary.RunCLI(t, []string{
+		"sandbox", "create",
+		"--org-id", "org-aaa",
+		"--name", "my-new-sandbox",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Set sandbox-new-123 as active sandbox"),
+		"expected active sandbox message, got: %s", result.Stderr)
+
+	// current should show the sandbox set by create
+	result = binary.RunCLI(t, []string{"sandbox", "current"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "sandbox-new-123"),
+		"expected sandbox ID from current, got: %s", combined)
+}
+
+func TestSandboxesExecUsesActiveSandbox(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{
+		CommandID: "cmd-1",
+		PID:       1,
+		Stdout:    "active sandbox output\n",
+		ExitCode:  0,
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	workDir := t.TempDir()
+
+	// create sets the active sandbox
+	result := binary.RunCLI(t, []string{
+		"sandbox", "create",
+		"--org-id", "org-aaa",
+		"--name", "test-box",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "create stderr: %s", result.Stderr)
+
+	// exec without --sandbox-id should succeed using active sandbox
+	result = binary.RunCLI(t, []string{
+		"sandbox", "exec",
+		"--command", "echo",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "exec stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout, "active sandbox output"),
+		"expected output, got: %s", result.Stdout)
+}
+
+func TestSandboxesForgetClearsActiveSandbox(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	workDir := t.TempDir()
+
+	// create sets active sandbox
+	result := binary.RunCLI(t, []string{
+		"sandbox", "create",
+		"--org-id", "org-aaa",
+		"--name", "temp-box",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "create stderr: %s", result.Stderr)
+
+	// forget clears it
+	result = binary.RunCLI(t, []string{"sandbox", "forget"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "forget stderr: %s", result.Stderr)
+
+	// exec without --sandbox-id should now fail
+	result = binary.RunCLI(t, []string{
+		"sandbox", "exec",
+		"--command", "echo",
+	}, env, workDir)
+	assert.Assert(t, result.ExitCode != 0, "expected failure after forget")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "sandbox-id") || strings.Contains(combined, "active sandbox"),
+		"expected missing sandbox error, got: %s", combined)
+}
+
+func TestSandboxesExplicitIDOverridesActive(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{
+		CommandID: "cmd-2",
+		PID:       2,
+		Stdout:    "explicit output\n",
+		ExitCode:  0,
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	workDir := t.TempDir()
+
+	// Set active sandbox to something
+	result := binary.RunCLI(t, []string{
+		"sandbox", "create",
+		"--org-id", "org-aaa",
+		"--name", "default-box",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "create stderr: %s", result.Stderr)
+
+	// exec with explicit --sandbox-id should use it (not the active one)
+	result = binary.RunCLI(t, []string{
+		"sandbox", "exec",
+		"--sandbox-id", "sb-explicit",
+		"--command", "echo",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "exec stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-explicit/exec")
+	assert.Assert(t, len(execReqs) >= 1, "expected exec request to use explicit sandbox ID, got requests: %v", reqs)
+}
+
+func TestSandboxesCurrentNoActive(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	workDir := t.TempDir()
+
+	result := binary.RunCLI(t, []string{"sandbox", "current"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "No active sandbox"),
+		"expected no active message, got: %s", combined)
+}
+
+func TestSandboxesUseCommand(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{
+		CommandID: "cmd-3",
+		PID:       3,
+		Stdout:    "use output\n",
+		ExitCode:  0,
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	workDir := t.TempDir()
+
+	result := binary.RunCLI(t, []string{"sandbox", "use", "sb-manual"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	result = binary.RunCLI(t, []string{"sandbox", "current"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "sb-manual"),
+		"expected sb-manual in current output, got: %s", combined)
+}
+
 func writeChunkConfig(t *testing.T, workDir, orgID string) {
 	t.Helper()
 	chunkDir := filepath.Join(workDir, ".chunk")
