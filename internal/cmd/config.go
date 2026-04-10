@@ -38,6 +38,12 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s\n", ui.Label("apiKey:", w), ui.Dim("(not set)"))
 			}
 
+			if rc.CircleCIToken != "" {
+				io.Printf("%s %s %s\n", ui.Label("circleCIToken:", w), config.MaskAPIKey(rc.CircleCIToken), ui.Dim("("+rc.CircleCITokenSource+")"))
+			} else {
+				io.Printf("%s %s\n", ui.Label("circleCIToken:", w), ui.Dim("(not set)"))
+			}
+
 			return nil
 		},
 	}
