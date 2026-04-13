@@ -57,7 +57,7 @@ func Build(commands []config.Command) ([]byte, error) {
 		s.Hooks = map[string][]HookGroup{
 			"PreToolUse": {
 				{
-					Matcher: "Bash(git commit*)",
+					Matcher: CommitMatcher,
 					Hooks:   hooks,
 				},
 			},
