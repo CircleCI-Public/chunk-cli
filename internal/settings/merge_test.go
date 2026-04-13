@@ -218,6 +218,36 @@ func TestMergeNoChangeWhenAlreadyMerged(t *testing.T) {
 	assert.Assert(t, !result.Changed)
 }
 
+func TestMergeGeneratedWithNoHooks(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash(git commit*)", "hooks": [{"type": "command", "command": "existing-cmd", "timeout": 30}]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"$schema": "https://json.schemastore.org/claude-code-settings.json",
+		"permissions": {"allow": ["Bash(chunk:*)"]}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	// Existing hooks preserved when generated has no hooks.
+	hooks := merged["hooks"].(map[string]interface{})
+	preToolUse := hooks["PreToolUse"].([]interface{})
+	assert.Equal(t, len(preToolUse), 1)
+
+	group := preToolUse[0].(map[string]interface{})
+	hookEntries := group["hooks"].([]interface{})
+	entry := hookEntries[0].(map[string]interface{})
+	assert.Equal(t, entry["command"], "existing-cmd")
+}
+
 func TestMergeMalformedExisting(t *testing.T) {
 	_, err := Merge([]byte(`not json`), []byte(`{}`))
 	assert.ErrorContains(t, err, "parse existing settings")
