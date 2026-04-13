@@ -61,6 +61,15 @@ func pickCircleCIOrg(ctx context.Context, streams iostream.Streams) (orgID, orgN
 // confirmFunc asks the user a yes/no question. Matches tui.Confirm signature.
 type confirmFunc func(label string, defaultYes bool) (bool, error)
 
+// withTrailingNewline returns a copy of data with a trailing newline appended.
+// Uses a copy to avoid mutating the original slice's backing array.
+func withTrailingNewline(data []byte) []byte {
+	buf := make([]byte, len(data)+1)
+	copy(buf, data)
+	buf[len(data)] = '\n'
+	return buf
+}
+
 // writeSettings writes .claude/settings.json for the project.
 // When settings.json already exists, it computes a merge, shows the user
 // a before/after comparison, and prompts for confirmation. On decline or
@@ -83,7 +92,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 			return fmt.Errorf("read existing settings.json: %w", readErr)
 		}
 		// No existing file — write directly.
-		if err := os.WriteFile(path, append(generated, '\n'), 0o644); err != nil {
+		if err := os.WriteFile(path, withTrailingNewline(generated), 0o644); err != nil {
 			return fmt.Errorf("write settings.json: %w", err)
 		}
 		streams.ErrPrintln(ui.Success("Wrote .claude/settings.json"))
@@ -120,7 +129,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 		return writeSettingsExample(dir, generated, streams)
 	}
 
-	if err := os.WriteFile(path, append(result.Merged, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(path, withTrailingNewline(result.Merged), 0o644); err != nil {
 		return fmt.Errorf("write settings.json: %w", err)
 	}
 	streams.ErrPrintln(ui.Success("Updated .claude/settings.json"))
@@ -130,7 +139,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 // writeSettingsExample writes settings.example.json as a fallback.
 func writeSettingsExample(dir string, data []byte, streams iostream.Streams) error {
 	exPath := filepath.Join(dir, "settings.example.json")
-	if err := os.WriteFile(exPath, append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(exPath, withTrailingNewline(data), 0o644); err != nil {
 		return fmt.Errorf("write settings.example.json: %w", err)
 	}
 	streams.ErrPrintln(ui.Success("Wrote .claude/settings.example.json (existing settings.json preserved)"))

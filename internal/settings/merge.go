@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -65,7 +66,7 @@ func Merge(existing, generated []byte) (*MergeResult, error) {
 	return &MergeResult{
 		Original: originalBytes,
 		Merged:   mergedBytes,
-		Changed:  string(originalBytes) != string(mergedBytes),
+		Changed:  !bytes.Equal(originalBytes, mergedBytes),
 	}, nil
 }
 

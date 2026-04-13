@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -82,8 +83,8 @@ func TestWriteSettingsExistingMergeApplied(t *testing.T) {
 	for i, v := range allow {
 		allowStrs[i] = v.(string)
 	}
-	assert.Assert(t, contains(allowStrs, "Read"))
-	assert.Assert(t, contains(allowStrs, "Bash(chunk:*)"))
+	assert.Assert(t, slices.Contains(allowStrs, "Read"))
+	assert.Assert(t, slices.Contains(allowStrs, "Bash(chunk:*)"))
 
 	// Hooks added.
 	assert.Assert(t, merged["hooks"] != nil)
@@ -168,11 +169,3 @@ func TestWriteSettingsAlreadyUpToDate(t *testing.T) {
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already up to date")))
 }
 
-func contains(ss []string, target string) bool {
-	for _, s := range ss {
-		if s == target {
-			return true
-		}
-	}
-	return false
-}
