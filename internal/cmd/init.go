@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,6 +79,9 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 	path := filepath.Join(dir, "settings.json")
 	existing, readErr := os.ReadFile(path)
 	if readErr != nil {
+		if !errors.Is(readErr, fs.ErrNotExist) {
+			return fmt.Errorf("read existing settings.json: %w", readErr)
+		}
 		// No existing file — write directly.
 		if err := os.WriteFile(path, append(generated, '\n'), 0o644); err != nil {
 			return fmt.Errorf("write settings.json: %w", err)
