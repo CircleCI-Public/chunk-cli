@@ -112,6 +112,9 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 
 	// Prompt for confirmation.
 	apply, confirmErr := confirm("Apply changes to .claude/settings.json?", false)
+	if confirmErr != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not confirm: %v", confirmErr)))
+	}
 	if confirmErr != nil || !apply {
 		// Decline, cancel, or non-TTY — fall back to example file.
 		return writeSettingsExample(dir, generated, streams)
