@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -110,12 +111,25 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 		return nil
 	}
 
-	// Show unified diff of changes.
+	// Show colored unified diff of changes.
 	diff := settings.Diff(result.Original, result.Merged)
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Changes to .claude/settings.json:"))
 	streams.ErrPrintln("")
-	streams.ErrPrintln(diff)
+	for _, line := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "---"), strings.HasPrefix(line, "+++"):
+			streams.ErrPrintln(ui.Bold(line))
+		case strings.HasPrefix(line, "@@"):
+			streams.ErrPrintln(ui.Cyan(line))
+		case strings.HasPrefix(line, "+"):
+			streams.ErrPrintln(ui.Green(line))
+		case strings.HasPrefix(line, "-"):
+			streams.ErrPrintln(ui.Red(line))
+		default:
+			streams.ErrPrintln(line)
+		}
+	}
 
 	// Prompt for confirmation.
 	apply, confirmErr := confirm("Apply changes to .claude/settings.json?", false)
