@@ -56,11 +56,15 @@ func pickCircleCIOrg(ctx context.Context, streams iostream.Streams) (orgID, orgN
 	return collabs[idx].ID, collabs[idx].Name
 }
 
+// confirmFunc asks the user a yes/no question. Matches tui.Confirm signature.
+type confirmFunc func(label string, defaultYes bool) (bool, error)
+
 // writeSettings writes .claude/settings.json for the project.
-// If settings.json already exists it is left untouched and the generated
-// content is written to settings.example.json instead.
-func writeSettings(workDir string, commands []config.Command, streams iostream.Streams) error {
-	data, err := settings.Build(commands)
+// When settings.json already exists, it computes a merge, shows the user
+// a before/after comparison, and prompts for confirmation. On decline or
+// non-TTY, falls back to writing settings.example.json.
+func writeSettings(workDir string, commands []config.Command, streams iostream.Streams, confirm confirmFunc) error {
+	generated, err := settings.Build(commands)
 	if err != nil {
 		return fmt.Errorf("build settings: %w", err)
 	}
@@ -71,21 +75,57 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 	}
 
 	path := filepath.Join(dir, "settings.json")
-	if _, err := os.Stat(path); err == nil {
-		// Existing settings.json — preserve it, write example instead.
-		exPath := filepath.Join(dir, "settings.example.json")
-		if err := os.WriteFile(exPath, append(data, '\n'), 0o644); err != nil {
-			return fmt.Errorf("write settings.example.json: %w", err)
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil {
+		// No existing file — write directly.
+		if err := os.WriteFile(path, append(generated, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write settings.json: %w", err)
 		}
-		streams.ErrPrintln(ui.Success("Wrote .claude/settings.example.json (existing settings.json preserved)"))
+		streams.ErrPrintln(ui.Success("Wrote .claude/settings.json"))
 		return nil
 	}
 
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
-		return fmt.Errorf("write settings.json: %w", err)
+	// Existing file found — compute merge.
+	result, err := settings.Merge(existing, generated)
+	if err != nil {
+		return fmt.Errorf("merge settings: %w", err)
 	}
 
-	streams.ErrPrintln(ui.Success("Wrote .claude/settings.json"))
+	if !result.Changed {
+		streams.ErrPrintln(ui.Success("Settings already up to date"))
+		return nil
+	}
+
+	// Show before/after comparison.
+	streams.ErrPrintln("")
+	streams.ErrPrintln(ui.Bold("Current .claude/settings.json:"))
+	streams.ErrPrintln(ui.Dim(string(result.Original)))
+	streams.ErrPrintln("")
+	streams.ErrPrintln(ui.Bold("Proposed .claude/settings.json:"))
+	streams.ErrPrintln(string(result.Merged))
+	streams.ErrPrintln("")
+
+	// Prompt for confirmation.
+	apply, confirmErr := confirm("Apply changes to .claude/settings.json?", false)
+	if confirmErr != nil || !apply {
+		// Decline, cancel, or non-TTY — fall back to example file.
+		return writeSettingsExample(dir, generated, streams)
+	}
+
+	if err := os.WriteFile(path, append(result.Merged, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write settings.json: %w", err)
+	}
+	streams.ErrPrintln(ui.Success("Updated .claude/settings.json"))
+	return nil
+}
+
+// writeSettingsExample writes settings.example.json as a fallback.
+func writeSettingsExample(dir string, data []byte, streams iostream.Streams) error {
+	exPath := filepath.Join(dir, "settings.example.json")
+	if err := os.WriteFile(exPath, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write settings.example.json: %w", err)
+	}
+	streams.ErrPrintln(ui.Success("Wrote .claude/settings.example.json (existing settings.json preserved)"))
 	return nil
 }
 
@@ -182,7 +222,7 @@ commands, and generates hook config files.`,
 
 			// Step 4: Write .claude/settings.json
 			if !skipHooks {
-				if err := writeSettings(workDir, cfg.Commands, streams); err != nil {
+				if err := writeSettings(workDir, cfg.Commands, streams, tui.Confirm); err != nil {
 					return fmt.Errorf("settings: %w", err)
 				}
 			}
