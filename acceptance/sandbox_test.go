@@ -647,6 +647,7 @@ func TestSandboxesUseCommand(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "sb-manual"),
 		"expected sb-manual in current output, got: %s", combined)
 }
+
 // filterByMethod returns requests matching both method and path prefix.
 func filterByMethod(reqs []recorder.RecordedRequest, method, pathPrefix string) []recorder.RecordedRequest {
 	var out []recorder.RecordedRequest
