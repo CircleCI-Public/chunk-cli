@@ -168,4 +168,3 @@ func TestWriteSettingsAlreadyUpToDate(t *testing.T) {
 	assert.NilError(t, writeSettings(dir, commands, streams2, fakeConfirmYes))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already up to date")))
 }
-

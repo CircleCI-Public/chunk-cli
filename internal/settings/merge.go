@@ -127,8 +127,8 @@ func mergeHooks(merged, generated map[string]interface{}) {
 	// Find the chunk-managed group in generated hooks.
 	var chunkGroup interface{}
 	for _, g := range genPreToolUse {
-		group, ok := g.(map[string]interface{})
-		if !ok {
+		group, isMap := g.(map[string]interface{})
+		if !isMap {
 			continue
 		}
 		if matcher, _ := group["matcher"].(string); matcher == CommitMatcher {
@@ -155,8 +155,8 @@ func mergeHooks(merged, generated map[string]interface{}) {
 	// Replace existing group with same matcher, or append.
 	replaced := false
 	for i, g := range mergedPreToolUse {
-		group, ok := g.(map[string]interface{})
-		if !ok {
+		group, isMap := g.(map[string]interface{})
+		if !isMap {
 			continue
 		}
 		if matcher, _ := group["matcher"].(string); matcher == CommitMatcher {
