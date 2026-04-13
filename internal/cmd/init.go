@@ -110,14 +110,12 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 		return nil
 	}
 
-	// Show before/after comparison.
+	// Show unified diff of changes.
+	diff := settings.Diff(result.Original, result.Merged)
 	streams.ErrPrintln("")
-	streams.ErrPrintln(ui.Bold("Current .claude/settings.json:"))
-	streams.ErrPrintln(ui.Dim(string(result.Original)))
+	streams.ErrPrintln(ui.Bold("Changes to .claude/settings.json:"))
 	streams.ErrPrintln("")
-	streams.ErrPrintln(ui.Bold("Proposed .claude/settings.json:"))
-	streams.ErrPrintln(string(result.Merged))
-	streams.ErrPrintln("")
+	streams.ErrPrintln(diff)
 
 	// Prompt for confirmation.
 	apply, confirmErr := confirm("Apply changes to .claude/settings.json?", false)

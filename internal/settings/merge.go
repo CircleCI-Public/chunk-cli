@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+
+	udiff "github.com/aymanbagabas/go-udiff"
 )
 
 // CommitMatcher is the hook matcher string that chunk manages.
@@ -68,6 +70,12 @@ func Merge(existing, generated []byte) (*MergeResult, error) {
 		Merged:   mergedBytes,
 		Changed:  !bytes.Equal(originalBytes, mergedBytes),
 	}, nil
+}
+
+// Diff returns a unified diff string between the original and merged JSON.
+// Returns an empty string if there are no differences.
+func Diff(original, merged []byte) string {
+	return udiff.Unified("current", "proposed", string(original)+"\n", string(merged)+"\n")
 }
 
 // mergePermissionsAllow unions the "allow" list under "permissions",

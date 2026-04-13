@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -246,6 +247,31 @@ func TestMergeGeneratedWithNoHooks(t *testing.T) {
 	hookEntries := group["hooks"].([]interface{})
 	entry := hookEntries[0].(map[string]interface{})
 	assert.Equal(t, entry["command"], "existing-cmd")
+}
+
+func TestDiffShowsChanges(t *testing.T) {
+	original := []byte(`{
+  "permissions": {
+    "allow": ["Read"]
+  }
+}`)
+	merged := []byte(`{
+  "permissions": {
+    "allow": ["Bash(chunk:*)", "Read"]
+  }
+}`)
+
+	diff := Diff(original, merged)
+	assert.Assert(t, diff != "", "expected non-empty diff")
+	assert.Assert(t, strings.Contains(diff, "---"))
+	assert.Assert(t, strings.Contains(diff, "+++"))
+	assert.Assert(t, strings.Contains(diff, "Bash(chunk:*)"))
+}
+
+func TestDiffEmptyWhenIdentical(t *testing.T) {
+	data := []byte(`{"foo": "bar"}`)
+	diff := Diff(data, data)
+	assert.Equal(t, diff, "")
 }
 
 func TestMergeMalformedExisting(t *testing.T) {
