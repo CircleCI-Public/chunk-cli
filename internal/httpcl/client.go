@@ -31,6 +31,9 @@ type Config struct {
 	UserAgent string
 	// Timeout is the per-request timeout. Defaults to 30s.
 	Timeout time.Duration
+	// DisableRetries disables automatic retries. By default requests are
+	// retried up to 3 times with exponential backoff.
+	DisableRetries bool
 	// Transport overrides the HTTP transport (useful for testing).
 	Transport http.RoundTripper
 }
@@ -54,6 +57,9 @@ func New(cfg Config) *Client {
 
 	rc := retryablehttp.NewClient()
 	rc.RetryMax = 3
+	if cfg.DisableRetries {
+		rc.RetryMax = 0
+	}
 	rc.RetryWaitMin = 50 * time.Millisecond
 	rc.RetryWaitMax = 2 * time.Second
 	rc.Logger = nil // suppress default log output
