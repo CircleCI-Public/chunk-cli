@@ -236,3 +236,23 @@ func TestInstallCompletionSkipsWhenAlreadyInstalled(t *testing.T) {
 	assert.Equal(t, string(data), existing)
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already installed")))
 }
+
+func TestInstallCompletionBashWritesRCFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/bash")
+
+	// Create .bashrc so detectShell prefers it over .bash_profile.
+	rcFile := filepath.Join(home, ".bashrc")
+	assert.NilError(t, os.WriteFile(rcFile, []byte("# existing config\n"), 0o644))
+
+	streams, _, errOut := testStreams()
+	err := installCompletion(streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(rcFile)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(data), completionTag))
+	assert.Assert(t, strings.Contains(string(data), "source <(chunk completion bash)"))
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
+}

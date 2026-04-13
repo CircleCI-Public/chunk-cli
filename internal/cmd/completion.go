@@ -95,11 +95,10 @@ func installCompletion(streams iostream.Streams) (err error) {
 	line := completionTag + "\n" + sh.source + "\n"
 
 	// Check if already installed.
-	if data, err := os.ReadFile(sh.rcFile); err == nil {
-		if strings.Contains(string(data), completionTag) {
-			streams.ErrPrintln(ui.Warning("Completion already installed."))
-			return nil
-		}
+	data, readErr := os.ReadFile(sh.rcFile)
+	if readErr == nil && strings.Contains(string(data), completionTag) {
+		streams.ErrPrintln(ui.Warning("Completion already installed."))
+		return nil
 	}
 
 	f, err := os.OpenFile(sh.rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)

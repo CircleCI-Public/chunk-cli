@@ -263,7 +263,9 @@ commands, and generates hook config files.`,
 					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping shell completions: %v", err)))
 				} else if !installed {
 					yes, confirmErr := tui.Confirm("Install shell completions?", true)
-					if confirmErr == nil && yes {
+					if confirmErr != nil {
+						streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not confirm: %v", confirmErr)))
+					} else if yes {
 						if installErr := installCompletion(streams); installErr != nil {
 							streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not install completions: %v", installErr)))
 						}
