@@ -159,7 +159,7 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 }
 
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipValidate, skipCircleCI bool
+	var force, skipHooks, skipValidate, skipCircleCI, skipCompletions bool
 	var projectDir string
 
 	cmd := &cobra.Command{
@@ -256,6 +256,21 @@ commands, and generates hook config files.`,
 				}
 			}
 
+			// Step 5: Shell completions
+			if !skipCompletions {
+				installed, err := completionInstalled()
+				if err != nil {
+					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping shell completions: %v", err)))
+				} else if !installed {
+					yes, confirmErr := tui.Confirm("Install shell completions?", true)
+					if confirmErr == nil && yes {
+						if installErr := installCompletion(streams); installErr != nil {
+							streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not install completions: %v", installErr)))
+						}
+					}
+				}
+			}
+
 			streams.ErrPrintln(ui.Success("Project initialized"))
 			return nil
 		},
@@ -265,6 +280,7 @@ commands, and generates hook config files.`,
 	cmd.Flags().BoolVar(&skipHooks, "skip-hooks", false, "Skip hook file generation")
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCircleCI, "skip-circleci", false, "Skip CircleCI org picker")
+	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 
 	return cmd

@@ -60,44 +60,68 @@ func detectShell(home string) (shellConfig, error) {
 	}
 }
 
+// completionInstalled reports whether the completion tag is already in the
+// user's shell rc file. Returns error if shell is unsupported or HOME unset.
+func completionInstalled() (bool, error) {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return false, fmt.Errorf("HOME not set")
+	}
+
+	sh, err := detectShell(home)
+	if err != nil {
+		return false, err
+	}
+
+	data, err := os.ReadFile(sh.rcFile)
+	if err != nil {
+		return false, nil // rc file doesn't exist — not installed
+	}
+	return strings.Contains(string(data), completionTag), nil
+}
+
+// installCompletion appends the completion source line to the user's shell rc file.
+func installCompletion(streams iostream.Streams) (err error) {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return fmt.Errorf("HOME not set")
+	}
+
+	sh, err := detectShell(home)
+	if err != nil {
+		return err
+	}
+
+	line := completionTag + "\n" + sh.source + "\n"
+
+	// Check if already installed.
+	if data, err := os.ReadFile(sh.rcFile); err == nil {
+		if strings.Contains(string(data), completionTag) {
+			streams.ErrPrintln(ui.Warning("Completion already installed."))
+			return nil
+		}
+	}
+
+	f, err := os.OpenFile(sh.rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", sh.rcFile, err)
+	}
+	defer closer.ErrorHandler(f, &err)
+
+	if _, err := f.WriteString("\n" + line); err != nil {
+		return fmt.Errorf("write %s: %w", sh.rcFile, err)
+	}
+
+	streams.ErrPrintln(ui.Success("Completion installed."))
+	return nil
+}
+
 func newCompletionInstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
 		Short: "Install shell completion",
-		RunE: func(cmd *cobra.Command, _ []string) (err error) {
-			io := iostream.FromCmd(cmd)
-			home := os.Getenv("HOME")
-			if home == "" {
-				return fmt.Errorf("HOME not set")
-			}
-
-			sh, err := detectShell(home)
-			if err != nil {
-				return err
-			}
-
-			line := completionTag + "\n" + sh.source + "\n"
-
-			// Check if already installed
-			if data, err := os.ReadFile(sh.rcFile); err == nil {
-				if strings.Contains(string(data), completionTag) {
-					io.ErrPrintln(ui.Warning("Completion already installed."))
-					return nil
-				}
-			}
-
-			f, err := os.OpenFile(sh.rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-			if err != nil {
-				return fmt.Errorf("open %s: %w", sh.rcFile, err)
-			}
-			defer closer.ErrorHandler(f, &err)
-
-			if _, err := f.WriteString("\n" + line); err != nil {
-				return fmt.Errorf("write %s: %w", sh.rcFile, err)
-			}
-
-			io.ErrPrintln(ui.Success("Completion installed."))
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return installCompletion(iostream.FromCmd(cmd))
 		},
 	}
 }
