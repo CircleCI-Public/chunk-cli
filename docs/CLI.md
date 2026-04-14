@@ -7,8 +7,9 @@ Complete command reference for the `chunk` CLI.
 ```
 chunk
 ├── auth
-│   ├── status                      # Check authentication status
-│   └── logout                      # Clear stored API key
+│   ├── set <provider>               # Store credential (circleci | anthropic)
+│   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
+│   └── remove <provider>           # Remove stored credential (circleci | anthropic)
 │
 ├── build-prompt                    # Mine PR comments → analyze → generate prompt
 │   --org <org>                     # GitHub org (auto-detected from git remote)

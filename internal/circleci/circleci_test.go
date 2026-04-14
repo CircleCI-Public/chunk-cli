@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"gotest.tools/v3/assert"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
@@ -21,55 +23,34 @@ func newTestClient(t *testing.T, url string) *Client {
 }
 
 func TestNewClient(t *testing.T) {
-	t.Run("missing token", func(t *testing.T) {
+	t.Run("creates client with token from env", func(t *testing.T) {
+		t.Setenv("CIRCLE_TOKEN", "explicit-token")
+		t.Setenv("CIRCLECI_BASE_URL", "")
+		c, err := NewClient()
+		assert.NilError(t, err)
+		assert.Assert(t, c != nil)
+	})
+
+	t.Run("uses base URL from env", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+
+		t.Setenv("CIRCLE_TOKEN", "test-token")
+		t.Setenv("CIRCLECI_BASE_URL", srv.URL)
+		c, err := NewClient()
+		assert.NilError(t, err)
+
+		ctx := context.Background()
+		assert.NilError(t, c.GetCurrentUser(ctx))
+	})
+
+	t.Run("returns error when no token", func(t *testing.T) {
 		t.Setenv("CIRCLE_TOKEN", "")
 		t.Setenv("CIRCLECI_TOKEN", "")
-
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 		_, err := NewClient()
-		if err == nil {
-			t.Fatal("expected error when no token set")
-		}
-	})
-
-	t.Run("CIRCLE_TOKEN", func(t *testing.T) {
-		t.Setenv("CIRCLE_TOKEN", "tok1")
-		t.Setenv("CIRCLECI_TOKEN", "")
-		t.Setenv("CIRCLECI_BASE_URL", "")
-
-		c, err := NewClient()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if c == nil {
-			t.Fatal("expected non-nil client")
-		}
-	})
-
-	t.Run("CIRCLECI_TOKEN fallback", func(t *testing.T) {
-		t.Setenv("CIRCLE_TOKEN", "")
-		t.Setenv("CIRCLECI_TOKEN", "tok2")
-		t.Setenv("CIRCLECI_BASE_URL", "")
-
-		c, err := NewClient()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if c == nil {
-			t.Fatal("expected non-nil client")
-		}
-	})
-
-	t.Run("custom base URL", func(t *testing.T) {
-		t.Setenv("CIRCLE_TOKEN", "tok")
-		t.Setenv("CIRCLECI_BASE_URL", "https://custom.example.com")
-
-		c, err := NewClient()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if c == nil {
-			t.Fatal("expected non-nil client")
-		}
+		assert.Assert(t, err != nil)
 	})
 }
 

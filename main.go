@@ -17,14 +17,16 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
-		var ue *usererr.Error
-		if errors.As(err, &ue) {
-			fmt.Fprintln(os.Stderr, ue.UserMessage())
-		} else {
-			fmt.Fprintln(os.Stderr, err)
-		}
-		if suggestion := errorSuggestion(err); suggestion != "" {
-			fmt.Fprintln(os.Stderr, suggestion)
+		if !errors.Is(err, cmd.ErrSilent) {
+			var ue *usererr.Error
+			if errors.As(err, &ue) {
+				fmt.Fprintln(os.Stderr, ue.UserMessage())
+			} else {
+				fmt.Fprintln(os.Stderr, err)
+			}
+			if suggestion := errorSuggestion(err); suggestion != "" {
+				fmt.Fprintln(os.Stderr, suggestion)
+			}
 		}
 		os.Exit(1)
 	}
@@ -39,7 +41,7 @@ func errorSuggestion(err error) string {
 	case strings.Contains(lower, "authentication") ||
 		strings.Contains(lower, "invalid api key") ||
 		strings.Contains(lower, "401"):
-		return "Hint: Run `chunk auth login` to set up your API key."
+		return "Hint: Run `chunk auth set anthropic` to set up your API key."
 	case strings.Contains(lower, "no such host") ||
 		strings.Contains(lower, "connection refused") ||
 		strings.Contains(lower, "network is unreachable") ||

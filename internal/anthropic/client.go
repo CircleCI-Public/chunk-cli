@@ -21,8 +21,11 @@ type Client struct {
 // It resolves the API key via config (env > config file) and reads
 // ANTHROPIC_BASE_URL from the environment.
 func New() (*Client, error) {
-	rc := config.Resolve("", "")
-	key := rc.APIKey
+	rc, err := config.Resolve("", "")
+	if err != nil {
+		return nil, fmt.Errorf("resolve config: %w", err)
+	}
+	key := rc.AnthropicAPIKey
 	if key == "" {
 		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable or config file is required")
 	}

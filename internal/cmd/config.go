@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -27,15 +26,24 @@ func newConfigShowCmd() *cobra.Command {
 		Short: "Display resolved configuration",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			rc := config.Resolve("", "")
+			rc, resolveErr := config.Resolve("", "")
+			if resolveErr != nil {
+				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", resolveErr)))
+			}
 
 			w := 15
 			io.Printf("%s %s %s\n", ui.Label("model:", w), rc.Model, ui.Dim("("+rc.ModelSource+")"))
 
-			if rc.APIKey != "" {
-				io.Printf("%s %s %s\n", ui.Label("apiKey:", w), config.MaskAPIKey(rc.APIKey), ui.Dim("("+rc.APIKeySource+")"))
+			if rc.AnthropicAPIKey != "" {
+				io.Printf("%s %s %s\n", ui.Label("anthropicAPIKey:", w), config.MaskKey(rc.AnthropicAPIKey), ui.Dim("("+rc.AnthropicAPIKeySource+")"))
 			} else {
-				io.Printf("%s %s\n", ui.Label("apiKey:", w), ui.Dim("(not set)"))
+				io.Printf("%s %s\n", ui.Label("anthropicAPIKey:", w), ui.Dim("(not set)"))
+			}
+
+			if rc.CircleCIToken != "" {
+				io.Printf("%s %s %s\n", ui.Label("circleCIToken:", w), config.MaskKey(rc.CircleCIToken), ui.Dim("("+rc.CircleCITokenSource+")"))
+			} else {
+				io.Printf("%s %s\n", ui.Label("circleCIToken:", w), ui.Dim("(not set)"))
 			}
 
 			return nil
@@ -47,6 +55,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
+		Long:  "Set a config value (model). Use 'chunk auth set <provider>' to store credentials with validation.",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -54,7 +63,7 @@ func newConfigSetCmd() *cobra.Command {
 
 			if !config.ValidConfigKeys[key] {
 				io.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Unknown config key: %q", key)))
-				os.Exit(2)
+				return ErrSilent
 			}
 
 			cfg, err := config.Load()
@@ -62,11 +71,8 @@ func newConfigSetCmd() *cobra.Command {
 				return err
 			}
 
-			switch key {
-			case "model":
+			if key == "model" {
 				cfg.Model = value
-			case "apiKey":
-				cfg.APIKey = value
 			}
 
 			if err := config.Save(cfg); err != nil {
