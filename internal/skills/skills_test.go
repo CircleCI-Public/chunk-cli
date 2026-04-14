@@ -17,7 +17,7 @@ func TestInstallBothAgents(t *testing.T) {
 	home := t.TempDir()
 
 	// Create both agent config dirs.
-	for _, dir := range []string{".claude", ".codex"} {
+	for _, dir := range []string{".claude", ".agents"} {
 		assert.NilError(t, os.MkdirAll(filepath.Join(home, dir), 0o755))
 	}
 
@@ -32,7 +32,7 @@ func TestInstallBothAgents(t *testing.T) {
 	}
 
 	// Verify files exist.
-	for _, dir := range []string{".claude", ".codex"} {
+	for _, dir := range []string{".claude", ".agents"} {
 		for _, name := range skillNames {
 			path := filepath.Join(home, dir, "skills", name, "SKILL.md")
 			info, err := os.Stat(path)
@@ -45,7 +45,7 @@ func TestInstallBothAgents(t *testing.T) {
 func TestInstallSkipsAgentWithoutConfigDir(t *testing.T) {
 	home := t.TempDir()
 
-	// Only create .claude, not .codex.
+	// Only create .claude, not .agents.
 	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
 	results := skills.Install(home)
@@ -63,12 +63,12 @@ func TestInstallSkipsAgentWithoutConfigDir(t *testing.T) {
 
 	assert.Assert(t, !claude.Skipped)
 	assert.Equal(t, len(claude.Installed), len(skillNames))
-	assert.Assert(t, codex.Skipped, "codex should be skipped when .codex dir missing")
+	assert.Assert(t, codex.Skipped, "codex should be skipped when .agents dir missing")
 	assert.Equal(t, len(codex.Installed), 0)
 
-	// Verify .codex skills dir was not created.
-	_, err := os.Stat(filepath.Join(home, ".codex", "skills"))
-	assert.Assert(t, os.IsNotExist(err), "should not create .codex/skills when .codex missing")
+	// Verify .agents skills dir was not created.
+	_, err := os.Stat(filepath.Join(home, ".agents", "skills"))
+	assert.Assert(t, os.IsNotExist(err), "should not create .agents/skills when .agents missing")
 }
 
 func TestInstallIdempotent(t *testing.T) {
@@ -104,7 +104,7 @@ func TestInstallDetectsOutdated(t *testing.T) {
 
 func TestInstallContentMatchesEmbedded(t *testing.T) {
 	home := t.TempDir()
-	for _, dir := range []string{".claude", ".codex"} {
+	for _, dir := range []string{".claude", ".agents"} {
 		assert.NilError(t, os.MkdirAll(filepath.Join(home, dir), 0o755))
 	}
 
@@ -112,7 +112,7 @@ func TestInstallContentMatchesEmbedded(t *testing.T) {
 
 	for _, name := range skillNames {
 		claudePath := filepath.Join(home, ".claude", "skills", name, "SKILL.md")
-		codexPath := filepath.Join(home, ".codex", "skills", name, "SKILL.md")
+		codexPath := filepath.Join(home, ".agents", "skills", name, "SKILL.md")
 
 		claudeData, err := os.ReadFile(claudePath)
 		assert.NilError(t, err)
@@ -120,7 +120,7 @@ func TestInstallContentMatchesEmbedded(t *testing.T) {
 		assert.NilError(t, err)
 
 		assert.Equal(t, string(claudeData), string(codexData),
-			"content mismatch for skill %s between .claude and .codex", name)
+			"content mismatch for skill %s between .claude and .agents", name)
 	}
 }
 

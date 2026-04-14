@@ -48,7 +48,7 @@ chunk build-prompt --org myorg --repos api,backend --top 10
 
 # Output lands in .chunk/context/review-prompt.md
 
-# Install the review skill so Claude Code uses the prompt during reviews
+# Install review skills for Claude Code, Codex, and Cursor
 chunk skill install
 ```
 
