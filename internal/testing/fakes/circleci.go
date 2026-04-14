@@ -31,6 +31,13 @@ type Sandbox struct {
 	Image          string `json:"image,omitempty"`
 }
 
+type Snapshot struct {
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	Name           string `json:"name"`
+	Tag            string `json:"tag,omitempty"`
+}
+
 type RunResponse struct {
 	RunID      string `json:"runId,omitempty"`
 	PipelineID string `json:"pipelineId,omitempty"`
@@ -53,16 +60,18 @@ type FakeCircleCI struct {
 	Collaborations []Collaboration
 	Projects       []Project
 	Sandboxes      []Sandbox
+	Snapshots      []Snapshot
 	RunResponse    *RunResponse
 	AddKeyURL      string
 	ExecResponse   *ExecResponse
 	RunStatusCode  int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
-	ListStatusCode   int // override for GET /sandbox/instances
-	CreateStatusCode int // override for POST /sandbox/instances
-	ExecStatusCode   int // override for POST /sandbox/instances/:id/exec
-	AddKeyStatusCode int // override for POST /sandbox/instances/:id/ssh/add-key
+	ListStatusCode           int // override for GET /sandbox/instances
+	CreateStatusCode         int // override for POST /sandbox/instances
+	ExecStatusCode           int // override for POST /sandbox/instances/:id/exec
+	AddKeyStatusCode         int // override for POST /sandbox/instances/:id/ssh/add-key
+	CreateSnapshotStatusCode int // override for POST /sandbox/snapshots
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -82,6 +91,10 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.POST("/api/v2/sandbox/instances", f.handleCreateSandbox)
 	r.POST("/api/v2/sandbox/instances/:id/ssh/add-key", f.handleAddSSHKey)
 	r.POST("/api/v2/sandbox/instances/:id/exec", f.handleExec)
+
+	// Snapshot endpoints
+	r.POST("/api/v2/sandbox/snapshots", f.handleCreateSnapshot)
+	r.GET("/api/v2/sandbox/snapshots/:id", f.handleGetSnapshot)
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
@@ -219,6 +232,56 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 		Stderr:    "",
 		ExitCode:  0,
 	})
+}
+
+func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	statusCode := f.CreateSnapshotStatusCode
+	f.mu.RUnlock()
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"message": "API error"})
+		return
+	}
+
+	var body struct {
+		SandboxID string `json:"sandbox_id"`
+		Name      string `json:"name"`
+	}
+	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Bad request"})
+		return
+	}
+
+	snap := Snapshot{
+		ID:   "snap-new-123",
+		Name: body.Name,
+	}
+
+	f.mu.Lock()
+	f.Snapshots = append(f.Snapshots, snap)
+	f.mu.Unlock()
+
+	c.JSON(http.StatusCreated, snap)
+}
+
+func (f *FakeCircleCI) handleGetSnapshot(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	id := c.Param("id")
+	for _, s := range f.Snapshots {
+		if s.ID == id {
+			c.JSON(http.StatusOK, s)
+			return
+		}
+	}
+	c.JSON(http.StatusNotFound, gin.H{"message": "snapshot not found"})
 }
 
 func (f *FakeCircleCI) handleTriggerRun(c *gin.Context) {

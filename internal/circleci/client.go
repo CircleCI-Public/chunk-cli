@@ -95,6 +95,30 @@ func (c *Client) Exec(ctx context.Context, sandboxID, command string, args []str
 	return &resp, nil
 }
 
+func (c *Client) CreateSnapshot(ctx context.Context, sandboxID, name string) (*Snapshot, error) {
+	var resp Snapshot
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/api/v2/sandbox/snapshots",
+		httpcl.Body(CreateSnapshotRequest{SandboxID: sandboxID, Name: name}),
+		httpcl.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("create snapshot: %w", err)
+	}
+	return &resp, nil
+}
+
+func (c *Client) GetSnapshot(ctx context.Context, id string) (*Snapshot, error) {
+	var resp Snapshot
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/v2/sandbox/snapshots/%s", id),
+		httpcl.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("get snapshot: %w", err)
+	}
+	return &resp, nil
+}
+
 func (c *Client) TriggerRun(ctx context.Context, orgID, projectID string, body TriggerRunRequest) (*RunResponse, error) {
 	var resp RunResponse
 	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost,
