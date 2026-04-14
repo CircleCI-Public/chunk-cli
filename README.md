@@ -12,7 +12,6 @@ CLI for remote validation of changes — run code in a cloud environment before 
 ## Requirements
 
 - **macOS** (arm64 or x86_64) or **Linux** (arm64 or x86_64)
-- `gh` CLI installed and authenticated (`gh auth login`) for context generation
 
 ## Installation
 
@@ -48,9 +47,8 @@ chunk build-prompt
 chunk build-prompt --org myorg --repos api,backend --top 10
 
 # Output lands in .chunk/context/review-prompt.md
-# AI agents (Claude Code, Cursor) pick it up automatically
 
-# Enhance your agent's review skills
+# Install the review skill so Claude Code uses the prompt during reviews
 chunk skill install
 ```
 
