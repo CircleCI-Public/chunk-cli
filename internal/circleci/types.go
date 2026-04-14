@@ -67,7 +67,6 @@ type Snapshot struct {
 }
 
 type CreateSnapshotRequest struct {
-	SandboxID string  `json:"sandbox_id"`
-	Name      string  `json:"name"`
-	Tag       *string `json:"tag,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Name      string `json:"name"`
 }
