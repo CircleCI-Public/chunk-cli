@@ -72,6 +72,7 @@ type FakeCircleCI struct {
 	ExecStatusCode           int // override for POST /sandbox/instances/:id/exec
 	AddKeyStatusCode         int // override for POST /sandbox/instances/:id/ssh/add-key
 	CreateSnapshotStatusCode int // override for POST /sandbox/snapshots
+	GetSnapshotStatusCode    int // override for GET /sandbox/snapshots/:id
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -273,6 +274,11 @@ func (f *FakeCircleCI) handleGetSnapshot(c *gin.Context) {
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+
+	if f.GetSnapshotStatusCode != 0 {
+		c.JSON(f.GetSnapshotStatusCode, gin.H{"message": "API error"})
+		return
+	}
 
 	id := c.Param("id")
 	for _, s := range f.Snapshots {

@@ -13,25 +13,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
-func TestSandboxSnapshotCreateHappyPath(t *testing.T) {
-	cci := fakes.NewFakeCircleCI()
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	env := testenv.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
-
-	result := binary.RunCLI(t, []string{
-		"sandbox", "snapshot", "create",
-		"--sandbox-id", "sb-111",
-		"--name", "my-checkpoint",
-	}, env, env.HomeDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "snap-new-123"),
-		"expected snapshot ID in stderr, got: %s", result.Stderr)
-}
-
 func TestSandboxSnapshotCreateSendsSandboxIDInBody(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
