@@ -335,7 +335,7 @@ func BuildAnalysisPrompt(groups []ReviewerGroup) string {
 
 	reviewerData := formatReviewerData(groups)
 
-	return fmt.Sprintf(`You are analyzing code review feedback from senior engineers at CircleCI.
+	return fmt.Sprintf(`You are analyzing code review feedback from senior engineers.
 
 # Context
 You have %d review comments from %d reviewer(s) across multiple repositories. Your goal is to identify:
