@@ -47,9 +47,9 @@ func TestOpenSessionDefaultKeyFallback(t *testing.T) {
 func TestList(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-1", Name: "alpha", OrganizationID: "org-1"},
-		{ID: "sb-2", Name: "beta", OrganizationID: "org-1"},
-		{ID: "sb-3", Name: "gamma", OrganizationID: "org-2"},
+		{ID: "sb-1", Name: "alpha", OrgID: "org-1"},
+		{ID: "sb-2", Name: "beta", OrgID: "org-1"},
+		{ID: "sb-3", Name: "gamma", OrgID: "org-2"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -84,7 +84,7 @@ func TestCreate(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, sb.ID, "sandbox-new-123")
 	assert.Equal(t, sb.Name, "my-sandbox")
-	assert.Equal(t, sb.OrganizationID, "org-1")
+	assert.Equal(t, sb.OrgID, "org-1")
 }
 
 func TestExec(t *testing.T) {

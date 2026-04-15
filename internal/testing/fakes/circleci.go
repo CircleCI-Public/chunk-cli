@@ -24,11 +24,11 @@ type Project struct {
 }
 
 type Sandbox struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	OrganizationID string `json:"organization_id"`
-	Provider       string `json:"provider,omitempty"`
-	Image          string `json:"image,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	OrgID    string `json:"org_id"`
+	Provider string `json:"provider,omitempty"`
+	Image    string `json:"image,omitempty"`
 }
 
 type RunResponse struct {
@@ -131,7 +131,7 @@ func (f *FakeCircleCI) handleListSandboxes(c *gin.Context) {
 	orgID := c.Query("org_id")
 	var filtered []Sandbox
 	for _, s := range f.Sandboxes {
-		if s.OrganizationID == orgID {
+		if s.OrgID == orgID {
 			filtered = append(filtered, s)
 		}
 	}
@@ -155,10 +155,10 @@ func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
 	}
 
 	var body struct {
-		OrganizationID string `json:"organization_id"`
-		Name           string `json:"name"`
-		Provider       string `json:"provider,omitempty"`
-		Image          string `json:"image,omitempty"`
+		OrgID    string `json:"org_id"`
+		Name     string `json:"name"`
+		Provider string `json:"provider,omitempty"`
+		Image    string `json:"image,omitempty"`
 	}
 	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Bad request"})
@@ -166,10 +166,10 @@ func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
 	}
 
 	sandbox := Sandbox{
-		ID:             "sandbox-new-123",
-		Name:           body.Name,
-		OrganizationID: body.OrganizationID,
-		Image:          body.Image,
+		ID:    "sandbox-new-123",
+		Name:  body.Name,
+		OrgID: body.OrgID,
+		Image: body.Image,
 	}
 
 	f.mu.Lock()

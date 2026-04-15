@@ -20,8 +20,8 @@ import (
 func TestSandboxesListHappyPath(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-111", Name: "dev-sandbox", OrganizationID: "org-aaa"},
-		{ID: "sb-222", Name: "staging-sandbox", OrganizationID: "org-aaa"},
+		{ID: "sb-111", Name: "dev-sandbox", OrgID: "org-aaa"},
+		{ID: "sb-222", Name: "staging-sandbox", OrgID: "org-aaa"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -69,8 +69,8 @@ func TestSandboxesListEmpty(t *testing.T) {
 func TestSandboxesListFiltersByOrg(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-111", Name: "org-a-box", OrganizationID: "org-a"},
-		{ID: "sb-222", Name: "org-b-box", OrganizationID: "org-b"},
+		{ID: "sb-111", Name: "org-a-box", OrgID: "org-a"},
+		{ID: "sb-222", Name: "org-b-box", OrgID: "org-b"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -140,7 +140,7 @@ func TestSandboxesCreateHappyPath(t *testing.T) {
 	var body map[string]interface{}
 	err := json.Unmarshal(createReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["organization_id"], "org-aaa")
+	assert.Equal(t, body["org_id"], "org-aaa")
 	assert.Equal(t, body["name"], "my-new-sandbox")
 }
 
@@ -425,7 +425,7 @@ func TestSandboxesCreateMissingName(t *testing.T) {
 func TestSandboxesListFromConfig(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-999", Name: "config-sandbox", OrganizationID: "org-from-config"},
+		{ID: "sb-999", Name: "config-sandbox", OrgID: "org-from-config"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
