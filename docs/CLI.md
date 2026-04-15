@@ -25,6 +25,13 @@ chunk
 │   ├── show                        # Display resolved configuration
 │   └── set <key> <value>           # Set a config value (keys: model, apiKey)
 │
+├── init                            # Initialize project configuration
+│   --force                         # Overwrite existing config
+│   --skip-hooks                    # Skip hook file generation
+│   --skip-validate                 # Skip validate command detection
+│   --skip-circleci                 # Skip CircleCI org picker
+│   --project-dir <path>            # Project directory (defaults to cwd)
+│
 ├── task
 │   └── run                         # Trigger a task run
 │       --definition <name|uuid>    # Definition name or UUID (required)
@@ -39,24 +46,16 @@ chunk
 │
 ├── validate                        # Run validation commands
 │   [name]                          # Optional: run a specific named command
-│   --check                         # Hook mode: check sentinel result
-│   --no-check                      # Hook mode: run + save sentinel, don't enforce
-│   --task                          # Hook mode: check subagent task result
-│   --sync <specs>                  # Hook mode: grouped sequential checks
-│   --on <group>                    # Trigger group name
-│   --trigger <pattern>             # Inline trigger pattern
-│   --matcher <regex>               # Tool-name regex filter
-│   --limit <n>                     # Max consecutive blocks
-│   --staged                        # Only staged files
-│   --always                        # Run even without changes
-│   --sandbox-id <id>               # Remote execution in sandbox
-│   --org-id <id>                   # Organization ID (required with sandbox-id)
 │   --dry-run                       # Print commands without executing
 │   --list                          # List all configured commands
 │   --status                        # Check cache only, don't execute
 │   --cmd <command>                 # Run an inline command
 │   --save                          # Save --cmd to config
 │   --force-run                     # Ignore cache, always run
+│   --sandbox-id <id>               # Remote execution in sandbox
+│   --identity-file <path>          # SSH identity file for sandbox
+│   --workdir <path>                # Working directory on sandbox
+│   --project <path>                # Override project directory
 │
 ├── sandbox
 │   ├── list --org-id <id>          # List sandboxes
@@ -98,10 +97,7 @@ chunk
   to disable.
 - `config set` accepts only `model` and `apiKey` as keys.
 - `chunk init` uses Claude to auto-detect the test command for the project.
-- `validate --check`, `--no-check`, `--task`, and `--sync` flags activate hook
-  mode for IDE lifecycle integration. See **[docs/HOOKS.md](HOOKS.md)**.
-- Session plumbing (`hook scope`, `hook state`) is hidden from `--help` but
-  still callable by IDE-generated settings.
+  It generates `.claude/settings.json` with pre-commit hooks.
 
 ## Flag Conventions
 

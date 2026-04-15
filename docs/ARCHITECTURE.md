@@ -16,7 +16,7 @@ chunk-cli/
     │   ├── buildprompt.go     # build-prompt
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set
-    │   ├── hook.go            # hook repo/setup/env/scope/state/exec/task/sync
+    │   ├── init.go            # init (project setup, settings.json generation)
     │   ├── sandbox.go         # sandbox list/create/exec/add-ssh-key/ssh/sync/env/build
     │   ├── skills.go          # skill install/list
     │   ├── task.go            # task run
@@ -29,7 +29,6 @@ chunk-cli/
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers
-    ├── hook/                  # Hook system: exec, task, sync, state, scope, env
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
     ├── sandbox/               # CircleCI sandbox operations
@@ -53,7 +52,7 @@ main.go → internal/cmd/ → internal/{business packages} → internal/httpcl/
 
 - `main.go` creates the root command and handles top-level errors
 - `internal/cmd/` contains thin cobra wrappers that parse flags and delegate
-- Business packages (`buildprompt/`, `hook/`, `task/`, etc.) contain the logic
+- Business packages (`buildprompt/`, `task/`, etc.) contain the logic
 - `internal/httpcl/` is an independent library — no imports are allowed to other `internal/` packages
 - `config/` is a leaf — no imports from other `internal/` packages
 
@@ -115,14 +114,14 @@ Resolution priority:
 - API key: flag > config file > `ANTHROPIC_API_KEY` env var
 - Model: flag > config file > built-in default
 
-## Hook System
+## Pre-Commit Hooks
 
-See **[docs/HOOKS.md](HOOKS.md)** for the full hook system documentation.
+`chunk init` generates `.claude/settings.json` with a `PreToolUse` hook that
+runs configured validation commands before the AI agent commits code. See
+**[docs/HOOKS.md](HOOKS.md)** for details.
 
-The hook subsystem lives entirely in `internal/hook/` and is exposed via
-`internal/cmd/hook.go`. It provides lifecycle automation for AI coding agents
-through exec commands, task delegation, grouped checks, state persistence,
-and multi-repo scope management.
+`chunk validate` runs those same commands manually, with SHA256-based content
+caching so unchanged files skip re-execution.
 
 ## HTTP Client (`internal/httpcl/`)
 
@@ -138,7 +137,6 @@ Shared HTTP infrastructure used by `anthropic/`, `circleci/`, and `github/`:
 - Business logic returns `usererr.Error` for user-facing messages
 - `fmt.Errorf("context: %w", err)` for error wrapping
 - `main()` catches errors and prints the appropriate message
-- Hook commands use exit codes as a protocol (0 = allow, 1 = error)
 
 ## Environment Variables
 
@@ -150,10 +148,4 @@ Shared HTTP infrastructure used by `anthropic/`, `circleci/`, and `github/`:
 | `GITHUB_API_URL` | github | GitHub API endpoint override |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
-| `CHUNK_HOOK_ENABLE` | hook | Global hook enable (0/1) |
-| `CHUNK_HOOK_ENABLE_{NAME}` | hook | Per-command enable override |
-| `CHUNK_HOOK_SENTINELS_DIR` | hook | Custom sentinel directory |
-| `CHUNK_HOOK_PROJECT_ROOT` | hook | Multi-repo workspace root |
-| `CHUNK_HOOK_LOG_DIR` | hook | Log directory |
-| `CHUNK_HOOK_VERBOSE` | hook | Verbose logging |
-| `CLAUDE_PROJECT_DIR` | hook | IDE-provided project directory |
+| `CLAUDE_PROJECT_DIR` | init | IDE-provided project directory |
