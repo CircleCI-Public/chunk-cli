@@ -76,9 +76,9 @@ func TestNewClient(t *testing.T) {
 func TestListSandboxes(t *testing.T) {
 	fake := fakes.NewFakeCircleCI()
 	fake.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-1", Name: "dev", OrganizationID: "org-1"},
-		{ID: "sb-2", Name: "staging", OrganizationID: "org-1"},
-		{ID: "sb-3", Name: "other", OrganizationID: "org-2"},
+		{ID: "sb-1", Name: "dev", OrgID: "org-1"},
+		{ID: "sb-2", Name: "staging", OrgID: "org-1"},
+		{ID: "sb-3", Name: "other", OrgID: "org-2"},
 	}
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
@@ -144,8 +144,8 @@ func TestCreateSandbox(t *testing.T) {
 	if sb.Name != "my-sandbox" {
 		t.Errorf("expected name my-sandbox, got %s", sb.Name)
 	}
-	if sb.OrganizationID != "org-1" {
-		t.Errorf("expected org org-1, got %s", sb.OrganizationID)
+	if sb.OrgID != "org-1" {
+		t.Errorf("expected org org-1, got %s", sb.OrgID)
 	}
 	if sb.Image != "ubuntu:22.04" {
 		t.Errorf("expected image ubuntu:22.04, got %s", sb.Image)

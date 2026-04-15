@@ -222,7 +222,7 @@ func TestSandboxCreateOrgIDFromConfig(t *testing.T) {
 	var body map[string]interface{}
 	err := json.Unmarshal(createReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["organization_id"], "org-from-config")
+	assert.Equal(t, body["org_id"], "org-from-config")
 }
 
 func TestSandboxCreateNoOrgIDNoConfig(t *testing.T) {
