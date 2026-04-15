@@ -37,6 +37,7 @@ func newSandboxCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxUseCmd())
 	cmd.AddCommand(newSandboxCurrentCmd())
 	cmd.AddCommand(newSandboxForgetCmd())
+	cmd.AddCommand(newSandboxResetCmd())
 
 	return cmd
 }
@@ -472,6 +473,39 @@ Example:
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write Dockerfile.test and build from")
 	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
+
+	return cmd
+}
+
+func newSandboxResetCmd() *cobra.Command {
+	var sandboxID string
+
+	cmd := &cobra.Command{
+		Use:   "reset",
+		Short: "Reset a sandbox to a clean state after snapshotting",
+		Long: `Reset a sandbox to a clean state.
+
+Unsets agent-specific environment variables, terminates the agent process,
+and removes the agent from the sandbox. Run this after taking a snapshot to
+ensure the snapshot base is clean for future use.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			if err := resolveSandboxID(&sandboxID); err != nil {
+				return err
+			}
+			client, err := circleci.NewClient()
+			if err != nil {
+				return err
+			}
+			if _, err := sandbox.Reset(cmd.Context(), client, sandboxID); err != nil {
+				return err
+			}
+			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Reset sandbox %s", sandboxID)))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
 
 	return cmd
 }

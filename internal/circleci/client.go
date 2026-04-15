@@ -95,6 +95,18 @@ func (c *Client) Exec(ctx context.Context, sandboxID, command string, args []str
 	return &resp, nil
 }
 
+func (c *Client) ResetSandbox(ctx context.Context, sandboxID string) (*ResetSandboxResponse, error) {
+	var resp ResetSandboxResponse
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v2/sandbox/instances/%s/reset", sandboxID),
+		httpcl.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("reset sandbox: %w", err)
+	}
+	return &resp, nil
+}
+
 func (c *Client) TriggerRun(ctx context.Context, orgID, projectID string, body TriggerRunRequest) (*RunResponse, error) {
 	var resp RunResponse
 	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost,

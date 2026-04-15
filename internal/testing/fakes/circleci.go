@@ -63,6 +63,9 @@ type FakeCircleCI struct {
 	CreateStatusCode int // override for POST /sandbox/instances
 	ExecStatusCode   int // override for POST /sandbox/instances/:id/exec
 	AddKeyStatusCode int // override for POST /sandbox/instances/:id/ssh/add-key
+	ResetStatusCode  int // override for POST /sandbox/instances/:id/reset
+
+	ResetRequests []string // IDs of sandboxes reset via handleResetSandbox
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -82,6 +85,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.POST("/api/v2/sandbox/instances", f.handleCreateSandbox)
 	r.POST("/api/v2/sandbox/instances/:id/ssh/add-key", f.handleAddSSHKey)
 	r.POST("/api/v2/sandbox/instances/:id/exec", f.handleExec)
+	r.POST("/api/v2/sandbox/instances/:id/reset", f.handleResetSandbox)
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
@@ -244,4 +248,27 @@ func (f *FakeCircleCI) handleTriggerRun(c *gin.Context) {
 		RunID:      "run-abc-123",
 		PipelineID: "pipeline-def-456",
 	})
+}
+
+func (f *FakeCircleCI) handleResetSandbox(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+
+	f.mu.RLock()
+	statusCode := f.ResetStatusCode
+	f.mu.RUnlock()
+
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"message": "API error"})
+		return
+	}
+
+	id := c.Param("id")
+
+	f.mu.Lock()
+	f.ResetRequests = append(f.ResetRequests, id)
+	f.mu.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{"id": id})
 }

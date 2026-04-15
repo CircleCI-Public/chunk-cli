@@ -58,3 +58,7 @@ type CreateSandboxRequest struct {
 	Provider string `json:"provider,omitempty"`
 	Image    string `json:"image,omitempty"`
 }
+
+type ResetSandboxResponse struct {
+	ID string `json:"id"`
+}
