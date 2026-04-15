@@ -507,6 +507,7 @@ func initGitRepo(t *testing.T, dir string) {
 		{"git", "init"},
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
+		{"git", "config", "commit.gpgsign", "false"},
 	} {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
