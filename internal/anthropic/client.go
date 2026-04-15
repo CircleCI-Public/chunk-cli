@@ -33,11 +33,12 @@ func New() (*Client, error) {
 	}
 
 	c := httpcl.New(httpcl.Config{
-		BaseURL:    baseURL,
-		AuthToken:  key,
-		AuthHeader: "x-api-key",
-		UserAgent:  "chunk-cli",
-		Timeout:    5 * time.Minute,
+		BaseURL:        baseURL,
+		AuthToken:      key,
+		AuthHeader:     "x-api-key",
+		UserAgent:      "chunk-cli",
+		Timeout:        5 * time.Minute,
+		DisableRetries: true,
 	})
 
 	return &Client{http: c}, nil

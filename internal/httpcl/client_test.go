@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
@@ -72,6 +73,29 @@ func TestCallHTTPError(t *testing.T) {
 	}
 	if !httpcl.HasStatusCode(err, http.StatusNotFound) {
 		t.Fatalf("expected HTTPError with 404, got %v", err)
+	}
+}
+
+func TestDisableRetries(t *testing.T) {
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	c := httpcl.New(httpcl.Config{
+		BaseURL:        srv.URL,
+		DisableRetries: true,
+	})
+
+	_, err := c.Call(context.Background(), httpcl.NewRequest("GET", "/"))
+	if err == nil {
+		t.Fatal("expected error for 503 response")
+	}
+	if n := attempts.Load(); n != 1 {
+		t.Fatalf("expected exactly 1 attempt with retries disabled, got %d", n)
 	}
 }
 
