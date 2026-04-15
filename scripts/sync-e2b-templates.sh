@@ -81,6 +81,7 @@ for lang in "${LANGUAGES[@]}"; do
       failed=$((failed + 1))
     fi
 
+    rm -rf "$tmpdir"
   done <<< "$tags"
 done
 
