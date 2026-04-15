@@ -47,6 +47,8 @@ sanitize_version() {
 
 created=0
 failed=0
+cleanup_dirs=()
+trap 'rm -rf "${cleanup_dirs[@]+"${cleanup_dirs[@]}"}"' EXIT
 
 for lang in "${LANGUAGES[@]}"; do
   echo "--- cimg/${lang} ---"
@@ -68,17 +70,17 @@ for lang in "${LANGUAGES[@]}"; do
     echo "  Building template '${template_name}' from cimg/${lang}:${tag} ..."
 
     tmpdir=$(mktemp -d)
+    cleanup_dirs+=("$tmpdir")
     echo "FROM cimg/${lang}:${tag}" > "${tmpdir}/Dockerfile"
 
     if e2b template build --name "$template_name" --dockerfile "${tmpdir}/Dockerfile" --cmd "sleep infinity"; then
       echo "  Created ${template_name}"
-      ((created++))
+      created=$((created + 1))
     else
       echo "  Failed to create ${template_name}" >&2
-      ((failed++))
+      failed=$((failed + 1))
     fi
 
-    rm -rf "$tmpdir"
   done <<< "$tags"
 done
 
