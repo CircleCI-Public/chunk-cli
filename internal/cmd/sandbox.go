@@ -59,12 +59,9 @@ func resolveSandboxID(sandboxID *string) error {
 	return nil
 }
 
-// resolveProvider returns the provider from the flag if set, otherwise the
-// CHUNK_SANDBOX_PROVIDER env var, otherwise the default ("e2b").
-func resolveProvider(flagVal string) string {
-	if flagVal != "" {
-		return flagVal
-	}
+// resolveProvider returns the CHUNK_SANDBOX_PROVIDER env var if set,
+// otherwise the default ("e2b").
+func resolveProvider() string {
 	if v := os.Getenv(providerEnvVar); v != "" {
 		return v
 	}
@@ -129,7 +126,7 @@ const (
 )
 
 func newSandboxCreateCmd() *cobra.Command {
-	var orgID, name, provider, image string
+	var orgID, name, image string
 	var quiet bool
 
 	cmd := &cobra.Command{
@@ -149,7 +146,7 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 			if err != nil {
 				return err
 			}
-			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, resolveProvider(provider), image)
+			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, resolveProvider(), image)
 			if err != nil {
 				return err
 			}
@@ -168,7 +165,6 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&name, "name", "", "Sandbox name")
-	cmd.Flags().StringVar(&provider, "provider", "", `Sandbox provider ("unikraft" or "e2b")`)
 	cmd.Flags().StringVar(&image, "image", "", "E2B template ID or container image")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Print only the sandbox ID")
 	_ = cmd.MarkFlagRequired("name")
@@ -621,7 +617,7 @@ func resolveEnvironment(cmd *cobra.Command, dir string) (envbuilder.Environment,
 }
 
 func newSandboxEnvSetupCmd() *cobra.Command {
-	var orgID, name, provider, image, dir, identityFile, envFile string
+	var orgID, name, image, dir, identityFile, envFile string
 	var envVarsFlag []string
 
 	cmd := &cobra.Command{
@@ -652,7 +648,11 @@ Example:
 			}
 
 			// Resolve image from flags or env spec.
-			if image == "" {
+			// For e2b the image is a template ID — the env spec image is a Docker
+			// image name and is not valid here. Only use the env spec image for
+			// non-e2b providers, or when --image is explicitly set.
+			resolvedProvider := resolveProvider()
+			if image == "" && resolvedProvider != "e2b" {
 				image = env.ResolvedImage()
 				if image == "" {
 					return fmt.Errorf("--image is required when environment has no image")
@@ -669,7 +669,7 @@ Example:
 				return err
 			}
 			streams.ErrPrintf("Creating sandbox...\n")
-			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, resolveProvider(provider), image)
+			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, resolvedProvider, image)
 			if err != nil {
 				return usererr.New(fmt.Sprintf("Failed to create sandbox. Check your network connection and that --org-id is correct.\n  %s", err), err)
 			}
@@ -726,7 +726,6 @@ Example:
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&name, "name", "", "Sandbox name")
-	cmd.Flags().StringVar(&provider, "provider", "", `Sandbox provider ("unikraft" or "e2b")`)
 	cmd.Flags().StringVar(&image, "image", "", `Container image (unikraft) or E2B template ID (e2b)`)
 	cmd.Flags().StringVar(&dir, "dir", "", "Directory to detect environment in (default: current directory)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")

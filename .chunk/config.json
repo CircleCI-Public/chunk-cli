@@ -36,5 +36,21 @@
   "vcs": {
     "org": "CircleCI-Public",
     "repo": "chunk-cli"
+  },
+  "environment": {
+    "stack": "go",
+    "steps": [
+      {
+        "name": "git",
+        "command": "sudo apt-get update \u0026\u0026 sudo apt-get install -y git --no-install-recommends \u0026\u0026 sudo rm -rf /var/lib/apt/lists/*"
+      },
+      {
+        "name": "install",
+        "command": "go mod download"
+      }
+    ],
+    "test": "go test -p 1 ./...",
+    "image": "cimg/go",
+    "image_version": "1.26.2"
   }
 }
