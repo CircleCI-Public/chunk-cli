@@ -8,19 +8,26 @@ set -euo pipefail
 #   - jq, curl
 #
 # Usage:
-#   ./scripts/sync-e2b-templates.sh [--dry-run]
+#   ./scripts/sync-e2b-templates.sh --team <team-id> [--dry-run]
 
 LANGUAGES=(go python node rust)
 TAGS_PER_LANG=3
 SEMVER_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$'
 DRY_RUN=false
+TEAM=""
 
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run) DRY_RUN=true ;;
-    *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --team) TEAM="$2"; shift 2 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+
+if [[ -z "$TEAM" ]]; then
+  echo "Error: --team <team-id> is required." >&2
+  exit 1
+fi
 
 # Check prerequisites
 for cmd in e2b jq curl; do
@@ -73,7 +80,7 @@ for lang in "${LANGUAGES[@]}"; do
     cleanup_dirs+=("$tmpdir")
     echo "FROM cimg/${lang}:${tag}" > "${tmpdir}/Dockerfile"
 
-    if e2b template build --name "$template_name" --dockerfile "${tmpdir}/Dockerfile" --cmd "sleep infinity"; then
+    if e2b template build --name "$template_name" --dockerfile "${tmpdir}/Dockerfile" --cmd "sleep infinity" --team "$TEAM"; then
       echo "  Created ${template_name}"
       created=$((created + 1))
     else
