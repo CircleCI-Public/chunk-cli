@@ -39,7 +39,7 @@ func TestSkillsInstall(t *testing.T) {
 func TestSkillsInstallSkipsUnavailableAgent(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	// Only create .claude, not .codex.
+	// Only create .claude, not .agents.
 	claudeDir := filepath.Join(env.HomeDir, ".claude")
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
@@ -50,9 +50,9 @@ func TestSkillsInstallSkipsUnavailableAgent(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "codex: skipped"),
 		"expected codex skipped message, got: %s", combined)
 
-	// .codex dir should not have been created.
-	_, err := os.Stat(filepath.Join(env.HomeDir, ".codex", "skills"))
-	assert.Assert(t, os.IsNotExist(err), "should not create .codex/skills")
+	// .agents dir should not have been created.
+	_, err := os.Stat(filepath.Join(env.HomeDir, ".agents", "skills"))
+	assert.Assert(t, os.IsNotExist(err), "should not create .agents/skills")
 }
 
 func TestSkillsInstallUpToDate(t *testing.T) {
@@ -106,8 +106,8 @@ func TestSkillsListShowsDescriptions(t *testing.T) {
 func TestSkillsInstallCodexPath(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	// Only create .codex, not .claude.
-	codexDir := filepath.Join(env.HomeDir, ".codex")
+	// Only create .agents, not .claude.
+	codexDir := filepath.Join(env.HomeDir, ".agents")
 	assert.NilError(t, os.MkdirAll(codexDir, 0o755))
 
 	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
@@ -122,7 +122,7 @@ func TestSkillsInstallCodexPath(t *testing.T) {
 	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "debug-ci-failures"} {
 		skillFile := filepath.Join(codexDir, "skills", name, "SKILL.md")
 		info, err := os.Stat(skillFile)
-		assert.NilError(t, err, "expected skill %s to exist under .codex", name)
+		assert.NilError(t, err, "expected skill %s to exist under .agents", name)
 		assert.Assert(t, info.Size() > 0, "expected skill %s to be non-empty", name)
 	}
 }
@@ -131,7 +131,7 @@ func TestSkillsInstallBothAgents(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	claudeDir := filepath.Join(env.HomeDir, ".claude")
-	codexDir := filepath.Join(env.HomeDir, ".codex")
+	codexDir := filepath.Join(env.HomeDir, ".agents")
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 	assert.NilError(t, os.MkdirAll(codexDir, 0o755))
 
@@ -192,7 +192,7 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 func TestSkillsInstallNoAgentDirs(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	// Don't create .claude or .codex.
+	// Don't create .claude or .agents.
 	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
@@ -228,7 +228,7 @@ func TestSkillsListStateLabels(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "missing"),
 		"expected 'missing' state before install, got: %s", combined)
 
-	// .codex does not exist, so codex should show "n/a".
+	// .agents does not exist, so codex should show "n/a".
 	assert.Assert(t, strings.Contains(combined, "n/a"),
 		"expected 'n/a' for codex (not installed), got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "codex:"),
