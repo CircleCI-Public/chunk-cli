@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func fakeConfirmYes(_ string, _ bool) (bool, error) { return true, nil }
@@ -167,4 +169,90 @@ func TestWriteSettingsAlreadyUpToDate(t *testing.T) {
 	streams2, _, errOut := testStreams()
 	assert.NilError(t, writeSettings(dir, commands, streams2, fakeConfirmYes))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already up to date")))
+}
+
+func setupShellEnv(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/zsh")
+	return home
+}
+
+func TestCompletionInstalledFalseWhenNoRCFile(t *testing.T) {
+	setupShellEnv(t)
+
+	installed, err := completionInstalled()
+	assert.NilError(t, err)
+	assert.Assert(t, !installed)
+}
+
+func TestCompletionInstalledTrueWhenTagPresent(t *testing.T) {
+	home := setupShellEnv(t)
+	rcFile := filepath.Join(home, ".zshrc")
+	assert.NilError(t, os.WriteFile(rcFile, []byte(completionTag+"\nsource <(chunk completion zsh)\n"), 0o644))
+
+	installed, err := completionInstalled()
+	assert.NilError(t, err)
+	assert.Assert(t, installed)
+}
+
+func TestCompletionInstalledUnsupportedShell(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SHELL", "/bin/fish")
+
+	_, err := completionInstalled()
+	assert.Assert(t, err != nil)
+}
+
+func TestInstallCompletionWritesRCFile(t *testing.T) {
+	home := setupShellEnv(t)
+	rcFile := filepath.Join(home, ".zshrc")
+	streams, _, errOut := testStreams()
+
+	err := installCompletion(streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(rcFile)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(data), completionTag))
+	assert.Assert(t, strings.Contains(string(data), "source <(chunk completion zsh)"))
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
+}
+
+func TestInstallCompletionSkipsWhenAlreadyInstalled(t *testing.T) {
+	home := setupShellEnv(t)
+	rcFile := filepath.Join(home, ".zshrc")
+	existing := completionTag + "\nsource <(chunk completion zsh)\n"
+	assert.NilError(t, os.WriteFile(rcFile, []byte(existing), 0o644))
+
+	streams, _, errOut := testStreams()
+	err := installCompletion(streams)
+	assert.NilError(t, err)
+
+	// File unchanged.
+	data, err := os.ReadFile(rcFile)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), existing)
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already installed")))
+}
+
+func TestInstallCompletionBashWritesRCFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/bash")
+
+	// Create .bashrc so detectShell prefers it over .bash_profile.
+	rcFile := filepath.Join(home, ".bashrc")
+	assert.NilError(t, os.WriteFile(rcFile, []byte("# existing config\n"), 0o644))
+
+	streams, _, errOut := testStreams()
+	err := installCompletion(streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(rcFile)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(data), completionTag))
+	assert.Assert(t, strings.Contains(string(data), "source <(chunk completion bash)"))
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
 }
