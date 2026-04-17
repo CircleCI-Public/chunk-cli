@@ -27,6 +27,11 @@ type UserConfig struct {
 	AnthropicAPIKey string `json:"anthropicAPIKey,omitempty"`
 	CircleCIToken   string `json:"circleCIToken,omitempty"`
 	Model           string `json:"model,omitempty"`
+
+	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
+	// silently lose their stored Anthropic key on upgrade. Migrated into
+	// AnthropicAPIKey by Load and dropped on the next Save (omitempty).
+	LegacyAPIKey string `json:"apiKey,omitempty"`
 }
 
 // ResolvedConfig holds the final resolved values with their sources.
@@ -60,6 +65,10 @@ func Load() (UserConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return UserConfig{}, err
 	}
+	if cfg.AnthropicAPIKey == "" && cfg.LegacyAPIKey != "" {
+		cfg.AnthropicAPIKey = cfg.LegacyAPIKey
+	}
+	cfg.LegacyAPIKey = ""
 	return cfg, nil
 }
 

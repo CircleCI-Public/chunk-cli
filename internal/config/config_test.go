@@ -65,6 +65,46 @@ func TestLoad_ValidFile(t *testing.T) {
 	assert.Equal(t, cfg.Model, "claude-test")
 }
 
+func TestLoad_MigratesLegacyAPIKey(t *testing.T) {
+	dir := setupTempConfig(t)
+	chunkDir := filepath.Join(dir, "chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
+
+	data := `{"apiKey":"sk-legacy-1234","model":"claude-test"}`
+	p := filepath.Join(chunkDir, "config.json")
+	assert.NilError(t, os.WriteFile(p, []byte(data), 0o600))
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.AnthropicAPIKey, "sk-legacy-1234")
+	assert.Equal(t, cfg.LegacyAPIKey, "")
+	assert.Equal(t, cfg.Model, "claude-test")
+
+	// Saving the migrated config drops the old "apiKey" field from disk.
+	assert.NilError(t, Save(cfg))
+	raw, err := os.ReadFile(p)
+	assert.NilError(t, err)
+	var m map[string]interface{}
+	assert.NilError(t, json.Unmarshal(raw, &m))
+	_, hasLegacy := m["apiKey"]
+	assert.Assert(t, !hasLegacy, "expected legacy apiKey to be dropped, got %v", m)
+	assert.Equal(t, m["anthropicAPIKey"], "sk-legacy-1234")
+}
+
+func TestLoad_NewKeyTakesPrecedenceOverLegacy(t *testing.T) {
+	dir := setupTempConfig(t)
+	chunkDir := filepath.Join(dir, "chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
+
+	data := `{"apiKey":"sk-old","anthropicAPIKey":"sk-new"}`
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(data), 0o600))
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.AnthropicAPIKey, "sk-new")
+	assert.Equal(t, cfg.LegacyAPIKey, "")
+}
+
 func TestLoad_InvalidJSON(t *testing.T) {
 	dir := setupTempConfig(t)
 	chunkDir := filepath.Join(dir, "chunk")
