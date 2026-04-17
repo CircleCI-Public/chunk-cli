@@ -11,6 +11,7 @@ import (
 type ActiveSandbox struct {
 	SandboxID string `json:"sandbox_id"`
 	Name      string `json:"name,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // sandboxFileName returns the name of the sandbox state file. When

@@ -16,6 +16,32 @@ import (
 
 const workspaceDir = "/workspace"
 
+// resolveWorkspace determines the workspace path. Priority:
+// 1. CLI --workdir flag  2. sandbox.json workspace  3. default.
+func resolveWorkspace(cliWorkdir, repo string) string {
+	if cliWorkdir != "" {
+		return cliWorkdir
+	}
+	if active, err := LoadActive(); err == nil && active != nil && active.Workspace != "" {
+		return active.Workspace
+	}
+	return workspaceDir + "/" + repo
+}
+
+// persistWorkspace saves the resolved workspace back to sandbox.json if it
+// differs from the current value.
+func persistWorkspace(workspace string) error {
+	active, err := LoadActive()
+	if err != nil {
+		return err
+	}
+	if active == nil || active.Workspace == workspace {
+		return nil
+	}
+	active.Workspace = workspace
+	return SaveActive(*active)
+}
+
 // Sync synchronises local changes to a sandbox over SSH.
 // It ensures the workspace base exists, clones the repo into workdir if absent,
 // then resets to the remote base and applies a patch of local changes.
@@ -36,9 +62,10 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		return fmt.Errorf("sync: %w", err)
 	}
 
-	repoPath := workdir
-	if repoPath == "" {
-		repoPath = workspaceDir + "/" + repo
+	repoPath := resolveWorkspace(workdir, repo)
+
+	if err := persistWorkspace(repoPath); err != nil {
+		io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Could not save workspace: %v", err)))
 	}
 
 	// Ensure the parent directory exists on the sandbox.
