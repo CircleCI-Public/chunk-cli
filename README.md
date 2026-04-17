@@ -58,7 +58,7 @@ Create and work in cloud sandbox environments:
 
 ```bash
 # Authenticate
-chunk auth login
+chunk auth set circleci
 
 # Create a sandbox
 chunk sandbox create --name my-sandbox --image ubuntu:22.04
@@ -98,7 +98,7 @@ chunk sandbox create --name my-sandbox --template-id <template-id>
 ## Commands
 
 ```
-chunk auth login|status|logout       Authentication
+chunk auth set|status|remove         Authentication
 chunk sandbox list|create|exec|ssh   Manage cloud sandbox environments
 chunk sandbox sync|env|build         Sync files, detect env, build images
 chunk sandbox env setup              Create sandbox and run setup steps

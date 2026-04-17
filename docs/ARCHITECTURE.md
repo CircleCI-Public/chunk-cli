@@ -12,7 +12,7 @@ chunk-cli/
 └── internal/
     ├── cmd/                   # Cobra command definitions (thin wrappers)
     │   ├── root.go            # Root command, registers all subcommands
-    │   ├── auth.go            # auth status, auth logout
+    │   ├── auth.go            # auth set, auth status, auth remove
     │   ├── buildprompt.go     # build-prompt
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set

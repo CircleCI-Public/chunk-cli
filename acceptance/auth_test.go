@@ -3,15 +3,19 @@ package acceptance
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
+
+// --- auth status ---
 
 func TestAuthStatusWithEnvKey(t *testing.T) {
 	anthropic := fakes.NewFakeAnthropic()
@@ -20,6 +24,7 @@ func TestAuthStatusWithEnvKey(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
+	env.CircleToken = "" // Anthropic-only test
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
@@ -28,22 +33,28 @@ func TestAuthStatusWithEnvKey(t *testing.T) {
 	assert.Assert(t,
 		strings.Contains(combined, "Environment variable") || strings.Contains(combined, "environment variable"),
 		"expected output to mention environment variable, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "API key is valid"),
+	assert.Assert(t, strings.Contains(combined, "Valid"),
 		"expected validation success message, got: %s", combined)
 }
 
 func TestAuthStatusNoKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Not authenticated") || strings.Contains(combined, "not authenticated"),
-		"expected output to indicate no auth, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "chunk auth login"),
-		"expected help text about login command, got: %s", combined)
+	// All three sections are always shown, each reporting "Not set" when unconfigured
+	assert.Assert(t, strings.Contains(combined, "CircleCI"),
+		"expected CircleCI section, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Anthropic"),
+		"expected Anthropic section, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "GitHub"),
+		"expected GitHub section, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Not set"),
+		"expected Not set in output, got: %s", combined)
 }
 
 func TestAuthStatusInvalidKey(t *testing.T) {
@@ -58,6 +69,7 @@ func TestAuthStatusInvalidKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 	env.AnthropicKey = "sk-ant-invalid-key-0000"
+	env.CircleToken = "" // Anthropic-only test
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
@@ -74,6 +86,7 @@ func TestAuthStatusShowsHeader(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
+	env.CircleToken = "" // Anthropic-only test
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
@@ -92,10 +105,11 @@ func TestAuthStatusEnvOverridesConfig(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 	env.AnthropicKey = "sk-ant-env-key-EEEE"
+	env.CircleToken = "" // Anthropic-only test
 
 	// Store a different key in config file
-	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-config-key-CCCC"}, env, env.HomeDir)
-	assert.Equal(t, setResult.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
+	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-config-key-CCCC"}))
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -115,8 +129,8 @@ func TestAuthStatusMaskExactlyFourChars(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
-	// Key where last-4 and chars-5-to-8-from-end are distinct
 	env.AnthropicKey = "sk-ant-AAAA-BBBB-CCCC-DDDD"
+	env.CircleToken = "" // Anthropic-only test
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -128,33 +142,6 @@ func TestAuthStatusMaskExactlyFourChars(t *testing.T) {
 		"expected chars 5-8 from end to be masked, got: %s", combined)
 }
 
-func TestAuthLogoutNoStoredKey(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = ""
-
-	result := binary.RunCLI(t, []string{"auth", "logout"}, env, env.HomeDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "No API key"),
-		"expected output to indicate no stored key, got: %s", combined)
-}
-
-func TestAuthLogoutNoStoredKeyWithEnvVar(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = "sk-ant-env-only-key"
-
-	// No config file key, but env var is set
-	result := binary.RunCLI(t, []string{"auth", "logout"}, env, env.HomeDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "No API key"),
-		"expected no stored key message, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "ANTHROPIC_API_KEY"),
-		"expected env var note, got: %s", combined)
-}
-
 // auth status reads key from config file when no env var is set
 func TestAuthStatusFromConfigFile(t *testing.T) {
 	anthropic := fakes.NewFakeAnthropic()
@@ -164,10 +151,11 @@ func TestAuthStatusFromConfigFile(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 	env.AnthropicKey = "" // no env var
+	env.CircleToken = ""  // Anthropic-only test
 
 	// Store key in config file
-	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-config-only-XYZW"}, env, env.HomeDir)
-	assert.Equal(t, setResult.ExitCode, 0, "config set failed: %s", setResult.Stderr)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
+	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-config-only-XYZW"}))
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
@@ -175,7 +163,7 @@ func TestAuthStatusFromConfigFile(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "Config file"),
 		"expected config file source, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "API key is valid"),
+	assert.Assert(t, strings.Contains(combined, "Valid"),
 		"expected key valid message, got: %s", combined)
 	// Last 4 chars visible
 	assert.Assert(t, strings.Contains(combined, "XYZW"),
@@ -190,6 +178,7 @@ func TestAuthStatusUsesCountTokensEndpoint(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
+	env.CircleToken = "" // Anthropic-only test
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -204,71 +193,182 @@ func TestAuthStatusUsesCountTokensEndpoint(t *testing.T) {
 	}
 }
 
-// auth logout with a stored config key prompts for confirmation.
-// Without a TTY the confirmation prompt fails and logout is cancelled,
-// but the output shows the config file path, proving the key was detected.
-func TestAuthLogoutWithStoredKey(t *testing.T) {
+// auth status with all three providers configured shows all sections
+func TestAuthStatusAllProviders(t *testing.T) {
+	anthropic := fakes.NewFakeAnthropic()
+	anthropicSrv := httptest.NewServer(anthropic)
+	defer anthropicSrv.Close()
+
+	circleci := fakes.NewFakeCircleCI()
+	circleCISrv := httptest.NewServer(circleci)
+	defer circleCISrv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicURL = anthropicSrv.URL
+	env.CircleCIURL = circleCISrv.URL
+
+	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "CircleCI"),
+		"expected CircleCI section, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Anthropic"),
+		"expected Anthropic section, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "GitHub"),
+		"expected GitHub section, got: %s", combined)
+}
+
+// auth set with an unrecognised provider prints an error and exits non-zero
+func TestAuthSetInvalidProvider(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"auth", "set", "invalid-provider"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for invalid provider")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "unknown provider"),
+		"expected error about unknown provider, got: %s", combined)
+}
+
+// --- auth remove ---
+
+func TestAuthRemoveNoStoredKey(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{"auth", "remove", "anthropic"}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "No API key"),
+		"expected output to indicate no stored key, got: %s", combined)
+}
+
+func TestAuthRemoveNoStoredKeyWithEnvVar(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = "sk-ant-env-only-key"
+
+	// No config file key, but env var is set
+	result := binary.RunCLI(t, []string{"auth", "remove", "anthropic"}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "No API key"),
+		"expected no stored key message, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "ANTHROPIC_API_KEY"),
+		"expected env var note, got: %s", combined)
+}
+
+// auth remove anthropic with a stored config key prompts for confirmation.
+// Without a TTY the confirmation prompt fails and remove is cancelled.
+func TestAuthRemoveWithStoredKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = "" // no env var
 
 	// Store a key in config
-	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-stored-key-1234"}, env, env.HomeDir)
-	assert.Equal(t, setResult.ExitCode, 0, "config set failed: %s", setResult.Stderr)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
+	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-stored-key-1234"}))
 
-	result := binary.RunCLI(t, []string{"auth", "logout"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"auth", "remove", "anthropic"}, env, env.HomeDir)
 
-	// Without a TTY, confirm prompt returns error and logout is cancelled
+	// Without a TTY, confirm prompt returns error and remove is cancelled
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
 	// The command should detect the stored key and mention the config path
 	assert.Assert(t,
-		strings.Contains(combined, "remove") || strings.Contains(combined, "cancelled"),
+		strings.Contains(combined, "remove") || strings.Contains(combined, "Cancelled"),
 		"expected removal prompt or cancellation, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
 
-	// Key should not have been removed — cancelled logout leaves config intact.
+	// Key should not have been removed — cancelled remove leaves config intact.
 	showResult := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
-	assert.Equal(t, showResult.ExitCode, 0, "config show failed after cancelled logout: %s", showResult.Stderr)
+	assert.Equal(t, showResult.ExitCode, 0, "config show failed after cancelled remove: %s", showResult.Stderr)
 	assert.Assert(t, strings.Contains(showResult.Stdout, "1234"), "expected stored key (masked) in config output, got: %s", showResult.Stdout)
 }
 
-// auth logout with both env var and config key: running logout shows
-// the stored key and (if confirmed) removes config key but env var remains.
-// Without a TTY the confirmation fails, but the output proves both were detected.
-func TestAuthLogoutWithEnvAndConfigKey(t *testing.T) {
+// auth remove with both env var and config key.
+// Without a TTY the confirmation fails, but the output proves the stored key was detected.
+func TestAuthRemoveWithEnvAndConfigKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = "sk-ant-env-key-EEEE"
 
 	// Store a different key in config
-	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-config-key-CCCC"}, env, env.HomeDir)
-	assert.Equal(t, setResult.ExitCode, 0, "config set failed: %s", setResult.Stderr)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
+	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-config-key-CCCC"}))
 
-	result := binary.RunCLI(t, []string{"auth", "logout"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"auth", "remove", "anthropic"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
-	// Should detect the stored config key and show removal prompt
 	assert.Assert(t,
-		strings.Contains(combined, "remove") || strings.Contains(combined, "cancelled"),
+		strings.Contains(combined, "remove") || strings.Contains(combined, "Cancelled"),
 		"expected removal prompt or cancellation, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
 
-	// Key should not have been removed — cancelled logout leaves config intact.
+	// Key should not have been removed — cancelled remove leaves config intact.
 	showResult := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
-	assert.Equal(t, showResult.ExitCode, 0, "config show failed after cancelled logout: %s", showResult.Stderr)
+	assert.Equal(t, showResult.ExitCode, 0, "config show failed after cancelled remove: %s", showResult.Stderr)
 	assert.Assert(t, strings.Contains(showResult.Stdout, "EEEE"), "expected env key (masked) in config output, got: %s", showResult.Stdout)
 }
 
-// auth login without TTY: prompts for key but bubbletea fails without terminal,
-// so command exits cleanly without storing anything.
-func TestAuthLoginNoTTYExitsCleanly(t *testing.T) {
+// auth remove requires a provider argument
+func TestAuthRemoveRequiresProvider(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"auth", "remove"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when provider omitted")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "remove") || strings.Contains(combined, "accepts"),
+		"expected usage error, got: %s", combined)
+}
+
+// auth remove circleci removes a stored CircleCI token (cancelled without TTY)
+func TestAuthRemoveCircleCI(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.CircleToken = "" // no env var
+
+	// Store a CircleCI token via the config package instead of raw JSON
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
+	assert.NilError(t, config.Save(config.UserConfig{CircleCIToken: "circle-tok-1234"}))
+
+	result := binary.RunCLI(t, []string{"auth", "remove", "circleci"}, env, env.HomeDir)
+
+	// Without a TTY, confirm prompt cancels
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t,
+		strings.Contains(combined, "remove") || strings.Contains(combined, "Cancelled"),
+		"expected removal prompt or cancellation, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
+}
+
+// --- auth set ---
+
+// auth set anthropic without TTY exits cleanly
+func TestAuthSetAnthropicNoTTYExitsCleanly(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
 
-	result := binary.RunCLI(t, []string{"auth", "login"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"auth", "set", "anthropic"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "API Key Setup"),
-		"expected login header, got: %s", combined)
+		"expected Anthropic login header, got: %s", combined)
+}
+
+// auth set circleci without TTY exits cleanly
+func TestAuthSetCircleCI(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.CircleToken = ""
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{"auth", "set", "circleci"}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "CircleCI Token Setup"),
+		"expected CircleCI setup header, got: %s", combined)
 }

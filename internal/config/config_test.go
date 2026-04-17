@@ -47,7 +47,7 @@ func TestLoad_NoFile(t *testing.T) {
 
 	cfg, err := Load()
 	assert.NilError(t, err)
-	assert.Equal(t, cfg.APIKey, "")
+	assert.Equal(t, cfg.AnthropicAPIKey, "")
 	assert.Equal(t, cfg.Model, "")
 }
 
@@ -56,13 +56,53 @@ func TestLoad_ValidFile(t *testing.T) {
 	chunkDir := filepath.Join(dir, "chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
 
-	data := `{"apiKey":"sk-test-1234","model":"claude-test"}`
+	data := `{"anthropicAPIKey":"sk-test-1234","model":"claude-test"}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(data), 0o600))
 
 	cfg, err := Load()
 	assert.NilError(t, err)
-	assert.Equal(t, cfg.APIKey, "sk-test-1234")
+	assert.Equal(t, cfg.AnthropicAPIKey, "sk-test-1234")
 	assert.Equal(t, cfg.Model, "claude-test")
+}
+
+func TestLoad_MigratesLegacyAPIKey(t *testing.T) {
+	dir := setupTempConfig(t)
+	chunkDir := filepath.Join(dir, "chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
+
+	data := `{"apiKey":"sk-legacy-1234","model":"claude-test"}`
+	p := filepath.Join(chunkDir, "config.json")
+	assert.NilError(t, os.WriteFile(p, []byte(data), 0o600))
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.AnthropicAPIKey, "sk-legacy-1234")
+	assert.Equal(t, cfg.LegacyAPIKey, "")
+	assert.Equal(t, cfg.Model, "claude-test")
+
+	// Saving the migrated config drops the old "apiKey" field from disk.
+	assert.NilError(t, Save(cfg))
+	raw, err := os.ReadFile(p)
+	assert.NilError(t, err)
+	var m map[string]interface{}
+	assert.NilError(t, json.Unmarshal(raw, &m))
+	_, hasLegacy := m["apiKey"]
+	assert.Assert(t, !hasLegacy, "expected legacy apiKey to be dropped, got %v", m)
+	assert.Equal(t, m["anthropicAPIKey"], "sk-legacy-1234")
+}
+
+func TestLoad_NewKeyTakesPrecedenceOverLegacy(t *testing.T) {
+	dir := setupTempConfig(t)
+	chunkDir := filepath.Join(dir, "chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o700))
+
+	data := `{"apiKey":"sk-old","anthropicAPIKey":"sk-new"}`
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(data), 0o600))
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.AnthropicAPIKey, "sk-new")
+	assert.Equal(t, cfg.LegacyAPIKey, "")
 }
 
 func TestLoad_InvalidJSON(t *testing.T) {
@@ -127,52 +167,73 @@ func TestSave_OmitsEmptyFields(t *testing.T) {
 	data, err := os.ReadFile(p)
 	assert.NilError(t, err)
 
-	// apiKey should be omitted from JSON (omitempty)
+	// anthropicAPIKey should be omitted from JSON (omitempty)
 	var raw map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &raw))
-	_, hasKey := raw["apiKey"]
-	assert.Assert(t, !hasKey, "expected apiKey to be omitted, got %v", raw)
+	_, hasKey := raw["anthropicAPIKey"]
+	assert.Assert(t, !hasKey, "expected anthropicAPIKey to be omitted, got %v", raw)
 }
 
 func TestSaveAndLoad_Roundtrip(t *testing.T) {
 	setupTempConfig(t)
 
-	original := UserConfig{APIKey: "sk-round", Model: "claude-trip"}
+	original := UserConfig{AnthropicAPIKey: "sk-round", Model: "claude-trip"}
 	assert.NilError(t, Save(original))
 
 	loaded, err := Load()
 	assert.NilError(t, err)
-	assert.Equal(t, loaded.APIKey, original.APIKey)
+	assert.Equal(t, loaded.AnthropicAPIKey, original.AnthropicAPIKey)
 	assert.Equal(t, loaded.Model, original.Model)
 }
 
-// --- ClearAPIKey ---
+// --- Clear ---
 
-func TestClearAPIKey(t *testing.T) {
+func TestClear_AnthropicAPIKey(t *testing.T) {
 	setupTempConfig(t)
 
-	assert.NilError(t, Save(UserConfig{APIKey: "sk-secret", Model: "m1"}))
+	assert.NilError(t, Save(UserConfig{AnthropicAPIKey: "sk-secret", Model: "m1"}))
 
-	err := ClearAPIKey()
+	err := Clear("anthropicAPIKey")
 	assert.NilError(t, err)
 
 	cfg, err := Load()
 	assert.NilError(t, err)
-	assert.Equal(t, cfg.APIKey, "")
+	assert.Equal(t, cfg.AnthropicAPIKey, "")
 	assert.Equal(t, cfg.Model, "m1") // model preserved
 }
 
-func TestClearAPIKey_NoExistingFile(t *testing.T) {
+func TestClear_CircleCIToken(t *testing.T) {
+	setupTempConfig(t)
+
+	assert.NilError(t, Save(UserConfig{CircleCIToken: "tok-secret", Model: "m1"}))
+
+	err := Clear("circleCIToken")
+	assert.NilError(t, err)
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.CircleCIToken, "")
+	assert.Equal(t, cfg.Model, "m1") // model preserved
+}
+
+func TestClear_UnknownKey(t *testing.T) {
+	setupTempConfig(t)
+
+	err := Clear("badkey")
+	assert.Assert(t, err != nil, "expected error for unknown key")
+}
+
+func TestClear_NoExistingFile(t *testing.T) {
 	setupTempConfig(t)
 
 	// Should succeed even if no config file exists
-	err := ClearAPIKey()
+	err := Clear("anthropicAPIKey")
 	assert.NilError(t, err)
 }
 
-// --- MaskAPIKey ---
+// --- MaskKey ---
 
-func TestMaskAPIKey(t *testing.T) {
+func TestMaskKey(t *testing.T) {
 	tests := []struct {
 		name string
 		key  string
@@ -186,7 +247,7 @@ func TestMaskAPIKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, MaskAPIKey(tt.key), tt.want)
+			assert.Equal(t, MaskKey(tt.key), tt.want)
 		})
 	}
 }
@@ -197,9 +258,9 @@ func TestResolve_Defaults(t *testing.T) {
 	setupTempConfig(t)
 	t.Setenv("ANTHROPIC_API_KEY", "")
 
-	rc := Resolve("", "")
+	rc, _ := Resolve("", "")
 
-	assert.Equal(t, rc.APIKey, "")
+	assert.Equal(t, rc.AnthropicAPIKey, "")
 	assert.Equal(t, rc.Model, DefaultModel)
 	assert.Equal(t, rc.ModelSource, "Default")
 	assert.Equal(t, rc.AnalyzeModel, AnalyzeModel)
@@ -210,30 +271,30 @@ func TestResolve_EnvKey(t *testing.T) {
 	setupTempConfig(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
 
-	rc := Resolve("", "")
-	assert.Equal(t, rc.APIKey, "sk-from-env")
-	assert.Equal(t, rc.APIKeySource, "Environment variable")
+	rc, _ := Resolve("", "")
+	assert.Equal(t, rc.AnthropicAPIKey, "sk-from-env")
+	assert.Equal(t, rc.AnthropicAPIKeySource, "Environment variable")
 }
 
 func TestResolve_EnvOverridesConfigFile(t *testing.T) {
 	setupTempConfig(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
 
-	assert.NilError(t, Save(UserConfig{APIKey: "sk-from-file"}))
+	assert.NilError(t, Save(UserConfig{AnthropicAPIKey: "sk-from-file"}))
 
-	rc := Resolve("", "")
-	assert.Equal(t, rc.APIKey, "sk-from-env")
-	assert.Equal(t, rc.APIKeySource, "Environment variable")
+	rc, _ := Resolve("", "")
+	assert.Equal(t, rc.AnthropicAPIKey, "sk-from-env")
+	assert.Equal(t, rc.AnthropicAPIKeySource, "Environment variable")
 }
 
 func TestResolve_FlagOverridesAll(t *testing.T) {
 	setupTempConfig(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
-	assert.NilError(t, Save(UserConfig{APIKey: "sk-from-file", Model: "file-model"}))
+	assert.NilError(t, Save(UserConfig{AnthropicAPIKey: "sk-from-file", Model: "file-model"}))
 
-	rc := Resolve("sk-from-flag", "flag-model")
-	assert.Equal(t, rc.APIKey, "sk-from-flag")
-	assert.Equal(t, rc.APIKeySource, "Flag")
+	rc, _ := Resolve("sk-from-flag", "flag-model")
+	assert.Equal(t, rc.AnthropicAPIKey, "sk-from-flag")
+	assert.Equal(t, rc.AnthropicAPIKeySource, "Flag")
 	assert.Equal(t, rc.Model, "flag-model")
 	assert.Equal(t, rc.ModelSource, "Flag")
 }
@@ -242,15 +303,15 @@ func TestResolve_ModelFromConfig(t *testing.T) {
 	setupTempConfig(t)
 	assert.NilError(t, Save(UserConfig{Model: "config-model"}))
 
-	rc := Resolve("", "")
+	rc, _ := Resolve("", "")
 	assert.Equal(t, rc.Model, "config-model")
-	assert.Equal(t, rc.ModelSource, "Config file (user config)")
+	assert.Equal(t, rc.ModelSource, SourceConfigFile)
 }
 
 // --- ValidConfigKeys ---
 
 func TestValidConfigKeys(t *testing.T) {
 	assert.Assert(t, ValidConfigKeys["model"])
-	assert.Assert(t, ValidConfigKeys["apiKey"])
+	assert.Assert(t, !ValidConfigKeys["anthropicAPIKey"])
 	assert.Assert(t, !ValidConfigKeys["badkey"])
 }

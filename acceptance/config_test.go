@@ -1,7 +1,6 @@
 package acceptance
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 )
@@ -41,7 +41,7 @@ func TestConfigShowDefaults(t *testing.T) {
 		"expected '(Default)' source annotation, got: %s", combined)
 }
 
-// apiKey.slice(-4) not .slice(0,4) — verify last 4 chars shown, not first 4
+// anthropicAPIKey last 4 chars shown, not first 4
 func TestConfigShowMasksLastFourChars(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	// Use a key where the first 4 and last 4 chars are distinct
@@ -65,9 +65,9 @@ func TestConfigShowFromConfigFile(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = "" // no env var
 
-	// Store key via config set
-	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-stored-key-ZZZZ"}, env, env.HomeDir)
-	assert.Equal(t, setResult.ExitCode, 0, "config set failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
+	// Store key directly in config file
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
+	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-stored-key-ZZZZ"}))
 
 	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -98,7 +98,7 @@ func TestConfigSetInvalidKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{"config", "set", "badkey", "somevalue"}, env, env.HomeDir)
-	assert.Equal(t, result.ExitCode, 2, "expected exit code 2 for invalid key\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Equal(t, result.ExitCode, 1, "expected exit code 1 for invalid key\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t,
@@ -148,13 +148,12 @@ func TestConfigShowModelFromEnvVar(t *testing.T) {
 
 func TestConfigShowAPIKeyEnvPrecedenceOverFile(t *testing.T) {
 	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = "" // clear initially to set via file first
 
-	// Store key via config set
-	setResult := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-file-key-FILE"}, env, env.HomeDir)
-	assert.Equal(t, setResult.ExitCode, 0, "config set failed")
+	// Store key directly in config file
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
+	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-file-key-FILE"}))
 
-	// Now set env var — it should win
+	// Set env var — it should win
 	env.AnthropicKey = "sk-ant-env-key-ENVK"
 	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -187,24 +186,6 @@ func TestConfigShowModelEnvPrecedenceOverFile(t *testing.T) {
 		"file model should not appear when env var is set, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "Environment variable"),
 		"expected env var source, got: %s", combined)
-}
-
-func TestConfigSetAPIKeyStoredInFile(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-
-	result := binary.RunCLI(t, []string{"config", "set", "apiKey", "sk-ant-stored-1234"}, env, env.HomeDir)
-	assert.Equal(t, result.ExitCode, 0, "config set failed")
-
-	// Read the config file directly
-	configFile := filepath.Join(env.HomeDir, ".config", "chunk", "config.json")
-	data, err := os.ReadFile(configFile)
-	assert.NilError(t, err, "config file should exist")
-
-	var cfg map[string]string
-	err = json.Unmarshal(data, &cfg)
-	assert.NilError(t, err, "config should be valid JSON")
-	assert.Equal(t, cfg["apiKey"], "sk-ant-stored-1234",
-		"expected stored apiKey value in config.json")
 }
 
 func TestConfigSetMissingValue(t *testing.T) {

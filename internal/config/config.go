@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"strings"
@@ -16,22 +17,35 @@ const (
 	ValidationModel = "claude-haiku-4-5-20251001"
 	dirPermission   = 0o700
 	filePermission  = 0o600
+
+	// SourceConfigFile is the source label used when a value comes from the user config file.
+	SourceConfigFile = "Config file (user config)"
 )
 
 // UserConfig is the on-disk JSON config.
 type UserConfig struct {
-	APIKey string `json:"apiKey,omitempty"`
-	Model  string `json:"model,omitempty"`
+	AnthropicAPIKey string `json:"anthropicAPIKey,omitempty"`
+	CircleCIToken   string `json:"circleCIToken,omitempty"`
+	Model           string `json:"model,omitempty"`
+
+	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
+	// silently lose their stored Anthropic key on upgrade. Migrated into
+	// AnthropicAPIKey by Load and dropped on the next Save (omitempty).
+	LegacyAPIKey string `json:"apiKey,omitempty"`
 }
 
 // ResolvedConfig holds the final resolved values with their sources.
 type ResolvedConfig struct {
-	APIKey       string
-	APIKeySource string
-	Model        string
-	ModelSource  string
-	AnalyzeModel string
-	PromptModel  string
+	AnthropicAPIKey       string
+	AnthropicAPIKeySource string
+	CircleCIToken         string
+	CircleCITokenSource   string
+	GitHubToken           string
+	GitHubTokenSource     string
+	Model                 string
+	ModelSource           string
+	AnalyzeModel          string
+	PromptModel           string
 }
 
 // Load reads the config file. Returns empty config if not found.
@@ -51,6 +65,10 @@ func Load() (UserConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return UserConfig{}, err
 	}
+	if cfg.AnthropicAPIKey == "" && cfg.LegacyAPIKey != "" {
+		cfg.AnthropicAPIKey = cfg.LegacyAPIKey
+	}
+	cfg.LegacyAPIKey = ""
 	return cfg, nil
 }
 
@@ -74,38 +92,64 @@ func Save(cfg UserConfig) error {
 	return os.WriteFile(p, data, filePermission)
 }
 
-// ClearAPIKey removes the stored API key from config.
-func ClearAPIKey() error {
+// Clear removes a stored config value by key.
+func Clear(key string) error {
 	cfg, err := Load()
 	if err != nil {
 		return err
 	}
-	cfg.APIKey = ""
+	switch key {
+	case "anthropicAPIKey":
+		cfg.AnthropicAPIKey = ""
+	case "circleCIToken":
+		cfg.CircleCIToken = ""
+	default:
+		return fmt.Errorf("unknown config key: %s", key)
+	}
 	return Save(cfg)
 }
 
 // Resolve computes the final config from flags, env, and file.
 // Priority for API key: flag > env > config file > (none).
 // Priority for model: flag > CODE_REVIEW_CLI_MODEL env > config file > default.
-func Resolve(flagAPIKey, flagModel string) ResolvedConfig {
-	cfg, _ := Load()
+func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
+	cfg, err := Load()
 
 	rc := ResolvedConfig{
 		AnalyzeModel: AnalyzeModel,
 		PromptModel:  PromptModel,
 	}
 
+	// CircleCI token resolution: CIRCLE_TOKEN env > CIRCLECI_TOKEN env > config file
+	switch {
+	case os.Getenv("CIRCLE_TOKEN") != "":
+		rc.CircleCIToken = os.Getenv("CIRCLE_TOKEN")
+		rc.CircleCITokenSource = "Environment variable (CIRCLE_TOKEN)"
+	case os.Getenv("CIRCLECI_TOKEN") != "":
+		rc.CircleCIToken = os.Getenv("CIRCLECI_TOKEN")
+		rc.CircleCITokenSource = "Environment variable (CIRCLECI_TOKEN)"
+	case cfg.CircleCIToken != "":
+		rc.CircleCIToken = cfg.CircleCIToken
+		rc.CircleCITokenSource = SourceConfigFile
+	}
+
 	// API key resolution: flag > env > config file
 	switch {
 	case flagAPIKey != "":
-		rc.APIKey = flagAPIKey
-		rc.APIKeySource = "Flag"
+		rc.AnthropicAPIKey = flagAPIKey
+		rc.AnthropicAPIKeySource = "Flag"
 	case os.Getenv("ANTHROPIC_API_KEY") != "":
-		rc.APIKey = os.Getenv("ANTHROPIC_API_KEY")
-		rc.APIKeySource = "Environment variable"
-	case cfg.APIKey != "":
-		rc.APIKey = cfg.APIKey
-		rc.APIKeySource = "Config file (user config)"
+		rc.AnthropicAPIKey = os.Getenv("ANTHROPIC_API_KEY")
+		rc.AnthropicAPIKeySource = "Environment variable"
+	case cfg.AnthropicAPIKey != "":
+		rc.AnthropicAPIKey = cfg.AnthropicAPIKey
+		rc.AnthropicAPIKeySource = SourceConfigFile
+	}
+
+	// GitHub token resolution: GITHUB_TOKEN env only (no config file support)
+	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
+		rc.GitHubToken = v
+		rc.GitHubTokenSource = "Environment variable (GITHUB_TOKEN)"
 	}
 
 	// Model resolution: flag > env > config file > default
@@ -118,17 +162,17 @@ func Resolve(flagAPIKey, flagModel string) ResolvedConfig {
 		rc.ModelSource = "Environment variable"
 	case cfg.Model != "":
 		rc.Model = cfg.Model
-		rc.ModelSource = "Config file (user config)"
+		rc.ModelSource = SourceConfigFile
 	default:
 		rc.Model = DefaultModel
 		rc.ModelSource = "Default"
 	}
 
-	return rc
+	return rc, err
 }
 
-// MaskAPIKey masks all but the last 4 characters with *.
-func MaskAPIKey(key string) string {
+// MaskKey masks all but the last 4 characters with *.
+func MaskKey(key string) string {
 	if len(key) <= 4 {
 		return "****"
 	}
@@ -136,7 +180,8 @@ func MaskAPIKey(key string) string {
 }
 
 // ValidConfigKeys are the keys accepted by "config set".
+// Credentials (anthropicAPIKey, circleCIToken) are intentionally excluded —
+// users should use "auth set" which validates before storing.
 var ValidConfigKeys = map[string]bool{
-	"model":  true,
-	"apiKey": true,
+	"model": true,
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
@@ -13,13 +14,15 @@ type Client struct {
 	cl *httpcl.Client
 }
 
+// NewClient resolves a CircleCI token via config (env vars then config file)
+// and returns a ready-to-use client.
 func NewClient() (*Client, error) {
-	token := os.Getenv("CIRCLE_TOKEN")
-	if token == "" {
-		token = os.Getenv("CIRCLECI_TOKEN")
+	rc, err := config.Resolve("", "")
+	if err != nil {
+		return nil, fmt.Errorf("resolve config: %w", err)
 	}
-	if token == "" {
-		return nil, fmt.Errorf("CIRCLE_TOKEN or CIRCLECI_TOKEN environment variable is required")
+	if rc.CircleCIToken == "" {
+		return nil, fmt.Errorf("circleci token not found: set CIRCLE_TOKEN or run 'chunk auth set circleci'")
 	}
 
 	baseURL := os.Getenv("CIRCLECI_BASE_URL")
@@ -29,11 +32,17 @@ func NewClient() (*Client, error) {
 
 	cl := httpcl.New(httpcl.Config{
 		BaseURL:    baseURL,
-		AuthToken:  token,
+		AuthToken:  rc.CircleCIToken,
 		AuthHeader: "Circle-Token",
 	})
 
 	return &Client{cl: cl}, nil
+}
+
+// GetCurrentUser calls GET /api/v2/me to validate the token.
+func (c *Client) GetCurrentUser(ctx context.Context) error {
+	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v2/me"))
+	return err
 }
 
 func (c *Client) ListSandboxes(ctx context.Context, orgID string) ([]Sandbox, error) {
