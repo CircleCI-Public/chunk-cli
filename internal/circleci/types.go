@@ -1,10 +1,10 @@
 package circleci
 
 type Sandbox struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	OrganizationID string `json:"organization_id"`
-	Image          string `json:"image,omitempty"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	OrgID string `json:"org_id"`
+	Image string `json:"image,omitempty"`
 }
 
 type listSandboxesResponse struct {
@@ -53,8 +53,8 @@ type RunResponse struct {
 }
 
 type CreateSandboxRequest struct {
-	OrganizationID string `json:"organization_id"`
-	Name           string `json:"name"`
-	Provider       string `json:"provider,omitempty"`
-	Image          string `json:"image,omitempty"`
+	OrgID    string `json:"org_id"`
+	Name     string `json:"name"`
+	Provider string `json:"provider,omitempty"`
+	Image    string `json:"image,omitempty"`
 }

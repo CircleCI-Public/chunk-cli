@@ -159,10 +159,10 @@ func TestInitExistingConfigWithForce(t *testing.T) {
 func TestInitForcePreservesSkippedSections(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "new-org", "new-repo")
 
-	// Write existing config with VCS, CircleCI, and Commands.
+	// Write existing config with VCS and Commands.
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	existing := `{"vcs":{"org":"old-org","repo":"old-repo"},"circleci":{"orgId":"abc-123"},"commands":[{"name":"test","run":"echo test"}]}`
+	existing := `{"vcs":{"org":"old-org","repo":"old-repo"},"commands":[{"name":"test","run":"echo test"}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(existing), 0o644))
 
 	env := testenv.NewTestEnv(t)
@@ -186,11 +186,6 @@ func TestInitForcePreservesSkippedSections(t *testing.T) {
 	assert.Assert(t, ok, "expected vcs section, got: %s", string(data))
 	assert.Equal(t, vcs["org"], "new-org")
 	assert.Equal(t, vcs["repo"], "new-repo")
-
-	// CircleCI should be preserved (--skip-circleci).
-	cci, ok := cfg["circleci"].(map[string]interface{})
-	assert.Assert(t, ok, "expected circleci section preserved, got: %s", string(data))
-	assert.Equal(t, cci["orgId"], "abc-123")
 
 	// Commands should be preserved (--skip-validate).
 	cmds, ok := cfg["commands"].([]interface{})
@@ -518,11 +513,12 @@ func TestInitCircleCISingleOrgAutoSelect(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	cfg := readInitConfig(t, workDir)
-
-	cciCfg, ok := cfg["circleci"].(map[string]interface{})
-	assert.Assert(t, ok, "expected circleci config when single org is available")
-	assert.Equal(t, cciCfg["orgId"], "org-aaa")
+	// init no longer writes circleci to config.json; it prints env var instructions
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "CIRCLECI_ORG_ID"),
+		"expected CIRCLECI_ORG_ID export instructions, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "org-aaa"),
+		"expected org ID in export instructions, got: %s", combined)
 }
 
 func TestInitCircleCINoToken(t *testing.T) {

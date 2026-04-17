@@ -50,10 +50,10 @@ func (c *Client) ListSandboxes(ctx context.Context, orgID string) ([]Sandbox, er
 
 func (c *Client) CreateSandbox(ctx context.Context, orgID, name, provider, image string) (*Sandbox, error) {
 	body := CreateSandboxRequest{
-		OrganizationID: orgID,
-		Name:           name,
-		Provider:       provider,
-		Image:          image,
+		OrgID:    orgID,
+		Name:     name,
+		Provider: provider,
+		Image:    image,
 	}
 	var resp Sandbox
 	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/api/v2/sandbox/instances",

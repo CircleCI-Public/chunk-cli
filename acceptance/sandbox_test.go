@@ -20,8 +20,8 @@ import (
 func TestSandboxesListHappyPath(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-111", Name: "dev-sandbox", OrganizationID: "org-aaa"},
-		{ID: "sb-222", Name: "staging-sandbox", OrganizationID: "org-aaa"},
+		{ID: "sb-111", Name: "dev-sandbox", OrgID: "org-aaa"},
+		{ID: "sb-222", Name: "staging-sandbox", OrgID: "org-aaa"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -69,8 +69,8 @@ func TestSandboxesListEmpty(t *testing.T) {
 func TestSandboxesListFiltersByOrg(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-111", Name: "org-a-box", OrganizationID: "org-a"},
-		{ID: "sb-222", Name: "org-b-box", OrganizationID: "org-b"},
+		{ID: "sb-111", Name: "org-a-box", OrgID: "org-a"},
+		{ID: "sb-222", Name: "org-b-box", OrgID: "org-b"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -140,7 +140,7 @@ func TestSandboxesCreateHappyPath(t *testing.T) {
 	var body map[string]interface{}
 	err := json.Unmarshal(createReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["organization_id"], "org-aaa")
+	assert.Equal(t, body["org_id"], "org-aaa")
 	assert.Equal(t, body["name"], "my-new-sandbox")
 }
 
@@ -425,18 +425,18 @@ func TestSandboxesCreateMissingName(t *testing.T) {
 func TestSandboxesListFromConfig(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-999", Name: "config-sandbox", OrganizationID: "org-from-config"},
+		{ID: "sb-999", Name: "config-sandbox", OrgID: "org-from-config"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeChunkConfig(t, workDir, "org-from-config")
 
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
+	env.Extra["CIRCLECI_ORG_ID"] = "org-from-config"
 
-	// No --org-id flag; should read from config
+	// No --org-id flag; should read from CIRCLECI_ORG_ID
 	result := binary.RunCLI(t, []string{"sandbox", "list"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -646,18 +646,6 @@ func TestSandboxesUseCommand(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "sb-manual"),
 		"expected sb-manual in current output, got: %s", combined)
-}
-
-func writeChunkConfig(t *testing.T, workDir, orgID string) {
-	t.Helper()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	content := `{"commands":[],"circleci":{"orgId":"` + orgID + `"}}`
-	if err := os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // filterByMethod returns requests matching both method and path prefix.

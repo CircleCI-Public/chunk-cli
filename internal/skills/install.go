@@ -56,8 +56,8 @@ func Agents(homeDir string) []Agent {
 		},
 		{
 			Name:      "codex",
-			ConfigDir: filepath.Join(homeDir, ".codex"),
-			SkillsDir: filepath.Join(homeDir, ".codex", "skills"),
+			ConfigDir: filepath.Join(homeDir, ".agents"),
+			SkillsDir: filepath.Join(homeDir, ".agents", "skills"),
 		},
 	}
 }
