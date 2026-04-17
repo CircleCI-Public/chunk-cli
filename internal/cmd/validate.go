@@ -21,7 +21,7 @@ import (
 
 func newValidateCmd() *cobra.Command {
 	var sandboxID, identityFile, workdir string
-	var dryRun, list, save, forceRun, status bool
+	var dryRun, list, save, forceRun, status, remote bool
 	var inlineCmd, projectDir string
 
 	cmd := &cobra.Command{
@@ -92,27 +92,14 @@ func newValidateCmd() *cobra.Command {
 				return validate.RunDryRun(cfg, name, streams)
 			}
 
-			if sandboxID != "" {
-				client, err := authprompt.EnsureCircleCIClient(cmd.Context(), streams, tui.PromptHidden)
-				if err != nil {
+			if remote {
+				if err := resolveSandboxID(&sandboxID); err != nil {
 					return err
 				}
-				authSock := os.Getenv("SSH_AUTH_SOCK")
-				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, authSock)
-				if err != nil {
-					return fmt.Errorf("open session: %w", err)
-				}
-				dest := workdir
-				if dest == "" {
-					dest = "/workspace"
-				}
-				return validate.RunRemote(cmd.Context(), func(ctx context.Context, script string) (string, string, int, error) {
-					result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
-					if err != nil {
-						return "", "", 0, err
-					}
-					return result.Stdout, result.Stderr, result.ExitCode, nil
-				}, cfg, dest, streams)
+			}
+
+			if sandboxID != "" {
+				return runRemoteValidate(cmd.Context(), sandboxID, identityFile, workdir, cfg, streams)
 			}
 
 			// Named command
@@ -152,6 +139,7 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVar(&remote, "remote", false, "Run on active sandbox (reads .chunk/sandbox.json)")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sandbox (auto-detected as /workspace/<repo> when omitted)")
@@ -164,4 +152,27 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 
 	return cmd
+}
+
+func runRemoteValidate(ctx context.Context, sandboxID, identityFile, workdir string, cfg *config.ProjectConfig, streams iostream.Streams) error {
+	client, err := authprompt.EnsureCircleCIClient(ctx, streams, tui.PromptHidden)
+	if err != nil {
+		return err
+	}
+	authSock := os.Getenv("SSH_AUTH_SOCK")
+	session, err := sandbox.OpenSession(ctx, client, sandboxID, identityFile, authSock)
+	if err != nil {
+		return fmt.Errorf("open session: %w", err)
+	}
+	dest := workdir
+	if dest == "" {
+		dest = "/workspace"
+	}
+	return validate.RunRemote(ctx, func(ctx context.Context, script string) (string, string, int, error) {
+		result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
+		if err != nil {
+			return "", "", 0, err
+		}
+		return result.Stdout, result.Stderr, result.ExitCode, nil
+	}, cfg, dest, streams)
 }
