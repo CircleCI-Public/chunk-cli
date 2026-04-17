@@ -43,7 +43,7 @@ func TestLoadActiveWalksUpToParent(t *testing.T) {
 	// Write .chunk/sandbox in parent
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
 	data := []byte(`{"sandbox_id":"sb-parent","name":"parent-box"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox.json"), data, 0o644))
 
 	// cd into child — should still find the parent's file
 	t.Chdir(child)
@@ -68,7 +68,7 @@ func TestLoadActiveStopsAtGitRoot(t *testing.T) {
 	// .chunk/sandbox lives in grandparent (above the repo root)
 	assert.NilError(t, os.MkdirAll(filepath.Join(grandparent, ".chunk"), 0o755))
 	data := []byte(`{"sandbox_id":"sb-grandparent"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(grandparent, ".chunk", "sandbox"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(grandparent, ".chunk", "sandbox.json"), data, 0o644))
 
 	t.Chdir(child)
 
@@ -86,7 +86,7 @@ func TestLoadActiveNoGitRepo(t *testing.T) {
 	// .chunk/sandbox in parent but no .git anywhere
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
 	data := []byte(`{"sandbox_id":"sb-parent"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox.json"), data, 0o644))
 
 	t.Chdir(child)
 
@@ -162,7 +162,7 @@ func TestSaveActiveUpdatesParentFile(t *testing.T) {
 	// Write an existing .chunk/sandbox in parent
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
 	initial := []byte(`{"sandbox_id":"sb-old"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox"), initial, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox.json"), initial, 0o644))
 
 	// Save from child — should update parent's file, not create child's
 	t.Chdir(child)
