@@ -58,15 +58,3 @@ type CreateSandboxRequest struct {
 	Provider string `json:"provider,omitempty"`
 	Image    string `json:"image,omitempty"`
 }
-
-type Snapshot struct {
-	ID             string `json:"id"`
-	OrganizationID string `json:"organization_id"`
-	Name           string `json:"name"`
-	Tag            string `json:"tag,omitempty"`
-}
-
-type CreateSnapshotRequest struct {
-	SandboxID string `json:"sandbox_id"`
-	Name      string `json:"name"`
-}
