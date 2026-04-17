@@ -21,6 +21,8 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
+		// A bare exitCoder (e.g. sandbox.ExitError for a remote command) means
+		// output was already printed; exit silently with its code.
 		if ec, ok := err.(exitCoder); ok {
 			os.Exit(ec.ExitCode())
 		}
@@ -32,6 +34,11 @@ func main() {
 		}
 		if suggestion := errorSuggestion(err); suggestion != "" {
 			fmt.Fprintln(os.Stderr, suggestion)
+		}
+		// If the error wraps an exitCoder, preserve its code.
+		var ec exitCoder
+		if errors.As(err, &ec) {
+			os.Exit(ec.ExitCode())
 		}
 		os.Exit(1)
 	}

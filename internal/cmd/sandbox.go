@@ -676,7 +676,7 @@ Example:
 				streams.ErrPrintf("Running %d setup steps...\n", len(env.Steps))
 				for i, s := range env.Steps {
 					streams.ErrPrintf("[%d/%d] %s\n", i+1, len(env.Steps), s.Name)
-					result, err := sandbox.RunStep(cmd.Context(), client, sb.ID, s)
+					result, err := sandbox.RunStep(cmd.Context(), client, sb.ID, s.Name, s.Command)
 					if err != nil {
 						return usererr.New(fmt.Sprintf("Setup failed (sandbox %s still running).\n  %s", sb.ID, err), err)
 					}

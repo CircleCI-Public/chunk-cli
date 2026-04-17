@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
@@ -67,13 +66,13 @@ type StepResult struct {
 }
 
 // RunStep executes a single setup step and returns its result.
-func RunStep(ctx context.Context, client *circleci.Client, sandboxID string, step envbuilder.Step) (*StepResult, error) {
-	resp, err := client.Exec(ctx, sandboxID, "bash", []string{"-l", "-c", step.Command})
+func RunStep(ctx context.Context, client *circleci.Client, sandboxID, name, command string) (*StepResult, error) {
+	resp, err := client.Exec(ctx, sandboxID, "bash", []string{"-l", "-c", command})
 	if err != nil {
-		return nil, fmt.Errorf("step %q: %w", step.Name, err)
+		return nil, fmt.Errorf("step %q: %w", name, err)
 	}
 	return &StepResult{
-		Name:     step.Name,
+		Name:     name,
 		Stdout:   resp.Stdout,
 		Stderr:   resp.Stderr,
 		ExitCode: resp.ExitCode,
