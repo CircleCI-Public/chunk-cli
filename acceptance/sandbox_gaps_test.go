@@ -276,6 +276,89 @@ func TestSandboxCreateAPIError403(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for 403 response")
 }
 
+// --- create org picker paths ---
+
+func TestSandboxCreateCollaborationsAPIError(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.CollaborationsStatusCode = 500
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sandbox", "create",
+		"--name", "my-sandbox",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "--org-id"),
+		"expected org-id error, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "list collaborations"),
+		"expected collaborations error detail, got: %s", combined)
+}
+
+func TestSandboxCreateNoCollaborationsAvailable(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	// Collaborations defaults to empty — no orgs available to pick from.
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sandbox", "create",
+		"--name", "my-sandbox",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "--org-id"),
+		"expected org-id error, got: %s", combined)
+
+	// Verify the collaborations endpoint was called.
+	reqs := cci.Recorder.AllRequests()
+	collabReqs := filterByMethod(reqs, "GET", "/api/v2/me/collaborations")
+	assert.Equal(t, len(collabReqs), 1, "expected collaborations endpoint to be called")
+}
+
+func TestSandboxCreateOrgPickerCalledWhenCollaborationsExist(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Collaborations = []fakes.Collaboration{
+		{ID: "org-111", Name: "my-org", VCSType: "github"},
+		{ID: "org-222", Name: "other-org", VCSType: "bitbucket"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	// No TTY in tests — the TUI will fail, but the collaborations endpoint
+	// must be called and the failure must come from the picker, not from
+	// missing org-id or a network error.
+	result := binary.RunCLI(t, []string{
+		"sandbox", "create",
+		"--name", "my-sandbox",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0)
+
+	// Collaborations endpoint must have been hit.
+	reqs := cci.Recorder.AllRequests()
+	collabReqs := filterByMethod(reqs, "GET", "/api/v2/me/collaborations")
+	assert.Equal(t, len(collabReqs), 1, "expected collaborations endpoint to be called")
+
+	// The error must not be the generic org-id-missing error — the code
+	// must have reached and attempted the TUI picker.
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, !strings.Contains(combined, "--org-id"),
+		"expected TUI error, not org-id error, got: %s", combined)
+}
+
 // --- list error paths ---
 
 func TestSandboxListAPIError500(t *testing.T) {

@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
+	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
@@ -123,9 +124,28 @@ The sandbox backend defaults to e2b. Override with the CHUNK_SANDBOX_PROVIDER
 environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			resolvedOrgID, err := resolveOrgID(orgID)
-			if err != nil {
-				return err
+			resolvedOrgID, orgErr := resolveOrgID(orgID)
+			if orgErr != nil {
+				client, err := circleci.NewClient()
+				if err != nil {
+					return err
+				}
+				collabs, listErr := client.ListCollaborations(cmd.Context())
+				if listErr != nil {
+					return fmt.Errorf("%w (also failed to list collaborations: %w)", orgErr, listErr)
+				}
+				if len(collabs) == 0 {
+					return orgErr
+				}
+				labels := make([]string, len(collabs))
+				for i, c := range collabs {
+					labels[i] = fmt.Sprintf("%s/%s", c.VcsType, c.Name)
+				}
+				idx, selErr := tui.SelectFromList("Select an organization:", labels)
+				if selErr != nil {
+					return selErr
+				}
+				resolvedOrgID = collabs[idx].ID
 			}
 			client, err := circleci.NewClient()
 			if err != nil {
