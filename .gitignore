@@ -34,7 +34,8 @@ PLANS.md
 .chunk/sandbox*.patch
 
 # active sandbox tracking
-.chunk/sandbox
+.chunk/sandbox.json
+.chunk/sandbox.*.json
 
 # unikraft
 .unikraft/

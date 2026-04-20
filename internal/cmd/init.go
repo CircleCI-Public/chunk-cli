@@ -158,6 +158,57 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 	return nil
 }
 
+var sandboxGitignoreEntries = []string{
+	".chunk/sandbox.json",
+	".chunk/sandbox.*.json",
+}
+
+// ensureGitignoreEntries appends sandbox tracking patterns to .gitignore if
+// they are not already present.
+func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
+	path := filepath.Join(workDir, ".gitignore")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read .gitignore: %w", err)
+	}
+
+	content := string(existing)
+	var toAdd []string
+	for _, entry := range sandboxGitignoreEntries {
+		if !strings.Contains(content, entry) {
+			toAdd = append(toAdd, entry)
+		}
+	}
+	if len(toAdd) == 0 {
+		return nil
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open .gitignore: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		if _, err := f.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+
+	if _, err := f.WriteString("\n# chunk active sandbox tracking\n"); err != nil {
+		return err
+	}
+	for _, entry := range toAdd {
+		if _, err := f.WriteString(entry + "\n"); err != nil {
+			return err
+		}
+	}
+
+	streams.ErrPrintln(ui.Success("Updated .gitignore with sandbox tracking patterns"))
+	return nil
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipValidate, skipCircleCI, skipCompletions bool
 	var projectDir string
@@ -250,6 +301,10 @@ commands, and generates hook config files.`,
 				return fmt.Errorf("write config: %w", err)
 			}
 			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
+
+			if err := ensureGitignoreEntries(workDir, streams); err != nil {
+				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
+			}
 
 			// Step 4: Write .claude/settings.json
 			if !skipHooks {
