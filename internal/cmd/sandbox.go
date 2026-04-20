@@ -310,7 +310,7 @@ func newSandboxSyncCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sandbox (auto-detected as /workspace/<repo> when omitted)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sandbox (reads from sandbox.json, or defaults to /workspace/<repo>)")
 
 	return cmd
 }
