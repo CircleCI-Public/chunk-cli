@@ -37,6 +37,7 @@ func newSandboxCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxUseCmd())
 	cmd.AddCommand(newSandboxCurrentCmd())
 	cmd.AddCommand(newSandboxForgetCmd())
+	cmd.AddCommand(newSandboxSnapshotCmd())
 
 	return cmd
 }
@@ -472,6 +473,74 @@ Example:
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write Dockerfile.test and build from")
 	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
+
+	return cmd
+}
+
+func newSandboxSnapshotCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "snapshot",
+		Short: "Manage sandbox snapshots",
+	}
+	cmd.AddCommand(newSandboxSnapshotCreateCmd())
+	cmd.AddCommand(newSandboxSnapshotGetCmd())
+	return cmd
+}
+
+func newSandboxSnapshotCreateCmd() *cobra.Command {
+	var sandboxID, name string
+
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a snapshot of a sandbox",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			if err := resolveSandboxID(&sandboxID); err != nil {
+				return err
+			}
+			client, err := circleci.NewClient()
+			if err != nil {
+				return err
+			}
+			snap, err := client.CreateSnapshot(cmd.Context(), sandboxID, name)
+			if err != nil {
+				return err
+			}
+			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created snapshot %s", snap.ID)))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
+	cmd.Flags().StringVar(&name, "name", "", "Snapshot name")
+	_ = cmd.MarkFlagRequired("name")
+
+	return cmd
+}
+
+func newSandboxSnapshotGetCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "get <snapshot-id>",
+		Short: "Get a snapshot by ID",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
+			client, err := circleci.NewClient()
+			if err != nil {
+				return err
+			}
+			snap, err := client.GetSnapshot(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if snap.Name != "" {
+				io.Printf("%s  %s\n", snap.Name, snap.ID)
+			} else {
+				io.Printf("%s\n", snap.ID)
+			}
+			return nil
+		},
+	}
 
 	return cmd
 }
