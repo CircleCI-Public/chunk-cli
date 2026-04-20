@@ -501,6 +501,111 @@ func TestRunRemoteSSH(t *testing.T) {
 	})
 }
 
+// TestDetectCommandsAndRunRemoteSSH verifies the full pipeline:
+// DetectCommands → RunRemote → SSH, confirming detected commands arrive at the
+// sandbox correctly formatted.
+func TestDetectCommandsAndRunRemoteSSH(t *testing.T) {
+	newCCIClient := func(t *testing.T, serverURL string) *circleci.Client {
+		t.Helper()
+		t.Setenv("CIRCLECI_BASE_URL", serverURL)
+		t.Setenv("CIRCLE_TOKEN", "test-token")
+		client, err := circleci.NewClient()
+		assert.NilError(t, err)
+		return client
+	}
+
+	execCallback := func(t *testing.T, session *sandbox.Session) func(context.Context, string) (string, string, int, error) {
+		t.Helper()
+		return func(ctx context.Context, script string) (string, string, int, error) {
+			result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
+			if err != nil {
+				return "", "", 0, err
+			}
+			return result.Stdout, result.Stderr, result.ExitCode, nil
+		}
+	}
+
+	setup := func(t *testing.T) (session *sandbox.Session, sshSrv *fakes.SSHServer) {
+		t.Helper()
+		keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+		sshSrv = fakes.NewSSHServer(t, pubKey)
+		sshSrv.SetResult("", 0)
+
+		cci := fakes.NewFakeCircleCI()
+		cci.AddKeyURL = sshSrv.Addr()
+		cciSrv := httptest.NewServer(cci)
+		t.Cleanup(cciSrv.Close)
+
+		t.Setenv("HOME", t.TempDir())
+		client := newCCIClient(t, cciSrv.URL)
+		var err error
+		session, err = sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
+		assert.NilError(t, err)
+		return session, sshSrv
+	}
+
+	t.Run("go project commands sent to sandbox", func(t *testing.T) {
+		dir := t.TempDir()
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n\ngo 1.22\n"), 0o644))
+
+		cmds, err := DetectCommands(context.Background(), nil, dir)
+		assert.NilError(t, err)
+		assert.Equal(t, len(cmds), 3) // go test ./..., golangci-lint run ./..., gofmt -w .
+
+		session, sshSrv := setup(t)
+		cfg := &config.ProjectConfig{Commands: cmds}
+		streams, _, _ := newStreams()
+
+		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "/workspace/repo", streams))
+
+		sent := sshSrv.Commands()
+		assert.Equal(t, len(sent), 3, "expected 3 SSH commands, got: %v", sent)
+		assert.Assert(t, strings.Contains(sent[0], "go test ./..."), "got: %s", sent[0])
+		assert.Assert(t, strings.Contains(sent[0], "/workspace/repo"), "got: %s", sent[0])
+	})
+
+	t.Run("node project commands sent to sandbox", func(t *testing.T) {
+		dir := t.TempDir()
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"test"}`), 0o644))
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(`{"lockfileVersion":3}`), 0o644))
+
+		cmds, err := DetectCommands(context.Background(), nil, dir)
+		assert.NilError(t, err)
+		assert.Equal(t, len(cmds), 1)
+		assert.Equal(t, cmds[0].Run, "npm test")
+
+		session, sshSrv := setup(t)
+		cfg := &config.ProjectConfig{Commands: cmds}
+		streams, _, _ := newStreams()
+
+		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "/workspace/repo", streams))
+
+		sent := sshSrv.Commands()
+		assert.Equal(t, len(sent), 1)
+		assert.Assert(t, strings.Contains(sent[0], "npm test"), "got: %s", sent[0])
+	})
+
+	t.Run("taskfile project commands sent to sandbox", func(t *testing.T) {
+		dir := t.TempDir()
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, "Taskfile.yml"), []byte("version: '3'\n"), 0o644))
+
+		cmds, err := DetectCommands(context.Background(), nil, dir)
+		assert.NilError(t, err)
+		assert.Equal(t, len(cmds), 1)
+		assert.Equal(t, cmds[0].Run, "task test")
+
+		session, sshSrv := setup(t)
+		cfg := &config.ProjectConfig{Commands: cmds}
+		streams, _, _ := newStreams()
+
+		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "/workspace/repo", streams))
+
+		sent := sshSrv.Commands()
+		assert.Equal(t, len(sent), 1)
+		assert.Assert(t, strings.Contains(sent[0], "task test"), "got: %s", sent[0])
+	})
+}
+
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
