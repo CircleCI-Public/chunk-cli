@@ -63,10 +63,10 @@ type FakeCircleCI struct {
 	Projects        []Project
 	Sandboxes       []Sandbox
 	Snapshots       []Snapshot
-	RunResponse    *RunResponse
-	AddKeyURL      string
-	ExecResponse   *ExecResponse
-	RunStatusCode  int // override status code for trigger run endpoint
+	RunResponse     *RunResponse
+	AddKeyURL       string
+	ExecResponse    *ExecResponse
+	RunStatusCode   int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
 	ListStatusCode           int // override for GET /sandbox/instances
