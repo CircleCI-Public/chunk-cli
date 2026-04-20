@@ -2,6 +2,7 @@ package fakes
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 
@@ -56,11 +57,12 @@ type FakeCircleCI struct {
 	http.Handler
 	Recorder *recorder.RequestRecorder
 
-	mu             sync.RWMutex
-	Collaborations []Collaboration
-	Projects       []Project
-	Sandboxes      []Sandbox
-	Snapshots      []Snapshot
+	mu              sync.RWMutex
+	snapshotCounter int
+	Collaborations  []Collaboration
+	Projects        []Project
+	Sandboxes       []Sandbox
+	Snapshots       []Snapshot
 	RunResponse    *RunResponse
 	AddKeyURL      string
 	ExecResponse   *ExecResponse
@@ -264,12 +266,12 @@ func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
 		return
 	}
 
+	f.mu.Lock()
+	f.snapshotCounter++
 	snap := Snapshot{
-		ID:   "snap-new-123",
+		ID:   fmt.Sprintf("snap-%d", f.snapshotCounter),
 		Name: body.Name,
 	}
-
-	f.mu.Lock()
 	f.Snapshots = append(f.Snapshots, snap)
 	f.mu.Unlock()
 

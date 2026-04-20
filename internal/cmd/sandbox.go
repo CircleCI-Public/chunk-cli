@@ -502,7 +502,7 @@ func newSandboxSnapshotCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			snap, err := sandbox.CreateSnapshot(cmd.Context(), client, sandboxID, name)
+			snap, err := client.CreateSnapshot(cmd.Context(), sandboxID, name)
 			if err != nil {
 				return err
 			}
@@ -529,7 +529,7 @@ func newSandboxSnapshotGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			snap, err := sandbox.GetSnapshot(cmd.Context(), client, args[0])
+			snap, err := client.GetSnapshot(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
