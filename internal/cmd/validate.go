@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
@@ -76,7 +77,7 @@ func newValidateCmd() *cobra.Command {
 				}
 				if save {
 					if err := config.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
-						return fmt.Errorf("save command: %w", err)
+						return usererr.New("Could not save command to .chunk/config.json.", err)
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 				}
@@ -85,7 +86,10 @@ func newValidateCmd() *cobra.Command {
 
 			cfg, err := config.LoadProjectConfig(workDir)
 			if err != nil || !cfg.HasCommands() {
-				return fmt.Errorf("no validate commands configured, run 'chunk init' first")
+				return usererr.New(
+					"No validate commands configured. Run 'chunk init' first.",
+					fmt.Errorf("no validate commands configured"),
+				)
 			}
 
 			if dryRun {
@@ -100,7 +104,7 @@ func newValidateCmd() *cobra.Command {
 				authSock := os.Getenv("SSH_AUTH_SOCK")
 				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, authSock)
 				if err != nil {
-					return fmt.Errorf("open session: %w", err)
+					return usererr.New("Could not open SSH session to sandbox.", err)
 				}
 				dest := workdir
 				if dest == "" {
@@ -120,22 +124,25 @@ func newValidateCmd() *cobra.Command {
 				if cfg.FindCommand(name) == nil {
 					isTTY := term.IsTerminal(int(os.Stdin.Fd()))
 					if !isTTY {
-						return fmt.Errorf("command %q is not configured\nAdd %q to .chunk/config.json", name, name)
+						return usererr.New(
+							fmt.Sprintf("Command %q is not configured. Add it to .chunk/config.json.", name),
+							fmt.Errorf("command %q is not configured", name),
+						)
 					}
 					// Interactive setup: prompt for command
 					streams.ErrPrintf("Command %s is not configured yet.\n\n", ui.Bold(name))
 					streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
 					scanner := bufio.NewScanner(os.Stdin)
 					if !scanner.Scan() {
-						return fmt.Errorf("no input received")
+						return usererr.New("No command entered.", fmt.Errorf("no input received"))
 					}
 					input := strings.TrimSpace(scanner.Text())
 					if input == "" {
 						streams.ErrPrintln(ui.Dim("No command entered, aborting."))
-						return fmt.Errorf("no command entered")
+						return usererr.New("No command entered.", fmt.Errorf("no command entered"))
 					}
 					if err := config.SaveCommand(workDir, name, input); err != nil {
-						return fmt.Errorf("save command: %w", err)
+						return usererr.New("Could not save command to .chunk/config.json.", err)
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
 					// Reload config after save
