@@ -352,11 +352,10 @@ func TestSandboxCreateOrgPickerCalledWhenCollaborationsExist(t *testing.T) {
 	collabReqs := filterByMethod(reqs, "GET", "/api/v2/me/collaborations")
 	assert.Equal(t, len(collabReqs), 1, "expected collaborations endpoint to be called")
 
-	// The error must not be the generic org-id-missing error — the code
-	// must have reached and attempted the TUI picker.
+	// The error must come from the TUI picker, proving the code reached it.
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, !strings.Contains(combined, "--org-id"),
-		"expected TUI error, not org-id error, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "select prompt"),
+		"expected TUI select prompt error, got: %s", combined)
 }
 
 // --- list error paths ---

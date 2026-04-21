@@ -125,11 +125,11 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			resolvedOrgID, orgErr := resolveOrgID(orgID)
+			client, err := circleci.NewClient()
+			if err != nil {
+				return err
+			}
 			if orgErr != nil {
-				client, err := circleci.NewClient()
-				if err != nil {
-					return err
-				}
 				collabs, listErr := client.ListCollaborations(cmd.Context())
 				if listErr != nil {
 					return fmt.Errorf("%w (also failed to list collaborations: %w)", orgErr, listErr)
@@ -146,10 +146,6 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 					return selErr
 				}
 				resolvedOrgID = collabs[idx].ID
-			}
-			client, err := circleci.NewClient()
-			if err != nil {
-				return err
 			}
 			provider := os.Getenv(providerEnvVar)
 			if provider == "" {
