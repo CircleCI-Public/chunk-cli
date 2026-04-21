@@ -8,6 +8,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -68,13 +69,15 @@ func newConfigSetCmd() *cobra.Command {
 			key, value := args[0], args[1]
 
 			if !config.ValidConfigKeys[key] {
-				io.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Unknown config key: %q", key)))
-				return ErrSilent
+				return usererr.Newf(
+					fmt.Sprintf("Unknown config key: %q. Supported keys: model.", key),
+					"unknown config key %q", key,
+				)
 			}
 
 			cfg, err := config.Load()
 			if err != nil {
-				return err
+				return usererr.New("Could not load configuration. "+configFilePermHint, err)
 			}
 
 			if key == "model" {
@@ -82,7 +85,7 @@ func newConfigSetCmd() *cobra.Command {
 			}
 
 			if err := config.Save(cfg); err != nil {
-				return err
+				return usererr.New("Could not save configuration. "+configFilePermHint, err)
 			}
 
 			io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))
