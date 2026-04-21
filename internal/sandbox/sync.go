@@ -13,7 +13,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-const workspaceDir = "/workspace"
+const workspaceDir = "./workspace"
 
 // Sync synchronises local changes to a sandbox over SSH.
 // It ensures the workspace base exists, clones the repo into workdir if absent,
