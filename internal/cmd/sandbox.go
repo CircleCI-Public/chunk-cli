@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -111,7 +110,7 @@ func newSandboxListCmd() *cobra.Command {
 		Short: "List sandboxes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), io)
 			if err != nil {
 				return err
 			}
@@ -159,7 +158,7 @@ The sandbox backend defaults to e2b. Override with the CHUNK_SANDBOX_PROVIDER
 environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), io)
 			if err != nil {
 				return err
 			}
@@ -209,7 +208,7 @@ func newSandboxExecCmd() *cobra.Command {
 			if err := resolveSandboxID(&sandboxID); err != nil {
 				return err
 			}
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), io)
 			if err != nil {
 				return err
 			}
@@ -253,7 +252,7 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 			if err := resolveSandboxID(&sandboxID); err != nil {
 				return err
 			}
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), io)
 			if err != nil {
 				return err
 			}
@@ -290,7 +289,7 @@ func newSandboxSSHCmd() *cobra.Command {
 				return err
 			}
 			authSock := os.Getenv("SSH_AUTH_SOCK")
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), io)
 			if err != nil {
 				return err
 			}
@@ -353,7 +352,7 @@ func newSandboxSyncCmd() *cobra.Command {
 				return err
 			}
 			authSock := os.Getenv("SSH_AUTH_SOCK")
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), io)
 			if err != nil {
 				return err
 			}
