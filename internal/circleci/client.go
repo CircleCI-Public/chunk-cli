@@ -18,10 +18,10 @@ type Client struct {
 // and returns a ready-to-use client.
 func NewClient() (*Client, error) {
 	rc, err := config.Resolve("", "")
-	if err != nil {
-		return nil, fmt.Errorf("resolve config: %w", err)
-	}
 	if rc.CircleCIToken == "" {
+		if err != nil {
+			return nil, fmt.Errorf("resolve config: %w", err)
+		}
 		return nil, fmt.Errorf("circleci token not found: set CIRCLE_TOKEN or run 'chunk auth set circleci'")
 	}
 
@@ -100,30 +100,6 @@ func (c *Client) Exec(ctx context.Context, sandboxID, command string, args []str
 	))
 	if err != nil {
 		return nil, fmt.Errorf("exec: %w", err)
-	}
-	return &resp, nil
-}
-
-func (c *Client) CreateSnapshot(ctx context.Context, sandboxID, name string) (*Snapshot, error) {
-	var resp Snapshot
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/api/v2/sandbox/snapshots",
-		httpcl.Body(CreateSnapshotRequest{SandboxID: sandboxID, Name: name}),
-		httpcl.JSONDecoder(&resp),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("create snapshot: %w", err)
-	}
-	return &resp, nil
-}
-
-func (c *Client) GetSnapshot(ctx context.Context, id string) (*Snapshot, error) {
-	var resp Snapshot
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/v2/sandbox/snapshots/%s", id),
-		httpcl.JSONDecoder(&resp),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("get snapshot: %w", err)
 	}
 	return &resp, nil
 }

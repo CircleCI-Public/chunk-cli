@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
@@ -39,7 +38,6 @@ func newSandboxCmd() *cobra.Command {
 	cmd.AddCommand(newSandboxUseCmd())
 	cmd.AddCommand(newSandboxCurrentCmd())
 	cmd.AddCommand(newSandboxForgetCmd())
-	cmd.AddCommand(newSandboxSnapshotCmd())
 
 	return cmd
 }
@@ -60,31 +58,16 @@ func resolveSandboxID(sandboxID *string) error {
 	return nil
 }
 
-// resolveOrgID returns orgID from the flag, the CIRCLECI_ORG_ID env var,
-// or by presenting a TUI picker of the user's collaborations.
-func resolveOrgID(ctx context.Context, client *circleci.Client, orgID string) (string, error) {
+// resolveOrgID returns orgID from the flag if set, otherwise falls back to
+// the CIRCLECI_ORG_ID env var. Returns an error if neither is set.
+func resolveOrgID(orgID string) (string, error) {
 	if orgID != "" {
 		return orgID, nil
 	}
 	if envID := os.Getenv("CIRCLECI_ORG_ID"); envID != "" {
 		return envID, nil
 	}
-	collabs, err := client.ListCollaborations(ctx)
-	if err != nil {
-		return "", fmt.Errorf("--org-id is required (also failed to list collaborations: %w)", err)
-	}
-	if len(collabs) == 0 {
-		return "", fmt.Errorf("--org-id is required: pass --org-id or set CIRCLECI_ORG_ID")
-	}
-	labels := make([]string, len(collabs))
-	for i, c := range collabs {
-		labels[i] = fmt.Sprintf("%s/%s", c.VcsType, c.Name)
-	}
-	idx, err := tui.SelectFromList("Select an organization:", labels)
-	if err != nil {
-		return "", err
-	}
-	return collabs[idx].ID, nil
+	return "", fmt.Errorf("--org-id is required: pass --org-id or set CIRCLECI_ORG_ID")
 }
 
 func newSandboxListCmd() *cobra.Command {
@@ -95,11 +78,11 @@ func newSandboxListCmd() *cobra.Command {
 		Short: "List sandboxes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := circleci.NewClient()
+			resolvedOrgID, err := resolveOrgID(orgID)
 			if err != nil {
 				return err
 			}
-			resolvedOrgID, err := resolveOrgID(cmd.Context(), client, orgID)
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -140,11 +123,11 @@ The sandbox backend defaults to e2b. Override with the CHUNK_SANDBOX_PROVIDER
 environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := circleci.NewClient()
+			resolvedOrgID, err := resolveOrgID(orgID)
 			if err != nil {
 				return err
 			}
-			resolvedOrgID, err := resolveOrgID(cmd.Context(), client, orgID)
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -187,7 +170,7 @@ func newSandboxExecCmd() *cobra.Command {
 			if err := resolveSandboxID(&sandboxID); err != nil {
 				return err
 			}
-			client, err := circleci.NewClient()
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -228,7 +211,7 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 			if err := resolveSandboxID(&sandboxID); err != nil {
 				return err
 			}
-			client, err := circleci.NewClient()
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -257,11 +240,12 @@ func newSandboxSSHCmd() *cobra.Command {
 		Short: "SSH into a sandbox",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			io := iostream.FromCmd(cmd)
 			if err := resolveSandboxID(&sandboxID); err != nil {
 				return err
 			}
 			authSock := os.Getenv("SSH_AUTH_SOCK")
-			client, err := circleci.NewClient()
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -292,7 +276,6 @@ func newSandboxSSHCmd() *cobra.Command {
 				return usererr.New(fmt.Sprintf("resolve secrets: %s", err), err)
 			}
 			envVars = resolved
-			io := iostream.FromCmd(cmd)
 			return sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
 		},
 	}
@@ -318,7 +301,7 @@ func newSandboxSyncCmd() *cobra.Command {
 				return err
 			}
 			authSock := os.Getenv("SSH_AUTH_SOCK")
-			client, err := circleci.NewClient()
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -328,7 +311,7 @@ func newSandboxSyncCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sandbox (reads from sandbox.json, or defaults to /workspace/<repo>)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sandbox (auto-detected as /workspace/<repo> when omitted)")
 
 	return cmd
 }
@@ -490,74 +473,6 @@ Example:
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write Dockerfile.test and build from")
 	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
-
-	return cmd
-}
-
-func newSandboxSnapshotCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "snapshot",
-		Short: "Manage sandbox snapshots",
-	}
-	cmd.AddCommand(newSandboxSnapshotCreateCmd())
-	cmd.AddCommand(newSandboxSnapshotGetCmd())
-	return cmd
-}
-
-func newSandboxSnapshotCreateCmd() *cobra.Command {
-	var sandboxID, name string
-
-	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create a snapshot of a sandbox",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			io := iostream.FromCmd(cmd)
-			if err := resolveSandboxID(&sandboxID); err != nil {
-				return err
-			}
-			client, err := circleci.NewClient()
-			if err != nil {
-				return err
-			}
-			snap, err := client.CreateSnapshot(cmd.Context(), sandboxID, name)
-			if err != nil {
-				return err
-			}
-			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created snapshot %s", snap.ID)))
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
-	cmd.Flags().StringVar(&name, "name", "", "Snapshot name")
-	_ = cmd.MarkFlagRequired("name")
-
-	return cmd
-}
-
-func newSandboxSnapshotGetCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "get <snapshot-id>",
-		Short: "Get a snapshot by ID",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			io := iostream.FromCmd(cmd)
-			client, err := circleci.NewClient()
-			if err != nil {
-				return err
-			}
-			snap, err := client.GetSnapshot(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			if snap.Name != "" {
-				io.Printf("%s  %s\n", snap.Name, snap.ID)
-			} else {
-				io.Printf("%s\n", snap.ID)
-			}
-			return nil
-		},
-	}
 
 	return cmd
 }

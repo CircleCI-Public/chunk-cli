@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -20,11 +19,14 @@ import (
 const (
 	providerCircleCI  = "circleci"
 	providerAnthropic = "anthropic"
+	providerGitHub    = "github"
 )
 
 // ErrSilent is returned when a command has already reported its error to the user
 // and wants to exit non-zero without printing anything further.
 var ErrSilent = errors.New("silent")
+
+const configFilePermHint = "Check file permissions on the chunk config file"
 
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -42,7 +44,7 @@ func newAuthSetCmd() *cobra.Command {
 		Use:       "set <provider>",
 		Short:     "Store credentials for a provider",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{"circleci", "anthropic"},
+		ValidArgs: []string{"circleci", "anthropic", "github"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			provider := args[0]
 			io := iostream.FromCmd(cmd)
@@ -58,8 +60,12 @@ func newAuthSetCmd() *cobra.Command {
 				anthropicBaseURL := os.Getenv("ANTHROPIC_BASE_URL")
 				anthropicKeyEnv := os.Getenv("ANTHROPIC_API_KEY")
 				return authSetAnthropic(cmd.Context(), io, anthropicBaseURL, anthropicKeyEnv)
+			case providerGitHub:
+				githubBaseURL := os.Getenv("GITHUB_API_URL")
+				githubTokenEnv := os.Getenv("GITHUB_TOKEN")
+				return authSetGitHub(cmd.Context(), io, githubBaseURL, githubTokenEnv)
 			default:
-				return fmt.Errorf("unknown provider %q: valid providers are circleci, anthropic", provider)
+				return fmt.Errorf("unknown provider %q: valid providers are circleci, anthropic, github", provider)
 			}
 		},
 	}
@@ -160,7 +166,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 	}
 
 	io.ErrPrintln(ui.Dim("Validating API key..."))
-	if err := validateAPIKey(ctx, key, anthropicBaseURL); err != nil {
+	if err := authprompt.ValidateAPIKey(ctx, key, anthropicBaseURL); err != nil {
 		io.ErrPrintln(ui.FormatError("API key validation failed.", "", "Check that your key is correct and has not been revoked."))
 		return ErrSilent
 	}
@@ -187,7 +193,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 // It prints status messages to streams and returns an error if anything fails.
 func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams, circleCIBaseURL string) error {
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
-	if err := validateCircleCIToken(ctx, token, circleCIBaseURL); err != nil {
+	if err := authprompt.ValidateCircleCIToken(ctx, token, circleCIBaseURL); err != nil {
 		streams.ErrPrintln(ui.FormatError("CircleCI token validation failed.", "", "Check that your token is correct."))
 		return fmt.Errorf("validate token: %w", err)
 	}
@@ -211,27 +217,6 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 	return nil
 }
 
-func validateCircleCIToken(ctx context.Context, token, baseURL string) error {
-	if baseURL == "" {
-		baseURL = "https://circleci.com"
-	}
-
-	cl := httpcl.New(httpcl.Config{
-		BaseURL:    baseURL,
-		AuthToken:  token,
-		AuthHeader: "Circle-Token",
-	})
-
-	_, err := cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v2/me"))
-	if err != nil {
-		if httpcl.HasStatusCode(err, http.StatusTooManyRequests) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
 func newAuthStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
@@ -240,6 +225,7 @@ func newAuthStatusCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			circleCIBaseURL := os.Getenv("CIRCLECI_BASE_URL")
 			anthropicBaseURL := os.Getenv("ANTHROPIC_BASE_URL")
+			githubBaseURL := os.Getenv("GITHUB_API_URL")
 
 			io.Println("")
 			io.Println(ui.Bold("Chunk CLI - Authentication Status"))
@@ -260,7 +246,7 @@ func newAuthStatusCmd() *cobra.Command {
 				io.Printf("  Source: %s\n", rc.CircleCITokenSource)
 				io.Printf("  Token:  %s\n", config.MaskKey(rc.CircleCIToken))
 				io.ErrPrintln(ui.Dim("Validating CircleCI token..."))
-				if err := validateCircleCIToken(cmd.Context(), rc.CircleCIToken, circleCIBaseURL); err != nil {
+				if err := authprompt.ValidateCircleCIToken(cmd.Context(), rc.CircleCIToken, circleCIBaseURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
 						"CircleCI token validation failed.",
 						"",
@@ -281,7 +267,7 @@ func newAuthStatusCmd() *cobra.Command {
 				io.Printf("  Source: %s\n", rc.AnthropicAPIKeySource)
 				io.Printf("  Key:    %s\n", config.MaskKey(rc.AnthropicAPIKey))
 				io.ErrPrintln(ui.Dim("Validating API key..."))
-				if err := validateAPIKey(cmd.Context(), rc.AnthropicAPIKey, anthropicBaseURL); err != nil {
+				if err := authprompt.ValidateAPIKey(cmd.Context(), rc.AnthropicAPIKey, anthropicBaseURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
 						"API key validation failed.",
 						"The API key could not be validated with the Anthropic API.",
@@ -294,13 +280,25 @@ func newAuthStatusCmd() *cobra.Command {
 			}
 			io.Println("")
 
-			// GitHub section (env-var only, no auth set/remove support)
+			// GitHub section
 			io.Println(ui.Bold("GitHub"))
-			if rc.GitHubToken != "" {
-				io.Println("  Set (via GITHUB_TOKEN)")
-			} else {
+			if rc.GitHubToken == "" {
 				io.Println("  Not set")
-				io.Println(ui.Dim("  Set the GITHUB_TOKEN environment variable to configure."))
+				io.Println(ui.Dim("  Run `chunk auth set github` to configure."))
+			} else {
+				io.Printf("  Source: %s\n", rc.GitHubTokenSource)
+				io.Printf("  Token:  %s\n", config.MaskKey(rc.GitHubToken))
+				io.ErrPrintln(ui.Dim("Validating GitHub token..."))
+				if err := authprompt.ValidateGitHubToken(cmd.Context(), rc.GitHubToken, githubBaseURL); err != nil {
+					io.ErrPrintln(ui.FormatError(
+						"GitHub token validation failed.",
+						"",
+						"Run `chunk auth set github` to set a new token.",
+					))
+					hasFailure = true
+				} else {
+					io.Println(ui.Success("Valid"))
+				}
 			}
 			io.Println("")
 
@@ -317,7 +315,7 @@ func newAuthRemoveCmd() *cobra.Command {
 		Use:       "remove <provider>",
 		Short:     "Remove stored credentials",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{"circleci", "anthropic"},
+		ValidArgs: []string{"circleci", "anthropic", "github"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			provider := args[0]
 			io := iostream.FromCmd(cmd)
@@ -331,8 +329,11 @@ func newAuthRemoveCmd() *cobra.Command {
 			case providerAnthropic:
 				anthropicKeyEnv := os.Getenv("ANTHROPIC_API_KEY")
 				return authRemoveAnthropic(io, anthropicKeyEnv)
+			case providerGitHub:
+				githubTokenEnv := os.Getenv("GITHUB_TOKEN")
+				return authRemoveGitHub(io, githubTokenEnv)
 			default:
-				return fmt.Errorf("unknown provider %q: valid providers are circleci, anthropic", provider)
+				return fmt.Errorf("unknown provider %q: valid providers are circleci, anthropic, github", provider)
 			}
 		},
 	}
@@ -368,7 +369,7 @@ func authRemoveCircleCI(io iostream.Streams, circleTokenEnv string) error {
 	}
 
 	if err := config.Clear("circleCIToken"); err != nil {
-		hint := "Check file permissions on the chunk config file"
+		hint := configFilePermHint
 		if errPath, pathErr := config.Path(); pathErr == nil {
 			hint = fmt.Sprintf("Check file permissions on %s", errPath)
 		}
@@ -413,7 +414,7 @@ func authRemoveAnthropic(io iostream.Streams, anthropicKeyEnv string) error {
 	}
 
 	if err := config.Clear("anthropicAPIKey"); err != nil {
-		hint := "Check file permissions on the chunk config file"
+		hint := configFilePermHint
 		if errPath, pathErr := config.Path(); pathErr == nil {
 			hint = fmt.Sprintf("Check file permissions on %s", errPath)
 		}
@@ -432,38 +433,112 @@ func authRemoveAnthropic(io iostream.Streams, anthropicKeyEnv string) error {
 	return nil
 }
 
-func validateAPIKey(ctx context.Context, apiKey, baseURL string) error {
-	if baseURL == "" {
-		baseURL = "https://api.anthropic.com"
+func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, githubTokenEnv string) error {
+	io.Println("")
+	io.Println(ui.Bold("Chunk CLI - GitHub Token Setup"))
+	io.Println("")
+	io.Println("Create a token at https://github.com/settings/tokens")
+	io.Println("")
+
+	if githubTokenEnv != "" {
+		io.Println(ui.Warning("A GitHub token is set in environment variables (GITHUB_TOKEN)."))
+		io.Println(ui.Dim("Environment variables take precedence over stored config."))
+		io.Println("")
 	}
 
-	cl := httpcl.New(httpcl.Config{
-		BaseURL:    baseURL,
-		AuthToken:  apiKey,
-		AuthHeader: "x-api-key",
-	})
-
-	type msg struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-	body := struct {
-		Model    string `json:"model"`
-		Messages []msg  `json:"messages"`
-	}{
-		Model:    config.ValidationModel,
-		Messages: []msg{{Role: "user", Content: "auth test"}},
-	}
-
-	_, err := cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
-		httpcl.Body(body),
-		httpcl.Header("anthropic-version", "2023-06-01"),
-	))
+	cfg, err := config.Load()
 	if err != nil {
-		if httpcl.HasStatusCode(err, http.StatusTooManyRequests) {
+		io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", err)))
+		return fmt.Errorf("load config: %w", err)
+	}
+	if cfg.GitHubToken != "" {
+		io.Printf("A GitHub token is already stored in config.\n")
+		replace, err := tui.Confirm("Do you want to replace it?", false)
+		if err != nil {
+			io.Println("Cancelled.")
 			return nil
 		}
+		if !replace {
+			io.Println("Keeping existing token.")
+			return nil
+		}
+	}
+
+	token, err := tui.PromptHidden("GitHub Token")
+	if err != nil {
+		return nil
+	}
+
+	token = strings.TrimSpace(token)
+	if token == "" {
+		io.ErrPrintln(ui.FormatError("Token cannot be empty.", "", "Create a token at https://github.com/settings/tokens"))
+		return ErrSilent
+	}
+
+	io.ErrPrintln(ui.Dim("Validating GitHub token..."))
+	if err := authprompt.ValidateGitHubToken(ctx, token, githubBaseURL); err != nil {
+		io.ErrPrintln(ui.FormatError("GitHub token validation failed.", "", "Check that your token is correct and has not been revoked."))
+		return ErrSilent
+	}
+
+	cfg, err = config.Load()
+	if err != nil {
+		return fmt.Errorf("load config before save: %w", err)
+	}
+	cfg.GitHubToken = token
+	if err := config.Save(cfg); err != nil {
+		return fmt.Errorf("save token: %w", err)
+	}
+
+	cfgPath, err := config.Path()
+	if err != nil {
 		return err
+	}
+	io.Printf("\n%s\n", ui.Success(fmt.Sprintf("GitHub token validated and saved to %s", cfgPath)))
+	return nil
+}
+
+func authRemoveGitHub(io iostream.Streams, githubTokenEnv string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.GitHubToken == "" {
+		io.Println(ui.Warning("No GitHub token stored in config file."))
+		if githubTokenEnv != "" {
+			io.Println("Note: A GitHub token is set in environment variables.")
+			io.Println("To remove it, unset the environment variable.")
+			io.Println("")
+		}
+		return nil
+	}
+
+	io.Println("")
+	cfgPath, err := config.Path()
+	if err != nil {
+		return err
+	}
+	io.Printf("This will remove your stored GitHub token from %s\n", cfgPath)
+	confirmed, err := tui.Confirm("Are you sure?", false)
+	if err != nil || !confirmed {
+		io.Println("")
+		io.Println("Cancelled.")
+		io.Println("")
+		return nil
+	}
+
+	if err := config.Clear("gitHubToken"); err != nil {
+		hint := configFilePermHint
+		if errPath, pathErr := config.Path(); pathErr == nil {
+			hint = fmt.Sprintf("Check file permissions on %s", errPath)
+		}
+		io.ErrPrintln(ui.FormatError("Failed to remove GitHub token.", "An error occurred while trying to remove the token from the config file.", hint))
+		return ErrSilent
+	}
+
+	io.Println(ui.Success("GitHub token removed successfully."))
+	if githubTokenEnv != "" {
+		io.Println(ui.Warning("Note: GITHUB_TOKEN is still set in your environment variables."))
 	}
 	return nil
 }

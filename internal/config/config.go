@@ -26,6 +26,7 @@ const (
 type UserConfig struct {
 	AnthropicAPIKey string `json:"anthropicAPIKey,omitempty"`
 	CircleCIToken   string `json:"circleCIToken,omitempty"`
+	GitHubToken     string `json:"gitHubToken,omitempty"`
 	Model           string `json:"model,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
@@ -103,6 +104,8 @@ func Clear(key string) error {
 		cfg.AnthropicAPIKey = ""
 	case "circleCIToken":
 		cfg.CircleCIToken = ""
+	case "gitHubToken":
+		cfg.GitHubToken = ""
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}
@@ -146,10 +149,14 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 		rc.AnthropicAPIKeySource = SourceConfigFile
 	}
 
-	// GitHub token resolution: GITHUB_TOKEN env only (no config file support)
-	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
-		rc.GitHubToken = v
+	// GitHub token resolution: GITHUB_TOKEN env > config file
+	switch {
+	case os.Getenv("GITHUB_TOKEN") != "":
+		rc.GitHubToken = os.Getenv("GITHUB_TOKEN")
 		rc.GitHubTokenSource = "Environment variable (GITHUB_TOKEN)"
+	case cfg.GitHubToken != "":
+		rc.GitHubToken = cfg.GitHubToken
+		rc.GitHubTokenSource = SourceConfigFile
 	}
 
 	// Model resolution: flag > env > config file > default

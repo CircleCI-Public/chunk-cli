@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -37,11 +38,6 @@ func newTaskRunCmd() *cobra.Command {
 		Use:   "run",
 		Short: "Trigger a task run",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, err := circleci.NewClient()
-			if err != nil {
-				return err
-			}
-
 			cwd, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
@@ -52,6 +48,12 @@ func newTaskRunCmd() *cobra.Command {
 			}
 
 			cfg, err := task.LoadRunConfig(repoRoot)
+			if err != nil {
+				return err
+			}
+
+			io := iostream.FromCmd(cmd)
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -69,7 +71,6 @@ func newTaskRunCmd() *cobra.Command {
 				return err
 			}
 
-			io := iostream.FromCmd(cmd)
 			w := 12
 			io.Printf("%s %s\n", ui.Label("Run triggered:", w), ui.Green(resp.RunID))
 			io.Printf("%s %s\n", ui.Label("Pipeline:", w), resp.PipelineID)
@@ -98,11 +99,6 @@ func newTaskConfigCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			ctx := cmd.Context()
 
-			client, err := circleci.NewClient()
-			if err != nil {
-				return err
-			}
-
 			// Find git repo root instead of using cwd
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -129,6 +125,11 @@ func newTaskConfigCmd() *cobra.Command {
 			io.Println("")
 			io.Println(ui.Bold("Chunk Run Setup"))
 			io.Println("")
+
+			client, err := authprompt.EnsureCircleCIClient(ctx, io, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
 
 			io.ErrPrintln(ui.Dim("Fetching your CircleCI projects..."))
 

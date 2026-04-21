@@ -35,7 +35,16 @@ func NewFakeGitHub() *FakeGitHub {
 	}
 
 	r.POST("/graphql", f.handleGraphQL)
+	r.GET("/user", f.handleUser)
 	return f
+}
+
+func (f *FakeGitHub) handleUser(c *gin.Context) {
+	if c.GetHeader("authorization") == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"message": "Bad credentials"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"login": "fake-user"})
 }
 
 func (f *FakeGitHub) SetOrgValidation(resp string) { f.set(func() { f.orgValidation = resp }) }

@@ -46,6 +46,12 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s\n", ui.Label("circleCIToken:", w), ui.Dim("(not set)"))
 			}
 
+			if rc.GitHubToken != "" {
+				io.Printf("%s %s %s\n", ui.Label("gitHubToken:", w), config.MaskKey(rc.GitHubToken), ui.Dim("("+rc.GitHubTokenSource+")"))
+			} else {
+				io.Printf("%s %s\n", ui.Label("gitHubToken:", w), ui.Dim("(not set)"))
+			}
+
 			return nil
 		},
 	}

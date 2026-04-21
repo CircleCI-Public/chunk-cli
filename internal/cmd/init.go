@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -22,42 +20,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
-
-// pickCircleCIOrg prompts the user to select a CircleCI organization.
-// Returns the selected org ID and name, or empty strings if selection is skipped.
-func pickCircleCIOrg(ctx context.Context, streams iostream.Streams) (orgID, orgName string) {
-	client, err := circleci.NewClient()
-	if err != nil {
-		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping CircleCI setup: %v", err)))
-		return "", ""
-	}
-
-	streams.ErrPrintln(ui.Dim("Fetching CircleCI organizations..."))
-	collabs, err := client.ListCollaborations(ctx)
-	if err != nil {
-		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not fetch organizations: %v", err)))
-		return "", ""
-	}
-	if len(collabs) == 0 {
-		streams.ErrPrintln(ui.Warning("No CircleCI organizations found"))
-		return "", ""
-	}
-
-	if len(collabs) == 1 {
-		return collabs[0].ID, collabs[0].Name
-	}
-
-	items := make([]string, len(collabs))
-	for i, c := range collabs {
-		items[i] = c.Name
-	}
-	idx, err := tui.SelectFromList("Select CircleCI organization:", items)
-	if err != nil {
-		streams.ErrPrintln(ui.Warning("Skipping CircleCI org selection"))
-		return "", ""
-	}
-	return collabs[idx].ID, collabs[idx].Name
-}
 
 // confirmFunc asks the user a yes/no question. Matches tui.Confirm signature.
 type confirmFunc func(label string, defaultYes bool) (bool, error)
@@ -158,68 +120,17 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 	return nil
 }
 
-var sandboxGitignoreEntries = []string{
-	".chunk/sandbox.json",
-	".chunk/sandbox.*.json",
-}
-
-// ensureGitignoreEntries appends sandbox tracking patterns to .gitignore if
-// they are not already present.
-func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
-	path := filepath.Join(workDir, ".gitignore")
-
-	existing, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("read .gitignore: %w", err)
-	}
-
-	content := string(existing)
-	var toAdd []string
-	for _, entry := range sandboxGitignoreEntries {
-		if !strings.Contains(content, entry) {
-			toAdd = append(toAdd, entry)
-		}
-	}
-	if len(toAdd) == 0 {
-		return nil
-	}
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open .gitignore: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
-		if _, err := f.WriteString("\n"); err != nil {
-			return err
-		}
-	}
-
-	if _, err := f.WriteString("\n# chunk active sandbox tracking\n"); err != nil {
-		return err
-	}
-	for _, entry := range toAdd {
-		if _, err := f.WriteString(entry + "\n"); err != nil {
-			return err
-		}
-	}
-
-	streams.ErrPrintln(ui.Success("Updated .gitignore with sandbox tracking patterns"))
-	return nil
-}
-
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipValidate, skipCircleCI, skipCompletions bool
+	var force, skipHooks, skipValidate, skipCompletions bool
 	var projectDir string
 
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize project configuration",
-		Long: `Set up .chunk/config.json with VCS, CircleCI, and validate command configuration.
+		Long: `Set up .chunk/config.json with VCS and validate command configuration.
 
-Detects VCS org/repo from git remote, prompts for CircleCI org, detects test
-commands, and generates hook config files.`,
+Detects VCS org/repo from git remote, detects test commands, and generates
+hook config files.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 			ctx := cmd.Context()
@@ -265,17 +176,7 @@ commands, and generates hook config files.`,
 				streams.ErrPrintf("Detected repository: %s\n", ui.Bold(fmt.Sprintf("%s/%s", org, repo)))
 			}
 
-			// Step 2: CircleCI org picker
-			if !skipCircleCI {
-				if orgID, orgName := pickCircleCIOrg(ctx, streams); orgID != "" {
-					streams.ErrPrintf("Selected organization: %s\n", ui.Bold(orgName))
-					if os.Getenv("CIRCLECI_ORG_ID") != orgID {
-						streams.ErrPrintf("\nSet your org ID as an environment variable:\n  export CIRCLECI_ORG_ID=%s\n\nAdd it to your shell profile (~/.zshrc or ~/.bashrc) to persist it.\n\n", orgID)
-					}
-				}
-			}
-
-			// Step 3: Validate command detection
+			// Step 2: Validate command detection
 			if !skipValidate {
 				claude, _ := anthropic.New() // nil if unavailable — static detection works without it
 				commands, detectErr := validate.DetectCommands(ctx, claude, workDir)
@@ -302,18 +203,14 @@ commands, and generates hook config files.`,
 			}
 			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
 
-			if err := ensureGitignoreEntries(workDir, streams); err != nil {
-				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
-			}
-
-			// Step 4: Write .claude/settings.json
+			// Step 3: Write .claude/settings.json
 			if !skipHooks {
 				if err := writeSettings(workDir, cfg.Commands, streams, tui.Confirm); err != nil {
 					return fmt.Errorf("settings: %w", err)
 				}
 			}
 
-			// Step 5: Shell completions
+			// Step 4: Shell completions
 			if !skipCompletions {
 				installed, err := completionInstalled()
 				if err != nil {
@@ -338,7 +235,6 @@ commands, and generates hook config files.`,
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing config")
 	cmd.Flags().BoolVar(&skipHooks, "skip-hooks", false, "Skip hook file generation")
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
-	cmd.Flags().BoolVar(&skipCircleCI, "skip-circleci", false, "Skip CircleCI org picker")
 	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 

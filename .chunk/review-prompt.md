@@ -29,7 +29,7 @@ You are a senior code reviewer for a Go CLI project built with cobra. Your role 
 - [ ] Commands use `RunE`, not `Run` — errors must propagate, not `os.Exit` mid-flight
 - [ ] I/O goes through `iostream.FromCmd(cmd)`, not direct `fmt.Print` or `os.Stdout`
 - [ ] Flags bind to local variables or options structs, then pass to business logic functions
-- [ ] Commands delegate to helpers or business packages — keep `RunE` bodies minimal (parse flags, resolve config, call helper, format output)
+- [ ] Commands delegate to business packages — no substantial logic inline in `RunE`
 - [ ] Use `cmd.Context()` to propagate context, not `context.Background()`
 
 ### Environment Variables
@@ -80,7 +80,6 @@ You are a senior code reviewer for a Go CLI project built with cobra. Your role 
 
 - [ ] Interactive terminal UI uses BubbleTea v2 (`github.com/charmbracelet/bubbletea/v2`)
 - [ ] TUI components live in `internal/tui/`, formatting helpers in `internal/ui/`
-- [ ] `internal/tui/` must only be imported from `internal/cmd/` — business logic packages must not depend on interactive prompts
 - [ ] No raw terminal escape codes — use `lipgloss` or `internal/ui/` helpers
 
 ## Code Examples

@@ -25,6 +25,7 @@ func TestAuthStatusWithEnvKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 	env.CircleToken = "" // Anthropic-only test
+	env.GithubToken = ""
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
@@ -41,6 +42,7 @@ func TestAuthStatusNoKey(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
 	env.CircleToken = ""
+	env.GithubToken = ""
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
@@ -87,6 +89,7 @@ func TestAuthStatusShowsHeader(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 	env.CircleToken = "" // Anthropic-only test
+	env.GithubToken = ""
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 
@@ -106,6 +109,7 @@ func TestAuthStatusEnvOverridesConfig(t *testing.T) {
 	env.AnthropicURL = srv.URL
 	env.AnthropicKey = "sk-ant-env-key-EEEE"
 	env.CircleToken = "" // Anthropic-only test
+	env.GithubToken = ""
 
 	// Store a different key in config file
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
@@ -131,6 +135,7 @@ func TestAuthStatusMaskExactlyFourChars(t *testing.T) {
 	env.AnthropicURL = srv.URL
 	env.AnthropicKey = "sk-ant-AAAA-BBBB-CCCC-DDDD"
 	env.CircleToken = "" // Anthropic-only test
+	env.GithubToken = ""
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -152,6 +157,7 @@ func TestAuthStatusFromConfigFile(t *testing.T) {
 	env.AnthropicURL = srv.URL
 	env.AnthropicKey = "" // no env var
 	env.CircleToken = ""  // Anthropic-only test
+	env.GithubToken = ""
 
 	// Store key in config file
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
@@ -179,6 +185,7 @@ func TestAuthStatusUsesCountTokensEndpoint(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = srv.URL
 	env.CircleToken = "" // Anthropic-only test
+	env.GithubToken = ""
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -203,9 +210,14 @@ func TestAuthStatusAllProviders(t *testing.T) {
 	circleCISrv := httptest.NewServer(circleci)
 	defer circleCISrv.Close()
 
+	gh := fakes.NewFakeGitHub()
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+
 	env := testenv.NewTestEnv(t)
 	env.AnthropicURL = anthropicSrv.URL
 	env.CircleCIURL = circleCISrv.URL
+	env.GithubURL = ghSrv.URL
 
 	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
@@ -19,11 +20,15 @@ type Client struct {
 }
 
 // New creates a GitHub GraphQL client.
-// It reads GITHUB_TOKEN and GITHUB_API_URL from the environment.
+// It resolves the token via config (GITHUB_TOKEN env > config file) and reads
+// GITHUB_API_URL from the environment.
 func New() (*Client, error) {
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		return nil, fmt.Errorf("GITHUB_TOKEN environment variable is required")
+	rc, err := config.Resolve("", "")
+	if rc.GitHubToken == "" {
+		if err != nil {
+			return nil, fmt.Errorf("resolve config: %w", err)
+		}
+		return nil, fmt.Errorf("GitHub token not found: set GITHUB_TOKEN or run 'chunk auth set github'")
 	}
 
 	baseURL := os.Getenv("GITHUB_API_URL")
@@ -33,7 +38,7 @@ func New() (*Client, error) {
 
 	c := httpcl.New(httpcl.Config{
 		BaseURL:    baseURL,
-		AuthToken:  "token " + token,
+		AuthToken:  "token " + rc.GitHubToken,
 		AuthHeader: "Authorization",
 		UserAgent:  "chunk-cli",
 	})
