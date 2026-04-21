@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "chunk validate --if-changed",
+            "command": "${CLAUDE_PROJECT_DIR:-.}/dist/chunk validate --if-changed",
             "timeout": 420
           }
         ]
