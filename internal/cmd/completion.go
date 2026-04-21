@@ -65,7 +65,7 @@ func detectShell(home string) (shellConfig, error) {
 func completionInstalled() (bool, error) {
 	home := os.Getenv("HOME")
 	if home == "" {
-		return false, fmt.Errorf("HOME not set")
+		return false, usererr.Newf("HOME environment variable is not set.", "HOME not set")
 	}
 
 	sh, err := detectShell(home)
@@ -84,7 +84,7 @@ func completionInstalled() (bool, error) {
 func installCompletion(streams iostream.Streams) (err error) {
 	home := os.Getenv("HOME")
 	if home == "" {
-		return fmt.Errorf("HOME not set")
+		return usererr.Newf("HOME environment variable is not set.", "HOME not set")
 	}
 
 	sh, err := detectShell(home)
@@ -103,12 +103,12 @@ func installCompletion(streams iostream.Streams) (err error) {
 
 	f, err := os.OpenFile(sh.rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", sh.rcFile, err)
+		return usererr.New(fmt.Sprintf("Could not update %s. Check file permissions.", sh.rcFile), err)
 	}
 	defer closer.ErrorHandler(f, &err)
 
 	if _, err := f.WriteString("\n" + line); err != nil {
-		return fmt.Errorf("write %s: %w", sh.rcFile, err)
+		return usererr.New(fmt.Sprintf("Could not update %s. Check file permissions.", sh.rcFile), err)
 	}
 
 	streams.ErrPrintln(ui.Success("Completion installed."))
@@ -155,7 +155,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			home := os.Getenv("HOME")
 			if home == "" {
-				return fmt.Errorf("HOME not set")
+				return usererr.Newf("HOME environment variable is not set.", "HOME not set")
 			}
 
 			sh, err := detectShell(home)
@@ -188,7 +188,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 			}
 
 			if err := os.WriteFile(sh.rcFile, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", sh.rcFile, err)
+				return usererr.New(fmt.Sprintf("Could not update %s. Check file permissions.", sh.rcFile), err)
 			}
 
 			io.ErrPrintln(ui.Success("Completion uninstalled."))
