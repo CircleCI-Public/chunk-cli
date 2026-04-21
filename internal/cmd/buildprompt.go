@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -9,8 +10,11 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/github"
+	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 func newBuildPromptCmd() *cobra.Command {
@@ -40,7 +44,7 @@ func newBuildPromptCmd() *cobra.Command {
 			}
 			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos, cwd)
 			if err != nil {
-				return err
+				return usererr.New("Could not determine org and repos. Use --org and --repos flags.", err)
 			}
 
 			sinceTime, err := parseSince(since)
@@ -75,7 +79,20 @@ func newBuildPromptCmd() *cobra.Command {
 				IncludeAttribution: includeAttribution,
 			}
 
-			return buildprompt.Run(cmd.Context(), opts, iostream.FromCmd(cmd))
+			if err := buildprompt.Run(cmd.Context(), opts, iostream.FromCmd(cmd)); err != nil {
+				if httpcl.HasStatusCode(err, 401, 403) {
+					return usererr.New("Authentication failed. Run 'chunk auth set' to update your credentials.", err)
+				}
+				if github.IsResolutionError(err) {
+					return usererr.New("Repository not found. Check the --org and --repos flags.", err)
+				}
+				var ue *usererr.Error
+				if errors.As(err, &ue) {
+					return err
+				}
+				return usererr.New("Build prompt generation failed.", err)
+			}
+			return nil
 		},
 	}
 
