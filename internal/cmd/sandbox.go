@@ -55,9 +55,9 @@ func resolveSandboxID(sandboxID *string) error {
 		return usererr.New("Could not load the active sandbox. "+configFilePermHint+".", err)
 	}
 	if active == nil {
-		return usererr.New(
-			"No active sandbox is set. Run 'chunk sandbox use <id>' or 'chunk sandbox create' first.",
-			fmt.Errorf("no active sandbox and --sandbox-id not provided"),
+		return usererr.Newf(
+			"No active sandbox is set. Pass --sandbox-id, or run 'chunk sandbox use <id>' or 'chunk sandbox create'.",
+			"no active sandbox and --sandbox-id not provided",
 		)
 	}
 	*sandboxID = active.SandboxID
@@ -222,7 +222,7 @@ func newSandboxExecCmd() *cobra.Command {
 				if httpcl.HasStatusCode(err, 401, 403) {
 					return usererr.New("Not authorized to execute commands. Check your CircleCI token and try again.", err)
 				}
-				return usererr.New("Could not execute the command in the sandbox. Check the sandbox is running and try again.", err)
+				return err
 			}
 			if resp.Stdout != "" {
 				_, _ = fmt.Fprint(io.Out, resp.Stdout)
@@ -262,7 +262,7 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 				if httpcl.HasStatusCode(err, 401, 403) {
 					return usererr.New("Not authorized to add SSH keys. Check your CircleCI token and try again.", err)
 				}
-				return usererr.New("Could not add the SSH key. Check the sandbox is running and try again.", err)
+				return err
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("SSH key added. Sandbox URL: %s", resp.URL)))
 			return nil
@@ -326,7 +326,7 @@ func newSandboxSSHCmd() *cobra.Command {
 				if httpcl.HasStatusCode(err, 401, 403) {
 					return usererr.New("Not authorized to connect via SSH. Check your CircleCI token and try again.", err)
 				}
-				return usererr.New("Could not connect to the sandbox via SSH. Check the sandbox is running and try again.", err)
+				return err
 			}
 			return nil
 		},
@@ -362,7 +362,7 @@ func newSandboxSyncCmd() *cobra.Command {
 				if httpcl.HasStatusCode(err, 401, 403) {
 					return usererr.New("Not authorized to sync files. Check your CircleCI token and try again.", err)
 				}
-				return usererr.New("Could not sync files to the sandbox. Check the sandbox is running and try again.", err)
+				return err
 			}
 			return nil
 		},

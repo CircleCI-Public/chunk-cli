@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -84,6 +85,10 @@ func newBuildPromptCmd() *cobra.Command {
 				}
 				if github.IsResolutionError(err) {
 					return usererr.New("Repository not found. Check the --org and --repos flags.", err)
+				}
+				var ue *usererr.Error
+				if errors.As(err, &ue) {
+					return err
 				}
 				return usererr.New("Build prompt generation failed.", err)
 			}
