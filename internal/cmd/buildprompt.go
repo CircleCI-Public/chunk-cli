@@ -85,9 +85,10 @@ func newBuildPromptCmd() *cobra.Command {
 				AnalyzeModel:       analyzeModel,
 				PromptModel:        promptModel,
 				IncludeAttribution: includeAttribution,
+				Status:             newStatusFunc(streams),
 			}
 
-			return buildprompt.Run(cmd.Context(), opts, ghClient, anthropicClient, streams)
+			return buildprompt.Run(cmd.Context(), opts, ghClient, anthropicClient)
 		},
 	}
 
