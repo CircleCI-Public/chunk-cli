@@ -200,7 +200,12 @@ func EnsureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 func EnsureGitHubClient(ctx context.Context, streams iostream.Streams, prompter Prompter) (*github.Client, error) {
 	rc, err := config.Resolve("", "")
 	if rc.GitHubToken != "" {
-		return github.New()
+		c, cerr := github.New()
+		if cerr != nil {
+			return nil, cerr
+		}
+		c.SetLogStatus(func(msg string) { streams.ErrPrintln("  " + msg) })
+		return c, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("resolve config: %w", err)
@@ -238,7 +243,12 @@ func EnsureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 		return nil, fmt.Errorf("save token: %w", err)
 	}
 	PrintSaved(streams, "GitHub token")
-	return github.New()
+	c, cerr := github.New()
+	if cerr != nil {
+		return nil, cerr
+	}
+	c.SetLogStatus(func(msg string) { streams.ErrPrintln("  " + msg) })
+	return c, nil
 }
 
 // ValidateGitHubToken calls GET /user to confirm the token is accepted.
