@@ -283,3 +283,98 @@ func TestMergeMalformedGenerated(t *testing.T) {
 	_, err := Merge([]byte(`{}`), []byte(`not json`))
 	assert.ErrorContains(t, err, "parse generated settings")
 }
+
+// --- Stop hook merge tests ---
+
+func TestMergeStopHookAdded(t *testing.T) {
+	existing := []byte(`{}`)
+	generated := []byte(`{
+		"hooks": {
+			"Stop": [
+				{"hooks": [{"type": "command", "command": "chunk validate --if-changed", "timeout": 420}]}
+			]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	stop := hooks["Stop"].([]interface{})
+	assert.Equal(t, len(stop), 1)
+
+	group := stop[0].(map[string]interface{})
+	entries := group["hooks"].([]interface{})
+	entry := entries[0].(map[string]interface{})
+	assert.Assert(t, strings.Contains(entry["command"].(string), "chunk validate --if-changed"))
+}
+
+func TestMergeStopHookReplaced(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"Stop": [
+				{"hooks": [{"type": "command", "command": "chunk validate --if-changed", "timeout": 60}]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"Stop": [
+				{"hooks": [{"type": "command", "command": "chunk validate --if-changed", "timeout": 420}]}
+			]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	stop := hooks["Stop"].([]interface{})
+	assert.Equal(t, len(stop), 1, "expected exactly one Stop group after replace")
+
+	group := stop[0].(map[string]interface{})
+	entries := group["hooks"].([]interface{})
+	entry := entries[0].(map[string]interface{})
+	assert.Equal(t, entry["timeout"], float64(420), "expected timeout updated to 420")
+}
+
+func TestMergeStopHookPreservesUserGroups(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"Stop": [
+				{"hooks": [{"type": "command", "command": "my-custom-stop-script", "timeout": 10}]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"Stop": [
+				{"hooks": [{"type": "command", "command": "chunk validate --if-changed", "timeout": 420}]}
+			]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	stop := hooks["Stop"].([]interface{})
+	assert.Equal(t, len(stop), 2, "expected user group preserved and chunk group appended")
+
+	// User group still present at index 0.
+	userGroup := stop[0].(map[string]interface{})
+	userEntries := userGroup["hooks"].([]interface{})
+	userEntry := userEntries[0].(map[string]interface{})
+	assert.Equal(t, userEntry["command"], "my-custom-stop-script")
+}

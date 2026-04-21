@@ -15,8 +15,9 @@ type hookEntry struct {
 }
 
 // hookGroup is a group of hooks filtered by matcher.
+// Matcher is omitted for hook types that don't use it (e.g. Stop).
 type hookGroup struct {
-	Matcher string      `json:"matcher"`
+	Matcher string      `json:"matcher,omitempty"`
 	Hooks   []hookEntry `json:"hooks"`
 }
 
@@ -29,8 +30,10 @@ type settingsJSON struct {
 }
 
 // Build generates .claude/settings.json content from commands.
-// It creates a single PreToolUse hook matching "Bash(git commit*)" that
-// runs each command directly.
+// It creates:
+//   - A PreToolUse hook matching "Bash(git commit*)" that runs each command before commits.
+//   - A Stop hook that runs "chunk validate --if-changed" after every session, skipping
+//     when there are no uncommitted changes (safe to run concurrently across worktrees).
 func Build(commands []config.Command) ([]byte, error) {
 	hooks := make([]hookEntry, 0, len(commands))
 	for _, cmd := range commands {
@@ -54,11 +57,36 @@ func Build(commands []config.Command) ([]byte, error) {
 	}
 
 	if len(hooks) > 0 {
+		// Compute a Stop hook timeout that covers all commands running sequentially.
+		stopTimeout := 30 // base buffer
+		for _, cmd := range commands {
+			t := cmd.Timeout
+			if t == 0 {
+				t = 300
+			}
+			stopTimeout += t
+		}
+
 		s.Hooks = map[string][]hookGroup{
 			"PreToolUse": {
 				{
 					Matcher: CommitMatcher,
 					Hooks:   hooks,
+				},
+			},
+			// Stop hook: warms the validate cache after each session so the
+			// pre-commit hook hits cache instead of re-running commands.
+			// chunk validate --if-changed handles worktree detection internally
+			// via CLAUDE_WORKING_DIR when set.
+			"Stop": {
+				{
+					Hooks: []hookEntry{
+						{
+							Type:    "command",
+							Command: "chunk validate --if-changed",
+							Timeout: stopTimeout,
+						},
+					},
 				},
 			},
 		}

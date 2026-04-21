@@ -141,6 +141,18 @@ func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams)
 	return nil
 }
 
+// HasUncommittedChanges reports whether workDir has any staged or unstaged
+// changes relative to HEAD. Returns false (no error) when not in a git repo
+// or when there are no commits yet — both are treated as "nothing to validate".
+func HasUncommittedChanges(workDir string) (bool, error) {
+	out, err := exec.Command("git", "-C", workDir, "diff", "HEAD", "--name-only").Output()
+	if err != nil {
+		// Not a git repo, no commits yet, or git not available — skip gracefully.
+		return false, nil
+	}
+	return len(strings.TrimSpace(string(out))) > 0, nil
+}
+
 // RunRemote runs commands on a remote sandbox via SSH.
 func RunRemote(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, dest string, streams iostream.Streams) error {
 	for _, c := range cfg.Commands {

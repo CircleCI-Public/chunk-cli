@@ -31,6 +31,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "chunk validate --if-changed",
+            "timeout": 420
+          }
+        ]
+      }
     ]
   }
 }

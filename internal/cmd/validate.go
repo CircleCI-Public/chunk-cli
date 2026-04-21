@@ -21,7 +21,7 @@ import (
 
 func newValidateCmd() *cobra.Command {
 	var sandboxID, identityFile, workdir string
-	var dryRun, list, save, forceRun, status bool
+	var dryRun, list, save, forceRun, status, ifChanged bool
 	var inlineCmd, projectDir string
 
 	cmd := &cobra.Command{
@@ -39,6 +39,41 @@ func newValidateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+			}
+
+			// --if-changed: hook-friendly mode. Skip all validation when the
+			// working tree is clean or the project has no commands configured.
+			// Intended for Stop hook usage — never errors, always exits 0.
+			if ifChanged {
+				// Resolve the effective work directory for hook context.
+				// CLAUDE_WORKING_DIR is set by Claude Code to the session's
+				// actual working directory, which for worktrees is the worktree
+				// root rather than the main repo root (CLAUDE_PROJECT_DIR).
+				// Only override the explicit --project flag if unset.
+				if projectDir == "" {
+					if wd := os.Getenv("CLAUDE_WORKING_DIR"); wd != "" {
+						workDir = wd
+					}
+				}
+				hasChanges, _ := validate.HasUncommittedChanges(workDir)
+				if !hasChanges {
+					streams.ErrPrintln(ui.Dim("chunk validate: no changes, skipping"))
+					return nil
+				}
+				cfg, err := config.LoadProjectConfig(workDir)
+				if err != nil || !cfg.HasCommands() {
+					return nil
+				}
+				// Acquire a per-directory advisory lock to prevent concurrent
+				// Stop hook invocations (e.g. two sessions sharing a worktree)
+				// from running expensive commands simultaneously.
+				release, acquired := validate.TryLock(workDir)
+				if !acquired {
+					streams.ErrPrintln(ui.Dim("chunk validate: another validate is running, skipping"))
+					return nil
+				}
+				defer release()
+				return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, streams)
 			}
 
 			var name string
@@ -162,6 +197,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&forceRun, "force-run", false, "Ignore cache, always run")
 	cmd.Flags().BoolVar(&status, "status", false, "Check cache only, don't execute")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
+	cmd.Flags().BoolVar(&ifChanged, "if-changed", false, "Skip validation if there are no uncommitted changes (for Stop hook use)")
 
 	return cmd
 }

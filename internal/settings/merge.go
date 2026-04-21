@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	udiff "github.com/aymanbagabas/go-udiff"
 )
 
-// CommitMatcher is the hook matcher string that chunk manages.
+// CommitMatcher is the hook matcher string that chunk manages in PreToolUse.
 const CommitMatcher = "Bash(git commit*)"
+
+// StopHookCmdSubstr is the command substring used to identify the
+// chunk-managed Stop hook group during settings merges.
+const StopHookCmdSubstr = "chunk validate --if-changed"
 
 // MergeResult holds the computed merge without performing any I/O.
 type MergeResult struct {
@@ -57,8 +62,9 @@ func Merge(existing, generated []byte) (*MergeResult, error) {
 	// Union permissions.allow.
 	mergePermissionsAllow(merged, generatedMap)
 
-	// Merge hooks.PreToolUse — replace the chunk-managed hook group by matcher.
-	mergeHooks(merged, generatedMap)
+	// Merge hook sections — replace chunk-managed groups, preserve user-defined ones.
+	mergePreToolUseHooks(merged, generatedMap)
+	mergeStopHooks(merged, generatedMap)
 
 	mergedBytes, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
@@ -120,9 +126,9 @@ func mergePermissionsAllow(merged, generated map[string]interface{}) {
 	mergedPerms["allow"] = result
 }
 
-// mergeHooks replaces the chunk-managed hook group (matched by CommitMatcher)
+// mergePreToolUseHooks replaces the chunk-managed hook group (matched by CommitMatcher)
 // within PreToolUse, preserving all other hook types and groups.
-func mergeHooks(merged, generated map[string]interface{}) {
+func mergePreToolUseHooks(merged, generated map[string]interface{}) {
 	genHooks, ok := generated["hooks"].(map[string]interface{})
 	if !ok {
 		return
@@ -178,6 +184,84 @@ func mergeHooks(merged, generated map[string]interface{}) {
 	}
 
 	mergedHooks["PreToolUse"] = mergedPreToolUse
+}
+
+// mergeStopHooks replaces the chunk-managed Stop hook group (identified by
+// StopHookCmdSubstr in a command entry) within Stop, preserving user-defined
+// Stop hook groups. Stop hooks have no matcher field.
+func mergeStopHooks(merged, generated map[string]interface{}) {
+	genHooks, ok := generated["hooks"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	genStop, ok := genHooks["Stop"].([]interface{})
+	if !ok || len(genStop) == 0 {
+		return
+	}
+
+	// Find the chunk-managed Stop group in generated hooks.
+	chunkGroup := findStopGroup(genStop)
+	if chunkGroup == nil {
+		return
+	}
+
+	// Ensure merged has hooks.Stop.
+	mergedHooks, ok := merged["hooks"].(map[string]interface{})
+	if !ok {
+		mergedHooks = map[string]interface{}{}
+		merged["hooks"] = mergedHooks
+	}
+
+	mergedStop, ok := mergedHooks["Stop"].([]interface{})
+	if !ok {
+		mergedStop = []interface{}{}
+	}
+
+	// Replace existing chunk-managed group (identified by command substring) or append.
+	replaced := false
+	for i, g := range mergedStop {
+		if isChunkStopGroup(g) {
+			mergedStop[i] = chunkGroup
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		mergedStop = append(mergedStop, chunkGroup)
+	}
+
+	mergedHooks["Stop"] = mergedStop
+}
+
+// findStopGroup returns the first Stop hook group from groups that contains
+// a chunk-managed command entry, or nil if none found.
+func findStopGroup(groups []interface{}) interface{} {
+	for _, g := range groups {
+		if isChunkStopGroup(g) {
+			return g
+		}
+	}
+	return nil
+}
+
+// isChunkStopGroup reports whether g is a hook group containing the
+// chunk-managed validate command (identified by StopHookCmdSubstr).
+func isChunkStopGroup(g interface{}) bool {
+	group, isMap := g.(map[string]interface{})
+	if !isMap {
+		return false
+	}
+	hooksArr, _ := group["hooks"].([]interface{})
+	for _, h := range hooksArr {
+		entry, isMap := h.(map[string]interface{})
+		if !isMap {
+			continue
+		}
+		if cmd, _ := entry["command"].(string); strings.Contains(cmd, StopHookCmdSubstr) {
+			return true
+		}
+	}
+	return false
 }
 
 // toStringSlice converts an interface{} (expected []interface{} of strings)

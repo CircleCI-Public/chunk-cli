@@ -501,6 +501,51 @@ func TestRunRemoteSSH(t *testing.T) {
 	})
 }
 
+// --- HasUncommittedChanges tests ---
+
+func TestHasUncommittedChanges(t *testing.T) {
+	t.Run("clean repo returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		initGitRepo(t, dir)
+
+		changed, err := HasUncommittedChanges(dir)
+		assert.NilError(t, err)
+		assert.Assert(t, !changed, "expected no changes on a clean repo")
+	})
+
+	t.Run("modified tracked file returns true", func(t *testing.T) {
+		dir := t.TempDir()
+		initGitRepo(t, dir)
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("modified"), 0o644))
+
+		changed, err := HasUncommittedChanges(dir)
+		assert.NilError(t, err)
+		assert.Assert(t, changed, "expected changes after modifying a tracked file")
+	})
+
+	t.Run("staged file returns true", func(t *testing.T) {
+		dir := t.TempDir()
+		initGitRepo(t, dir)
+		newFile := filepath.Join(dir, "new.go")
+		assert.NilError(t, os.WriteFile(newFile, []byte("package main"), 0o644))
+		cmd := exec.Command("git", "add", "new.go")
+		cmd.Dir = dir
+		assert.NilError(t, cmd.Run())
+
+		changed, err := HasUncommittedChanges(dir)
+		assert.NilError(t, err)
+		assert.Assert(t, changed, "expected changes after staging a new file")
+	})
+
+	t.Run("non-git dir returns false without error", func(t *testing.T) {
+		dir := t.TempDir()
+
+		changed, err := HasUncommittedChanges(dir)
+		assert.NilError(t, err)
+		assert.Assert(t, !changed, "expected false for non-git directory")
+	})
+}
+
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
