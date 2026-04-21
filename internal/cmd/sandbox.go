@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
@@ -58,16 +60,37 @@ func resolveSandboxID(sandboxID *string) error {
 	return nil
 }
 
-// resolveOrgID returns orgID from the flag if set, otherwise falls back to
-// the CIRCLECI_ORG_ID env var. Returns an error if neither is set.
-func resolveOrgID(orgID string) (string, error) {
+// resolveOrgID returns orgID from the flag, the CIRCLECI_ORG_ID env var,
+// or by calling pickOrg as a last resort (e.g. to present a TUI picker).
+func resolveOrgID(orgID string, pickOrg func() (string, error)) (string, error) {
 	if orgID != "" {
 		return orgID, nil
 	}
 	if envID := os.Getenv("CIRCLECI_ORG_ID"); envID != "" {
 		return envID, nil
 	}
-	return "", fmt.Errorf("--org-id is required: pass --org-id or set CIRCLECI_ORG_ID")
+	return pickOrg()
+}
+
+func orgPicker(ctx context.Context, client *circleci.Client) func() (string, error) {
+	return func() (string, error) {
+		collabs, err := client.ListCollaborations(ctx)
+		if err != nil {
+			return "", fmt.Errorf("--org-id is required (failed to list collaborations: %w)", err)
+		}
+		if len(collabs) == 0 {
+			return "", fmt.Errorf("--org-id is required: no organizations found")
+		}
+		labels := make([]string, len(collabs))
+		for i, c := range collabs {
+			labels[i] = fmt.Sprintf("%s/%s", c.VcsType, c.Name)
+		}
+		idx, err := tui.SelectFromList("Select an organization:", labels)
+		if err != nil {
+			return "", err
+		}
+		return collabs[idx].ID, nil
+	}
 }
 
 func newSandboxListCmd() *cobra.Command {
@@ -78,11 +101,11 @@ func newSandboxListCmd() *cobra.Command {
 		Short: "List sandboxes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			resolvedOrgID, err := resolveOrgID(orgID)
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			resolvedOrgID, err := resolveOrgID(orgID, orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
@@ -123,11 +146,11 @@ The sandbox backend defaults to e2b. Override with the CHUNK_SANDBOX_PROVIDER
 environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			resolvedOrgID, err := resolveOrgID(orgID)
+			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			resolvedOrgID, err := resolveOrgID(orgID, orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
