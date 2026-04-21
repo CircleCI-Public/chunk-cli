@@ -53,6 +53,23 @@ func TestError(t *testing.T) {
 	})
 }
 
+func TestNewDetailed(t *testing.T) {
+	cause := fmt.Errorf("root")
+	ue := usererr.NewDetailed("Brief msg.", "Some detail.", "Try this.", cause)
+	if ue.UserMessage() != "Brief msg." {
+		t.Errorf("UserMessage() = %q", ue.UserMessage())
+	}
+	if ue.Detail() != "Some detail." {
+		t.Errorf("Detail() = %q", ue.Detail())
+	}
+	if ue.Suggestion() != "Try this." {
+		t.Errorf("Suggestion() = %q", ue.Suggestion())
+	}
+	if !errors.Is(ue, cause) {
+		t.Error("Unwrap chain broken")
+	}
+}
+
 func TestNewf(t *testing.T) {
 	sentinel := fmt.Errorf("root cause")
 	ue := usererr.Newf("Could not save file.", "save %s: %w", "config.json", sentinel)

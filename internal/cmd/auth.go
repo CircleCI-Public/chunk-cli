@@ -108,8 +108,9 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, circleCIBaseURL, 
 
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return usererr.New(
-			ui.FormatError("Token cannot be empty.", "", "Create a token at https://app.circleci.com/settings/user/tokens"),
+		return usererr.NewDetailed(
+			"Token cannot be empty.", "",
+			"Create a token at https://app.circleci.com/settings/user/tokens",
 			fmt.Errorf("empty circleci token"),
 		)
 	}
@@ -153,23 +154,27 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return usererr.New(
-			ui.FormatError("API key cannot be empty.", "", "Get an API key from https://console.anthropic.com/"),
+		return usererr.NewDetailed(
+			"API key cannot be empty.", "",
+			"Get an API key from https://console.anthropic.com/",
 			fmt.Errorf("empty anthropic key"),
 		)
 	}
 
 	if !strings.HasPrefix(key, "sk-ant-") {
-		return usererr.New(
-			ui.FormatError("Invalid API key format.", "Keys should start with \"sk-ant-\".", "Get a valid API key from https://console.anthropic.com/"),
+		return usererr.NewDetailed(
+			"Invalid API key format.",
+			"Keys should start with \"sk-ant-\".",
+			"Get a valid API key from https://console.anthropic.com/",
 			fmt.Errorf("invalid anthropic key format"),
 		)
 	}
 
 	io.ErrPrintln(ui.Dim("Validating API key..."))
 	if err := authprompt.ValidateAPIKey(ctx, key, anthropicBaseURL); err != nil {
-		return usererr.New(
-			ui.FormatError("API key validation failed.", "", "Check that your key is correct and has not been revoked."),
+		return usererr.NewDetailed(
+			"API key validation failed.", "",
+			"Check that your key is correct and has not been revoked.",
 			err,
 		)
 	}
@@ -192,8 +197,9 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams, circleCIBaseURL string) error {
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
 	if err := authprompt.ValidateCircleCIToken(ctx, token, circleCIBaseURL); err != nil {
-		return usererr.New(
-			ui.FormatError("CircleCI token validation failed.", "", "Check that your token is correct."),
+		return usererr.NewDetailed(
+			"CircleCI token validation failed.", "",
+			"Check that your token is correct.",
 			fmt.Errorf("validate token: %w", err),
 		)
 	}
@@ -204,8 +210,9 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 	}
 	cfg.CircleCIToken = token
 	if err := config.Save(cfg); err != nil {
-		return usererr.New(
-			ui.FormatError("Failed to save CircleCI token.", "", "Check that your config file is writable."),
+		return usererr.NewDetailed(
+			"Failed to save CircleCI token.", "",
+			"Check that your config file is writable.",
 			fmt.Errorf("save token: %w", err),
 		)
 	}
@@ -374,8 +381,10 @@ func authRemoveCircleCI(io iostream.Streams, circleTokenEnv string) error {
 		if errPath, pathErr := config.Path(); pathErr == nil {
 			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
 		}
-		return usererr.New(
-			ui.FormatError("Failed to remove CircleCI token.", "An error occurred while trying to remove the token from the config file.", hint),
+		return usererr.NewDetailed(
+			"Failed to remove CircleCI token.",
+			"An error occurred while trying to remove the token from the config file.",
+			hint,
 			err,
 		)
 	}
@@ -421,8 +430,10 @@ func authRemoveAnthropic(io iostream.Streams, anthropicKeyEnv string) error {
 		if errPath, pathErr := config.Path(); pathErr == nil {
 			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
 		}
-		return usererr.New(
-			ui.FormatError("Failed to remove API key.", "An error occurred while trying to remove the API key from the config file.", hint),
+		return usererr.NewDetailed(
+			"Failed to remove API key.",
+			"An error occurred while trying to remove the API key from the config file.",
+			hint,
 			err,
 		)
 	}
@@ -472,16 +483,18 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return usererr.New(
-			ui.FormatError("Token cannot be empty.", "", "Create a token at https://github.com/settings/tokens"),
+		return usererr.NewDetailed(
+			"Token cannot be empty.", "",
+			"Create a token at https://github.com/settings/tokens",
 			fmt.Errorf("empty github token"),
 		)
 	}
 
 	io.ErrPrintln(ui.Dim("Validating GitHub token..."))
 	if err := authprompt.ValidateGitHubToken(ctx, token, githubBaseURL); err != nil {
-		return usererr.New(
-			ui.FormatError("GitHub token validation failed.", "", "Check that your token is correct and has not been revoked."),
+		return usererr.NewDetailed(
+			"GitHub token validation failed.", "",
+			"Check that your token is correct and has not been revoked.",
 			err,
 		)
 	}
@@ -534,8 +547,10 @@ func authRemoveGitHub(io iostream.Streams, githubTokenEnv string) error {
 		if errPath, pathErr := config.Path(); pathErr == nil {
 			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
 		}
-		return usererr.New(
-			ui.FormatError("Failed to remove GitHub token.", "An error occurred while trying to remove the token from the config file.", hint),
+		return usererr.NewDetailed(
+			"Failed to remove GitHub token.",
+			"An error occurred while trying to remove the token from the config file.",
+			hint,
 			err,
 		)
 	}
