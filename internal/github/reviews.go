@@ -107,7 +107,7 @@ func (c *Client) FetchReviewActivity(ctx context.Context, org, repo string, sinc
 		cursor = prData.PageInfo.EndCursor
 
 		// Throttle if rate limit is low
-		if err := waitForRateLimit(ctx, resp.Data.RateLimit); err != nil {
+		if err := c.waitForRateLimit(ctx, resp.Data.RateLimit); err != nil {
 			return nil, err
 		}
 	}

@@ -147,8 +147,9 @@ func TestDoWithRetry_RespectsContextCancellation(t *testing.T) {
 }
 
 func TestWaitForRateLimit_AboveThreshold(t *testing.T) {
+	c := &Client{}
 	start := time.Now()
-	err := waitForRateLimit(context.Background(), RateLimit{
+	err := c.waitForRateLimit(context.Background(), RateLimit{
 		Remaining: 1000,
 		ResetAt:   time.Now().Add(time.Hour).Format(time.RFC3339),
 	})
@@ -161,8 +162,9 @@ func TestWaitForRateLimit_AboveThreshold(t *testing.T) {
 }
 
 func TestWaitForRateLimit_BelowThresholdPastReset(t *testing.T) {
+	c := &Client{}
 	start := time.Now()
-	err := waitForRateLimit(context.Background(), RateLimit{
+	err := c.waitForRateLimit(context.Background(), RateLimit{
 		Remaining: 100,
 		ResetAt:   time.Now().Add(-time.Hour).Format(time.RFC3339),
 	})
@@ -175,10 +177,11 @@ func TestWaitForRateLimit_BelowThresholdPastReset(t *testing.T) {
 }
 
 func TestWaitForRateLimit_CancelledContext(t *testing.T) {
+	c := &Client{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := waitForRateLimit(ctx, RateLimit{
+	err := c.waitForRateLimit(ctx, RateLimit{
 		Remaining: 100,
 		ResetAt:   time.Now().Add(time.Hour).Format(time.RFC3339),
 	})

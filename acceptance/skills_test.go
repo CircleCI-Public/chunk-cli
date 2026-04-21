@@ -212,8 +212,8 @@ func TestSkillsInstallHomeNotSet(t *testing.T) {
 		"expected non-zero exit code when HOME is not set, got exit %d", result.ExitCode)
 
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "HOME not set"),
-		"expected 'HOME not set' error, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "HOME environment variable is not set"),
+		"expected 'HOME environment variable is not set' error, got: %s", combined)
 }
 
 func TestSkillsListStateLabels(t *testing.T) {

@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+const orgTypeGitHub = "github"
+
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type RunDefinition struct {
@@ -81,8 +83,8 @@ func SaveRunConfig(workDir string, cfg *RunConfig) error {
 // "github" and "gh" map to "github"; everything else maps to "circleci".
 func MapVcsTypeToOrgType(vcsType string) string {
 	lower := strings.ToLower(vcsType)
-	if lower == "github" || lower == "gh" {
-		return "github"
+	if lower == orgTypeGitHub || lower == "gh" {
+		return orgTypeGitHub
 	}
 	return "circleci"
 }

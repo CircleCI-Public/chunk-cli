@@ -445,14 +445,18 @@ func TestSandboxesListFromConfig(t *testing.T) {
 }
 
 func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
 	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{"sandbox", "list"}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t,
-		strings.Contains(combined, "--org-id") || strings.Contains(combined, "chunk init"),
+	assert.Assert(t, strings.Contains(combined, "--org-id"),
 		"expected helpful error message, got: %s", combined)
 }
 

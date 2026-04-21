@@ -17,13 +17,11 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
-		if !errors.Is(err, cmd.ErrSilent) {
-			var ue *usererr.Error
-			if errors.As(err, &ue) {
-				fmt.Fprintln(os.Stderr, ue.UserMessage())
-			} else {
-				fmt.Fprintln(os.Stderr, err)
-			}
+		var ue *usererr.Error
+		if errors.As(err, &ue) {
+			fmt.Fprintln(os.Stderr, ue.UserMessage())
+		} else {
+			fmt.Fprintln(os.Stderr, err)
 			if suggestion := errorSuggestion(err); suggestion != "" {
 				fmt.Fprintln(os.Stderr, suggestion)
 			}

@@ -239,7 +239,7 @@ func TestAuthSetInvalidProvider(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for invalid provider")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "unknown provider"),
+	assert.Assert(t, strings.Contains(combined, "Unknown provider"),
 		"expected error about unknown provider, got: %s", combined)
 }
 
