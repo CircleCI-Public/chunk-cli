@@ -34,12 +34,12 @@ func newBuildPromptCmd() *cobra.Command {
 		Short: "Analyze GitHub PR comments and generate a review prompt for AI coding agents",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if top <= 0 {
-				return fmt.Errorf("--top must be a positive integer, got %d", top)
+				return usererr.Newf("--top must be a positive integer.", "invalid --top value: %d", top)
 			}
 
 			cwd, err := os.Getwd()
 			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
+				return usererr.New("Could not determine working directory.", err)
 			}
 			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos, cwd)
 			if err != nil {
