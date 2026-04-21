@@ -14,7 +14,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
+	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
+	ghpkg "github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fixtures"
@@ -28,14 +29,14 @@ func TestRunHappyPath(t *testing.T) {
 	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
 	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
 
-	anthropic := fakes.NewFakeAnthropic(
+	fakeAnthropic := fakes.NewFakeAnthropic(
 		fixtures.AnalysisResponse,
 		fixtures.PromptResponse,
 	)
 
 	ghSrv := httptest.NewServer(gh)
 	defer ghSrv.Close()
-	anthropicSrv := httptest.NewServer(anthropic)
+	anthropicSrv := httptest.NewServer(fakeAnthropic)
 	defer anthropicSrv.Close()
 
 	t.Setenv("GITHUB_TOKEN", "fake-token")
@@ -43,13 +44,18 @@ func TestRunHappyPath(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
 
+	ghClient, err := ghpkg.New()
+	assert.NilError(t, err)
+	anthropicClient, err := anthropic.New()
+	assert.NilError(t, err)
+
 	outDir := t.TempDir()
 	outputPath := filepath.Join(outDir, "prompt.md")
 
 	var stderr bytes.Buffer
 	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
 
-	err := Run(context.Background(), Options{
+	err = Run(context.Background(), Options{
 		Org:          "test-org",
 		Repos:        []string{"test-repo"},
 		Top:          5,
@@ -57,7 +63,7 @@ func TestRunHappyPath(t *testing.T) {
 		OutputPath:   outputPath,
 		AnalyzeModel: "claude-sonnet-4-6",
 		PromptModel:  "claude-sonnet-4-6",
-	}, streams)
+	}, ghClient, anthropicClient, streams)
 	assert.NilError(t, err)
 
 	// All output files created
@@ -104,16 +110,21 @@ func TestRunNoReposFound(t *testing.T) {
 	t.Setenv("GITHUB_API_URL", ghSrv.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 
+	ghClient, err := ghpkg.New()
+	assert.NilError(t, err)
+	anthropicClient, err := anthropic.New()
+	assert.NilError(t, err)
+
 	var stderr bytes.Buffer
 	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
 
 	// Pass empty repos so FetchOrgRepos queries the API (which returns empty)
-	err := Run(context.Background(), Options{
+	err = Run(context.Background(), Options{
 		Org:        "test-org",
 		Repos:      nil,
 		Top:        5,
 		OutputPath: filepath.Join(t.TempDir(), "prompt.md"),
-	}, streams)
+	}, ghClient, anthropicClient, streams)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(stderr.String(), "No repositories found"))
 }
@@ -124,14 +135,14 @@ func TestRunSkipsRepoResolutionErrors(t *testing.T) {
 	gh.SetReviewActivity("good-repo", fixtures.ReviewActivityResponse())
 	gh.SetRepoError("bad-repo", fixtures.RepoNotFoundError("test-org", "bad-repo"))
 
-	anthropic := fakes.NewFakeAnthropic(
+	fakeAnthropic := fakes.NewFakeAnthropic(
 		fixtures.AnalysisResponse,
 		fixtures.PromptResponse,
 	)
 
 	ghSrv := httptest.NewServer(gh)
 	defer ghSrv.Close()
-	anthropicSrv := httptest.NewServer(anthropic)
+	anthropicSrv := httptest.NewServer(fakeAnthropic)
 	defer anthropicSrv.Close()
 
 	t.Setenv("GITHUB_TOKEN", "fake-token")
@@ -139,20 +150,25 @@ func TestRunSkipsRepoResolutionErrors(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
 
+	ghClient, err := ghpkg.New()
+	assert.NilError(t, err)
+	anthropicClient, err := anthropic.New()
+	assert.NilError(t, err)
+
 	outDir := t.TempDir()
 	outputPath := filepath.Join(outDir, "prompt.md")
 
 	var stderr bytes.Buffer
 	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
 
-	err := Run(context.Background(), Options{
+	err = Run(context.Background(), Options{
 		Org:          "test-org",
 		Repos:        []string{"good-repo", "bad-repo"},
 		Top:          5,
 		OutputPath:   outputPath,
 		AnalyzeModel: "claude-sonnet-4-6",
 		PromptModel:  "claude-sonnet-4-6",
-	}, streams)
+	}, ghClient, anthropicClient, streams)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(stderr.String(), "Skipping bad-repo"))
 }
@@ -162,14 +178,14 @@ func TestRunWithMaxComments(t *testing.T) {
 	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
 	gh.SetReviewActivity("test-repo", fixtures.MultiReviewerResponse())
 
-	anthropic := fakes.NewFakeAnthropic(
+	fakeAnthropic := fakes.NewFakeAnthropic(
 		fixtures.AnalysisResponse,
 		fixtures.PromptResponse,
 	)
 
 	ghSrv := httptest.NewServer(gh)
 	defer ghSrv.Close()
-	anthropicSrv := httptest.NewServer(anthropic)
+	anthropicSrv := httptest.NewServer(fakeAnthropic)
 	defer anthropicSrv.Close()
 
 	t.Setenv("GITHUB_TOKEN", "fake-token")
@@ -177,12 +193,17 @@ func TestRunWithMaxComments(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
 
+	ghClient, err := ghpkg.New()
+	assert.NilError(t, err)
+	anthropicClient, err := anthropic.New()
+	assert.NilError(t, err)
+
 	outDir := t.TempDir()
 	outputPath := filepath.Join(outDir, "prompt.md")
 
 	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
 
-	err := Run(context.Background(), Options{
+	err = Run(context.Background(), Options{
 		Org:          "test-org",
 		Repos:        []string{"test-repo"},
 		Top:          5,
@@ -190,11 +211,11 @@ func TestRunWithMaxComments(t *testing.T) {
 		OutputPath:   outputPath,
 		AnalyzeModel: "claude-sonnet-4-6",
 		PromptModel:  "claude-sonnet-4-6",
-	}, streams)
+	}, ghClient, anthropicClient, streams)
 	assert.NilError(t, err)
 
 	// Verify the anthropic request was made (analysis prompt built with limited comments)
-	reqs := anthropic.Recorder.AllRequests()
+	reqs := fakeAnthropic.Recorder.AllRequests()
 	assert.Assert(t, len(reqs) >= 2, "expected at least 2 anthropic requests")
 }
 
@@ -203,16 +224,16 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
 	gh.SetReviewActivity("test-repo", fixtures.MultiReviewerResponse())
 
-	anthropic := fakes.NewFakeAnthropic(
+	fakeAnthropic := fakes.NewFakeAnthropic(
 		fixtures.AnalysisResponse,
 		fixtures.PromptResponse,
 	)
 	// First 2 analysis attempts return token limit errors, third succeeds.
-	anthropic.SetTokenLimitErrors(2)
+	fakeAnthropic.SetTokenLimitErrors(2)
 
 	ghSrv := httptest.NewServer(gh)
 	defer ghSrv.Close()
-	anthropicSrv := httptest.NewServer(anthropic)
+	anthropicSrv := httptest.NewServer(fakeAnthropic)
 	defer anthropicSrv.Close()
 
 	t.Setenv("GITHUB_TOKEN", "fake-token")
@@ -220,13 +241,18 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
 
+	ghClient, err := ghpkg.New()
+	assert.NilError(t, err)
+	anthropicClient, err := anthropic.New()
+	assert.NilError(t, err)
+
 	outDir := t.TempDir()
 	outputPath := filepath.Join(outDir, "prompt.md")
 
 	var stderr bytes.Buffer
 	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
 
-	err := Run(context.Background(), Options{
+	err = Run(context.Background(), Options{
 		Org:          "test-org",
 		Repos:        []string{"test-repo"},
 		Top:          5,
@@ -234,7 +260,7 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 		OutputPath:   outputPath,
 		AnalyzeModel: "claude-sonnet-4-6",
 		PromptModel:  "claude-sonnet-4-6",
-	}, streams)
+	}, ghClient, anthropicClient, streams)
 	assert.NilError(t, err)
 
 	// Verify retry messages appeared in stderr
@@ -253,40 +279,17 @@ func TestRunMissingGithubToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
-	err := Run(context.Background(), Options{
-		Org:        "test-org",
-		Repos:      []string{"test-repo"},
-		Top:        5,
-		OutputPath: filepath.Join(t.TempDir(), "prompt.md"),
-	}, streams)
-	// When no token is set and there is no TTY, EnsureGitHubClient returns a
-	// no-TTY error rather than "GITHUB_TOKEN not set".
+	// With the decoupled auth, client construction fails before Run is called.
+	_, err := ghpkg.New()
 	assert.Assert(t, err != nil, "expected error when GITHUB_TOKEN is missing")
 }
 
 func TestRunMissingAnthropicKey(t *testing.T) {
-	gh := fakes.NewFakeGitHub()
-	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
-	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
-
-	ghSrv := httptest.NewServer(gh)
-	defer ghSrv.Close()
-
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-	t.Setenv("GITHUB_API_URL", ghSrv.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
-	err := Run(context.Background(), Options{
-		Org:        "test-org",
-		Repos:      []string{"test-repo"},
-		Top:        5,
-		OutputPath: filepath.Join(t.TempDir(), "prompt.md"),
-	}, streams)
-	// When no key is set and there is no TTY, EnsureAnthropicClient returns a
-	// no-TTY error rather than "ANTHROPIC_API_KEY not set".
+	// With the decoupled auth, client construction fails before Run is called.
+	_, err := anthropic.New()
 	assert.Assert(t, err != nil, "expected error when Anthropic key is missing")
 }
 
@@ -345,15 +348,15 @@ func TestDeriveOutputPathsNoExtension(t *testing.T) {
 
 func TestAggregateActivity(t *testing.T) {
 	t.Run("merges across repos", func(t *testing.T) {
-		repo1 := map[string]*github.UserActivity{
+		repo1 := map[string]*ghpkg.UserActivity{
 			"alice": {Login: "alice", TotalActivity: 3, ReviewsGiven: 2, Approvals: 1, ReposActiveIn: map[string]bool{"repo1": true}},
 			"bob":   {Login: "bob", TotalActivity: 1, ReviewsGiven: 1, ReposActiveIn: map[string]bool{"repo1": true}},
 		}
-		repo2 := map[string]*github.UserActivity{
+		repo2 := map[string]*ghpkg.UserActivity{
 			"alice": {Login: "alice", TotalActivity: 2, ReviewsGiven: 1, ChangesRequested: 1, ReposActiveIn: map[string]bool{"repo2": true}},
 		}
 
-		result := AggregateActivity([]map[string]*github.UserActivity{repo1, repo2})
+		result := AggregateActivity([]map[string]*ghpkg.UserActivity{repo1, repo2})
 
 		// Sorted by TotalActivity descending
 		assert.Equal(t, len(result), 2)
@@ -376,7 +379,7 @@ func TestAggregateActivity(t *testing.T) {
 // --- TopN ---
 
 func TestTopN(t *testing.T) {
-	activities := []*github.UserActivity{
+	activities := []*ghpkg.UserActivity{
 		{Login: "alice", TotalActivity: 10},
 		{Login: "bob", TotalActivity: 5},
 		{Login: "charlie", TotalActivity: 1},
@@ -417,15 +420,15 @@ func TestTopN(t *testing.T) {
 // --- AggregateDetails ---
 
 func TestAggregateDetails(t *testing.T) {
-	batch1 := []github.ReviewCommentDetail{
+	batch1 := []ghpkg.ReviewCommentDetail{
 		{Reviewer: "alice", Body: "comment1"},
 	}
-	batch2 := []github.ReviewCommentDetail{
+	batch2 := []ghpkg.ReviewCommentDetail{
 		{Reviewer: "bob", Body: "comment2"},
 		{Reviewer: "alice", Body: "comment3"},
 	}
 
-	result := AggregateDetails([][]github.ReviewCommentDetail{batch1, batch2})
+	result := AggregateDetails([][]ghpkg.ReviewCommentDetail{batch1, batch2})
 	assert.Equal(t, len(result), 3)
 }
 
@@ -437,13 +440,13 @@ func TestAggregateDetailsEmpty(t *testing.T) {
 // --- FilterDetailsByReviewers ---
 
 func TestFilterDetailsByReviewers(t *testing.T) {
-	details := []github.ReviewCommentDetail{
+	details := []ghpkg.ReviewCommentDetail{
 		{Reviewer: "alice", Body: "a1"},
 		{Reviewer: "bob", Body: "b1"},
 		{Reviewer: "charlie", Body: "c1"},
 		{Reviewer: "alice", Body: "a2"},
 	}
-	reviewers := []*github.UserActivity{
+	reviewers := []*ghpkg.UserActivity{
 		{Login: "alice"},
 		{Login: "bob"},
 	}
@@ -466,8 +469,8 @@ func TestWriteDetailsJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "details.json")
 
-	details := []github.ReviewCommentDetail{
-		{Reviewer: "alice", Body: "good stuff", PR: github.ReviewCommentDetailPR{Repo: "repo1", Number: 1}},
+	details := []ghpkg.ReviewCommentDetail{
+		{Reviewer: "alice", Body: "good stuff", PR: ghpkg.ReviewCommentDetailPR{Repo: "repo1", Number: 1}},
 	}
 	since := time.Date(2025, 6, 15, 0, 0, 0, 0, time.UTC)
 
@@ -490,11 +493,11 @@ func TestWriteDetailsJSON(t *testing.T) {
 // --- AggregatePRRankings ---
 
 func TestAggregatePRRankings(t *testing.T) {
-	details := []github.ReviewCommentDetail{
-		{Reviewer: "alice", PR: github.ReviewCommentDetailPR{Repo: "r1", Number: 10, Title: "PR10", Author: "dan", URL: "http://10", State: "MERGED"}},
-		{Reviewer: "bob", PR: github.ReviewCommentDetailPR{Repo: "r1", Number: 10, Title: "PR10", Author: "dan", URL: "http://10", State: "MERGED"}},
-		{Reviewer: "alice", PR: github.ReviewCommentDetailPR{Repo: "r1", Number: 10, Title: "PR10", Author: "dan", URL: "http://10", State: "MERGED"}},
-		{Reviewer: "alice", PR: github.ReviewCommentDetailPR{Repo: "r1", Number: 20, Title: "PR20", Author: "dan", URL: "http://20", State: "OPEN"}},
+	details := []ghpkg.ReviewCommentDetail{
+		{Reviewer: "alice", PR: ghpkg.ReviewCommentDetailPR{Repo: "r1", Number: 10, Title: "PR10", Author: "dan", URL: "http://10", State: "MERGED"}},
+		{Reviewer: "bob", PR: ghpkg.ReviewCommentDetailPR{Repo: "r1", Number: 10, Title: "PR10", Author: "dan", URL: "http://10", State: "MERGED"}},
+		{Reviewer: "alice", PR: ghpkg.ReviewCommentDetailPR{Repo: "r1", Number: 10, Title: "PR10", Author: "dan", URL: "http://10", State: "MERGED"}},
+		{Reviewer: "alice", PR: ghpkg.ReviewCommentDetailPR{Repo: "r1", Number: 20, Title: "PR20", Author: "dan", URL: "http://20", State: "OPEN"}},
 	}
 
 	rankings := AggregatePRRankings(details)
@@ -568,10 +571,10 @@ func TestWritePRRankingsCSVEmpty(t *testing.T) {
 // --- GroupByReviewer ---
 
 func TestGroupByReviewer(t *testing.T) {
-	comments := []github.ReviewCommentDetail{
-		{Reviewer: "alice", Body: "a1", PR: github.ReviewCommentDetailPR{Repo: "r1", Number: 1}},
-		{Reviewer: "bob", Body: "b1", PR: github.ReviewCommentDetailPR{Repo: "r1", Number: 1}},
-		{Reviewer: "alice", Body: "a2", PR: github.ReviewCommentDetailPR{Repo: "r2", Number: 2}},
+	comments := []ghpkg.ReviewCommentDetail{
+		{Reviewer: "alice", Body: "a1", PR: ghpkg.ReviewCommentDetailPR{Repo: "r1", Number: 1}},
+		{Reviewer: "bob", Body: "b1", PR: ghpkg.ReviewCommentDetailPR{Repo: "r1", Number: 1}},
+		{Reviewer: "alice", Body: "a2", PR: ghpkg.ReviewCommentDetailPR{Repo: "r2", Number: 2}},
 	}
 
 	groups := GroupByReviewer(comments)

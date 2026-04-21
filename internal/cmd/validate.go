@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
@@ -97,7 +96,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if sandboxID != "" {
-				client, err := authprompt.EnsureCircleCIClient(cmd.Context(), streams, tui.PromptHidden)
+				client, err := ensureCircleCIClient(cmd.Context(), streams, tui.PromptHidden)
 				if err != nil {
 					return err
 				}

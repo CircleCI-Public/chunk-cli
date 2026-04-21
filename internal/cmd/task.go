@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -54,7 +53,7 @@ func newTaskRunCmd() *cobra.Command {
 			}
 
 			io := iostream.FromCmd(cmd)
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -126,7 +125,7 @@ func newTaskConfigCmd() *cobra.Command {
 			io.Println(ui.Bold("Chunk Run Setup"))
 			io.Println("")
 
-			client, err := authprompt.EnsureCircleCIClient(ctx, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(ctx, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}

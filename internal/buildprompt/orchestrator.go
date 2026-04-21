@@ -8,10 +8,8 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -72,16 +70,12 @@ func analyzeWithRetry(ctx context.Context, client *anthropic.Client, groups []Re
 }
 
 // Run executes the full build-prompt pipeline: discover, analyze, generate.
-func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
+// The caller must provide authenticated GitHub and Anthropic clients.
+func Run(ctx context.Context, opts Options, ghClient *github.Client, anthropicClient *anthropic.Client, streams iostream.Streams) error {
 	paths := DeriveOutputPaths(opts.OutputPath)
 
 	// --- Step 1: Discover top reviewers ---
 	streams.ErrPrintln(ui.Step(1, 3, "Discovering Top Reviewers"))
-
-	ghClient, err := authprompt.EnsureGitHubClient(ctx, streams, tui.PromptHidden)
-	if err != nil {
-		return err
-	}
 
 	if err := ghClient.ValidateOrg(ctx, opts.Org); err != nil {
 		return err
@@ -145,11 +139,6 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 
 	// --- Step 2: Analyze review patterns ---
 	streams.ErrPrintln(ui.Step(2, 3, "Analyzing Review Patterns"))
-
-	anthropicClient, err := authprompt.EnsureAnthropicClient(ctx, streams, tui.PromptHidden)
-	if err != nil {
-		return err
-	}
 
 	reviewerGroups := GroupByReviewer(filteredDetails)
 	if opts.MaxComments > 0 {
