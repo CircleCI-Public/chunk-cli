@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/task"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 func newTaskCmd() *cobra.Command {
@@ -40,11 +41,11 @@ func newTaskRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
+				return usererr.New("Could not determine working directory.", fmt.Errorf("get working directory: %w", err))
 			}
 			repoRoot, err := gitutil.RepoRoot(cwd)
 			if err != nil {
-				return fmt.Errorf("not in a git repository: %w", err)
+				return usererr.New("Not in a git repository. Run this command from inside a git repo.", fmt.Errorf("not in a git repository: %w", err))
 			}
 
 			cfg, err := task.LoadRunConfig(repoRoot)
@@ -102,11 +103,11 @@ func newTaskConfigCmd() *cobra.Command {
 			// Find git repo root instead of using cwd
 			cwd, err := os.Getwd()
 			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
+				return usererr.New("Could not determine working directory.", fmt.Errorf("get working directory: %w", err))
 			}
 			repoRoot, err := gitutil.RepoRoot(cwd)
 			if err != nil {
-				return fmt.Errorf("not in a git repository: %w", err)
+				return usererr.New("Not in a git repository. Run this command from inside a git repo.", fmt.Errorf("not in a git repository: %w", err))
 			}
 
 			// Check for existing config and prompt before overwriting
@@ -151,10 +152,10 @@ func newTaskConfigCmd() *cobra.Command {
 			wg.Wait()
 
 			if projErr != nil {
-				return fmt.Errorf("fetch projects: %w", projErr)
+				return usererr.New("Could not fetch CircleCI projects. Check your token and network connection.", fmt.Errorf("fetch projects: %w", projErr))
 			}
 			if collabErr != nil {
-				return fmt.Errorf("fetch collaborations: %w", collabErr)
+				return usererr.New("Could not fetch CircleCI projects. Check your token and network connection.", fmt.Errorf("fetch collaborations: %w", collabErr))
 			}
 
 			var orgID, projectID, orgType string
@@ -190,7 +191,7 @@ func newTaskConfigCmd() *cobra.Command {
 				io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Fetching project details for %s...", slug)))
 				detail, err := client.GetProjectBySlug(ctx, slug)
 				if err != nil {
-					return fmt.Errorf("fetch project details: %w", err)
+					return usererr.New("Could not fetch project details. Check your token and network connection.", fmt.Errorf("fetch project details: %w", err))
 				}
 
 				projectID = detail.ID
@@ -199,7 +200,10 @@ func newTaskConfigCmd() *cobra.Command {
 			} else {
 				// Manual entry
 				if len(collabs) == 0 {
-					return fmt.Errorf("no organizations found")
+					return usererr.New(
+						"No organizations found. Check your CircleCI token has access to at least one organization.",
+						fmt.Errorf("no organizations found"),
+					)
 				}
 
 				orgItems := make([]string, len(collabs))
@@ -220,7 +224,7 @@ func newTaskConfigCmd() *cobra.Command {
 					return nil
 				}
 				if projectID == "" {
-					return fmt.Errorf("project ID is required")
+					return usererr.New("Project ID is required.", fmt.Errorf("project ID is required"))
 				}
 			}
 
@@ -241,7 +245,7 @@ func newTaskConfigCmd() *cobra.Command {
 					return nil
 				}
 				if name == "" {
-					return fmt.Errorf("definition name is required")
+					return usererr.New("Definition name is required.", fmt.Errorf("definition name is required"))
 				}
 
 				// Prompt for definition ID with UUID validation
