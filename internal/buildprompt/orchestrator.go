@@ -8,11 +8,8 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // maxCommentsPerReviewer returns the maximum comment count across all groups.
@@ -28,7 +25,7 @@ func maxCommentsPerReviewer(groups []ReviewerGroup) int {
 
 // analyzeWithRetry attempts analysis, binary-searching for a viable comment
 // limit when the prompt exceeds the model's context window.
-func analyzeWithRetry(ctx context.Context, client *anthropic.Client, groups []ReviewerGroup, opts Options, streams iostream.Streams) (string, error) {
+func analyzeWithRetry(ctx context.Context, client *anthropic.Client, groups []ReviewerGroup, opts Options) (string, error) {
 	minComments := 1
 	currentMax := opts.MaxComments
 	if currentMax <= 0 {
@@ -49,7 +46,7 @@ func analyzeWithRetry(ctx context.Context, client *anthropic.Client, groups []Re
 			totalComments += g.TotalComments
 		}
 
-		streams.ErrPrintf("  %s\n", ui.Dim(fmt.Sprintf("Sending %d comments (~%d tokens)", totalComments, estimatedTokens)))
+		opts.Status(iostream.LevelInfo, fmt.Sprintf("Sending %d comments (~%d tokens)", totalComments, estimatedTokens))
 
 		analysis, err := client.AnalyzeReviews(ctx, prompt, opts.AnalyzeModel)
 		if err == nil {
@@ -67,21 +64,17 @@ func analyzeWithRetry(ctx context.Context, client *anthropic.Client, groups []Re
 			return "", err
 		}
 
-		streams.ErrPrintf("  %s\n", ui.Warning(fmt.Sprintf("Token limit exceeded, reducing to %d comments per reviewer...", currentLimit)))
+		opts.Status(iostream.LevelWarn, fmt.Sprintf("Token limit exceeded, reducing to %d comments per reviewer...", currentLimit))
 	}
 }
 
 // Run executes the full build-prompt pipeline: discover, analyze, generate.
-func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
+// The caller must provide authenticated GitHub and Anthropic clients.
+func Run(ctx context.Context, opts Options, ghClient *github.Client, anthropicClient *anthropic.Client) error {
 	paths := DeriveOutputPaths(opts.OutputPath)
 
 	// --- Step 1: Discover top reviewers ---
-	streams.ErrPrintln(ui.Step(1, 3, "Discovering Top Reviewers"))
-
-	ghClient, err := authprompt.EnsureGitHubClient(ctx, streams, tui.PromptHidden)
-	if err != nil {
-		return err
-	}
+	opts.Status(iostream.LevelStep, "Step 1/3: Discovering Top Reviewers")
 
 	if err := ghClient.ValidateOrg(ctx, opts.Org); err != nil {
 		return err
@@ -97,7 +90,7 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	}
 
 	if len(repos) == 0 {
-		streams.ErrPrintln(ui.Warning("No repositories found."))
+		opts.Status(iostream.LevelWarn, "No repositories found.")
 		return nil
 	}
 
@@ -105,11 +98,11 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	var allDetails [][]github.ReviewCommentDetail
 
 	for i, repo := range repos {
-		streams.ErrPrintf("  %s %s\n", ui.Dim(fmt.Sprintf("[%d/%d]", i+1, len(repos))), ui.Bold(repo))
+		opts.Status(iostream.LevelInfo, fmt.Sprintf("[%d/%d] %s", i+1, len(repos), repo))
 		result, err := ghClient.FetchReviewActivity(ctx, opts.Org, repo, opts.Since)
 		if err != nil {
 			if github.IsResolutionError(err) {
-				streams.ErrPrintf("  %s\n", ui.Warning(fmt.Sprintf("Skipping %s: %v", repo, err)))
+				opts.Status(iostream.LevelWarn, fmt.Sprintf("Skipping %s: %v", repo, err))
 				continue
 			}
 			return err
@@ -140,23 +133,18 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 		return fmt.Errorf("write PR rankings CSV: %w", err)
 	}
 
-	streams.ErrPrintf("  %s\n", ui.Success(fmt.Sprintf("Details written to %s", paths.DetailsPath)))
-	streams.ErrPrintf("  %s\n", ui.Success(fmt.Sprintf("PR rankings written to %s", paths.CSVPath)))
+	opts.Status(iostream.LevelDone, fmt.Sprintf("Details written to %s", paths.DetailsPath))
+	opts.Status(iostream.LevelDone, fmt.Sprintf("PR rankings written to %s", paths.CSVPath))
 
 	// --- Step 2: Analyze review patterns ---
-	streams.ErrPrintln(ui.Step(2, 3, "Analyzing Review Patterns"))
-
-	anthropicClient, err := authprompt.EnsureAnthropicClient(ctx, streams, tui.PromptHidden)
-	if err != nil {
-		return err
-	}
+	opts.Status(iostream.LevelStep, "Step 2/3: Analyzing Review Patterns")
 
 	reviewerGroups := GroupByReviewer(filteredDetails)
 	if opts.MaxComments > 0 {
 		reviewerGroups = LimitCommentsPerReviewer(reviewerGroups, opts.MaxComments)
 	}
 
-	analysis, err := analyzeWithRetry(ctx, anthropicClient, reviewerGroups, opts, streams)
+	analysis, err := analyzeWithRetry(ctx, anthropicClient, reviewerGroups, opts)
 	if err != nil {
 		return fmt.Errorf("analyze reviews: %w", err)
 	}
@@ -174,10 +162,10 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	if err := os.WriteFile(paths.AnalysisPath, []byte(report), 0o644); err != nil {
 		return fmt.Errorf("write analysis: %w", err)
 	}
-	streams.ErrPrintf("  %s\n", ui.Success(fmt.Sprintf("Analysis written to %s", paths.AnalysisPath)))
+	opts.Status(iostream.LevelDone, fmt.Sprintf("Analysis written to %s", paths.AnalysisPath))
 
 	// --- Step 3: Generate review prompt ---
-	streams.ErrPrintln(ui.Step(3, 3, "Generating PR Review Prompt"))
+	opts.Status(iostream.LevelStep, "Step 3/3: Generating PR Review Prompt")
 
 	analysisContent, err := os.ReadFile(paths.AnalysisPath)
 	if err != nil {
@@ -197,7 +185,7 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	if err := os.WriteFile(paths.PromptPath, []byte(generatedPrompt+footer), 0o644); err != nil {
 		return fmt.Errorf("write prompt: %w", err)
 	}
-	streams.ErrPrintf("  %s\n", ui.Success(fmt.Sprintf("Prompt written to %s", paths.PromptPath)))
+	opts.Status(iostream.LevelDone, fmt.Sprintf("Prompt written to %s", paths.PromptPath))
 
 	return nil
 }

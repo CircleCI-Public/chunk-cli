@@ -10,14 +10,29 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
+
+func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
+	return func(level iostream.Level, msg string) {
+		switch level {
+		case iostream.LevelStep:
+			streams.ErrPrintln(ui.Bold(msg))
+		case iostream.LevelInfo:
+			streams.ErrPrintf("  %s\n", ui.Dim(msg))
+		case iostream.LevelWarn:
+			streams.ErrPrintf("  %s\n", ui.Warning(msg))
+		case iostream.LevelDone:
+			streams.ErrPrintf("  %s\n", ui.Success(msg))
+		}
+	}
+}
 
 func newValidateCmd() *cobra.Command {
 	var sandboxID, identityFile, workdir string
@@ -31,6 +46,7 @@ func newValidateCmd() *cobra.Command {
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			streams := iostream.FromCmd(cmd)
+			statusFn := newStatusFunc(streams)
 
 			workDir := projectDir
 			if workDir == "" {
@@ -52,7 +68,7 @@ func newValidateCmd() *cobra.Command {
 				if err != nil {
 					cfg = &config.ProjectConfig{}
 				}
-				return validate.List(cfg, streams)
+				return validate.List(cfg, statusFn)
 			}
 
 			// --status: check cache only
@@ -61,7 +77,7 @@ func newValidateCmd() *cobra.Command {
 				if err != nil {
 					cfg = &config.ProjectConfig{}
 				}
-				return validate.Status(workDir, name, cfg, streams)
+				return validate.Status(workDir, name, cfg, statusFn)
 			}
 
 			// --cmd: run inline command
@@ -76,31 +92,34 @@ func newValidateCmd() *cobra.Command {
 				}
 				if save {
 					if err := config.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
-						return fmt.Errorf("save command: %w", err)
+						return usererr.New("Could not save command to .chunk/config.json.", err)
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 				}
-				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, streams)
+				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, statusFn, streams)
 			}
 
 			cfg, err := config.LoadProjectConfig(workDir)
 			if err != nil || !cfg.HasCommands() {
-				return fmt.Errorf("no validate commands configured, run 'chunk init' first")
+				return usererr.New(
+					"No validate commands configured. Run 'chunk init' first.",
+					fmt.Errorf("no validate commands configured"),
+				)
 			}
 
 			if dryRun {
-				return validate.RunDryRun(cfg, name, streams)
+				return validate.RunDryRun(cfg, name, statusFn)
 			}
 
 			if sandboxID != "" {
-				client, err := authprompt.EnsureCircleCIClient(cmd.Context(), streams, tui.PromptHidden)
+				client, err := ensureCircleCIClient(cmd.Context(), streams, tui.PromptHidden)
 				if err != nil {
 					return err
 				}
 				authSock := os.Getenv("SSH_AUTH_SOCK")
 				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, authSock)
 				if err != nil {
-					return fmt.Errorf("open session: %w", err)
+					return usererr.New("Could not open SSH session to sandbox.", err)
 				}
 				dest := workdir
 				if dest == "" {
@@ -120,22 +139,25 @@ func newValidateCmd() *cobra.Command {
 				if cfg.FindCommand(name) == nil {
 					isTTY := term.IsTerminal(int(os.Stdin.Fd()))
 					if !isTTY {
-						return fmt.Errorf("command %q is not configured\nAdd %q to .chunk/config.json", name, name)
+						return usererr.New(
+							fmt.Sprintf("Command %q is not configured. Add it to .chunk/config.json.", name),
+							fmt.Errorf("command %q is not configured", name),
+						)
 					}
 					// Interactive setup: prompt for command
 					streams.ErrPrintf("Command %s is not configured yet.\n\n", ui.Bold(name))
 					streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
 					scanner := bufio.NewScanner(os.Stdin)
 					if !scanner.Scan() {
-						return fmt.Errorf("no input received")
+						return usererr.New("No command entered.", fmt.Errorf("no input received"))
 					}
 					input := strings.TrimSpace(scanner.Text())
 					if input == "" {
 						streams.ErrPrintln(ui.Dim("No command entered, aborting."))
-						return fmt.Errorf("no command entered")
+						return usererr.New("No command entered.", fmt.Errorf("no command entered"))
 					}
 					if err := config.SaveCommand(workDir, name, input); err != nil {
-						return fmt.Errorf("save command: %w", err)
+						return usererr.New("Could not save command to .chunk/config.json.", err)
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
 					// Reload config after save
@@ -144,11 +166,11 @@ func newValidateCmd() *cobra.Command {
 						return err
 					}
 				}
-				return validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, streams)
+				return validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, statusFn, streams)
 			}
 
 			// Run all
-			return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, streams)
+			return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, statusFn, streams)
 		},
 	}
 

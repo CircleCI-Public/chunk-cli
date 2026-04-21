@@ -10,7 +10,9 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 func newBuildPromptCmd() *cobra.Command {
@@ -31,16 +33,16 @@ func newBuildPromptCmd() *cobra.Command {
 		Short: "Analyze GitHub PR comments and generate a review prompt for AI coding agents",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if top <= 0 {
-				return fmt.Errorf("--top must be a positive integer, got %d", top)
+				return usererr.Newf("--top must be a positive integer.", "invalid --top value: %d", top)
 			}
 
 			cwd, err := os.Getwd()
 			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
+				return usererr.New("Could not determine working directory.", err)
 			}
 			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos, cwd)
 			if err != nil {
-				return err
+				return usererr.New("Could not determine org and repos. Use --org and --repos flags.", err)
 			}
 
 			sinceTime, err := parseSince(since)
@@ -63,6 +65,16 @@ func newBuildPromptCmd() *cobra.Command {
 				}
 			}
 
+			ghClient, err := ensureGitHubClient(cmd.Context(), streams, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+
+			anthropicClient, err := ensureAnthropicClient(cmd.Context(), streams, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+
 			opts := buildprompt.Options{
 				Org:                resolvedOrg,
 				Repos:              resolvedRepos,
@@ -73,9 +85,10 @@ func newBuildPromptCmd() *cobra.Command {
 				AnalyzeModel:       analyzeModel,
 				PromptModel:        promptModel,
 				IncludeAttribution: includeAttribution,
+				Status:             newStatusFunc(streams),
 			}
 
-			return buildprompt.Run(cmd.Context(), opts, iostream.FromCmd(cmd))
+			return buildprompt.Run(cmd.Context(), opts, ghClient, anthropicClient)
 		},
 	}
 

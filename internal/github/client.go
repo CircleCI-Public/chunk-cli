@@ -17,6 +17,16 @@ type Client struct {
 	// retryDelayOverride, if non-zero, replaces the exponential backoff
 	// delay in doWithRetry. Intended for tests only.
 	retryDelayOverride time.Duration
+
+	// logStatus, if non-nil, is called with informational progress
+	// messages (e.g. retry/rate-limit waits). Callers typically wire
+	// this to stderr output.
+	logStatus func(string)
+}
+
+// SetLogStatus sets an optional callback for progress/status messages.
+func (c *Client) SetLogStatus(fn func(string)) {
+	c.logStatus = fn
 }
 
 // New creates a GitHub GraphQL client.

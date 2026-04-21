@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -60,6 +61,12 @@ func writeConfig(t *testing.T, dir string, commands []config.Command) string {
 func newStreams() (iostream.Streams, *bytes.Buffer, *bytes.Buffer) {
 	var out, errBuf bytes.Buffer
 	return iostream.Streams{Out: &out, Err: &errBuf}, &out, &errBuf
+}
+
+func testStatus(buf *bytes.Buffer) iostream.StatusFunc {
+	return func(_ iostream.Level, msg string) {
+		fmt.Fprintln(buf, msg)
+	}
 }
 
 // --- LoadProjectConfig tests ---
@@ -137,9 +144,9 @@ func TestRunDryRun(t *testing.T) {
 			{Name: "install", Run: "npm install"},
 			{Name: "test", Run: "npm test"},
 		}}
-		streams, out, _ := newStreams()
+		var out bytes.Buffer
 
-		assert.NilError(t, RunDryRun(cfg, "", streams))
+		assert.NilError(t, RunDryRun(cfg, "", testStatus(&out)))
 
 		assert.Assert(t, strings.Contains(out.String(), "install: npm install"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(out.String(), "test: npm test"), "got: %s", out.String())
@@ -147,9 +154,9 @@ func TestRunDryRun(t *testing.T) {
 
 	t.Run("no commands", func(t *testing.T) {
 		cfg := &config.ProjectConfig{}
-		streams, _, _ := newStreams()
+		var out bytes.Buffer
 
-		err := RunDryRun(cfg, "", streams)
+		err := RunDryRun(cfg, "", testStatus(&out))
 		assert.ErrorContains(t, err, "no validate commands")
 	})
 }
@@ -162,19 +169,21 @@ func TestRunAll(t *testing.T) {
 			{Name: "install", Run: "echo installed"},
 			{Name: "test", Run: "echo tested"},
 		}}
-		streams, out, errBuf := newStreams()
+		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunAll(context.Background(), ".", true, cfg, streams))
+		assert.NilError(t, RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(errBuf.String(), "Running install"), "got: %s", errBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "Running install"), "got: %s", statusBuf.String())
 	})
 
 	t.Run("no commands", func(t *testing.T) {
 		cfg := &config.ProjectConfig{}
 		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", true, cfg, streams)
+		err := RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "no validate commands")
 	})
 
@@ -183,8 +192,9 @@ func TestRunAll(t *testing.T) {
 			{Name: "test", Run: "false"},
 		}}
 		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", true, cfg, streams)
+		err := RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "test command failed")
 	})
 
@@ -194,13 +204,14 @@ func TestRunAll(t *testing.T) {
 			{Name: "test", Run: "echo should-not-run"},
 			{Name: "lint", Run: "echo should-not-run-either"},
 		}}
-		streams, out, errBuf := newStreams()
+		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", true, cfg, streams)
+		err := RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams)
 		assert.Assert(t, err != nil, "expected error")
 		assert.Assert(t, !strings.Contains(out.String(), "should-not-run"), "skipped command should not produce output, got: %s", out.String())
-		assert.Assert(t, strings.Contains(errBuf.String(), "test: skipped"), "got: %s", errBuf.String())
-		assert.Assert(t, strings.Contains(errBuf.String(), "lint: skipped"), "got: %s", errBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "test: skipped"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "lint: skipped"), "got: %s", statusBuf.String())
 	})
 
 	t.Run("single command success", func(t *testing.T) {
@@ -208,8 +219,9 @@ func TestRunAll(t *testing.T) {
 			{Name: "test", Run: "echo ok"},
 		}}
 		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunAll(context.Background(), ".", true, cfg, streams))
+		assert.NilError(t, RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
 	})
 }

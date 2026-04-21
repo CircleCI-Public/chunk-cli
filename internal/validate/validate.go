@@ -12,7 +12,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // shellEscape wraps arg in single quotes for safe use in a POSIX sh -c command.
@@ -24,20 +23,20 @@ func shellEscape(arg string) string {
 const DefaultTimeout = 300
 
 // List prints all configured command names and their run strings.
-func List(cfg *config.ProjectConfig, streams iostream.Streams) error {
+func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
-		streams.Println(ui.Dim("No commands configured."))
-		streams.Println(ui.Dim("Add commands with: chunk validate <name> --cmd \"your command\" --save"))
+		status(iostream.LevelInfo, "No commands configured.")
+		status(iostream.LevelInfo, "Add commands with: chunk validate <name> --cmd \"your command\" --save")
 		return nil
 	}
 	for _, c := range cfg.Commands {
-		streams.Printf("  %s: %s\n", ui.Bold(c.Name), ui.Gray(c.Run))
+		status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
 	}
 	return nil
 }
 
 // Status checks the cache for each command (or a single named command) and prints its status.
-func Status(workDir, name string, cfg *config.ProjectConfig, streams iostream.Streams) error {
+func Status(workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	commands := cfg.Commands
 	if name != "" {
 		c := cfg.FindCommand(name)
@@ -50,19 +49,27 @@ func Status(workDir, name string, cfg *config.ProjectConfig, streams iostream.St
 	for _, c := range commands {
 		cached := CheckCache(workDir, c.Name, c.FileExt)
 		if cached != nil {
-			streams.Printf("  %s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
+			level := iostream.LevelDone
+			if cached.Status != statusPass {
+				level = iostream.LevelWarn
+			}
+			status(level, fmt.Sprintf("%s: cached (%s)", c.Name, strings.ToUpper(cached.Status)))
 		} else {
-			streams.Printf("  %s: %s\n", ui.Bold(c.Name), ui.Dim("no cached result"))
+			status(iostream.LevelInfo, fmt.Sprintf("%s: no cached result", c.Name))
 		}
 	}
 	return nil
 }
 
 // RunInline runs an inline command string, caching the result under the given name.
-func RunInline(ctx context.Context, workDir, name, command string, force bool, streams iostream.Streams) error {
+func RunInline(ctx context.Context, workDir, name, command string, force bool, status iostream.StatusFunc, streams iostream.Streams) error {
 	if !force {
 		if cached := CheckCache(workDir, name, ""); cached != nil {
-			streams.Printf("%s: cached (%s)\n", ui.Bold(name), colorStatus(cached.Status))
+			level := iostream.LevelDone
+			if cached.Status != statusPass {
+				level = iostream.LevelWarn
+			}
+			status(level, fmt.Sprintf("%s: cached (%s)", name, strings.ToUpper(cached.Status)))
 			if cached.ExitCode != 0 {
 				return fmt.Errorf("%s: cached failure", name)
 			}
@@ -70,11 +77,11 @@ func RunInline(ctx context.Context, workDir, name, command string, force bool, s
 		}
 	}
 
-	return runAndCache(ctx, workDir, name, command, "", 0, streams)
+	return runAndCache(ctx, workDir, name, command, "", 0, status, streams)
 }
 
 // RunNamed runs a single named command from config with caching.
-func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *config.ProjectConfig, streams iostream.Streams) error {
+func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
 	c := cfg.FindCommand(name)
 	if c == nil {
 		return fmt.Errorf("command %q not configured", name)
@@ -82,7 +89,11 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *config
 
 	if !force {
 		if cached := CheckCache(workDir, c.Name, c.FileExt); cached != nil {
-			streams.Printf("%s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
+			level := iostream.LevelDone
+			if cached.Status != statusPass {
+				level = iostream.LevelWarn
+			}
+			status(level, fmt.Sprintf("%s: cached (%s)", c.Name, strings.ToUpper(cached.Status)))
 			if cached.ExitCode != 0 {
 				return fmt.Errorf("%s: cached failure", c.Name)
 			}
@@ -90,11 +101,11 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *config
 		}
 	}
 
-	return runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, c.Timeout, streams)
+	return runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, c.Timeout, status, streams)
 }
 
 // RunAll runs all configured commands with optional cache bypass.
-func RunAll(ctx context.Context, workDir string, force bool, cfg *config.ProjectConfig, streams iostream.Streams) error {
+func RunAll(ctx context.Context, workDir string, force bool, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
 		return fmt.Errorf("no validate commands configured, run 'chunk init' first")
 	}
@@ -102,7 +113,11 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *config.Project
 	for i, c := range cfg.Commands {
 		if !force {
 			if cached := CheckCache(workDir, c.Name, c.FileExt); cached != nil {
-				streams.ErrPrintf("%s: cached (%s)\n", ui.Bold(c.Name), colorStatus(cached.Status))
+				level := iostream.LevelDone
+				if cached.Status != statusPass {
+					level = iostream.LevelWarn
+				}
+				status(level, fmt.Sprintf("%s: cached (%s)", c.Name, strings.ToUpper(cached.Status)))
 				if cached.ExitCode != 0 {
 					return fmt.Errorf("%s: cached failure", c.Name)
 				}
@@ -110,9 +125,9 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *config.Project
 			}
 		}
 
-		if err := runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, c.Timeout, streams); err != nil {
+		if err := runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, c.Timeout, status, streams); err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
-				streams.ErrPrintf("%s: %s\n", ui.Bold(cfg.Commands[j].Name), ui.Yellow(fmt.Sprintf("skipped (%s failed)", c.Name)))
+				status(iostream.LevelWarn, fmt.Sprintf("%s: skipped (%s failed)", cfg.Commands[j].Name, c.Name))
 			}
 			return err
 		}
@@ -121,7 +136,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *config.Project
 }
 
 // RunDryRun prints commands without executing them.
-func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams) error {
+func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
 		return fmt.Errorf("no validate commands configured, run 'chunk init' first")
 	}
@@ -136,7 +151,7 @@ func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams)
 	}
 
 	for _, c := range commands {
-		streams.Printf("%s: %s\n", ui.Bold(c.Name), ui.Gray(c.Run))
+		status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
 	}
 	return nil
 }
@@ -162,19 +177,8 @@ func RunRemote(ctx context.Context, exec func(ctx context.Context, script string
 	return nil
 }
 
-func colorStatus(status string) string {
-	switch status {
-	case statusPass:
-		return ui.Green("PASS")
-	case statusFail:
-		return ui.Red("FAIL")
-	default:
-		return status
-	}
-}
-
-func runAndCache(ctx context.Context, workDir, name, command, fileExt string, timeoutSec int, streams iostream.Streams) error {
-	streams.ErrPrintf("%s %s\n", ui.Dim("Running "+name+":"), ui.Gray(command))
+func runAndCache(ctx context.Context, workDir, name, command, fileExt string, timeoutSec int, status iostream.StatusFunc, streams iostream.Streams) error {
+	status(iostream.LevelInfo, fmt.Sprintf("Running %s: %s", name, command))
 
 	if timeoutSec <= 0 {
 		timeoutSec = DefaultTimeout

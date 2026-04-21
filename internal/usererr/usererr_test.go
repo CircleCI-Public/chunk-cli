@@ -52,3 +52,18 @@ func TestError(t *testing.T) {
 		}
 	})
 }
+
+func TestNewf(t *testing.T) {
+	sentinel := fmt.Errorf("root cause")
+	ue := usererr.Newf("Could not save file.", "save %s: %w", "config.json", sentinel)
+
+	if got := ue.UserMessage(); got != "Could not save file." {
+		t.Errorf("UserMessage() = %q", got)
+	}
+	if got := ue.Error(); got != "save config.json: root cause" {
+		t.Errorf("Error() = %q", got)
+	}
+	if !errors.Is(ue, sentinel) {
+		t.Error("errors.Is failed to match wrapped sentinel")
+	}
+}

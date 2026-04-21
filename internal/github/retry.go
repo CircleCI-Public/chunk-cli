@@ -86,7 +86,7 @@ func (c *Client) doWithRetry(ctx context.Context, query string, vars map[string]
 
 		lastErr = err
 		delay := c.retryDelay(attempt)
-		fmt.Printf("  GitHub API error on attempt %d/%d, retrying in %s...\n", attempt+1, maxRetries, delay)
+		c.status(fmt.Sprintf("GitHub API error on attempt %d/%d, retrying in %s...", attempt+1, maxRetries, delay))
 
 		select {
 		case <-ctx.Done():
@@ -102,7 +102,7 @@ func (c *Client) doWithRetry(ctx context.Context, query string, vars map[string]
 }
 
 // waitForRateLimit sleeps until the rate limit resets if remaining is below the threshold.
-func waitForRateLimit(ctx context.Context, rl RateLimit) error {
+func (c *Client) waitForRateLimit(ctx context.Context, rl RateLimit) error {
 	if rl.Remaining >= rateLimitThreshold {
 		return nil
 	}
@@ -117,12 +117,19 @@ func waitForRateLimit(ctx context.Context, rl RateLimit) error {
 		return nil
 	}
 
-	fmt.Printf("Rate limit low (%d remaining). Waiting %s until reset...\n", rl.Remaining, wait.Truncate(time.Second))
+	c.status(fmt.Sprintf("Rate limit low (%d remaining). Waiting %s until reset...", rl.Remaining, wait.Truncate(time.Second)))
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-time.After(wait):
 		return nil
+	}
+}
+
+// status emits a progress message via the logStatus callback, if set.
+func (c *Client) status(msg string) {
+	if c.logStatus != nil {
+		c.logStatus(msg)
 	}
 }
