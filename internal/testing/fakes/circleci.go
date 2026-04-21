@@ -69,6 +69,7 @@ type FakeCircleCI struct {
 	RunStatusCode   int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
+	CollaborationsStatusCode int // override for GET /me/collaborations
 	ListStatusCode           int // override for GET /sandbox/instances
 	CreateStatusCode         int // override for POST /sandbox/instances
 	ExecStatusCode           int // override for POST /sandbox/instances/:id/exec
@@ -128,6 +129,10 @@ func (f *FakeCircleCI) handleCollaborations(c *gin.Context) {
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+	if f.CollaborationsStatusCode != 0 {
+		c.JSON(f.CollaborationsStatusCode, gin.H{"message": "API error"})
+		return
+	}
 	c.JSON(http.StatusOK, f.Collaborations)
 }
 
