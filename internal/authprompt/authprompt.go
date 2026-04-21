@@ -82,6 +82,20 @@ func ValidateAPIKey(ctx context.Context, apiKey, baseURL string) error {
 	return nil
 }
 
+func PrintSaveHint(streams iostream.Streams, label string) {
+	if cfgPath, err := config.Path(); err == nil {
+		streams.ErrPrintln(ui.Dim(fmt.Sprintf("%s will be saved to user config (%s, mode 0600)", label, cfgPath)))
+	}
+}
+
+func PrintSaved(streams iostream.Streams, label string) {
+	msg := label + " saved"
+	if cfgPath, err := config.Path(); err == nil {
+		msg = fmt.Sprintf("%s saved to user config (%s)", label, cfgPath)
+	}
+	streams.ErrPrintln(ui.Success(msg))
+}
+
 // EnsureCircleCIClient returns a ready-to-use CircleCI client. If a token is
 // already available (env var or config file), it uses it directly. Otherwise
 // it prompts inline once, validates, saves to config, and returns the client.
@@ -97,6 +111,7 @@ func EnsureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("CircleCI token required"))
 	streams.ErrPrintln("Create a token at https://app.circleci.com/settings/user/tokens")
+	PrintSaveHint(streams, "Token")
 	streams.ErrPrintln("")
 
 	token, err := prompter("CircleCI Token")
@@ -124,7 +139,7 @@ func EnsureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 	if err := config.Save(cfg); err != nil {
 		return nil, fmt.Errorf("save token: %w", err)
 	}
-	streams.ErrPrintln(ui.Success("CircleCI token saved"))
+	PrintSaved(streams, "CircleCI token")
 	return circleci.NewClient()
 }
 
@@ -143,6 +158,7 @@ func EnsureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Anthropic API key required"))
 	streams.ErrPrintln("Get a key at https://console.anthropic.com/")
+	PrintSaveHint(streams, "Key")
 	streams.ErrPrintln("")
 
 	key, err := prompter("API Key")
@@ -173,7 +189,7 @@ func EnsureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 	if err := config.Save(cfg); err != nil {
 		return nil, fmt.Errorf("save API key: %w", err)
 	}
-	streams.ErrPrintln(ui.Success("Anthropic API key saved"))
+	PrintSaved(streams, "Anthropic API key")
 	return anthropic.New()
 }
 
@@ -193,6 +209,7 @@ func EnsureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("GitHub token required"))
 	streams.ErrPrintln("Create a token at https://github.com/settings/tokens")
+	PrintSaveHint(streams, "Token")
 	streams.ErrPrintln("")
 
 	token, err := prompter("GitHub Token")
@@ -220,7 +237,7 @@ func EnsureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 	if err := config.Save(cfg); err != nil {
 		return nil, fmt.Errorf("save token: %w", err)
 	}
-	streams.ErrPrintln(ui.Success("GitHub token saved"))
+	PrintSaved(streams, "GitHub token")
 	return github.New()
 }
 

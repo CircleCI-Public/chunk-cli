@@ -75,6 +75,7 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, circleCIBaseURL, 
 	io.Println(ui.Bold("Chunk CLI - CircleCI Token Setup"))
 	io.Println("")
 	io.Println("Create a CircleCI token at https://app.circleci.com/settings/user/tokens")
+	authprompt.PrintSaveHint(io, "Token")
 	io.Println("")
 
 	if circleTokenEnv != "" {
@@ -121,7 +122,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 	io.Println(ui.Bold("Chunk CLI - Anthropic API Key Setup"))
 	io.Println("")
 	io.Println("Enter your Anthropic API key (starts with sk-ant-).")
-	io.Println(ui.Dim("The key will be stored securely and never displayed."))
+	authprompt.PrintSaveHint(io, "Key")
 	io.Println("")
 	if anthropicKeyEnv != "" {
 		io.Println(ui.Warning("An Anthropic API key is set in environment variables (ANTHROPIC_API_KEY)."))
@@ -182,11 +183,8 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 		return usererr.New("Could not save credentials. "+configFilePermHint, err)
 	}
 
-	cfgPath, err := config.Path()
-	if err != nil {
-		return usererr.New("Could not access configuration.", err)
-	}
-	io.Printf("\n%s\n", ui.Success(fmt.Sprintf("API key validated and saved to %s", cfgPath)))
+	io.Println("")
+	authprompt.PrintSaved(io, "Anthropic API key")
 	io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
 	return nil
 }
@@ -212,11 +210,8 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 		)
 	}
 
-	cfgPath, err := config.Path()
-	if err != nil {
-		return usererr.New("Could not access configuration.", err)
-	}
-	streams.ErrPrintf("\n%s\n", ui.Success(fmt.Sprintf("CircleCI token validated and saved to %s", cfgPath)))
+	streams.ErrPrintln("")
+	authprompt.PrintSaved(streams, "CircleCI token")
 	return nil
 }
 
@@ -444,6 +439,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 	io.Println(ui.Bold("Chunk CLI - GitHub Token Setup"))
 	io.Println("")
 	io.Println("Create a token at https://github.com/settings/tokens")
+	authprompt.PrintSaveHint(io, "Token")
 	io.Println("")
 
 	if githubTokenEnv != "" {
@@ -499,11 +495,8 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 		return usererr.New("Could not save credentials. "+configFilePermHint, err)
 	}
 
-	cfgPath, err := config.Path()
-	if err != nil {
-		return usererr.New("Could not access configuration.", err)
-	}
-	io.Printf("\n%s\n", ui.Success(fmt.Sprintf("GitHub token validated and saved to %s", cfgPath)))
+	io.Println("")
+	authprompt.PrintSaved(io, "GitHub token")
 	return nil
 }
 
