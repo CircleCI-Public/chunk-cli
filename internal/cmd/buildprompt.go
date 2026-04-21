@@ -10,6 +10,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
@@ -64,12 +65,12 @@ func newBuildPromptCmd() *cobra.Command {
 				}
 			}
 
-			ghClient, err := ensureGitHubClient(cmd.Context(), streams)
+			ghClient, err := ensureGitHubClient(cmd.Context(), streams, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
 
-			anthropicClient, err := ensureAnthropicClient(cmd.Context(), streams)
+			anthropicClient, err := ensureAnthropicClient(cmd.Context(), streams, tui.PromptHidden)
 			if err != nil {
 				return err
 			}

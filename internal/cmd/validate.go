@@ -13,6 +13,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
+	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
@@ -95,7 +96,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if sandboxID != "" {
-				client, err := ensureCircleCIClient(cmd.Context(), streams)
+				client, err := ensureCircleCIClient(cmd.Context(), streams, tui.PromptHidden)
 				if err != nil {
 					return err
 				}

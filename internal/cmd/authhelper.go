@@ -33,7 +33,7 @@ func printSaved(streams iostream.Streams, label string) {
 
 // ensureCircleCIClient resolves or interactively prompts for a CircleCI token,
 // validates it, saves it to config, and returns a ready client.
-func ensureCircleCIClient(ctx context.Context, streams iostream.Streams) (*circleci.Client, error) {
+func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*circleci.Client, error) {
 	client, err := authprompt.ResolveCircleCIClient()
 	if err == nil {
 		return client, nil
@@ -47,7 +47,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams) (*circl
 	streams.ErrPrintln("Create a token at https://app.circleci.com/settings/user/tokens")
 	streams.ErrPrintln("")
 
-	token, err := tui.PromptHidden("CircleCI Token")
+	token, err := prompter("CircleCI Token")
 	if err != nil {
 		if errors.Is(err, tui.ErrNoTTY) {
 			return nil, usererr.New("CircleCI token required: set CIRCLE_TOKEN or run 'chunk auth set circleci'", err)
@@ -73,7 +73,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams) (*circl
 
 // ensureAnthropicClient resolves or interactively prompts for an Anthropic API
 // key, validates it, saves it to config, and returns a ready client.
-func ensureAnthropicClient(ctx context.Context, streams iostream.Streams) (*anthropic.Client, error) {
+func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*anthropic.Client, error) {
 	client, err := authprompt.ResolveAnthropicClient()
 	if err == nil {
 		return client, nil
@@ -87,7 +87,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams) (*anth
 	streams.ErrPrintln("Get a key at https://console.anthropic.com/")
 	streams.ErrPrintln("")
 
-	key, err := tui.PromptHidden("API Key")
+	key, err := prompter("API Key")
 	if err != nil {
 		if errors.Is(err, tui.ErrNoTTY) {
 			return nil, usererr.New("Anthropic API key required: set ANTHROPIC_API_KEY or run 'chunk auth set anthropic'", err)
@@ -116,7 +116,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams) (*anth
 
 // ensureGitHubClient resolves or interactively prompts for a GitHub token,
 // validates it, saves it to config, and returns a ready client.
-func ensureGitHubClient(ctx context.Context, streams iostream.Streams) (*github.Client, error) {
+func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*github.Client, error) {
 	client, err := authprompt.ResolveGitHubClient()
 	if err == nil {
 		return client, nil
@@ -130,7 +130,7 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams) (*github.
 	streams.ErrPrintln("Create a token at https://github.com/settings/tokens")
 	streams.ErrPrintln("")
 
-	token, err := tui.PromptHidden("GitHub Token")
+	token, err := prompter("GitHub Token")
 	if err != nil {
 		if errors.Is(err, tui.ErrNoTTY) {
 			return nil, usererr.New("GitHub token required: set GITHUB_TOKEN or run 'chunk auth set github'", err)

@@ -53,7 +53,7 @@ func newTaskRunCmd() *cobra.Command {
 			}
 
 			io := iostream.FromCmd(cmd)
-			client, err := ensureCircleCIClient(cmd.Context(), io)
+			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -125,7 +125,7 @@ func newTaskConfigCmd() *cobra.Command {
 			io.Println(ui.Bold("Chunk Run Setup"))
 			io.Println("")
 
-			client, err := ensureCircleCIClient(ctx, io)
+			client, err := ensureCircleCIClient(ctx, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
