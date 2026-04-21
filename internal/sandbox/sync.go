@@ -11,7 +11,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 const workspaceDir = "/workspace"
@@ -20,7 +19,7 @@ const workspaceDir = "/workspace"
 // It ensures the workspace base exists, clones the repo into workdir if absent,
 // then resets to the remote base and applies a patch of local changes.
 // workdir overrides the destination path; defaults to /workspace/<repo>.
-func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock, workdir string, io iostream.Streams) error {
+func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
 	session, err := OpenSession(ctx, client, sandboxID, identityFile, authSock)
 	if err != nil {
 		return err
@@ -66,13 +65,13 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 				ShellEscape(branch), ShellEscape(repoURL), ShellEscape(repoPath),
 			)
 		} else {
-			io.ErrPrintf("%s\n", ui.Dim("Branch not pushed to remote; cloning default branch instead."))
+			status(iostream.LevelInfo, "Branch not pushed to remote; cloning default branch instead.")
 			cloneCmd = fmt.Sprintf("git clone %s %s",
 				ShellEscape(repoURL), ShellEscape(repoPath),
 			)
 		}
 
-		io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Cloning %s/%s into %s...", org, repo, repoPath)))
+		status(iostream.LevelInfo, fmt.Sprintf("Cloning %s/%s into %s...", org, repo, repoPath))
 		cloneResult, err := ExecOverSSH(ctx, session, cloneCmd, nil, nil)
 		if err != nil {
 			return fmt.Errorf("sync: clone: %w", err)
@@ -96,7 +95,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		return err
 	}
 	if patch == "" {
-		io.ErrPrintln(ui.Dim("No local changes relative to remote base."))
+		status(iostream.LevelInfo, "No local changes relative to remote base.")
 		return nil
 	}
 
@@ -129,6 +128,6 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		return fmt.Errorf("sync failed: %s", detail)
 	}
 
-	io.ErrPrintln(ui.Success("Synced."))
+	status(iostream.LevelDone, "Synced.")
 	return nil
 }

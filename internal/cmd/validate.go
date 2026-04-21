@@ -19,6 +19,21 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
+func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
+	return func(level iostream.Level, msg string) {
+		switch level {
+		case iostream.LevelStep:
+			streams.ErrPrintln(ui.Bold(msg))
+		case iostream.LevelInfo:
+			streams.ErrPrintf("  %s\n", ui.Dim(msg))
+		case iostream.LevelWarn:
+			streams.ErrPrintf("  %s\n", ui.Warning(msg))
+		case iostream.LevelDone:
+			streams.ErrPrintf("  %s\n", ui.Success(msg))
+		}
+	}
+}
+
 func newValidateCmd() *cobra.Command {
 	var sandboxID, identityFile, workdir string
 	var dryRun, list, save, forceRun, status bool
@@ -31,6 +46,7 @@ func newValidateCmd() *cobra.Command {
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			streams := iostream.FromCmd(cmd)
+			statusFn := newStatusFunc(streams)
 
 			workDir := projectDir
 			if workDir == "" {
@@ -52,7 +68,7 @@ func newValidateCmd() *cobra.Command {
 				if err != nil {
 					cfg = &config.ProjectConfig{}
 				}
-				return validate.List(cfg, streams)
+				return validate.List(cfg, statusFn)
 			}
 
 			// --status: check cache only
@@ -61,7 +77,7 @@ func newValidateCmd() *cobra.Command {
 				if err != nil {
 					cfg = &config.ProjectConfig{}
 				}
-				return validate.Status(workDir, name, cfg, streams)
+				return validate.Status(workDir, name, cfg, statusFn)
 			}
 
 			// --cmd: run inline command
@@ -80,7 +96,7 @@ func newValidateCmd() *cobra.Command {
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 				}
-				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, streams)
+				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, statusFn, streams)
 			}
 
 			cfg, err := config.LoadProjectConfig(workDir)
@@ -92,7 +108,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if dryRun {
-				return validate.RunDryRun(cfg, name, streams)
+				return validate.RunDryRun(cfg, name, statusFn)
 			}
 
 			if sandboxID != "" {
@@ -150,11 +166,11 @@ func newValidateCmd() *cobra.Command {
 						return err
 					}
 				}
-				return validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, streams)
+				return validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, statusFn, streams)
 			}
 
 			// Run all
-			return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, streams)
+			return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, statusFn, streams)
 		},
 	}
 

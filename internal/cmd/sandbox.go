@@ -356,7 +356,7 @@ func newSandboxSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			err = sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, workdir, io)
+			err = sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, workdir, newStatusFunc(io))
 			if err != nil {
 				if httpcl.HasStatusCode(err, 401, 403) {
 					return usererr.New("Not authorized to sync files. Check your CircleCI token and try again.", err)

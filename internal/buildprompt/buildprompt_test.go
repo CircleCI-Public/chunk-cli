@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -21,6 +22,12 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fixtures"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
+
+func testStatus(buf *bytes.Buffer) iostream.StatusFunc {
+	return func(_ iostream.Level, msg string) {
+		fmt.Fprintln(buf, msg)
+	}
+}
 
 // --- Run (orchestrator) integration tests ---
 
@@ -53,7 +60,6 @@ func TestRunHappyPath(t *testing.T) {
 	outputPath := filepath.Join(outDir, "prompt.md")
 
 	var stderr bytes.Buffer
-	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
 
 	err = Run(context.Background(), Options{
 		Org:          "test-org",
@@ -63,7 +69,8 @@ func TestRunHappyPath(t *testing.T) {
 		OutputPath:   outputPath,
 		AnalyzeModel: "claude-sonnet-4-6",
 		PromptModel:  "claude-sonnet-4-6",
-	}, ghClient, anthropicClient, streams)
+		Status:       testStatus(&stderr),
+	}, ghClient, anthropicClient)
 	assert.NilError(t, err)
 
 	// All output files created
@@ -93,7 +100,7 @@ func TestRunHappyPath(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(analysisBytes), "Review Pattern Analysis"))
 
-	// Stderr has step progress
+	// Status callback has step progress
 	assert.Assert(t, strings.Contains(stderr.String(), "Step 1/3"))
 	assert.Assert(t, strings.Contains(stderr.String(), "Step 2/3"))
 	assert.Assert(t, strings.Contains(stderr.String(), "Step 3/3"))
@@ -116,7 +123,6 @@ func TestRunNoReposFound(t *testing.T) {
 	assert.NilError(t, err)
 
 	var stderr bytes.Buffer
-	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
 
 	// Pass empty repos so FetchOrgRepos queries the API (which returns empty)
 	err = Run(context.Background(), Options{
@@ -124,7 +130,8 @@ func TestRunNoReposFound(t *testing.T) {
 		Repos:      nil,
 		Top:        5,
 		OutputPath: filepath.Join(t.TempDir(), "prompt.md"),
-	}, ghClient, anthropicClient, streams)
+		Status:     testStatus(&stderr),
+	}, ghClient, anthropicClient)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(stderr.String(), "No repositories found"))
 }
@@ -159,7 +166,6 @@ func TestRunSkipsRepoResolutionErrors(t *testing.T) {
 	outputPath := filepath.Join(outDir, "prompt.md")
 
 	var stderr bytes.Buffer
-	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
 
 	err = Run(context.Background(), Options{
 		Org:          "test-org",
@@ -168,7 +174,8 @@ func TestRunSkipsRepoResolutionErrors(t *testing.T) {
 		OutputPath:   outputPath,
 		AnalyzeModel: "claude-sonnet-4-6",
 		PromptModel:  "claude-sonnet-4-6",
-	}, ghClient, anthropicClient, streams)
+		Status:       testStatus(&stderr),
+	}, ghClient, anthropicClient)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(stderr.String(), "Skipping bad-repo"))
 }
@@ -201,7 +208,7 @@ func TestRunWithMaxComments(t *testing.T) {
 	outDir := t.TempDir()
 	outputPath := filepath.Join(outDir, "prompt.md")
 
-	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
+	var statusBuf bytes.Buffer
 
 	err = Run(context.Background(), Options{
 		Org:          "test-org",
@@ -211,7 +218,8 @@ func TestRunWithMaxComments(t *testing.T) {
 		OutputPath:   outputPath,
 		AnalyzeModel: "claude-sonnet-4-6",
 		PromptModel:  "claude-sonnet-4-6",
-	}, ghClient, anthropicClient, streams)
+		Status:       testStatus(&statusBuf),
+	}, ghClient, anthropicClient)
 	assert.NilError(t, err)
 
 	// Verify the anthropic request was made (analysis prompt built with limited comments)
@@ -250,7 +258,6 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 	outputPath := filepath.Join(outDir, "prompt.md")
 
 	var stderr bytes.Buffer
-	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &stderr}
 
 	err = Run(context.Background(), Options{
 		Org:          "test-org",
@@ -260,10 +267,11 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 		OutputPath:   outputPath,
 		AnalyzeModel: "claude-sonnet-4-6",
 		PromptModel:  "claude-sonnet-4-6",
-	}, ghClient, anthropicClient, streams)
+		Status:       testStatus(&stderr),
+	}, ghClient, anthropicClient)
 	assert.NilError(t, err)
 
-	// Verify retry messages appeared in stderr
+	// Verify retry messages appeared via status callback
 	assert.Assert(t, strings.Contains(stderr.String(), "Token limit exceeded"))
 
 	// Verify output files were created
