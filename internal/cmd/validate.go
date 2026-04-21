@@ -164,7 +164,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&remote, "remote", false, "Run on active sandbox (reads .chunk/sandbox.json)")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sandbox (auto-detected as /workspace/<repo> when omitted)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sandbox (reads from sandbox.json, defaults to ./workspace)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
 	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
@@ -188,7 +188,11 @@ func runRemoteValidate(ctx context.Context, sandboxID, identityFile, workdir str
 	}
 	dest := workdir
 	if dest == "" {
-		dest = "/workspace"
+		if active, err := sandbox.LoadActive(); err == nil && active != nil && active.Workspace != "" {
+			dest = active.Workspace
+		} else {
+			dest = "./workspace"
+		}
 	}
 	return validate.RunRemote(ctx, func(ctx context.Context, script string) (string, string, int, error) {
 		result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)

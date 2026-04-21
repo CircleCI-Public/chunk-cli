@@ -11,6 +11,7 @@ import (
 type ActiveSandbox struct {
 	SandboxID string `json:"sandbox_id"`
 	Name      string `json:"name,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // sandboxFileName returns the name of the sandbox state file. When
@@ -18,12 +19,12 @@ type ActiveSandbox struct {
 // Claude sessions in the same repo each maintain their own active sandbox.
 func sandboxFileName() string {
 	if id := os.Getenv("CLAUDE_SESSION_ID"); id != "" {
-		return "sandbox." + id
+		return "sandbox." + id + ".json"
 	}
-	return "sandbox"
+	return "sandbox.json"
 }
 
-// LoadActive walks up from cwd looking for .chunk/sandbox. Returns nil if not found.
+// LoadActive walks up from cwd looking for .chunk/sandbox.json. Returns nil if not found.
 func LoadActive() (*ActiveSandbox, error) {
 	path, err := findSandboxFile()
 	if err != nil {
@@ -43,7 +44,7 @@ func LoadActive() (*ActiveSandbox, error) {
 	return &a, nil
 }
 
-// SaveActive writes .chunk/sandbox. If a .chunk/sandbox already exists in a
+// SaveActive writes .chunk/sandbox.json. If the file already exists in a
 // parent directory it is updated in place; otherwise the file is created in
 // cwd's .chunk/ directory.
 func SaveActive(a ActiveSandbox) error {
@@ -62,8 +63,8 @@ func SaveActive(a ActiveSandbox) error {
 }
 
 // saveDir returns the .chunk directory to write into. It prefers an existing
-// .chunk/sandbox found by walking upward; otherwise walks up to find the git
-// root and uses that; falls back to cwd/.chunk when not in a git repo.
+// .chunk/sandbox.json found by walking upward; otherwise walks up to find the
+// git root and uses that; falls back to cwd/.chunk when not in a git repo.
 func saveDir() (string, error) {
 	existing, err := findSandboxFile()
 	if err != nil {
@@ -101,7 +102,7 @@ func findGitRoot() (string, error) {
 	}
 }
 
-// ClearActive removes the .chunk/sandbox file found by walking up from cwd.
+// ClearActive removes the .chunk/sandbox.json file found by walking up from cwd.
 func ClearActive() error {
 	path, err := findSandboxFile()
 	if err != nil {
@@ -113,7 +114,7 @@ func ClearActive() error {
 	return os.Remove(path)
 }
 
-// findSandboxFile walks up from cwd looking for .chunk/sandbox, returning the path or "".
+// findSandboxFile walks up from cwd looking for .chunk/sandbox.json, returning the path or "".
 // When inside a git repository the walk is bounded by the repository root (the directory
 // containing .git); files above that root are never considered. When not inside any git
 // repository only the current directory is checked.
