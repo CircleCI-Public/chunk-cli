@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -76,7 +78,7 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	// --- Step 1: Discover top reviewers ---
 	streams.ErrPrintln(ui.Step(1, 3, "Discovering Top Reviewers"))
 
-	ghClient, err := github.New()
+	ghClient, err := authprompt.EnsureGitHubClient(ctx, streams, tui.PromptHidden)
 	if err != nil {
 		return err
 	}
@@ -144,7 +146,7 @@ func Run(ctx context.Context, opts Options, streams iostream.Streams) error {
 	// --- Step 2: Analyze review patterns ---
 	streams.ErrPrintln(ui.Step(2, 3, "Analyzing Review Patterns"))
 
-	anthropicClient, err := anthropic.New()
+	anthropicClient, err := authprompt.EnsureAnthropicClient(ctx, streams, tui.PromptHidden)
 	if err != nil {
 		return err
 	}

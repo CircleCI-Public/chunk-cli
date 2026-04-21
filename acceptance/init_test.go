@@ -2,7 +2,6 @@ package acceptance
 
 import (
 	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
@@ -66,19 +64,11 @@ func commandByName(cfg map[string]interface{}, name string) map[string]interface
 func TestInitWritesVCSConfig(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 
-	cci := fakes.NewFakeCircleCI()
-	cci.Collaborations = []fakes.Collaboration{
-		{ID: "org-aaa", Name: "my-org"},
-	}
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
 	env := testenv.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
 	env.AnthropicKey = "" // skip claude
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-validate", "--skip-circleci",
+		"init", "--skip-hooks", "--skip-validate",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -103,7 +93,7 @@ func TestInitSkipAllWritesOnlyVCS(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-validate", "--skip-circleci",
+		"init", "--skip-hooks", "--skip-validate",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -133,7 +123,7 @@ func TestInitExistingConfigNoForce(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-validate", "--skip-circleci",
+		"init", "--skip-hooks", "--skip-validate",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "expected clean exit when config exists without --force\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -150,7 +140,7 @@ func TestInitExistingConfigWithForce(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--force", "--skip-hooks", "--skip-validate", "--skip-circleci",
+		"init", "--force", "--skip-hooks", "--skip-validate",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -168,9 +158,9 @@ func TestInitForcePreservesSkippedSections(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
 
-	// --force re-runs init; --skip-circleci and --skip-validate skip those sections.
+	// --force re-runs init; --skip-validate skips validate command detection.
 	result := binary.RunCLI(t, []string{
-		"init", "--force", "--skip-hooks", "--skip-validate", "--skip-circleci",
+		"init", "--force", "--skip-hooks", "--skip-validate",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -199,7 +189,7 @@ func TestInitNotGitRepo(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-validate", "--skip-circleci",
+		"init", "--skip-hooks", "--skip-validate",
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
@@ -219,7 +209,7 @@ func TestInitDetectsTaskfileGoCommands(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-circleci",
+		"init", "--skip-hooks",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -252,7 +242,7 @@ func TestInitDetectsMakefileGoCommands(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-circleci",
+		"init", "--skip-hooks",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -275,7 +265,7 @@ func TestInitDetectsGoModOnlyCommands(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-circleci",
+		"init", "--skip-hooks",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -302,7 +292,7 @@ func TestInitDetectsCargoCommands(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-circleci",
+		"init", "--skip-hooks",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -321,7 +311,7 @@ func TestInitDetectsPyprojectCommands(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-circleci",
+		"init", "--skip-hooks",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -341,7 +331,7 @@ func TestInitDetectsPackageJsonWithYarnLock(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-circleci",
+		"init", "--skip-hooks",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -367,7 +357,7 @@ func TestInitDetectsPackageJsonWithPnpmLock(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-circleci",
+		"init", "--skip-hooks",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -391,7 +381,7 @@ func TestInitDetectsUnknownToolchainNoClaude(t *testing.T) {
 	env.AnthropicKey = "" // no Claude fallback
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-circleci",
+		"init", "--skip-hooks",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -412,7 +402,7 @@ func TestInitCreatesHookFiles(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-circleci",
+		"init",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -440,7 +430,7 @@ func TestInitHookExistingSettingsForceWritesExample(t *testing.T) {
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-circleci", "--force",
+		"init", "--force",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -473,7 +463,7 @@ func TestInitHookExistingSettingsWritesExample(t *testing.T) {
 	// Without --force on config, but config doesn't exist yet so init proceeds.
 	// However settings.json already exists, so hook setup writes .example.
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-circleci",
+		"init",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -490,38 +480,10 @@ func TestInitHookExistingSettingsWritesExample(t *testing.T) {
 	assert.NilError(t, err, "expected settings.example.json to exist")
 }
 
-// --- CircleCI org picker (Gap 1) ---
+// --- init never touches CircleCI ---
 
-func TestInitCircleCISingleOrgAutoSelect(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-
-	cci := fakes.NewFakeCircleCI()
-	cci.Collaborations = []fakes.Collaboration{
-		{ID: "org-aaa", Name: "my-org"},
-	}
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	env := testenv.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
-	env.AnthropicKey = ""
-
-	// With a single org, the command should auto-select without prompting.
-	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-validate",
-	}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	// init no longer writes circleci to config.json; it prints env var instructions
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "CIRCLECI_ORG_ID"),
-		"expected CIRCLECI_ORG_ID export instructions, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "org-aaa"),
-		"expected org ID in export instructions, got: %s", combined)
-}
-
-func TestInitCircleCINoToken(t *testing.T) {
+// TestInitNoCircleCINoToken verifies init succeeds even with no CircleCI token.
+func TestInitNoCircleCINoToken(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 
 	env := testenv.NewTestEnv(t)
@@ -533,21 +495,18 @@ func TestInitCircleCINoToken(t *testing.T) {
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	// init must not mention CircleCI
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(strings.ToLower(combined), "skip"),
-		"expected skip warning when no CIRCLE_TOKEN, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "CircleCI"),
+		"expected init to not mention CircleCI, got: %s", combined)
 }
 
-func TestInitCircleCIZeroOrgs(t *testing.T) {
+// TestInitNoCircleCIWithToken verifies init ignores a CircleCI token if present.
+func TestInitNoCircleCIWithToken(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 
-	cci := fakes.NewFakeCircleCI()
-	cci.Collaborations = []fakes.Collaboration{} // zero orgs
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
 	env := testenv.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{
@@ -555,9 +514,11 @@ func TestInitCircleCIZeroOrgs(t *testing.T) {
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	// init must not mention CircleCI even when a token is available
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "No CircleCI organizations"),
-		"expected zero-org warning, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "CircleCI"),
+		"expected init to not mention CircleCI, got: %s", combined)
 }
 
 // --- --project-dir flag ---
@@ -570,7 +531,7 @@ func TestInitProjectDir(t *testing.T) {
 
 	// Run from a different directory but point --project-dir at the git repo
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-validate", "--skip-circleci",
+		"init", "--skip-hooks", "--skip-validate",
 		"--project-dir", workDir,
 	}, env, env.HomeDir) // CWD is HomeDir, not workDir
 
@@ -588,7 +549,7 @@ func TestInitProjectDirNotGitRepo(t *testing.T) {
 	notGit := t.TempDir()
 
 	result := binary.RunCLI(t, []string{
-		"init", "--skip-hooks", "--skip-validate", "--skip-circleci",
+		"init", "--skip-hooks", "--skip-validate",
 		"--project-dir", notGit,
 	}, env, env.HomeDir)
 

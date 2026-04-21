@@ -251,6 +251,7 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 
 func TestRunMissingGithubToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	streams := iostream.Streams{Out: &bytes.Buffer{}, Err: &bytes.Buffer{}}
 	err := Run(context.Background(), Options{
@@ -259,8 +260,9 @@ func TestRunMissingGithubToken(t *testing.T) {
 		Top:        5,
 		OutputPath: filepath.Join(t.TempDir(), "prompt.md"),
 	}, streams)
-	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "GITHUB_TOKEN"))
+	// When no token is set and there is no TTY, EnsureGitHubClient returns a
+	// no-TTY error rather than "GITHUB_TOKEN not set".
+	assert.Assert(t, err != nil, "expected error when GITHUB_TOKEN is missing")
 }
 
 func TestRunMissingAnthropicKey(t *testing.T) {
@@ -283,8 +285,9 @@ func TestRunMissingAnthropicKey(t *testing.T) {
 		Top:        5,
 		OutputPath: filepath.Join(t.TempDir(), "prompt.md"),
 	}, streams)
-	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "ANTHROPIC_API_KEY") || strings.Contains(err.Error(), "config file"))
+	// When no key is set and there is no TTY, EnsureAnthropicClient returns a
+	// no-TTY error rather than "ANTHROPIC_API_KEY not set".
+	assert.Assert(t, err != nil, "expected error when Anthropic key is missing")
 }
 
 // --- ResolveOrgAndRepos ---

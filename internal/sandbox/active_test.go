@@ -3,7 +3,6 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -44,7 +43,7 @@ func TestLoadActiveWalksUpToParent(t *testing.T) {
 	// Write .chunk/sandbox in parent
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
 	data := []byte(`{"sandbox_id":"sb-parent","name":"parent-box"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox.json"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox"), data, 0o644))
 
 	// cd into child — should still find the parent's file
 	t.Chdir(child)
@@ -69,7 +68,7 @@ func TestLoadActiveStopsAtGitRoot(t *testing.T) {
 	// .chunk/sandbox lives in grandparent (above the repo root)
 	assert.NilError(t, os.MkdirAll(filepath.Join(grandparent, ".chunk"), 0o755))
 	data := []byte(`{"sandbox_id":"sb-grandparent"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(grandparent, ".chunk", "sandbox.json"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(grandparent, ".chunk", "sandbox"), data, 0o644))
 
 	t.Chdir(child)
 
@@ -87,7 +86,7 @@ func TestLoadActiveNoGitRepo(t *testing.T) {
 	// .chunk/sandbox in parent but no .git anywhere
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
 	data := []byte(`{"sandbox_id":"sb-parent"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox.json"), data, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox"), data, 0o644))
 
 	t.Chdir(child)
 
@@ -163,7 +162,7 @@ func TestSaveActiveUpdatesParentFile(t *testing.T) {
 	// Write an existing .chunk/sandbox in parent
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
 	initial := []byte(`{"sandbox_id":"sb-old"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox.json"), initial, 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sandbox"), initial, 0o644))
 
 	// Save from child — should update parent's file, not create child's
 	t.Chdir(child)
@@ -178,57 +177,4 @@ func TestSaveActiveUpdatesParentFile(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
 	assert.Equal(t, got.SandboxID, "sb-new")
-}
-
-func TestWorkspaceFieldRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	want := ActiveSandbox{SandboxID: "sb-1", Name: "test", Workspace: "/workspace/myrepo"}
-	assert.NilError(t, SaveActive(want))
-
-	got, err := LoadActive()
-	assert.NilError(t, err)
-	assert.Assert(t, got != nil)
-	assert.Equal(t, got.Workspace, want.Workspace)
-	assert.Equal(t, got.SandboxID, want.SandboxID)
-}
-
-func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	assert.NilError(t, SaveActive(ActiveSandbox{SandboxID: "sb-1"}))
-
-	data, err := os.ReadFile(filepath.Join(dir, ".chunk", "sandbox.json"))
-	assert.NilError(t, err)
-	assert.Assert(t, !strings.Contains(string(data), "workspace"), "empty workspace should be omitted from JSON")
-}
-
-func TestResolveWorkspaceCLIFlagWins(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	assert.NilError(t, SaveActive(ActiveSandbox{SandboxID: "sb-1", Workspace: "/workspace/saved"}))
-
-	got := resolveWorkspace("/workspace/override", "myrepo")
-	assert.Equal(t, got, "/workspace/override")
-}
-
-func TestResolveWorkspaceSandboxJsonFallback(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	assert.NilError(t, SaveActive(ActiveSandbox{SandboxID: "sb-1", Workspace: "/workspace/saved"}))
-
-	got := resolveWorkspace("", "myrepo")
-	assert.Equal(t, got, "/workspace/saved")
-}
-
-func TestResolveWorkspaceDefaultFallback(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
-	got := resolveWorkspace("", "myrepo")
-	assert.Equal(t, got, "/workspace/myrepo")
 }

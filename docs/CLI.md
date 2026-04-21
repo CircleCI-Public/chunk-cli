@@ -7,9 +7,9 @@ Complete command reference for the `chunk` CLI.
 ```
 chunk
 ├── auth
-│   ├── set <provider>               # Store credential (circleci | anthropic)
+│   ├── set <provider>               # Store credential (circleci | anthropic | github)
 │   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
-│   └── remove <provider>           # Remove stored credential (circleci | anthropic)
+│   └── remove <provider>           # Remove stored credential (circleci | anthropic | github)
 │
 ├── build-prompt                    # Mine PR comments → analyze → generate prompt
 │   --org <org>                     # GitHub org (auto-detected from git remote)
@@ -30,7 +30,7 @@ chunk
 │   --force                         # Overwrite existing config
 │   --skip-hooks                    # Skip hook file generation
 │   --skip-validate                 # Skip validate command detection
-│   --skip-circleci                 # Skip CircleCI org picker
+│   --skip-completions               # Skip shell completion installation
 │   --project-dir <path>            # Project directory (defaults to cwd)
 │
 ├── task
@@ -98,7 +98,13 @@ chunk
   to disable.
 - `config set` accepts only `model` and `apiKey` as keys.
 - `chunk init` uses Claude to auto-detect the test command for the project.
-  It generates `.claude/settings.json` with pre-commit hooks.
+  It generates `.claude/settings.json` with pre-commit hooks. It never touches
+  CircleCI — tokens are prompted inline only when a command actually needs them.
+- Commands that require a CircleCI token (`task run`, `task config`, `sandbox *`,
+  `validate --sandbox-id`) prompt for it inline at the point of need rather than
+  failing with an error.
+- `chunk auth set github` stores a GitHub token in the config file; previously
+  only the `GITHUB_TOKEN` environment variable was supported.
 
 ## Flag Conventions
 

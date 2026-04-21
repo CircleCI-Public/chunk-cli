@@ -24,7 +24,7 @@
       "test": "cargo test --workspace --exclude serde --exclude serde_core --exclude serde_test_suite",
       "system_deps": [],
       "image": "cimg/rust",
-      "image_version": "1.95.0"
+      "image_version": "1.94.1"
     }
   },
   {

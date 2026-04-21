@@ -58,11 +58,6 @@ func (c *sshConn) Close() error {
 	if c.cleanup != nil {
 		c.cleanup()
 	}
-	// Both sides may initiate close simultaneously; if the remote end already
-	// closed the connection, treat it as a successful close.
-	if errors.Is(err, net.ErrClosed) {
-		return nil
-	}
 	return err
 }
 
