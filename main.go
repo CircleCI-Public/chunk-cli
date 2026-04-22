@@ -21,7 +21,7 @@ func main() {
 		var ue *usererr.Error
 		if errors.As(err, &ue) {
 			if ue.Detail() != "" || ue.Suggestion() != "" {
-				fmt.Fprintln(os.Stderr, ui.FormatError(ue.UserMessage(), ue.Detail(), ue.Suggestion()))
+				fmt.Fprint(os.Stderr, ui.FormatError(ue.UserMessage(), ue.Detail(), ue.Suggestion()))
 			} else {
 				fmt.Fprintln(os.Stderr, ue.UserMessage())
 			}
