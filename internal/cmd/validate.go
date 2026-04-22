@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -108,7 +109,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if dryRun {
-				return validate.RunDryRun(cfg, name, statusFn)
+				return mapValidateError(validate.RunDryRun(cfg, name, statusFn))
 			}
 
 			if remote {
@@ -154,11 +155,11 @@ func newValidateCmd() *cobra.Command {
 						return err
 					}
 				}
-				return validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, statusFn, streams)
+				return mapValidateError(validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, statusFn, streams))
 			}
 
 			// Run all
-			return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, statusFn, streams)
+			return mapValidateError(validate.RunAll(cmd.Context(), workDir, forceRun, cfg, statusFn, streams))
 		},
 	}
 
@@ -175,6 +176,17 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 
 	return cmd
+}
+
+func mapValidateError(err error) error {
+	if errors.Is(err, validate.ErrNotConfigured) {
+		return &userError{
+			msg:        "No validate commands configured.",
+			suggestion: "Run 'chunk init' first.",
+			err:        err,
+		}
+	}
+	return err
 }
 
 func runRemoteValidate(ctx context.Context, sandboxID, identityFile, workdir string, cfg *config.ProjectConfig, streams iostream.Streams) error {

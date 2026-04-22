@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
@@ -80,8 +80,8 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 	return func() (string, error) {
 		collabs, err := client.ListCollaborations(ctx)
 		if err != nil {
-			if httpcl.HasStatusCode(err, 401, 403) {
-				return "", &userError{msg: "Not authorized.", suggestion: "Check your CircleCI token and try again.", err: err}
+			if err := notAuthorized("list organizations", err); err != nil {
+				return "", err
 			}
 			return "", &userError{
 				msg:        "Could not list organizations.",
@@ -126,12 +126,8 @@ func newSandboxListCmd() *cobra.Command {
 			}
 			sandboxes, err := sandbox.List(cmd.Context(), client, resolvedOrgID)
 			if err != nil {
-				if httpcl.HasStatusCode(err, 401, 403) {
-					return &userError{
-						msg:        "Not authorized to list sandboxes.",
-						suggestion: "Check your CircleCI token and try again.",
-						err:        err,
-					}
+				if err := notAuthorized("list sandboxes", err); err != nil {
+					return err
 				}
 				return &userError{
 					msg:        "Could not list sandboxes.",
@@ -186,12 +182,8 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 			}
 			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, provider, image)
 			if err != nil {
-				if httpcl.HasStatusCode(err, 401, 403) {
-					return &userError{
-						msg:        "Not authorized to create sandboxes.",
-						suggestion: "Check your CircleCI token and try again.",
-						err:        err,
-					}
+				if err := notAuthorized("create sandboxes", err); err != nil {
+					return err
 				}
 				return &userError{
 					msg:        "Could not create the sandbox.",
@@ -240,12 +232,8 @@ func newSandboxExecCmd() *cobra.Command {
 			allArgs = append(allArgs, args...)
 			resp, err := sandbox.Exec(cmd.Context(), client, sandboxID, command, allArgs)
 			if err != nil {
-				if httpcl.HasStatusCode(err, 401, 403) {
-					return &userError{
-						msg:        "Not authorized to execute commands.",
-						suggestion: "Check your CircleCI token and try again.",
-						err:        err,
-					}
+				if err := notAuthorized("execute commands", err); err != nil {
+					return err
 				}
 				return err
 			}
@@ -284,10 +272,25 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 			}
 			resp, err := sandbox.AddSSHKey(cmd.Context(), client, sandboxID, publicKey, publicKeyFile)
 			if err != nil {
-				if httpcl.HasStatusCode(err, 401, 403) {
+				if err := notAuthorized("add SSH keys", err); err != nil {
+					return err
+				}
+				switch {
+				case errors.Is(err, sandbox.ErrPrivateKeyProvided):
 					return &userError{
-						msg:        "Not authorized to add SSH keys.",
-						suggestion: "Check your CircleCI token and try again.",
+						msg:        "The provided key is a private key.",
+						suggestion: "Provide a public key instead.",
+						err:        err,
+					}
+				case errors.Is(err, sandbox.ErrMutuallyExclusiveKeys):
+					return &userError{
+						msg: "--public-key and --public-key-file are mutually exclusive.",
+						err: err,
+					}
+				case errors.Is(err, sandbox.ErrPublicKeyRequired):
+					return &userError{
+						msg:        "A public key is required.",
+						suggestion: "Pass --public-key or --public-key-file.",
 						err:        err,
 					}
 				}
@@ -352,12 +355,11 @@ func newSandboxSSHCmd() *cobra.Command {
 			envVars = resolved
 			err = sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
 			if err != nil {
-				if httpcl.HasStatusCode(err, 401, 403) {
-					return &userError{
-						msg:        "Not authorized to connect via SSH.",
-						suggestion: "Check your CircleCI token and try again.",
-						err:        err,
-					}
+				if err := sshSessionError(err); err != nil {
+					return err
+				}
+				if err := notAuthorized("connect via SSH", err); err != nil {
+					return err
 				}
 				return err
 			}
@@ -392,12 +394,18 @@ func newSandboxSyncCmd() *cobra.Command {
 			}
 			err = sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, workdir, newStatusFunc(io))
 			if err != nil {
-				if httpcl.HasStatusCode(err, 401, 403) {
+				if _, ok := errors.AsType[*sandbox.RemoteBaseError](err); ok {
 					return &userError{
-						msg:        "Not authorized to sync files.",
-						suggestion: "Check your CircleCI token and try again.",
+						msg:        "Could not resolve remote base.",
+						suggestion: "Push your branch or ensure the repository has a remote configured.",
 						err:        err,
 					}
+				}
+				if err := sshSessionError(err); err != nil {
+					return err
+				}
+				if err := notAuthorized("sync files", err); err != nil {
+					return err
 				}
 				return err
 			}

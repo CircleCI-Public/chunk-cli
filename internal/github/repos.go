@@ -24,7 +24,7 @@ func (c *Client) FetchOrgRepos(ctx context.Context, org string, filterRepos []st
 
 		var resp graphQLResponse[OrgReposData]
 		if err := c.do(ctx, orgReposQuery, vars, &resp); err != nil {
-			return nil, fmt.Errorf("fetch org repos: %w", err)
+			return nil, mapErr("fetch org repos", err)
 		}
 		if hasResolutionError(resp.Errors) {
 			return nil, fmt.Errorf("could not resolve organization %q", org)

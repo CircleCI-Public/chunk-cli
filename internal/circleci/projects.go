@@ -39,7 +39,7 @@ func (c *Client) ListFollowedProjects(ctx context.Context) ([]FollowedProject, e
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("list followed projects: %w", err)
+		return nil, mapErr("list followed projects", err)
 	}
 	return resp, nil
 }
@@ -51,7 +51,7 @@ func (c *Client) ListCollaborations(ctx context.Context) ([]Collaboration, error
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("list collaborations: %w", err)
+		return nil, mapErr("list collaborations", err)
 	}
 	return resp, nil
 }
@@ -64,7 +64,7 @@ func (c *Client) GetProjectBySlug(ctx context.Context, slug string) (*ProjectDet
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("get project by slug: %w", err)
+		return nil, mapErr("get project by slug", err)
 	}
 	return &resp, nil
 }

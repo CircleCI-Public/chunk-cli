@@ -114,7 +114,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 
 	base, err := gitutil.MergeBase()
 	if err != nil {
-		return fmt.Errorf("could not resolve remote base: %w\nPush your branch or ensure the repository has a remote configured", err)
+		return &RemoteBaseError{Err: err}
 	}
 
 	patch, err := gitutil.GeneratePatch(base)

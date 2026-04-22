@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -314,7 +315,7 @@ func TestResolveOrgAndRepos(t *testing.T) {
 	t.Run("org without repos errors", func(t *testing.T) {
 		_, _, err := ResolveOrgAndRepos("my-org", "", "")
 		assert.Assert(t, err != nil)
-		assert.Assert(t, strings.Contains(err.Error(), "--repos"))
+		assert.Assert(t, errors.Is(err, ErrReposRequired))
 	})
 
 	t.Run("auto-detect from git remote", func(t *testing.T) {

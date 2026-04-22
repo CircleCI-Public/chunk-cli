@@ -81,7 +81,7 @@ func (c *Client) doWithRetry(ctx context.Context, query string, vars map[string]
 			return nil
 		}
 		if !isRetryable(err) {
-			return err
+			return mapErr("", err)
 		}
 
 		lastErr = err
@@ -96,9 +96,9 @@ func (c *Client) doWithRetry(ctx context.Context, query string, vars map[string]
 	}
 
 	if lastErr != nil && isHTMLError(lastErr.Error()) {
-		return fmt.Errorf("GitHub API returned server error after %d retries — try again in a few minutes", maxRetries)
+		return &RetryError{Retries: maxRetries, ServerError: true}
 	}
-	return fmt.Errorf("GitHub API request failed after %d retries: %w", maxRetries, lastErr)
+	return &RetryError{Retries: maxRetries, Err: mapErr("", lastErr)}
 }
 
 // waitForRateLimit sleeps until the rate limit resets if remaining is below the threshold.
