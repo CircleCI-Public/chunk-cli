@@ -73,8 +73,8 @@ func TestDialSSHWebSocketConnectionRefused(t *testing.T) {
 
 	_, err := sandbox.ExecOverSSH(context.Background(), session, "echo hi", nil, nil)
 	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "WebSocket connect"),
-		"expected WebSocket connect error, got: %v", err)
+	assert.Assert(t, strings.Contains(err.Error(), "websocket connect"),
+		"expected websocket connect error, got: %v", err)
 }
 
 // TestDialSSHWebSocketHostKeyMismatch verifies that a tampered known_hosts

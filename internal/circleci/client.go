@@ -2,6 +2,7 @@ package circleci
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,33 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
+
+// ErrTokenNotFound indicates no CircleCI token was found in env or config.
+var ErrTokenNotFound = errors.New("api token not found")
+
+// ErrNotAuthorized indicates the request was rejected (401/403).
+var ErrNotAuthorized = errors.New("not authorized")
+
+// StatusError represents an HTTP error from the CircleCI API without exposing httpcl internals.
+type StatusError struct {
+	Op         string
+	StatusCode int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s: %d %s", e.Op, e.StatusCode, http.StatusText(e.StatusCode))
+}
+
+func mapErr(op string, err error) error {
+	var he *httpcl.HTTPError
+	if !errors.As(err, &he) {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if he.StatusCode == http.StatusUnauthorized || he.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("%s: %w", op, ErrNotAuthorized)
+	}
+	return &StatusError{Op: op, StatusCode: he.StatusCode}
+}
 
 type Client struct {
 	cl *httpcl.Client
@@ -22,7 +50,7 @@ func NewClient() (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve config: %w", err)
 		}
-		return nil, fmt.Errorf("circleci token not found: set CIRCLE_TOKEN or run 'chunk auth set circleci'")
+		return nil, ErrTokenNotFound
 	}
 
 	baseURL := os.Getenv("CIRCLECI_BASE_URL")
@@ -42,7 +70,10 @@ func NewClient() (*Client, error) {
 // GetCurrentUser calls GET /api/v2/me to validate the token.
 func (c *Client) GetCurrentUser(ctx context.Context) error {
 	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v2/me"))
-	return err
+	if err != nil {
+		return mapErr("get current user", err)
+	}
+	return nil
 }
 
 func (c *Client) ListSandboxes(ctx context.Context, orgID string) ([]Sandbox, error) {
@@ -52,7 +83,7 @@ func (c *Client) ListSandboxes(ctx context.Context, orgID string) ([]Sandbox, er
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("list sandboxes: %w", err)
+		return nil, mapErr("list sandboxes", err)
 	}
 	return resp.Items, nil
 }
@@ -70,7 +101,7 @@ func (c *Client) CreateSandbox(ctx context.Context, orgID, name, provider, image
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("create sandbox: %w", err)
+		return nil, mapErr("create sandbox", err)
 	}
 	return &resp, nil
 }
@@ -83,7 +114,7 @@ func (c *Client) AddSSHKey(ctx context.Context, sandboxID, publicKey string) (*A
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("add ssh key: %w", err)
+		return nil, mapErr("add ssh key", err)
 	}
 	return &resp, nil
 }
@@ -99,7 +130,7 @@ func (c *Client) Exec(ctx context.Context, sandboxID, command string, args []str
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("exec: %w", err)
+		return nil, mapErr("exec", err)
 	}
 	return &resp, nil
 }
@@ -111,7 +142,7 @@ func (c *Client) CreateSnapshot(ctx context.Context, sandboxID, name string) (*S
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("create snapshot: %w", err)
+		return nil, mapErr("create snapshot", err)
 	}
 	return &resp, nil
 }
@@ -123,7 +154,7 @@ func (c *Client) GetSnapshot(ctx context.Context, id string) (*Snapshot, error) 
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("get snapshot: %w", err)
+		return nil, mapErr("get snapshot", err)
 	}
 	return &resp, nil
 }
@@ -136,7 +167,7 @@ func (c *Client) TriggerRun(ctx context.Context, orgID, projectID string, body T
 		httpcl.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, fmt.Errorf("trigger run: %w", err)
+		return nil, mapErr("trigger run", err)
 	}
 	return &resp, nil
 }

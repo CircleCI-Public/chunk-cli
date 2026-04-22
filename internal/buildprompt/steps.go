@@ -3,6 +3,7 @@ package buildprompt
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,12 +16,15 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 )
 
+// ErrReposRequired indicates --repos must be provided when --org is used.
+var ErrReposRequired = errors.New("repos is required when org is provided")
+
 // ResolveOrgAndRepos resolves the org and repos from flags or git remote.
 func ResolveOrgAndRepos(org string, repos string, workDir string) (string, []string, error) {
 	repoList := splitRepos(repos)
 
 	if org != "" && len(repoList) == 0 {
-		return "", nil, fmt.Errorf("--repos is required when --org is provided. Omit --org to auto-detect from git remote")
+		return "", nil, ErrReposRequired
 	}
 
 	if org != "" {

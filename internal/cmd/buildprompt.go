@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -41,6 +43,13 @@ func newBuildPromptCmd() *cobra.Command {
 			}
 			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos, cwd)
 			if err != nil {
+				if errors.Is(err, buildprompt.ErrReposRequired) {
+					return &userError{
+						msg:        "--repos is required when --org is provided.",
+						suggestion: "Omit --org to auto-detect from git remote.",
+						err:        err,
+					}
+				}
 				return &userError{msg: "Could not determine org and repos.", suggestion: "Use --org and --repos flags.", err: err}
 			}
 
@@ -87,7 +96,24 @@ func newBuildPromptCmd() *cobra.Command {
 				Status:             newStatusFunc(streams),
 			}
 
-			return buildprompt.Run(cmd.Context(), opts, ghClient, anthropicClient)
+			if err := buildprompt.Run(cmd.Context(), opts, ghClient, anthropicClient); err != nil {
+				if e, ok := errors.AsType[*github.RetryError](err); ok {
+					if e.ServerError {
+						return &userError{
+							msg:        "GitHub API returned a server error.",
+							suggestion: "Try again in a few minutes.",
+							err:        err,
+						}
+					}
+					return &userError{
+						msg:        fmt.Sprintf("GitHub API request failed after %d retries.", e.Retries),
+						suggestion: "Check your network connection and try again.",
+						err:        err,
+					}
+				}
+				return err
+			}
+			return nil
 		},
 	}
 

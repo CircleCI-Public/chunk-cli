@@ -16,6 +16,12 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
+const (
+	suggestionCircleCIAuth  = "Set CIRCLE_TOKEN or run 'chunk auth set circleci'."
+	suggestionAnthropicAuth = "Set ANTHROPIC_API_KEY or run 'chunk auth set anthropic'."
+	suggestionGitHubAuth    = "Set GITHUB_TOKEN or run 'chunk auth set github'."
+)
+
 func printSaveHint(streams iostream.Streams, label string) {
 	if cfgPath, err := config.Path(); err == nil {
 		streams.ErrPrintln(ui.Dim(fmt.Sprintf("%s will be saved to user config (%s, mode 0600)", label, cfgPath)))
@@ -52,7 +58,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 		if errors.Is(err, tui.ErrNoTTY) {
 			return nil, &userError{
 				msg:        "CircleCI token required.",
-				suggestion: "Set CIRCLE_TOKEN or run 'chunk auth set circleci'.",
+				suggestion: suggestionCircleCIAuth,
 				err:        err,
 			}
 		}
@@ -62,7 +68,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 	if token == "" {
 		return nil, &userError{
 			msg:        "CircleCI token required.",
-			suggestion: "Set CIRCLE_TOKEN or run 'chunk auth set circleci'.",
+			suggestion: suggestionCircleCIAuth,
 			errMsg:     "empty token entered",
 		}
 	}
@@ -76,7 +82,15 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 		return nil, err
 	}
 	printSaved(streams, "CircleCI token")
-	return circleci.NewClient()
+	client, err = circleci.NewClient()
+	if errors.Is(err, circleci.ErrTokenNotFound) {
+		return nil, &userError{
+			msg:        "CircleCI token not found.",
+			suggestion: suggestionCircleCIAuth,
+			err:        err,
+		}
+	}
+	return client, err
 }
 
 // ensureAnthropicClient resolves or interactively prompts for an Anthropic API
@@ -101,7 +115,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 		if errors.Is(err, tui.ErrNoTTY) {
 			return nil, &userError{
 				msg:        "Anthropic API key required.",
-				suggestion: "Set ANTHROPIC_API_KEY or run 'chunk auth set anthropic'.",
+				suggestion: suggestionAnthropicAuth,
 				err:        err,
 			}
 		}
@@ -111,7 +125,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 	if key == "" {
 		return nil, &userError{
 			msg:        "Anthropic API key required.",
-			suggestion: "Set ANTHROPIC_API_KEY or run 'chunk auth set anthropic'.",
+			suggestion: suggestionAnthropicAuth,
 			errMsg:     "empty key entered",
 		}
 	}
@@ -133,7 +147,15 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 		return nil, err
 	}
 	printSaved(streams, "Anthropic API key")
-	return anthropic.New()
+	client, err = anthropic.New()
+	if errors.Is(err, anthropic.ErrKeyNotFound) {
+		return nil, &userError{
+			msg:        "Anthropic API key not found.",
+			suggestion: suggestionAnthropicAuth,
+			err:        err,
+		}
+	}
+	return client, err
 }
 
 // ensureGitHubClient resolves or interactively prompts for a GitHub token,
@@ -159,7 +181,7 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 		if errors.Is(err, tui.ErrNoTTY) {
 			return nil, &userError{
 				msg:        "GitHub token required.",
-				suggestion: "Set GITHUB_TOKEN or run 'chunk auth set github'.",
+				suggestion: suggestionGitHubAuth,
 				err:        err,
 			}
 		}
@@ -169,7 +191,7 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 	if token == "" {
 		return nil, &userError{
 			msg:        "GitHub token required.",
-			suggestion: "Set GITHUB_TOKEN or run 'chunk auth set github'.",
+			suggestion: suggestionGitHubAuth,
 			errMsg:     "empty token entered",
 		}
 	}
@@ -183,5 +205,13 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 		return nil, err
 	}
 	printSaved(streams, "GitHub token")
-	return github.New(logStatus)
+	client, err = github.New(logStatus)
+	if errors.Is(err, github.ErrTokenNotFound) {
+		return nil, &userError{
+			msg:        "GitHub token not found.",
+			suggestion: suggestionGitHubAuth,
+			err:        err,
+		}
+	}
+	return client, err
 }

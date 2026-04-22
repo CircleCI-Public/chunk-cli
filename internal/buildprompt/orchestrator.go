@@ -2,6 +2,7 @@ package buildprompt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ func analyzeWithRetry(ctx context.Context, client *anthropic.Client, groups []Re
 			return analysis, nil
 		}
 
-		if !anthropic.IsTokenLimitError(err) {
+		if !errors.Is(err, anthropic.ErrTokenLimit) {
 			return "", err
 		}
 

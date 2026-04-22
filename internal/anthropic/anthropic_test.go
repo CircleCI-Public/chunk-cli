@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -36,7 +37,7 @@ func TestNew(t *testing.T) {
 			name:        "missing API key",
 			apiKey:      "",
 			wantErr:     true,
-			errContains: "ANTHROPIC_API_KEY",
+			errContains: "api key not found",
 		},
 		{
 			name:   "default base URL",
@@ -339,8 +340,8 @@ func TestFullWorkflow(t *testing.T) {
 	assert.Assert(t, strings.Contains(body1.Messages[0].Content, fixtures.AnalysisResponse))
 }
 
-func TestIsTokenLimitError(t *testing.T) {
-	t.Run("returns true for prompt too long", func(t *testing.T) {
+func TestErrTokenLimit(t *testing.T) {
+	t.Run("wrapped for prompt too long", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
@@ -351,10 +352,10 @@ func TestIsTokenLimitError(t *testing.T) {
 		c := newTestClient(t, srv.URL)
 		_, err := c.Ask(context.Background(), "m", 10, "p")
 		assert.Assert(t, err != nil)
-		assert.Assert(t, IsTokenLimitError(err))
+		assert.Assert(t, errors.Is(err, ErrTokenLimit))
 	})
 
-	t.Run("returns false for other errors", func(t *testing.T) {
+	t.Run("not wrapped for other errors", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -365,11 +366,11 @@ func TestIsTokenLimitError(t *testing.T) {
 		c := newTestClient(t, srv.URL)
 		_, err := c.Ask(context.Background(), "m", 10, "p")
 		assert.Assert(t, err != nil)
-		assert.Assert(t, !IsTokenLimitError(err))
+		assert.Assert(t, !errors.Is(err, ErrTokenLimit))
 	})
 
-	t.Run("returns false for nil error", func(t *testing.T) {
-		assert.Assert(t, !IsTokenLimitError(nil))
+	t.Run("not present for nil error", func(t *testing.T) {
+		assert.Assert(t, !errors.Is(nil, ErrTokenLimit))
 	})
 }
 

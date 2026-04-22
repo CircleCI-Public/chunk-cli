@@ -2,7 +2,9 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -34,7 +36,7 @@ func New(logStatus func(string)) (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve config: %w", err)
 		}
-		return nil, fmt.Errorf("GitHub token not found: set GITHUB_TOKEN or run 'chunk auth set github'")
+		return nil, ErrTokenNotFound
 	}
 
 	baseURL := os.Getenv("GITHUB_API_URL")
@@ -58,6 +60,30 @@ type graphQLRequest struct {
 	Variables map[string]any `json:"variables,omitempty"`
 }
 
+// StatusError represents an HTTP error from the GitHub API without exposing httpcl internals.
+type StatusError struct {
+	Op         string
+	StatusCode int
+}
+
+func (e *StatusError) Error() string {
+	if e.Op != "" {
+		return fmt.Sprintf("%s: %d %s", e.Op, e.StatusCode, http.StatusText(e.StatusCode))
+	}
+	return fmt.Sprintf("%d %s", e.StatusCode, http.StatusText(e.StatusCode))
+}
+
+func mapErr(op string, err error) error {
+	var he *httpcl.HTTPError
+	if !errors.As(err, &he) {
+		if op == "" {
+			return err
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	return &StatusError{Op: op, StatusCode: he.StatusCode}
+}
+
 // do executes a GraphQL query and decodes the response into dest.
 func (c *Client) do(ctx context.Context, query string, vars map[string]any, dest any) error {
 	req := httpcl.NewRequest("POST", "/graphql",
@@ -79,7 +105,7 @@ func (c *Client) ValidateOrg(ctx context.Context, org string) error {
 
 	err := c.do(ctx, `query($org: String!) { organization(login: $org) { login } }`, map[string]any{"org": org}, &resp)
 	if err != nil {
-		return fmt.Errorf("validate org: %w", err)
+		return mapErr("validate org", err)
 	}
 	if hasResolutionError(resp.Errors) {
 		return fmt.Errorf("organization %q not found or not accessible", org)
@@ -92,5 +118,8 @@ func (c *Client) CheckRateLimit(ctx context.Context) error {
 	var resp graphQLResponse[struct {
 		RateLimit RateLimit `json:"rateLimit"`
 	}]
-	return c.do(ctx, `{ rateLimit { remaining resetAt } }`, nil, &resp)
+	if err := c.do(ctx, `{ rateLimit { remaining resetAt } }`, nil, &resp); err != nil {
+		return mapErr("check rate limit", err)
+	}
+	return nil
 }
