@@ -11,7 +11,7 @@ import (
 	embeddedSkills "github.com/CircleCI-Public/chunk-cli/skills"
 )
 
-var skillNames = []string{"chunk-testing-gaps", "chunk-review", "debug-ci-failures"}
+var skillNames = []string{"chunk-testing-gaps", "chunk-review", "debug-ci-failures", "chunk-sandbox"}
 
 func TestInstallBothAgents(t *testing.T) {
 	home := t.TempDir()

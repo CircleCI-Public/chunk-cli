@@ -28,7 +28,7 @@ func TestSkillsInstall(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "claude:"),
 		"expected per-agent output for claude, got: %s", combined)
 
-	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "debug-ci-failures"} {
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sandbox", "debug-ci-failures"} {
 		skillFile := filepath.Join(claudeDir, "skills", name, "SKILL.md")
 		info, err := os.Stat(skillFile)
 		assert.NilError(t, err, "expected skill %s to exist", name)
@@ -86,6 +86,8 @@ func TestSkillsList(t *testing.T) {
 		"expected 'chunk-testing-gaps' in output, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "debug-ci-failures"),
 		"expected 'debug-ci-failures' in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "chunk-sandbox"),
+		"expected 'chunk-sandbox' in output, got: %s", combined)
 	// Should show per-agent status.
 	assert.Assert(t, strings.Contains(combined, "claude:"),
 		"expected per-agent status for claude, got: %s", combined)
@@ -119,7 +121,7 @@ func TestSkillsInstallCodexPath(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "claude: skipped"),
 		"expected claude skipped, got: %s", combined)
 
-	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "debug-ci-failures"} {
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sandbox", "debug-ci-failures"} {
 		skillFile := filepath.Join(codexDir, "skills", name, "SKILL.md")
 		info, err := os.Stat(skillFile)
 		assert.NilError(t, err, "expected skill %s to exist under .agents", name)
@@ -149,7 +151,7 @@ func TestSkillsInstallBothAgents(t *testing.T) {
 
 	// Verify files exist under both agent dirs.
 	for _, dir := range []string{claudeDir, codexDir} {
-		for _, name := range []string{"chunk-review", "chunk-testing-gaps", "debug-ci-failures"} {
+		for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sandbox", "debug-ci-failures"} {
 			skillFile := filepath.Join(dir, "skills", name, "SKILL.md")
 			_, err := os.Stat(skillFile)
 			assert.NilError(t, err, "expected skill %s under %s", name, dir)

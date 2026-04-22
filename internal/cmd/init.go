@@ -307,6 +307,7 @@ hook config files.`,
 			}
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
+			streams.ErrPrintln(ui.Dim("Tip: install agent skills with 'chunk skill install' (includes chunk-sandbox for the remote validate loop)."))
 			return nil
 		},
 	}
