@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -92,7 +91,7 @@ func newValidateCmd() *cobra.Command {
 				}
 				if save {
 					if err := config.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
-						return usererr.New("Could not save command to .chunk/config.json.", err)
+						return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 				}
@@ -101,10 +100,11 @@ func newValidateCmd() *cobra.Command {
 
 			cfg, err := config.LoadProjectConfig(workDir)
 			if err != nil || !cfg.HasCommands() {
-				return usererr.New(
-					"No validate commands configured. Run 'chunk init' first.",
-					fmt.Errorf("no validate commands configured"),
-				)
+				return &userError{
+					msg:        "No validate commands configured.",
+					suggestion: "Run 'chunk init' first.",
+					errMsg:     "no validate commands configured",
+				}
 			}
 
 			if dryRun {
@@ -126,25 +126,26 @@ func newValidateCmd() *cobra.Command {
 				if cfg.FindCommand(name) == nil {
 					isTTY := term.IsTerminal(int(os.Stdin.Fd()))
 					if !isTTY {
-						return usererr.New(
-							fmt.Sprintf("Command %q is not configured. Add it to .chunk/config.json.", name),
-							fmt.Errorf("command %q is not configured", name),
-						)
+						return &userError{
+							msg:        fmt.Sprintf("Command %q is not configured.", name),
+							suggestion: "Add it to .chunk/config.json.",
+							errMsg:     fmt.Sprintf("command %q is not configured", name),
+						}
 					}
 					// Interactive setup: prompt for command
 					streams.ErrPrintf("Command %s is not configured yet.\n\n", ui.Bold(name))
 					streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
 					scanner := bufio.NewScanner(os.Stdin)
 					if !scanner.Scan() {
-						return usererr.New("No command entered.", fmt.Errorf("no input received"))
+						return &userError{msg: "No command entered.", errMsg: "no input received"}
 					}
 					input := strings.TrimSpace(scanner.Text())
 					if input == "" {
 						streams.ErrPrintln(ui.Dim("No command entered, aborting."))
-						return usererr.New("No command entered.", fmt.Errorf("no command entered"))
+						return &userError{msg: "No command entered.", errMsg: "no command entered"}
 					}
 					if err := config.SaveCommand(workDir, name, input); err != nil {
-						return usererr.New("Could not save command to .chunk/config.json.", err)
+						return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
 					// Reload config after save
@@ -184,7 +185,7 @@ func runRemoteValidate(ctx context.Context, sandboxID, identityFile, workdir str
 	authSock := os.Getenv("SSH_AUTH_SOCK")
 	session, err := sandbox.OpenSession(ctx, client, sandboxID, identityFile, authSock)
 	if err != nil {
-		return usererr.New("Could not open SSH session to sandbox.", err)
+		return &userError{msg: "Could not open SSH session to sandbox.", err: err}
 	}
 	dest := workdir
 	if dest == "" {

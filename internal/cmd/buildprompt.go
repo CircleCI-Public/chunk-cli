@@ -5,7 +5,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
@@ -33,16 +32,16 @@ func newBuildPromptCmd() *cobra.Command {
 		Short: "Analyze GitHub PR comments and generate a review prompt for AI coding agents",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if top <= 0 {
-				return usererr.Newf("--top must be a positive integer.", "invalid --top value: %d", top)
+				return &userError{msg: "--top must be a positive integer.", errMsg: fmt.Sprintf("invalid --top value: %d", top)}
 			}
 
 			cwd, err := os.Getwd()
 			if err != nil {
-				return usererr.New("Could not determine working directory.", err)
+				return &userError{msg: "Could not determine working directory.", err: err}
 			}
 			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos, cwd)
 			if err != nil {
-				return usererr.New("Could not determine org and repos. Use --org and --repos flags.", err)
+				return &userError{msg: "Could not determine org and repos.", suggestion: "Use --org and --repos flags.", err: err}
 			}
 
 			sinceTime, err := parseSince(since)

@@ -1,13 +1,11 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/cmd"
-	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -18,21 +16,26 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
-		var ue *usererr.Error
-		if errors.As(err, &ue) {
-			if ue.Detail() != "" || ue.Suggestion() != "" {
-				fmt.Fprint(os.Stderr, ui.FormatError(ue.UserMessage(), ue.Detail(), ue.Suggestion()))
-			} else {
-				fmt.Fprintln(os.Stderr, ue.UserMessage())
-			}
-		} else {
-			fmt.Fprintln(os.Stderr, err)
-			if suggestion := errorSuggestion(err); suggestion != "" {
-				fmt.Fprintln(os.Stderr, suggestion)
-			}
-		}
+		m, d, s := errorDetails(err)
+		_, _ = fmt.Fprint(os.Stderr, ui.FormatError(m, d, s))
 		os.Exit(1)
 	}
+}
+
+func errorDetails(err error) (msg, detail, suggestion string) {
+	msg = "An unknown error occurred."
+	detail = err.Error()
+	suggestion = errorSuggestion(err)
+	if um, ok := err.(interface{ UserMessage() string }); ok {
+		msg = um.UserMessage()
+	}
+	if d, ok := err.(interface{ Detail() string }); ok {
+		detail = d.Detail()
+	}
+	if s, ok := err.(interface{ Suggestion() string }); ok {
+		suggestion = s.Suggestion()
+	}
+	return msg, detail, suggestion
 }
 
 // errorSuggestion returns a contextual hint for common error patterns.

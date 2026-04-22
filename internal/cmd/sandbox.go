@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
@@ -52,13 +51,14 @@ func resolveSandboxID(sandboxID *string) error {
 	}
 	active, err := sandbox.LoadActive()
 	if err != nil {
-		return usererr.New("Could not load the active sandbox. "+configFilePermHint+".", err)
+		return &userError{msg: "Could not load the active sandbox.", suggestion: configFilePermHint, err: err}
 	}
 	if active == nil {
-		return usererr.Newf(
-			"No active sandbox is set. Pass --sandbox-id, or run 'chunk sandbox use <id>' or 'chunk sandbox create'.",
-			"no active sandbox and --sandbox-id not provided",
-		)
+		return &userError{
+			msg:        "No active sandbox is set.",
+			suggestion: "Pass --sandbox-id, or run 'chunk sandbox use <id>' or 'chunk sandbox create'.",
+			errMsg:     "no active sandbox and --sandbox-id not provided",
+		}
 	}
 	*sandboxID = active.SandboxID
 	return nil
@@ -81,15 +81,20 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 		collabs, err := client.ListCollaborations(ctx)
 		if err != nil {
 			if httpcl.HasStatusCode(err, 401, 403) {
-				return "", usererr.New("Not authorized. Check your CircleCI token and try again.", err)
+				return "", &userError{msg: "Not authorized.", suggestion: "Check your CircleCI token and try again.", err: err}
 			}
-			return "", usererr.New("Could not list organizations. Pass --org-id or check your network connection.", err)
+			return "", &userError{
+				msg:        "Could not list organizations.",
+				suggestion: "Pass --org-id or check your network connection.",
+				err:        err,
+			}
 		}
 		if len(collabs) == 0 {
-			return "", usererr.New(
-				"No organizations found. Pass --org-id or join an organization in CircleCI.",
-				fmt.Errorf("no organizations found for current user"),
-			)
+			return "", &userError{
+				msg:        "No organizations found.",
+				suggestion: "Pass --org-id or join an organization in CircleCI.",
+				err:        fmt.Errorf("no organizations found for current user"),
+			}
 		}
 		labels := make([]string, len(collabs))
 		for i, c := range collabs {
@@ -97,7 +102,7 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 		}
 		idx, err := tui.SelectFromList("Select an organization:", labels)
 		if err != nil {
-			return "", usererr.New("Could not select an organization. Pass --org-id instead.", err)
+			return "", &userError{msg: "Could not select an organization.", suggestion: "Pass --org-id instead.", err: err}
 		}
 		return collabs[idx].ID, nil
 	}
@@ -122,9 +127,17 @@ func newSandboxListCmd() *cobra.Command {
 			sandboxes, err := sandbox.List(cmd.Context(), client, resolvedOrgID)
 			if err != nil {
 				if httpcl.HasStatusCode(err, 401, 403) {
-					return usererr.New("Not authorized to list sandboxes. Check your CircleCI token and try again.", err)
+					return &userError{
+						msg:        "Not authorized to list sandboxes.",
+						suggestion: "Check your CircleCI token and try again.",
+						err:        err,
+					}
 				}
-				return usererr.New("Could not list sandboxes. Check your network connection and try again.", err)
+				return &userError{
+					msg:        "Could not list sandboxes.",
+					suggestion: "Check your network connection and try again.",
+					err:        err,
+				}
 			}
 			if len(sandboxes) == 0 {
 				io.ErrPrintln(ui.Dim("No sandboxes found"))
@@ -174,9 +187,17 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, provider, image)
 			if err != nil {
 				if httpcl.HasStatusCode(err, 401, 403) {
-					return usererr.New("Not authorized to create sandboxes. Check your CircleCI token and try again.", err)
+					return &userError{
+						msg:        "Not authorized to create sandboxes.",
+						suggestion: "Check your CircleCI token and try again.",
+						err:        err,
+					}
 				}
-				return usererr.New("Could not create the sandbox. Check your network connection and try again.", err)
+				return &userError{
+					msg:        "Could not create the sandbox.",
+					suggestion: "Check your network connection and try again.",
+					err:        err,
+				}
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sb.Name, sb.ID)))
 			if err := sandbox.SaveActive(sandbox.ActiveSandbox{SandboxID: sb.ID, Name: sb.Name}); err != nil {
@@ -220,7 +241,11 @@ func newSandboxExecCmd() *cobra.Command {
 			resp, err := sandbox.Exec(cmd.Context(), client, sandboxID, command, allArgs)
 			if err != nil {
 				if httpcl.HasStatusCode(err, 401, 403) {
-					return usererr.New("Not authorized to execute commands. Check your CircleCI token and try again.", err)
+					return &userError{
+						msg:        "Not authorized to execute commands.",
+						suggestion: "Check your CircleCI token and try again.",
+						err:        err,
+					}
 				}
 				return err
 			}
@@ -260,7 +285,11 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 			resp, err := sandbox.AddSSHKey(cmd.Context(), client, sandboxID, publicKey, publicKeyFile)
 			if err != nil {
 				if httpcl.HasStatusCode(err, 401, 403) {
-					return usererr.New("Not authorized to add SSH keys. Check your CircleCI token and try again.", err)
+					return &userError{
+						msg:        "Not authorized to add SSH keys.",
+						suggestion: "Check your CircleCI token and try again.",
+						err:        err,
+					}
 				}
 				return err
 			}
@@ -296,7 +325,7 @@ func newSandboxSSHCmd() *cobra.Command {
 			}
 			flagVars, err := sandbox.ParseEnvPairs(envVarsFlag)
 			if err != nil {
-				return usererr.New(fmt.Sprintf("invalid --env value: %s", err), err)
+				return &userError{msg: fmt.Sprintf("invalid --env value: %s", err), err: err}
 			}
 			var envVars map[string]string
 			if envFile != "" {
@@ -304,13 +333,13 @@ func newSandboxSSHCmd() *cobra.Command {
 				if !filepath.IsAbs(path) {
 					cwd, err := os.Getwd()
 					if err != nil {
-						return usererr.New("Could not determine the current directory.", err)
+						return &userError{msg: "Could not determine the current directory.", err: err}
 					}
 					path = filepath.Join(cwd, path)
 				}
 				fileVars, err := sandbox.LoadEnvFileAt(path)
 				if err != nil {
-					return usererr.New(fmt.Sprintf("load %s: %s", envFile, err), err)
+					return &userError{msg: fmt.Sprintf("load %s: %s", envFile, err), err: err}
 				}
 				envVars = sandbox.MergeEnv(fileVars, flagVars)
 			} else {
@@ -318,13 +347,17 @@ func newSandboxSSHCmd() *cobra.Command {
 			}
 			resolved, err := secrets.ResolveAll(cmd.Context(), envVars, nil)
 			if err != nil {
-				return usererr.New(fmt.Sprintf("resolve secrets: %s", err), err)
+				return &userError{msg: fmt.Sprintf("resolve secrets: %s", err), err: err}
 			}
 			envVars = resolved
 			err = sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
 			if err != nil {
 				if httpcl.HasStatusCode(err, 401, 403) {
-					return usererr.New("Not authorized to connect via SSH. Check your CircleCI token and try again.", err)
+					return &userError{
+						msg:        "Not authorized to connect via SSH.",
+						suggestion: "Check your CircleCI token and try again.",
+						err:        err,
+					}
 				}
 				return err
 			}
@@ -360,7 +393,11 @@ func newSandboxSyncCmd() *cobra.Command {
 			err = sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, workdir, newStatusFunc(io))
 			if err != nil {
 				if httpcl.HasStatusCode(err, 401, 403) {
-					return usererr.New("Not authorized to sync files. Check your CircleCI token and try again.", err)
+					return &userError{
+						msg:        "Not authorized to sync files.",
+						suggestion: "Check your CircleCI token and try again.",
+						err:        err,
+					}
 				}
 				return err
 			}
@@ -383,7 +420,7 @@ func newSandboxUseCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
 			if err := sandbox.SaveActive(sandbox.ActiveSandbox{SandboxID: args[0]}); err != nil {
-				return usererr.New("Could not save the active sandbox. "+configFilePermHint+".", err)
+				return &userError{msg: "Could not save the active sandbox.", suggestion: configFilePermHint, err: err}
 			}
 			io.ErrPrintf("Set %s as active sandbox\n", args[0])
 			return nil
@@ -399,7 +436,7 @@ func newSandboxCurrentCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			active, err := sandbox.LoadActive()
 			if err != nil {
-				return usererr.New("Could not load the active sandbox. "+configFilePermHint+".", err)
+				return &userError{msg: "Could not load the active sandbox.", suggestion: configFilePermHint, err: err}
 			}
 			if active == nil {
 				io.ErrPrintln("No active sandbox")
@@ -422,7 +459,7 @@ func newSandboxForgetCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if err := sandbox.ClearActive(); err != nil {
-				return usererr.New("Could not clear the active sandbox. "+configFilePermHint+".", err)
+				return &userError{msg: "Could not clear the active sandbox.", suggestion: configFilePermHint, err: err}
 			}
 			io.ErrPrintln("Active sandbox cleared")
 			return nil
@@ -444,18 +481,26 @@ generate a Dockerfile and build a test image.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if _, err := os.Stat(dir); err != nil {
-				return usererr.New(fmt.Sprintf("Directory %q not found. Check the --dir path and try again.", dir), err)
+				return &userError{
+					msg:        fmt.Sprintf("Directory %q not found.", dir),
+					suggestion: "Check the --dir path and try again.",
+					err:        err,
+				}
 			}
 			io.ErrPrintf("Detecting environment in %s...\n", dir)
 
 			env, err := envbuilder.DetectEnvironment(cmd.Context(), dir)
 			if err != nil {
-				return usererr.New("Could not detect the environment. Check the directory contains a supported project.", err)
+				return &userError{
+					msg:        "Could not detect the environment.",
+					suggestion: "Check the directory contains a supported project.",
+					err:        err,
+				}
 			}
 
 			out, err := json.MarshalIndent(env, "", "  ")
 			if err != nil {
-				return usererr.New("Could not encode the environment spec.", err)
+				return &userError{msg: "Could not encode the environment spec.", err: err}
 			}
 			io.Printf("%s\n", out)
 			return nil
@@ -480,10 +525,11 @@ Example:
   chunk sandbox env --dir . | chunk sandbox build --dir .`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if tag != "" && !validDockerTag.MatchString(tag) {
-				return usererr.New(
-					fmt.Sprintf("Invalid image tag %q. Use a tag like 'myapp:latest'.", tag),
-					fmt.Errorf("invalid docker tag %q", tag),
-				)
+				return &userError{
+					msg:        fmt.Sprintf("Invalid image tag %q.", tag),
+					suggestion: "Use a tag like 'myapp:latest'.",
+					errMsg:     fmt.Sprintf("invalid docker tag %q", tag),
+				}
 			}
 
 			streams := iostream.FromCmd(cmd)
@@ -493,25 +539,34 @@ Example:
 			// Check cmd.InOrStdin() so injected readers (e.g. in tests) are not blocked.
 			if f, ok := cmd.InOrStdin().(*os.File); ok {
 				if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
-					return usererr.New(
-						"No input on stdin. Pipe a JSON env spec, for example: chunk sandbox env | chunk sandbox build",
-						fmt.Errorf("no input on stdin"),
-					)
+					return &userError{
+						msg:        "No input on stdin.",
+						suggestion: "Pipe a JSON env spec, for example: chunk sandbox env | chunk sandbox build",
+						errMsg:     "no input on stdin",
+					}
 				}
 			}
 
 			raw, err := io.ReadAll(cmd.InOrStdin())
 			if err != nil {
-				return usererr.New("Could not read the environment spec from stdin.", err)
+				return &userError{msg: "Could not read the environment spec from stdin.", err: err}
 			}
 			var env envbuilder.Environment
 			if err := json.Unmarshal(raw, &env); err != nil {
-				return usererr.New("Invalid environment spec. Pipe the output of 'chunk sandbox env' into this command.", err)
+				return &userError{
+					msg:        "Invalid environment spec.",
+					suggestion: "Pipe the output of 'chunk sandbox env' into this command.",
+					err:        err,
+				}
 			}
 
 			dockerfilePath, err := envbuilder.WriteDockerfile(dir, &env)
 			if err != nil {
-				return usererr.New("Could not write the Dockerfile. Check directory permissions and try again.", err)
+				return &userError{
+					msg:        "Could not write the Dockerfile.",
+					suggestion: "Check directory permissions and try again.",
+					err:        err,
+				}
 			}
 			streams.ErrPrintf("Wrote %s\n", dockerfilePath)
 
@@ -528,7 +583,7 @@ Example:
 			dockerCmd.Stdout = streams.Out
 			dockerCmd.Stderr = streams.Err
 			if err := dockerCmd.Run(); err != nil {
-				return usererr.New("Docker build failed. Check the build output above for details.", err)
+				return &userError{msg: "Docker build failed.", suggestion: "Check the build output above for details.", err: err}
 			}
 
 			streams.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))

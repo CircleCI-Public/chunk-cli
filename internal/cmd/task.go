@@ -7,7 +7,6 @@ import (
 	"os"
 	"sync"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -40,11 +39,15 @@ func newTaskRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
-				return usererr.New("Could not determine working directory.", fmt.Errorf("get working directory: %w", err))
+				return &userError{msg: "Could not determine working directory.", err: fmt.Errorf("get working directory: %w", err)}
 			}
 			repoRoot, err := gitutil.RepoRoot(cwd)
 			if err != nil {
-				return usererr.New("Not in a git repository. Run this command from inside a git repo.", fmt.Errorf("not in a git repository: %w", err))
+				return &userError{
+					msg:        "Not in a git repository.",
+					suggestion: "Run this command from inside a git repo.",
+					err:        fmt.Errorf("not in a git repository: %w", err),
+				}
 			}
 
 			cfg, err := task.LoadRunConfig(repoRoot)
@@ -101,11 +104,15 @@ func newTaskConfigCmd() *cobra.Command {
 			// Find git repo root instead of using cwd
 			cwd, err := os.Getwd()
 			if err != nil {
-				return usererr.New("Could not determine working directory.", fmt.Errorf("get working directory: %w", err))
+				return &userError{msg: "Could not determine working directory.", err: fmt.Errorf("get working directory: %w", err)}
 			}
 			repoRoot, err := gitutil.RepoRoot(cwd)
 			if err != nil {
-				return usererr.New("Not in a git repository. Run this command from inside a git repo.", fmt.Errorf("not in a git repository: %w", err))
+				return &userError{
+					msg:        "Not in a git repository.",
+					suggestion: "Run this command from inside a git repo.",
+					err:        fmt.Errorf("not in a git repository: %w", err),
+				}
 			}
 
 			// Check for existing config and prompt before overwriting
@@ -188,10 +195,18 @@ func fetchProjectsAndCollabs(ctx context.Context, client *circleci.Client) ([]ci
 	wg.Wait()
 
 	if projErr != nil {
-		return nil, nil, usererr.New("Could not fetch CircleCI projects. Check your token and network connection.", fmt.Errorf("fetch projects: %w", projErr))
+		return nil, nil, &userError{
+			msg:        "Could not fetch CircleCI projects.",
+			suggestion: "Check your token and network connection.",
+			err:        fmt.Errorf("fetch projects: %w", projErr),
+		}
 	}
 	if collabErr != nil {
-		return nil, nil, usererr.New("Could not fetch CircleCI projects. Check your token and network connection.", fmt.Errorf("fetch collaborations: %w", collabErr))
+		return nil, nil, &userError{
+			msg:        "Could not fetch CircleCI projects.",
+			suggestion: "Check your token and network connection.",
+			err:        fmt.Errorf("fetch collaborations: %w", collabErr),
+		}
 	}
 	return projects, collabs, nil
 }

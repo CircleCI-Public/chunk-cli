@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -50,9 +49,9 @@ func TestEnsureCircleCIClient_NoTTY(t *testing.T) {
 	assert.Assert(t, err != nil)
 	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
 
-	var ue *usererr.Error
+	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
-	assert.Assert(t, strings.Contains(ue.UserMessage(), "CIRCLE_TOKEN"))
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "CIRCLE_TOKEN"))
 }
 
 func TestEnsureAnthropicClient_NoTTY(t *testing.T) {
@@ -63,9 +62,9 @@ func TestEnsureAnthropicClient_NoTTY(t *testing.T) {
 	assert.Assert(t, err != nil)
 	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
 
-	var ue *usererr.Error
+	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
-	assert.Assert(t, strings.Contains(ue.UserMessage(), "ANTHROPIC_API_KEY"))
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "ANTHROPIC_API_KEY"))
 }
 
 func TestEnsureGitHubClient_NoTTY(t *testing.T) {
@@ -76,9 +75,9 @@ func TestEnsureGitHubClient_NoTTY(t *testing.T) {
 	assert.Assert(t, err != nil)
 	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
 
-	var ue *usererr.Error
+	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
-	assert.Assert(t, strings.Contains(ue.UserMessage(), "GITHUB_TOKEN"))
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "GITHUB_TOKEN"))
 }
 
 func TestEnsureGitHubClient_PromptAndSave(t *testing.T) {
@@ -134,9 +133,9 @@ func TestEnsureAnthropicClient_InvalidPrefix(t *testing.T) {
 	_, err := ensureAnthropicClient(context.Background(), discardStreams(), prompter)
 	assert.Assert(t, err != nil)
 
-	var ue *usererr.Error
+	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
-	assert.Assert(t, strings.Contains(ue.UserMessage(), "sk-ant-"), "expected message about invalid key format, got: %s", ue.UserMessage())
+	assert.Assert(t, strings.Contains(ue.Detail(), "sk-ant-"), "expected detail about invalid key format, got: %s", ue.Detail())
 }
 
 func TestEnsureCircleCIClient_EmptyToken(t *testing.T) {
@@ -149,7 +148,7 @@ func TestEnsureCircleCIClient_EmptyToken(t *testing.T) {
 	_, err := ensureCircleCIClient(context.Background(), discardStreams(), prompter)
 	assert.Assert(t, err != nil)
 
-	var ue *usererr.Error
+	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
-	assert.Assert(t, strings.Contains(ue.UserMessage(), "CIRCLE_TOKEN"), "expected message about CIRCLE_TOKEN, got: %s", ue.UserMessage())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "CIRCLE_TOKEN"), "expected suggestion about CIRCLE_TOKEN, got: %s", ue.Suggestion())
 }
