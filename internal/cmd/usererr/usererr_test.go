@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
+	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 )
 
 func TestError(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -15,7 +16,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/task"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 func newTaskCmd() *cobra.Command {

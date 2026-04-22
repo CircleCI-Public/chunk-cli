@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/cmd"
+	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 var version = "dev"

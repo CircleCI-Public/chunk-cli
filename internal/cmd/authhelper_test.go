@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/cmd/usererr"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 func isolateConfig(t *testing.T) {
