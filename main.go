@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/cmd"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
@@ -19,7 +20,11 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		var ue *usererr.Error
 		if errors.As(err, &ue) {
-			fmt.Fprintln(os.Stderr, ue.UserMessage())
+			if ue.Detail() != "" || ue.Suggestion() != "" {
+				fmt.Fprint(os.Stderr, ui.FormatError(ue.UserMessage(), ue.Detail(), ue.Suggestion()))
+			} else {
+				fmt.Fprintln(os.Stderr, ue.UserMessage())
+			}
 		} else {
 			fmt.Fprintln(os.Stderr, err)
 			if suggestion := errorSuggestion(err); suggestion != "" {
