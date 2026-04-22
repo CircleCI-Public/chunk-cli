@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 const (
@@ -32,7 +32,7 @@ func isRetryable(err error) bool {
 	}
 
 	// HTTP 5xx errors
-	var httpErr *httpcl.HTTPError
+	var httpErr *hc.HTTPError
 	if errors.As(err, &httpErr) && httpErr.StatusCode >= 500 {
 		return true
 	}

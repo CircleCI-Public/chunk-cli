@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 var (
@@ -18,14 +18,6 @@ var (
 	// ErrTokenLimit indicates the prompt exceeds the model's context window.
 	ErrTokenLimit = errors.New("prompt exceeds context window")
 )
-
-func isTokenLimitErr(err error) bool {
-	var he *httpcl.HTTPError
-	if !errors.As(err, &he) {
-		return false
-	}
-	return strings.Contains(string(he.Body), "prompt is too long")
-}
 
 // StatusError represents an HTTP error from the Anthropic API without exposing httpcl internals.
 type StatusError struct {
@@ -37,14 +29,6 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("%s: %d %s", e.Op, e.StatusCode, http.StatusText(e.StatusCode))
 }
 
-func mapErr(op string, err error) error {
-	var he *httpcl.HTTPError
-	if !errors.As(err, &he) {
-		return fmt.Errorf("%s: %w", op, err)
-	}
-	return &StatusError{Op: op, StatusCode: he.StatusCode}
-}
-
 type Config struct {
 	APIKey  string
 	BaseURL string
@@ -52,14 +36,14 @@ type Config struct {
 
 // Client is an Anthropic Messages API client.
 type Client struct {
-	http *httpcl.Client
+	http *hc.Client
 }
 
 func New(cfg Config) (*Client, error) {
 	if cfg.APIKey == "" {
 		return nil, ErrKeyNotFound
 	}
-	c := httpcl.New(httpcl.Config{
+	c := hc.New(hc.Config{
 		BaseURL:        cfg.BaseURL,
 		AuthToken:      cfg.APIKey,
 		AuthHeader:     "x-api-key",
@@ -105,10 +89,10 @@ func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt st
 	if len(system) > 0 {
 		body.System = system[0]
 	}
-	req := httpcl.NewRequest("POST", "/v1/messages",
-		httpcl.Body(body),
-		httpcl.Header("anthropic-version", "2023-06-01"),
-		httpcl.JSONDecoder(&resp),
+	req := hc.NewRequest("POST", "/v1/messages",
+		hc.Body(body),
+		hc.Header("anthropic-version", "2023-06-01"),
+		hc.JSONDecoder(&resp),
 	)
 
 	_, err := c.http.Call(ctx, req)
@@ -125,4 +109,20 @@ func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt st
 		}
 	}
 	return "", fmt.Errorf("no text content in Anthropic response")
+}
+
+func isTokenLimitErr(err error) bool {
+	var he *hc.HTTPError
+	if !errors.As(err, &he) {
+		return false
+	}
+	return strings.Contains(string(he.Body), "prompt is too long")
+}
+
+func mapErr(op string, err error) error {
+	var he *hc.HTTPError
+	if !errors.As(err, &he) {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	return &StatusError{Op: op, StatusCode: he.StatusCode}
 }

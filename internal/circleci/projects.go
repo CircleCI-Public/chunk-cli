@@ -2,10 +2,9 @@ package circleci
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 // FollowedProject represents a project returned by the v1.1 API.
@@ -35,8 +34,8 @@ type ProjectDetail struct {
 // ListFollowedProjects returns projects the user follows.
 func (c *Client) ListFollowedProjects(ctx context.Context) ([]FollowedProject, error) {
 	var resp []FollowedProject
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v1.1/projects",
-		httpcl.JSONDecoder(&resp),
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v1.1/projects",
+		hc.JSONDecoder(&resp),
 	))
 	if err != nil {
 		return nil, mapErr("list followed projects", err)
@@ -47,8 +46,8 @@ func (c *Client) ListFollowedProjects(ctx context.Context) ([]FollowedProject, e
 // ListCollaborations returns organizations the user belongs to.
 func (c *Client) ListCollaborations(ctx context.Context) ([]Collaboration, error) {
 	var resp []Collaboration
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v2/me/collaborations",
-		httpcl.JSONDecoder(&resp),
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/me/collaborations",
+		hc.JSONDecoder(&resp),
 	))
 	if err != nil {
 		return nil, mapErr("list collaborations", err)
@@ -59,9 +58,9 @@ func (c *Client) ListCollaborations(ctx context.Context) ([]Collaboration, error
 // GetProjectBySlug fetches project details by slug (e.g. "gh/org/repo").
 func (c *Client) GetProjectBySlug(ctx context.Context, slug string) (*ProjectDetail, error) {
 	var resp ProjectDetail
-	_, err := c.cl.Call(ctx, httpcl.NewRequest(http.MethodGet,
-		fmt.Sprintf("/api/v2/project/%s", slug),
-		httpcl.JSONDecoder(&resp),
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/project/%s",
+		hc.RouteParams(slug),
+		hc.JSONDecoder(&resp),
 	))
 	if err != nil {
 		return nil, mapErr("get project by slug", err)

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 type Config struct {
@@ -18,7 +18,7 @@ type Config struct {
 
 // Client is a GitHub GraphQL API client.
 type Client struct {
-	http *httpcl.Client
+	http *hc.Client
 
 	// retryDelayOverride, if non-zero, replaces the exponential backoff
 	// delay in doWithRetry. Intended for tests only.
@@ -34,7 +34,7 @@ func New(cfg Config) (*Client, error) {
 	if cfg.Token == "" {
 		return nil, ErrTokenNotFound
 	}
-	c := httpcl.New(httpcl.Config{
+	c := hc.New(hc.Config{
 		BaseURL:    cfg.BaseURL,
 		AuthToken:  "token " + cfg.Token,
 		AuthHeader: "Authorization",
@@ -60,28 +60,6 @@ func (e *StatusError) Error() string {
 		return fmt.Sprintf("%s: %d %s", e.Op, e.StatusCode, http.StatusText(e.StatusCode))
 	}
 	return fmt.Sprintf("%d %s", e.StatusCode, http.StatusText(e.StatusCode))
-}
-
-func mapErr(op string, err error) error {
-	var he *httpcl.HTTPError
-	if !errors.As(err, &he) {
-		if op == "" {
-			return err
-		}
-		return fmt.Errorf("%s: %w", op, err)
-	}
-	return &StatusError{Op: op, StatusCode: he.StatusCode}
-}
-
-// do executes a GraphQL query and decodes the response into dest.
-func (c *Client) do(ctx context.Context, query string, vars map[string]any, dest any) error {
-	req := httpcl.NewRequest("POST", "/graphql",
-		httpcl.Body(graphQLRequest{Query: query, Variables: vars}),
-		httpcl.JSONDecoder(dest),
-	)
-
-	_, err := c.http.Call(ctx, req)
-	return err
 }
 
 // ValidateOrg checks that the org is accessible.
@@ -111,4 +89,25 @@ func (c *Client) CheckRateLimit(ctx context.Context) error {
 		return mapErr("check rate limit", err)
 	}
 	return nil
+}
+
+func (c *Client) do(ctx context.Context, query string, vars map[string]any, dest any) error {
+	req := hc.NewRequest("POST", "/graphql",
+		hc.Body(graphQLRequest{Query: query, Variables: vars}),
+		hc.JSONDecoder(dest),
+	)
+
+	_, err := c.http.Call(ctx, req)
+	return err
+}
+
+func mapErr(op string, err error) error {
+	var he *hc.HTTPError
+	if !errors.As(err, &he) {
+		if op == "" {
+			return err
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	return &StatusError{Op: op, StatusCode: he.StatusCode}
 }

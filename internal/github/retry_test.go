@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 func TestIsRetryable(t *testing.T) {
@@ -26,10 +26,10 @@ func TestIsRetryable(t *testing.T) {
 		{"wrapped deadline", fmt.Errorf("fetch: %w", context.DeadlineExceeded), true},
 		{"html error", fmt.Errorf("<!DOCTYPE html>"), true},
 		{"unicorn error", fmt.Errorf("Unicorn! GitHub is down"), true},
-		{"http 500", &httpcl.HTTPError{StatusCode: 500}, true},
-		{"http 503", &httpcl.HTTPError{StatusCode: 503}, true},
-		{"http 400", &httpcl.HTTPError{StatusCode: 400}, false},
-		{"http 401", &httpcl.HTTPError{StatusCode: 401}, false},
+		{"http 500", &hc.HTTPError{StatusCode: 500}, true},
+		{"http 503", &hc.HTTPError{StatusCode: 503}, true},
+		{"http 400", &hc.HTTPError{StatusCode: 400}, false},
+		{"http 401", &hc.HTTPError{StatusCode: 401}, false},
 		{"json decode html", fmt.Errorf("httpcl: decode response: invalid character '<' looking for beginning of value"), true},
 	}
 

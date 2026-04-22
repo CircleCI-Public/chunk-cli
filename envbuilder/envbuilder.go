@@ -14,7 +14,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 const (
@@ -146,7 +146,7 @@ var otpMajorInLineRe = regexp.MustCompile(`\b([2-9]\d)\b`)
 // be matched by versionTagRe.
 var cimgBaseDateTagRe = regexp.MustCompile(`^(\d{4})\.(\d{2})(?:\.(\d+))?$`)
 
-var dockerHubClient = httpcl.New(httpcl.Config{})
+var dockerHubClient = hc.New(hc.Config{})
 
 type dockerHubTagsResponse struct {
 	Results []struct {
@@ -158,7 +158,7 @@ type dockerHubTagsResponse struct {
 // fetchRawTags paginates the Docker Hub tag API for image and returns all tag
 // name strings up to a limit of 300. Official single-component image names
 // (e.g. "elixir") are automatically mapped to "library/elixir".
-func fetchRawTags(ctx context.Context, client *httpcl.Client, image string) ([]string, error) {
+func fetchRawTags(ctx context.Context, client *hc.Client, image string) ([]string, error) {
 	apiImage := image
 	if !strings.Contains(image, "/") {
 		apiImage = "library/" + image
@@ -172,7 +172,7 @@ func fetchRawTags(ctx context.Context, client *httpcl.Client, image string) ([]s
 	)
 	for route != "" && len(tags) < 300 {
 		var page dockerHubTagsResponse
-		if _, err := client.Call(ctx, httpcl.NewRequest("GET", route, httpcl.JSONDecoder(&page))); err != nil {
+		if _, err := client.Call(ctx, hc.NewRequest("GET", route, hc.JSONDecoder(&page))); err != nil {
 			return nil, fmt.Errorf("docker hub request failed: %w", err)
 		}
 		for _, tag := range page.Results {
@@ -183,7 +183,7 @@ func fetchRawTags(ctx context.Context, client *httpcl.Client, image string) ([]s
 	return tags, nil
 }
 
-func fetchAllImageVersions(ctx context.Context, client *httpcl.Client, image string) ([]string, error) {
+func fetchAllImageVersions(ctx context.Context, client *hc.Client, image string) ([]string, error) {
 	raw, err := fetchRawTags(ctx, client, image)
 	if err != nil {
 		return nil, err
@@ -203,7 +203,7 @@ func fetchAllImageVersions(ctx context.Context, client *httpcl.Client, image str
 	return allTags, nil
 }
 
-func fetchLatestImageVersion(ctx context.Context, client *httpcl.Client, image string) (string, error) {
+func fetchLatestImageVersion(ctx context.Context, client *hc.Client, image string) (string, error) {
 	allTags, err := fetchAllImageVersions(ctx, client, image)
 	if err != nil {
 		return "", err
@@ -211,7 +211,7 @@ func fetchLatestImageVersion(ctx context.Context, client *httpcl.Client, image s
 	return highestVersion(allTags), nil
 }
 
-func fetchLatestImageVersionWithConstraint(ctx context.Context, client *httpcl.Client, image string, maxMajor int) (string, error) {
+func fetchLatestImageVersionWithConstraint(ctx context.Context, client *hc.Client, image string, maxMajor int) (string, error) {
 	allTags, err := fetchAllImageVersions(ctx, client, image)
 	if err != nil {
 		return "", err
@@ -239,7 +239,7 @@ func fetchLatestImageVersionWithConstraint(ctx context.Context, client *httpcl.C
 // whose major.minor is no greater than maxMajor.maxMinor. This is used to cap
 // language runtimes at a known-compatible minor release (e.g. Python 3.13 when
 // a dependency like uvloop does not yet support 3.14+).
-func fetchLatestImageVersionWithMajorMinorConstraint(ctx context.Context, client *httpcl.Client, image string, maxMajor, maxMinor int) (string, error) {
+func fetchLatestImageVersionWithMajorMinorConstraint(ctx context.Context, client *hc.Client, image string, maxMajor, maxMinor int) (string, error) {
 	allTags, err := fetchAllImageVersions(ctx, client, image)
 	if err != nil {
 		return "", err
@@ -273,7 +273,7 @@ func fetchLatestImageVersionWithMajorMinorConstraint(ctx context.Context, client
 // behaviour that breaks test suites written against OTP 26.
 // Falls back to fetchLatestImageVersionWithMajorMinorConstraint when no matching
 // OTP-specific tag is found.
-func fetchElixirOTPImageVersion(ctx context.Context, client *httpcl.Client, image string, maxMajor, maxMinor, otpMajor int) (string, error) {
+func fetchElixirOTPImageVersion(ctx context.Context, client *hc.Client, image string, maxMajor, maxMinor, otpMajor int) (string, error) {
 	allTags, err := fetchRawTags(ctx, client, image)
 	if err != nil {
 		return "", err
@@ -318,7 +318,7 @@ func fetchElixirOTPImageVersion(ctx context.Context, client *httpcl.Client, imag
 
 // fetchLatestCimgBaseDateVersion fetches the most recent cimg/base tag, which
 // uses a "YYYY.MM" or "YYYY.MM.N" date format rather than semver.
-func fetchLatestCimgBaseDateVersion(ctx context.Context, client *httpcl.Client, image string) (string, error) {
+func fetchLatestCimgBaseDateVersion(ctx context.Context, client *hc.Client, image string) (string, error) {
 	raw, err := fetchRawTags(ctx, client, image)
 	if err != nil {
 		return "", err
@@ -2323,7 +2323,7 @@ func detectHaskellGHCVersionFromCI(dir string) (major, minor int) {
 }
 
 // detectImageVersion fetches the appropriate CircleCI image version for the detected stack.
-func detectImageVersion(ctx context.Context, client *httpcl.Client, dir, stack, image, install string) (string, error) {
+func detectImageVersion(ctx context.Context, client *hc.Client, dir, stack, image, install string) (string, error) {
 	switch stack {
 	case stackGo:
 		// Cap to the major.minor declared in go.mod. Go 1.23 is used as a floor

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 func TestCallJSONRoundTrip(t *testing.T) {
@@ -37,15 +37,15 @@ func TestCallJSONRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := httpcl.New(httpcl.Config{
+	c := hc.New(hc.Config{
 		BaseURL:   srv.URL,
 		AuthToken: "test-token",
 	})
 
 	var resp respBody
-	status, err := c.Call(context.Background(), httpcl.NewRequest("POST", "/test",
-		httpcl.Body(reqBody{Name: "world"}),
-		httpcl.JSONDecoder(&resp),
+	status, err := c.Call(context.Background(), hc.NewRequest("POST", "/test",
+		hc.Body(reqBody{Name: "world"}),
+		hc.JSONDecoder(&resp),
 	))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -65,13 +65,13 @@ func TestCallHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := httpcl.New(httpcl.Config{BaseURL: srv.URL})
+	c := hc.New(hc.Config{BaseURL: srv.URL})
 
-	status, err := c.Call(context.Background(), httpcl.NewRequest("GET", "/missing"))
+	status, err := c.Call(context.Background(), hc.NewRequest("GET", "/missing"))
 	if status != 404 {
 		t.Fatalf("expected 404, got %d", status)
 	}
-	if !httpcl.HasStatusCode(err, http.StatusNotFound) {
+	if !hc.HasStatusCode(err, http.StatusNotFound) {
 		t.Fatalf("expected HTTPError with 404, got %v", err)
 	}
 }
@@ -85,12 +85,12 @@ func TestDisableRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := httpcl.New(httpcl.Config{
+	c := hc.New(hc.Config{
 		BaseURL:        srv.URL,
 		DisableRetries: true,
 	})
 
-	_, err := c.Call(context.Background(), httpcl.NewRequest("GET", "/"))
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
 	if err == nil {
 		t.Fatal("expected error for 503 response")
 	}
@@ -108,13 +108,59 @@ func TestCallCustomAuthHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := httpcl.New(httpcl.Config{
+	c := hc.New(hc.Config{
 		BaseURL:    srv.URL,
 		AuthToken:  "my-key",
 		AuthHeader: "x-api-key",
 	})
 
-	status, err := c.Call(context.Background(), httpcl.NewRequest("GET", "/"))
+	status, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("expected 200, got %d", status)
+	}
+}
+
+func TestRouteParams(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/sandbox/instances/sb-42/exec" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{BaseURL: srv.URL, DisableRetries: true})
+
+	status, err := c.Call(context.Background(), hc.NewRequest("GET",
+		"/api/v2/sandbox/instances/%s/exec",
+		hc.RouteParams("sb-42"),
+	))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("expected 200, got %d", status)
+	}
+}
+
+func TestRouteParamsMultiple(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/agents/org/org-1/project/proj-2/runs" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{BaseURL: srv.URL, DisableRetries: true})
+
+	status, err := c.Call(context.Background(), hc.NewRequest("POST",
+		"/api/v2/agents/org/%s/project/%s/runs",
+		hc.RouteParams("org-1", "proj-2"),
+	))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
