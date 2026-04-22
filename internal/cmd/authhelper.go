@@ -45,6 +45,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("CircleCI token required"))
 	streams.ErrPrintln("Create a token at https://app.circleci.com/settings/user/tokens")
+	printSaveHint(streams, "Token")
 	streams.ErrPrintln("")
 
 	token, err := prompter("CircleCI Token")
@@ -67,7 +68,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 	if err := authprompt.SaveCircleCIToken(token); err != nil {
 		return nil, err
 	}
-	streams.ErrPrintln(ui.Success("CircleCI token saved"))
+	printSaved(streams, "CircleCI token")
 	return circleci.NewClient()
 }
 
@@ -85,6 +86,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Anthropic API key required"))
 	streams.ErrPrintln("Get a key at https://console.anthropic.com/")
+	printSaveHint(streams, "Key")
 	streams.ErrPrintln("")
 
 	key, err := prompter("API Key")
@@ -110,7 +112,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 	if err := authprompt.SaveAnthropicKey(key); err != nil {
 		return nil, err
 	}
-	streams.ErrPrintln(ui.Success("Anthropic API key saved"))
+	printSaved(streams, "Anthropic API key")
 	return anthropic.New()
 }
 
@@ -128,6 +130,7 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("GitHub token required"))
 	streams.ErrPrintln("Create a token at https://github.com/settings/tokens")
+	printSaveHint(streams, "Token")
 	streams.ErrPrintln("")
 
 	token, err := prompter("GitHub Token")
@@ -150,6 +153,6 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 	if err := authprompt.SaveGitHubToken(token); err != nil {
 		return nil, err
 	}
-	streams.ErrPrintln(ui.Success("GitHub token saved"))
+	printSaved(streams, "GitHub token")
 	return github.New()
 }
