@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/task"
@@ -156,7 +157,7 @@ func newTaskConfigCmd() *cobra.Command {
 				return client.GetProjectBySlug(ctx, slug)
 			}
 
-			runCfg, err := task.CollectRunConfig(ctx, prompts, projects, collabs, fetchDetail)
+			runCfg, err := task.CollectRunConfig(ctx, prompts, projects, collabs, fetchDetail, os.Getenv(config.EnvCircleCIOrgID))
 			if errors.Is(err, tui.ErrCancelled) {
 				return nil
 			}

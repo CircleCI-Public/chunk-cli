@@ -16,12 +16,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
-// isolateConfig sets up a temp HOME so config.Load/Save use an isolated file.
 func isolateConfig(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
 }
 
 func randToken(prefix string) string {
@@ -64,10 +63,11 @@ func TestResolveCircleCIClient_TokenInEnv(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	t.Setenv("CIRCLE_TOKEN", randToken("cci-"))
-	t.Setenv("CIRCLECI_BASE_URL", srv.URL)
+	t.Setenv(config.EnvCircleToken, randToken("cci-"))
+	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
 
-	client, err := authprompt.ResolveCircleCIClient()
+	rc, _ := config.Resolve("", "")
+	client, err := authprompt.ResolveCircleCIClient(rc)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
@@ -79,26 +79,28 @@ func TestResolveCircleCIClient_TokenInConfig(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	t.Setenv("CIRCLECI_BASE_URL", srv.URL)
-	t.Setenv("CIRCLE_TOKEN", "")
-	t.Setenv("CIRCLECI_TOKEN", "")
+	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
 
 	cfg, err := config.Load()
 	assert.NilError(t, err)
 	cfg.CircleCIToken = randToken("cci-")
 	assert.NilError(t, config.Save(cfg))
 
-	client, err := authprompt.ResolveCircleCIClient()
+	rc, _ := config.Resolve("", "")
+	client, err := authprompt.ResolveCircleCIClient(rc)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
 
 func TestResolveCircleCIClient_NeedsAuth(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("CIRCLE_TOKEN", "")
-	t.Setenv("CIRCLECI_TOKEN", "")
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
 
-	_, err := authprompt.ResolveCircleCIClient()
+	rc, _ := config.Resolve("", "")
+	_, err := authprompt.ResolveCircleCIClient(rc)
 	assert.Assert(t, errors.Is(err, authprompt.ErrNeedsAuth))
 }
 
@@ -109,10 +111,11 @@ func TestResolveAnthropicClient_KeyInEnv(t *testing.T) {
 	srv := httptest.NewServer(ant)
 	defer srv.Close()
 
-	t.Setenv("ANTHROPIC_API_KEY", randToken("sk-ant-"))
-	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
+	t.Setenv(config.EnvAnthropicAPIKey, randToken("sk-ant-"))
+	t.Setenv(config.EnvAnthropicBaseURL, srv.URL)
 
-	client, err := authprompt.ResolveAnthropicClient()
+	rc, _ := config.Resolve("", "")
+	client, err := authprompt.ResolveAnthropicClient(rc)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
@@ -124,24 +127,26 @@ func TestResolveAnthropicClient_KeyInConfig(t *testing.T) {
 	srv := httptest.NewServer(ant)
 	defer srv.Close()
 
-	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
-	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv(config.EnvAnthropicBaseURL, srv.URL)
+	t.Setenv(config.EnvAnthropicAPIKey, "")
 
 	cfg, err := config.Load()
 	assert.NilError(t, err)
 	cfg.AnthropicAPIKey = randToken("sk-ant-")
 	assert.NilError(t, config.Save(cfg))
 
-	client, err := authprompt.ResolveAnthropicClient()
+	rc, _ := config.Resolve("", "")
+	client, err := authprompt.ResolveAnthropicClient(rc)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
 
 func TestResolveAnthropicClient_NeedsAuth(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv(config.EnvAnthropicAPIKey, "")
 
-	_, err := authprompt.ResolveAnthropicClient()
+	rc, _ := config.Resolve("", "")
+	_, err := authprompt.ResolveAnthropicClient(rc)
 	assert.Assert(t, errors.Is(err, authprompt.ErrNeedsAuth))
 }
 
@@ -152,10 +157,11 @@ func TestResolveGitHubClient_TokenInEnv(t *testing.T) {
 	srv := httptest.NewServer(gh)
 	defer srv.Close()
 
-	t.Setenv("GITHUB_TOKEN", randToken("ghp_"))
-	t.Setenv("GITHUB_API_URL", srv.URL)
+	t.Setenv(config.EnvGitHubToken, randToken("ghp_"))
+	t.Setenv(config.EnvGitHubAPIURL, srv.URL)
 
-	client, err := authprompt.ResolveGitHubClient(nil)
+	rc, _ := config.Resolve("", "")
+	client, err := authprompt.ResolveGitHubClient(rc, nil)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
@@ -167,24 +173,26 @@ func TestResolveGitHubClient_TokenInConfig(t *testing.T) {
 	srv := httptest.NewServer(gh)
 	defer srv.Close()
 
-	t.Setenv("GITHUB_API_URL", srv.URL)
-	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv(config.EnvGitHubAPIURL, srv.URL)
+	t.Setenv(config.EnvGitHubToken, "")
 
 	cfg, err := config.Load()
 	assert.NilError(t, err)
 	cfg.GitHubToken = randToken("ghp_")
 	assert.NilError(t, config.Save(cfg))
 
-	client, err := authprompt.ResolveGitHubClient(nil)
+	rc, _ := config.Resolve("", "")
+	client, err := authprompt.ResolveGitHubClient(rc, nil)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
 
 func TestResolveGitHubClient_NeedsAuth(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv(config.EnvGitHubToken, "")
 
-	_, err := authprompt.ResolveGitHubClient(nil)
+	rc, _ := config.Resolve("", "")
+	_, err := authprompt.ResolveGitHubClient(rc, nil)
 	assert.Assert(t, errors.Is(err, authprompt.ErrNeedsAuth))
 }
 

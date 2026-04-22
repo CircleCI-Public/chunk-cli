@@ -15,6 +15,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
@@ -70,7 +71,7 @@ func resolveOrgID(orgID string, pickOrg func() (string, error)) (string, error) 
 	if orgID != "" {
 		return orgID, nil
 	}
-	if envID := os.Getenv("CIRCLECI_ORG_ID"); envID != "" {
+	if envID := os.Getenv(config.EnvCircleCIOrgID); envID != "" {
 		return envID, nil
 	}
 	return pickOrg()
@@ -151,10 +152,7 @@ func newSandboxListCmd() *cobra.Command {
 	return cmd
 }
 
-const (
-	defaultProvider = "e2b"
-	providerEnvVar  = "CHUNK_SANDBOX_PROVIDER"
-)
+const defaultProvider = "e2b"
 
 func newSandboxCreateCmd() *cobra.Command {
 	var orgID, name, image string
@@ -162,10 +160,8 @@ func newSandboxCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a sandbox",
-		Long: `Create a sandbox.
-
-The sandbox backend defaults to e2b. Override with the CHUNK_SANDBOX_PROVIDER
-environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
+		Long: "Create a sandbox.\n\nThe sandbox backend defaults to e2b. Override with the " + config.EnvSandboxProvider +
+			"\nenvironment variable (e.g. " + config.EnvSandboxProvider + "=unikraft).",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
@@ -176,7 +172,7 @@ environment variable (e.g. CHUNK_SANDBOX_PROVIDER=unikraft).`,
 			if err != nil {
 				return err
 			}
-			provider := os.Getenv(providerEnvVar)
+			provider := os.Getenv(config.EnvSandboxProvider)
 			if provider == "" {
 				provider = defaultProvider
 			}
@@ -321,7 +317,7 @@ func newSandboxSSHCmd() *cobra.Command {
 			if err := resolveSandboxID(&sandboxID); err != nil {
 				return err
 			}
-			authSock := os.Getenv("SSH_AUTH_SOCK")
+			authSock := os.Getenv(config.EnvSSHAuthSock)
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
@@ -387,7 +383,7 @@ func newSandboxSyncCmd() *cobra.Command {
 			if err := resolveSandboxID(&sandboxID); err != nil {
 				return err
 			}
-			authSock := os.Getenv("SSH_AUTH_SOCK")
+			authSock := os.Getenv(config.EnvSSHAuthSock)
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err

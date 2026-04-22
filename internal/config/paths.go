@@ -36,7 +36,7 @@ func Path() (string, error) {
 }
 
 func configHome() (string, error) {
-	if v := os.Getenv("XDG_CONFIG_HOME"); v != "" {
+	if v := os.Getenv(EnvXDGConfigHome); v != "" {
 		return v, nil
 	}
 	home, err := os.UserHomeDir()
@@ -47,7 +47,7 @@ func configHome() (string, error) {
 }
 
 func stateHome() (string, error) {
-	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
+	if v := os.Getenv(EnvXDGStateHome); v != "" {
 		return v, nil
 	}
 	home, err := os.UserHomeDir()

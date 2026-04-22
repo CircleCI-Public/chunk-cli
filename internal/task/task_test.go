@@ -247,10 +247,7 @@ func newFakeAndClient(t *testing.T) (*fakes.FakeCircleCI, *circleci.Client) {
 	srv := httptest.NewServer(cci)
 	t.Cleanup(srv.Close)
 
-	t.Setenv("CIRCLE_TOKEN", "test-token")
-	t.Setenv("CIRCLECI_BASE_URL", srv.URL)
-
-	client, err := circleci.NewClient()
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
 	}
@@ -408,10 +405,7 @@ func TestTriggerRunAPIError(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	t.Cleanup(srv.Close)
 
-	t.Setenv("CIRCLE_TOKEN", "test-token")
-	t.Setenv("CIRCLECI_BASE_URL", srv.URL)
-
-	client, err := circleci.NewClient()
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("create client: %v", err)
 	}

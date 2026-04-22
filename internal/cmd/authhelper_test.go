@@ -22,8 +22,8 @@ import (
 func isolateConfig(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
 }
 
 func randToken(prefix string) string {
@@ -42,8 +42,8 @@ func noTTYPrompter(_ string) (string, error) {
 
 func TestEnsureCircleCIClient_NoTTY(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("CIRCLE_TOKEN", "")
-	t.Setenv("CIRCLECI_TOKEN", "")
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
 
 	_, err := ensureCircleCIClient(context.Background(), discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
@@ -56,7 +56,7 @@ func TestEnsureCircleCIClient_NoTTY(t *testing.T) {
 
 func TestEnsureAnthropicClient_NoTTY(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv(config.EnvAnthropicAPIKey, "")
 
 	_, err := ensureAnthropicClient(context.Background(), discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
@@ -69,7 +69,7 @@ func TestEnsureAnthropicClient_NoTTY(t *testing.T) {
 
 func TestEnsureGitHubClient_NoTTY(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv(config.EnvGitHubToken, "")
 
 	_, err := ensureGitHubClient(context.Background(), discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
@@ -87,8 +87,8 @@ func TestEnsureGitHubClient_PromptAndSave(t *testing.T) {
 	srv := httptest.NewServer(gh)
 	defer srv.Close()
 
-	t.Setenv("GITHUB_TOKEN", "")
-	t.Setenv("GITHUB_API_URL", srv.URL)
+	t.Setenv(config.EnvGitHubToken, "")
+	t.Setenv(config.EnvGitHubAPIURL, srv.URL)
 
 	token := randToken("ghp_")
 	prompter := func(_ string) (string, error) { return token, nil }
@@ -109,8 +109,8 @@ func TestEnsureAnthropicClient_PromptAndSave(t *testing.T) {
 	srv := httptest.NewServer(ant)
 	defer srv.Close()
 
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
+	t.Setenv(config.EnvAnthropicAPIKey, "")
+	t.Setenv(config.EnvAnthropicBaseURL, srv.URL)
 
 	key := randToken("sk-ant-")
 	prompter := func(_ string) (string, error) { return key, nil }
@@ -126,7 +126,7 @@ func TestEnsureAnthropicClient_PromptAndSave(t *testing.T) {
 
 func TestEnsureAnthropicClient_InvalidPrefix(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv(config.EnvAnthropicAPIKey, "")
 
 	prompter := func(_ string) (string, error) { return "bad-key", nil }
 
@@ -140,8 +140,8 @@ func TestEnsureAnthropicClient_InvalidPrefix(t *testing.T) {
 
 func TestEnsureCircleCIClient_EmptyToken(t *testing.T) {
 	isolateConfig(t)
-	t.Setenv("CIRCLE_TOKEN", "")
-	t.Setenv("CIRCLECI_TOKEN", "")
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
 
 	prompter := func(_ string) (string, error) { return "", nil }
 

@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -41,24 +40,19 @@ func newAuthSetCmd() *cobra.Command {
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"circleci", "anthropic", "github"},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, _ := config.Resolve("", "")
 			provider := args[0]
 			io := iostream.FromCmd(cmd)
 			switch provider {
 			case providerCircleCI:
-				circleCIBaseURL := os.Getenv("CIRCLECI_BASE_URL")
-				circleTokenEnv := os.Getenv("CIRCLE_TOKEN")
-				if circleTokenEnv == "" {
-					circleTokenEnv = os.Getenv("CIRCLECI_TOKEN")
-				}
-				return authSetCircleCI(cmd.Context(), io, circleCIBaseURL, circleTokenEnv)
+				envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
+				return authSetCircleCI(cmd.Context(), io, rc.CircleCIBaseURL, envSet)
 			case providerAnthropic:
-				anthropicBaseURL := os.Getenv("ANTHROPIC_BASE_URL")
-				anthropicKeyEnv := os.Getenv("ANTHROPIC_API_KEY")
-				return authSetAnthropic(cmd.Context(), io, anthropicBaseURL, anthropicKeyEnv)
+				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
+				return authSetAnthropic(cmd.Context(), io, rc.AnthropicBaseURL, envSet)
 			case providerGitHub:
-				githubBaseURL := os.Getenv("GITHUB_API_URL")
-				githubTokenEnv := os.Getenv("GITHUB_TOKEN")
-				return authSetGitHub(cmd.Context(), io, githubBaseURL, githubTokenEnv)
+				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
+				return authSetGitHub(cmd.Context(), io, rc.GitHubAPIURL, envSet)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
@@ -70,7 +64,7 @@ func newAuthSetCmd() *cobra.Command {
 	}
 }
 
-func authSetCircleCI(ctx context.Context, io iostream.Streams, circleCIBaseURL, circleTokenEnv string) error {
+func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, envSet bool) error {
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - CircleCI Token Setup"))
 	io.Println("")
@@ -78,8 +72,8 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, circleCIBaseURL, 
 	printSaveHint(io, "Token")
 	io.Println("")
 
-	if circleTokenEnv != "" {
-		io.Println(ui.Warning("A CircleCI token is set in environment variables (CIRCLE_TOKEN/CIRCLECI_TOKEN)."))
+	if envSet {
+		io.Println(ui.Warning("A CircleCI token is set in environment variables (" + config.EnvCircleToken + "/" + config.EnvCircleCIToken + ")."))
 		io.Println(ui.Dim("Environment variables take precedence over stored config."))
 		io.Println("")
 	}
@@ -115,18 +109,18 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, circleCIBaseURL, 
 		}
 	}
 
-	return saveCircleCIToken(ctx, token, io, circleCIBaseURL)
+	return saveCircleCIToken(ctx, token, io, baseURL)
 }
 
-func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL, anthropicKeyEnv string) error {
+func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, envSet bool) error {
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - Anthropic API Key Setup"))
 	io.Println("")
 	io.Println("Enter your Anthropic API key (starts with sk-ant-).")
 	printSaveHint(io, "Key")
 	io.Println("")
-	if anthropicKeyEnv != "" {
-		io.Println(ui.Warning("An Anthropic API key is set in environment variables (ANTHROPIC_API_KEY)."))
+	if envSet {
+		io.Println(ui.Warning("An Anthropic API key is set in environment variables (" + config.EnvAnthropicAPIKey + ")."))
 		io.Println(ui.Dim("Environment variables take precedence over stored config."))
 		io.Println("")
 	}
@@ -171,7 +165,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 	}
 
 	io.ErrPrintln(ui.Dim("Validating API key..."))
-	if err := authprompt.ValidateAPIKey(ctx, key, anthropicBaseURL); err != nil {
+	if err := authprompt.ValidateAPIKey(ctx, key, baseURL); err != nil {
 		return &userError{
 			msg:        "API key validation failed.",
 			suggestion: "Check that your key is correct and has not been revoked.",
@@ -228,9 +222,6 @@ func newAuthStatusCmd() *cobra.Command {
 		Short: "Check authentication status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			circleCIBaseURL := os.Getenv("CIRCLECI_BASE_URL")
-			anthropicBaseURL := os.Getenv("ANTHROPIC_BASE_URL")
-			githubBaseURL := os.Getenv("GITHUB_API_URL")
 
 			io.Println("")
 			io.Println(ui.Bold("Chunk CLI - Authentication Status"))
@@ -251,7 +242,7 @@ func newAuthStatusCmd() *cobra.Command {
 				io.Printf("  Source: %s\n", rc.CircleCITokenSource)
 				io.Printf("  Token:  %s\n", config.MaskKey(rc.CircleCIToken))
 				io.ErrPrintln(ui.Dim("Validating CircleCI token..."))
-				if err := authprompt.ValidateCircleCIToken(cmd.Context(), rc.CircleCIToken, circleCIBaseURL); err != nil {
+				if err := authprompt.ValidateCircleCIToken(cmd.Context(), rc.CircleCIToken, rc.CircleCIBaseURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
 						"CircleCI token validation failed.",
 						"",
@@ -272,7 +263,7 @@ func newAuthStatusCmd() *cobra.Command {
 				io.Printf("  Source: %s\n", rc.AnthropicAPIKeySource)
 				io.Printf("  Key:    %s\n", config.MaskKey(rc.AnthropicAPIKey))
 				io.ErrPrintln(ui.Dim("Validating API key..."))
-				if err := authprompt.ValidateAPIKey(cmd.Context(), rc.AnthropicAPIKey, anthropicBaseURL); err != nil {
+				if err := authprompt.ValidateAPIKey(cmd.Context(), rc.AnthropicAPIKey, rc.AnthropicBaseURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
 						"API key validation failed.",
 						"The API key could not be validated with the Anthropic API.",
@@ -294,7 +285,7 @@ func newAuthStatusCmd() *cobra.Command {
 				io.Printf("  Source: %s\n", rc.GitHubTokenSource)
 				io.Printf("  Token:  %s\n", config.MaskKey(rc.GitHubToken))
 				io.ErrPrintln(ui.Dim("Validating GitHub token..."))
-				if err := authprompt.ValidateGitHubToken(cmd.Context(), rc.GitHubToken, githubBaseURL); err != nil {
+				if err := authprompt.ValidateGitHubToken(cmd.Context(), rc.GitHubToken, rc.GitHubAPIURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
 						"GitHub token validation failed.",
 						"",
@@ -322,21 +313,19 @@ func newAuthRemoveCmd() *cobra.Command {
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"circleci", "anthropic", "github"},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			rc, _ := config.Resolve("", "")
 			provider := args[0]
 			io := iostream.FromCmd(cmd)
 			switch provider {
 			case providerCircleCI:
-				circleTokenEnv := os.Getenv("CIRCLE_TOKEN")
-				if circleTokenEnv == "" {
-					circleTokenEnv = os.Getenv("CIRCLECI_TOKEN")
-				}
-				return authRemoveCircleCI(io, circleTokenEnv)
+				envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
+				return authRemoveCircleCI(io, envSet)
 			case providerAnthropic:
-				anthropicKeyEnv := os.Getenv("ANTHROPIC_API_KEY")
-				return authRemoveAnthropic(io, anthropicKeyEnv)
+				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
+				return authRemoveAnthropic(io, envSet)
 			case providerGitHub:
-				githubTokenEnv := os.Getenv("GITHUB_TOKEN")
-				return authRemoveGitHub(io, githubTokenEnv)
+				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
+				return authRemoveGitHub(io, envSet)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
@@ -348,14 +337,14 @@ func newAuthRemoveCmd() *cobra.Command {
 	}
 }
 
-func authRemoveCircleCI(io iostream.Streams, circleTokenEnv string) error {
+func authRemoveCircleCI(io iostream.Streams, envSet bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.CircleCIToken == "" {
 		io.Println(ui.Warning("No CircleCI token stored in config file."))
-		if circleTokenEnv != "" {
+		if envSet {
 			io.Println("Note: A CircleCI token is set in environment variables.")
 			io.Println("To remove it, unset the environment variable.")
 			io.Println("")
@@ -391,21 +380,21 @@ func authRemoveCircleCI(io iostream.Streams, circleTokenEnv string) error {
 	}
 
 	io.Println(ui.Success("CircleCI token removed successfully."))
-	if circleTokenEnv != "" {
-		io.Println(ui.Warning("Note: CIRCLE_TOKEN/CIRCLECI_TOKEN is still set in your environment variables."))
+	if envSet {
+		io.Println(ui.Warning("Note: " + config.EnvCircleToken + "/" + config.EnvCircleCIToken + " is still set in your environment variables."))
 	}
 	return nil
 }
 
-func authRemoveAnthropic(io iostream.Streams, anthropicKeyEnv string) error {
+func authRemoveAnthropic(io iostream.Streams, envSet bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.AnthropicAPIKey == "" {
 		io.Println(ui.Warning("No API key stored in config file."))
-		if anthropicKeyEnv != "" {
-			io.Println("Note: ANTHROPIC_API_KEY is set in your environment variables.")
+		if envSet {
+			io.Println("Note: " + config.EnvAnthropicAPIKey + " is set in your environment variables.")
 			io.Println("To remove it, unset the environment variable.")
 			io.Println("")
 		}
@@ -440,13 +429,13 @@ func authRemoveAnthropic(io iostream.Streams, anthropicKeyEnv string) error {
 	}
 
 	io.Println(ui.Success("API key removed successfully."))
-	if anthropicKeyEnv != "" {
-		io.Println(ui.Warning("Note: ANTHROPIC_API_KEY is still set in your environment variables."))
+	if envSet {
+		io.Println(ui.Warning("Note: " + config.EnvAnthropicAPIKey + " is still set in your environment variables."))
 	}
 	return nil
 }
 
-func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, githubTokenEnv string) error {
+func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, envSet bool) error {
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - GitHub Token Setup"))
 	io.Println("")
@@ -454,8 +443,8 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 	printSaveHint(io, "Token")
 	io.Println("")
 
-	if githubTokenEnv != "" {
-		io.Println(ui.Warning("A GitHub token is set in environment variables (GITHUB_TOKEN)."))
+	if envSet {
+		io.Println(ui.Warning("A GitHub token is set in environment variables (" + config.EnvGitHubToken + ")."))
 		io.Println(ui.Dim("Environment variables take precedence over stored config."))
 		io.Println("")
 	}
@@ -492,7 +481,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 	}
 
 	io.ErrPrintln(ui.Dim("Validating GitHub token..."))
-	if err := authprompt.ValidateGitHubToken(ctx, token, githubBaseURL); err != nil {
+	if err := authprompt.ValidateGitHubToken(ctx, token, baseURL); err != nil {
 		return &userError{
 			msg:        "GitHub token validation failed.",
 			suggestion: "Check that your token is correct and has not been revoked.",
@@ -514,14 +503,14 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 	return nil
 }
 
-func authRemoveGitHub(io iostream.Streams, githubTokenEnv string) error {
+func authRemoveGitHub(io iostream.Streams, envSet bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.GitHubToken == "" {
 		io.Println(ui.Warning("No GitHub token stored in config file."))
-		if githubTokenEnv != "" {
+		if envSet {
 			io.Println("Note: A GitHub token is set in environment variables.")
 			io.Println("To remove it, unset the environment variable.")
 			io.Println("")
@@ -557,8 +546,8 @@ func authRemoveGitHub(io iostream.Streams, githubTokenEnv string) error {
 	}
 
 	io.Println(ui.Success("GitHub token removed successfully."))
-	if githubTokenEnv != "" {
-		io.Println(ui.Warning("Note: GITHUB_TOKEN is still set in your environment variables."))
+	if envSet {
+		io.Println(ui.Warning("Note: " + config.EnvGitHubToken + " is still set in your environment variables."))
 	}
 	return nil
 }

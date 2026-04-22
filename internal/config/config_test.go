@@ -12,21 +12,21 @@ import (
 func setupTempConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv(EnvXDGConfigHome, dir)
 	return dir
 }
 
 // --- Dir / Path ---
 
 func TestDir_XDGSet(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/custom-xdg")
+	t.Setenv(EnvXDGConfigHome, "/tmp/custom-xdg")
 	d, err := Dir()
 	assert.NilError(t, err)
 	assert.Equal(t, d, "/tmp/custom-xdg/chunk")
 }
 
 func TestDir_XDGUnset(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv(EnvXDGConfigHome, "")
 	home, _ := os.UserHomeDir()
 	d, err := Dir()
 	assert.NilError(t, err)
@@ -34,7 +34,7 @@ func TestDir_XDGUnset(t *testing.T) {
 }
 
 func TestPath(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg")
+	t.Setenv(EnvXDGConfigHome, "/tmp/xdg")
 	p, err := Path()
 	assert.NilError(t, err)
 	assert.Equal(t, p, "/tmp/xdg/chunk/config.json")
@@ -256,7 +256,7 @@ func TestMaskKey(t *testing.T) {
 
 func TestResolve_Defaults(t *testing.T) {
 	setupTempConfig(t)
-	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv(EnvAnthropicAPIKey, "")
 
 	rc, _ := Resolve("", "")
 
@@ -269,7 +269,7 @@ func TestResolve_Defaults(t *testing.T) {
 
 func TestResolve_EnvKey(t *testing.T) {
 	setupTempConfig(t)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
+	t.Setenv(EnvAnthropicAPIKey, "sk-from-env")
 
 	rc, _ := Resolve("", "")
 	assert.Equal(t, rc.AnthropicAPIKey, "sk-from-env")
@@ -278,7 +278,7 @@ func TestResolve_EnvKey(t *testing.T) {
 
 func TestResolve_EnvOverridesConfigFile(t *testing.T) {
 	setupTempConfig(t)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
+	t.Setenv(EnvAnthropicAPIKey, "sk-from-env")
 
 	assert.NilError(t, Save(UserConfig{AnthropicAPIKey: "sk-from-file"}))
 
@@ -289,7 +289,7 @@ func TestResolve_EnvOverridesConfigFile(t *testing.T) {
 
 func TestResolve_FlagOverridesAll(t *testing.T) {
 	setupTempConfig(t)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
+	t.Setenv(EnvAnthropicAPIKey, "sk-from-env")
 	assert.NilError(t, Save(UserConfig{AnthropicAPIKey: "sk-from-file", Model: "file-model"}))
 
 	rc, _ := Resolve("sk-from-flag", "flag-model")

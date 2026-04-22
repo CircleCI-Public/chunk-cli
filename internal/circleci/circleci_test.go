@@ -23,22 +23,18 @@ func newTestClient(t *testing.T, url string) *Client {
 }
 
 func TestNewClient(t *testing.T) {
-	t.Run("creates client with token from env", func(t *testing.T) {
-		t.Setenv("CIRCLE_TOKEN", "explicit-token")
-		t.Setenv("CIRCLECI_BASE_URL", "")
-		c, err := NewClient()
+	t.Run("creates client with token", func(t *testing.T) {
+		c, err := NewClient(Config{Token: "explicit-token", BaseURL: "https://circleci.com"})
 		assert.NilError(t, err)
 		assert.Assert(t, c != nil)
 	})
 
-	t.Run("uses base URL from env", func(t *testing.T) {
+	t.Run("uses base URL", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
 
-		t.Setenv("CIRCLE_TOKEN", "test-token")
-		t.Setenv("CIRCLECI_BASE_URL", srv.URL)
-		c, err := NewClient()
+		c, err := NewClient(Config{Token: "test-token", BaseURL: srv.URL})
 		assert.NilError(t, err)
 
 		ctx := context.Background()
@@ -46,10 +42,7 @@ func TestNewClient(t *testing.T) {
 	})
 
 	t.Run("returns error when no token", func(t *testing.T) {
-		t.Setenv("CIRCLE_TOKEN", "")
-		t.Setenv("CIRCLECI_TOKEN", "")
-		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-		_, err := NewClient()
+		_, err := NewClient(Config{BaseURL: "https://circleci.com"})
 		assert.Assert(t, err != nil)
 	})
 }

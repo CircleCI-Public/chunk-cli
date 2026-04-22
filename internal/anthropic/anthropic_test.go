@@ -18,9 +18,7 @@ import (
 // newTestClient creates a Client pointing at the given base URL with a test API key.
 func newTestClient(t *testing.T, baseURL string) *Client {
 	t.Helper()
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-	t.Setenv("ANTHROPIC_BASE_URL", baseURL)
-	c, err := New()
+	c, err := New(Config{APIKey: "test-key", BaseURL: baseURL})
 	assert.NilError(t, err)
 	return c
 }
@@ -52,11 +50,11 @@ func TestNew(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("ANTHROPIC_API_KEY", tt.apiKey)
-			t.Setenv("ANTHROPIC_BASE_URL", tt.baseURL)
-			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-
-			c, err := New()
+			baseURL := tt.baseURL
+			if baseURL == "" {
+				baseURL = "https://api.anthropic.com"
+			}
+			c, err := New(Config{APIKey: tt.apiKey, BaseURL: baseURL})
 			if tt.wantErr {
 				assert.Assert(t, err != nil)
 				if tt.errContains != "" {
@@ -129,10 +127,6 @@ func TestSendMessageAuthError(t *testing.T) {
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
-	// Set env so New() succeeds, then the fake will check the header.
-	t.Setenv("ANTHROPIC_API_KEY", "") // empty key
-	t.Setenv("ANTHROPIC_BASE_URL", srv.URL)
-
 	// New() rejects empty key, so we can't test 401 through New().
 	// Instead, directly test that the error path works when the server returns non-2xx.
 	// We'll use a custom handler that always returns 401.
@@ -143,9 +137,7 @@ func TestSendMessageAuthError(t *testing.T) {
 	}))
 	defer errSrv.Close()
 
-	t.Setenv("ANTHROPIC_API_KEY", "bad-key")
-	t.Setenv("ANTHROPIC_BASE_URL", errSrv.URL)
-	c, err := New()
+	c, err := New(Config{APIKey: "bad-key", BaseURL: errSrv.URL})
 	assert.NilError(t, err)
 
 	_, err = c.Ask(context.Background(), "m", 10, "p")

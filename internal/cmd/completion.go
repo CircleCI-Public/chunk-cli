@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -36,7 +37,7 @@ type shellConfig struct {
 }
 
 func detectShell(home string) (shellConfig, error) {
-	shell := os.Getenv("SHELL")
+	shell := os.Getenv(config.EnvShell)
 	switch {
 	case strings.HasSuffix(shell, "zsh"):
 		return shellConfig{
@@ -66,7 +67,7 @@ func detectShell(home string) (shellConfig, error) {
 // completionInstalled reports whether the completion tag is already in the
 // user's shell rc file. Returns error if shell is unsupported or HOME unset.
 func completionInstalled() (bool, error) {
-	home := os.Getenv("HOME")
+	home := os.Getenv(config.EnvHome)
 	if home == "" {
 		return false, &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 	}
@@ -85,7 +86,7 @@ func completionInstalled() (bool, error) {
 
 // installCompletion appends the completion source line to the user's shell rc file.
 func installCompletion(streams iostream.Streams) (err error) {
-	home := os.Getenv("HOME")
+	home := os.Getenv(config.EnvHome)
 	if home == "" {
 		return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 	}
@@ -164,7 +165,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 		Short: "Remove shell completion",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			home := os.Getenv("HOME")
+			home := os.Getenv(config.EnvHome)
 			if home == "" {
 				return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 			}

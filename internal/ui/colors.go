@@ -5,12 +5,14 @@ import (
 	"os"
 
 	"golang.org/x/term"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 var colorEnabled = detectColor()
 
 func detectColor() bool {
-	if os.Getenv("NO_COLOR") != "" {
+	if os.Getenv(config.EnvNoColor) != "" {
 		return false
 	}
 	return term.IsTerminal(int(os.Stderr.Fd()))

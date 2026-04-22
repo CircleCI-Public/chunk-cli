@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -26,7 +27,7 @@ func newSkillInstallCmd() *cobra.Command {
 		Use:   "install",
 		Short: "Install or update all skills into agent config directories",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := os.Getenv("HOME")
+			home := os.Getenv(config.EnvHome)
 			if home == "" {
 				return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 			}
@@ -58,7 +59,7 @@ func newSkillListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List bundled skills and their per-agent installation status",
 		Run: func(cmd *cobra.Command, _ []string) {
-			home := os.Getenv("HOME")
+			home := os.Getenv(config.EnvHome)
 			io := iostream.FromCmd(cmd)
 			statuses := skills.Status(home)
 

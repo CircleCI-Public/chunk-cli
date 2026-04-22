@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 )
 
@@ -39,7 +40,7 @@ func sshSessionError(err error) error {
 	if errors.Is(err, sandbox.ErrAuthSockNotSet) {
 		return &userError{
 			msg:        "SSH agent not available.",
-			suggestion: "Set SSH_AUTH_SOCK or pass --identity-file.",
+			suggestion: "Set " + config.EnvSSHAuthSock + " or pass --identity-file.",
 			err:        err,
 		}
 	}
