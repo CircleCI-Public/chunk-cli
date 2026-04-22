@@ -192,9 +192,7 @@ func TestWaitForRateLimit_CancelledContext(t *testing.T) {
 
 func testClient(t *testing.T, url string) *Client {
 	t.Helper()
-	t.Setenv("GITHUB_TOKEN", "test-token")
-	t.Setenv("GITHUB_API_URL", url)
-	c, err := New(nil)
+	c, err := New(Config{Token: "test-token", BaseURL: url})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -419,9 +419,7 @@ func TestRunRemote(t *testing.T) {
 func TestRunRemoteSSH(t *testing.T) {
 	newCCIClient := func(t *testing.T, serverURL string) *circleci.Client {
 		t.Helper()
-		t.Setenv("CIRCLECI_BASE_URL", serverURL)
-		t.Setenv("CIRCLE_TOKEN", "test-token")
-		client, err := circleci.NewClient()
+		client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: serverURL})
 		assert.NilError(t, err)
 		return client
 	}
@@ -447,7 +445,7 @@ func TestRunRemoteSSH(t *testing.T) {
 		cciSrv := httptest.NewServer(cci)
 		defer cciSrv.Close()
 
-		t.Setenv("HOME", t.TempDir())
+		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
 		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
 		assert.NilError(t, err)
@@ -472,7 +470,7 @@ func TestRunRemoteSSH(t *testing.T) {
 		cciSrv := httptest.NewServer(cci)
 		defer cciSrv.Close()
 
-		t.Setenv("HOME", t.TempDir())
+		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
 		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
 		assert.NilError(t, err)
@@ -496,7 +494,7 @@ func TestRunRemoteSSH(t *testing.T) {
 		cciSrv := httptest.NewServer(cci)
 		defer cciSrv.Close()
 
-		t.Setenv("HOME", t.TempDir())
+		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
 		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
 		assert.NilError(t, err)

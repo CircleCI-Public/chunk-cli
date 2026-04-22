@@ -248,7 +248,8 @@ hook config files.`,
 
 			// Step 2: Validate command detection
 			if !skipValidate {
-				claude, _ := anthropic.New() // nil if unavailable — static detection works without it
+				rc, _ := config.Resolve("", "")
+				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
 				commands, detectErr := validate.DetectCommands(ctx, claude, workDir)
 				if detectErr != nil {
 					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", detectErr)))

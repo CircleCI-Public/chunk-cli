@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // ActiveSandbox holds the currently active sandbox for a project.
@@ -18,7 +20,7 @@ type ActiveSandbox struct {
 // CLAUDE_SESSION_ID is set the file is keyed to that session so concurrent
 // Claude sessions in the same repo each maintain their own active sandbox.
 func sandboxFileName() string {
-	if id := os.Getenv("CLAUDE_SESSION_ID"); id != "" {
+	if id := os.Getenv(config.EnvClaudeSession); id != "" {
 		return "sandbox." + id + ".json"
 	}
 	return "sandbox.json"

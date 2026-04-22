@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -30,17 +29,17 @@ func CollectRunConfig(
 	projects []circleci.FollowedProject,
 	collabs []circleci.Collaboration,
 	fetchDetail ProjectDetailFunc,
+	envOrgID string,
 ) (*RunConfig, error) {
 	orgID, projectID, orgType, err := collectProject(ctx, prompts, projects, collabs, fetchDetail)
 	if err != nil {
 		return nil, err
 	}
 
-	// Warn if selected org differs from CIRCLECI_ORG_ID
-	if envOrgID := os.Getenv("CIRCLECI_ORG_ID"); envOrgID != "" && envOrgID != orgID {
+	if envOrgID != "" && envOrgID != orgID {
 		prompts.Warn(fmt.Sprintf(
-			"Warning: selected project org (%s) differs from CIRCLECI_ORG_ID (%s)",
-			orgID, envOrgID,
+			"Warning: selected project org (%s) differs from %s (%s)",
+			orgID, "CIRCLECI_ORG_ID", envOrgID,
 		))
 	}
 

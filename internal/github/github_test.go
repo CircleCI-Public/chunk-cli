@@ -14,9 +14,7 @@ import (
 // newTestClient creates a Client wired to the given fake server.
 func newTestClient(t *testing.T, srv *httptest.Server) *github.Client {
 	t.Helper()
-	t.Setenv("GITHUB_TOKEN", "test-token")
-	t.Setenv("GITHUB_API_URL", srv.URL)
-	c, err := github.New(nil)
+	c, err := github.New(github.Config{Token: "test-token", BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("github.New: %v", err)
 	}
@@ -26,17 +24,14 @@ func newTestClient(t *testing.T, srv *httptest.Server) *github.Client {
 // --- New ---
 
 func TestNew_MissingToken(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "")
-	_, err := github.New(nil)
+	_, err := github.New(github.Config{BaseURL: "http://localhost"})
 	if err == nil {
-		t.Fatal("expected error when GITHUB_TOKEN is empty")
+		t.Fatal("expected error when token is empty")
 	}
 }
 
 func TestNew_DefaultURL(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "tok")
-	t.Setenv("GITHUB_API_URL", "")
-	c, err := github.New(nil)
+	c, err := github.New(github.Config{Token: "tok", BaseURL: "https://api.github.com"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

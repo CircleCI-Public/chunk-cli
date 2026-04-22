@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -75,44 +74,41 @@ func ValidateAPIKey(ctx context.Context, apiKey, baseURL string) error {
 	return nil
 }
 
-// ResolveCircleCIClient returns a CircleCI client if credentials are available
-// in env vars or config. Returns ErrNeedsAuth when the caller must prompt.
-func ResolveCircleCIClient() (*circleci.Client, error) {
-	rc, err := config.Resolve("", "")
-	if rc.CircleCIToken != "" {
-		return circleci.NewClient()
+// ResolveCircleCIClient returns a CircleCI client if credentials are available.
+// Returns ErrNeedsAuth when the caller must prompt.
+func ResolveCircleCIClient(rc config.ResolvedConfig) (*circleci.Client, error) {
+	if rc.CircleCIToken == "" {
+		return nil, ErrNeedsAuth
 	}
-	if err != nil {
-		return nil, fmt.Errorf("resolve config: %w", err)
-	}
-	return nil, ErrNeedsAuth
+	return circleci.NewClient(circleci.Config{
+		Token:   rc.CircleCIToken,
+		BaseURL: rc.CircleCIBaseURL,
+	})
 }
 
 // ResolveAnthropicClient returns an Anthropic client if credentials are
-// available in env vars or config. Returns ErrNeedsAuth when the caller must
-// prompt.
-func ResolveAnthropicClient() (*anthropic.Client, error) {
-	rc, err := config.Resolve("", "")
-	if rc.AnthropicAPIKey != "" {
-		return anthropic.New()
+// available. Returns ErrNeedsAuth when the caller must prompt.
+func ResolveAnthropicClient(rc config.ResolvedConfig) (*anthropic.Client, error) {
+	if rc.AnthropicAPIKey == "" {
+		return nil, ErrNeedsAuth
 	}
-	if err != nil {
-		return nil, fmt.Errorf("resolve config: %w", err)
-	}
-	return nil, ErrNeedsAuth
+	return anthropic.New(anthropic.Config{
+		APIKey:  rc.AnthropicAPIKey,
+		BaseURL: rc.AnthropicBaseURL,
+	})
 }
 
-// ResolveGitHubClient returns a GitHub client if credentials are available in
-// env vars or config. Returns ErrNeedsAuth when the caller must prompt.
-func ResolveGitHubClient(logStatus func(string)) (*github.Client, error) {
-	rc, err := config.Resolve("", "")
-	if rc.GitHubToken != "" {
-		return github.New(logStatus)
+// ResolveGitHubClient returns a GitHub client if credentials are available.
+// Returns ErrNeedsAuth when the caller must prompt.
+func ResolveGitHubClient(rc config.ResolvedConfig, logStatus func(string)) (*github.Client, error) {
+	if rc.GitHubToken == "" {
+		return nil, ErrNeedsAuth
 	}
-	if err != nil {
-		return nil, fmt.Errorf("resolve config: %w", err)
-	}
-	return nil, ErrNeedsAuth
+	return github.New(github.Config{
+		Token:     rc.GitHubToken,
+		BaseURL:   rc.GitHubAPIURL,
+		LogStatus: logStatus,
+	})
 }
 
 // SaveCircleCIToken persists a CircleCI token to the config file.
@@ -174,19 +170,4 @@ func ValidateGitHubToken(ctx context.Context, token, baseURL string) error {
 		return err
 	}
 	return nil
-}
-
-// CircleCIBaseURL returns the configured CircleCI base URL from the environment.
-func CircleCIBaseURL() string {
-	return os.Getenv("CIRCLECI_BASE_URL")
-}
-
-// AnthropicBaseURL returns the configured Anthropic base URL from the environment.
-func AnthropicBaseURL() string {
-	return os.Getenv("ANTHROPIC_BASE_URL")
-}
-
-// GitHubBaseURL returns the configured GitHub API URL from the environment.
-func GitHubBaseURL() string {
-	return os.Getenv("GITHUB_API_URL")
 }

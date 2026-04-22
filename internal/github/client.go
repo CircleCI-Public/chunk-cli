@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
+
+type Config struct {
+	Token     string
+	BaseURL   string
+	LogStatus func(string)
+}
 
 // Client is a GitHub GraphQL API client.
 type Client struct {
@@ -26,32 +30,17 @@ type Client struct {
 	logStatus func(string)
 }
 
-// New creates a GitHub GraphQL client.
-// It resolves the token via config (GITHUB_TOKEN env > config file) and reads
-// GITHUB_API_URL from the environment.
-// An optional logStatus callback receives progress messages (e.g. retry waits).
-func New(logStatus func(string)) (*Client, error) {
-	rc, err := config.Resolve("", "")
-	if rc.GitHubToken == "" {
-		if err != nil {
-			return nil, fmt.Errorf("resolve config: %w", err)
-		}
+func New(cfg Config) (*Client, error) {
+	if cfg.Token == "" {
 		return nil, ErrTokenNotFound
 	}
-
-	baseURL := os.Getenv("GITHUB_API_URL")
-	if baseURL == "" {
-		baseURL = "https://api.github.com"
-	}
-
 	c := httpcl.New(httpcl.Config{
-		BaseURL:    baseURL,
-		AuthToken:  "token " + rc.GitHubToken,
+		BaseURL:    cfg.BaseURL,
+		AuthToken:  "token " + cfg.Token,
 		AuthHeader: "Authorization",
 		UserAgent:  "chunk-cli",
 	})
-
-	return &Client{http: c, logStatus: logStatus}, nil
+	return &Client{http: c, logStatus: cfg.LogStatus}, nil
 }
 
 // graphQLRequest is the JSON body sent to /graphql.

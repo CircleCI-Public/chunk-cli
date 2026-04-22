@@ -202,7 +202,7 @@ func runRemoteValidate(ctx context.Context, sandboxID, identityFile, workdir str
 	if err != nil {
 		return err
 	}
-	authSock := os.Getenv("SSH_AUTH_SOCK")
+	authSock := os.Getenv(config.EnvSSHAuthSock)
 	session, err := sandbox.OpenSession(ctx, client, sandboxID, identityFile, authSock)
 	if err != nil {
 		return &userError{msg: "Could not open SSH session to sandbox.", err: err}
@@ -229,7 +229,7 @@ func runRemoteInlineValidate(ctx context.Context, sandboxID, identityFile, workd
 	if err != nil {
 		return err
 	}
-	authSock := os.Getenv("SSH_AUTH_SOCK")
+	authSock := os.Getenv(config.EnvSSHAuthSock)
 	session, err := sandbox.OpenSession(ctx, client, sandboxID, identityFile, authSock)
 	if err != nil {
 		return &userError{msg: "Could not open SSH session to sandbox.", err: err}

@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	suggestionCircleCIAuth  = "Set CIRCLE_TOKEN or run 'chunk auth set circleci'."
-	suggestionAnthropicAuth = "Set ANTHROPIC_API_KEY or run 'chunk auth set anthropic'."
-	suggestionGitHubAuth    = "Set GITHUB_TOKEN or run 'chunk auth set github'."
+	suggestionCircleCIAuth  = "Set " + config.EnvCircleToken + " or run 'chunk auth set circleci'."
+	suggestionAnthropicAuth = "Set " + config.EnvAnthropicAPIKey + " or run 'chunk auth set anthropic'."
+	suggestionGitHubAuth    = "Set " + config.EnvGitHubToken + " or run 'chunk auth set github'."
 )
 
 func printSaveHint(streams iostream.Streams, label string) {
@@ -36,10 +36,9 @@ func printSaved(streams iostream.Streams, label string) {
 	streams.ErrPrintln(ui.Success(msg))
 }
 
-// ensureCircleCIClient resolves or interactively prompts for a CircleCI token,
-// validates it, saves it to config, and returns a ready client.
 func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*circleci.Client, error) {
-	client, err := authprompt.ResolveCircleCIClient()
+	rc, _ := config.Resolve("", "")
+	client, err := authprompt.ResolveCircleCIClient(rc)
 	if err == nil {
 		return client, nil
 	}
@@ -74,7 +73,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 	}
 
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
-	if err := authprompt.ValidateCircleCIToken(ctx, token, authprompt.CircleCIBaseURL()); err != nil {
+	if err := authprompt.ValidateCircleCIToken(ctx, token, rc.CircleCIBaseURL); err != nil {
 		return nil, fmt.Errorf("invalid CircleCI token: %w", err)
 	}
 
@@ -82,21 +81,15 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 		return nil, err
 	}
 	printSaved(streams, "CircleCI token")
-	client, err = circleci.NewClient()
-	if errors.Is(err, circleci.ErrTokenNotFound) {
-		return nil, &userError{
-			msg:        "CircleCI token not found.",
-			suggestion: suggestionCircleCIAuth,
-			err:        err,
-		}
-	}
-	return client, err
+	return circleci.NewClient(circleci.Config{
+		Token:   token,
+		BaseURL: rc.CircleCIBaseURL,
+	})
 }
 
-// ensureAnthropicClient resolves or interactively prompts for an Anthropic API
-// key, validates it, saves it to config, and returns a ready client.
 func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*anthropic.Client, error) {
-	client, err := authprompt.ResolveAnthropicClient()
+	rc, _ := config.Resolve("", "")
+	client, err := authprompt.ResolveAnthropicClient(rc)
 	if err == nil {
 		return client, nil
 	}
@@ -139,7 +132,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 	}
 
 	streams.ErrPrintln(ui.Dim("Validating API key..."))
-	if err := authprompt.ValidateAPIKey(ctx, key, authprompt.AnthropicBaseURL()); err != nil {
+	if err := authprompt.ValidateAPIKey(ctx, key, rc.AnthropicBaseURL); err != nil {
 		return nil, fmt.Errorf("invalid Anthropic API key: %w", err)
 	}
 
@@ -147,22 +140,16 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 		return nil, err
 	}
 	printSaved(streams, "Anthropic API key")
-	client, err = anthropic.New()
-	if errors.Is(err, anthropic.ErrKeyNotFound) {
-		return nil, &userError{
-			msg:        "Anthropic API key not found.",
-			suggestion: suggestionAnthropicAuth,
-			err:        err,
-		}
-	}
-	return client, err
+	return anthropic.New(anthropic.Config{
+		APIKey:  key,
+		BaseURL: rc.AnthropicBaseURL,
+	})
 }
 
-// ensureGitHubClient resolves or interactively prompts for a GitHub token,
-// validates it, saves it to config, and returns a ready client.
 func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*github.Client, error) {
+	rc, _ := config.Resolve("", "")
 	logStatus := func(msg string) { streams.ErrPrintln("  " + msg) }
-	client, err := authprompt.ResolveGitHubClient(logStatus)
+	client, err := authprompt.ResolveGitHubClient(rc, logStatus)
 	if err == nil {
 		return client, nil
 	}
@@ -197,7 +184,7 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 	}
 
 	streams.ErrPrintln(ui.Dim("Validating GitHub token..."))
-	if err := authprompt.ValidateGitHubToken(ctx, token, authprompt.GitHubBaseURL()); err != nil {
+	if err := authprompt.ValidateGitHubToken(ctx, token, rc.GitHubAPIURL); err != nil {
 		return nil, fmt.Errorf("invalid GitHub token: %w", err)
 	}
 
@@ -205,13 +192,9 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 		return nil, err
 	}
 	printSaved(streams, "GitHub token")
-	client, err = github.New(logStatus)
-	if errors.Is(err, github.ErrTokenNotFound) {
-		return nil, &userError{
-			msg:        "GitHub token not found.",
-			suggestion: suggestionGitHubAuth,
-			err:        err,
-		}
-	}
-	return client, err
+	return github.New(github.Config{
+		Token:     token,
+		BaseURL:   rc.GitHubAPIURL,
+		LogStatus: logStatus,
+	})
 }

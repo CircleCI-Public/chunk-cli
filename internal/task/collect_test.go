@@ -89,6 +89,7 @@ func TestCollectRunConfig_SelectFromList(t *testing.T) {
 		projects,
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
+		"",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -146,6 +147,7 @@ func TestCollectRunConfig_ManualEntry(t *testing.T) {
 		nil, // no followed projects
 		collabs,
 		nil, // fetchDetail not needed for manual
+		"",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -205,6 +207,7 @@ func TestCollectRunConfig_MultipleDefinitions(t *testing.T) {
 		projects,
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
+		"",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -246,6 +249,7 @@ func TestCollectRunConfig_InvalidUUIDRetries(t *testing.T) {
 		projects,
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
+		"",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -318,6 +322,7 @@ func TestCollectRunConfig_RequiredDefIDRetries(t *testing.T) {
 		projects,
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
+		"",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -350,6 +355,7 @@ func TestCollectRunConfig_NoCollabsError(t *testing.T) {
 		nil, // no projects, so "Enter manually" is index 0
 		nil, // no collabs
 		nil,
+		"",
 	)
 	if err == nil {
 		t.Fatal("expected error for no organizations")
@@ -372,14 +378,13 @@ func TestCollectRunConfig_OrgMismatchWarning(t *testing.T) {
 		&warnings,
 	)
 
-	t.Setenv("CIRCLECI_ORG_ID", "different-org")
-
 	_, err := CollectRunConfig(
 		context.Background(),
 		prompts,
 		projects,
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
+		"different-org",
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -412,7 +417,7 @@ func TestCollectRunConfig_BitbucketPrefix(t *testing.T) {
 		nil,
 	)
 
-	_, err := CollectRunConfig(context.Background(), prompts, projects, nil, fetch)
+	_, err := CollectRunConfig(context.Background(), prompts, projects, nil, fetch, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

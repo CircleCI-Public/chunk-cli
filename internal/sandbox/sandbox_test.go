@@ -11,15 +11,14 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 func newClient(t *testing.T, serverURL string) *circleci.Client {
 	t.Helper()
-	t.Setenv("CIRCLE_TOKEN", "fake-token")
-	t.Setenv("CIRCLECI_BASE_URL", serverURL)
-	cl, err := circleci.NewClient()
+	cl, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: serverURL})
 	assert.NilError(t, err)
 	return cl
 }
@@ -30,7 +29,7 @@ func TestOpenSessionDefaultKeyFallback(t *testing.T) {
 	defer srv.Close()
 
 	// Use a temp dir as HOME so ~/.ssh/chunk_ai definitely doesn't exist.
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv(config.EnvHome, t.TempDir())
 
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()

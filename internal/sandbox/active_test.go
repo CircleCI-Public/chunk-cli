@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 func TestSaveAndLoadActive(t *testing.T) {
@@ -124,7 +126,7 @@ func TestSessionKeyedSandbox(t *testing.T) {
 	assert.NilError(t, SaveActive(ActiveSandbox{SandboxID: "sb-generic"}))
 
 	// With a session ID set, load should return nil (isolated from the generic file).
-	t.Setenv("CLAUDE_SESSION_ID", "sess-abc")
+	t.Setenv(config.EnvClaudeSession, "sess-abc")
 	got, err := LoadActive()
 	assert.NilError(t, err)
 	assert.Assert(t, got == nil, "session-keyed load should not see generic file")
@@ -138,7 +140,7 @@ func TestSessionKeyedSandbox(t *testing.T) {
 	assert.Equal(t, got.SandboxID, "sb-session")
 
 	// Without the session env var, the original generic file is still intact.
-	t.Setenv("CLAUDE_SESSION_ID", "")
+	t.Setenv(config.EnvClaudeSession, "")
 	got, err = LoadActive()
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)

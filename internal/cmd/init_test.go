@@ -174,8 +174,8 @@ func TestWriteSettingsAlreadyUpToDate(t *testing.T) {
 func setupShellEnv(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvShell, "/bin/zsh")
 	return home
 }
 
@@ -198,8 +198,8 @@ func TestCompletionInstalledTrueWhenTagPresent(t *testing.T) {
 }
 
 func TestCompletionInstalledUnsupportedShell(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("SHELL", "/bin/fish")
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvShell, "/bin/fish")
 
 	_, err := completionInstalled()
 	assert.Assert(t, err != nil)
@@ -286,8 +286,8 @@ func TestEnsureGitignoreEntriesIdempotent(t *testing.T) {
 
 func TestInstallCompletionBashWritesRCFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvShell, "/bin/bash")
 
 	// Create .bashrc so detectShell prefers it over .bash_profile.
 	rcFile := filepath.Join(home, ".bashrc")

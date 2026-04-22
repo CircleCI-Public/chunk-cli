@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
@@ -38,32 +36,24 @@ func mapErr(op string, err error) error {
 	return &StatusError{Op: op, StatusCode: he.StatusCode}
 }
 
+type Config struct {
+	Token   string
+	BaseURL string
+}
+
 type Client struct {
 	cl *httpcl.Client
 }
 
-// NewClient resolves a CircleCI token via config (env vars then config file)
-// and returns a ready-to-use client.
-func NewClient() (*Client, error) {
-	rc, err := config.Resolve("", "")
-	if rc.CircleCIToken == "" {
-		if err != nil {
-			return nil, fmt.Errorf("resolve config: %w", err)
-		}
+func NewClient(cfg Config) (*Client, error) {
+	if cfg.Token == "" {
 		return nil, ErrTokenNotFound
 	}
-
-	baseURL := os.Getenv("CIRCLECI_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://circleci.com"
-	}
-
 	cl := httpcl.New(httpcl.Config{
-		BaseURL:    baseURL,
-		AuthToken:  rc.CircleCIToken,
+		BaseURL:    cfg.BaseURL,
+		AuthToken:  cfg.Token,
 		AuthHeader: "Circle-Token",
 	})
-
 	return &Client{cl: cl}, nil
 }
 

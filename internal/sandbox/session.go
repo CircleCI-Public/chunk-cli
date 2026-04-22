@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 const (
@@ -36,7 +37,7 @@ type Session struct {
 // authSock is the SSH_AUTH_SOCK path; when non-empty and no identityFile is
 // given, the agent is tried first.
 func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock string) (*Session, error) {
-	sshDir := filepath.Join(os.Getenv("HOME"), ".ssh")
+	sshDir := filepath.Join(os.Getenv(config.EnvHome), ".ssh")
 
 	// When no identity file is specified, try the ssh-agent first.
 	if identityFile == "" && authSock != "" {

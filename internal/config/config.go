@@ -22,6 +22,33 @@ const (
 	SourceConfigFile = "Config file (user config)"
 )
 
+// Chunk-specific environment variable names.
+//
+//nolint:gosec // env var names, not credentials
+const (
+	EnvCircleToken      = "CIRCLE_TOKEN"
+	EnvCircleCIToken    = "CIRCLECI_TOKEN"
+	EnvCircleCIBaseURL  = "CIRCLECI_BASE_URL"
+	EnvAnthropicAPIKey  = "ANTHROPIC_API_KEY"
+	EnvAnthropicBaseURL = "ANTHROPIC_BASE_URL"
+	EnvGitHubToken      = "GITHUB_TOKEN"
+	EnvGitHubAPIURL     = "GITHUB_API_URL"
+	EnvModel            = "CODE_REVIEW_CLI_MODEL"
+	EnvCircleCIOrgID    = "CIRCLECI_ORG_ID"
+	EnvSandboxProvider  = "CHUNK_SANDBOX_PROVIDER"
+)
+
+// System/standard environment variable names.
+const (
+	EnvHome          = "HOME"
+	EnvShell         = "SHELL"
+	EnvSSHAuthSock   = "SSH_AUTH_SOCK"
+	EnvNoColor       = "NO_COLOR"
+	EnvXDGConfigHome = "XDG_CONFIG_HOME"
+	EnvXDGStateHome  = "XDG_STATE_HOME"
+	EnvClaudeSession = "CLAUDE_SESSION_ID"
+)
+
 // UserConfig is the on-disk JSON config.
 type UserConfig struct {
 	AnthropicAPIKey string `json:"anthropicAPIKey,omitempty"`
@@ -39,10 +66,13 @@ type UserConfig struct {
 type ResolvedConfig struct {
 	AnthropicAPIKey       string
 	AnthropicAPIKeySource string
+	AnthropicBaseURL      string
 	CircleCIToken         string
 	CircleCITokenSource   string
+	CircleCIBaseURL       string
 	GitHubToken           string
 	GitHubTokenSource     string
+	GitHubAPIURL          string
 	Model                 string
 	ModelSource           string
 	AnalyzeModel          string
@@ -114,7 +144,7 @@ func Clear(key string) error {
 
 // Resolve computes the final config from flags, env, and file.
 // Priority for API key: flag > env > config file > (none).
-// Priority for model: flag > CODE_REVIEW_CLI_MODEL env > config file > default.
+// Priority for model: flag > env > config file > default.
 func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	cfg, err := Load()
 
@@ -123,49 +153,45 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 		PromptModel:  PromptModel,
 	}
 
-	// CircleCI token resolution: CIRCLE_TOKEN env > CIRCLECI_TOKEN env > config file
 	switch {
-	case os.Getenv("CIRCLE_TOKEN") != "":
-		rc.CircleCIToken = os.Getenv("CIRCLE_TOKEN")
-		rc.CircleCITokenSource = "Environment variable (CIRCLE_TOKEN)"
-	case os.Getenv("CIRCLECI_TOKEN") != "":
-		rc.CircleCIToken = os.Getenv("CIRCLECI_TOKEN")
-		rc.CircleCITokenSource = "Environment variable (CIRCLECI_TOKEN)"
+	case os.Getenv(EnvCircleToken) != "":
+		rc.CircleCIToken = os.Getenv(EnvCircleToken)
+		rc.CircleCITokenSource = "Environment variable (" + EnvCircleToken + ")"
+	case os.Getenv(EnvCircleCIToken) != "":
+		rc.CircleCIToken = os.Getenv(EnvCircleCIToken)
+		rc.CircleCITokenSource = "Environment variable (" + EnvCircleCIToken + ")"
 	case cfg.CircleCIToken != "":
 		rc.CircleCIToken = cfg.CircleCIToken
 		rc.CircleCITokenSource = SourceConfigFile
 	}
 
-	// API key resolution: flag > env > config file
 	switch {
 	case flagAPIKey != "":
 		rc.AnthropicAPIKey = flagAPIKey
 		rc.AnthropicAPIKeySource = "Flag"
-	case os.Getenv("ANTHROPIC_API_KEY") != "":
-		rc.AnthropicAPIKey = os.Getenv("ANTHROPIC_API_KEY")
+	case os.Getenv(EnvAnthropicAPIKey) != "":
+		rc.AnthropicAPIKey = os.Getenv(EnvAnthropicAPIKey)
 		rc.AnthropicAPIKeySource = "Environment variable"
 	case cfg.AnthropicAPIKey != "":
 		rc.AnthropicAPIKey = cfg.AnthropicAPIKey
 		rc.AnthropicAPIKeySource = SourceConfigFile
 	}
 
-	// GitHub token resolution: GITHUB_TOKEN env > config file
 	switch {
-	case os.Getenv("GITHUB_TOKEN") != "":
-		rc.GitHubToken = os.Getenv("GITHUB_TOKEN")
-		rc.GitHubTokenSource = "Environment variable (GITHUB_TOKEN)"
+	case os.Getenv(EnvGitHubToken) != "":
+		rc.GitHubToken = os.Getenv(EnvGitHubToken)
+		rc.GitHubTokenSource = "Environment variable (" + EnvGitHubToken + ")"
 	case cfg.GitHubToken != "":
 		rc.GitHubToken = cfg.GitHubToken
 		rc.GitHubTokenSource = SourceConfigFile
 	}
 
-	// Model resolution: flag > env > config file > default
 	switch {
 	case flagModel != "":
 		rc.Model = flagModel
 		rc.ModelSource = "Flag"
-	case os.Getenv("CODE_REVIEW_CLI_MODEL") != "":
-		rc.Model = os.Getenv("CODE_REVIEW_CLI_MODEL")
+	case os.Getenv(EnvModel) != "":
+		rc.Model = os.Getenv(EnvModel)
 		rc.ModelSource = "Environment variable"
 	case cfg.Model != "":
 		rc.Model = cfg.Model
@@ -173,6 +199,19 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	default:
 		rc.Model = DefaultModel
 		rc.ModelSource = "Default"
+	}
+
+	rc.CircleCIBaseURL = os.Getenv(EnvCircleCIBaseURL)
+	if rc.CircleCIBaseURL == "" {
+		rc.CircleCIBaseURL = "https://circleci.com"
+	}
+	rc.AnthropicBaseURL = os.Getenv(EnvAnthropicBaseURL)
+	if rc.AnthropicBaseURL == "" {
+		rc.AnthropicBaseURL = "https://api.anthropic.com"
+	}
+	rc.GitHubAPIURL = os.Getenv(EnvGitHubAPIURL)
+	if rc.GitHubAPIURL == "" {
+		rc.GitHubAPIURL = "https://api.github.com"
 	}
 
 	return rc, err

@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
@@ -47,38 +45,28 @@ func mapErr(op string, err error) error {
 	return &StatusError{Op: op, StatusCode: he.StatusCode}
 }
 
+type Config struct {
+	APIKey  string
+	BaseURL string
+}
+
 // Client is an Anthropic Messages API client.
 type Client struct {
 	http *httpcl.Client
 }
 
-// New creates an Anthropic API client.
-// It resolves the API key via config (env > config file) and reads
-// ANTHROPIC_BASE_URL from the environment.
-func New() (*Client, error) {
-	rc, err := config.Resolve("", "")
-	key := rc.AnthropicAPIKey
-	if key == "" {
-		if err != nil {
-			return nil, fmt.Errorf("resolve config: %w", err)
-		}
+func New(cfg Config) (*Client, error) {
+	if cfg.APIKey == "" {
 		return nil, ErrKeyNotFound
 	}
-
-	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://api.anthropic.com"
-	}
-
 	c := httpcl.New(httpcl.Config{
-		BaseURL:        baseURL,
-		AuthToken:      key,
+		BaseURL:        cfg.BaseURL,
+		AuthToken:      cfg.APIKey,
 		AuthHeader:     "x-api-key",
 		UserAgent:      "chunk-cli",
 		Timeout:        5 * time.Minute,
 		DisableRetries: true,
 	})
-
 	return &Client{http: c}, nil
 }
 

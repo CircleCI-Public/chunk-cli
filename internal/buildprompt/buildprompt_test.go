@@ -47,14 +47,9 @@ func TestRunHappyPath(t *testing.T) {
 	anthropicSrv := httptest.NewServer(fakeAnthropic)
 	defer anthropicSrv.Close()
 
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-	t.Setenv("GITHUB_API_URL", ghSrv.URL)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
-	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
-
-	ghClient, err := ghpkg.New(nil)
+	ghClient, err := ghpkg.New(ghpkg.Config{Token: "fake-token", BaseURL: ghSrv.URL})
 	assert.NilError(t, err)
-	anthropicClient, err := anthropic.New()
+	anthropicClient, err := anthropic.New(anthropic.Config{APIKey: "sk-ant-fake", BaseURL: anthropicSrv.URL})
 	assert.NilError(t, err)
 
 	outDir := t.TempDir()
@@ -114,13 +109,9 @@ func TestRunNoReposFound(t *testing.T) {
 	ghSrv := httptest.NewServer(gh)
 	defer ghSrv.Close()
 
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-	t.Setenv("GITHUB_API_URL", ghSrv.URL)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
-
-	ghClient, err := ghpkg.New(nil)
+	ghClient, err := ghpkg.New(ghpkg.Config{Token: "fake-token", BaseURL: ghSrv.URL})
 	assert.NilError(t, err)
-	anthropicClient, err := anthropic.New()
+	anthropicClient, err := anthropic.New(anthropic.Config{APIKey: "sk-ant-fake", BaseURL: "https://api.anthropic.com"})
 	assert.NilError(t, err)
 
 	var stderr bytes.Buffer
@@ -153,14 +144,9 @@ func TestRunSkipsRepoResolutionErrors(t *testing.T) {
 	anthropicSrv := httptest.NewServer(fakeAnthropic)
 	defer anthropicSrv.Close()
 
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-	t.Setenv("GITHUB_API_URL", ghSrv.URL)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
-	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
-
-	ghClient, err := ghpkg.New(nil)
+	ghClient, err := ghpkg.New(ghpkg.Config{Token: "fake-token", BaseURL: ghSrv.URL})
 	assert.NilError(t, err)
-	anthropicClient, err := anthropic.New()
+	anthropicClient, err := anthropic.New(anthropic.Config{APIKey: "sk-ant-fake", BaseURL: anthropicSrv.URL})
 	assert.NilError(t, err)
 
 	outDir := t.TempDir()
@@ -196,14 +182,9 @@ func TestRunWithMaxComments(t *testing.T) {
 	anthropicSrv := httptest.NewServer(fakeAnthropic)
 	defer anthropicSrv.Close()
 
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-	t.Setenv("GITHUB_API_URL", ghSrv.URL)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
-	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
-
-	ghClient, err := ghpkg.New(nil)
+	ghClient, err := ghpkg.New(ghpkg.Config{Token: "fake-token", BaseURL: ghSrv.URL})
 	assert.NilError(t, err)
-	anthropicClient, err := anthropic.New()
+	anthropicClient, err := anthropic.New(anthropic.Config{APIKey: "sk-ant-fake", BaseURL: anthropicSrv.URL})
 	assert.NilError(t, err)
 
 	outDir := t.TempDir()
@@ -245,14 +226,9 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 	anthropicSrv := httptest.NewServer(fakeAnthropic)
 	defer anthropicSrv.Close()
 
-	t.Setenv("GITHUB_TOKEN", "fake-token")
-	t.Setenv("GITHUB_API_URL", ghSrv.URL)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
-	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
-
-	ghClient, err := ghpkg.New(nil)
+	ghClient, err := ghpkg.New(ghpkg.Config{Token: "fake-token", BaseURL: ghSrv.URL})
 	assert.NilError(t, err)
-	anthropicClient, err := anthropic.New()
+	anthropicClient, err := anthropic.New(anthropic.Config{APIKey: "sk-ant-fake", BaseURL: anthropicSrv.URL})
 	assert.NilError(t, err)
 
 	outDir := t.TempDir()
@@ -285,21 +261,13 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 }
 
 func TestRunMissingGithubToken(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "")
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-
-	// With the decoupled auth, client construction fails before Run is called.
-	_, err := ghpkg.New(nil)
-	assert.Assert(t, err != nil, "expected error when GITHUB_TOKEN is missing")
+	_, err := ghpkg.New(ghpkg.Config{BaseURL: "https://api.github.com"})
+	assert.Assert(t, err != nil, "expected error when token is missing")
 }
 
 func TestRunMissingAnthropicKey(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-
-	// With the decoupled auth, client construction fails before Run is called.
-	_, err := anthropic.New()
-	assert.Assert(t, err != nil, "expected error when Anthropic key is missing")
+	_, err := anthropic.New(anthropic.Config{BaseURL: "https://api.anthropic.com"})
+	assert.Assert(t, err != nil, "expected error when API key is missing")
 }
 
 // --- ResolveOrgAndRepos ---
