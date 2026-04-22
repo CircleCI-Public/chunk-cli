@@ -513,6 +513,42 @@ func TestRunRemoteSSH(t *testing.T) {
 	})
 }
 
+func TestRunRemoteInline(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		var capturedScript string
+		execFn := func(_ context.Context, script string) (string, string, int, error) {
+			capturedScript = script
+			return "inline output\n", "", 0, nil
+		}
+		streams, out, _ := newStreams()
+
+		assert.NilError(t, RunRemoteInline(context.Background(), execFn, "custom", "echo hello", "/workspace/repo", streams))
+		assert.Assert(t, strings.Contains(out.String(), "inline output"), "got: %s", out.String())
+		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/workspace/repo' &&"), "got: %s", capturedScript)
+	})
+
+	t.Run("non-zero exit code", func(t *testing.T) {
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 1, nil
+		}
+		streams, _, _ := newStreams()
+
+		err := RunRemoteInline(context.Background(), execFn, "custom", "false", "/workspace", streams)
+		assert.ErrorContains(t, err, "remote custom failed")
+	})
+
+	t.Run("exec error", func(t *testing.T) {
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 0, fmt.Errorf("connection lost")
+		}
+		streams, _, _ := newStreams()
+
+		err := RunRemoteInline(context.Background(), execFn, "custom", "echo hi", "/workspace", streams)
+		assert.ErrorContains(t, err, "remote custom")
+		assert.ErrorContains(t, err, "connection lost")
+	})
+}
+
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	for _, args := range [][]string{
