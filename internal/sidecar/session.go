@@ -2,6 +2,10 @@ package sidecar
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 	"os"
@@ -21,6 +25,43 @@ const (
 	defaultSSHUser = "user"
 	knownHostsFile = "chunk_ai_known_hosts"
 )
+
+// DefaultKeyPath returns the default SSH private key path used by chunk.
+func DefaultKeyPath() string {
+	return filepath.Join(os.Getenv("HOME"), ".ssh", defaultKeyName)
+}
+
+// GenerateKeyPair generates an ed25519 keypair and writes the private key to
+// path and the public key to path+".pub". The .ssh directory is created if it
+// does not exist.
+func GenerateKeyPair(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create .ssh directory: %w", err)
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate key: %w", err)
+	}
+
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return fmt.Errorf("marshal private key: %w", err)
+	}
+	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+	if err := os.WriteFile(path, privPEM, 0o600); err != nil {
+		return fmt.Errorf("write private key: %w", err)
+	}
+
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return fmt.Errorf("create public key: %w", err)
+	}
+	if err := os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(sshPub), 0o644); err != nil {
+		return fmt.Errorf("write public key: %w", err)
+	}
+	return nil
+}
 
 // Session holds the info needed to SSH into a sidecar.
 // It is a plain value type with no open connections or resources to close.
