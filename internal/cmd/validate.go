@@ -95,6 +95,14 @@ func newValidateCmd() *cobra.Command {
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 				}
+				if remote {
+					if err := resolveSandboxID(&sandboxID); err != nil {
+						return err
+					}
+				}
+				if sandboxID != "" {
+					return runRemoteInlineValidate(cmd.Context(), sandboxID, identityFile, workdir, cmdName, inlineCmd, streams)
+				}
 				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, statusFn, streams)
 			}
 
@@ -202,4 +210,31 @@ func runRemoteValidate(ctx context.Context, sandboxID, identityFile, workdir str
 		}
 		return result.Stdout, result.Stderr, result.ExitCode, nil
 	}, cfg, dest, streams)
+}
+
+func runRemoteInlineValidate(ctx context.Context, sandboxID, identityFile, workdir, name, command string, streams iostream.Streams) error {
+	client, err := ensureCircleCIClient(ctx, streams, tui.PromptHidden)
+	if err != nil {
+		return err
+	}
+	authSock := os.Getenv("SSH_AUTH_SOCK")
+	session, err := sandbox.OpenSession(ctx, client, sandboxID, identityFile, authSock)
+	if err != nil {
+		return &userError{msg: "Could not open SSH session to sandbox.", err: err}
+	}
+	dest := workdir
+	if dest == "" {
+		if active, err := sandbox.LoadActive(); err == nil && active != nil && active.Workspace != "" {
+			dest = active.Workspace
+		} else {
+			dest = "./workspace"
+		}
+	}
+	return validate.RunRemoteInline(ctx, func(ctx context.Context, script string) (string, string, int, error) {
+		result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
+		if err != nil {
+			return "", "", 0, err
+		}
+		return result.Stdout, result.Stderr, result.ExitCode, nil
+	}, name, command, dest, streams)
 }

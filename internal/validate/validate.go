@@ -177,6 +177,25 @@ func RunRemote(ctx context.Context, exec func(ctx context.Context, script string
 	return nil
 }
 
+// RunRemoteInline runs a single inline command on a remote sandbox via SSH.
+func RunRemoteInline(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, streams iostream.Streams) error {
+	script := "cd " + shellEscape(dest) + " && " + command
+	stdout, stderr, exitCode, err := exec(ctx, script)
+	if err != nil {
+		return fmt.Errorf("remote %s: %w", name, err)
+	}
+	if stdout != "" {
+		_, _ = fmt.Fprint(streams.Out, stdout)
+	}
+	if stderr != "" {
+		_, _ = fmt.Fprint(streams.Err, stderr)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
+	}
+	return nil
+}
+
 func runAndCache(ctx context.Context, workDir, name, command, fileExt string, timeoutSec int, status iostream.StatusFunc, streams iostream.Streams) error {
 	status(iostream.LevelInfo, fmt.Sprintf("Running %s: %s", name, command))
 
