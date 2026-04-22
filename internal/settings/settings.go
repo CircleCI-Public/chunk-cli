@@ -74,10 +74,10 @@ func Build(commands []config.Command) ([]byte, error) {
 					Hooks:   hooks,
 				},
 			},
-			// Stop hook: warms the validate cache after each session so the
-			// pre-commit hook hits cache instead of re-running commands.
-			// chunk validate --if-changed handles worktree detection internally
-			// via CLAUDE_WORKING_DIR when set.
+			// Stop hook: runs validation at session end so uncommitted changes
+			// are checked before the agent stops. Skips when the working tree
+			// is clean. chunk validate --if-changed handles worktree detection
+			// internally via CLAUDE_WORKING_DIR when set.
 			"Stop": {
 				{
 					Hooks: []hookEntry{

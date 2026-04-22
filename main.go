@@ -17,6 +17,10 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
+		var ee *usererr.ExitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.Code)
+		}
 		var ue *usererr.Error
 		if errors.As(err, &ue) {
 			fmt.Fprintln(os.Stderr, ue.UserMessage())

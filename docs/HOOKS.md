@@ -11,12 +11,7 @@ before a commit. If any command fails, the commit is blocked.
 
 **Stop** — runs `chunk validate --if-changed` after every session ends. Skips
 everything when the working tree is clean. When there are changes, it runs all
-configured commands and warms the validate cache — so the pre-commit hook hits
-cache instead of re-running from scratch.
-
-Together they form a cache-warming pipeline: Stop hook does the work
-asynchronously after each session; pre-commit hook validates instantly via
-cache.
+configured commands so problems are surfaced before the agent stops working.
 
 ## Worktree Support
 
@@ -49,9 +44,15 @@ Commands are defined in the project config:
     {"name": "format", "run": "task fmt", "timeout": 30},
     {"name": "lint", "run": "task lint", "timeout": 60},
     {"name": "test", "run": "task test", "timeout": 300}
-  ]
+  ],
+  "stopHookMaxAttempts": 3
 }
 ```
+
+`stopHookMaxAttempts` controls how many times the Stop hook will re-signal the
+agent when validation keeps failing for the same uncommitted changes. After that
+many consecutive failures the hook exits 0 (ending the session) instead of
+non-zero (which would ask Claude to try again). Defaults to 3 if unset.
 
 ### `.claude/settings.json`
 
@@ -99,6 +100,5 @@ Use `chunk validate` to run checks manually (outside of hooks):
 chunk validate           # Run all configured commands
 chunk validate test      # Run a specific command
 chunk validate --list    # List configured commands
-chunk validate --status  # Check cached results
 chunk validate --dry-run # Show commands without executing
 ```

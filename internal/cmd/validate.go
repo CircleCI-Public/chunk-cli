@@ -16,12 +16,13 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
 func newValidateCmd() *cobra.Command {
 	var sandboxID, identityFile, workdir string
-	var dryRun, list, save, forceRun, status, ifChanged bool
+	var dryRun, list, save, ifChanged bool
 	var inlineCmd, projectDir string
 
 	cmd := &cobra.Command{
@@ -45,35 +46,15 @@ func newValidateCmd() *cobra.Command {
 			// working tree is clean or the project has no commands configured.
 			// Intended for Stop hook usage — never errors, always exits 0.
 			if ifChanged {
-				// Resolve the effective work directory for hook context.
 				// CLAUDE_WORKING_DIR is set by Claude Code to the session's
 				// actual working directory, which for worktrees is the worktree
 				// root rather than the main repo root (CLAUDE_PROJECT_DIR).
-				// Only override the explicit --project flag if unset.
 				if projectDir == "" {
 					if wd := os.Getenv("CLAUDE_WORKING_DIR"); wd != "" {
 						workDir = wd
 					}
 				}
-				hasChanges, _ := validate.HasUncommittedChanges(workDir)
-				if !hasChanges {
-					streams.ErrPrintln(ui.Dim("chunk validate: no changes, skipping"))
-					return nil
-				}
-				cfg, err := config.LoadProjectConfig(workDir)
-				if err != nil || !cfg.HasCommands() {
-					return nil
-				}
-				// Acquire a per-directory advisory lock to prevent concurrent
-				// Stop hook invocations (e.g. two sessions sharing a worktree)
-				// from running expensive commands simultaneously.
-				release, acquired := validate.TryLock(workDir)
-				if !acquired {
-					streams.ErrPrintln(ui.Dim("chunk validate: another validate is running, skipping"))
-					return nil
-				}
-				defer release()
-				return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, streams)
+				return runIfChanged(cmd.Context(), workDir, streams)
 			}
 
 			var name string
@@ -88,15 +69,6 @@ func newValidateCmd() *cobra.Command {
 					cfg = &config.ProjectConfig{}
 				}
 				return validate.List(cfg, streams)
-			}
-
-			// --status: check cache only
-			if status {
-				cfg, err := config.LoadProjectConfig(workDir)
-				if err != nil {
-					cfg = &config.ProjectConfig{}
-				}
-				return validate.Status(workDir, name, cfg, streams)
 			}
 
 			// --cmd: run inline command
@@ -115,7 +87,7 @@ func newValidateCmd() *cobra.Command {
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 				}
-				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, streams)
+				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, streams)
 			}
 
 			cfg, err := config.LoadProjectConfig(workDir)
@@ -152,38 +124,15 @@ func newValidateCmd() *cobra.Command {
 
 			// Named command
 			if name != "" {
-				if cfg.FindCommand(name) == nil {
-					isTTY := term.IsTerminal(int(os.Stdin.Fd()))
-					if !isTTY {
-						return fmt.Errorf("command %q is not configured\nAdd %q to .chunk/config.json", name, name)
-					}
-					// Interactive setup: prompt for command
-					streams.ErrPrintf("Command %s is not configured yet.\n\n", ui.Bold(name))
-					streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
-					scanner := bufio.NewScanner(os.Stdin)
-					if !scanner.Scan() {
-						return fmt.Errorf("no input received")
-					}
-					input := strings.TrimSpace(scanner.Text())
-					if input == "" {
-						streams.ErrPrintln(ui.Dim("No command entered, aborting."))
-						return fmt.Errorf("no command entered")
-					}
-					if err := config.SaveCommand(workDir, name, input); err != nil {
-						return fmt.Errorf("save command: %w", err)
-					}
-					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
-					// Reload config after save
-					cfg, err = config.LoadProjectConfig(workDir)
-					if err != nil {
-						return err
-					}
+				cfg, err = ensureCommandConfigured(workDir, name, cfg, streams)
+				if err != nil {
+					return err
 				}
-				return validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, streams)
+				return validate.RunNamed(cmd.Context(), workDir, name, cfg, streams)
 			}
 
 			// Run all
-			return validate.RunAll(cmd.Context(), workDir, forceRun, cfg, streams)
+			return validate.RunAll(cmd.Context(), workDir, cfg, streams)
 		},
 	}
 
@@ -194,10 +143,79 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
 	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
-	cmd.Flags().BoolVar(&forceRun, "force-run", false, "Ignore cache, always run")
-	cmd.Flags().BoolVar(&status, "status", false, "Check cache only, don't execute")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 	cmd.Flags().BoolVar(&ifChanged, "if-changed", false, "Skip validation if there are no uncommitted changes (for Stop hook use)")
 
 	return cmd
+}
+
+// ensureCommandConfigured returns a config with the named command present,
+// prompting interactively to configure it if missing (TTY only).
+func ensureCommandConfigured(workDir, name string, cfg *config.ProjectConfig, streams iostream.Streams) (*config.ProjectConfig, error) {
+	if cfg.FindCommand(name) != nil {
+		return cfg, nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, fmt.Errorf("command %q is not configured\nAdd %q to .chunk/config.json", name, name)
+	}
+	streams.ErrPrintf("Command %s is not configured yet.\n\n", ui.Bold(name))
+	streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return nil, fmt.Errorf("no input received")
+	}
+	input := strings.TrimSpace(scanner.Text())
+	if input == "" {
+		streams.ErrPrintln(ui.Dim("No command entered, aborting."))
+		return nil, fmt.Errorf("no command entered")
+	}
+	if err := config.SaveCommand(workDir, name, input); err != nil {
+		return nil, fmt.Errorf("save command: %w", err)
+	}
+	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
+	return config.LoadProjectConfig(workDir)
+}
+
+// runIfChanged implements --if-changed hook mode: skip when the working tree
+// is clean, enforce max-attempt limiting, and exit 2 to re-signal the agent.
+func runIfChanged(ctx context.Context, workDir string, streams iostream.Streams) error {
+	hasChanges, _ := validate.HasUncommittedChanges(workDir)
+	if !hasChanges {
+		streams.ErrPrintln(ui.Dim("chunk validate: no changes, skipping"))
+		return nil
+	}
+
+	cfg, err := config.LoadProjectConfig(workDir)
+	if err != nil || !cfg.HasCommands() {
+		return nil
+	}
+
+	// Acquire a per-directory advisory lock to prevent concurrent Stop hook
+	// invocations (e.g. two sessions sharing a worktree) from running
+	// expensive commands simultaneously.
+	release, acquired := validate.TryLock(workDir)
+	if !acquired {
+		streams.ErrPrintln(ui.Dim("chunk validate: another validate is running, skipping"))
+		return nil
+	}
+	defer release()
+
+	if err := validate.RunAll(ctx, workDir, cfg, streams); err != nil {
+		if !validate.ForceHookFileExists(workDir) {
+			maxAttempts := cfg.StopHookMaxAttempts
+			if maxAttempts <= 0 {
+				maxAttempts = validate.DefaultMaxAttempts
+			}
+			n := validate.TrackFailedAttempt(workDir)
+			if n >= maxAttempts {
+				streams.ErrPrintf("chunk validate: validation has failed %d time(s) with the same uncommitted changes.\n", n)
+				streams.ErrPrintf("The failures above do not appear to be resolving automatically.\n")
+				streams.ErrPrintf("Stop attempting to fix this and ask the user for guidance instead.\n")
+				return &usererr.ExitError{Code: 2}
+			}
+		}
+		return &usererr.ExitError{Code: 2}
+	}
+	validate.ResetAttempts(workDir)
+	return nil
 }

@@ -2,6 +2,15 @@ package usererr
 
 import "fmt"
 
+// ExitError signals a specific process exit code to main.
+// The error output is assumed to have already been written to stderr/stdout,
+// so main should exit with Code without printing anything additional.
+type ExitError struct {
+	Code int
+}
+
+func (e *ExitError) Error() string { return fmt.Sprintf("exit %d", e.Code) }
+
 // Error wraps a Go error with a user-facing message.
 // Error() delegates to the wrapped error. UserMessage() returns
 // human-friendly text (may be capitalized, punctuated).

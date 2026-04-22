@@ -19,12 +19,17 @@ func lockPath(workDir string) string {
 func TryLock(workDir string) (release func(), acquired bool) {
 	dir := cacheDir(workDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return func() {}, true // can't lock, proceed anyway
+		// Fail open: if we can't create the lock directory we allow the
+		// caller to proceed without mutual exclusion rather than silently
+		// skipping validation entirely.
+		return func() {}, true
 	}
 
 	f, err := os.OpenFile(lockPath(workDir), os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return func() {}, true // can't open lock file, proceed anyway
+		// Same fail-open policy: prefer running validation without a lock
+		// over skipping it due to a filesystem error.
+		return func() {}, true
 	}
 
 	// LOCK_EX|LOCK_NB: exclusive, non-blocking. Returns EWOULDBLOCK if locked.
