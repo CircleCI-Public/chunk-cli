@@ -1,12 +1,11 @@
 package validate
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,97 +37,28 @@ func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	return nil
 }
 
-// Status checks the cache for each command (or a single named command) and prints its status.
-func Status(workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc) error {
-	commands := cfg.Commands
-	if name != "" {
-		c := cfg.FindCommand(name)
-		if c == nil {
-			return fmt.Errorf("command %q not configured", name)
-		}
-		commands = []config.Command{*c}
-	}
-
-	for _, c := range commands {
-		cached := CheckCache(workDir, c.Name, c.FileExt)
-		if cached != nil {
-			level := iostream.LevelDone
-			if cached.Status != statusPass {
-				level = iostream.LevelWarn
-			}
-			status(level, fmt.Sprintf("%s: cached (%s)", c.Name, strings.ToUpper(cached.Status)))
-		} else {
-			status(iostream.LevelInfo, fmt.Sprintf("%s: no cached result", c.Name))
-		}
-	}
-	return nil
+// RunInline runs an inline command string.
+func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) error {
+	return runCommand(ctx, workDir, name, command, 0, status, streams)
 }
 
-// RunInline runs an inline command string, caching the result under the given name.
-func RunInline(ctx context.Context, workDir, name, command string, force bool, status iostream.StatusFunc, streams iostream.Streams) error {
-	if !force {
-		if cached := CheckCache(workDir, name, ""); cached != nil {
-			level := iostream.LevelDone
-			if cached.Status != statusPass {
-				level = iostream.LevelWarn
-			}
-			status(level, fmt.Sprintf("%s: cached (%s)", name, strings.ToUpper(cached.Status)))
-			if cached.ExitCode != 0 {
-				return fmt.Errorf("%s: cached failure", name)
-			}
-			return nil
-		}
-	}
-
-	return runAndCache(ctx, workDir, name, command, "", 0, status, streams)
-}
-
-// RunNamed runs a single named command from config with caching.
-func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
+// RunNamed runs a single named command from config.
+func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
 	c := cfg.FindCommand(name)
 	if c == nil {
 		return fmt.Errorf("command %q not configured", name)
 	}
-
-	if !force {
-		if cached := CheckCache(workDir, c.Name, c.FileExt); cached != nil {
-			level := iostream.LevelDone
-			if cached.Status != statusPass {
-				level = iostream.LevelWarn
-			}
-			status(level, fmt.Sprintf("%s: cached (%s)", c.Name, strings.ToUpper(cached.Status)))
-			if cached.ExitCode != 0 {
-				return fmt.Errorf("%s: cached failure", c.Name)
-			}
-			return nil
-		}
-	}
-
-	return runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, c.Timeout, status, streams)
+	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
 }
 
-// RunAll runs all configured commands with optional cache bypass.
-func RunAll(ctx context.Context, workDir string, force bool, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
+// RunAll runs all configured commands, stopping at the first failure.
+func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
 		return ErrNotConfigured
 	}
 
 	for i, c := range cfg.Commands {
-		if !force {
-			if cached := CheckCache(workDir, c.Name, c.FileExt); cached != nil {
-				level := iostream.LevelDone
-				if cached.Status != statusPass {
-					level = iostream.LevelWarn
-				}
-				status(level, fmt.Sprintf("%s: cached (%s)", c.Name, strings.ToUpper(cached.Status)))
-				if cached.ExitCode != 0 {
-					return fmt.Errorf("%s: cached failure", c.Name)
-				}
-				continue
-			}
-		}
-
-		if err := runAndCache(ctx, workDir, c.Name, c.Run, c.FileExt, c.Timeout, status, streams); err != nil {
+		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams); err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
 				status(iostream.LevelWarn, fmt.Sprintf("%s: skipped (%s failed)", cfg.Commands[j].Name, c.Name))
 			}
@@ -199,7 +129,42 @@ func RunRemoteInline(ctx context.Context, exec func(ctx context.Context, script 
 	return nil
 }
 
-func runAndCache(ctx context.Context, workDir, name, command, fileExt string, timeoutSec int, status iostream.StatusFunc, streams iostream.Streams) error {
+// expandCommand replaces template variables in command before execution.
+// {{CHANGED_PACKAGES}} expands to the space-separated list of Go package
+// paths whose source files appear in `git diff HEAD`.
+// Expands to "./..." when no .go files changed.
+func expandCommand(workDir, command string) string {
+	if !strings.Contains(command, "{{CHANGED_PACKAGES}}") {
+		return command
+	}
+
+	out, err := exec.Command("git", "-C", workDir, "diff", "HEAD", "--name-only").Output()
+	if err != nil {
+		return strings.ReplaceAll(command, "{{CHANGED_PACKAGES}}", "./...")
+	}
+
+	seen := map[string]bool{}
+	var pkgs []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" || !strings.HasSuffix(line, ".go") {
+			continue
+		}
+		pkg := "./" + filepath.Dir(line)
+		if !seen[pkg] {
+			seen[pkg] = true
+			pkgs = append(pkgs, pkg)
+		}
+	}
+
+	expanded := "./..."
+	if len(pkgs) > 0 {
+		expanded = strings.Join(pkgs, " ")
+	}
+	return strings.ReplaceAll(command, "{{CHANGED_PACKAGES}}", expanded)
+}
+
+func runCommand(ctx context.Context, workDir, name, command string, timeoutSec int, status iostream.StatusFunc, streams iostream.Streams) error {
+	command = expandCommand(workDir, command)
 	status(iostream.LevelInfo, fmt.Sprintf("Running %s: %s", name, command))
 
 	if timeoutSec <= 0 {
@@ -210,30 +175,19 @@ func runAndCache(ctx context.Context, workDir, name, command, fileExt string, ti
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
-
-	var combined bytes.Buffer
-	cmd.Stdout = io.MultiWriter(streams.Out, &combined)
-	cmd.Stderr = io.MultiWriter(streams.Err, &combined)
+	cmd.Stdout = streams.Out
+	cmd.Stderr = streams.Err
 
 	err := cmd.Run()
-	exitCode := 0
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			_ = WriteCache(workDir, name, fileExt, 1, combined.String())
 			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
 		}
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = 1
+		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
+			return fmt.Errorf("%s command failed", name)
 		}
-	}
-
-	_ = WriteCache(workDir, name, fileExt, exitCode, combined.String())
-
-	if exitCode != 0 {
-		return fmt.Errorf("%s command failed", name)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
 }
