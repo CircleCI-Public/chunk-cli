@@ -36,7 +36,7 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 
 func newValidateCmd() *cobra.Command {
 	var sandboxID, identityFile, workdir string
-	var dryRun, list, save, forceRun, status, remote bool
+	var dryRun, list, save, remote bool
 	var inlineCmd, projectDir string
 
 	cmd := &cobra.Command{
@@ -71,15 +71,6 @@ func newValidateCmd() *cobra.Command {
 				return validate.List(cfg, statusFn)
 			}
 
-			// --status: check cache only
-			if status {
-				cfg, err := config.LoadProjectConfig(workDir)
-				if err != nil {
-					cfg = &config.ProjectConfig{}
-				}
-				return validate.Status(workDir, name, cfg, statusFn)
-			}
-
 			// --cmd: run inline command
 			if inlineCmd != "" {
 				cmdName := name
@@ -104,7 +95,7 @@ func newValidateCmd() *cobra.Command {
 				if sandboxID != "" {
 					return runRemoteInlineValidate(cmd.Context(), sandboxID, identityFile, workdir, cmdName, inlineCmd, streams)
 				}
-				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, forceRun, statusFn, streams)
+				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, statusFn, streams)
 			}
 
 			cfg, err := config.LoadProjectConfig(workDir)
@@ -163,11 +154,11 @@ func newValidateCmd() *cobra.Command {
 						return err
 					}
 				}
-				return mapValidateError(validate.RunNamed(cmd.Context(), workDir, name, forceRun, cfg, statusFn, streams))
+				return mapValidateError(validate.RunNamed(cmd.Context(), workDir, name, cfg, statusFn, streams))
 			}
 
 			// Run all
-			return mapValidateError(validate.RunAll(cmd.Context(), workDir, forceRun, cfg, statusFn, streams))
+			return mapValidateError(validate.RunAll(cmd.Context(), workDir, cfg, statusFn, streams))
 		},
 	}
 
@@ -179,8 +170,6 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
 	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
-	cmd.Flags().BoolVar(&forceRun, "force-run", false, "Ignore cache, always run")
-	cmd.Flags().BoolVar(&status, "status", false, "Check cache only, don't execute")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 
 	return cmd

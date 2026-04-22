@@ -172,7 +172,7 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams))
+		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "Running install"), "got: %s", statusBuf.String())
@@ -183,7 +183,7 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams)
+		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "no validate commands")
 	})
 
@@ -194,7 +194,7 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams)
+		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "test command failed")
 	})
 
@@ -207,7 +207,7 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams)
+		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
 		assert.Assert(t, err != nil, "expected error")
 		assert.Assert(t, !strings.Contains(out.String(), "should-not-run"), "skipped command should not produce output, got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "test: skipped"), "got: %s", statusBuf.String())
@@ -221,7 +221,7 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunAll(context.Background(), ".", true, cfg, testStatus(&statusBuf), streams))
+		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
 	})
 }
@@ -264,88 +264,6 @@ func TestCommandFileExtOmitted(t *testing.T) {
 	// fileExt and timeout should not appear when empty/zero
 	assert.Assert(t, !strings.Contains(string(data), "fileExt"), "expected fileExt to be omitted, got: %s", data)
 	assert.Assert(t, !strings.Contains(string(data), "timeout"), "expected timeout to be omitted, got: %s", data)
-}
-
-// --- Cache with fileExt tests ---
-
-func TestCacheWithFileExt(t *testing.T) {
-	dir := t.TempDir()
-
-	// Initialize a git repo so computeContentHash works
-	initGitRepo(t, dir)
-
-	assert.NilError(t, WriteCache(dir, "test", "", 0, "passed"))
-	cached := CheckCache(dir, "test", "")
-	assert.Assert(t, cached != nil, "expected cache hit with no fileExt")
-	assert.Equal(t, cached.Status, "pass")
-
-	// Cache written with no fileExt should miss when checked with fileExt
-	// because the content hashes will differ (different git diff args)
-	assert.NilError(t, WriteCache(dir, "lint", ".ts", 0, "ok"))
-	cached = CheckCache(dir, "lint", ".ts")
-	assert.Assert(t, cached != nil, "expected cache hit with matching fileExt")
-}
-
-func TestCache(t *testing.T) {
-	tests := []struct {
-		name       string
-		exitCode   int
-		output     string
-		wantStatus string
-	}{
-		{"pass result", 0, "all good", "pass"},
-		{"fail result", 1, "FAIL: test_foo", "fail"},
-		{"exit code 2", 2, "error", "fail"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			initGitRepo(t, dir)
-
-			assert.NilError(t, WriteCache(dir, "cmd", "", tt.exitCode, tt.output))
-
-			cached := CheckCache(dir, "cmd", "")
-			assert.Assert(t, cached != nil, "expected cache hit")
-			assert.Equal(t, cached.Status, tt.wantStatus)
-			assert.Equal(t, cached.ExitCode, tt.exitCode)
-			assert.Equal(t, cached.Output, tt.output)
-		})
-	}
-}
-
-func TestCacheInvalidatedByChange(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	assert.NilError(t, WriteCache(dir, "test", "", 0, "ok"))
-
-	// Modify a tracked file so the content hash changes
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("changed"), 0o644))
-
-	cached := CheckCache(dir, "test", "")
-	assert.Assert(t, cached == nil, "expected cache miss after file change")
-}
-
-func TestCacheMissForMissingFile(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	cached := CheckCache(dir, "nonexistent", "")
-	assert.Assert(t, cached == nil, "expected nil for nonexistent cache")
-}
-
-func TestCacheOutputTruncation(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	bigOutput := strings.Repeat("x", 100*1024) // 100KB, exceeds maxOutputBytes (50KB)
-	assert.NilError(t, WriteCache(dir, "big", "", 1, bigOutput))
-
-	cached := CheckCache(dir, "big", "")
-	assert.Assert(t, cached != nil, "expected cache hit")
-	assert.Assert(t, len(cached.Output) <= maxOutputBytes,
-		"output should be truncated to %d bytes, got %d", maxOutputBytes, len(cached.Output))
 }
 
 // --- RunRemote tests ---
