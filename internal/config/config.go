@@ -1,12 +1,15 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"strings"
+
+	"github.com/sethvargo/go-envconfig"
 )
 
 // Model constants define the Claude models used for different operations.
@@ -48,6 +51,38 @@ const (
 	EnvXDGStateHome  = "XDG_STATE_HOME"
 	EnvClaudeSession = "CLAUDE_SESSION_ID"
 )
+
+// EnvVars holds all environment variables the application reads.
+//
+//nolint:gosec // env var names, not credentials
+type EnvVars struct {
+	CircleToken      string `env:"CIRCLE_TOKEN"`
+	CircleCIToken    string `env:"CIRCLECI_TOKEN"`
+	CircleCIBaseURL  string `env:"CIRCLECI_BASE_URL,default=https://circleci.com"`
+	AnthropicAPIKey  string `env:"ANTHROPIC_API_KEY"`
+	AnthropicBaseURL string `env:"ANTHROPIC_BASE_URL,default=https://api.anthropic.com"`
+	GitHubToken      string `env:"GITHUB_TOKEN"`
+	GitHubAPIURL     string `env:"GITHUB_API_URL,default=https://api.github.com"`
+	Model            string `env:"CODE_REVIEW_CLI_MODEL"`
+	CircleCIOrgID    string `env:"CIRCLECI_ORG_ID"`
+	SandboxProvider  string `env:"CHUNK_SANDBOX_PROVIDER"`
+	Home             string `env:"HOME"`
+	Shell            string `env:"SHELL"`
+	SSHAuthSock      string `env:"SSH_AUTH_SOCK"`
+	NoColor          string `env:"NO_COLOR"`
+	XDGConfigHome    string `env:"XDG_CONFIG_HOME"`
+	XDGStateHome     string `env:"XDG_STATE_HOME"`
+	ClaudeSession    string `env:"CLAUDE_SESSION_ID"`
+}
+
+// LoadEnv populates an EnvVars struct from the process environment.
+func LoadEnv(ctx context.Context) (EnvVars, error) {
+	var env EnvVars
+	if err := envconfig.Process(ctx, &env); err != nil {
+		return EnvVars{}, fmt.Errorf("load environment: %w", err)
+	}
+	return env, nil
+}
 
 // UserConfig is the on-disk JSON config.
 type UserConfig struct {
@@ -148,17 +183,22 @@ func Clear(key string) error {
 func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	cfg, err := Load()
 
+	env, envErr := LoadEnv(context.Background())
+	if envErr != nil {
+		return ResolvedConfig{}, envErr
+	}
+
 	rc := ResolvedConfig{
 		AnalyzeModel: AnalyzeModel,
 		PromptModel:  PromptModel,
 	}
 
 	switch {
-	case os.Getenv(EnvCircleToken) != "":
-		rc.CircleCIToken = os.Getenv(EnvCircleToken)
+	case env.CircleToken != "":
+		rc.CircleCIToken = env.CircleToken
 		rc.CircleCITokenSource = "Environment variable (" + EnvCircleToken + ")"
-	case os.Getenv(EnvCircleCIToken) != "":
-		rc.CircleCIToken = os.Getenv(EnvCircleCIToken)
+	case env.CircleCIToken != "":
+		rc.CircleCIToken = env.CircleCIToken
 		rc.CircleCITokenSource = "Environment variable (" + EnvCircleCIToken + ")"
 	case cfg.CircleCIToken != "":
 		rc.CircleCIToken = cfg.CircleCIToken
@@ -169,8 +209,8 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	case flagAPIKey != "":
 		rc.AnthropicAPIKey = flagAPIKey
 		rc.AnthropicAPIKeySource = "Flag"
-	case os.Getenv(EnvAnthropicAPIKey) != "":
-		rc.AnthropicAPIKey = os.Getenv(EnvAnthropicAPIKey)
+	case env.AnthropicAPIKey != "":
+		rc.AnthropicAPIKey = env.AnthropicAPIKey
 		rc.AnthropicAPIKeySource = "Environment variable"
 	case cfg.AnthropicAPIKey != "":
 		rc.AnthropicAPIKey = cfg.AnthropicAPIKey
@@ -178,8 +218,8 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	}
 
 	switch {
-	case os.Getenv(EnvGitHubToken) != "":
-		rc.GitHubToken = os.Getenv(EnvGitHubToken)
+	case env.GitHubToken != "":
+		rc.GitHubToken = env.GitHubToken
 		rc.GitHubTokenSource = "Environment variable (" + EnvGitHubToken + ")"
 	case cfg.GitHubToken != "":
 		rc.GitHubToken = cfg.GitHubToken
@@ -190,8 +230,8 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	case flagModel != "":
 		rc.Model = flagModel
 		rc.ModelSource = "Flag"
-	case os.Getenv(EnvModel) != "":
-		rc.Model = os.Getenv(EnvModel)
+	case env.Model != "":
+		rc.Model = env.Model
 		rc.ModelSource = "Environment variable"
 	case cfg.Model != "":
 		rc.Model = cfg.Model
@@ -201,18 +241,9 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 		rc.ModelSource = "Default"
 	}
 
-	rc.CircleCIBaseURL = os.Getenv(EnvCircleCIBaseURL)
-	if rc.CircleCIBaseURL == "" {
-		rc.CircleCIBaseURL = "https://circleci.com"
-	}
-	rc.AnthropicBaseURL = os.Getenv(EnvAnthropicBaseURL)
-	if rc.AnthropicBaseURL == "" {
-		rc.AnthropicBaseURL = "https://api.anthropic.com"
-	}
-	rc.GitHubAPIURL = os.Getenv(EnvGitHubAPIURL)
-	if rc.GitHubAPIURL == "" {
-		rc.GitHubAPIURL = "https://api.github.com"
-	}
+	rc.CircleCIBaseURL = env.CircleCIBaseURL
+	rc.AnthropicBaseURL = env.AnthropicBaseURL
+	rc.GitHubAPIURL = env.GitHubAPIURL
 
 	return rc, err
 }
