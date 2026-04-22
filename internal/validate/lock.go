@@ -1,6 +1,8 @@
 package validate
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -16,12 +18,16 @@ func lockPath(workDir string) string {
 // If the lock is already held (another validate is running), it returns
 // a no-op release and false. The lock is automatically released when the
 // process exits.
-func TryLock(workDir string) (release func(), acquired bool) {
+// warn is an optional writer for diagnostic messages (pass nil to suppress).
+func TryLock(workDir string, warn io.Writer) (release func(), acquired bool) {
 	dir := cacheDir(workDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		// Fail open: if we can't create the lock directory we allow the
 		// caller to proceed without mutual exclusion rather than silently
 		// skipping validation entirely.
+		if warn != nil {
+			_, _ = fmt.Fprintf(warn, "chunk validate: cannot create lock directory: %v (proceeding without lock)\n", err)
+		}
 		return func() {}, true
 	}
 
@@ -29,6 +35,9 @@ func TryLock(workDir string) (release func(), acquired bool) {
 	if err != nil {
 		// Same fail-open policy: prefer running validation without a lock
 		// over skipping it due to a filesystem error.
+		if warn != nil {
+			_, _ = fmt.Fprintf(warn, "chunk validate: cannot open lock file: %v (proceeding without lock)\n", err)
+		}
 		return func() {}, true
 	}
 

@@ -144,7 +144,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
 	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
-	cmd.Flags().BoolVar(&ifChanged, "if-changed", false, "Skip validation if there are no uncommitted changes (for Stop hook use)")
+	cmd.Flags().BoolVar(&ifChanged, "if-changed", false, "Skip validation if there are no uncommitted changes (for Stop hook use); respects CLAUDE_WORKING_DIR for worktree detection")
 
 	return cmd
 }
@@ -193,20 +193,33 @@ func runIfChanged(ctx context.Context, workDir string, streams iostream.Streams)
 	// Acquire a per-directory advisory lock to prevent concurrent Stop hook
 	// invocations (e.g. two sessions sharing a worktree) from running
 	// expensive commands simultaneously.
-	release, acquired := validate.TryLock(workDir)
+	release, acquired := validate.TryLock(workDir, streams.Err)
 	if !acquired {
 		streams.ErrPrintln(ui.Dim("chunk validate: another validate is running, skipping"))
 		return nil
 	}
 	defer release()
 
-	if err := validate.RunAll(ctx, workDir, cfg, streams); err != nil {
+	// Compute the content hash before running validation so that
+	// TrackFailedAttempt uses a stable snapshot. A concurrent commit between
+	// RunAll and the attempt counter update would otherwise spuriously reset
+	// the consecutive-failure count.
+	contentHash := validate.ComputeContentHash(workDir)
+
+	// Route stdout to stderr so all command output appears in the Stop hook
+	// feedback block that Claude Code shows the agent.
+	hookStreams := iostream.Streams{Out: streams.Err, Err: streams.Err}
+
+	if err := validate.RunAll(ctx, workDir, cfg, hookStreams); err != nil {
+		// When the force-validate sentinel is present, always re-signal the
+		// agent (exit 2) regardless of attempt count — useful for debugging
+		// loops where the developer wants unlimited retries.
 		if !validate.ForceHookFileExists(workDir) {
 			maxAttempts := cfg.StopHookMaxAttempts
 			if maxAttempts <= 0 {
 				maxAttempts = validate.DefaultMaxAttempts
 			}
-			n := validate.TrackFailedAttempt(workDir)
+			n := validate.TrackFailedAttempt(workDir, contentHash)
 			if n >= maxAttempts {
 				streams.ErrPrintf("chunk validate: validation has failed %d time(s) with the same uncommitted changes.\n", n)
 				streams.ErrPrintf("The failures above do not appear to be resolving automatically.\n")

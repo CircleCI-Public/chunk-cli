@@ -32,11 +32,12 @@ func attemptsPath(workDir string) string {
 }
 
 // TrackFailedAttempt increments the consecutive failure count for workDir.
+// hash is the content hash computed before validation ran (pass the same value
+// used to detect changes so the count isn't spuriously reset by a concurrent
+// commit between RunAll and this call).
 // It resets to 1 if the content hash has changed since the last failure.
 // Returns the new failure count.
-func TrackFailedAttempt(workDir string) int {
-	hash := computeContentHash(workDir)
-
+func TrackFailedAttempt(workDir, hash string) int {
 	var state attemptsState
 	if data, err := os.ReadFile(attemptsPath(workDir)); err == nil {
 		_ = json.Unmarshal(data, &state)

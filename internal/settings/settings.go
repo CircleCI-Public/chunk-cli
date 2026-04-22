@@ -57,7 +57,9 @@ func Build(commands []config.Command) ([]byte, error) {
 	}
 
 	if len(hooks) > 0 {
-		// Compute a Stop hook timeout that covers all commands running sequentially.
+		// Compute a Stop hook timeout that covers all commands running sequentially,
+		// capped at 600s to avoid exceeding Claude Code's maximum hook timeout.
+		const maxStopTimeout = 600
 		stopTimeout := 30 // base buffer
 		for _, cmd := range commands {
 			t := cmd.Timeout
@@ -65,6 +67,9 @@ func Build(commands []config.Command) ([]byte, error) {
 				t = 300
 			}
 			stopTimeout += t
+		}
+		if stopTimeout > maxStopTimeout {
+			stopTimeout = maxStopTimeout
 		}
 
 		s.Hooks = map[string][]hookGroup{

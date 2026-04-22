@@ -20,10 +20,10 @@ func cacheDir(workDir string) string {
 	return filepath.Join(os.TempDir(), "chunk-run", "cache", fmt.Sprintf("%x", h[:8]))
 }
 
-// computeContentHash returns a hash of the current HEAD commit plus the diff
+// ComputeContentHash returns a hash of the current HEAD commit plus the diff
 // against HEAD, used to detect whether uncommitted changes have shifted
 // between Stop hook invocations.
-func computeContentHash(workDir string) string {
+func ComputeContentHash(workDir string) string {
 	h := sha256.New()
 
 	head, err := exec.Command("git", "-C", workDir, "rev-parse", "HEAD").Output()

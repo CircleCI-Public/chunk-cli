@@ -87,11 +87,12 @@ func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams)
 	return nil
 }
 
-// HasUncommittedChanges reports whether workDir has any staged or unstaged
-// changes relative to HEAD. Returns false (no error) when not in a git repo
-// or when there are no commits yet — both are treated as "nothing to validate".
+// HasUncommittedChanges reports whether workDir has any staged, unstaged, or
+// untracked changes. Returns false (no error) when not in a git repo or when
+// there are no commits yet — both are treated as "nothing to validate".
+// Uses `git status --porcelain` so newly created (untracked) files are detected.
 func HasUncommittedChanges(workDir string) (bool, error) {
-	out, err := exec.Command("git", "-C", workDir, "diff", "HEAD", "--name-only").Output()
+	out, err := exec.Command("git", "-C", workDir, "status", "--porcelain").Output()
 	if err != nil {
 		return false, nil
 	}
@@ -165,8 +166,7 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec i
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
-	// Route all output to stderr so it appears in Stop hook feedback to the agent.
-	cmd.Stdout = streams.Err
+	cmd.Stdout = streams.Out
 	cmd.Stderr = streams.Err
 
 	err := cmd.Run()

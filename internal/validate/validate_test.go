@@ -469,13 +469,14 @@ func TestTrackFailedAttempt(t *testing.T) {
 		dir := t.TempDir()
 		initGitRepo(t, dir)
 
-		n1 := TrackFailedAttempt(dir)
+		hash := ComputeContentHash(dir)
+		n1 := TrackFailedAttempt(dir, hash)
 		assert.Equal(t, n1, 1)
 
-		n2 := TrackFailedAttempt(dir)
+		n2 := TrackFailedAttempt(dir, hash)
 		assert.Equal(t, n2, 2)
 
-		n3 := TrackFailedAttempt(dir)
+		n3 := TrackFailedAttempt(dir, hash)
 		assert.Equal(t, n3, 3)
 	})
 
@@ -483,16 +484,18 @@ func TestTrackFailedAttempt(t *testing.T) {
 		dir := t.TempDir()
 		initGitRepo(t, dir)
 
-		n1 := TrackFailedAttempt(dir)
+		hash1 := ComputeContentHash(dir)
+		n1 := TrackFailedAttempt(dir, hash1)
 		assert.Equal(t, n1, 1)
 
-		n2 := TrackFailedAttempt(dir)
+		n2 := TrackFailedAttempt(dir, hash1)
 		assert.Equal(t, n2, 2)
 
 		// Modify a tracked file so the content hash changes.
 		assert.NilError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("changed"), 0o644))
 
-		n3 := TrackFailedAttempt(dir)
+		hash2 := ComputeContentHash(dir)
+		n3 := TrackFailedAttempt(dir, hash2)
 		assert.Equal(t, n3, 1, "expected reset to 1 after content change")
 	})
 
@@ -500,7 +503,7 @@ func TestTrackFailedAttempt(t *testing.T) {
 		dir := t.TempDir()
 		initGitRepo(t, dir)
 
-		n := TrackFailedAttempt(dir)
+		n := TrackFailedAttempt(dir, ComputeContentHash(dir))
 		assert.Equal(t, n, 1)
 	})
 }
@@ -509,12 +512,13 @@ func TestResetAttempts(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
-	TrackFailedAttempt(dir)
-	TrackFailedAttempt(dir)
+	hash := ComputeContentHash(dir)
+	TrackFailedAttempt(dir, hash)
+	TrackFailedAttempt(dir, hash)
 
 	ResetAttempts(dir)
 
-	n := TrackFailedAttempt(dir)
+	n := TrackFailedAttempt(dir, hash)
 	assert.Equal(t, n, 1, "expected attempt count to restart after reset")
 }
 
