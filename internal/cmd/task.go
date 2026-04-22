@@ -1,15 +1,14 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
-	"sort"
-	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -40,11 +39,15 @@ func newTaskRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
+				return &userError{msg: "Could not determine working directory.", err: fmt.Errorf("get working directory: %w", err)}
 			}
 			repoRoot, err := gitutil.RepoRoot(cwd)
 			if err != nil {
-				return fmt.Errorf("not in a git repository: %w", err)
+				return &userError{
+					msg:        "Not in a git repository.",
+					suggestion: "Run this command from inside a git repo.",
+					err:        fmt.Errorf("not in a git repository: %w", err),
+				}
 			}
 
 			cfg, err := task.LoadRunConfig(repoRoot)
@@ -53,7 +56,7 @@ func newTaskRunCmd() *cobra.Command {
 			}
 
 			io := iostream.FromCmd(cmd)
-			client, err := authprompt.EnsureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -90,7 +93,6 @@ func newTaskRunCmd() *cobra.Command {
 	return cmd
 }
 
-//nolint:gocyclo // cobra command wiring with many flags
 func newTaskConfigCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "config",
@@ -102,11 +104,15 @@ func newTaskConfigCmd() *cobra.Command {
 			// Find git repo root instead of using cwd
 			cwd, err := os.Getwd()
 			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
+				return &userError{msg: "Could not determine working directory.", err: fmt.Errorf("get working directory: %w", err)}
 			}
 			repoRoot, err := gitutil.RepoRoot(cwd)
 			if err != nil {
-				return fmt.Errorf("not in a git repository: %w", err)
+				return &userError{
+					msg:        "Not in a git repository.",
+					suggestion: "Run this command from inside a git repo.",
+					err:        fmt.Errorf("not in a git repository: %w", err),
+				}
 			}
 
 			// Check for existing config and prompt before overwriting
@@ -126,192 +132,36 @@ func newTaskConfigCmd() *cobra.Command {
 			io.Println(ui.Bold("Chunk Run Setup"))
 			io.Println("")
 
-			client, err := authprompt.EnsureCircleCIClient(ctx, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(ctx, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
 
 			io.ErrPrintln(ui.Dim("Fetching your CircleCI projects..."))
 
-			// Fetch projects and collaborations in parallel
-			var projects []circleci.FollowedProject
-			var collabs []circleci.Collaboration
-			var projErr, collabErr error
-
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() {
-				defer wg.Done()
-				projects, projErr = client.ListFollowedProjects(ctx)
-			}()
-			go func() {
-				defer wg.Done()
-				collabs, collabErr = client.ListCollaborations(ctx)
-			}()
-			wg.Wait()
-
-			if projErr != nil {
-				return fmt.Errorf("fetch projects: %w", projErr)
-			}
-			if collabErr != nil {
-				return fmt.Errorf("fetch collaborations: %w", collabErr)
-			}
-
-			var orgID, projectID, orgType string
-
-			// Sort projects alphabetically
-			sort.Slice(projects, func(i, j int) bool {
-				a := fmt.Sprintf("%s/%s", projects[i].Username, projects[i].Reponame)
-				b := fmt.Sprintf("%s/%s", projects[j].Username, projects[j].Reponame)
-				return a < b
-			})
-
-			// Build project selection list
-			items := make([]string, 0, len(projects)+1)
-			for _, p := range projects {
-				items = append(items, fmt.Sprintf("%s/%s", p.Username, p.Reponame))
-			}
-			items = append(items, "Enter manually")
-
-			idx, err := tui.SelectFromList("Select a project:", items)
+			projects, collabs, err := fetchProjectsAndCollabs(ctx, client)
 			if err != nil {
+				return err
+			}
+
+			prompts := task.Prompts{
+				Confirm:    tui.Confirm,
+				SelectFrom: tui.SelectFromList,
+				PromptText: tui.PromptText,
+				Warn:       func(msg string) { io.ErrPrintln(ui.Yellow(msg)) },
+			}
+
+			fetchDetail := func(ctx context.Context, slug string) (*circleci.ProjectDetail, error) {
+				io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Fetching project details for %s...", slug)))
+				return client.GetProjectBySlug(ctx, slug)
+			}
+
+			runCfg, err := task.CollectRunConfig(ctx, prompts, projects, collabs, fetchDetail)
+			if errors.Is(err, tui.ErrCancelled) {
 				return nil
 			}
-
-			if idx < len(projects) {
-				// Selected a project from the list
-				p := projects[idx]
-				vcsPrefix := "gh"
-				if strings.EqualFold(p.VcsType, "bitbucket") {
-					vcsPrefix = "bb"
-				}
-				slug := fmt.Sprintf("%s/%s/%s", vcsPrefix, p.Username, p.Reponame)
-
-				io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Fetching project details for %s...", slug)))
-				detail, err := client.GetProjectBySlug(ctx, slug)
-				if err != nil {
-					return fmt.Errorf("fetch project details: %w", err)
-				}
-
-				projectID = detail.ID
-				orgID = detail.OrgID
-				orgType = task.MapVcsTypeToOrgType(p.VcsType)
-			} else {
-				// Manual entry
-				if len(collabs) == 0 {
-					return fmt.Errorf("no organizations found")
-				}
-
-				orgItems := make([]string, len(collabs))
-				for i, c := range collabs {
-					orgItems[i] = c.Name
-				}
-
-				orgIdx, err := tui.SelectFromList("Select your organization:", orgItems)
-				if err != nil {
-					return nil
-				}
-
-				orgID = collabs[orgIdx].ID
-				orgType = task.MapVcsTypeToOrgType(collabs[orgIdx].VcsType)
-
-				projectID, err = tui.PromptText("Project ID (UUID)", "")
-				if err != nil {
-					return nil
-				}
-				if projectID == "" {
-					return fmt.Errorf("project ID is required")
-				}
-			}
-
-			// Warn if selected org differs from CIRCLECI_ORG_ID
-			if envOrgID := os.Getenv("CIRCLECI_ORG_ID"); envOrgID != "" && envOrgID != orgID {
-				_, _ = fmt.Fprintln(io.Err, ui.Warning(fmt.Sprintf(
-					"Warning: selected project org (%s) differs from CIRCLECI_ORG_ID (%s)",
-					orgID, envOrgID,
-				)))
-			}
-
-			// Collect definitions
-			definitions := make(map[string]task.RunDefinition)
-
-			for {
-				name, err := tui.PromptText("Definition name (e.g. dev, prod)", "")
-				if err != nil {
-					return nil
-				}
-				if name == "" {
-					return fmt.Errorf("definition name is required")
-				}
-
-				// Prompt for definition ID with UUID validation
-				var defID string
-				for {
-					defID, err = tui.PromptText("Definition ID (UUID)", "")
-					if err != nil {
-						return nil
-					}
-					if defID == "" {
-						io.Println(ui.Yellow("  This field is required."))
-						continue
-					}
-					if !task.IsValidUUID(defID) {
-						io.Println(ui.Yellow("  Must be a valid UUID (e.g. 550e8400-e29b-41d4-a716-446655440000)."))
-						continue
-					}
-					break
-				}
-
-				// Prompt for optional description
-				description, err := tui.PromptText("Description (optional)", "")
-				if err != nil {
-					return nil
-				}
-
-				defaultBranch, err := tui.PromptText("Default branch", "main")
-				if err != nil {
-					return nil
-				}
-
-				// Prompt for environment ID with optional UUID validation
-				var envID string
-				for {
-					envID, err = tui.PromptText("Environment ID (optional UUID)", "")
-					if err != nil {
-						return nil
-					}
-					if envID == "" {
-						break
-					}
-					if !task.IsValidUUID(envID) {
-						io.Println(ui.Yellow("  Must be a valid UUID (e.g. 550e8400-e29b-41d4-a716-446655440000)."))
-						continue
-					}
-					break
-				}
-
-				def := task.RunDefinition{
-					DefinitionID:  defID,
-					Description:   description,
-					DefaultBranch: defaultBranch,
-				}
-				if envID != "" {
-					def.ChunkEnvironmentID = &envID
-				}
-
-				definitions[name] = def
-
-				more, err := tui.Confirm("Add another definition?", false)
-				if err != nil || !more {
-					break
-				}
-			}
-
-			runCfg := &task.RunConfig{
-				OrgID:       orgID,
-				ProjectID:   projectID,
-				OrgType:     orgType,
-				Definitions: definitions,
+			if err != nil {
+				return err
 			}
 
 			if err := task.SaveRunConfig(repoRoot, runCfg); err != nil {
@@ -325,4 +175,38 @@ func newTaskConfigCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func fetchProjectsAndCollabs(ctx context.Context, client *circleci.Client) ([]circleci.FollowedProject, []circleci.Collaboration, error) {
+	var projects []circleci.FollowedProject
+	var collabs []circleci.Collaboration
+	var projErr, collabErr error
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		projects, projErr = client.ListFollowedProjects(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		collabs, collabErr = client.ListCollaborations(ctx)
+	}()
+	wg.Wait()
+
+	if projErr != nil {
+		return nil, nil, &userError{
+			msg:        "Could not fetch CircleCI projects.",
+			suggestion: "Check your token and network connection.",
+			err:        fmt.Errorf("fetch projects: %w", projErr),
+		}
+	}
+	if collabErr != nil {
+		return nil, nil, &userError{
+			msg:        "Could not fetch CircleCI projects.",
+			suggestion: "Check your token and network connection.",
+			err:        fmt.Errorf("fetch collaborations: %w", collabErr),
+		}
+	}
+	return projects, collabs, nil
 }

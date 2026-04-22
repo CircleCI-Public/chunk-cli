@@ -61,14 +61,14 @@ func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identi
 	}
 
 	if _, err := os.Stat(identityFile); err != nil {
-		return nil, fmt.Errorf("SSH key not found: %s\nGenerate one with: ssh-keygen -t ed25519 -f %s\nOr pass --identity-file to use an existing key", identityFile, identityFile)
+		return nil, &KeyNotFoundError{Path: identityFile}
 	}
 
 	pubKeyPath := identityFile + ".pub"
 	pubKeyData, err := os.ReadFile(pubKeyPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("SSH public key not found: %s\nThe public key must be co-located with the private key.\nGenerate a new keypair with: ssh-keygen -t ed25519 -f %s", pubKeyPath, identityFile)
+			return nil, &PublicKeyNotFoundError{KeyPath: pubKeyPath, IdentityFile: identityFile}
 		}
 		return nil, fmt.Errorf("read public key: %w", err)
 	}
@@ -109,7 +109,7 @@ func agentPublicKey(ctx context.Context, authSock string) (_ string, err error) 
 // the agent client and the underlying connection. The caller must close conn.
 func dialAgent(ctx context.Context, authSock string) (agent.ExtendedAgent, net.Conn, error) {
 	if authSock == "" {
-		return nil, nil, fmt.Errorf("SSH_AUTH_SOCK not set")
+		return nil, nil, ErrAuthSockNotSet
 	}
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", authSock)

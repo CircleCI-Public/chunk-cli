@@ -12,7 +12,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 const completionTag = "# chunk shell completion"
@@ -56,7 +55,11 @@ func detectShell(home string) (shellConfig, error) {
 			source: "source <(chunk completion bash)",
 		}, nil
 	default:
-		return shellConfig{}, usererr.New("Unsupported shell: set SHELL to bash or zsh.", fmt.Errorf("unsupported shell %q", shell))
+		return shellConfig{}, &userError{
+			msg:        "Unsupported shell.",
+			suggestion: "Set SHELL to bash or zsh.",
+			errMsg:     fmt.Sprintf("unsupported shell %q", shell),
+		}
 	}
 }
 
@@ -65,7 +68,7 @@ func detectShell(home string) (shellConfig, error) {
 func completionInstalled() (bool, error) {
 	home := os.Getenv("HOME")
 	if home == "" {
-		return false, fmt.Errorf("HOME not set")
+		return false, &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 	}
 
 	sh, err := detectShell(home)
@@ -84,7 +87,7 @@ func completionInstalled() (bool, error) {
 func installCompletion(streams iostream.Streams) (err error) {
 	home := os.Getenv("HOME")
 	if home == "" {
-		return fmt.Errorf("HOME not set")
+		return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 	}
 
 	sh, err := detectShell(home)
@@ -103,12 +106,20 @@ func installCompletion(streams iostream.Streams) (err error) {
 
 	f, err := os.OpenFile(sh.rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", sh.rcFile, err)
+		return &userError{
+			msg:        fmt.Sprintf("Could not update %s.", sh.rcFile),
+			suggestion: "Check file permissions.",
+			err:        err,
+		}
 	}
 	defer closer.ErrorHandler(f, &err)
 
 	if _, err := f.WriteString("\n" + line); err != nil {
-		return fmt.Errorf("write %s: %w", sh.rcFile, err)
+		return &userError{
+			msg:        fmt.Sprintf("Could not update %s.", sh.rcFile),
+			suggestion: "Check file permissions.",
+			err:        err,
+		}
 	}
 
 	streams.ErrPrintln(ui.Success("Completion installed."))
@@ -155,7 +166,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			home := os.Getenv("HOME")
 			if home == "" {
-				return fmt.Errorf("HOME not set")
+				return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 			}
 
 			sh, err := detectShell(home)
@@ -188,7 +199,11 @@ func newCompletionUninstallCmd() *cobra.Command {
 			}
 
 			if err := os.WriteFile(sh.rcFile, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-				return fmt.Errorf("write %s: %w", sh.rcFile, err)
+				return &userError{
+					msg:        fmt.Sprintf("Could not update %s.", sh.rcFile),
+					suggestion: "Check file permissions.",
+					err:        err,
+				}
 			}
 
 			io.ErrPrintln(ui.Success("Completion uninstalled."))

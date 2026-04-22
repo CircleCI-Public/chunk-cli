@@ -11,16 +11,41 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-const workspaceDir = "/workspace"
+const workspaceDir = "./workspace"
+
+// resolveWorkspace determines the workspace path. Priority:
+// 1. CLI --workdir flag  2. sandbox.json workspace  3. default.
+func resolveWorkspace(cliWorkdir, repo string) string {
+	if cliWorkdir != "" {
+		return cliWorkdir
+	}
+	if active, err := LoadActive(); err == nil && active != nil && active.Workspace != "" {
+		return active.Workspace
+	}
+	return workspaceDir + "/" + repo
+}
+
+// persistWorkspace saves the resolved workspace back to the sandbox file if it
+// differs from the current value.
+func persistWorkspace(workspace string) error {
+	active, err := LoadActive()
+	if err != nil {
+		return err
+	}
+	if active == nil || active.Workspace == workspace {
+		return nil
+	}
+	active.Workspace = workspace
+	return SaveActive(*active)
+}
 
 // Sync synchronises local changes to a sandbox over SSH.
 // It ensures the workspace base exists, clones the repo into workdir if absent,
 // then resets to the remote base and applies a patch of local changes.
 // workdir overrides the destination path; defaults to /workspace/<repo>.
-func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock, workdir string, io iostream.Streams) error {
+func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
 	session, err := OpenSession(ctx, client, sandboxID, identityFile, authSock)
 	if err != nil {
 		return err
@@ -36,9 +61,10 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		return fmt.Errorf("sync: %w", err)
 	}
 
-	repoPath := workdir
-	if repoPath == "" {
-		repoPath = workspaceDir + "/" + repo
+	repoPath := resolveWorkspace(workdir, repo)
+
+	if err := persistWorkspace(repoPath); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
 	}
 
 	// Ensure the parent directory exists on the sandbox.
@@ -66,13 +92,13 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 				ShellEscape(branch), ShellEscape(repoURL), ShellEscape(repoPath),
 			)
 		} else {
-			io.ErrPrintf("%s\n", ui.Dim("Branch not pushed to remote; cloning default branch instead."))
+			status(iostream.LevelInfo, "Branch not pushed to remote; cloning default branch instead.")
 			cloneCmd = fmt.Sprintf("git clone %s %s",
 				ShellEscape(repoURL), ShellEscape(repoPath),
 			)
 		}
 
-		io.ErrPrintf("%s\n", ui.Dim(fmt.Sprintf("Cloning %s/%s into %s...", org, repo, repoPath)))
+		status(iostream.LevelInfo, fmt.Sprintf("Cloning %s/%s into %s...", org, repo, repoPath))
 		cloneResult, err := ExecOverSSH(ctx, session, cloneCmd, nil, nil)
 		if err != nil {
 			return fmt.Errorf("sync: clone: %w", err)
@@ -88,7 +114,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 
 	base, err := gitutil.MergeBase()
 	if err != nil {
-		return fmt.Errorf("could not resolve remote base: %w\nPush your branch or ensure the repository has a remote configured", err)
+		return &RemoteBaseError{Err: err}
 	}
 
 	patch, err := gitutil.GeneratePatch(base)
@@ -96,7 +122,7 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		return err
 	}
 	if patch == "" {
-		io.ErrPrintln(ui.Dim("No local changes relative to remote base."))
+		status(iostream.LevelInfo, "No local changes relative to remote base.")
 		return nil
 	}
 
@@ -129,6 +155,6 @@ func Sync(ctx context.Context, client *circleci.Client, sandboxID, identityFile,
 		return fmt.Errorf("sync failed: %s", detail)
 	}
 
-	io.ErrPrintln(ui.Success("Synced."))
+	status(iostream.LevelDone, "Synced.")
 	return nil
 }

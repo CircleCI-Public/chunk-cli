@@ -173,8 +173,10 @@ func TestBuildPromptMissingGithubToken(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "GitHub token required: set GITHUB_TOKEN"),
+	assert.Assert(t, strings.Contains(combined, "GitHub token required."),
 		"expected actionable no-TTY error, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Set GITHUB_TOKEN"),
+		"expected suggestion in error, got: %s", combined)
 }
 
 func TestBuildPromptMissingAnthropicKey(t *testing.T) {
@@ -200,8 +202,10 @@ func TestBuildPromptMissingAnthropicKey(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Anthropic API key required: set ANTHROPIC_API_KEY"),
+	assert.Assert(t, strings.Contains(combined, "Anthropic API key required."),
 		"expected actionable no-TTY error, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Set ANTHROPIC_API_KEY"),
+		"expected suggestion in error, got: %s", combined)
 }
 
 func TestBuildPromptFlagVariants(t *testing.T) {

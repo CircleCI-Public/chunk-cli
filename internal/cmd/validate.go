@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,19 +11,32 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
+func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
+	return func(level iostream.Level, msg string) {
+		switch level {
+		case iostream.LevelStep:
+			streams.ErrPrintln(ui.Bold(msg))
+		case iostream.LevelInfo:
+			streams.ErrPrintf("  %s\n", ui.Dim(msg))
+		case iostream.LevelWarn:
+			streams.ErrPrintf("  %s\n", ui.Warning(msg))
+		case iostream.LevelDone:
+			streams.ErrPrintf("  %s\n", ui.Success(msg))
+		}
+	}
+}
+
 func newValidateCmd() *cobra.Command {
 	var sandboxID, identityFile, workdir string
-	var dryRun, list, save, ifChanged bool
+	var dryRun, list, save, ifChanged, remote bool
 	var inlineCmd, projectDir string
 
 	cmd := &cobra.Command{
@@ -32,6 +46,7 @@ func newValidateCmd() *cobra.Command {
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			streams := iostream.FromCmd(cmd)
+			statusFn := newStatusFunc(streams)
 
 			workDir := projectDir
 			if workDir == "" {
@@ -68,7 +83,7 @@ func newValidateCmd() *cobra.Command {
 				if err != nil {
 					cfg = &config.ProjectConfig{}
 				}
-				return validate.List(cfg, streams)
+				return validate.List(cfg, statusFn)
 			}
 
 			// --cmd: run inline command
@@ -83,62 +98,89 @@ func newValidateCmd() *cobra.Command {
 				}
 				if save {
 					if err := config.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
-						return fmt.Errorf("save command: %w", err)
+						return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
 					}
 					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 				}
-				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, streams)
+				if remote {
+					if err := resolveSandboxID(&sandboxID); err != nil {
+						return err
+					}
+				}
+				if sandboxID != "" {
+					return runRemoteInlineValidate(cmd.Context(), sandboxID, identityFile, workdir, cmdName, inlineCmd, streams)
+				}
+				return validate.RunInline(cmd.Context(), workDir, cmdName, inlineCmd, statusFn, streams)
 			}
 
 			cfg, err := config.LoadProjectConfig(workDir)
 			if err != nil || !cfg.HasCommands() {
-				return fmt.Errorf("no validate commands configured, run 'chunk init' first")
+				return &userError{
+					msg:        "No validate commands configured.",
+					suggestion: "Run 'chunk init' first.",
+					errMsg:     "no validate commands configured",
+				}
 			}
 
 			if dryRun {
-				return validate.RunDryRun(cfg, name, streams)
+				return mapValidateError(validate.RunDryRun(cfg, name, statusFn))
+			}
+
+			if remote {
+				if err := resolveSandboxID(&sandboxID); err != nil {
+					return err
+				}
 			}
 
 			if sandboxID != "" {
-				client, err := authprompt.EnsureCircleCIClient(cmd.Context(), streams, tui.PromptHidden)
-				if err != nil {
-					return err
-				}
-				authSock := os.Getenv("SSH_AUTH_SOCK")
-				session, err := sandbox.OpenSession(cmd.Context(), client, sandboxID, identityFile, authSock)
-				if err != nil {
-					return fmt.Errorf("open session: %w", err)
-				}
-				dest := workdir
-				if dest == "" {
-					dest = "/workspace"
-				}
-				return validate.RunRemote(cmd.Context(), func(ctx context.Context, script string) (string, string, int, error) {
-					result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
-					if err != nil {
-						return "", "", 0, err
-					}
-					return result.Stdout, result.Stderr, result.ExitCode, nil
-				}, cfg, dest, streams)
+				return runRemoteValidate(cmd.Context(), sandboxID, identityFile, workdir, cfg, streams)
 			}
 
 			// Named command
 			if name != "" {
-				cfg, err = ensureCommandConfigured(workDir, name, cfg, streams)
-				if err != nil {
-					return err
+				if cfg.FindCommand(name) == nil {
+					isTTY := term.IsTerminal(int(os.Stdin.Fd()))
+					if !isTTY {
+						return &userError{
+							msg:        fmt.Sprintf("Command %q is not configured.", name),
+							suggestion: "Add it to .chunk/config.json.",
+							errMsg:     fmt.Sprintf("command %q is not configured", name),
+						}
+					}
+					// Interactive setup: prompt for command
+					streams.ErrPrintf("Command %s is not configured yet.\n\n", ui.Bold(name))
+					streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
+					scanner := bufio.NewScanner(os.Stdin)
+					if !scanner.Scan() {
+						return &userError{msg: "No command entered.", errMsg: "no input received"}
+					}
+					input := strings.TrimSpace(scanner.Text())
+					if input == "" {
+						streams.ErrPrintln(ui.Dim("No command entered, aborting."))
+						return &userError{msg: "No command entered.", errMsg: "no command entered"}
+					}
+					if err := config.SaveCommand(workDir, name, input); err != nil {
+						return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
+					}
+					streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
+					// Reload config after save
+					cfg, err = config.LoadProjectConfig(workDir)
+					if err != nil {
+						return err
+					}
 				}
-				return validate.RunNamed(cmd.Context(), workDir, name, cfg, streams)
+				return mapValidateError(validate.RunNamed(cmd.Context(), workDir, name, cfg, statusFn, streams))
 			}
 
 			// Run all
-			return validate.RunAll(cmd.Context(), workDir, cfg, streams)
+			return mapValidateError(validate.RunAll(cmd.Context(), workDir, cfg, statusFn, streams))
 		},
 	}
 
+	cmd.Flags().BoolVar(&remote, "remote", false, "Run on active sandbox (reads .chunk/sandbox.json)")
 	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sandbox (auto-detected as /workspace/<repo> when omitted)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sandbox (reads from sandbox.json, defaults to ./workspace)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
 	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
@@ -149,31 +191,69 @@ func newValidateCmd() *cobra.Command {
 	return cmd
 }
 
-// ensureCommandConfigured returns a config with the named command present,
-// prompting interactively to configure it if missing (TTY only).
-func ensureCommandConfigured(workDir, name string, cfg *config.ProjectConfig, streams iostream.Streams) (*config.ProjectConfig, error) {
-	if cfg.FindCommand(name) != nil {
-		return cfg, nil
+func mapValidateError(err error) error {
+	if errors.Is(err, validate.ErrNotConfigured) {
+		return &userError{
+			msg:        "No validate commands configured.",
+			suggestion: "Run 'chunk init' first.",
+			err:        err,
+		}
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return nil, fmt.Errorf("command %q is not configured\nAdd %q to .chunk/config.json", name, name)
+	return err
+}
+
+func runRemoteValidate(ctx context.Context, sandboxID, identityFile, workdir string, cfg *config.ProjectConfig, streams iostream.Streams) error {
+	client, err := ensureCircleCIClient(ctx, streams, tui.PromptHidden)
+	if err != nil {
+		return err
 	}
-	streams.ErrPrintf("Command %s is not configured yet.\n\n", ui.Bold(name))
-	streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		return nil, fmt.Errorf("no input received")
+	authSock := os.Getenv("SSH_AUTH_SOCK")
+	session, err := sandbox.OpenSession(ctx, client, sandboxID, identityFile, authSock)
+	if err != nil {
+		return &userError{msg: "Could not open SSH session to sandbox.", err: err}
 	}
-	input := strings.TrimSpace(scanner.Text())
-	if input == "" {
-		streams.ErrPrintln(ui.Dim("No command entered, aborting."))
-		return nil, fmt.Errorf("no command entered")
+	dest := workdir
+	if dest == "" {
+		if active, err := sandbox.LoadActive(); err == nil && active != nil && active.Workspace != "" {
+			dest = active.Workspace
+		} else {
+			dest = "./workspace"
+		}
 	}
-	if err := config.SaveCommand(workDir, name, input); err != nil {
-		return nil, fmt.Errorf("save command: %w", err)
+	return validate.RunRemote(ctx, func(ctx context.Context, script string) (string, string, int, error) {
+		result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
+		if err != nil {
+			return "", "", 0, err
+		}
+		return result.Stdout, result.Stderr, result.ExitCode, nil
+	}, cfg, dest, streams)
+}
+
+func runRemoteInlineValidate(ctx context.Context, sandboxID, identityFile, workdir, name, command string, streams iostream.Streams) error {
+	client, err := ensureCircleCIClient(ctx, streams, tui.PromptHidden)
+	if err != nil {
+		return err
 	}
-	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
-	return config.LoadProjectConfig(workDir)
+	authSock := os.Getenv("SSH_AUTH_SOCK")
+	session, err := sandbox.OpenSession(ctx, client, sandboxID, identityFile, authSock)
+	if err != nil {
+		return &userError{msg: "Could not open SSH session to sandbox.", err: err}
+	}
+	dest := workdir
+	if dest == "" {
+		if active, err := sandbox.LoadActive(); err == nil && active != nil && active.Workspace != "" {
+			dest = active.Workspace
+		} else {
+			dest = "./workspace"
+		}
+	}
+	return validate.RunRemoteInline(ctx, func(ctx context.Context, script string) (string, string, int, error) {
+		result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
+		if err != nil {
+			return "", "", 0, err
+		}
+		return result.Stdout, result.Stderr, result.ExitCode, nil
+	}, name, command, dest, streams)
 }
 
 // runIfChanged implements --if-changed hook mode: skip when the working tree
@@ -209,8 +289,9 @@ func runIfChanged(ctx context.Context, workDir string, streams iostream.Streams)
 	// Route stdout to stderr so all command output appears in the Stop hook
 	// feedback block that Claude Code shows the agent.
 	hookStreams := iostream.Streams{Out: streams.Err, Err: streams.Err}
+	hookStatus := newStatusFunc(hookStreams)
 
-	if err := validate.RunAll(ctx, workDir, cfg, hookStreams); err != nil {
+	if err := validate.RunAll(ctx, workDir, cfg, hookStatus, hookStreams); err != nil {
 		// When the force-validate sentinel is present, always re-signal the
 		// agent (exit 2) regardless of attempt count — useful for debugging
 		// loops where the developer wants unlimited retries.
@@ -224,10 +305,10 @@ func runIfChanged(ctx context.Context, workDir string, streams iostream.Streams)
 				streams.ErrPrintf("chunk validate: validation has failed %d time(s) with the same uncommitted changes.\n", n)
 				streams.ErrPrintf("The failures above do not appear to be resolving automatically.\n")
 				streams.ErrPrintf("Stop attempting to fix this and ask the user for guidance instead.\n")
-				return &usererr.ExitError{Code: 2}
+				return &exitError{code: 2}
 			}
 		}
-		return &usererr.ExitError{Code: 2}
+		return &exitError{code: 2}
 	}
 	validate.ResetAttempts(workDir)
 	return nil

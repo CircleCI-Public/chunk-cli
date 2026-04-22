@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 // Options holds the configuration for a build-prompt run.
@@ -17,6 +18,7 @@ type Options struct {
 	AnalyzeModel       string
 	PromptModel        string
 	IncludeAttribution bool
+	Status             iostream.StatusFunc
 }
 
 // OutputPaths holds the derived file paths for build-prompt outputs.

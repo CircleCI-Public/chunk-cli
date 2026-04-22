@@ -40,23 +40,35 @@ func withTrailingNewline(data []byte) []byte {
 func writeSettings(workDir string, commands []config.Command, streams iostream.Streams, confirm confirmFunc) error {
 	generated, err := settings.Build(commands)
 	if err != nil {
-		return fmt.Errorf("build settings: %w", err)
+		return &userError{msg: "Could not build .claude/settings.json.", err: fmt.Errorf("build settings: %w", err)}
 	}
 
 	dir := filepath.Join(workDir, ".claude")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create .claude dir: %w", err)
+		return &userError{
+			msg:        "Could not create .claude directory.",
+			suggestion: "Check file permissions.",
+			err:        fmt.Errorf("create .claude dir: %w", err),
+		}
 	}
 
 	path := filepath.Join(dir, "settings.json")
 	existing, readErr := os.ReadFile(path)
 	if readErr != nil {
 		if !errors.Is(readErr, fs.ErrNotExist) {
-			return fmt.Errorf("read existing settings.json: %w", readErr)
+			return &userError{
+				msg:        "Could not read .claude/settings.json.",
+				suggestion: "Check file permissions.",
+				err:        fmt.Errorf("read existing settings.json: %w", readErr),
+			}
 		}
 		// No existing file — write directly.
 		if err := os.WriteFile(path, withTrailingNewline(generated), 0o644); err != nil {
-			return fmt.Errorf("write settings.json: %w", err)
+			return &userError{
+				msg:        "Could not write .claude/settings.json.",
+				suggestion: "Check file permissions.",
+				err:        fmt.Errorf("write settings.json: %w", err),
+			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .claude/settings.json"))
 		return nil
@@ -65,7 +77,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 	// Existing file found — compute merge.
 	result, err := settings.Merge(existing, generated)
 	if err != nil {
-		return fmt.Errorf("merge settings: %w", err)
+		return &userError{msg: "Could not merge .claude/settings.json.", err: fmt.Errorf("merge settings: %w", err)}
 	}
 
 	if !result.Changed {
@@ -104,7 +116,11 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 	}
 
 	if err := os.WriteFile(path, withTrailingNewline(result.Merged), 0o644); err != nil {
-		return fmt.Errorf("write settings.json: %w", err)
+		return &userError{
+			msg:        "Could not write .claude/settings.json.",
+			suggestion: "Check file permissions.",
+			err:        fmt.Errorf("write settings.json: %w", err),
+		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .claude/settings.json"))
 	return nil
@@ -114,9 +130,63 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 func writeSettingsExample(dir string, data []byte, streams iostream.Streams) error {
 	exPath := filepath.Join(dir, "settings.example.json")
 	if err := os.WriteFile(exPath, withTrailingNewline(data), 0o644); err != nil {
-		return fmt.Errorf("write settings.example.json: %w", err)
+		return &userError{
+			msg: "Could not write .claude/settings.example.json.",
+			err: fmt.Errorf("write settings.example.json: %w", err),
+		}
 	}
 	streams.ErrPrintln(ui.Success("Wrote .claude/settings.example.json (existing settings.json preserved)"))
+	return nil
+}
+
+var sandboxGitignoreEntries = []string{
+	".chunk/sandbox.json",
+	".chunk/sandbox.*.json",
+}
+
+// ensureGitignoreEntries appends sandbox tracking patterns to .gitignore if
+// they are not already present.
+func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
+	path := filepath.Join(workDir, ".gitignore")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read .gitignore: %w", err)
+	}
+
+	content := string(existing)
+	var toAdd []string
+	for _, entry := range sandboxGitignoreEntries {
+		if !strings.Contains(content, entry) {
+			toAdd = append(toAdd, entry)
+		}
+	}
+	if len(toAdd) == 0 {
+		return nil
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open .gitignore: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		if _, err := f.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+
+	if _, err := f.WriteString("\n# chunk active sandbox tracking\n"); err != nil {
+		return err
+	}
+	for _, entry := range toAdd {
+		if _, err := f.WriteString(entry + "\n"); err != nil {
+			return err
+		}
+	}
+
+	streams.ErrPrintln(ui.Success("Updated .gitignore with sandbox tracking patterns"))
 	return nil
 }
 
@@ -140,14 +210,14 @@ hook config files.`,
 				var err error
 				workDir, err = os.Getwd()
 				if err != nil {
-					return err
+					return &userError{msg: "Could not determine working directory.", err: err}
 				}
 			}
 
 			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
 			gitCmd.Dir = workDir
 			if err := gitCmd.Run(); err != nil {
-				return fmt.Errorf("not a git repository, run this command from inside a git repo")
+				return &userError{msg: "Not a git repository.", suggestion: "Run this command from inside a git repo.", err: err}
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
@@ -199,14 +269,22 @@ hook config files.`,
 
 			// Save config
 			if err := config.SaveProjectConfig(workDir, cfg); err != nil {
-				return fmt.Errorf("write config: %w", err)
+				return &userError{
+					msg:        "Could not write .chunk/config.json.",
+					suggestion: "Check file permissions.",
+					err:        fmt.Errorf("write config: %w", err),
+				}
 			}
 			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
+
+			if err := ensureGitignoreEntries(workDir, streams); err != nil {
+				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
+			}
 
 			// Step 3: Write .claude/settings.json
 			if !skipHooks {
 				if err := writeSettings(workDir, cfg.Commands, streams, tui.Confirm); err != nil {
-					return fmt.Errorf("settings: %w", err)
+					return err
 				}
 			}
 

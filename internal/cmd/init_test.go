@@ -237,6 +237,53 @@ func TestInstallCompletionSkipsWhenAlreadyInstalled(t *testing.T) {
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already installed")))
 }
 
+func TestEnsureGitignoreEntriesCreatesNew(t *testing.T) {
+	dir := t.TempDir()
+	streams, _, _ := testStreams()
+
+	err := ensureGitignoreEntries(dir, streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+	for _, entry := range sandboxGitignoreEntries {
+		assert.Assert(t, strings.Contains(string(data), entry), "missing %s", entry)
+	}
+}
+
+func TestEnsureGitignoreEntriesAppendsToExisting(t *testing.T) {
+	dir := t.TempDir()
+	existing := "node_modules/\n.env\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644))
+
+	streams, _, _ := testStreams()
+	err := ensureGitignoreEntries(dir, streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+	content := string(data)
+	assert.Assert(t, strings.HasPrefix(content, existing))
+	for _, entry := range sandboxGitignoreEntries {
+		assert.Assert(t, strings.Contains(content, entry), "missing %s", entry)
+	}
+}
+
+func TestEnsureGitignoreEntriesIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	streams, _, _ := testStreams()
+
+	assert.NilError(t, ensureGitignoreEntries(dir, streams))
+	first, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+
+	assert.NilError(t, ensureGitignoreEntries(dir, streams))
+	second, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+
+	assert.Equal(t, string(first), string(second))
+}
+
 func TestInstallCompletionBashWritesRCFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -29,7 +28,7 @@ func newSkillInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := os.Getenv("HOME")
 			if home == "" {
-				return fmt.Errorf("HOME not set")
+				return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 			}
 			io := iostream.FromCmd(cmd)
 			results := skills.Install(home)

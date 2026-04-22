@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -11,6 +12,40 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
+
+var (
+	// ErrKeyNotFound indicates no Anthropic API key was found in env or config.
+	ErrKeyNotFound = errors.New("api key not found")
+
+	// ErrTokenLimit indicates the prompt exceeds the model's context window.
+	ErrTokenLimit = errors.New("prompt exceeds context window")
+)
+
+func isTokenLimitErr(err error) bool {
+	var he *httpcl.HTTPError
+	if !errors.As(err, &he) {
+		return false
+	}
+	return strings.Contains(string(he.Body), "prompt is too long")
+}
+
+// StatusError represents an HTTP error from the Anthropic API without exposing httpcl internals.
+type StatusError struct {
+	Op         string
+	StatusCode int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s: %d %s", e.Op, e.StatusCode, http.StatusText(e.StatusCode))
+}
+
+func mapErr(op string, err error) error {
+	var he *httpcl.HTTPError
+	if !errors.As(err, &he) {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	return &StatusError{Op: op, StatusCode: he.StatusCode}
+}
 
 // Client is an Anthropic Messages API client.
 type Client struct {
@@ -27,7 +62,7 @@ func New() (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve config: %w", err)
 		}
-		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable or config file is required")
+		return nil, ErrKeyNotFound
 	}
 
 	baseURL := os.Getenv("ANTHROPIC_BASE_URL")
@@ -90,7 +125,10 @@ func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt st
 
 	_, err := c.http.Call(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("anthropic messages: %w", err)
+		if isTokenLimitErr(err) {
+			return "", fmt.Errorf("anthropic messages: %w", ErrTokenLimit)
+		}
+		return "", mapErr("anthropic messages", err)
 	}
 
 	for _, block := range resp.Content {
@@ -99,14 +137,4 @@ func (c *Client) Ask(ctx context.Context, model string, maxTokens int, prompt st
 		}
 	}
 	return "", fmt.Errorf("no text content in Anthropic response")
-}
-
-// IsTokenLimitError reports whether err is an Anthropic API error indicating
-// that the prompt exceeds the model's context window.
-func IsTokenLimitError(err error) bool {
-	var he *httpcl.HTTPError
-	if !errors.As(err, &he) {
-		return false
-	}
-	return strings.Contains(string(he.Body), "prompt is too long")
 }

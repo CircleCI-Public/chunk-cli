@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/buildprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -31,16 +34,23 @@ func newBuildPromptCmd() *cobra.Command {
 		Short: "Analyze GitHub PR comments and generate a review prompt for AI coding agents",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if top <= 0 {
-				return fmt.Errorf("--top must be a positive integer, got %d", top)
+				return &userError{msg: "--top must be a positive integer.", errMsg: fmt.Sprintf("invalid --top value: %d", top)}
 			}
 
 			cwd, err := os.Getwd()
 			if err != nil {
-				return fmt.Errorf("get working directory: %w", err)
+				return &userError{msg: "Could not determine working directory.", err: err}
 			}
 			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos, cwd)
 			if err != nil {
-				return err
+				if errors.Is(err, buildprompt.ErrReposRequired) {
+					return &userError{
+						msg:        "--repos is required when --org is provided.",
+						suggestion: "Omit --org to auto-detect from git remote.",
+						err:        err,
+					}
+				}
+				return &userError{msg: "Could not determine org and repos.", suggestion: "Use --org and --repos flags.", err: err}
 			}
 
 			sinceTime, err := parseSince(since)
@@ -63,6 +73,16 @@ func newBuildPromptCmd() *cobra.Command {
 				}
 			}
 
+			ghClient, err := ensureGitHubClient(cmd.Context(), streams, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+
+			anthropicClient, err := ensureAnthropicClient(cmd.Context(), streams, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+
 			opts := buildprompt.Options{
 				Org:                resolvedOrg,
 				Repos:              resolvedRepos,
@@ -73,9 +93,27 @@ func newBuildPromptCmd() *cobra.Command {
 				AnalyzeModel:       analyzeModel,
 				PromptModel:        promptModel,
 				IncludeAttribution: includeAttribution,
+				Status:             newStatusFunc(streams),
 			}
 
-			return buildprompt.Run(cmd.Context(), opts, iostream.FromCmd(cmd))
+			if err := buildprompt.Run(cmd.Context(), opts, ghClient, anthropicClient); err != nil {
+				if e, ok := errors.AsType[*github.RetryError](err); ok {
+					if e.ServerError {
+						return &userError{
+							msg:        "GitHub API returned a server error.",
+							suggestion: "Try again in a few minutes.",
+							err:        err,
+						}
+					}
+					return &userError{
+						msg:        fmt.Sprintf("GitHub API request failed after %d retries.", e.Retries),
+						suggestion: "Check your network connection and try again.",
+						err:        err,
+					}
+				}
+				return err
+			}
+			return nil
 		},
 	}
 

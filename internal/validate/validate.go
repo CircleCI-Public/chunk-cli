@@ -11,8 +11,10 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
+
+// ErrNotConfigured indicates no validate commands are configured.
+var ErrNotConfigured = errors.New("no validate commands configured")
 
 // shellEscape wraps arg in single quotes for safe use in a POSIX sh -c command.
 func shellEscape(arg string) string {
@@ -23,42 +25,42 @@ func shellEscape(arg string) string {
 const DefaultTimeout = 300
 
 // List prints all configured command names and their run strings.
-func List(cfg *config.ProjectConfig, streams iostream.Streams) error {
+func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
-		streams.Println(ui.Dim("No commands configured."))
-		streams.Println(ui.Dim("Add commands with: chunk validate <name> --cmd \"your command\" --save"))
+		status(iostream.LevelInfo, "No commands configured.")
+		status(iostream.LevelInfo, "Add commands with: chunk validate <name> --cmd \"your command\" --save")
 		return nil
 	}
 	for _, c := range cfg.Commands {
-		streams.Printf("  %s: %s\n", ui.Bold(c.Name), ui.Gray(c.Run))
+		status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
 	}
 	return nil
 }
 
 // RunInline runs an inline command string.
-func RunInline(ctx context.Context, workDir, name, command string, streams iostream.Streams) error {
-	return runCommand(ctx, workDir, name, command, 0, streams)
+func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) error {
+	return runCommand(ctx, workDir, name, command, 0, status, streams)
 }
 
 // RunNamed runs a single named command from config.
-func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, streams iostream.Streams) error {
+func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
 	c := cfg.FindCommand(name)
 	if c == nil {
 		return fmt.Errorf("command %q not configured", name)
 	}
-	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, streams)
+	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
 }
 
 // RunAll runs all configured commands, stopping at the first failure.
-func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, streams iostream.Streams) error {
+func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
-		return fmt.Errorf("no validate commands configured, run 'chunk init' first")
+		return ErrNotConfigured
 	}
 
 	for i, c := range cfg.Commands {
-		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, streams); err != nil {
+		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams); err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
-				streams.ErrPrintf("%s: %s\n", ui.Bold(cfg.Commands[j].Name), ui.Yellow(fmt.Sprintf("skipped (%s failed)", c.Name)))
+				status(iostream.LevelWarn, fmt.Sprintf("%s: skipped (%s failed)", cfg.Commands[j].Name, c.Name))
 			}
 			return err
 		}
@@ -67,9 +69,9 @@ func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, stre
 }
 
 // RunDryRun prints commands without executing them.
-func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams) error {
+func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
-		return fmt.Errorf("no validate commands configured, run 'chunk init' first")
+		return ErrNotConfigured
 	}
 
 	commands := cfg.Commands
@@ -82,7 +84,7 @@ func RunDryRun(cfg *config.ProjectConfig, name string, streams iostream.Streams)
 	}
 
 	for _, c := range commands {
-		streams.Printf("%s: %s\n", ui.Bold(c.Name), ui.Gray(c.Run))
+		status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
 	}
 	return nil
 }
@@ -116,6 +118,25 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		if exitCode != 0 {
 			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
+	}
+	return nil
+}
+
+// RunRemoteInline runs a single inline command on a remote sandbox via SSH.
+func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, streams iostream.Streams) error {
+	script := "cd " + shellEscape(dest) + " && " + command
+	stdout, stderr, exitCode, err := execFn(ctx, script)
+	if err != nil {
+		return fmt.Errorf("remote %s: %w", name, err)
+	}
+	if stdout != "" {
+		_, _ = fmt.Fprint(streams.Out, stdout)
+	}
+	if stderr != "" {
+		_, _ = fmt.Fprint(streams.Err, stderr)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
 	}
 	return nil
 }
@@ -154,9 +175,9 @@ func expandCommand(workDir, command string) string {
 	return strings.ReplaceAll(command, "{{CHANGED_PACKAGES}}", expanded)
 }
 
-func runCommand(ctx context.Context, workDir, name, command string, timeoutSec int, streams iostream.Streams) error {
+func runCommand(ctx context.Context, workDir, name, command string, timeoutSec int, status iostream.StatusFunc, streams iostream.Streams) error {
 	command = expandCommand(workDir, command)
-	streams.ErrPrintf("%s %s\n", ui.Dim("Running "+name+":"), ui.Gray(command))
+	status(iostream.LevelInfo, fmt.Sprintf("Running %s: %s", name, command))
 
 	if timeoutSec <= 0 {
 		timeoutSec = DefaultTimeout

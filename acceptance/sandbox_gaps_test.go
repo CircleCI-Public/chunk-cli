@@ -149,7 +149,7 @@ func TestSandboxBuildInvalidTag(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for invalid tag")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "invalid docker tag"),
+	assert.Assert(t, strings.Contains(combined, "Invalid image tag"),
 		"expected invalid tag error, got: %s", combined)
 }
 
@@ -300,7 +300,7 @@ func TestSandboxCreateCollaborationsAPIError(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "--org-id"),
 		"expected org-id error, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "list collaborations"),
+	assert.Assert(t, strings.Contains(combined, "Could not list organizations"),
 		"expected collaborations error detail, got: %s", combined)
 }
 

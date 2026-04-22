@@ -58,6 +58,11 @@ func (c *sshConn) Close() error {
 	if c.cleanup != nil {
 		c.cleanup()
 	}
+	// Both sides may initiate close simultaneously; if the remote end already
+	// closed the connection, treat it as a successful close.
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
 	return err
 }
 
@@ -129,7 +134,7 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 			_ = resp.Body.Close()
 		}
 		cleanup()
-		return nil, fmt.Errorf("WebSocket connect to %s: %w", wsURL, err)
+		return nil, fmt.Errorf("websocket connect to %s: %w", wsURL, err)
 	}
 
 	netConn := websocket.NetConn(ctx, wsConn, websocket.MessageBinary)
@@ -143,7 +148,7 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 	if err != nil {
 		_ = netConn.Close()
 		cleanup()
-		return nil, fmt.Errorf("SSH handshake: %w", err)
+		return nil, fmt.Errorf("ssh handshake: %w", err)
 	}
 
 	return &sshConn{Client: ssh.NewClient(conn, chans, reqs), cleanup: cleanup}, nil
@@ -174,7 +179,7 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 
 	sess, err := client.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("SSH session: %w", err)
+		return nil, fmt.Errorf("ssh session: %w", err)
 	}
 	defer func() { _ = sess.Close() }()
 
@@ -196,7 +201,7 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitStatus()
 		} else {
-			return nil, fmt.Errorf("SSH exec: %w", err)
+			return nil, fmt.Errorf("ssh exec: %w", err)
 		}
 	}
 
@@ -220,7 +225,7 @@ func InteractiveShell(ctx context.Context, session *Session, envVars map[string]
 
 	sess, err := client.NewSession()
 	if err != nil {
-		return fmt.Errorf("SSH session: %w", err)
+		return fmt.Errorf("ssh session: %w", err)
 	}
 	defer closer.ErrorHandler(sess, &err)
 
