@@ -155,7 +155,7 @@ func TestResolveGitHubClient_TokenInEnv(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", randToken("ghp_"))
 	t.Setenv("GITHUB_API_URL", srv.URL)
 
-	client, err := authprompt.ResolveGitHubClient()
+	client, err := authprompt.ResolveGitHubClient(nil)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
@@ -175,7 +175,7 @@ func TestResolveGitHubClient_TokenInConfig(t *testing.T) {
 	cfg.GitHubToken = randToken("ghp_")
 	assert.NilError(t, config.Save(cfg))
 
-	client, err := authprompt.ResolveGitHubClient()
+	client, err := authprompt.ResolveGitHubClient(nil)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
@@ -184,7 +184,7 @@ func TestResolveGitHubClient_NeedsAuth(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv("GITHUB_TOKEN", "")
 
-	_, err := authprompt.ResolveGitHubClient()
+	_, err := authprompt.ResolveGitHubClient(nil)
 	assert.Assert(t, errors.Is(err, authprompt.ErrNeedsAuth))
 }
 
