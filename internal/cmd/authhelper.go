@@ -119,7 +119,8 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 // ensureGitHubClient resolves or interactively prompts for a GitHub token,
 // validates it, saves it to config, and returns a ready client.
 func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*github.Client, error) {
-	client, err := authprompt.ResolveGitHubClient()
+	logStatus := func(msg string) { streams.ErrPrintln("  " + msg) }
+	client, err := authprompt.ResolveGitHubClient(logStatus)
 	if err == nil {
 		return client, nil
 	}
@@ -154,5 +155,5 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 		return nil, err
 	}
 	printSaved(streams, "GitHub token")
-	return github.New()
+	return github.New(logStatus)
 }

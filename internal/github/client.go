@@ -24,15 +24,11 @@ type Client struct {
 	logStatus func(string)
 }
 
-// SetLogStatus sets an optional callback for progress/status messages.
-func (c *Client) SetLogStatus(fn func(string)) {
-	c.logStatus = fn
-}
-
 // New creates a GitHub GraphQL client.
 // It resolves the token via config (GITHUB_TOKEN env > config file) and reads
 // GITHUB_API_URL from the environment.
-func New() (*Client, error) {
+// An optional logStatus callback receives progress messages (e.g. retry waits).
+func New(logStatus func(string)) (*Client, error) {
 	rc, err := config.Resolve("", "")
 	if rc.GitHubToken == "" {
 		if err != nil {
@@ -53,7 +49,7 @@ func New() (*Client, error) {
 		UserAgent:  "chunk-cli",
 	})
 
-	return &Client{http: c}, nil
+	return &Client{http: c, logStatus: logStatus}, nil
 }
 
 // graphQLRequest is the JSON body sent to /graphql.
