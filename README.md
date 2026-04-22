@@ -143,8 +143,6 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment va
 
 - Go 1.26+
 - [Task](https://taskfile.dev/) (task runner)
-- [golangci-lint](https://golangci-lint.run/) (optional, for linting)
-
 ### Building
 
 ```bash
@@ -154,10 +152,10 @@ task lint               # Run linters
 task acceptance-test    # Run acceptance tests
 ```
 
-To build and install from source:
+To build and install from source into `~/.local/bin` (make sure it's on your `PATH`):
 
 ```bash
-task build && cp dist/chunk ~/.local/bin/
+task dev-install
 ```
 
 Acceptance tests that clone repositories are skipped by default. Set `CHUNK_ENV_BUILDER_ACCEPTANCE=1` to enable them. To avoid re-cloning on repeated runs, set `CHUNK_SANDBOX_CACHE_DIR` to a persistent directory.
