@@ -37,6 +37,10 @@ var All = []Skill{
 		Name:        "debug-ci-failures",
 		Description: `Debug CircleCI build failures, analyze test results, and identify flaky tests. Use when asked to "debug CI", "why is CI failing", "fix CI failures", "find flaky tests", or "check CircleCI".`,
 	},
+	{
+		Name:        "chunk-sandbox",
+		Description: `Run build/test/validate on a remote chunk sandbox instead of locally. Use when asked to "validate on the sandbox", "run tests on the sandbox", "sync to sandbox", "check this on the sandbox", or when edits need remote verification. Also covers creating sandboxes, snapshots, and env customization.`,
+	},
 }
 
 // Agent represents a target agent with its config directories.
