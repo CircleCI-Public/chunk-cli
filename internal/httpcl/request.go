@@ -2,6 +2,7 @@ package httpcl
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,10 +13,19 @@ import (
 type Request struct {
 	method  string
 	route   string
+	url     string
 	body    any
 	decoder func(io.Reader) error
 	headers http.Header
 	query   url.Values
+}
+
+// URL returns the resolved URL (after RouteParams) or the raw route.
+func (r Request) URL() string {
+	if r.url != "" {
+		return r.url
+	}
+	return r.route
 }
 
 // NewRequest creates a request with functional options.
@@ -54,4 +64,11 @@ func Header(key, val string) func(*Request) {
 // QueryParam sets a single query parameter.
 func QueryParam(key, val string) func(*Request) {
 	return func(r *Request) { r.query.Set(key, val) }
+}
+
+// RouteParams fills route template placeholders (%s, %d, etc.) with the given values.
+func RouteParams(params ...any) func(*Request) {
+	return func(r *Request) {
+		r.url = fmt.Sprintf(r.route, params...)
+	}
 }

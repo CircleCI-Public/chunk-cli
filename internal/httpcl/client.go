@@ -82,7 +82,7 @@ func New(cfg Config) *Client {
 // Non-2xx responses return an *HTTPError. If a decoder is set and the
 // response is 2xx, the response body is decoded.
 func (c *Client) Call(ctx context.Context, r Request) (int, error) {
-	u, err := url.Parse(c.baseURL + r.route)
+	u, err := url.Parse(c.baseURL + r.URL())
 	if err != nil {
 		return 0, fmt.Errorf("httpcl: bad url: %w", err)
 	}

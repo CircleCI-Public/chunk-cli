@@ -7,14 +7,14 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 // newTestClient creates a Client pointed at the given test server.
 func newTestClient(t *testing.T, url string) *Client {
 	t.Helper()
-	cl := httpcl.New(httpcl.Config{
+	cl := hc.New(hc.Config{
 		BaseURL:    url,
 		AuthToken:  "test-token",
 		AuthHeader: "Circle-Token",
@@ -309,7 +309,7 @@ func TestAuthRequired(t *testing.T) {
 	defer srv.Close()
 
 	// Create a client with no auth token to trigger 401.
-	cl := httpcl.New(httpcl.Config{
+	cl := hc.New(hc.Config{
 		BaseURL: srv.URL,
 	})
 	client := &Client{cl: cl}

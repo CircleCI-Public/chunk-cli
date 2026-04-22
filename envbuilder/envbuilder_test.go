@@ -12,7 +12,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 // --- pure function tests ---
@@ -837,10 +837,10 @@ func (f *fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rr.Result(), nil
 }
 
-// newFakeDockerHubClient returns a *httpcl.Client whose HTTP calls are handled
+// newFakeDockerHubClient returns a *hc.Client whose HTTP calls are handled
 // by the provided handler instead of hitting the real Docker Hub.
-func newFakeDockerHubClient(handler http.Handler) *httpcl.Client {
-	return httpcl.New(httpcl.Config{Transport: &fakeTransport{handler: handler}})
+func newFakeDockerHubClient(handler http.Handler) *hc.Client {
+	return hc.New(hc.Config{Transport: &fakeTransport{handler: handler}})
 }
 
 func TestFetchAllImageVersions(t *testing.T) {

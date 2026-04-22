@@ -10,7 +10,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
-	"github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
 // ErrNeedsAuth is returned by Resolve* functions when no credentials are
@@ -24,14 +24,14 @@ func ValidateCircleCIToken(ctx context.Context, token, baseURL string) error {
 	if baseURL == "" {
 		baseURL = "https://circleci.com"
 	}
-	cl := httpcl.New(httpcl.Config{
+	cl := hc.New(hc.Config{
 		BaseURL:    baseURL,
 		AuthToken:  token,
 		AuthHeader: "Circle-Token",
 	})
-	_, err := cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/api/v2/me"))
+	_, err := cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/me"))
 	if err != nil {
-		if httpcl.HasStatusCode(err, http.StatusTooManyRequests) {
+		if hc.HasStatusCode(err, http.StatusTooManyRequests) {
 			return nil
 		}
 		return err
@@ -45,7 +45,7 @@ func ValidateAPIKey(ctx context.Context, apiKey, baseURL string) error {
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
-	cl := httpcl.New(httpcl.Config{
+	cl := hc.New(hc.Config{
 		BaseURL:    baseURL,
 		AuthToken:  apiKey,
 		AuthHeader: "x-api-key",
@@ -61,12 +61,12 @@ func ValidateAPIKey(ctx context.Context, apiKey, baseURL string) error {
 		Model:    config.ValidationModel,
 		Messages: []msg{{Role: "user", Content: "auth test"}},
 	}
-	_, err := cl.Call(ctx, httpcl.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
-		httpcl.Body(body),
-		httpcl.Header("anthropic-version", "2023-06-01"),
+	_, err := cl.Call(ctx, hc.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
+		hc.Body(body),
+		hc.Header("anthropic-version", "2023-06-01"),
 	))
 	if err != nil {
-		if httpcl.HasStatusCode(err, http.StatusTooManyRequests) {
+		if hc.HasStatusCode(err, http.StatusTooManyRequests) {
 			return nil
 		}
 		return err
@@ -156,15 +156,15 @@ func ValidateGitHubToken(ctx context.Context, token, baseURL string) error {
 	if baseURL == "" {
 		baseURL = "https://api.github.com"
 	}
-	cl := httpcl.New(httpcl.Config{
+	cl := hc.New(hc.Config{
 		BaseURL:    baseURL,
 		AuthToken:  "token " + token,
 		AuthHeader: "Authorization",
 		UserAgent:  "chunk-cli",
 	})
-	_, err := cl.Call(ctx, httpcl.NewRequest(http.MethodGet, "/user"))
+	_, err := cl.Call(ctx, hc.NewRequest(http.MethodGet, "/user"))
 	if err != nil {
-		if httpcl.HasStatusCode(err, http.StatusTooManyRequests) {
+		if hc.HasStatusCode(err, http.StatusTooManyRequests) {
 			return nil
 		}
 		return err
