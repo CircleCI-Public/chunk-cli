@@ -24,10 +24,10 @@ func Exec(ctx context.Context, client *circleci.Client, sandboxID, command strin
 
 func AddSSHKey(ctx context.Context, client *circleci.Client, sandboxID, publicKey, publicKeyFile string) (*circleci.AddSSHKeyResponse, error) {
 	if publicKey != "" && publicKeyFile != "" {
-		return nil, fmt.Errorf("--public-key and --public-key-file are mutually exclusive")
+		return nil, ErrMutuallyExclusiveKeys
 	}
 	if publicKey == "" && publicKeyFile == "" {
-		return nil, fmt.Errorf("either --public-key or --public-key-file is required")
+		return nil, ErrPublicKeyRequired
 	}
 
 	key := publicKey
@@ -40,7 +40,7 @@ func AddSSHKey(ctx context.Context, client *circleci.Client, sandboxID, publicKe
 	}
 
 	if strings.Contains(key, "PRIVATE KEY") {
-		return nil, fmt.Errorf("the provided key appears to be a private key; please provide a public key instead")
+		return nil, ErrPrivateKeyProvided
 	}
 
 	return client.AddSSHKey(ctx, sandboxID, key)

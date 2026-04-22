@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -51,7 +52,7 @@ func TestRunHappyPath(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
 
-	ghClient, err := ghpkg.New()
+	ghClient, err := ghpkg.New(nil)
 	assert.NilError(t, err)
 	anthropicClient, err := anthropic.New()
 	assert.NilError(t, err)
@@ -117,7 +118,7 @@ func TestRunNoReposFound(t *testing.T) {
 	t.Setenv("GITHUB_API_URL", ghSrv.URL)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 
-	ghClient, err := ghpkg.New()
+	ghClient, err := ghpkg.New(nil)
 	assert.NilError(t, err)
 	anthropicClient, err := anthropic.New()
 	assert.NilError(t, err)
@@ -157,7 +158,7 @@ func TestRunSkipsRepoResolutionErrors(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
 
-	ghClient, err := ghpkg.New()
+	ghClient, err := ghpkg.New(nil)
 	assert.NilError(t, err)
 	anthropicClient, err := anthropic.New()
 	assert.NilError(t, err)
@@ -200,7 +201,7 @@ func TestRunWithMaxComments(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
 
-	ghClient, err := ghpkg.New()
+	ghClient, err := ghpkg.New(nil)
 	assert.NilError(t, err)
 	anthropicClient, err := anthropic.New()
 	assert.NilError(t, err)
@@ -249,7 +250,7 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
 	t.Setenv("ANTHROPIC_BASE_URL", anthropicSrv.URL)
 
-	ghClient, err := ghpkg.New()
+	ghClient, err := ghpkg.New(nil)
 	assert.NilError(t, err)
 	anthropicClient, err := anthropic.New()
 	assert.NilError(t, err)
@@ -288,7 +289,7 @@ func TestRunMissingGithubToken(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	// With the decoupled auth, client construction fails before Run is called.
-	_, err := ghpkg.New()
+	_, err := ghpkg.New(nil)
 	assert.Assert(t, err != nil, "expected error when GITHUB_TOKEN is missing")
 }
 
@@ -314,7 +315,7 @@ func TestResolveOrgAndRepos(t *testing.T) {
 	t.Run("org without repos errors", func(t *testing.T) {
 		_, _, err := ResolveOrgAndRepos("my-org", "", "")
 		assert.Assert(t, err != nil)
-		assert.Assert(t, strings.Contains(err.Error(), "--repos"))
+		assert.Assert(t, errors.Is(err, ErrReposRequired))
 	})
 
 	t.Run("auto-detect from git remote", func(t *testing.T) {

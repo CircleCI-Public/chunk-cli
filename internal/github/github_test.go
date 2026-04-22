@@ -16,7 +16,7 @@ func newTestClient(t *testing.T, srv *httptest.Server) *github.Client {
 	t.Helper()
 	t.Setenv("GITHUB_TOKEN", "test-token")
 	t.Setenv("GITHUB_API_URL", srv.URL)
-	c, err := github.New()
+	c, err := github.New(nil)
 	if err != nil {
 		t.Fatalf("github.New: %v", err)
 	}
@@ -27,7 +27,7 @@ func newTestClient(t *testing.T, srv *httptest.Server) *github.Client {
 
 func TestNew_MissingToken(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
-	_, err := github.New()
+	_, err := github.New(nil)
 	if err == nil {
 		t.Fatal("expected error when GITHUB_TOKEN is empty")
 	}
@@ -36,7 +36,7 @@ func TestNew_MissingToken(t *testing.T) {
 func TestNew_DefaultURL(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "tok")
 	t.Setenv("GITHUB_API_URL", "")
-	c, err := github.New()
+	c, err := github.New(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

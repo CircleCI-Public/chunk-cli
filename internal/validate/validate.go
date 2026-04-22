@@ -14,6 +14,9 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
+// ErrNotConfigured indicates no validate commands are configured.
+var ErrNotConfigured = errors.New("no validate commands configured")
+
 // shellEscape wraps arg in single quotes for safe use in a POSIX sh -c command.
 func shellEscape(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"
@@ -107,7 +110,7 @@ func RunNamed(ctx context.Context, workDir, name string, force bool, cfg *config
 // RunAll runs all configured commands with optional cache bypass.
 func RunAll(ctx context.Context, workDir string, force bool, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
 	if !cfg.HasCommands() {
-		return fmt.Errorf("no validate commands configured, run 'chunk init' first")
+		return ErrNotConfigured
 	}
 
 	for i, c := range cfg.Commands {
@@ -138,7 +141,7 @@ func RunAll(ctx context.Context, workDir string, force bool, cfg *config.Project
 // RunDryRun prints commands without executing them.
 func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
-		return fmt.Errorf("no validate commands configured, run 'chunk init' first")
+		return ErrNotConfigured
 	}
 
 	commands := cfg.Commands
@@ -173,6 +176,25 @@ func RunRemote(ctx context.Context, exec func(ctx context.Context, script string
 		if exitCode != 0 {
 			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
+	}
+	return nil
+}
+
+// RunRemoteInline runs a single inline command on a remote sandbox via SSH.
+func RunRemoteInline(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, streams iostream.Streams) error {
+	script := "cd " + shellEscape(dest) + " && " + command
+	stdout, stderr, exitCode, err := exec(ctx, script)
+	if err != nil {
+		return fmt.Errorf("remote %s: %w", name, err)
+	}
+	if stdout != "" {
+		_, _ = fmt.Fprint(streams.Out, stdout)
+	}
+	if stderr != "" {
+		_, _ = fmt.Fprint(streams.Err, stderr)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
 	}
 	return nil
 }

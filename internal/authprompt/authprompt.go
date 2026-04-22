@@ -104,10 +104,10 @@ func ResolveAnthropicClient() (*anthropic.Client, error) {
 
 // ResolveGitHubClient returns a GitHub client if credentials are available in
 // env vars or config. Returns ErrNeedsAuth when the caller must prompt.
-func ResolveGitHubClient() (*github.Client, error) {
+func ResolveGitHubClient(logStatus func(string)) (*github.Client, error) {
 	rc, err := config.Resolve("", "")
 	if rc.GitHubToken != "" {
-		return github.New()
+		return github.New(logStatus)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("resolve config: %w", err)

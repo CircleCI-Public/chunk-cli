@@ -18,7 +18,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/settings"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
@@ -41,23 +40,35 @@ func withTrailingNewline(data []byte) []byte {
 func writeSettings(workDir string, commands []config.Command, streams iostream.Streams, confirm confirmFunc) error {
 	generated, err := settings.Build(commands)
 	if err != nil {
-		return usererr.New("Could not build .claude/settings.json.", fmt.Errorf("build settings: %w", err))
+		return &userError{msg: "Could not build .claude/settings.json.", err: fmt.Errorf("build settings: %w", err)}
 	}
 
 	dir := filepath.Join(workDir, ".claude")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return usererr.New("Could not create .claude directory. Check file permissions.", fmt.Errorf("create .claude dir: %w", err))
+		return &userError{
+			msg:        "Could not create .claude directory.",
+			suggestion: "Check file permissions.",
+			err:        fmt.Errorf("create .claude dir: %w", err),
+		}
 	}
 
 	path := filepath.Join(dir, "settings.json")
 	existing, readErr := os.ReadFile(path)
 	if readErr != nil {
 		if !errors.Is(readErr, fs.ErrNotExist) {
-			return usererr.New("Could not read .claude/settings.json. Check file permissions.", fmt.Errorf("read existing settings.json: %w", readErr))
+			return &userError{
+				msg:        "Could not read .claude/settings.json.",
+				suggestion: "Check file permissions.",
+				err:        fmt.Errorf("read existing settings.json: %w", readErr),
+			}
 		}
 		// No existing file — write directly.
 		if err := os.WriteFile(path, withTrailingNewline(generated), 0o644); err != nil {
-			return usererr.New("Could not write .claude/settings.json. Check file permissions.", fmt.Errorf("write settings.json: %w", err))
+			return &userError{
+				msg:        "Could not write .claude/settings.json.",
+				suggestion: "Check file permissions.",
+				err:        fmt.Errorf("write settings.json: %w", err),
+			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .claude/settings.json"))
 		return nil
@@ -66,7 +77,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 	// Existing file found — compute merge.
 	result, err := settings.Merge(existing, generated)
 	if err != nil {
-		return usererr.New("Could not merge .claude/settings.json.", fmt.Errorf("merge settings: %w", err))
+		return &userError{msg: "Could not merge .claude/settings.json.", err: fmt.Errorf("merge settings: %w", err)}
 	}
 
 	if !result.Changed {
@@ -105,7 +116,11 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 	}
 
 	if err := os.WriteFile(path, withTrailingNewline(result.Merged), 0o644); err != nil {
-		return usererr.New("Could not write .claude/settings.json. Check file permissions.", fmt.Errorf("write settings.json: %w", err))
+		return &userError{
+			msg:        "Could not write .claude/settings.json.",
+			suggestion: "Check file permissions.",
+			err:        fmt.Errorf("write settings.json: %w", err),
+		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .claude/settings.json"))
 	return nil
@@ -115,7 +130,10 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 func writeSettingsExample(dir string, data []byte, streams iostream.Streams) error {
 	exPath := filepath.Join(dir, "settings.example.json")
 	if err := os.WriteFile(exPath, withTrailingNewline(data), 0o644); err != nil {
-		return usererr.New("Could not write .claude/settings.example.json.", fmt.Errorf("write settings.example.json: %w", err))
+		return &userError{
+			msg: "Could not write .claude/settings.example.json.",
+			err: fmt.Errorf("write settings.example.json: %w", err),
+		}
 	}
 	streams.ErrPrintln(ui.Success("Wrote .claude/settings.example.json (existing settings.json preserved)"))
 	return nil
@@ -192,14 +210,14 @@ hook config files.`,
 				var err error
 				workDir, err = os.Getwd()
 				if err != nil {
-					return usererr.New("Could not determine working directory.", err)
+					return &userError{msg: "Could not determine working directory.", err: err}
 				}
 			}
 
 			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
 			gitCmd.Dir = workDir
 			if err := gitCmd.Run(); err != nil {
-				return usererr.New("Not a git repository. Run this command from inside a git repo.", err)
+				return &userError{msg: "Not a git repository.", suggestion: "Run this command from inside a git repo.", err: err}
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
@@ -251,7 +269,11 @@ hook config files.`,
 
 			// Save config
 			if err := config.SaveProjectConfig(workDir, cfg); err != nil {
-				return usererr.New("Could not write .chunk/config.json. Check file permissions.", fmt.Errorf("write config: %w", err))
+				return &userError{
+					msg:        "Could not write .chunk/config.json.",
+					suggestion: "Check file permissions.",
+					err:        fmt.Errorf("write config: %w", err),
+				}
 			}
 			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
 

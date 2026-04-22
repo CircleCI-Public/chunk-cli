@@ -13,7 +13,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 const (
@@ -61,10 +60,11 @@ func newAuthSetCmd() *cobra.Command {
 				githubTokenEnv := os.Getenv("GITHUB_TOKEN")
 				return authSetGitHub(cmd.Context(), io, githubBaseURL, githubTokenEnv)
 			default:
-				return usererr.Newf(
-					fmt.Sprintf("Unknown provider %q. Valid providers: circleci, anthropic, github.", provider),
-					"unknown provider %q", provider,
-				)
+				return &userError{
+					msg:    fmt.Sprintf("Unknown provider %q.", provider),
+					detail: "Valid providers: circleci, anthropic, github.",
+					errMsg: fmt.Sprintf("unknown provider %q", provider),
+				}
 			}
 		},
 	}
@@ -86,7 +86,7 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, circleCIBaseURL, 
 
 	cfg, err := config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.CircleCIToken != "" {
 		io.Printf("A CircleCI token is already stored in config.\n")
@@ -108,10 +108,11 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, circleCIBaseURL, 
 
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return usererr.New(
-			ui.FormatError("Token cannot be empty.", "", "Create a token at https://app.circleci.com/settings/user/tokens"),
-			fmt.Errorf("empty circleci token"),
-		)
+		return &userError{
+			msg:        "Token cannot be empty.",
+			suggestion: "Create a token at https://app.circleci.com/settings/user/tokens",
+			errMsg:     "empty circleci token",
+		}
 	}
 
 	return saveCircleCIToken(ctx, token, io, circleCIBaseURL)
@@ -132,7 +133,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 
 	cfg, err := config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.AnthropicAPIKey != "" {
 		io.Printf("An Anthropic API key is already stored in config.\n")
@@ -153,34 +154,38 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return usererr.New(
-			ui.FormatError("API key cannot be empty.", "", "Get an API key from https://console.anthropic.com/"),
-			fmt.Errorf("empty anthropic key"),
-		)
+		return &userError{
+			msg:        "API key cannot be empty.",
+			suggestion: "Get an API key from https://console.anthropic.com/",
+			errMsg:     "empty anthropic key",
+		}
 	}
 
 	if !strings.HasPrefix(key, "sk-ant-") {
-		return usererr.New(
-			ui.FormatError("Invalid API key format.", "Keys should start with \"sk-ant-\".", "Get a valid API key from https://console.anthropic.com/"),
-			fmt.Errorf("invalid anthropic key format"),
-		)
+		return &userError{
+			msg:        "Invalid API key format.",
+			detail:     "Keys should start with \"sk-ant-\".",
+			suggestion: "Get a valid API key from https://console.anthropic.com/",
+			errMsg:     "invalid anthropic key format",
+		}
 	}
 
 	io.ErrPrintln(ui.Dim("Validating API key..."))
 	if err := authprompt.ValidateAPIKey(ctx, key, anthropicBaseURL); err != nil {
-		return usererr.New(
-			ui.FormatError("API key validation failed.", "", "Check that your key is correct and has not been revoked."),
-			err,
-		)
+		return &userError{
+			msg:        "API key validation failed.",
+			suggestion: "Check that your key is correct and has not been revoked.",
+			err:        err,
+		}
 	}
 
 	cfg, err = config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	cfg.AnthropicAPIKey = key
 	if err := config.Save(cfg); err != nil {
-		return usererr.New("Could not save credentials. "+configFilePermHint, err)
+		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
 	}
 
 	io.Println("")
@@ -192,22 +197,24 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, anthropicBaseURL
 func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams, circleCIBaseURL string) error {
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
 	if err := authprompt.ValidateCircleCIToken(ctx, token, circleCIBaseURL); err != nil {
-		return usererr.New(
-			ui.FormatError("CircleCI token validation failed.", "", "Check that your token is correct."),
-			fmt.Errorf("validate token: %w", err),
-		)
+		return &userError{
+			msg:        "CircleCI token validation failed.",
+			suggestion: "Check that your token is correct.",
+			err:        fmt.Errorf("validate token: %w", err),
+		}
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	cfg.CircleCIToken = token
 	if err := config.Save(cfg); err != nil {
-		return usererr.New(
-			ui.FormatError("Failed to save CircleCI token.", "", "Check that your config file is writable."),
-			fmt.Errorf("save token: %w", err),
-		)
+		return &userError{
+			msg:        "Failed to save CircleCI token.",
+			suggestion: "Check that your config file is writable.",
+			err:        fmt.Errorf("save token: %w", err),
+		}
 	}
 
 	streams.ErrPrintln("")
@@ -301,7 +308,7 @@ func newAuthStatusCmd() *cobra.Command {
 			io.Println("")
 
 			if hasFailure {
-				return usererr.Newf("One or more credential checks failed.", "auth status: validation failures")
+				return &userError{msg: "One or more credential checks failed.", errMsg: "auth status: validation failures"}
 			}
 			return nil
 		},
@@ -331,10 +338,11 @@ func newAuthRemoveCmd() *cobra.Command {
 				githubTokenEnv := os.Getenv("GITHUB_TOKEN")
 				return authRemoveGitHub(io, githubTokenEnv)
 			default:
-				return usererr.Newf(
-					fmt.Sprintf("Unknown provider %q. Valid providers: circleci, anthropic, github.", provider),
-					"unknown provider %q", provider,
-				)
+				return &userError{
+					msg:    fmt.Sprintf("Unknown provider %q.", provider),
+					detail: "Valid providers: circleci, anthropic, github.",
+					errMsg: fmt.Sprintf("unknown provider %q", provider),
+				}
 			}
 		},
 	}
@@ -343,7 +351,7 @@ func newAuthRemoveCmd() *cobra.Command {
 func authRemoveCircleCI(io iostream.Streams, circleTokenEnv string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.CircleCIToken == "" {
 		io.Println(ui.Warning("No CircleCI token stored in config file."))
@@ -358,7 +366,7 @@ func authRemoveCircleCI(io iostream.Streams, circleTokenEnv string) error {
 	io.Println("")
 	cfgPath, err := config.Path()
 	if err != nil {
-		return usererr.New("Could not access configuration.", err)
+		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored CircleCI token from %s\n", cfgPath)
 	confirmed, err := tui.Confirm("Are you sure?", false)
@@ -374,10 +382,12 @@ func authRemoveCircleCI(io iostream.Streams, circleTokenEnv string) error {
 		if errPath, pathErr := config.Path(); pathErr == nil {
 			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
 		}
-		return usererr.New(
-			ui.FormatError("Failed to remove CircleCI token.", "An error occurred while trying to remove the token from the config file.", hint),
-			err,
-		)
+		return &userError{
+			msg:        "Failed to remove CircleCI token.",
+			detail:     "An error occurred while trying to remove the token from the config file.",
+			suggestion: hint,
+			err:        err,
+		}
 	}
 
 	io.Println(ui.Success("CircleCI token removed successfully."))
@@ -390,7 +400,7 @@ func authRemoveCircleCI(io iostream.Streams, circleTokenEnv string) error {
 func authRemoveAnthropic(io iostream.Streams, anthropicKeyEnv string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.AnthropicAPIKey == "" {
 		io.Println(ui.Warning("No API key stored in config file."))
@@ -405,7 +415,7 @@ func authRemoveAnthropic(io iostream.Streams, anthropicKeyEnv string) error {
 	io.Println("")
 	cfgPath, err := config.Path()
 	if err != nil {
-		return usererr.New("Could not access configuration.", err)
+		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored API key from %s\n", cfgPath)
 	confirmed, err := tui.Confirm("Are you sure?", false)
@@ -421,10 +431,12 @@ func authRemoveAnthropic(io iostream.Streams, anthropicKeyEnv string) error {
 		if errPath, pathErr := config.Path(); pathErr == nil {
 			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
 		}
-		return usererr.New(
-			ui.FormatError("Failed to remove API key.", "An error occurred while trying to remove the API key from the config file.", hint),
-			err,
-		)
+		return &userError{
+			msg:        "Failed to remove API key.",
+			detail:     "An error occurred while trying to remove the API key from the config file.",
+			suggestion: hint,
+			err:        err,
+		}
 	}
 
 	io.Println(ui.Success("API key removed successfully."))
@@ -450,7 +462,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 
 	cfg, err := config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.GitHubToken != "" {
 		io.Printf("A GitHub token is already stored in config.\n")
@@ -472,27 +484,29 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return usererr.New(
-			ui.FormatError("Token cannot be empty.", "", "Create a token at https://github.com/settings/tokens"),
-			fmt.Errorf("empty github token"),
-		)
+		return &userError{
+			msg:        "Token cannot be empty.",
+			suggestion: "Create a token at https://github.com/settings/tokens",
+			errMsg:     "empty github token",
+		}
 	}
 
 	io.ErrPrintln(ui.Dim("Validating GitHub token..."))
 	if err := authprompt.ValidateGitHubToken(ctx, token, githubBaseURL); err != nil {
-		return usererr.New(
-			ui.FormatError("GitHub token validation failed.", "", "Check that your token is correct and has not been revoked."),
-			err,
-		)
+		return &userError{
+			msg:        "GitHub token validation failed.",
+			suggestion: "Check that your token is correct and has not been revoked.",
+			err:        err,
+		}
 	}
 
 	cfg, err = config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	cfg.GitHubToken = token
 	if err := config.Save(cfg); err != nil {
-		return usererr.New("Could not save credentials. "+configFilePermHint, err)
+		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
 	}
 
 	io.Println("")
@@ -503,7 +517,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, githubBaseURL, gith
 func authRemoveGitHub(io iostream.Streams, githubTokenEnv string) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return usererr.New("Could not load configuration. "+configFilePermHint, err)
+		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
 	}
 	if cfg.GitHubToken == "" {
 		io.Println(ui.Warning("No GitHub token stored in config file."))
@@ -518,7 +532,7 @@ func authRemoveGitHub(io iostream.Streams, githubTokenEnv string) error {
 	io.Println("")
 	cfgPath, err := config.Path()
 	if err != nil {
-		return usererr.New("Could not access configuration.", err)
+		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored GitHub token from %s\n", cfgPath)
 	confirmed, err := tui.Confirm("Are you sure?", false)
@@ -534,10 +548,12 @@ func authRemoveGitHub(io iostream.Streams, githubTokenEnv string) error {
 		if errPath, pathErr := config.Path(); pathErr == nil {
 			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
 		}
-		return usererr.New(
-			ui.FormatError("Failed to remove GitHub token.", "An error occurred while trying to remove the token from the config file.", hint),
-			err,
-		)
+		return &userError{
+			msg:        "Failed to remove GitHub token.",
+			detail:     "An error occurred while trying to remove the token from the config file.",
+			suggestion: hint,
+			err:        err,
+		}
 	}
 
 	io.Println(ui.Success("GitHub token removed successfully."))

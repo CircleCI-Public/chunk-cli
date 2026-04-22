@@ -8,7 +8,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/usererr"
 )
 
 func newSkillCmd() *cobra.Command {
@@ -29,7 +28,7 @@ func newSkillInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := os.Getenv("HOME")
 			if home == "" {
-				return usererr.Newf("HOME environment variable is not set.", "HOME not set")
+				return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
 			}
 			io := iostream.FromCmd(cmd)
 			results := skills.Install(home)
