@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -465,33 +464,4 @@ func TestRunRemoteInline(t *testing.T) {
 		assert.ErrorContains(t, err, "remote custom")
 		assert.ErrorContains(t, err, "connection lost")
 	})
-}
-
-func initGitRepo(t *testing.T, dir string) {
-	t.Helper()
-	for _, args := range [][]string{
-		{"git", "init"},
-		{"git", "config", "user.email", "test@test.com"},
-		{"git", "config", "user.name", "Test"},
-		{"git", "config", "commit.gpgsign", "false"},
-	} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git command %v failed: %s: %v", args, out, err)
-		}
-	}
-	// Create an initial commit so HEAD exists
-	readme := filepath.Join(dir, "README.md")
-	assert.NilError(t, os.WriteFile(readme, []byte("test"), 0o644))
-	for _, args := range [][]string{
-		{"git", "add", "."},
-		{"git", "commit", "-m", "init"},
-	} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git command %v failed: %s: %v", args, out, err)
-		}
-	}
 }
