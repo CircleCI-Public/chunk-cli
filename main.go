@@ -30,10 +30,14 @@ func errorDetails(err error) (msg, detail, suggestion string) {
 		msg = um.UserMessage()
 	}
 	if d, ok := err.(interface{ Detail() string }); ok {
-		detail = d.Detail()
+		if d.Detail() != "" {
+			detail = d.Detail()
+		}
 	}
 	if s, ok := err.(interface{ Suggestion() string }); ok {
-		suggestion = s.Suggestion()
+		if s.Suggestion() != "" {
+			suggestion = s.Suggestion()
+		}
 	}
 	return msg, detail, suggestion
 }
