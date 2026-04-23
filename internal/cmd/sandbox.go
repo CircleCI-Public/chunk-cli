@@ -403,7 +403,10 @@ func newSandboxSyncCmd() *cobra.Command {
 				if err := notAuthorized("sync files", err); err != nil {
 					return err
 				}
-				return err
+				return &userError{
+					msg: "The sync operation failed.",
+					err: err,
+				}
 			}
 			return nil
 		},
