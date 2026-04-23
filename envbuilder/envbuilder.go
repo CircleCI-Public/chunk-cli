@@ -49,6 +49,19 @@ type Environment struct {
 	ImageVersion string   `json:"image_version"`
 }
 
+// BinaryPaths returns colon-separated PATH prefixes needed for the detected stack.
+// cimg images set these via Docker ENV which e2b does not propagate to SSH sessions.
+func (e *Environment) BinaryPaths() string {
+	switch e.Stack {
+	case stackGo:
+		return "/usr/local/go/bin:/home/circleci/go/bin"
+	case stackJavaScript, stackTypeScript:
+		return "/home/circleci/.yarn/bin"
+	default:
+		return ""
+	}
+}
+
 func fileExists(dir, name string) bool {
 	_, err := os.Stat(filepath.Join(dir, name))
 	return err == nil
