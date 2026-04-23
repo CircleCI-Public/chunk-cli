@@ -17,7 +17,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 const (
@@ -27,8 +26,12 @@ const (
 )
 
 // DefaultKeyPath returns the default SSH private key path used by chunk.
-func DefaultKeyPath() string {
-	return filepath.Join(os.Getenv("HOME"), ".ssh", defaultKeyName)
+func DefaultKeyPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	return filepath.Join(home, ".ssh", defaultKeyName), nil
 }
 
 // GenerateKeyPair generates an ed25519 keypair and writes the private key to
@@ -78,7 +81,11 @@ type Session struct {
 // authSock is the SSH_AUTH_SOCK path; when non-empty and no identityFile is
 // given, the agent is tried first.
 func OpenSession(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string) (*Session, error) {
-	sshDir := filepath.Join(os.Getenv(config.EnvHome), ".ssh")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	sshDir := filepath.Join(home, ".ssh")
 
 	// When no identity file is specified, try the ssh-agent first.
 	if identityFile == "" && authSock != "" {

@@ -712,10 +712,14 @@ Example:
 			status(iostream.LevelInfo, fmt.Sprintf("install: %s", env.Install))
 
 			// Step 2: Resolve or create sidecar.
-			var scDisplayName string
+			provider := os.Getenv(config.EnvSidecarProvider)
+			if provider == "" {
+				provider = defaultProvider
+			}
+			var scDisplayName, workspace string
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, scDisplayName, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, status, streams)
+				sidecarID, scDisplayName, workspace, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, provider, status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -734,7 +738,7 @@ Example:
 			}
 
 			// Step 5: Run install command over SSH.
-			if err := sidecarSetupRunInstall(cmd.Context(), client, sidecarID, identityFile, authSock, env, streams, status); err != nil {
+			if err := sidecarSetupRunInstall(cmd.Context(), client, sidecarID, identityFile, authSock, env, workspace, streams, status); err != nil {
 				return err
 			}
 
@@ -764,20 +768,20 @@ Example:
 func sidecarSetupResolveSidecar(
 	ctx context.Context,
 	client *circleci.Client,
-	orgID, name string,
+	orgID, name, provider string,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
-) (sidecarID, displayName string, err error) {
+) (id, displayName, workspace string, err error) {
 	active, err := sidecar.LoadActive()
 	if err != nil {
-		return "", "", &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
+		return "", "", "", &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
 	}
 	if active != nil {
 		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
-		return active.SidecarID, active.Name, nil
+		return active.SidecarID, active.Name, active.Workspace, nil
 	}
 	if name == "" {
-		return "", "", &userError{
+		return "", "", "", &userError{
 			msg:        "No active sidecar and --name not provided.",
 			suggestion: "Pass --name to create a new sidecar, or run 'chunk sidecar use <id>'.",
 			errMsg:     "no active sidecar and --name not provided",
@@ -785,19 +789,15 @@ func sidecarSetupResolveSidecar(
 	}
 	resolvedOrgID, err := resolveOrgID(orgID, orgPicker(ctx, client))
 	if err != nil {
-		return "", "", err
-	}
-	provider := os.Getenv(config.EnvSidecarProvider)
-	if provider == "" {
-		provider = defaultProvider
+		return "", "", "", err
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q...", name))
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, provider, "")
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
-			return "", "", authErr
+			return "", "", "", authErr
 		}
-		return "", "", &userError{
+		return "", "", "", &userError{
 			msg:        "Could not create the sidecar.",
 			suggestion: "Check your network connection and try again.",
 			err:        err,
@@ -807,14 +807,17 @@ func sidecarSetupResolveSidecar(
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))
-	return sc.ID, sc.Name, nil
+	return sc.ID, sc.Name, "", nil
 }
 
 func sidecarSetupEnsureSSHKey(identityFile string, status iostream.StatusFunc) error {
 	if identityFile != "" {
 		return nil
 	}
-	keyPath := sidecar.DefaultKeyPath()
+	keyPath, err := sidecar.DefaultKeyPath()
+	if err != nil {
+		return &userError{msg: "Could not determine SSH key path.", err: err}
+	}
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		status(iostream.LevelStep, fmt.Sprintf("Generating SSH key at %s...", keyPath))
 		if err := sidecar.GenerateKeyPair(keyPath); err != nil {
@@ -857,6 +860,7 @@ func sidecarSetupRunInstall(
 	client *circleci.Client,
 	sidecarID, identityFile, authSock string,
 	env *envbuilder.Environment,
+	workspace string,
 	streams iostream.Streams,
 	status iostream.StatusFunc,
 ) error {
@@ -875,8 +879,14 @@ func sidecarSetupRunInstall(
 	// Run from the synced workspace directory so package managers can
 	// find their manifest files (go.mod, package.json, etc.).
 	workspaceCmd := env.Install
-	if active, err := sidecar.LoadActive(); err == nil && active != nil && active.Workspace != "" {
-		workspaceCmd = "cd " + sidecar.ShellEscape(active.Workspace) + " && " + env.Install
+	ws := workspace
+	if ws == "" {
+		if active, lerr := sidecar.LoadActive(); lerr == nil && active != nil && active.Workspace != "" {
+			ws = active.Workspace
+		}
+	}
+	if ws != "" {
+		workspaceCmd = "cd " + sidecar.ShellEscape(ws) + " && " + env.Install
 	}
 	loginCmd := "bash -l -c " + sidecar.ShellEscape(workspaceCmd)
 	result, err := sidecar.ExecOverSSH(ctx, session, loginCmd, nil, nil)
@@ -913,7 +923,7 @@ func sidecarSetupSnapshot(
 		if scDisplayName != "" {
 			snapshotName = scDisplayName + "-setup"
 		} else {
-			snapshotName = sidecarID[:8] + "-setup"
+			snapshotName = sidecarID[:min(len(sidecarID), 8)] + "-setup"
 		}
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating snapshot %q...", snapshotName))
