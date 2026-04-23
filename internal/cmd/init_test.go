@@ -54,7 +54,7 @@ func TestWriteSettingsExistingMergeApplied(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	existing := []byte(`{
-  "env": {"CHUNK_HOOK_ENABLE": "1"},
+  "env": {"MY_CUSTOM_VAR": "hello"},
   "permissions": {"allow": ["Read"]}
 }`)
 	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), existing, 0o644))
@@ -74,9 +74,9 @@ func TestWriteSettingsExistingMergeApplied(t *testing.T) {
 	var merged map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &merged))
 
-	// Existing key preserved.
+	// Existing env key preserved.
 	env := merged["env"].(map[string]interface{})
-	assert.Equal(t, env["CHUNK_HOOK_ENABLE"], "1")
+	assert.Equal(t, env["MY_CUSTOM_VAR"], "hello")
 
 	// Permissions unioned.
 	perms := merged["permissions"].(map[string]interface{})

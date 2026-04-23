@@ -40,11 +40,16 @@ tasks:
       - go mod tidy -v
 
   dev-install:
-    desc: Build from source and install to ~/.local/bin
+    desc: Symlink dist/chunk into ~/.local/bin so hooks pick up the local build automatically after each `task build`
     cmds:
       - task: build
       - mkdir -p ${HOME}/.local/bin
-      - cp dist/chunk ${HOME}/.local/bin
+      - ln -sf "$(pwd)/dist/chunk" ${HOME}/.local/bin/chunk
+
+  dev-uninstall:
+    desc: Remove the dev symlink from ~/.local/bin (restores the system chunk)
+    cmds:
+      - rm -f ${HOME}/.local/bin/chunk
 
   acceptance-test:
     desc: Run acceptance tests

@@ -23,6 +23,7 @@ type ProjectDetailFunc func(ctx context.Context, slug string) (*circleci.Project
 // CollectRunConfig drives the interactive form to build a RunConfig.
 // It takes already-fetched projects and collaborations plus injected UI
 // and data-fetch dependencies so the logic is testable without a TTY.
+// envOrgID is the value of CIRCLECI_ORG_ID from the environment (pass "" to skip the mismatch check).
 func CollectRunConfig(
 	ctx context.Context,
 	prompts Prompts,

@@ -6,9 +6,6 @@
       "Bash(chunk:*)"
     ]
   },
-  "env": {
-    "CHUNK_HOOK_ENABLE": "1"
-  },
   "hooks": {
     "PreToolUse": [
       {
@@ -28,6 +25,17 @@
             "type": "command",
             "command": "cd ${CLAUDE_PROJECT_DIR:-.} && task test",
             "timeout": 300
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "chunk validate",
+            "timeout": 420
           }
         ]
       }

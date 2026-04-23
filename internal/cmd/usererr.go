@@ -47,12 +47,16 @@ func sshSessionError(err error) error {
 	return nil
 }
 
+// userError is a structured error with a user-facing message and optional
+// detail/suggestion for display. For the technical error string, set err when
+// you have an underlying error to wrap (its Error() string is used), or set
+// errMsg when you only have a string. Do not set both; err takes precedence.
 type userError struct {
 	msg        string
 	detail     string
 	suggestion string
-	errMsg     string
-	err        error
+	errMsg     string // used only when err == nil
+	err        error  // when set, Error() delegates to err.Error()
 }
 
 func (e *userError) Error() string {

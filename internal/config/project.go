@@ -43,10 +43,11 @@ type VCSConfig struct {
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
-	Commands []Command             `json:"commands,omitempty"`
-	Triggers map[string][]string   `json:"triggers,omitempty"`
-	Tasks    map[string]TaskConfig `json:"tasks,omitempty"`
-	VCS      *VCSConfig            `json:"vcs,omitempty"`
+	Commands            []Command             `json:"commands,omitempty"`
+	Triggers            map[string][]string   `json:"triggers,omitempty"`
+	Tasks               map[string]TaskConfig `json:"tasks,omitempty"`
+	VCS                 *VCSConfig            `json:"vcs,omitempty"`
+	StopHookMaxAttempts int                   `json:"stopHookMaxAttempts,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.
