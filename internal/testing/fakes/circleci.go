@@ -24,7 +24,7 @@ type Project struct {
 	Reponame string `json:"reponame"`
 }
 
-type Sandbox struct {
+type Sidecar struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	OrgID    string `json:"org_id"`
@@ -61,7 +61,7 @@ type FakeCircleCI struct {
 	snapshotCounter int
 	Collaborations  []Collaboration
 	Projects        []Project
-	Sandboxes       []Sandbox
+	Sidecars        []Sidecar
 	Snapshots       []Snapshot
 	RunResponse     *RunResponse
 	AddKeyURL       string
@@ -70,12 +70,12 @@ type FakeCircleCI struct {
 
 	// Per-endpoint status code overrides for testing error responses.
 	CollaborationsStatusCode int // override for GET /me/collaborations
-	ListStatusCode           int // override for GET /sandbox/instances
-	CreateStatusCode         int // override for POST /sandbox/instances
-	ExecStatusCode           int // override for POST /sandbox/instances/:id/exec
-	AddKeyStatusCode         int // override for POST /sandbox/instances/:id/ssh/add-key
-	CreateSnapshotStatusCode int // override for POST /sandbox/snapshots
-	GetSnapshotStatusCode    int // override for GET /sandbox/snapshots/:id
+	ListStatusCode           int // override for GET /sidecar/instances
+	CreateStatusCode         int // override for POST /sidecar/instances
+	ExecStatusCode           int // override for POST /sidecar/instances/:id/exec
+	AddKeyStatusCode         int // override for POST /sidecar/instances/:id/ssh/add-key
+	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
+	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -83,7 +83,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	f := &FakeCircleCI{
 		Handler:   r,
 		Recorder:  rec,
-		AddKeyURL: "sandbox-abc.example.com",
+		AddKeyURL: "sidecar-abc.example.com",
 	}
 
 	// Existing endpoints
@@ -91,15 +91,15 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.GET("/api/v2/me/collaborations", f.handleCollaborations)
 	r.GET("/api/v1.1/projects", f.handleProjects)
 
-	// Sandbox endpoints
-	r.GET("/api/v2/sandbox/instances", f.handleListSandboxes)
-	r.POST("/api/v2/sandbox/instances", f.handleCreateSandbox)
-	r.POST("/api/v2/sandbox/instances/:id/ssh/add-key", f.handleAddSSHKey)
-	r.POST("/api/v2/sandbox/instances/:id/exec", f.handleExec)
+	// Sidecar endpoints
+	r.GET("/api/v2/sidecar/instances", f.handleListSidecars)
+	r.POST("/api/v2/sidecar/instances", f.handleCreateSidecar)
+	r.POST("/api/v2/sidecar/instances/:id/ssh/add-key", f.handleAddSSHKey)
+	r.POST("/api/v2/sidecar/instances/:id/exec", f.handleExec)
 
 	// Snapshot endpoints
-	r.POST("/api/v2/sandbox/snapshots", f.handleCreateSnapshot)
-	r.GET("/api/v2/sandbox/snapshots/:id", f.handleGetSnapshot)
+	r.POST("/api/v2/sidecar/snapshots", f.handleCreateSnapshot)
+	r.GET("/api/v2/sidecar/snapshots/:id", f.handleGetSnapshot)
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
@@ -145,7 +145,7 @@ func (f *FakeCircleCI) handleProjects(c *gin.Context) {
 	c.JSON(http.StatusOK, f.Projects)
 }
 
-func (f *FakeCircleCI) handleListSandboxes(c *gin.Context) {
+func (f *FakeCircleCI) handleListSidecars(c *gin.Context) {
 	if !f.requireToken(c) {
 		return
 	}
@@ -158,19 +158,19 @@ func (f *FakeCircleCI) handleListSandboxes(c *gin.Context) {
 	}
 
 	orgID := c.Query("org_id")
-	var filtered []Sandbox
-	for _, s := range f.Sandboxes {
+	var filtered []Sidecar
+	for _, s := range f.Sidecars {
 		if s.OrgID == orgID {
 			filtered = append(filtered, s)
 		}
 	}
 	if filtered == nil {
-		filtered = []Sandbox{}
+		filtered = []Sidecar{}
 	}
 	c.JSON(http.StatusOK, gin.H{"items": filtered})
 }
 
-func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
+func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 	if !f.requireToken(c) {
 		return
 	}
@@ -194,18 +194,18 @@ func (f *FakeCircleCI) handleCreateSandbox(c *gin.Context) {
 		return
 	}
 
-	sandbox := Sandbox{
-		ID:    "sandbox-new-123",
+	sidecar := Sidecar{
+		ID:    "sidecar-new-123",
 		Name:  body.Name,
 		OrgID: body.OrgID,
 		Image: body.Image,
 	}
 
 	f.mu.Lock()
-	f.Sandboxes = append(f.Sandboxes, sandbox)
+	f.Sidecars = append(f.Sidecars, sidecar)
 	f.mu.Unlock()
 
-	c.JSON(http.StatusCreated, sandbox)
+	c.JSON(http.StatusCreated, sidecar)
 }
 
 func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {
@@ -263,7 +263,7 @@ func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
 	}
 
 	var body struct {
-		SandboxID string `json:"sandbox_id"`
+		SidecarID string `json:"sidecar_id"`
 		Name      string `json:"name"`
 	}
 	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil {

@@ -17,7 +17,7 @@ chunk-cli/
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set
     │   ├── init.go            # init (project setup, settings.json generation)
-    │   ├── sandbox.go         # sandbox list/create/exec/add-ssh-key/ssh/sync/env/build
+    │   ├── sidecar.go         # sidecar list/create/exec/add-ssh-key/ssh/sync/env/build
     │   ├── skills.go          # skill install/list
     │   ├── task.go            # task run
     │   ├── upgrade.go         # upgrade
@@ -31,7 +31,7 @@ chunk-cli/
     ├── gitutil/               # Git utility helpers
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
-    ├── sandbox/               # CircleCI sandbox operations
+    ├── sidecar/               # CircleCI sidecar operations
     ├── skills/                # Skill definitions (go:embed) and installation
     ├── task/                  # Task run config and CircleCI trigger
     ├── testing/recorder/      # HTTP recorder for tests
@@ -402,8 +402,8 @@ assert.NilError(t, err)
 stCode := st.Code()
 assert.Check(t, cmp.Equal(stCode, codes.NotFound))
 
-sandboxes := registry.List()
-assert.Check(t, cmp.Len(sandboxes, 0))
+sidecars := registry.List()
+assert.Check(t, cmp.Len(sidecars, 0))
 ```
 
 Type conversions (`int32(x)`, `string(b)`) and built-in functions (`len`) are

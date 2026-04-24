@@ -125,7 +125,7 @@ func TestCallCustomAuthHeader(t *testing.T) {
 
 func TestRouteParams(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v2/sandbox/instances/sb-42/exec" {
+		if r.URL.Path != "/api/v2/sidecar/instances/sb-42/exec" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -135,7 +135,7 @@ func TestRouteParams(t *testing.T) {
 	c := hc.New(hc.Config{BaseURL: srv.URL, DisableRetries: true})
 
 	status, err := c.Call(context.Background(), hc.NewRequest("GET",
-		"/api/v2/sandbox/instances/%s/exec",
+		"/api/v2/sidecar/instances/%s/exec",
 		hc.RouteParams("sb-42"),
 	))
 	if err != nil {

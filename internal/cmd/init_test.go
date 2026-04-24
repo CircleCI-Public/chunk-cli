@@ -246,7 +246,7 @@ func TestEnsureGitignoreEntriesCreatesNew(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
 	assert.NilError(t, err)
-	for _, entry := range sandboxGitignoreEntries {
+	for _, entry := range sidecarGitignoreEntries {
 		assert.Assert(t, strings.Contains(string(data), entry), "missing %s", entry)
 	}
 }
@@ -264,7 +264,7 @@ func TestEnsureGitignoreEntriesAppendsToExisting(t *testing.T) {
 	assert.NilError(t, err)
 	content := string(data)
 	assert.Assert(t, strings.HasPrefix(content, existing))
-	for _, entry := range sandboxGitignoreEntries {
+	for _, entry := range sidecarGitignoreEntries {
 		assert.Assert(t, strings.Contains(content, entry), "missing %s", entry)
 	}
 }

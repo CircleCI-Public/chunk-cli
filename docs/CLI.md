@@ -53,33 +53,33 @@ chunk
 │   --cmd <command>                 # Run an inline command
 │   --save                          # Save --cmd to config
 │   --force-run                     # Ignore cache, always run
-│   --sandbox-id <id>               # Remote execution in sandbox
-│   --identity-file <path>          # SSH identity file for sandbox
-│   --workdir <path>                # Working directory on sandbox
+│   --sidecar-id <id>               # Remote execution in sidecar
+│   --identity-file <path>          # SSH identity file for sidecar
+│   --workdir <path>                # Working directory on sidecar
 │   --project <path>                # Override project directory
 │
-├── sandbox
-│   ├── list --org-id <id>          # List sandboxes
-│   ├── create                      # Create a sandbox
+├── sidecar
+│   ├── list --org-id <id>          # List sidecars
+│   ├── create                      # Create a sidecar
 │   │   --org-id <id>               # Organization ID (required)
-│   │   --name <name>               # Sandbox name (required)
+│   │   --name <name>               # Sidecar name (required)
 │   │   --image <image>             # Container image
-│   ├── exec                        # Execute command in sandbox
+│   ├── exec                        # Execute command in sidecar
 │   │   --org-id <id>               # Organization ID (required)
-│   │   --sandbox-id <id>           # Sandbox ID (required)
+│   │   --sidecar-id <id>           # Sidecar ID (required)
 │   │   --command <cmd>             # Command to run (required)
 │   │   --args <args>               # Command arguments
-│   ├── add-ssh-key                 # Add SSH key to sandbox
+│   ├── add-ssh-key                 # Add SSH key to sidecar
 │   │   --org-id <id>               # Organization ID (required)
-│   │   --sandbox-id <id>           # Sandbox ID (required)
+│   │   --sidecar-id <id>           # Sidecar ID (required)
 │   │   --public-key <key>          # SSH public key string
 │   │   --public-key-file <path>    # Path to public key file
-│   ├── ssh                         # SSH into sandbox
-│   │   --sandbox-id <id>           # Sandbox ID (required)
+│   ├── ssh                         # SSH into sidecar
+│   │   --sidecar-id <id>           # Sidecar ID (required)
 │   │   --identity-file <path>      # SSH identity file
 │   │   --env-vars KEY=VALUE        # Set env var in remote session (repeatable)
 │   │   --no-env-file               # Skip auto-loading .env.local
-│   └── sync                        # Sync files to sandbox
+│   └── sync                        # Sync files to sidecar
 │
 ├── completion
 │   ├── install                     # Install zsh completion
@@ -100,8 +100,8 @@ chunk
 - `chunk init` uses Claude to auto-detect the test command for the project.
   It generates `.claude/settings.json` with pre-commit hooks. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.
-- Commands that require a CircleCI token (`task run`, `task config`, `sandbox *`,
-  `validate --sandbox-id`) prompt for it inline at the point of need rather than
+- Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,
+  `validate --sidecar-id`) prompt for it inline at the point of need rather than
   failing with an error.
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.

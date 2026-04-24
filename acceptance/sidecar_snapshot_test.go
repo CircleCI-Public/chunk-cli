@@ -13,7 +13,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
-func TestSandboxSnapshotCreateSendsSandboxIDInBody(t *testing.T) {
+func TestSidecarSnapshotCreateSendsSidecarIDInBody(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -22,30 +22,30 @@ func TestSandboxSnapshotCreateSendsSandboxIDInBody(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "snapshot", "create",
-		"--sandbox-id", "sb-111",
+		"sidecar", "snapshot", "create",
+		"--sidecar-id", "sb-111",
 		"--name", "my-checkpoint",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	snapReqs := filterByMethod(reqs, "POST", "/api/v2/sandbox/snapshots")
+	snapReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/snapshots")
 	assert.Equal(t, len(snapReqs), 1, "expected 1 create snapshot request")
 
 	var body map[string]interface{}
 	err := json.Unmarshal(snapReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["sandbox_id"], "sb-111")
+	assert.Equal(t, body["sidecar_id"], "sb-111")
 	assert.Equal(t, body["name"], "my-checkpoint")
 }
 
-func TestSandboxSnapshotCreateMissingName(t *testing.T) {
+func TestSidecarSnapshotCreateMissingName(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "snapshot", "create",
-		"--sandbox-id", "sb-111",
+		"sidecar", "snapshot", "create",
+		"--sidecar-id", "sb-111",
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for missing --name")
@@ -54,7 +54,7 @@ func TestSandboxSnapshotCreateMissingName(t *testing.T) {
 		"expected error about missing --name, got: %s", combined)
 }
 
-func TestSandboxSnapshotCreateUsesActiveSandbox(t *testing.T) {
+func TestSidecarSnapshotCreateUsesActiveSidecar(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -63,48 +63,48 @@ func TestSandboxSnapshotCreateUsesActiveSandbox(t *testing.T) {
 	env.CircleCIURL = srv.URL
 	workDir := t.TempDir()
 
-	// create sandbox → sets active sandbox to "sandbox-new-123"
+	// create sidecar → sets active sidecar to "sidecar-new-123"
 	result := binary.RunCLI(t, []string{
-		"sandbox", "create",
+		"sidecar", "create",
 		"--org-id", "org-aaa",
 		"--name", "test-box",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "create stderr: %s", result.Stderr)
 
-	// snapshot create without --sandbox-id should use the active sandbox
+	// snapshot create without --sidecar-id should use the active sidecar
 	result = binary.RunCLI(t, []string{
-		"sandbox", "snapshot", "create",
+		"sidecar", "snapshot", "create",
 		"--name", "my-checkpoint",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "snapshot create stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	snapReqs := filterByMethod(reqs, "POST", "/api/v2/sandbox/snapshots")
+	snapReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/snapshots")
 	assert.Assert(t, len(snapReqs) >= 1, "expected at least 1 create snapshot request")
 
 	var body map[string]interface{}
 	err := json.Unmarshal(snapReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["sandbox_id"], "sandbox-new-123",
-		"expected active sandbox ID in request body")
+	assert.Equal(t, body["sidecar_id"], "sidecar-new-123",
+		"expected active sidecar ID in request body")
 }
 
-func TestSandboxSnapshotCreateNoActiveSandbox(t *testing.T) {
+func TestSidecarSnapshotCreateNoActiveSidecar(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	workDir := t.TempDir()
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "snapshot", "create",
+		"sidecar", "snapshot", "create",
 		"--name", "my-checkpoint",
 	}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit with no sandbox ID")
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit with no sidecar ID")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "sandbox-id") || strings.Contains(combined, "active sandbox"),
+	assert.Assert(t, strings.Contains(combined, "sidecar-id") || strings.Contains(combined, "active sidecar"),
 		"expected helpful error, got: %s", combined)
 }
 
-func TestSandboxSnapshotCreateAPIError(t *testing.T) {
+func TestSidecarSnapshotCreateAPIError(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.CreateSnapshotStatusCode = 500
 	srv := httptest.NewServer(cci)
@@ -114,15 +114,15 @@ func TestSandboxSnapshotCreateAPIError(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "snapshot", "create",
-		"--sandbox-id", "sb-111",
+		"sidecar", "snapshot", "create",
+		"--sidecar-id", "sb-111",
 		"--name", "my-checkpoint",
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for 500 response")
 }
 
-func TestSandboxSnapshotGetHappyPath(t *testing.T) {
+func TestSidecarSnapshotGetHappyPath(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Snapshots = []fakes.Snapshot{
 		{ID: "snap-abc", Name: "my-checkpoint"},
@@ -134,7 +134,7 @@ func TestSandboxSnapshotGetHappyPath(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "snapshot", "get", "snap-abc",
+		"sidecar", "snapshot", "get", "snap-abc",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -144,7 +144,7 @@ func TestSandboxSnapshotGetHappyPath(t *testing.T) {
 		"expected snapshot name in output, got: %s", result.Stdout)
 }
 
-func TestSandboxSnapshotGetNotFound(t *testing.T) {
+func TestSidecarSnapshotGetNotFound(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -153,19 +153,19 @@ func TestSandboxSnapshotGetNotFound(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "snapshot", "get", "snap-does-not-exist",
+		"sidecar", "snapshot", "get", "snap-does-not-exist",
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for not found")
 }
 
-func TestSandboxSnapshotMissingToken(t *testing.T) {
+func TestSidecarSnapshotMissingToken(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 	}{
-		{"create", []string{"sandbox", "snapshot", "create", "--sandbox-id", "sb-111", "--name", "snap"}},
-		{"get", []string{"sandbox", "snapshot", "get", "snap-abc"}},
+		{"create", []string{"sidecar", "snapshot", "create", "--sidecar-id", "sb-111", "--name", "snap"}},
+		{"get", []string{"sidecar", "snapshot", "get", "snap-abc"}},
 	}
 
 	for _, tt := range tests {

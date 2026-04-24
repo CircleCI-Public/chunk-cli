@@ -354,7 +354,7 @@ func TestValidateListNoConfig(t *testing.T) {
 		"expected 'No commands configured' message, got: %s", combined)
 }
 func TestValidateRunRemoteUsesSSH(t *testing.T) {
-	// Verify that validate --sandbox-id uses the SSH path (AddSSHKey) rather than HTTP exec.
+	// Verify that validate --sidecar-id uses the SSH path (AddSSHKey) rather than HTTP exec.
 	// We can't complete the SSH handshake in this test, but we verify the code reaches
 	// OpenSession (i.e. calls AddSSHKey) and never calls the HTTP exec endpoint.
 	cci := fakes.NewFakeCircleCI()
@@ -376,7 +376,7 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"validate",
-		"--sandbox-id", "sandbox-123",
+		"--sidecar-id", "sidecar-123",
 		"--identity-file", identityFile,
 	}, env, workDir)
 
@@ -386,10 +386,10 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	reqs := cci.Recorder.AllRequests()
 
 	// AddSSHKey must be called — proves SSH path was taken.
-	addKeyReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sandbox-123/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sidecar-123/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request; got: %v", reqs)
 
 	// HTTP exec must NOT be called — SSH is used instead.
-	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sandbox-123/exec")
+	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sidecar-123/exec")
 	assert.Equal(t, len(execReqs), 0, "expected 0 HTTP exec requests (SSH should be used)")
 }

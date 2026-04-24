@@ -21,7 +21,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// SSHServer is a WebSocket+SSH server for testing SSH-based sandbox interactions.
+// SSHServer is a WebSocket+SSH server for testing SSH-based sidecar interactions.
 // It accepts a single authorized public key and records exec requests.
 type SSHServer struct {
 	srv      *httptest.Server
@@ -59,7 +59,7 @@ func GenerateSSHKeypair(t *testing.T) (keyFile string, pubKey ssh.PublicKey) {
 		t.Fatal(err)
 	}
 
-	// sandbox.OpenSession reads identityFile+".pub" to register the key.
+	// sidecar.OpenSession reads identityFile+".pub" to register the key.
 	pubLine := ssh.MarshalAuthorizedKey(sshPub)
 	if err := os.WriteFile(keyPath+".pub", pubLine, 0o644); err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 }
 
 // Addr returns the "host:port" address the server is listening on.
-// sandbox.OpenSession stores this as Session.URL; toWebSocketURL converts it
+// sidecar.OpenSession stores this as Session.URL; toWebSocketURL converts it
 // to ws://host:port/ssh/tunnel before dialling.
 func (s *SSHServer) Addr() string {
 	return strings.TrimPrefix(s.srv.URL, "http://")

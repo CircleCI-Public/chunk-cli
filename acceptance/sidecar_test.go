@@ -17,11 +17,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
-func TestSandboxesListHappyPath(t *testing.T) {
+func TestSidecarsListHappyPath(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
-	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-111", Name: "dev-sandbox", OrgID: "org-aaa"},
-		{ID: "sb-222", Name: "staging-sandbox", OrgID: "org-aaa"},
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sb-111", Name: "dev-sidecar", OrgID: "org-aaa"},
+		{ID: "sb-222", Name: "staging-sidecar", OrgID: "org-aaa"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -30,25 +30,25 @@ func TestSandboxesListHappyPath(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "list", "--org-id", "org-aaa",
+		"sidecar", "list", "--org-id", "org-aaa",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stdout, "dev-sandbox"),
-		"expected sandbox name in output, got: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "dev-sidecar"),
+		"expected sidecar name in output, got: %s", result.Stdout)
 	assert.Assert(t, strings.Contains(result.Stdout, "sb-111"),
-		"expected sandbox id in output, got: %s", result.Stdout)
-	assert.Assert(t, strings.Contains(result.Stdout, "staging-sandbox"),
-		"expected second sandbox in output, got: %s", result.Stdout)
+		"expected sidecar id in output, got: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "staging-sidecar"),
+		"expected second sidecar in output, got: %s", result.Stdout)
 
 	// Verify org_id query param was sent
 	reqs := cci.Recorder.AllRequests()
-	listReqs := filterByPath(reqs, "/api/v2/sandbox/instances")
+	listReqs := filterByPath(reqs, "/api/v2/sidecar/instances")
 	assert.Assert(t, len(listReqs) >= 1, "expected at least 1 list request")
 	assert.Equal(t, listReqs[0].URL.Query().Get("org_id"), "org-aaa")
 }
 
-func TestSandboxesListEmpty(t *testing.T) {
+func TestSidecarsListEmpty(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -57,18 +57,18 @@ func TestSandboxesListEmpty(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "list", "--org-id", "org-empty",
+		"sidecar", "list", "--org-id", "org-empty",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "No sandboxes") || strings.Contains(combined, "no sandbox"),
+	assert.Assert(t, strings.Contains(combined, "No sidecars") || strings.Contains(combined, "no sidecar"),
 		"expected empty message, got: %s", combined)
 }
 
-func TestSandboxesListFiltersByOrg(t *testing.T) {
+func TestSidecarsListFiltersByOrg(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
-	cci.Sandboxes = []fakes.Sandbox{
+	cci.Sidecars = []fakes.Sidecar{
 		{ID: "sb-111", Name: "org-a-box", OrgID: "org-a"},
 		{ID: "sb-222", Name: "org-b-box", OrgID: "org-b"},
 	}
@@ -79,26 +79,26 @@ func TestSandboxesListFiltersByOrg(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "list", "--org-id", "org-a",
+		"sidecar", "list", "--org-id", "org-a",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stdout, "org-a-box"),
-		"expected org-a sandbox, got: %s", result.Stdout)
+		"expected org-a sidecar, got: %s", result.Stdout)
 	assert.Assert(t, !strings.Contains(result.Stdout, "org-b-box"),
-		"should not contain org-b sandbox, got: %s", result.Stdout)
+		"should not contain org-b sidecar, got: %s", result.Stdout)
 }
 
-func TestSandboxesMissingToken(t *testing.T) {
+func TestSidecarsMissingToken(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 	}{
-		{"list", []string{"sandbox", "list", "--org-id", "org-aaa"}},
-		{"create", []string{"sandbox", "create", "--org-id", "org-aaa", "--name", "my-sandbox"}},
-		{"exec", []string{"sandbox", "exec", "--org-id", "org-aaa", "--sandbox-id", "sb-111", "--command", "ls"}},
-		{"ssh", []string{"sandbox", "ssh", "--org-id", "org-aaa", "--sandbox-id", "sb-111"}},
-		{"sync", []string{"sandbox", "sync", "--org-id", "org-aaa", "--sandbox-id", "sb-111"}},
+		{"list", []string{"sidecar", "list", "--org-id", "org-aaa"}},
+		{"create", []string{"sidecar", "create", "--org-id", "org-aaa", "--name", "my-sidecar"}},
+		{"exec", []string{"sidecar", "exec", "--org-id", "org-aaa", "--sidecar-id", "sb-111", "--command", "ls"}},
+		{"ssh", []string{"sidecar", "ssh", "--org-id", "org-aaa", "--sidecar-id", "sb-111"}},
+		{"sync", []string{"sidecar", "sync", "--org-id", "org-aaa", "--sidecar-id", "sb-111"}},
 	}
 
 	for _, tt := range tests {
@@ -112,7 +112,7 @@ func TestSandboxesMissingToken(t *testing.T) {
 	}
 }
 
-func TestSandboxesCreateHappyPath(t *testing.T) {
+func TestSidecarsCreateHappyPath(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -121,30 +121,30 @@ func TestSandboxesCreateHappyPath(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "create",
+		"sidecar", "create",
 		"--org-id", "org-aaa",
-		"--name", "my-new-sandbox",
+		"--name", "my-new-sidecar",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "sandbox-new-123"),
-		"expected sandbox ID in stderr, got: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "my-new-sandbox"),
-		"expected sandbox name in stderr, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "sidecar-new-123"),
+		"expected sidecar ID in stderr, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "my-new-sidecar"),
+		"expected sidecar name in stderr, got: %s", result.Stderr)
 
 	// Verify request body
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByMethod(reqs, "POST", "/api/v2/sandbox/instances")
+	createReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/instances")
 	assert.Equal(t, len(createReqs), 1, "expected 1 create request")
 
 	var body map[string]interface{}
 	err := json.Unmarshal(createReqs[0].Body, &body)
 	assert.NilError(t, err)
 	assert.Equal(t, body["org_id"], "org-aaa")
-	assert.Equal(t, body["name"], "my-new-sandbox")
+	assert.Equal(t, body["name"], "my-new-sidecar")
 }
 
-func TestSandboxesCreateWithImage(t *testing.T) {
+func TestSidecarsCreateWithImage(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -153,16 +153,16 @@ func TestSandboxesCreateWithImage(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "create",
+		"sidecar", "create",
 		"--org-id", "org-aaa",
-		"--name", "custom-sandbox",
+		"--name", "custom-sidecar",
 		"--image", "ubuntu:22.04",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByMethod(reqs, "POST", "/api/v2/sandbox/instances")
+	createReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/instances")
 	assert.Equal(t, len(createReqs), 1)
 
 	var body map[string]interface{}
@@ -171,7 +171,7 @@ func TestSandboxesCreateWithImage(t *testing.T) {
 	assert.Equal(t, body["image"], "ubuntu:22.04")
 }
 
-func TestSandboxesExecHappyPath(t *testing.T) {
+func TestSidecarsExecHappyPath(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.ExecResponse = &fakes.ExecResponse{
 		CommandID: "cmd-789",
@@ -187,8 +187,8 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "exec",
-		"--sandbox-id", "sb-111",
+		"sidecar", "exec",
+		"--sidecar-id", "sb-111",
 		"--command", "echo",
 		"--args", "hello", "world",
 	}, env, env.HomeDir)
@@ -197,9 +197,9 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stdout, "hello world"),
 		"expected command output, got: %s", result.Stdout)
 
-	// Verify exec request with sandbox ID in path
+	// Verify exec request with sidecar ID in path
 	reqs := cci.Recorder.AllRequests()
-	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-111/exec")
+	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/exec")
 	assert.Equal(t, len(execReqs), 1, "expected 1 exec request")
 
 	var body map[string]interface{}
@@ -212,9 +212,9 @@ func TestSandboxesExecHappyPath(t *testing.T) {
 		"expected Circle-Token auth on exec request")
 }
 
-func TestSandboxesAddSSHKeyFromString(t *testing.T) {
+func TestSidecarsAddSSHKeyFromString(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
-	cci.AddKeyURL = "my-sandbox.dev.example.com"
+	cci.AddKeyURL = "my-sidecar.dev.example.com"
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
@@ -222,18 +222,18 @@ func TestSandboxesAddSSHKeyFromString(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "add-ssh-key",
-		"--sandbox-id", "sb-111",
+		"sidecar", "add-ssh-key",
+		"--sidecar-id", "sb-111",
 		"--public-key", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTestingPurposesOnly123 test@test",
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "my-sandbox.dev.example.com"),
-		"expected sandbox domain in stderr, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "my-sidecar.dev.example.com"),
+		"expected sidecar domain in stderr, got: %s", result.Stderr)
 
-	// Verify add-key request with sandbox ID in path
+	// Verify add-key request with sidecar ID in path
 	reqs := cci.Recorder.AllRequests()
-	addKeyReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-111/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request")
 
 	var body map[string]interface{}
@@ -243,7 +243,7 @@ func TestSandboxesAddSSHKeyFromString(t *testing.T) {
 		"expected public key in body, got: %v", body["public_key"])
 }
 
-func TestSandboxesAddSSHKeyFromFile(t *testing.T) {
+func TestSidecarsAddSSHKeyFromFile(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -257,8 +257,8 @@ func TestSandboxesAddSSHKeyFromFile(t *testing.T) {
 	assert.NilError(t, err)
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "add-ssh-key",
-		"--sandbox-id", "sb-111",
+		"sidecar", "add-ssh-key",
+		"--sidecar-id", "sb-111",
 		"--public-key-file", keyFile,
 	}, env, env.HomeDir)
 
@@ -266,7 +266,7 @@ func TestSandboxesAddSSHKeyFromFile(t *testing.T) {
 
 	// Verify the key was sent in the request
 	reqs := cci.Recorder.AllRequests()
-	addKeyReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-111/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1)
 
 	var body map[string]interface{}
@@ -276,7 +276,7 @@ func TestSandboxesAddSSHKeyFromFile(t *testing.T) {
 		"expected public key from file in body")
 }
 
-func TestSandboxesAddSSHKeyMutuallyExclusive(t *testing.T) {
+func TestSidecarsAddSSHKeyMutuallyExclusive(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -289,8 +289,8 @@ func TestSandboxesAddSSHKeyMutuallyExclusive(t *testing.T) {
 	assert.NilError(t, err)
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "add-ssh-key",
-		"--sandbox-id", "sb-111",
+		"sidecar", "add-ssh-key",
+		"--sidecar-id", "sb-111",
 		"--public-key", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKey test@test",
 		"--public-key-file", keyFile,
 	}, env, env.HomeDir)
@@ -301,7 +301,7 @@ func TestSandboxesAddSSHKeyMutuallyExclusive(t *testing.T) {
 		"expected mutually exclusive error, got: %s", combined)
 }
 
-func TestSandboxesAddSSHKeyNeitherProvided(t *testing.T) {
+func TestSidecarsAddSSHKeyNeitherProvided(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -310,8 +310,8 @@ func TestSandboxesAddSSHKeyNeitherProvided(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "add-ssh-key",
-		"--sandbox-id", "sb-111",
+		"sidecar", "add-ssh-key",
+		"--sidecar-id", "sb-111",
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code when no key provided")
@@ -320,7 +320,7 @@ func TestSandboxesAddSSHKeyNeitherProvided(t *testing.T) {
 		"expected missing key error, got: %s", combined)
 }
 
-func TestSandboxesAddSSHKeyPrivateKeyRejected(t *testing.T) {
+func TestSidecarsAddSSHKeyPrivateKeyRejected(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -334,8 +334,8 @@ func TestSandboxesAddSSHKeyPrivateKeyRejected(t *testing.T) {
 	assert.NilError(t, err)
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "add-ssh-key",
-		"--sandbox-id", "sb-111",
+		"sidecar", "add-ssh-key",
+		"--sidecar-id", "sb-111",
 		"--public-key-file", keyFile,
 	}, env, env.HomeDir)
 
@@ -345,15 +345,15 @@ func TestSandboxesAddSSHKeyPrivateKeyRejected(t *testing.T) {
 		"expected private key error, got: %s", combined)
 }
 
-// TestSandboxesSshSyncFlags verifies that SSH/sync flags are accepted and
+// TestSidecarsSshSyncFlags verifies that SSH/sync flags are accepted and
 // code progresses past flag parsing (fails at SSH step, not at parsing).
-func TestSandboxesSshSyncFlags(t *testing.T) {
+func TestSidecarsSshSyncFlags(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 	}{
-		{"ssh identity-file", []string{"sandbox", "ssh", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync identity-file", []string{"sandbox", "sync", "--sandbox-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+		{"ssh identity-file", []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+		{"sync identity-file", []string{"sidecar", "sync", "--sidecar-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
 	}
 
 	for _, tt := range tests {
@@ -376,7 +376,7 @@ func TestSandboxesSshSyncFlags(t *testing.T) {
 	}
 }
 
-func TestSandboxesExecWithArgs(t *testing.T) {
+func TestSidecarsExecWithArgs(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.ExecResponse = &fakes.ExecResponse{
 		CommandID: "cmd-789",
@@ -392,8 +392,8 @@ func TestSandboxesExecWithArgs(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "exec",
-		"--sandbox-id", "sb-111",
+		"sidecar", "exec",
+		"--sidecar-id", "sb-111",
 		"--command", "ls",
 		"--args", "-la", "/tmp",
 	}, env, env.HomeDir)
@@ -402,7 +402,7 @@ func TestSandboxesExecWithArgs(t *testing.T) {
 
 	// Verify exec request body has the command
 	reqs := cci.Recorder.AllRequests()
-	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-111/exec")
+	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/exec")
 	assert.Equal(t, len(execReqs), 1)
 
 	var body map[string]interface{}
@@ -411,21 +411,21 @@ func TestSandboxesExecWithArgs(t *testing.T) {
 	assert.Equal(t, body["command"], "ls")
 }
 
-func TestSandboxesCreateMissingName(t *testing.T) {
+func TestSidecarsCreateMissingName(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "create",
+		"sidecar", "create",
 		"--org-id", "org-aaa",
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code for missing --name")
 }
 
-func TestSandboxesListFromConfig(t *testing.T) {
+func TestSidecarsListFromConfig(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
-	cci.Sandboxes = []fakes.Sandbox{
-		{ID: "sb-999", Name: "config-sandbox", OrgID: "org-from-config"},
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sb-999", Name: "config-sidecar", OrgID: "org-from-config"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -437,14 +437,14 @@ func TestSandboxesListFromConfig(t *testing.T) {
 	env.Extra["CIRCLECI_ORG_ID"] = "org-from-config"
 
 	// No --org-id flag; should read from CIRCLECI_ORG_ID
-	result := binary.RunCLI(t, []string{"sandbox", "list"}, env, workDir)
+	result := binary.RunCLI(t, []string{"sidecar", "list"}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stdout, "config-sandbox"),
-		"expected sandbox from config org, got: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "config-sidecar"),
+		"expected sidecar from config org, got: %s", result.Stdout)
 }
 
-func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
+func TestSidecarsListNoOrgIDNoConfig(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -452,7 +452,7 @@ func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := binary.RunCLI(t, []string{"sandbox", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"sidecar", "list"}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	combined := result.Stdout + result.Stderr
@@ -460,13 +460,13 @@ func TestSandboxesListNoOrgIDNoConfig(t *testing.T) {
 		"expected helpful error message, got: %s", combined)
 }
 
-// TestSandboxesSSHEnvFlag verifies the -e/--env flag rejects invalid input.
-// Direct env resolution logic is tested in internal/sandbox/env_test.go (TestResolveEnv).
+// TestSidecarsSSHEnvFlag verifies the -e/--env flag rejects invalid input.
+// Direct env resolution logic is tested in internal/sidecar/env_test.go (TestResolveEnv).
 //
 // TODO: Once the fake SSH server from #188 lands, add tests that spin up the
 // fake server and assert on the actual env vars sent over the wire (valid pairs,
 // .env.local loading, multiple -e flags, --no-env-file).
-func TestSandboxesSSHEnvFlag(t *testing.T) {
+func TestSidecarsSSHEnvFlag(t *testing.T) {
 	t.Run("invalid entry without equals returns error", func(t *testing.T) {
 		cci := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(cci)
@@ -476,8 +476,8 @@ func TestSandboxesSSHEnvFlag(t *testing.T) {
 		env.CircleCIURL = srv.URL
 
 		result := binary.RunCLI(t, []string{
-			"sandbox", "ssh",
-			"--sandbox-id", "sb-111",
+			"sidecar", "ssh",
+			"--sidecar-id", "sb-111",
 			"--env", "NOEQUALS",
 		}, env, env.HomeDir)
 
@@ -488,7 +488,7 @@ func TestSandboxesSSHEnvFlag(t *testing.T) {
 	})
 }
 
-func TestSandboxesCreateSetsActiveSandbox(t *testing.T) {
+func TestSidecarsCreateSetsActiveSidecar(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -498,29 +498,29 @@ func TestSandboxesCreateSetsActiveSandbox(t *testing.T) {
 	workDir := t.TempDir()
 
 	result := binary.RunCLI(t, []string{
-		"sandbox", "create",
+		"sidecar", "create",
 		"--org-id", "org-aaa",
-		"--name", "my-new-sandbox",
+		"--name", "my-new-sidecar",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "Set sandbox-new-123 as active sandbox"),
-		"expected active sandbox message, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Set sidecar-new-123 as active sidecar"),
+		"expected active sidecar message, got: %s", result.Stderr)
 
-	// current should show the sandbox set by create
-	result = binary.RunCLI(t, []string{"sandbox", "current"}, env, workDir)
+	// current should show the sidecar set by create
+	result = binary.RunCLI(t, []string{"sidecar", "current"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "sandbox-new-123"),
-		"expected sandbox ID from current, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "sidecar-new-123"),
+		"expected sidecar ID from current, got: %s", combined)
 }
 
-func TestSandboxesExecUsesActiveSandbox(t *testing.T) {
+func TestSidecarsExecUsesActiveSidecar(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.ExecResponse = &fakes.ExecResponse{
 		CommandID: "cmd-1",
 		PID:       1,
-		Stdout:    "active sandbox output\n",
+		Stdout:    "active sidecar output\n",
 		ExitCode:  0,
 	}
 	srv := httptest.NewServer(cci)
@@ -530,25 +530,25 @@ func TestSandboxesExecUsesActiveSandbox(t *testing.T) {
 	env.CircleCIURL = srv.URL
 	workDir := t.TempDir()
 
-	// create sets the active sandbox
+	// create sets the active sidecar
 	result := binary.RunCLI(t, []string{
-		"sandbox", "create",
+		"sidecar", "create",
 		"--org-id", "org-aaa",
 		"--name", "test-box",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "create stderr: %s", result.Stderr)
 
-	// exec without --sandbox-id should succeed using active sandbox
+	// exec without --sidecar-id should succeed using active sidecar
 	result = binary.RunCLI(t, []string{
-		"sandbox", "exec",
+		"sidecar", "exec",
 		"--command", "echo",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "exec stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stdout, "active sandbox output"),
+	assert.Assert(t, strings.Contains(result.Stdout, "active sidecar output"),
 		"expected output, got: %s", result.Stdout)
 }
 
-func TestSandboxesForgetClearsActiveSandbox(t *testing.T) {
+func TestSidecarsForgetClearsActiveSidecar(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -557,30 +557,30 @@ func TestSandboxesForgetClearsActiveSandbox(t *testing.T) {
 	env.CircleCIURL = srv.URL
 	workDir := t.TempDir()
 
-	// create sets active sandbox
+	// create sets active sidecar
 	result := binary.RunCLI(t, []string{
-		"sandbox", "create",
+		"sidecar", "create",
 		"--org-id", "org-aaa",
 		"--name", "temp-box",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "create stderr: %s", result.Stderr)
 
 	// forget clears it
-	result = binary.RunCLI(t, []string{"sandbox", "forget"}, env, workDir)
+	result = binary.RunCLI(t, []string{"sidecar", "forget"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "forget stderr: %s", result.Stderr)
 
-	// exec without --sandbox-id should now fail
+	// exec without --sidecar-id should now fail
 	result = binary.RunCLI(t, []string{
-		"sandbox", "exec",
+		"sidecar", "exec",
 		"--command", "echo",
 	}, env, workDir)
 	assert.Assert(t, result.ExitCode != 0, "expected failure after forget")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "sandbox-id") || strings.Contains(combined, "active sandbox"),
-		"expected missing sandbox error, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "sidecar-id") || strings.Contains(combined, "active sidecar"),
+		"expected missing sidecar error, got: %s", combined)
 }
 
-func TestSandboxesExplicitIDOverridesActive(t *testing.T) {
+func TestSidecarsExplicitIDOverridesActive(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.ExecResponse = &fakes.ExecResponse{
 		CommandID: "cmd-2",
@@ -595,39 +595,39 @@ func TestSandboxesExplicitIDOverridesActive(t *testing.T) {
 	env.CircleCIURL = srv.URL
 	workDir := t.TempDir()
 
-	// Set active sandbox to something
+	// Set active sidecar to something
 	result := binary.RunCLI(t, []string{
-		"sandbox", "create",
+		"sidecar", "create",
 		"--org-id", "org-aaa",
 		"--name", "default-box",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "create stderr: %s", result.Stderr)
 
-	// exec with explicit --sandbox-id should use it (not the active one)
+	// exec with explicit --sidecar-id should use it (not the active one)
 	result = binary.RunCLI(t, []string{
-		"sandbox", "exec",
-		"--sandbox-id", "sb-explicit",
+		"sidecar", "exec",
+		"--sidecar-id", "sb-explicit",
 		"--command", "echo",
 	}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "exec stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	execReqs := filterByPath(reqs, "/api/v2/sandbox/instances/sb-explicit/exec")
-	assert.Assert(t, len(execReqs) >= 1, "expected exec request to use explicit sandbox ID, got requests: %v", reqs)
+	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-explicit/exec")
+	assert.Assert(t, len(execReqs) >= 1, "expected exec request to use explicit sidecar ID, got requests: %v", reqs)
 }
 
-func TestSandboxesCurrentNoActive(t *testing.T) {
+func TestSidecarsCurrentNoActive(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	workDir := t.TempDir()
 
-	result := binary.RunCLI(t, []string{"sandbox", "current"}, env, workDir)
+	result := binary.RunCLI(t, []string{"sidecar", "current"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "No active sandbox"),
+	assert.Assert(t, strings.Contains(combined, "No active sidecar"),
 		"expected no active message, got: %s", combined)
 }
 
-func TestSandboxesUseCommand(t *testing.T) {
+func TestSidecarsUseCommand(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.ExecResponse = &fakes.ExecResponse{
 		CommandID: "cmd-3",
@@ -642,10 +642,10 @@ func TestSandboxesUseCommand(t *testing.T) {
 	env.CircleCIURL = srv.URL
 	workDir := t.TempDir()
 
-	result := binary.RunCLI(t, []string{"sandbox", "use", "sb-manual"}, env, workDir)
+	result := binary.RunCLI(t, []string{"sidecar", "use", "sb-manual"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
-	result = binary.RunCLI(t, []string{"sandbox", "current"}, env, workDir)
+	result = binary.RunCLI(t, []string{"sidecar", "current"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "sb-manual"),

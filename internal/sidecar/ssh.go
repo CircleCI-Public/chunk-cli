@@ -1,4 +1,4 @@
-package sandbox
+package sidecar
 
 import (
 	"bytes"
@@ -66,7 +66,7 @@ func (c *sshConn) Close() error {
 	return err
 }
 
-// toWebSocketURL normalises a sandbox URL into a WebSocket URL with the
+// toWebSocketURL normalises a sidecar URL into a WebSocket URL with the
 // /ssh/tunnel path appended. It returns the normalised URL string and the
 // hostname (for SSH host key TOFU), avoiding a second url.Parse in the caller.
 //
@@ -100,7 +100,7 @@ func toWebSocketURL(raw string) (wsURL, host string, err error) {
 	return u.String(), u.Hostname(), nil
 }
 
-// dialSSH establishes an SSH client connection to the sandbox over a WebSocket tunnel.
+// dialSSH establishes an SSH client connection to the sidecar over a WebSocket tunnel.
 // The caller must close the returned sshConn.
 func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 	authMethod, cleanup, err := sshAuth(ctx, session)
@@ -121,7 +121,7 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 		dialOpts.HTTPClient = &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // sandbox uses self-signed certs; trust via SSH host key TOFU
+					InsecureSkipVerify: true, //nolint:gosec // sidecar uses self-signed certs; trust via SSH host key TOFU
 				},
 			},
 		}
@@ -169,7 +169,7 @@ func setSessionEnv(sess *ssh.Session, vars map[string]string) error {
 	return nil
 }
 
-// ExecOverSSH connects to the sandbox via SSH-over-TLS and executes a command.
+// ExecOverSSH connects to the sidecar via SSH-over-TLS and executes a command.
 func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io.Reader, envVars map[string]string) (_ *ExecResult, err error) {
 	client, err := dialSSH(ctx, session)
 	if err != nil {
@@ -212,7 +212,7 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 	}, nil
 }
 
-// InteractiveShell opens an interactive shell session to the sandbox with PTY.
+// InteractiveShell opens an interactive shell session to the sidecar with PTY.
 // It intentionally uses os.Stdin/os.Stdout/os.Stderr directly rather than
 // iostream.Streams: term.MakeRaw and term.GetSize require a real *os.File fd,
 // and PTY I/O must be wired to the process's actual terminal.

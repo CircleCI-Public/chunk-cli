@@ -47,9 +47,9 @@ func TestNewClient(t *testing.T) {
 	})
 }
 
-func TestListSandboxes(t *testing.T) {
+func TestListSidecars(t *testing.T) {
 	fake := fakes.NewFakeCircleCI()
-	fake.Sandboxes = []fakes.Sandbox{
+	fake.Sidecars = []fakes.Sidecar{
 		{ID: "sb-1", Name: "dev", OrgID: "org-1"},
 		{ID: "sb-2", Name: "staging", OrgID: "org-1"},
 		{ID: "sb-3", Name: "other", OrgID: "org-2"},
@@ -61,31 +61,31 @@ func TestListSandboxes(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("filters by org", func(t *testing.T) {
-		sandboxes, err := client.ListSandboxes(ctx, "org-1")
+		sidecars, err := client.ListSidecars(ctx, "org-1")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(sandboxes) != 2 {
-			t.Fatalf("expected 2 sandboxes, got %d", len(sandboxes))
+		if len(sidecars) != 2 {
+			t.Fatalf("expected 2 sidecars, got %d", len(sidecars))
 		}
-		if sandboxes[0].ID != "sb-1" || sandboxes[1].ID != "sb-2" {
-			t.Errorf("unexpected sandbox IDs: %v, %v", sandboxes[0].ID, sandboxes[1].ID)
+		if sidecars[0].ID != "sb-1" || sidecars[1].ID != "sb-2" {
+			t.Errorf("unexpected sidecar IDs: %v, %v", sidecars[0].ID, sidecars[1].ID)
 		}
 	})
 
 	t.Run("empty result", func(t *testing.T) {
-		sandboxes, err := client.ListSandboxes(ctx, "org-nonexistent")
+		sidecars, err := client.ListSidecars(ctx, "org-nonexistent")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(sandboxes) != 0 {
-			t.Fatalf("expected 0 sandboxes, got %d", len(sandboxes))
+		if len(sidecars) != 0 {
+			t.Fatalf("expected 0 sidecars, got %d", len(sidecars))
 		}
 	})
 
 	t.Run("records request", func(t *testing.T) {
 		fake.Recorder.AllRequests() // baseline
-		_, err := client.ListSandboxes(ctx, "org-1")
+		_, err := client.ListSidecars(ctx, "org-1")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -100,7 +100,7 @@ func TestListSandboxes(t *testing.T) {
 	})
 }
 
-func TestCreateSandbox(t *testing.T) {
+func TestCreateSidecar(t *testing.T) {
 	fake := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
@@ -108,15 +108,15 @@ func TestCreateSandbox(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	sb, err := client.CreateSandbox(ctx, "org-1", "my-sandbox", "", "ubuntu:22.04")
+	sb, err := client.CreateSidecar(ctx, "org-1", "my-sidecar", "", "ubuntu:22.04")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if sb.ID != "sandbox-new-123" {
-		t.Errorf("expected ID sandbox-new-123, got %s", sb.ID)
+	if sb.ID != "sidecar-new-123" {
+		t.Errorf("expected ID sidecar-new-123, got %s", sb.ID)
 	}
-	if sb.Name != "my-sandbox" {
-		t.Errorf("expected name my-sandbox, got %s", sb.Name)
+	if sb.Name != "my-sidecar" {
+		t.Errorf("expected name my-sidecar, got %s", sb.Name)
 	}
 	if sb.OrgID != "org-1" {
 		t.Errorf("expected org org-1, got %s", sb.OrgID)
@@ -128,7 +128,7 @@ func TestCreateSandbox(t *testing.T) {
 
 func TestAddSSHKey(t *testing.T) {
 	fake := fakes.NewFakeCircleCI()
-	fake.AddKeyURL = "sandbox-host.example.com"
+	fake.AddKeyURL = "sidecar-host.example.com"
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
 
@@ -139,8 +139,8 @@ func TestAddSSHKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.URL != "sandbox-host.example.com" {
-		t.Errorf("expected sandbox-host.example.com, got %s", resp.URL)
+	if resp.URL != "sidecar-host.example.com" {
+		t.Errorf("expected sidecar-host.example.com, got %s", resp.URL)
 	}
 
 	// Verify Circle-Token auth header was sent.
@@ -149,8 +149,8 @@ func TestAddSSHKey(t *testing.T) {
 	if got := last.Header.Get("Circle-Token"); got != "test-token" {
 		t.Errorf("expected Circle-Token test-token, got %s", got)
 	}
-	// Verify sandbox ID in URL path.
-	if last.URL.Path != "/api/v2/sandbox/instances/sb-1/ssh/add-key" {
+	// Verify sidecar ID in URL path.
+	if last.URL.Path != "/api/v2/sidecar/instances/sb-1/ssh/add-key" {
 		t.Errorf("unexpected path: %s", last.URL.Path)
 	}
 }
@@ -209,7 +209,7 @@ func TestExec(t *testing.T) {
 		}
 	})
 
-	t.Run("sends sandbox ID in path", func(t *testing.T) {
+	t.Run("sends sidecar ID in path", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
@@ -224,8 +224,8 @@ func TestExec(t *testing.T) {
 
 		reqs := fake.Recorder.AllRequests()
 		last := reqs[len(reqs)-1]
-		if last.URL.Path != "/api/v2/sandbox/instances/sb-1/exec" {
-			t.Errorf("expected /api/v2/sandbox/instances/sb-1/exec, got %s", last.URL.Path)
+		if last.URL.Path != "/api/v2/sidecar/instances/sb-1/exec" {
+			t.Errorf("expected /api/v2/sidecar/instances/sb-1/exec, got %s", last.URL.Path)
 		}
 	})
 }
@@ -315,15 +315,15 @@ func TestAuthRequired(t *testing.T) {
 	client := &Client{cl: cl}
 	ctx := context.Background()
 
-	t.Run("ListSandboxes", func(t *testing.T) {
-		_, err := client.ListSandboxes(ctx, "org-1")
+	t.Run("ListSidecars", func(t *testing.T) {
+		_, err := client.ListSidecars(ctx, "org-1")
 		if err == nil {
 			t.Fatal("expected error")
 		}
 	})
 
-	t.Run("CreateSandbox", func(t *testing.T) {
-		_, err := client.CreateSandbox(ctx, "org-1", "name", "", "image")
+	t.Run("CreateSidecar", func(t *testing.T) {
+		_, err := client.CreateSidecar(ctx, "org-1", "name", "", "image")
 		if err == nil {
 			t.Fatal("expected error")
 		}

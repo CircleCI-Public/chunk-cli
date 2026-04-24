@@ -38,8 +38,8 @@ var All = []Skill{
 		Description: `Debug CircleCI build failures, analyze test results, and identify flaky tests. Use when asked to "debug CI", "why is CI failing", "fix CI failures", "find flaky tests", or "check CircleCI".`,
 	},
 	{
-		Name:        "chunk-sandbox",
-		Description: `Run build/test/validate on a remote chunk sandbox instead of locally. Use when asked to "validate on the sandbox", "run tests on the sandbox", "sync to sandbox", "check this on the sandbox", or when edits need remote verification. Also covers creating sandboxes, snapshots, and env customization.`,
+		Name:        "chunk-sidecar",
+		Description: `Run build/test/validate on a remote chunk sidecar instead of locally. Use when asked to "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "check this on the sidecar", or when edits need remote verification. Also covers creating sidecars, snapshots, and env customization.`,
 	},
 }
 
