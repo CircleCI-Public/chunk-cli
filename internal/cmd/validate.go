@@ -15,7 +15,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
@@ -60,7 +60,7 @@ func detectHook(r io.Reader) *hookContext {
 }
 
 func newValidateCmd() *cobra.Command {
-	var sandboxID, identityFile, remoteWorkdir string
+	var sidecarID, identityFile, workdir string
 	var dryRun, list, save, remote bool
 	var inlineCmd, projectDir string
 
@@ -136,12 +136,12 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if remote {
-				if err := resolveSandboxID(&sandboxID); err != nil {
+				if err := resolveSidecarID(&sidecarID); err != nil {
 					return err
 				}
 			}
 
-			execErr := runValidate(cmd.Context(), workDir, name, inlineCmd, save, sandboxID, identityFile, remoteWorkdir, cfg, statusFn, streams)
+			execErr := runValidate(cmd.Context(), workDir, name, inlineCmd, save, sidecarID, identityFile, workdir, cfg, statusFn, streams)
 
 			if hook != nil {
 				maxAttempts := cfg.StopHookMaxAttempts
@@ -154,10 +154,10 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&remote, "remote", false, "Run on active sandbox (reads .chunk/sandbox.json)")
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID for remote execution")
+	cmd.Flags().BoolVar(&remote, "remote", false, "Run on active sidecar (reads .chunk/sidecar.json)")
+	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID for remote execution")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
-	cmd.Flags().StringVar(&remoteWorkdir, "workdir", "", "Working directory on sandbox (reads from sandbox.json, defaults to ./workspace)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sidecar (reads from sidecar.json, defaults to ./workspace)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
 	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
@@ -169,7 +169,7 @@ func newValidateCmd() *cobra.Command {
 
 // runValidate dispatches to the appropriate Run* function based on the
 // provided options. It is shared by both direct and hook invocations.
-func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sandboxID, identityFile, remoteWorkdir string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID, identityFile, workdir string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	// --cmd: inline command
 	if inlineCmd != "" {
 		cmdName := name
@@ -182,8 +182,8 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 			}
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 		}
-		if sandboxID != "" {
-			execFn, dest, err := openSSHSession(ctx, sandboxID, identityFile, remoteWorkdir, streams)
+		if sidecarID != "" {
+			execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
 			if err != nil {
 				return err
 			}
@@ -193,8 +193,8 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 	}
 
 	// Remote execution
-	if sandboxID != "" {
-		execFn, dest, err := openSSHSession(ctx, sandboxID, identityFile, remoteWorkdir, streams)
+	if sidecarID != "" {
+		execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
 		if err != nil {
 			return err
 		}
@@ -240,28 +240,28 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 	return mapValidateError(validate.RunAll(ctx, workDir, cfg, statusFn, streams))
 }
 
-// openSSHSession establishes an SSH session to the sandbox and returns an
+// openSSHSession establishes an SSH session to the sidecar and returns an
 // exec function and the resolved remote working directory.
-func openSSHSession(ctx context.Context, sandboxID, identityFile, remoteWorkdir string, streams iostream.Streams) (func(context.Context, string) (string, string, int, error), string, error) {
+func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string, streams iostream.Streams) (func(context.Context, string) (string, string, int, error), string, error) {
 	client, err := ensureCircleCIClient(ctx, streams, tui.PromptHidden)
 	if err != nil {
 		return nil, "", err
 	}
 	authSock := os.Getenv(config.EnvSSHAuthSock)
-	session, err := sandbox.OpenSession(ctx, client, sandboxID, identityFile, authSock)
+	session, err := sidecar.OpenSession(ctx, client, sidecarID, identityFile, authSock)
 	if err != nil {
-		return nil, "", &userError{msg: "Could not open SSH session to sandbox.", err: err}
+		return nil, "", &userError{msg: "Could not open SSH session to sidecar.", err: err}
 	}
-	dest := remoteWorkdir
+	dest := workdir
 	if dest == "" {
-		if active, err := sandbox.LoadActive(); err == nil && active != nil && active.Workspace != "" {
+		if active, err := sidecar.LoadActive(); err == nil && active != nil && active.Workspace != "" {
 			dest = active.Workspace
 		} else {
 			dest = "./workspace"
 		}
 	}
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
-		result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
+		result, err := sidecar.ExecOverSSH(ctx, session, "sh -c "+sidecar.ShellEscape(script), nil, nil)
 		if err != nil {
 			return "", "", 0, err
 		}

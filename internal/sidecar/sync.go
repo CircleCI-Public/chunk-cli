@@ -1,4 +1,4 @@
-package sandbox
+package sidecar
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 const workspaceDir = "./workspace"
 
 // resolveWorkspace determines the workspace path. Priority:
-// 1. CLI --workdir flag  2. sandbox.json workspace  3. default.
+// 1. CLI --workdir flag  2. sidecar.json workspace  3. default.
 func resolveWorkspace(cliWorkdir, repo string) string {
 	if cliWorkdir != "" {
 		return cliWorkdir
@@ -28,7 +28,7 @@ func resolveWorkspace(cliWorkdir, repo string) string {
 	return workspaceDir + "/" + repo
 }
 
-// persistWorkspace saves the resolved workspace back to the sandbox file if it
+// persistWorkspace saves the resolved workspace back to the sidecar file if it
 // differs from the current value.
 func persistWorkspace(workspace string) error {
 	active, err := LoadActive()
@@ -42,14 +42,14 @@ func persistWorkspace(workspace string) error {
 	return SaveActive(*active)
 }
 
-// Sync synchronises local changes to a sandbox over SSH.
+// Sync synchronises local changes to a sidecar over SSH.
 // It ensures the workspace base exists, clones the repo into workdir if absent,
 // then resets to the remote base and applies a patch of local changes.
 // workdir overrides the destination path; defaults to /workspace/<repo>.
 func Sync(ctx context.Context,
-	client *circleci.Client, sandboxID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
+	client *circleci.Client, sidecarID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
 
-	session, err := OpenSession(ctx, client, sandboxID, identityFile, authSock)
+	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ var errApplyFailed = errors.New("apply failed")
 func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, repoPath string, session *Session) error {
 	status(iostream.LevelInfo, fmt.Sprintf("Assessing %s/%s on remote: %s...", org, repo, repoPath))
 
-	// Ensure the parent directory exists on the sandbox.
+	// Ensure the parent directory exists on the sidecar.
 	parentDir := filepath.Dir(repoPath)
 	if result, err := ExecOverSSH(ctx, session, "mkdir -p "+ShellEscape(parentDir), nil, nil); err != nil {
 		return fmt.Errorf("sync: mkdir %s: %w", parentDir, err)

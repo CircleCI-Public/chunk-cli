@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-environment: harness for `chunk sandbox env` + the sandbox build acceptance test.
+environment: harness for `chunk sidecar env` + the sidecar build acceptance test.
 Runs against target repos and uses the Claude Code SDK to improve
 internal/envbuilder when tests fail.
 
@@ -81,8 +81,8 @@ class TargetRepo:
     env: dict | None = None  # last known passing env spec
 
     @property
-    def sandbox_repos_value(self) -> str:
-        """Value to pass as CHUNK_SANDBOX_REPOS to the acceptance test."""
+    def sidecar_repos_value(self) -> str:
+        """Value to pass as CHUNK_SIDECAR_REPOS to the acceptance test."""
         known = {r["name"] for r in KNOWN_REPOS}
         return self.name if self.name in known else self.url
 
@@ -169,14 +169,14 @@ def _run_test(repo: TargetRepo, cache_dir: Path, timeout: int, extra_env: dict |
     env = {
         **os.environ,
         "CHUNK_ENV_BUILDER_ACCEPTANCE": "1",
-        "CHUNK_SANDBOX_REPOS": repo.sandbox_repos_value,
-        "CHUNK_SANDBOX_CACHE_DIR": str(cache_dir),
+        "CHUNK_SIDECAR_REPOS": repo.sidecar_repos_value,
+        "CHUNK_SIDECAR_CACHE_DIR": str(cache_dir),
         "NO_COLOR": "1",
         **(extra_env or {}),
     }
     result = subprocess.run(
         ["go", "test", "-v", "-count=1", f"-timeout={timeout}s",
-         "-run", "TestSandboxesBuildEndToEnd", "./acceptance/"],
+         "-run", "TestSidecarsBuildEndToEnd", "./acceptance/"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -193,10 +193,10 @@ def run_acceptance_test(repo: TargetRepo, cache_dir: Path, timeout: int) -> tupl
 
 def run_env_only_test(repo: TargetRepo, cache_dir: Path, timeout: int) -> tuple[dict | None, str]:
     """Clone (if needed) and run env detection only. Returns (env_dict, output)."""
-    ok, output = _run_test(repo, cache_dir, timeout, extra_env={"CHUNK_SANDBOX_ENV_ONLY": "1"})
+    ok, output = _run_test(repo, cache_dir, timeout, extra_env={"CHUNK_SIDECAR_ENV_ONLY": "1"})
     if not ok:
         return None, output
-    env_json_path = cache_dir / f"chunk-sandbox-{repo.name}" / "env.json"
+    env_json_path = cache_dir / f"chunk-sidecar-{repo.name}" / "env.json"
     try:
         return json.loads(env_json_path.read_text()), output
     except (OSError, json.JSONDecodeError) as e:
@@ -204,8 +204,8 @@ def run_env_only_test(repo: TargetRepo, cache_dir: Path, timeout: int) -> tuple[
 
 
 def read_dockerfile(repo: TargetRepo, cache_dir: Path) -> str:
-    # Acceptance test clones to cache_dir/chunk-sandbox-{name}
-    path = cache_dir / f"chunk-sandbox-{repo.name}" / "Dockerfile.test"
+    # Acceptance test clones to cache_dir/chunk-sidecar-{name}
+    path = cache_dir / f"chunk-sidecar-{repo.name}" / "Dockerfile.test"
     if path.exists():
         return path.read_text()
     return "(Dockerfile.test not found)"
@@ -277,7 +277,7 @@ After editing, run `go build -o {BINARY.relative_to(REPO_ROOT)} .` to verify it 
         else:
             prompt = f"""You are debugging an environment detection tool inside the chunk CLI.
 
-`chunk sandbox env` analyses a repository, detects its tech stack, and writes a
+`chunk sidecar env` analyses a repository, detects its tech stack, and writes a
 Dockerfile.test for running that repo's tests. It was run on the
 {repo.name} repo ({repo.url}).
 
@@ -449,11 +449,11 @@ def run_repo(repo: TargetRepo, timeout: int, max_iterations: int, persistent_cac
     else:
         own_cache = Path(tempfile.mkdtemp(prefix=f"chunk-env-harness-{repo.name}-"))
         cache_dir = own_cache
-    clone_dir = cache_dir / f"chunk-sandbox-{repo.name}"
+    clone_dir = cache_dir / f"chunk-sidecar-{repo.name}"
 
     try:
         # Phase 1: env-only — clone + detect env (no docker).
-        print("Running env detection (clone + sandbox env)...")
+        print("Running env detection (clone + sidecar env)...")
         current_env, env_output = run_env_only_test(repo, cache_dir, timeout)
         if current_env is None:
             print(f"  Env detection failed:\n{env_output}")
@@ -593,7 +593,7 @@ def main():
     known_names = [r["name"] for r in KNOWN_REPOS]
 
     parser = argparse.ArgumentParser(
-        description="environment: harness for chunk sandbox env/build. "
+        description="environment: harness for chunk sidecar env/build. "
                     "Uses Claude to improve envbuilder on failure.",
     )
     parser.add_argument(

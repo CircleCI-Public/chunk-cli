@@ -30,12 +30,12 @@ PLANS.md
 # git
 .worktrees
 
-# sandbox sync scratch files
-.chunk/sandbox*.patch
+# sidecar sync scratch files
+.chunk/sidecar*.patch
 
-# active sandbox tracking
-.chunk/sandbox.json
-.chunk/sandbox.*.json
+# active sidecar tracking
+.chunk/sidecar.json
+.chunk/sidecar.*.json
 
 # unikraft
 .unikraft/

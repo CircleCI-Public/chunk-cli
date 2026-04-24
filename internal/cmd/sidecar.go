@@ -17,51 +17,51 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
 	"github.com/CircleCI-Public/chunk-cli/internal/secrets"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-func newSandboxCmd() *cobra.Command {
+func newSidecarCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "sandbox",
-		Short: "Manage sandboxes",
+		Use:   "sidecar",
+		Short: "Manage sidecars",
 	}
 
-	cmd.AddCommand(newSandboxListCmd())
-	cmd.AddCommand(newSandboxCreateCmd())
-	cmd.AddCommand(newSandboxExecCmd())
-	cmd.AddCommand(newSandboxAddSSHKeyCmd())
-	cmd.AddCommand(newSandboxSSHCmd())
-	cmd.AddCommand(newSandboxSyncCmd())
-	cmd.AddCommand(newSandboxEnvCmd())
-	cmd.AddCommand(newSandboxBuildCmd())
-	cmd.AddCommand(newSandboxUseCmd())
-	cmd.AddCommand(newSandboxCurrentCmd())
-	cmd.AddCommand(newSandboxForgetCmd())
-	cmd.AddCommand(newSandboxSnapshotCmd())
+	cmd.AddCommand(newSidecarListCmd())
+	cmd.AddCommand(newSidecarCreateCmd())
+	cmd.AddCommand(newSidecarExecCmd())
+	cmd.AddCommand(newSidecarAddSSHKeyCmd())
+	cmd.AddCommand(newSidecarSSHCmd())
+	cmd.AddCommand(newSidecarSyncCmd())
+	cmd.AddCommand(newSidecarEnvCmd())
+	cmd.AddCommand(newSidecarBuildCmd())
+	cmd.AddCommand(newSidecarUseCmd())
+	cmd.AddCommand(newSidecarCurrentCmd())
+	cmd.AddCommand(newSidecarForgetCmd())
+	cmd.AddCommand(newSidecarSnapshotCmd())
 
 	return cmd
 }
 
-// resolveSandboxID fills in sandboxID from the active sandbox file if it is empty.
-func resolveSandboxID(sandboxID *string) error {
-	if *sandboxID != "" {
+// resolveSidecarID fills in sidecarID from the active sidecar file if it is empty.
+func resolveSidecarID(sidecarID *string) error {
+	if *sidecarID != "" {
 		return nil
 	}
-	active, err := sandbox.LoadActive()
+	active, err := sidecar.LoadActive()
 	if err != nil {
-		return &userError{msg: "Could not load the active sandbox.", suggestion: configFilePermHint, err: err}
+		return &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
 	}
 	if active == nil {
 		return &userError{
-			msg:        "No active sandbox is set.",
-			suggestion: "Pass --sandbox-id, or run 'chunk sandbox use <id>' or 'chunk sandbox create'.",
-			errMsg:     "no active sandbox and --sandbox-id not provided",
+			msg:        "No active sidecar is set.",
+			suggestion: "Pass --sidecar-id, or run 'chunk sidecar use <id>' or 'chunk sidecar create'.",
+			errMsg:     "no active sidecar and --sidecar-id not provided",
 		}
 	}
-	*sandboxID = active.SandboxID
+	*sidecarID = active.SidecarID
 	return nil
 }
 
@@ -109,12 +109,12 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 	}
 }
 
-func newSandboxListCmd() *cobra.Command {
+func newSidecarListCmd() *cobra.Command {
 	var orgID string
 
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List sandboxes",
+		Short: "List sidecars",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
@@ -125,22 +125,22 @@ func newSandboxListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sandboxes, err := sandbox.List(cmd.Context(), client, resolvedOrgID)
+			sidecars, err := sidecar.List(cmd.Context(), client, resolvedOrgID)
 			if err != nil {
-				if err := notAuthorized("list sandboxes", err); err != nil {
+				if err := notAuthorized("list sidecars", err); err != nil {
 					return err
 				}
 				return &userError{
-					msg:        "Could not list sandboxes.",
+					msg:        "Could not list sidecars.",
 					suggestion: "Check your network connection and try again.",
 					err:        err,
 				}
 			}
-			if len(sandboxes) == 0 {
-				io.ErrPrintln(ui.Dim("No sandboxes found"))
+			if len(sidecars) == 0 {
+				io.ErrPrintln(ui.Dim("No sidecars found"))
 				return nil
 			}
-			for _, s := range sandboxes {
+			for _, s := range sidecars {
 				io.Printf("%s  %s\n", s.Name, s.ID)
 			}
 			return nil
@@ -154,14 +154,14 @@ func newSandboxListCmd() *cobra.Command {
 
 const defaultProvider = "e2b"
 
-func newSandboxCreateCmd() *cobra.Command {
+func newSidecarCreateCmd() *cobra.Command {
 	var orgID, name, image string
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a sandbox",
-		Long: "Create a sandbox.\n\nThe sandbox backend defaults to e2b. Override with the " + config.EnvSandboxProvider +
-			"\nenvironment variable (e.g. " + config.EnvSandboxProvider + "=unikraft).",
+		Short: "Create a sidecar",
+		Long: "Create a sidecar.\n\nThe sidecar backend defaults to e2b. Override with the " + config.EnvSidecarProvider +
+			"\nenvironment variable (e.g. " + config.EnvSidecarProvider + "=unikraft).",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
@@ -172,50 +172,50 @@ func newSandboxCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			provider := os.Getenv(config.EnvSandboxProvider)
+			provider := os.Getenv(config.EnvSidecarProvider)
 			if provider == "" {
 				provider = defaultProvider
 			}
-			sb, err := sandbox.Create(cmd.Context(), client, resolvedOrgID, name, provider, image)
+			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, provider, image)
 			if err != nil {
-				if err := notAuthorized("create sandboxes", err); err != nil {
+				if err := notAuthorized("create sidecars", err); err != nil {
 					return err
 				}
 				return &userError{
-					msg:        "Could not create the sandbox.",
+					msg:        "Could not create the sidecar.",
 					suggestion: "Check your network connection and try again.",
 					err:        err,
 				}
 			}
-			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sb.Name, sb.ID)))
-			if err := sandbox.SaveActive(sandbox.ActiveSandbox{SandboxID: sb.ID, Name: sb.Name}); err != nil {
-				io.ErrPrintf("warning: could not save active sandbox: %v\n", err)
+			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sidecar %s (%s)", sb.Name, sb.ID)))
+			if err := sidecar.SaveActive(sidecar.ActiveSidecar{SidecarID: sb.ID, Name: sb.Name}); err != nil {
+				io.ErrPrintf("warning: could not save active sidecar: %v\n", err)
 			} else {
-				io.ErrPrintf("Set %s as active sandbox\n", sb.ID)
+				io.ErrPrintf("Set %s as active sidecar\n", sb.ID)
 			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
-	cmd.Flags().StringVar(&name, "name", "", "Sandbox name")
+	cmd.Flags().StringVar(&name, "name", "", "Sidecar name")
 	cmd.Flags().StringVar(&image, "image", "", "E2B template ID or container image")
 	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
 }
 
-func newSandboxExecCmd() *cobra.Command {
-	var sandboxID, command string
+func newSidecarExecCmd() *cobra.Command {
+	var sidecarID, command string
 	var execArgs []string
 
 	cmd := &cobra.Command{
 		Use:   "exec",
-		Short: "Execute a command in a sandbox",
+		Short: "Execute a command in a sidecar",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := resolveSandboxID(&sandboxID); err != nil {
+			if err := resolveSidecarID(&sidecarID); err != nil {
 				return err
 			}
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
@@ -226,7 +226,7 @@ func newSandboxExecCmd() *cobra.Command {
 			allArgs := make([]string, 0, len(execArgs)+len(args))
 			allArgs = append(allArgs, execArgs...)
 			allArgs = append(allArgs, args...)
-			resp, err := sandbox.Exec(cmd.Context(), client, sandboxID, command, allArgs)
+			resp, err := sidecar.Exec(cmd.Context(), client, sidecarID, command, allArgs)
 			if err != nil {
 				if err := notAuthorized("execute commands", err); err != nil {
 					return err
@@ -243,7 +243,7 @@ func newSandboxExecCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
+	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&command, "command", "", "Command to execute")
 	cmd.Flags().StringArrayVar(&execArgs, "args", nil, "Command arguments")
 	_ = cmd.MarkFlagRequired("command")
@@ -251,39 +251,39 @@ func newSandboxExecCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxAddSSHKeyCmd() *cobra.Command {
-	var sandboxID, publicKey, publicKeyFile string
+func newSidecarAddSSHKeyCmd() *cobra.Command {
+	var sidecarID, publicKey, publicKeyFile string
 
 	cmd := &cobra.Command{
 		Use:   "add-ssh-key",
-		Short: "Add an SSH public key to a sandbox",
+		Short: "Add an SSH public key to a sidecar",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := resolveSandboxID(&sandboxID); err != nil {
+			if err := resolveSidecarID(&sidecarID); err != nil {
 				return err
 			}
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
-			resp, err := sandbox.AddSSHKey(cmd.Context(), client, sandboxID, publicKey, publicKeyFile)
+			resp, err := sidecar.AddSSHKey(cmd.Context(), client, sidecarID, publicKey, publicKeyFile)
 			if err != nil {
 				if err := notAuthorized("add SSH keys", err); err != nil {
 					return err
 				}
 				switch {
-				case errors.Is(err, sandbox.ErrPrivateKeyProvided):
+				case errors.Is(err, sidecar.ErrPrivateKeyProvided):
 					return &userError{
 						msg:        "The provided key is a private key.",
 						suggestion: "Provide a public key instead.",
 						err:        err,
 					}
-				case errors.Is(err, sandbox.ErrMutuallyExclusiveKeys):
+				case errors.Is(err, sidecar.ErrMutuallyExclusiveKeys):
 					return &userError{
 						msg: "--public-key and --public-key-file are mutually exclusive.",
 						err: err,
 					}
-				case errors.Is(err, sandbox.ErrPublicKeyRequired):
+				case errors.Is(err, sidecar.ErrPublicKeyRequired):
 					return &userError{
 						msg:        "A public key is required.",
 						suggestion: "Pass --public-key or --public-key-file.",
@@ -292,29 +292,29 @@ func newSandboxAddSSHKeyCmd() *cobra.Command {
 				}
 				return err
 			}
-			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("SSH key added. Sandbox URL: %s", resp.URL)))
+			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("SSH key added. Sidecar URL: %s", resp.URL)))
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
+	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&publicKey, "public-key", "", "SSH public key string")
 	cmd.Flags().StringVar(&publicKeyFile, "public-key-file", "", "Path to SSH public key file")
 
 	return cmd
 }
 
-func newSandboxSSHCmd() *cobra.Command {
-	var sandboxID, identityFile, envFile string
+func newSidecarSSHCmd() *cobra.Command {
+	var sidecarID, identityFile, envFile string
 	var envVarsFlag []string
 
 	cmd := &cobra.Command{
 		Use:   "ssh [flags] [-- command...]",
-		Short: "SSH into a sandbox",
+		Short: "SSH into a sidecar",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := resolveSandboxID(&sandboxID); err != nil {
+			if err := resolveSidecarID(&sidecarID); err != nil {
 				return err
 			}
 			authSock := os.Getenv(config.EnvSSHAuthSock)
@@ -322,7 +322,7 @@ func newSandboxSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			flagVars, err := sandbox.ParseEnvPairs(envVarsFlag)
+			flagVars, err := sidecar.ParseEnvPairs(envVarsFlag)
 			if err != nil {
 				return &userError{msg: fmt.Sprintf("invalid --env value: %s", err), err: err}
 			}
@@ -336,11 +336,11 @@ func newSandboxSSHCmd() *cobra.Command {
 					}
 					path = filepath.Join(cwd, path)
 				}
-				fileVars, err := sandbox.LoadEnvFileAt(path)
+				fileVars, err := sidecar.LoadEnvFileAt(path)
 				if err != nil {
 					return &userError{msg: fmt.Sprintf("load %s: %s", envFile, err), err: err}
 				}
-				envVars = sandbox.MergeEnv(fileVars, flagVars)
+				envVars = sidecar.MergeEnv(fileVars, flagVars)
 			} else {
 				envVars = flagVars
 			}
@@ -349,7 +349,7 @@ func newSandboxSSHCmd() *cobra.Command {
 				return &userError{msg: fmt.Sprintf("resolve secrets: %s", err), err: err}
 			}
 			envVars = resolved
-			err = sandbox.SSH(cmd.Context(), client, sandboxID, identityFile, authSock, args, envVars, io)
+			err = sidecar.SSH(cmd.Context(), client, sidecarID, identityFile, authSock, args, envVars, io)
 			if err != nil {
 				if err := sshSessionError(err); err != nil {
 					return err
@@ -363,7 +363,7 @@ func newSandboxSSHCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
+	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in the remote session (repeatable)")
 	cmd.Flags().StringVar(&envFile, "env-file", "", "Env file to load (default .env.local when flag is present)")
@@ -372,15 +372,15 @@ func newSandboxSSHCmd() *cobra.Command {
 	return cmd
 }
 
-func newSandboxSyncCmd() *cobra.Command {
-	var sandboxID, identityFile, workdir string
+func newSidecarSyncCmd() *cobra.Command {
+	var sidecarID, identityFile, workdir string
 
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "Sync files to a sandbox",
+		Short: "Sync files to a sidecar",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := resolveSandboxID(&sandboxID); err != nil {
+			if err := resolveSidecarID(&sidecarID); err != nil {
 				return err
 			}
 			authSock := os.Getenv(config.EnvSSHAuthSock)
@@ -388,9 +388,9 @@ func newSandboxSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			err = sandbox.Sync(cmd.Context(), client, sandboxID, identityFile, authSock, workdir, newStatusFunc(io))
+			err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, newStatusFunc(io))
 			if err != nil {
-				if _, ok := errors.AsType[*sandbox.RemoteBaseError](err); ok {
+				if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
 					return &userError{
 						msg:        "Could not resolve remote base.",
 						suggestion: "Push your branch or ensure the repository has a remote configured.",
@@ -412,63 +412,63 @@ func newSandboxSyncCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
+	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sandbox (auto-detected as /workspace/<repo> when omitted)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (auto-detected as /workspace/<repo> when omitted)")
 
 	return cmd
 }
 
-func newSandboxUseCmd() *cobra.Command {
+func newSidecarUseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "use <sandbox-id>",
-		Short: "Set the active sandbox for this project",
+		Use:   "use <sidecar-id>",
+		Short: "Set the active sidecar for this project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := sandbox.SaveActive(sandbox.ActiveSandbox{SandboxID: args[0]}); err != nil {
-				return &userError{msg: "Could not save the active sandbox.", suggestion: configFilePermHint, err: err}
+			if err := sidecar.SaveActive(sidecar.ActiveSidecar{SidecarID: args[0]}); err != nil {
+				return &userError{msg: "Could not save the active sidecar.", suggestion: configFilePermHint, err: err}
 			}
-			io.ErrPrintf("Set %s as active sandbox\n", args[0])
+			io.ErrPrintf("Set %s as active sidecar\n", args[0])
 			return nil
 		},
 	}
 }
 
-func newSandboxCurrentCmd() *cobra.Command {
+func newSidecarCurrentCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "current",
-		Short: "Show the active sandbox",
+		Short: "Show the active sidecar",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			active, err := sandbox.LoadActive()
+			active, err := sidecar.LoadActive()
 			if err != nil {
-				return &userError{msg: "Could not load the active sandbox.", suggestion: configFilePermHint, err: err}
+				return &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
 			}
 			if active == nil {
-				io.ErrPrintln("No active sandbox")
+				io.ErrPrintln("No active sidecar")
 				return nil
 			}
 			if active.Name != "" {
-				io.Printf("%s  %s\n", active.Name, active.SandboxID)
+				io.Printf("%s  %s\n", active.Name, active.SidecarID)
 			} else {
-				io.Printf("%s\n", active.SandboxID)
+				io.Printf("%s\n", active.SidecarID)
 			}
 			return nil
 		},
 	}
 }
 
-func newSandboxForgetCmd() *cobra.Command {
+func newSidecarForgetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "forget",
-		Short: "Clear the active sandbox",
+		Short: "Clear the active sidecar",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := sandbox.ClearActive(); err != nil {
-				return &userError{msg: "Could not clear the active sandbox.", suggestion: configFilePermHint, err: err}
+			if err := sidecar.ClearActive(); err != nil {
+				return &userError{msg: "Could not clear the active sidecar.", suggestion: configFilePermHint, err: err}
 			}
-			io.ErrPrintln("Active sandbox cleared")
+			io.ErrPrintln("Active sidecar cleared")
 			return nil
 		},
 	}
@@ -476,14 +476,14 @@ func newSandboxForgetCmd() *cobra.Command {
 
 var validDockerTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*(:[a-zA-Z0-9._\-]+)?$`)
 
-func newSandboxEnvCmd() *cobra.Command {
+func newSidecarEnvCmd() *cobra.Command {
 	var dir string
 
 	cmd := &cobra.Command{
 		Use:   "env",
 		Short: "Detect tech stack and print environment spec as JSON",
 		Long: `Analyse the repository at --dir, detect its tech stack, and print
-a JSON environment spec to stdout. Pipe this into 'chunk sandbox build' to
+a JSON environment spec to stdout. Pipe this into 'chunk sidecar build' to
 generate a Dockerfile and build a test image.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
@@ -519,17 +519,17 @@ generate a Dockerfile and build a test image.`,
 	return cmd
 }
 
-func newSandboxBuildCmd() *cobra.Command {
+func newSidecarBuildCmd() *cobra.Command {
 	var dir, tag string
 
 	cmd := &cobra.Command{
 		Use:   "build",
 		Short: "Generate a Dockerfile from an environment spec and build a test image",
-		Long: `Read a JSON environment spec from stdin (produced by 'chunk sandbox env'),
+		Long: `Read a JSON environment spec from stdin (produced by 'chunk sidecar env'),
 write Dockerfile.test to --dir, and build a Docker test image from it.
 
 Example:
-  chunk sandbox env --dir . | chunk sandbox build --dir .`,
+  chunk sidecar env --dir . | chunk sidecar build --dir .`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if tag != "" && !validDockerTag.MatchString(tag) {
 				return &userError{
@@ -548,7 +548,7 @@ Example:
 				if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
 					return &userError{
 						msg:        "No input on stdin.",
-						suggestion: "Pipe a JSON env spec, for example: chunk sandbox env | chunk sandbox build",
+						suggestion: "Pipe a JSON env spec, for example: chunk sidecar env | chunk sidecar build",
 						errMsg:     "no input on stdin",
 					}
 				}
@@ -562,7 +562,7 @@ Example:
 			if err := json.Unmarshal(raw, &env); err != nil {
 				return &userError{
 					msg:        "Invalid environment spec.",
-					suggestion: "Pipe the output of 'chunk sandbox env' into this command.",
+					suggestion: "Pipe the output of 'chunk sidecar env' into this command.",
 					err:        err,
 				}
 			}
@@ -604,32 +604,32 @@ Example:
 	return cmd
 }
 
-func newSandboxSnapshotCmd() *cobra.Command {
+func newSidecarSnapshotCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "snapshot",
-		Short: "Manage sandbox snapshots",
+		Short: "Manage sidecar snapshots",
 	}
-	cmd.AddCommand(newSandboxSnapshotCreateCmd())
-	cmd.AddCommand(newSandboxSnapshotGetCmd())
+	cmd.AddCommand(newSidecarSnapshotCreateCmd())
+	cmd.AddCommand(newSidecarSnapshotGetCmd())
 	return cmd
 }
 
-func newSandboxSnapshotCreateCmd() *cobra.Command {
-	var sandboxID, name string
+func newSidecarSnapshotCreateCmd() *cobra.Command {
+	var sidecarID, name string
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a snapshot of a sandbox",
+		Short: "Create a snapshot of a sidecar",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := resolveSandboxID(&sandboxID); err != nil {
+			if err := resolveSidecarID(&sidecarID); err != nil {
 				return err
 			}
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
-			snap, err := client.CreateSnapshot(cmd.Context(), sandboxID, name)
+			snap, err := client.CreateSnapshot(cmd.Context(), sidecarID, name)
 			if err != nil {
 				return err
 			}
@@ -638,14 +638,14 @@ func newSandboxSnapshotCreateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&sandboxID, "sandbox-id", "", "Sandbox ID (defaults to active sandbox)")
+	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&name, "name", "", "Snapshot name")
 	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
 }
 
-func newSandboxSnapshotGetCmd() *cobra.Command {
+func newSidecarSnapshotGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get <snapshot-id>",
 		Short: "Get a snapshot by ID",

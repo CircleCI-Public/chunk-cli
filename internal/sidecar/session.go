@@ -1,4 +1,4 @@
-package sandbox
+package sidecar
 
 import (
 	"context"
@@ -22,7 +22,7 @@ const (
 	knownHostsFile = "chunk_ai_known_hosts"
 )
 
-// Session holds the info needed to SSH into a sandbox.
+// Session holds the info needed to SSH into a sidecar.
 // It is a plain value type with no open connections or resources to close.
 // Each call to ExecOverSSH opens and closes its own SSH connection.
 type Session struct {
@@ -33,17 +33,17 @@ type Session struct {
 	AuthSock     string // SSH_AUTH_SOCK path (only used when UseAgent is true)
 }
 
-// OpenSession registers an SSH key with the sandbox and returns session info.
+// OpenSession registers an SSH key with the sidecar and returns session info.
 // authSock is the SSH_AUTH_SOCK path; when non-empty and no identityFile is
 // given, the agent is tried first.
-func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock string) (*Session, error) {
+func OpenSession(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string) (*Session, error) {
 	sshDir := filepath.Join(os.Getenv(config.EnvHome), ".ssh")
 
 	// When no identity file is specified, try the ssh-agent first.
 	if identityFile == "" && authSock != "" {
 		pubKey, err := agentPublicKey(ctx, authSock)
 		if err == nil {
-			resp, err := client.AddSSHKey(ctx, sandboxID, pubKey)
+			resp, err := client.AddSSHKey(ctx, sidecarID, pubKey)
 			if err != nil {
 				return nil, fmt.Errorf("register SSH key: %w", err)
 			}
@@ -75,7 +75,7 @@ func OpenSession(ctx context.Context, client *circleci.Client, sandboxID, identi
 	}
 	pubKey := strings.TrimSpace(string(pubKeyData))
 
-	resp, err := client.AddSSHKey(ctx, sandboxID, pubKey)
+	resp, err := client.AddSSHKey(ctx, sidecarID, pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("register SSH key: %w", err)
 	}

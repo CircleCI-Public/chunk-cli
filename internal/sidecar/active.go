@@ -1,4 +1,4 @@
-package sandbox
+package sidecar
 
 import (
 	"encoding/json"
@@ -9,26 +9,26 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
-// ActiveSandbox holds the currently active sandbox for a project.
-type ActiveSandbox struct {
-	SandboxID string `json:"sandbox_id"`
+// ActiveSidecar holds the currently active sidecar for a project.
+type ActiveSidecar struct {
+	SidecarID string `json:"sidecar_id"`
 	Name      string `json:"name,omitempty"`
 	Workspace string `json:"workspace,omitempty"`
 }
 
-// sandboxFileName returns the name of the sandbox state file. When
+// sidecarFileName returns the name of the sidecar state file. When
 // CLAUDE_SESSION_ID is set the file is keyed to that session so concurrent
-// Claude sessions in the same repo each maintain their own active sandbox.
-func sandboxFileName() string {
+// Claude sessions in the same repo each maintain their own active sidecar.
+func sidecarFileName() string {
 	if id := os.Getenv(config.EnvClaudeSession); id != "" {
-		return "sandbox." + id + ".json"
+		return "sidecar." + id + ".json"
 	}
-	return "sandbox.json"
+	return "sidecar.json"
 }
 
-// LoadActive walks up from cwd looking for .chunk/sandbox.json. Returns nil if not found.
-func LoadActive() (*ActiveSandbox, error) {
-	path, err := findSandboxFile()
+// LoadActive walks up from cwd looking for .chunk/sidecar.json. Returns nil if not found.
+func LoadActive() (*ActiveSidecar, error) {
+	path, err := findSidecarFile()
 	if err != nil {
 		return nil, err
 	}
@@ -39,17 +39,17 @@ func LoadActive() (*ActiveSandbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	var a ActiveSandbox
+	var a ActiveSidecar
 	if err := json.Unmarshal(data, &a); err != nil {
 		return nil, err
 	}
 	return &a, nil
 }
 
-// SaveActive writes .chunk/sandbox.json. If the file already exists in a
+// SaveActive writes .chunk/sidecar.json. If the file already exists in a
 // parent directory it is updated in place; otherwise the file is created in
 // cwd's .chunk/ directory.
-func SaveActive(a ActiveSandbox) error {
+func SaveActive(a ActiveSidecar) error {
 	dir, err := saveDir()
 	if err != nil {
 		return err
@@ -61,14 +61,14 @@ func SaveActive(a ActiveSandbox) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, sandboxFileName()), data, 0o644)
+	return os.WriteFile(filepath.Join(dir, sidecarFileName()), data, 0o644)
 }
 
 // saveDir returns the .chunk directory to write into. It prefers an existing
-// .chunk/sandbox.json found by walking upward; otherwise walks up to find the
+// .chunk/sidecar.json found by walking upward; otherwise walks up to find the
 // git root and uses that; falls back to cwd/.chunk when not in a git repo.
 func saveDir() (string, error) {
-	existing, err := findSandboxFile()
+	existing, err := findSidecarFile()
 	if err != nil {
 		return "", err
 	}
@@ -104,9 +104,9 @@ func findGitRoot() (string, error) {
 	}
 }
 
-// ClearActive removes the .chunk/sandbox.json file found by walking up from cwd.
+// ClearActive removes the .chunk/sidecar.json file found by walking up from cwd.
 func ClearActive() error {
-	path, err := findSandboxFile()
+	path, err := findSidecarFile()
 	if err != nil {
 		return err
 	}
@@ -116,18 +116,18 @@ func ClearActive() error {
 	return os.Remove(path)
 }
 
-// findSandboxFile walks up from cwd looking for .chunk/sandbox.json, returning the path or "".
+// findSidecarFile walks up from cwd looking for .chunk/sidecar.json, returning the path or "".
 // When inside a git repository the walk is bounded by the repository root (the directory
 // containing .git); files above that root are never considered. When not inside any git
 // repository only the current directory is checked.
-func findSandboxFile() (string, error) {
+func findSidecarFile() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	gitRoot, _ := findGitRoot()
 	for {
-		candidate := filepath.Join(dir, ".chunk", sandboxFileName())
+		candidate := filepath.Join(dir, ".chunk", sidecarFileName())
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		} else if !errors.Is(err, os.ErrNotExist) {

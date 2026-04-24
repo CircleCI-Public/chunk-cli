@@ -16,7 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sandbox"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
@@ -373,10 +373,10 @@ func TestRunRemoteSSH(t *testing.T) {
 		return client
 	}
 
-	execCallback := func(t *testing.T, session *sandbox.Session) func(context.Context, string) (string, string, int, error) {
+	execCallback := func(t *testing.T, session *sidecar.Session) func(context.Context, string) (string, string, int, error) {
 		t.Helper()
 		return func(ctx context.Context, script string) (string, string, int, error) {
-			result, err := sandbox.ExecOverSSH(ctx, session, "sh -c "+sandbox.ShellEscape(script), nil, nil)
+			result, err := sidecar.ExecOverSSH(ctx, session, "sh -c "+sidecar.ShellEscape(script), nil, nil)
 			if err != nil {
 				return "", "", 0, err
 			}
@@ -396,7 +396,7 @@ func TestRunRemoteSSH(t *testing.T) {
 
 		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -421,7 +421,7 @@ func TestRunRemoteSSH(t *testing.T) {
 
 		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -445,7 +445,7 @@ func TestRunRemoteSSH(t *testing.T) {
 
 		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sandbox.OpenSession(context.Background(), client, "sandbox-123", keyFile, "")
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{

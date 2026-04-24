@@ -139,12 +139,12 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 	return nil
 }
 
-var sandboxGitignoreEntries = []string{
-	".chunk/sandbox.json",
-	".chunk/sandbox.*.json",
+var sidecarGitignoreEntries = []string{
+	".chunk/sidecar.json",
+	".chunk/sidecar.*.json",
 }
 
-// ensureGitignoreEntries appends sandbox tracking patterns to .gitignore if
+// ensureGitignoreEntries appends sidecar tracking patterns to .gitignore if
 // they are not already present.
 func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 	path := filepath.Join(workDir, ".gitignore")
@@ -156,7 +156,7 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 
 	content := string(existing)
 	var toAdd []string
-	for _, entry := range sandboxGitignoreEntries {
+	for _, entry := range sidecarGitignoreEntries {
 		if !strings.Contains(content, entry) {
 			toAdd = append(toAdd, entry)
 		}
@@ -177,7 +177,7 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 		}
 	}
 
-	if _, err := f.WriteString("\n# chunk active sandbox tracking\n"); err != nil {
+	if _, err := f.WriteString("\n# chunk active sidecar tracking\n"); err != nil {
 		return err
 	}
 	for _, entry := range toAdd {
@@ -186,7 +186,7 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 		}
 	}
 
-	streams.ErrPrintln(ui.Success("Updated .gitignore with sandbox tracking patterns"))
+	streams.ErrPrintln(ui.Success("Updated .gitignore with sidecar tracking patterns"))
 	return nil
 }
 
@@ -307,7 +307,7 @@ hook config files.`,
 			}
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
-			streams.ErrPrintln(ui.Dim("Tip: install agent skills with 'chunk skill install' (includes chunk-sandbox for the remote validate loop)."))
+			streams.ErrPrintln(ui.Dim("Tip: install agent skills with 'chunk skill install' (includes chunk-sidecar for the remote validate loop)."))
 			return nil
 		},
 	}

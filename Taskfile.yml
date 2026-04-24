@@ -60,7 +60,7 @@ tasks:
 
   env-harness:
     desc: |
-      Run chunk sandbox env/build against target repos, using Claude to improve
+      Run chunk sidecar env/build against target repos, using Claude to improve
       envbuilder on failure. Args are passed through to harness/environment.py.
       Examples:
         task env-harness                                       # all known repos

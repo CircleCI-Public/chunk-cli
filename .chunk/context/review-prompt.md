@@ -89,30 +89,30 @@ You are a senior code reviewer for a Go CLI project built with cobra. Your role 
 
 **Avoid:**
 ```go
-// internal/sandbox/sandbox.go
-package sandbox
+// internal/sidecar/sidecar.go
+package sidecar
 
 import "fmt"
 
-func List(ctx context.Context, client *circleci.Client, orgID string) ([]Sandbox, error) {
-    fmt.Println("Fetching sandboxes...")  // UI output in business logic
-    return client.ListSandboxes(ctx, orgID)
+func List(ctx context.Context, client *circleci.Client, orgID string) ([]Sidecar, error) {
+    fmt.Println("Fetching sidecars...")  // UI output in business logic
+    return client.ListSidecars(ctx, orgID)
 }
 ```
 
 **Prefer:**
 ```go
-// internal/sandbox/sandbox.go
-package sandbox
+// internal/sidecar/sidecar.go
+package sidecar
 
-func List(ctx context.Context, client *circleci.Client, orgID string) ([]Sandbox, error) {
-    return client.ListSandboxes(ctx, orgID)  // Pure logic, no side effects
+func List(ctx context.Context, client *circleci.Client, orgID string) ([]Sidecar, error) {
+    return client.ListSidecars(ctx, orgID)  // Pure logic, no side effects
 }
 
-// internal/cmd/sandboxes.go — the cmd layer handles all UI
+// internal/cmd/sidecars.go — the cmd layer handles all UI
 io := iostream.FromCmd(cmd)
-io.ErrPrintln(ui.Dim("Fetching sandboxes..."))
-sandboxes, err := sandbox.List(cmd.Context(), client, orgID)
+io.ErrPrintln(ui.Dim("Fetching sidecars..."))
+sidecars, err := sidecar.List(cmd.Context(), client, orgID)
 ```
 
 </details>
@@ -139,7 +139,7 @@ func NewClient(token string) *Client {
     return &Client{token: token}
 }
 
-// internal/cmd/sandboxes.go — env var resolved at the cmd layer
+// internal/cmd/sidecars.go — env var resolved at the cmd layer
 token := os.Getenv("CIRCLE_TOKEN")
 if token == "" {
     return usererr.New("Set CIRCLE_TOKEN to authenticate.", fmt.Errorf("missing CIRCLE_TOKEN"))
@@ -186,25 +186,25 @@ func BuildPrompt(ctx context.Context, client *circleci.Client) error {
 
 **Avoid:**
 ```go
-func TestListSandboxes(t *testing.T) {
+func TestListSidecars(t *testing.T) {
     ctrl := gomock.NewController(t)
     mock := NewMockClient(ctrl)
-    mock.EXPECT().ListSandboxes(gomock.Any(), "org-1").Return([]Sandbox{{ID: "sb-1"}}, nil)
+    mock.EXPECT().ListSidecars(gomock.Any(), "org-1").Return([]Sidecar{{ID: "sb-1"}}, nil)
     // Tightly coupled to implementation details
 }
 ```
 
 **Prefer:**
 ```go
-func TestListSandboxes(t *testing.T) {
+func TestListSidecars(t *testing.T) {
     srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        json.NewEncoder(w).Encode([]Sandbox{{ID: "sb-1"}})
+        json.NewEncoder(w).Encode([]Sidecar{{ID: "sb-1"}})
     }))
     t.Cleanup(srv.Close)
 
     client := circleci.NewClient("test-token")
     client.BaseURL = srv.URL
-    got, err := sandbox.List(context.Background(), client, "org-1")
+    got, err := sidecar.List(context.Background(), client, "org-1")
     assert.NilError(t, err)
     assert.Equal(t, len(got), 1)
     assert.Equal(t, got[0].ID, "sb-1")

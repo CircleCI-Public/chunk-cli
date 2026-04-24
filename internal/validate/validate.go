@@ -90,7 +90,7 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 	return nil
 }
 
-// RunRemote runs commands on a remote sandbox via SSH.
+// RunRemote runs commands on a remote sidecar via SSH.
 // If name is non-empty, only the named command is run.
 func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest string, streams iostream.Streams) error {
 	commands := cfg.Commands
@@ -120,7 +120,7 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 	return nil
 }
 
-// RunRemoteInline runs a single inline command on a remote sandbox via SSH.
+// RunRemoteInline runs a single inline command on a remote sidecar via SSH.
 func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, streams iostream.Streams) error {
 	script := "cd " + shellEscape(dest) + " && " + command
 	stdout, stderr, exitCode, err := execFn(ctx, script)

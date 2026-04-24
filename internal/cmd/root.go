@@ -34,7 +34,7 @@ Getting started:
 	rootCmd.AddCommand(newBuildPromptCmd())
 	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newCompletionCmd())
-	rootCmd.AddCommand(newSandboxCmd())
+	rootCmd.AddCommand(newSidecarCmd())
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newUpgradeCmd())

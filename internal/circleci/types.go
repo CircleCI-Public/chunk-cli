@@ -1,14 +1,14 @@
 package circleci
 
-type Sandbox struct {
+type Sidecar struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	OrgID string `json:"org_id"`
 	Image string `json:"image,omitempty"`
 }
 
-type listSandboxesResponse struct {
-	Items []Sandbox `json:"items"`
+type listSidecarsResponse struct {
+	Items []Sidecar `json:"items"`
 }
 
 type ExecRequest struct {
@@ -52,7 +52,7 @@ type RunResponse struct {
 	PipelineID string `json:"pipelineId,omitempty"`
 }
 
-type CreateSandboxRequest struct {
+type CreateSidecarRequest struct {
 	OrgID    string `json:"org_id"`
 	Name     string `json:"name"`
 	Provider string `json:"provider,omitempty"`
@@ -67,6 +67,6 @@ type Snapshot struct {
 }
 
 type CreateSnapshotRequest struct {
-	SandboxID string `json:"sandbox_id"`
+	SidecarID string `json:"sidecar_id"`
 	Name      string `json:"name"`
 }

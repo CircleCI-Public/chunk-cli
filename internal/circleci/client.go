@@ -48,40 +48,40 @@ func (c *Client) GetCurrentUser(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) ListSandboxes(ctx context.Context, orgID string) ([]Sandbox, error) {
-	var resp listSandboxesResponse
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/sandbox/instances",
+func (c *Client) ListSidecars(ctx context.Context, orgID string) ([]Sidecar, error) {
+	var resp listSidecarsResponse
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/sidecar/instances",
 		hc.QueryParam("org_id", orgID),
 		hc.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, mapErr("list sandboxes", err)
+		return nil, mapErr("list sidecars", err)
 	}
 	return resp.Items, nil
 }
 
-func (c *Client) CreateSandbox(ctx context.Context, orgID, name, provider, image string) (*Sandbox, error) {
-	body := CreateSandboxRequest{
+func (c *Client) CreateSidecar(ctx context.Context, orgID, name, provider, image string) (*Sidecar, error) {
+	body := CreateSidecarRequest{
 		OrgID:    orgID,
 		Name:     name,
 		Provider: provider,
 		Image:    image,
 	}
-	var resp Sandbox
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sandbox/instances",
+	var resp Sidecar
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sidecar/instances",
 		hc.Body(body),
 		hc.JSONDecoder(&resp),
 	))
 	if err != nil {
-		return nil, mapErr("create sandbox", err)
+		return nil, mapErr("create sidecar", err)
 	}
 	return &resp, nil
 }
 
-func (c *Client) AddSSHKey(ctx context.Context, sandboxID, publicKey string) (*AddSSHKeyResponse, error) {
+func (c *Client) AddSSHKey(ctx context.Context, sidecarID, publicKey string) (*AddSSHKeyResponse, error) {
 	var resp AddSSHKeyResponse
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sandbox/instances/%s/ssh/add-key",
-		hc.RouteParams(sandboxID),
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sidecar/instances/%s/ssh/add-key",
+		hc.RouteParams(sidecarID),
 		hc.Body(AddSSHKeyRequest{PublicKey: publicKey}),
 		hc.JSONDecoder(&resp),
 	))
@@ -91,10 +91,10 @@ func (c *Client) AddSSHKey(ctx context.Context, sandboxID, publicKey string) (*A
 	return &resp, nil
 }
 
-func (c *Client) Exec(ctx context.Context, sandboxID, command string, args []string) (*ExecResponse, error) {
+func (c *Client) Exec(ctx context.Context, sidecarID, command string, args []string) (*ExecResponse, error) {
 	var resp ExecResponse
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sandbox/instances/%s/exec",
-		hc.RouteParams(sandboxID),
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sidecar/instances/%s/exec",
+		hc.RouteParams(sidecarID),
 		hc.Body(ExecRequest{
 			Command: command,
 			Args:    args,
@@ -107,10 +107,10 @@ func (c *Client) Exec(ctx context.Context, sandboxID, command string, args []str
 	return &resp, nil
 }
 
-func (c *Client) CreateSnapshot(ctx context.Context, sandboxID, name string) (*Snapshot, error) {
+func (c *Client) CreateSnapshot(ctx context.Context, sidecarID, name string) (*Snapshot, error) {
 	var resp Snapshot
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sandbox/snapshots",
-		hc.Body(CreateSnapshotRequest{SandboxID: sandboxID, Name: name}),
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sidecar/snapshots",
+		hc.Body(CreateSnapshotRequest{SidecarID: sidecarID, Name: name}),
 		hc.JSONDecoder(&resp),
 	))
 	if err != nil {
@@ -121,7 +121,7 @@ func (c *Client) CreateSnapshot(ctx context.Context, sandboxID, name string) (*S
 
 func (c *Client) GetSnapshot(ctx context.Context, id string) (*Snapshot, error) {
 	var resp Snapshot
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/sandbox/snapshots/%s",
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/sidecar/snapshots/%s",
 		hc.RouteParams(id),
 		hc.JSONDecoder(&resp),
 	))

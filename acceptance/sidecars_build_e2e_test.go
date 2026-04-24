@@ -39,11 +39,11 @@ var knownRepos = func() []repoEntry {
 	return repos
 }()
 
-// resolveRepos parses CHUNK_SANDBOX_REPOS (comma-separated nicknames or Git
+// resolveRepos parses CHUNK_SIDECAR_REPOS (comma-separated nicknames or Git
 // URLs). If unset, all knownRepos are returned.
 func resolveRepos(t *testing.T) []repoEntry {
 	t.Helper()
-	raw := os.Getenv("CHUNK_SANDBOX_REPOS")
+	raw := os.Getenv("CHUNK_SIDECAR_REPOS")
 	if raw == "" {
 		return knownRepos
 	}
@@ -78,17 +78,17 @@ func resolveRepos(t *testing.T) []repoEntry {
 	return entries
 }
 
-// TestSandboxesBuildEndToEnd clones real open-source repos, runs
-// `chunk sandboxes build` to generate a Dockerfile.test, builds the image,
+// TestSidecarsBuildEndToEnd clones real open-source repos, runs
+// `chunk sidecars build` to generate a Dockerfile.test, builds the image,
 // and runs the tests inside the container.
 //
 // Enable with: CHUNK_ENV_BUILDER_ACCEPTANCE=1
 // Requires: git and docker accessible without sudo.
 //
-// To run a specific subset, set CHUNK_SANDBOX_REPOS to a comma-separated list
+// To run a specific subset, set CHUNK_SIDECAR_REPOS to a comma-separated list
 // of known nicknames (e.g. "flask,serde") or full Git URLs
 // (e.g. "https://github.com/owner/repo.git"), or a mix of both.
-func TestSandboxesBuildEndToEnd(t *testing.T) {
+func TestSidecarsBuildEndToEnd(t *testing.T) {
 	if os.Getenv("CHUNK_ENV_BUILDER_ACCEPTANCE") == "" {
 		t.Skip("set CHUNK_ENV_BUILDER_ACCEPTANCE=1 to run")
 	}
@@ -101,22 +101,22 @@ func TestSandboxesBuildEndToEnd(t *testing.T) {
 
 	repos := resolveRepos(t)
 
-	cacheDir := os.Getenv("CHUNK_SANDBOX_CACHE_DIR")
+	cacheDir := os.Getenv("CHUNK_SIDECAR_CACHE_DIR")
 
 	for _, repo := range repos {
 		t.Run(repo.Name, func(t *testing.T) {
 			var cloneDir string
 			if cacheDir != "" {
-				cloneDir = cacheDir + "/chunk-sandbox-" + repo.Name
+				cloneDir = cacheDir + "/chunk-sidecar-" + repo.Name
 			} else {
 				cloneDir = t.TempDir()
 			}
 			e2eCloneRepo(t, repo.URL, repo.Ref, cloneDir)
 
-			t.Log("Running chunk sandbox env...")
+			t.Log("Running chunk sidecar env...")
 			envJSON, envStderr, exitCode := e2eRunEnv(t, cloneDir)
 			assert.Equal(t, exitCode, 0,
-				"chunk sandbox env failed\nstdout: %s\nstderr: %s", envJSON, envStderr)
+				"chunk sidecar env failed\nstdout: %s\nstderr: %s", envJSON, envStderr)
 			t.Log(envStderr)
 			t.Log(envJSON)
 
@@ -127,16 +127,16 @@ func TestSandboxesBuildEndToEnd(t *testing.T) {
 			)
 
 			// Env-only mode: stop here so the harness can decide whether to build.
-			if os.Getenv("CHUNK_SANDBOX_ENV_ONLY") == "1" {
+			if os.Getenv("CHUNK_SIDECAR_ENV_ONLY") == "1" {
 				return
 			}
 
-			tag := "chunk-sandbox-" + repo.Name + "-test"
+			tag := "chunk-sidecar-" + repo.Name + "-test"
 
 			t.Log("Building Docker image...")
 			buildOutput, buildExitCode := e2eRunBuild(t, cloneDir, tag, envJSON)
 			assert.Equal(t, buildExitCode, 0,
-				"chunk sandbox build failed\n%s", lastLines(buildOutput, 30))
+				"chunk sidecar build failed\n%s", lastLines(buildOutput, 30))
 
 			_, err := os.Stat(cloneDir + "/Dockerfile.test")
 			assert.NilError(t, err, "Dockerfile.test not created")
@@ -196,7 +196,7 @@ func e2eRunEnv(t *testing.T, dir string) (stdout, stderr string, exitCode int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binary.Path(), "sandbox", "env", "--dir", dir)
+	cmd := exec.CommandContext(ctx, binary.Path(), "sidecar", "env", "--dir", dir)
 	cmd.Env = []string{
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
@@ -222,7 +222,7 @@ func e2eRunBuild(t *testing.T, dir, tag, envJSON string) (output string, exitCod
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binary.Path(), "sandbox", "build", "--dir", dir, "--tag", tag)
+	cmd := exec.CommandContext(ctx, binary.Path(), "sidecar", "build", "--dir", dir, "--tag", tag)
 	cmd.Env = []string{
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),

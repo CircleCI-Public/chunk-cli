@@ -1,4 +1,4 @@
-package sandbox
+package sidecar
 
 import (
 	"context"
@@ -10,19 +10,19 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-func List(ctx context.Context, client *circleci.Client, orgID string) ([]circleci.Sandbox, error) {
-	return client.ListSandboxes(ctx, orgID)
+func List(ctx context.Context, client *circleci.Client, orgID string) ([]circleci.Sidecar, error) {
+	return client.ListSidecars(ctx, orgID)
 }
 
-func Create(ctx context.Context, client *circleci.Client, orgID, name, provider, image string) (*circleci.Sandbox, error) {
-	return client.CreateSandbox(ctx, orgID, name, provider, image)
+func Create(ctx context.Context, client *circleci.Client, orgID, name, provider, image string) (*circleci.Sidecar, error) {
+	return client.CreateSidecar(ctx, orgID, name, provider, image)
 }
 
-func Exec(ctx context.Context, client *circleci.Client, sandboxID, command string, args []string) (*circleci.ExecResponse, error) {
-	return client.Exec(ctx, sandboxID, command, args)
+func Exec(ctx context.Context, client *circleci.Client, sidecarID, command string, args []string) (*circleci.ExecResponse, error) {
+	return client.Exec(ctx, sidecarID, command, args)
 }
 
-func AddSSHKey(ctx context.Context, client *circleci.Client, sandboxID, publicKey, publicKeyFile string) (*circleci.AddSSHKeyResponse, error) {
+func AddSSHKey(ctx context.Context, client *circleci.Client, sidecarID, publicKey, publicKeyFile string) (*circleci.AddSSHKeyResponse, error) {
 	if publicKey != "" && publicKeyFile != "" {
 		return nil, ErrMutuallyExclusiveKeys
 	}
@@ -43,12 +43,12 @@ func AddSSHKey(ctx context.Context, client *circleci.Client, sandboxID, publicKe
 		return nil, ErrPrivateKeyProvided
 	}
 
-	return client.AddSSHKey(ctx, sandboxID, key)
+	return client.AddSSHKey(ctx, sidecarID, key)
 }
 
 // SSH opens a session and either runs a command or starts an interactive shell.
-func SSH(ctx context.Context, client *circleci.Client, sandboxID, identityFile, authSock string, args []string, envVars map[string]string, io iostream.Streams) error {
-	session, err := OpenSession(ctx, client, sandboxID, identityFile, authSock)
+func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, args []string, envVars map[string]string, io iostream.Streams) error {
+	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
 	if err != nil {
 		return err
 	}
