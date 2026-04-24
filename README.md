@@ -114,6 +114,16 @@ chunk upgrade                        Update CLI
 
 See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Step-by-step guide: auth, init, build-prompt, skills, sidecar workflow |
+| [docs/SKILLS.md](docs/SKILLS.md) | Skills reference: installing, triggering, and troubleshooting agent skills |
+| [docs/CLI.md](docs/CLI.md) | Full command and flag reference |
+| [docs/HOOKS.md](docs/HOOKS.md) | Pre-commit and Stop hook configuration |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal module layout and dependency rules |
+
 ## Configuration
 
 ### Environment Variables
