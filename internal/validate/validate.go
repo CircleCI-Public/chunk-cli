@@ -91,8 +91,17 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 }
 
 // RunRemote runs commands on a remote sandbox via SSH.
-func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, dest string, streams iostream.Streams) error {
-	for _, c := range cfg.Commands {
+// If name is non-empty, only the named command is run.
+func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest string, streams iostream.Streams) error {
+	commands := cfg.Commands
+	if name != "" {
+		c := cfg.FindCommand(name)
+		if c == nil {
+			return fmt.Errorf("command %q not configured", name)
+		}
+		commands = []config.Command{*c}
+	}
+	for _, c := range commands {
 		script := "cd " + shellEscape(dest) + " && " + c.Run
 		stdout, stderr, exitCode, err := execFn(ctx, script)
 		if err != nil {

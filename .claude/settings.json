@@ -18,12 +18,12 @@
           },
           {
             "type": "command",
-            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && task lint",
+            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint",
             "timeout": 60
           },
           {
             "type": "command",
-            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && task test",
+            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test",
             "timeout": 300
           }
         ]

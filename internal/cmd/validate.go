@@ -198,7 +198,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 		if err != nil {
 			return err
 		}
-		return validate.RunRemote(ctx, execFn, cfg, dest, streams)
+		return validate.RunRemote(ctx, execFn, cfg, name, dest, streams)
 	}
 
 	// Named command
