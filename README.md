@@ -123,7 +123,6 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 | `ANTHROPIC_API_KEY` | Anthropic API key (required for `build-prompt`; optional for `init`) |
 | `GITHUB_TOKEN` | GitHub PAT with `repo` scope (for `build-prompt`) |
 | `CIRCLE_TOKEN` | CircleCI personal API token (for `sandbox` and `task`) |
-| `CHUNK_HOOK_ENABLE` | Enable/disable hook automation (`0`/`1`) |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment variable reference.
 

@@ -16,6 +16,12 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
+		// ExitCode errors have already written their output; exit without
+		// printing further error text. Only errors returned after all output
+		// has been written should implement ExitCode().
+		if ec, ok := err.(interface{ ExitCode() int }); ok {
+			os.Exit(ec.ExitCode())
+		}
 		m, d, s := errorDetails(err)
 		_, _ = fmt.Fprint(os.Stderr, ui.FormatError(m, d, s))
 		os.Exit(1)
@@ -29,15 +35,11 @@ func errorDetails(err error) (msg, detail, suggestion string) {
 	if um, ok := err.(interface{ UserMessage() string }); ok {
 		msg = um.UserMessage()
 	}
-	if d, ok := err.(interface{ Detail() string }); ok {
-		if d.Detail() != "" {
-			detail = d.Detail()
-		}
+	if d, ok := err.(interface{ Detail() string }); ok && d.Detail() != "" {
+		detail = d.Detail()
 	}
-	if s, ok := err.(interface{ Suggestion() string }); ok {
-		if s.Suggestion() != "" {
-			suggestion = s.Suggestion()
-		}
+	if s, ok := err.(interface{ Suggestion() string }); ok && s.Suggestion() != "" {
+		suggestion = s.Suggestion()
 	}
 	return msg, detail, suggestion
 }

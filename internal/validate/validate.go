@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -90,10 +91,19 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 }
 
 // RunRemote runs commands on a remote sandbox via SSH.
-func RunRemote(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, dest string, streams iostream.Streams) error {
-	for _, c := range cfg.Commands {
+// If name is non-empty, only the named command is run.
+func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest string, streams iostream.Streams) error {
+	commands := cfg.Commands
+	if name != "" {
+		c := cfg.FindCommand(name)
+		if c == nil {
+			return fmt.Errorf("command %q not configured", name)
+		}
+		commands = []config.Command{*c}
+	}
+	for _, c := range commands {
 		script := "cd " + shellEscape(dest) + " && " + c.Run
-		stdout, stderr, exitCode, err := exec(ctx, script)
+		stdout, stderr, exitCode, err := execFn(ctx, script)
 		if err != nil {
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}
@@ -111,9 +121,9 @@ func RunRemote(ctx context.Context, exec func(ctx context.Context, script string
 }
 
 // RunRemoteInline runs a single inline command on a remote sandbox via SSH.
-func RunRemoteInline(ctx context.Context, exec func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, streams iostream.Streams) error {
+func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, streams iostream.Streams) error {
 	script := "cd " + shellEscape(dest) + " && " + command
-	stdout, stderr, exitCode, err := exec(ctx, script)
+	stdout, stderr, exitCode, err := execFn(ctx, script)
 	if err != nil {
 		return fmt.Errorf("remote %s: %w", name, err)
 	}
@@ -190,4 +200,45 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec i
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
+}
+
+// HookExitError signals a specific process exit code without printing
+// additional error output. All output must be written before this error
+// is returned.
+type HookExitError struct {
+	code int
+}
+
+func (e *HookExitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
+func (e *HookExitError) ExitCode() int { return e.code }
+
+// HasGitChanges reports whether the working tree at workDir has any
+// uncommitted modifications (staged or unstaged). Returns true when git
+// is unavailable or the directory is not a repository so that validation
+// still runs in ambiguous cases.
+func HasGitChanges(workDir string) bool {
+	out, err := exec.Command("git", "-C", workDir, "status", "--porcelain").Output()
+	if err != nil {
+		return true // fail open: run validation when git is unavailable
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
+// WrapHookResult applies Stop hook lifecycle to the result of running validate
+// commands. On success it resets the attempt counter. On failure it increments
+// the counter and returns a HookExitError with code 2 to re-signal the agent,
+// or prints a give-up message and returns nil once maxAttempts is reached.
+func WrapHookResult(sessionID string, execErr error, maxAttempts int, warn io.Writer) error {
+	if execErr == nil {
+		ResetAttempts(sessionID)
+		return nil
+	}
+	n := TrackFailedAttempt(sessionID, warn)
+	if n >= maxAttempts {
+		_, _ = fmt.Fprintf(warn, "chunk validate: validation has failed %d time(s) in a row.\n", n)
+		_, _ = fmt.Fprintf(warn, "The failures above do not appear to be resolving automatically.\n")
+		_, _ = fmt.Fprintf(warn, "Stop attempting to fix this and ask the user for guidance instead.\n")
+		return nil
+	}
+	return &HookExitError{code: 2}
 }

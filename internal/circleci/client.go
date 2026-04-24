@@ -15,15 +15,8 @@ var ErrTokenNotFound = errors.New("api token not found")
 // ErrNotAuthorized indicates the request was rejected (401/403).
 var ErrNotAuthorized = errors.New("not authorized")
 
-// StatusError represents an HTTP error from the CircleCI API without exposing httpcl internals.
-type StatusError struct {
-	Op         string
-	StatusCode int
-}
-
-func (e *StatusError) Error() string {
-	return fmt.Sprintf("%s: %d %s", e.Op, e.StatusCode, http.StatusText(e.StatusCode))
-}
+// StatusError is an alias for the shared httpcl.StatusError type.
+type StatusError = hc.StatusError
 
 type Config struct {
 	Token   string

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
@@ -49,18 +48,8 @@ type graphQLRequest struct {
 	Variables map[string]any `json:"variables,omitempty"`
 }
 
-// StatusError represents an HTTP error from the GitHub API without exposing httpcl internals.
-type StatusError struct {
-	Op         string
-	StatusCode int
-}
-
-func (e *StatusError) Error() string {
-	if e.Op != "" {
-		return fmt.Sprintf("%s: %d %s", e.Op, e.StatusCode, http.StatusText(e.StatusCode))
-	}
-	return fmt.Sprintf("%d %s", e.StatusCode, http.StatusText(e.StatusCode))
-}
+// StatusError is an alias for the shared httpcl.StatusError type.
+type StatusError = hc.StatusError
 
 // ValidateOrg checks that the org is accessible.
 func (c *Client) ValidateOrg(ctx context.Context, org string) error {

@@ -391,7 +391,7 @@ func TestCollectRunConfig_OrgMismatchWarning(t *testing.T) {
 	}
 	found := false
 	for _, w := range warnings {
-		if w == "Warning: selected project org (org-1) differs from CIRCLECI_ORG_ID (different-org)" {
+		if w == "Warning: selected project org (org-1) differs from configured org ID (different-org)" {
 			found = true
 		}
 	}

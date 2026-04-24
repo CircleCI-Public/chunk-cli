@@ -15,8 +15,9 @@ type hookEntry struct {
 }
 
 // hookGroup is a group of hooks filtered by matcher.
+// Matcher is omitted for hook types that don't use it (e.g. Stop).
 type hookGroup struct {
-	Matcher string      `json:"matcher"`
+	Matcher string      `json:"matcher,omitempty"`
 	Hooks   []hookEntry `json:"hooks"`
 }
 
@@ -29,8 +30,9 @@ type settingsJSON struct {
 }
 
 // Build generates .claude/settings.json content from commands.
-// It creates a single PreToolUse hook matching "Bash(git commit*)" that
-// runs each command directly.
+// It creates:
+//   - A PreToolUse hook matching "Bash(git commit*)" that runs each command before commits.
+//   - A Stop hook that runs "chunk validate" after every session.
 func Build(commands []config.Command) ([]byte, error) {
 	hooks := make([]hookEntry, 0, len(commands))
 	for _, cmd := range commands {
@@ -54,11 +56,38 @@ func Build(commands []config.Command) ([]byte, error) {
 	}
 
 	if len(hooks) > 0 {
+		// Compute a Stop hook timeout that covers all commands running sequentially,
+		// capped at 600s to avoid exceeding Claude Code's maximum hook timeout.
+		const maxStopTimeout = 600
+		stopTimeout := 30 // base buffer
+		for _, cmd := range commands {
+			t := cmd.Timeout
+			if t == 0 {
+				t = 300
+			}
+			stopTimeout += t
+		}
+		if stopTimeout > maxStopTimeout {
+			stopTimeout = maxStopTimeout
+		}
+
 		s.Hooks = map[string][]hookGroup{
 			"PreToolUse": {
 				{
 					Matcher: CommitMatcher,
 					Hooks:   hooks,
+				},
+			},
+			// Stop hook: runs validation at session end.
+			"Stop": {
+				{
+					Hooks: []hookEntry{
+						{
+							Type:    "command",
+							Command: "chunk validate",
+							Timeout: stopTimeout,
+						},
+					},
 				},
 			},
 		}

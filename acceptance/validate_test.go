@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,6 +44,65 @@ func writeProjectConfig(t *testing.T, workDir string, installCmd, testCmd string
 	assert.NilError(t, err)
 	err = os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644)
 	assert.NilError(t, err)
+}
+
+// hookPayload mirrors the Claude Code Stop hook JSON fields.
+type hookPayload struct {
+	SessionID      string `json:"session_id"`
+	StopHookActive bool   `json:"stop_hook_active"`
+}
+
+func hookStdin(t *testing.T, sessionID string, stopHookActive bool) []byte {
+	t.Helper()
+	data, err := json.Marshal(hookPayload{SessionID: sessionID, StopHookActive: stopHookActive})
+	assert.NilError(t, err)
+	return data
+}
+
+// commitAll stages and commits all files in dir.
+func commitAll(t *testing.T, dir, message string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"git", "add", "-A"},
+		{"git", "commit", "-m", message},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = gitrepo.GitEnv(dir)
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, "%v: %s", args, out)
+	}
+}
+
+// TestValidateHookMode_DirtyTree verifies that piping a hook payload triggers
+// hook mode and re-signals the agent (exit 2) when commands fail.
+func TestValidateHookMode_DirtyTree(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	// writeProjectConfig creates an untracked file → dirty working tree.
+	writeProjectConfig(t, workDir, "", "false")
+
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
+		hookStdin(t, "test-session-dirty", false))
+
+	assert.Equal(t, result.ExitCode, 2,
+		"expected exit 2 (hook re-signal) for dirty tree with failing command; stderr: %s", result.Stderr)
+}
+
+// TestValidateHookMode_CleanTree verifies that piping a hook payload exits 0
+// without running any commands when the working tree is clean.
+func TestValidateHookMode_CleanTree(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	// Write config then commit it so the tree is clean.
+	writeProjectConfig(t, workDir, "", "false") // deliberately failing command
+	commitAll(t, workDir, "add config")
+
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
+		hookStdin(t, "test-session-clean", false))
+
+	assert.Equal(t, result.ExitCode, 0,
+		"expected exit 0 (skipped) for clean tree; stderr: %s", result.Stderr)
 }
 
 func TestValidateRunDryRun(t *testing.T) {

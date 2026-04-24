@@ -23,6 +23,7 @@ type ProjectDetailFunc func(ctx context.Context, slug string) (*circleci.Project
 // CollectRunConfig drives the interactive form to build a RunConfig.
 // It takes already-fetched projects and collaborations plus injected UI
 // and data-fetch dependencies so the logic is testable without a TTY.
+// envOrgID is the org ID read from the environment by the caller; pass "" to skip the mismatch check.
 func CollectRunConfig(
 	ctx context.Context,
 	prompts Prompts,
@@ -38,8 +39,8 @@ func CollectRunConfig(
 
 	if envOrgID != "" && envOrgID != orgID {
 		prompts.Warn(fmt.Sprintf(
-			"Warning: selected project org (%s) differs from %s (%s)",
-			orgID, "CIRCLECI_ORG_ID", envOrgID,
+			"Warning: selected project org (%s) differs from configured org ID (%s)",
+			orgID, envOrgID,
 		))
 	}
 
