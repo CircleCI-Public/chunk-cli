@@ -460,6 +460,113 @@ func TestRunRemoteSSH(t *testing.T) {
 	})
 }
 
+// --- RunMixed tests ---
+
+func TestRunMixed(t *testing.T) {
+	t.Run("all local when no remote flag", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "install", Run: "echo installed"},
+			{Name: "test", Run: "echo tested"},
+		}}
+		execCalled := 0
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			execCalled++
+			return "", "", 0, nil
+		}
+		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		assert.NilError(t, RunMixed(context.Background(), ".", execFn, cfg, "", "/workspace", testStatus(&statusBuf), streams))
+		assert.Equal(t, execCalled, 0, "no remote commands should have been executed")
+		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
+		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
+	})
+
+	t.Run("remote commands use execFn", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "lint", Run: "echo lint"},
+			{Name: "test", Run: "echo test", Remote: true},
+		}}
+		var capturedScripts []string
+		execFn := func(_ context.Context, script string) (string, string, int, error) {
+			capturedScripts = append(capturedScripts, script)
+			return "remote output\n", "", 0, nil
+		}
+		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		assert.NilError(t, RunMixed(context.Background(), ".", execFn, cfg, "", "/workspace", testStatus(&statusBuf), streams))
+		assert.Equal(t, len(capturedScripts), 1, "only remote command should use execFn")
+		assert.Assert(t, strings.Contains(capturedScripts[0], "echo test"), "got: %s", capturedScripts[0])
+		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
+		assert.Assert(t, strings.Contains(out.String(), "lint"), "local output should appear, got: %s", out.String())
+	})
+
+	t.Run("stops on local failure", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "lint", Run: "false"},
+			{Name: "test", Run: "echo test", Remote: true},
+		}}
+		execCalled := 0
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			execCalled++
+			return "", "", 0, nil
+		}
+		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		err := RunMixed(context.Background(), ".", execFn, cfg, "", "/workspace", testStatus(&statusBuf), streams)
+		assert.ErrorContains(t, err, "lint command failed")
+		assert.Equal(t, execCalled, 0, "remote command should be skipped after local failure")
+		assert.Assert(t, strings.Contains(statusBuf.String(), "test: skipped"), "got: %s", statusBuf.String())
+	})
+
+	t.Run("stops on remote failure", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "false", Remote: true},
+			{Name: "lint", Run: "echo lint"},
+		}}
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 1, nil
+		}
+		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		err := RunMixed(context.Background(), ".", execFn, cfg, "", "/workspace", testStatus(&statusBuf), streams)
+		assert.ErrorContains(t, err, "remote test failed")
+		assert.Assert(t, strings.Contains(statusBuf.String(), "lint: skipped"), "got: %s", statusBuf.String())
+	})
+
+	t.Run("no commands returns error", func(t *testing.T) {
+		cfg := &config.ProjectConfig{}
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 0, nil
+		}
+		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		err := RunMixed(context.Background(), ".", execFn, cfg, "", "/workspace", testStatus(&statusBuf), streams)
+		assert.ErrorContains(t, err, "no validate commands")
+	})
+
+	t.Run("named remote command", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "install", Run: "echo install"},
+			{Name: "test", Run: "echo test", Remote: true},
+		}}
+		var capturedScripts []string
+		execFn := func(_ context.Context, script string) (string, string, int, error) {
+			capturedScripts = append(capturedScripts, script)
+			return "", "", 0, nil
+		}
+		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		assert.NilError(t, RunMixed(context.Background(), ".", execFn, cfg, "test", "/workspace", testStatus(&statusBuf), streams))
+		assert.Equal(t, len(capturedScripts), 1)
+	})
+}
+
 func TestRunRemoteInline(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		var capturedScript string

@@ -393,3 +393,107 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sidecar-123/exec")
 	assert.Equal(t, len(execReqs), 0, "expected 0 HTTP exec requests (SSH should be used)")
 }
+
+// writeSidecarFile writes a sidecar state file into workDir/.chunk/<filename>.
+func writeSidecarFile(t *testing.T, workDir, filename, sidecarID string) {
+	t.Helper()
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	data := []byte(`{"sidecar_id":"` + sidecarID + `"}`)
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, filename), data, 0o644))
+}
+
+// generateHomeSSHKey writes a chunk_ai keypair into env.HomeDir/.ssh so that
+// OpenSession can load it when no --identity-file flag is provided.
+func generateHomeSSHKey(t *testing.T, env *testenv.TestEnv) string {
+	t.Helper()
+	sshDir := filepath.Join(env.HomeDir, ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	keyPath := filepath.Join(sshDir, "chunk_ai")
+	assert.NilError(t, generateTestSSHKey(t, keyPath))
+	return keyPath
+}
+
+// TestValidateAutoDetectsActiveSidecar verifies that validate routes to the
+// SSH path when a sidecar.json is present in the project, without requiring
+// --remote or --sidecar-id.
+func TestValidateAutoDetectsActiveSidecar(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = "127.0.0.1" // causes SSH handshake to fail — expected
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeProjectConfig(t, workDir, "echo install", "echo test")
+	writeSidecarFile(t, workDir, "sidecar.json", "sidecar-auto")
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	generateHomeSSHKey(t, env)
+
+	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
+
+	// SSH will fail (no server), but the path through OpenSession is what matters.
+	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
+
+	// "using active sidecar" should appear in stderr output.
+	assert.Assert(t, strings.Contains(result.Stderr, "sidecar-auto"),
+		"expected sidecar ID in output, got: %s", result.Stderr)
+
+	// AddSSHKey must have been called — proves SSH path was taken automatically.
+	addKeyReqs := filterByPath(cci.Recorder.AllRequests(), "/api/v2/sidecar/instances/sidecar-auto/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 1, "expected add-key request for auto-detected sidecar")
+}
+
+// TestValidateHookAutoDetectsSessionSidecar verifies that when running as a
+// Stop hook with a session ID, validate picks up the session-keyed sidecar
+// file and routes to SSH.
+func TestValidateHookAutoDetectsSessionSidecar(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = "127.0.0.1"
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeProjectConfig(t, workDir, "echo install", "echo test")
+	writeSidecarFile(t, workDir, "sidecar.sess-hook.json", "sidecar-session")
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	generateHomeSSHKey(t, env)
+
+	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
+		hookStdin(t, "sess-hook", false))
+
+	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
+
+	addKeyReqs := filterByPath(cci.Recorder.AllRequests(), "/api/v2/sidecar/instances/sidecar-session/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 1, "expected add-key request for session-keyed sidecar")
+}
+
+// TestValidateHookDoesNotUseGenericSidecarForSession verifies that when running
+// as a Stop hook with a session ID, validate does NOT pick up a generic
+// sidecar.json — it only uses a session-keyed file.
+func TestValidateHookDoesNotUseGenericSidecarForSession(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeProjectConfig(t, workDir, "true", "true")
+	// Only a generic sidecar.json — no session-specific file.
+	writeSidecarFile(t, workDir, "sidecar.json", "sidecar-generic")
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
+		hookStdin(t, "sess-other", false))
+
+	// Commands succeed locally → hook returns exit 0.
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	// AddSSHKey must NOT be called — session had no matching sidecar file.
+	addKeyReqs := filterByPath(cci.Recorder.AllRequests(), "/api/v2/sidecar/instances/sidecar-generic/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 0, "expected no SSH requests when session sidecar file is absent")
+}

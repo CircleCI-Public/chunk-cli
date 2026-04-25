@@ -24,6 +24,7 @@ type Command struct {
 	Limit   int    `json:"limit,omitempty"`
 	Always  bool   `json:"always,omitempty"`
 	Staged  bool   `json:"staged,omitempty"`
+	Remote  bool   `json:"remote,omitempty"`
 }
 
 // TaskConfig holds task delegation configuration.

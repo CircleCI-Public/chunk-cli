@@ -90,6 +90,25 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 	return nil
 }
 
+// runRemoteCommand executes a single command on a remote sidecar via execFn.
+func runRemoteCommand(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, streams iostream.Streams) error {
+	script := "cd " + shellEscape(dest) + " && " + command
+	stdout, stderr, exitCode, err := execFn(ctx, script)
+	if err != nil {
+		return fmt.Errorf("remote %s: %w", name, err)
+	}
+	if stdout != "" {
+		_, _ = fmt.Fprint(streams.Out, stdout)
+	}
+	if stderr != "" {
+		_, _ = fmt.Fprint(streams.Err, stderr)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
+	}
+	return nil
+}
+
 // RunRemote runs commands on a remote sidecar via SSH.
 // If name is non-empty, only the named command is run.
 func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest string, streams iostream.Streams) error {
@@ -102,19 +121,42 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		commands = []config.Command{*c}
 	}
 	for _, c := range commands {
-		script := "cd " + shellEscape(dest) + " && " + c.Run
-		stdout, stderr, exitCode, err := execFn(ctx, script)
+		if err := runRemoteCommand(ctx, execFn, c.Name, c.Run, dest, streams); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunMixed runs commands, routing each one based on its Remote flag.
+// Commands with Remote:true run via execFn on dest; others run locally in workDir.
+// Stops at the first failure, logging skipped commands via status.
+func RunMixed(ctx context.Context, workDir string, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest string, status iostream.StatusFunc, streams iostream.Streams) error {
+	if !cfg.HasCommands() {
+		return ErrNotConfigured
+	}
+
+	commands := cfg.Commands
+	if name != "" {
+		c := cfg.FindCommand(name)
+		if c == nil {
+			return fmt.Errorf("command %q not configured", name)
+		}
+		commands = []config.Command{*c}
+	}
+
+	for i, c := range commands {
+		var err error
+		if c.Remote {
+			err = runRemoteCommand(ctx, execFn, c.Name, c.Run, dest, streams)
+		} else {
+			err = runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
+		}
 		if err != nil {
-			return fmt.Errorf("remote %s: %w", c.Name, err)
-		}
-		if stdout != "" {
-			_, _ = fmt.Fprint(streams.Out, stdout)
-		}
-		if stderr != "" {
-			_, _ = fmt.Fprint(streams.Err, stderr)
-		}
-		if exitCode != 0 {
-			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
+			for j := i + 1; j < len(commands); j++ {
+				status(iostream.LevelWarn, fmt.Sprintf("%s: skipped (%s failed)", commands[j].Name, c.Name))
+			}
+			return err
 		}
 	}
 	return nil

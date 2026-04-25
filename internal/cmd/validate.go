@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -135,13 +136,14 @@ func newValidateCmd() *cobra.Command {
 				return mapValidateError(validate.RunDryRun(cfg, name, statusFn))
 			}
 
-			if remote {
-				if err := resolveSidecarID(&sidecarID); err != nil {
-					return err
-				}
+			var remoteAll bool
+			var resolveErr error
+			sidecarID, remoteAll, resolveErr = resolveSidecarForValidate(cmd.Context(), sidecarID, remote, hook, workDir, cfg, name, inlineCmd, streams, statusFn)
+			if resolveErr != nil {
+				return resolveErr
 			}
 
-			execErr := runValidate(cmd.Context(), workDir, name, inlineCmd, save, sidecarID, identityFile, workdir, cfg, statusFn, streams)
+			execErr := runValidate(cmd.Context(), workDir, name, inlineCmd, save, sidecarID, identityFile, workdir, remoteAll, cfg, statusFn, streams)
 
 			if hook != nil {
 				maxAttempts := cfg.StopHookMaxAttempts
@@ -169,7 +171,10 @@ func newValidateCmd() *cobra.Command {
 
 // runValidate dispatches to the appropriate Run* function based on the
 // provided options. It is shared by both direct and hook invocations.
-func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID, identityFile, workdir string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+// When remoteAll is true and sidecarID is non-empty, all commands run on the
+// sidecar. When remoteAll is false, only commands with Remote:true are routed
+// to the sidecar and the rest run locally.
+func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID, identityFile, workdir string, remoteAll bool, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	// --cmd: inline command
 	if inlineCmd != "" {
 		cmdName := name
@@ -198,7 +203,10 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 		if err != nil {
 			return err
 		}
-		return validate.RunRemote(ctx, execFn, cfg, name, dest, streams)
+		if remoteAll {
+			return validate.RunRemote(ctx, execFn, cfg, name, dest, streams)
+		}
+		return validate.RunMixed(ctx, workDir, execFn, cfg, name, dest, statusFn, streams)
 	}
 
 	// Named command
@@ -268,6 +276,109 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 		return result.Stdout, result.Stderr, result.ExitCode, nil
 	}
 	return execFn, dest, nil
+}
+
+// resolveSidecarForValidate determines the sidecarID and remoteAll flag for a
+// validate run. remoteAll is true when all commands should run on the sidecar
+// (explicit --sidecar-id/--remote flag or an existing active sidecar); false
+// when only commands with Remote:true are routed (auto-provisioned sidecar).
+func resolveSidecarForValidate(ctx context.Context, sidecarID string, remote bool, hook *hookContext, workDir string, cfg *config.ProjectConfig, name, inlineCmd string, streams iostream.Streams, statusFn iostream.StatusFunc) (id string, remoteAll bool, err error) {
+	// Explicit --sidecar-id: route all commands to sidecar.
+	if sidecarID != "" {
+		return sidecarID, true, nil
+	}
+	// --remote: resolve from active sidecar file.
+	if remote {
+		if err := resolveSidecarID(&sidecarID); err != nil {
+			return "", false, err
+		}
+		return sidecarID, true, nil
+	}
+	// Auto-use the active sidecar for the current session.
+	var active *sidecar.ActiveSidecar
+	if hook != nil && hook.sessionID != "" {
+		active, _ = sidecar.LoadForSession(hook.sessionID)
+	} else {
+		active, _ = sidecar.LoadActive()
+	}
+	if active != nil {
+		if hook == nil {
+			statusFn(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
+		}
+		return active.SidecarID, true, nil
+	}
+	// Per-command remote: auto-provision when some commands require remote execution.
+	if inlineCmd == "" && hasRemoteCommands(cfg, name) {
+		id, provisionErr := ensureRemoteSidecar(ctx, workDir, hook, streams, statusFn)
+		if provisionErr != nil {
+			return "", false, provisionErr
+		}
+		return id, false, nil // remoteAll=false: only Remote:true commands go to sidecar
+	}
+	return "", false, nil
+}
+
+// hasRemoteCommands reports whether the named command (or any command when
+// name is empty) has the Remote flag set.
+func hasRemoteCommands(cfg *config.ProjectConfig, name string) bool {
+	if name != "" {
+		c := cfg.FindCommand(name)
+		return c != nil && c.Remote
+	}
+	for _, c := range cfg.Commands {
+		if c.Remote {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureRemoteSidecar returns a sidecarID for remote command execution.
+// It loads the active sidecar when one is already set, otherwise creates a new
+// one using CIRCLECI_ORG_ID and a name derived from workDir.
+func ensureRemoteSidecar(ctx context.Context, workDir string, hook *hookContext, streams iostream.Streams, statusFn iostream.StatusFunc) (string, error) {
+	var active *sidecar.ActiveSidecar
+	if hook != nil && hook.sessionID != "" {
+		active, _ = sidecar.LoadForSession(hook.sessionID)
+	}
+	if active == nil {
+		active, _ = sidecar.LoadActive()
+	}
+	if active != nil {
+		return active.SidecarID, nil
+	}
+
+	// No active sidecar: auto-create one.
+	client, err := ensureCircleCIClient(ctx, streams, tui.PromptHidden)
+	if err != nil {
+		return "", fmt.Errorf("cannot provision sidecar for remote commands: %w", err)
+	}
+	orgID := os.Getenv(config.EnvCircleCIOrgID)
+	if orgID == "" {
+		return "", &userError{
+			msg:        "No active sidecar and CIRCLECI_ORG_ID is not set.",
+			suggestion: "Set CIRCLECI_ORG_ID, or run 'chunk sidecar use <id>' to specify a sidecar.",
+			errMsg:     "no active sidecar and CIRCLECI_ORG_ID not set",
+		}
+	}
+	name := filepath.Base(workDir)
+	provider := os.Getenv(config.EnvSidecarProvider)
+	if provider == "" {
+		provider = defaultProvider
+	}
+	statusFn(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q for remote commands...", name))
+	sc, err := sidecar.Create(ctx, client, orgID, name, provider, "")
+	if err != nil {
+		if authErr := notAuthorized("create sidecars", err); authErr != nil {
+			return "", authErr
+		}
+		return "", &userError{msg: "Could not create sidecar for remote commands.", err: err}
+	}
+	if saveErr := sidecar.SaveActive(sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
+		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
+	}
+	statusFn(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))
+	return sc.ID, nil
 }
 
 func mapValidateError(err error) error {
