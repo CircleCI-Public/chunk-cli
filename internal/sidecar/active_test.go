@@ -234,3 +234,50 @@ func TestResolveWorkspaceDefaultFallback(t *testing.T) {
 	got := resolveWorkspace("", "myrepo")
 	assert.Equal(t, got, "./workspace/myrepo")
 }
+
+func TestLoadForSessionFindsSessionFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
+	data := []byte(`{"sidecar_id":"sb-sess","name":"session-box"}`)
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk", "sidecar.sess-123.json"), data, 0o644))
+
+	got, err := LoadForSession("sess-123")
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil)
+	assert.Equal(t, got.SidecarID, "sb-sess")
+}
+
+func TestLoadForSessionDoesNotSeeGenericFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	// Only a generic sidecar.json exists — session-specific lookup should return nil.
+	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-generic"}))
+
+	got, err := LoadForSession("sess-abc")
+	assert.NilError(t, err)
+	assert.Assert(t, got == nil, "session lookup should not see the generic sidecar file")
+}
+
+func TestLoadForSessionReturnsNilWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	got, err := LoadForSession("sess-xyz")
+	assert.NilError(t, err)
+	assert.Assert(t, got == nil)
+}
+
+func TestLoadForSessionEmptyIDDelegatesToLoadActive(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-generic"}))
+
+	got, err := LoadForSession("")
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil)
+	assert.Equal(t, got.SidecarID, "sb-generic")
+}

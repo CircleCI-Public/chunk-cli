@@ -28,7 +28,21 @@ func sidecarFileName() string {
 
 // LoadActive walks up from cwd looking for .chunk/sidecar.json. Returns nil if not found.
 func LoadActive() (*ActiveSidecar, error) {
-	path, err := findSidecarFile()
+	return loadActiveNamed(sidecarFileName())
+}
+
+// LoadForSession loads the active sidecar for a specific Claude session ID,
+// looking for .chunk/sidecar.<sessionID>.json directly rather than relying on
+// the CLAUDE_SESSION_ID environment variable.
+func LoadForSession(sessionID string) (*ActiveSidecar, error) {
+	if sessionID == "" {
+		return LoadActive()
+	}
+	return loadActiveNamed("sidecar." + sessionID + ".json")
+}
+
+func loadActiveNamed(filename string) (*ActiveSidecar, error) {
+	path, err := findSidecarFileNamed(filename)
 	if err != nil {
 		return nil, err
 	}
@@ -116,18 +130,23 @@ func ClearActive() error {
 	return os.Remove(path)
 }
 
-// findSidecarFile walks up from cwd looking for .chunk/sidecar.json, returning the path or "".
+// findSidecarFile walks up from cwd looking for the active sidecar file.
+func findSidecarFile() (string, error) {
+	return findSidecarFileNamed(sidecarFileName())
+}
+
+// findSidecarFileNamed walks up from cwd looking for .chunk/<name>, returning the path or "".
 // When inside a git repository the walk is bounded by the repository root (the directory
 // containing .git); files above that root are never considered. When not inside any git
 // repository only the current directory is checked.
-func findSidecarFile() (string, error) {
+func findSidecarFileNamed(name string) (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	gitRoot, _ := findGitRoot()
 	for {
-		candidate := filepath.Join(dir, ".chunk", sidecarFileName())
+		candidate := filepath.Join(dir, ".chunk", name)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
