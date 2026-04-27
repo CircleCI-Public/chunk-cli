@@ -8,6 +8,7 @@ import (
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
 var (
@@ -39,7 +40,7 @@ func New(cfg Config) (*Client, error) {
 		BaseURL:        cfg.BaseURL,
 		AuthToken:      cfg.APIKey,
 		AuthHeader:     "x-api-key",
-		UserAgent:      "chunk-cli",
+		UserAgent:      version.UserAgent(),
 		Timeout:        5 * time.Minute,
 		DisableRetries: true,
 	})
