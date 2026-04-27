@@ -256,9 +256,15 @@ func MaskKey(key string) string {
 	return strings.Repeat("*", len(key)-4) + key[len(key)-4:]
 }
 
-// ValidConfigKeys are the keys accepted by "config set".
+// ValidConfigKeys are the keys accepted by "config set" that write to the user config.
 // Credentials (anthropicAPIKey, circleCIToken) are intentionally excluded —
 // users should use "auth set" which validates before storing.
 var ValidConfigKeys = map[string]bool{
 	"model": true,
+}
+
+// ValidProjectConfigKeys are the keys accepted by "config set" that write to
+// the project config (.chunk/config.json).
+var ValidProjectConfigKeys = map[string]bool{
+	"orgID": true,
 }
