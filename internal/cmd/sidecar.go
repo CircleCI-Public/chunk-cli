@@ -479,13 +479,18 @@ var validDockerTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*(:[a-zA-Z0
 
 func newSidecarEnvCmd() *cobra.Command {
 	var dir string
+	var noSave bool
 
 	cmd := &cobra.Command{
 		Use:   "env",
 		Short: "Detect tech stack and print environment spec as JSON",
 		Long: `Analyse the repository at --dir, detect its tech stack, and print
 a JSON environment spec to stdout. Pipe this into 'chunk sidecar build' to
-generate a Dockerfile and build a test image.`,
+generate a Dockerfile and build a test image.
+
+By default the detected environment is saved to .chunk/config.json so that
+'chunk sidecar setup' can reuse it without re-detecting. Pass --no-save to
+print only without writing.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if _, err := os.Stat(dir); err != nil {
@@ -506,6 +511,17 @@ generate a Dockerfile and build a test image.`,
 				}
 			}
 
+			if !noSave {
+				cfg, loadErr := config.LoadProjectConfig(dir)
+				if loadErr != nil {
+					cfg = &config.ProjectConfig{}
+				}
+				cfg.Environment = env
+				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
+					io.ErrPrintf("Warning: could not save environment to config: %v\n", saveErr)
+				}
+			}
+
 			out, err := json.MarshalIndent(env, "", "  ")
 			if err != nil {
 				return &userError{msg: "Could not encode the environment spec.", err: err}
@@ -516,6 +532,7 @@ generate a Dockerfile and build a test image.`,
 	}
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to detect environment in")
+	cmd.Flags().BoolVar(&noSave, "no-save", false, "Print only without saving to .chunk/config.json")
 
 	return cmd
 }
@@ -675,19 +692,24 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 
 func newSidecarSetupCmd() *cobra.Command {
 	var sidecarID, orgID, name, identityFile, snapshotName, dir string
-	var skipSync, skipSnapshot bool
+	var skipSync, skipSnapshot, force bool
 
 	cmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Detect environment, run install in a sidecar, and snapshot",
-		Long: `Detect the tech stack in --dir, sync files, run the install command
+		Long: `Detect the tech stack in --dir, sync files, run the setup commands
 in a sidecar, and create a snapshot of the prepared environment.
+
+The detected environment is saved to .chunk/config.json on first run.
+Subsequent runs reuse the saved environment and skip detection unless
+--force is passed.
 
 If no active sidecar is set, pass --org-id and --name to create one first.
 
 Example:
   chunk sidecar setup --dir .
-  chunk sidecar setup --dir . --name my-sidecar --org-id <org-id>`,
+  chunk sidecar setup --dir . --name my-sidecar --org-id <org-id>
+  chunk sidecar setup --dir . --force`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 			status := newStatusFunc(streams)
@@ -698,18 +720,33 @@ Example:
 				return err
 			}
 
-			// Step 1: Detect environment.
-			status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
-			env, err := envbuilder.DetectEnvironment(cmd.Context(), dir)
-			if err != nil {
-				return &userError{
-					msg:        "Could not detect the environment.",
-					suggestion: "Check the directory contains a supported project.",
-					err:        err,
+			// Load project config (best-effort; start fresh when absent).
+			cfg, loadErr := config.LoadProjectConfig(dir)
+			if loadErr != nil {
+				cfg = &config.ProjectConfig{}
+			}
+
+			// Step 1: Detect environment (skip when cached and --force not set).
+			var env *envbuilder.Environment
+			if cfg.Environment != nil && !force {
+				streams.ErrPrintln("Using environment from .chunk/config.json")
+				env = cfg.Environment
+			} else {
+				status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
+				env, err = envbuilder.DetectEnvironment(cmd.Context(), dir)
+				if err != nil {
+					return &userError{
+						msg:        "Could not detect the environment.",
+						suggestion: "Check the directory contains a supported project.",
+						err:        err,
+					}
+				}
+				cfg.Environment = env
+				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
+					streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
 				}
 			}
 			status(iostream.LevelInfo, fmt.Sprintf("stack: %s", env.Stack))
-			status(iostream.LevelInfo, fmt.Sprintf("install: %s", env.Install))
 
 			// Step 2: Resolve or create sidecar.
 			provider := os.Getenv(config.EnvSidecarProvider)
@@ -737,8 +774,8 @@ Example:
 				}
 			}
 
-			// Step 5: Run install command over SSH.
-			if err := sidecarSetupRunInstall(cmd.Context(), client, sidecarID, identityFile, authSock, env, workspace, streams, status); err != nil {
+			// Step 5: Run setup steps over SSH.
+			if err := sidecarSetupRunSetup(cmd.Context(), client, sidecarID, identityFile, authSock, env, workspace, streams, status); err != nil {
 				return err
 			}
 
@@ -761,6 +798,7 @@ Example:
 	cmd.Flags().StringVar(&snapshotName, "snapshot-name", "", "Snapshot name (defaults to <sidecar-name>-setup)")
 	cmd.Flags().BoolVar(&skipSync, "skip-sync", false, "Skip syncing files to the sidecar")
 	cmd.Flags().BoolVar(&skipSnapshot, "skip-snapshot", false, "Skip creating a snapshot after install")
+	cmd.Flags().BoolVar(&force, "force", false, "Re-detect environment even if cached in .chunk/config.json")
 
 	return cmd
 }
@@ -855,7 +893,7 @@ func sidecarSetupSync(
 	return err
 }
 
-func sidecarSetupRunInstall(
+func sidecarSetupRunSetup(
 	ctx context.Context,
 	client *circleci.Client,
 	sidecarID, identityFile, authSock string,
@@ -864,57 +902,64 @@ func sidecarSetupRunInstall(
 	streams iostream.Streams,
 	status iostream.StatusFunc,
 ) error {
-	if env.Install == "" {
-		status(iostream.LevelInfo, "No install command detected, skipping")
+	if len(env.Setup) == 0 {
+		status(iostream.LevelInfo, "No setup steps detected, skipping")
 		return nil
 	}
-	status(iostream.LevelStep, fmt.Sprintf("Running install: %s", env.Install))
-	session, err := sidecar.OpenSession(ctx, client, sidecarID, identityFile, authSock)
-	if err != nil {
-		if sessErr := sshSessionError(err); sessErr != nil {
-			return sessErr
-		}
-		return err
-	}
-	// Run from the synced workspace directory so package managers can
-	// find their manifest files (go.mod, package.json, etc.).
-	workspaceCmd := env.Install
+
 	ws := workspace
 	if ws == "" {
 		if active, lerr := sidecar.LoadActive(); lerr == nil && active != nil && active.Workspace != "" {
 			ws = active.Workspace
 		}
 	}
-	if ws != "" {
-		workspaceCmd = "cd " + sidecar.ShellEscape(ws) + " && " + env.Install
-	}
-	// cimg images set PATH via Docker ENV which e2b does not propagate to SSH
-	// sessions, so prepend the stack's binary locations explicitly.
-	if paths := env.BinaryPaths(); paths != "" {
-		workspaceCmd = "export PATH=" + paths + ":$PATH && " + workspaceCmd
-	}
-	loginCmd := "bash -l -c " + sidecar.ShellEscape(workspaceCmd)
-	result, err := sidecar.ExecOverSSH(ctx, session, loginCmd, nil, nil)
-	if err != nil {
-		if sessErr := sshSessionError(err); sessErr != nil {
-			return sessErr
+
+	for _, step := range env.Setup {
+		if step.Name == "test" {
+			continue // test step is for Dockerfile CMD only, not for SSH execution
 		}
-		return err
-	}
-	if result.Stdout != "" {
-		streams.Printf("%s", result.Stdout)
-	}
-	if result.Stderr != "" {
-		streams.ErrPrintf("%s", result.Stderr)
-	}
-	if result.ExitCode != 0 {
-		return &userError{
-			msg:        fmt.Sprintf("Install command exited with status %d.", result.ExitCode),
-			suggestion: "Check the output above for details.",
-			errMsg:     fmt.Sprintf("install command exited with status %d", result.ExitCode),
+		status(iostream.LevelStep, fmt.Sprintf("Running setup step %q: %s", step.Name, step.Command))
+		session, err := sidecar.OpenSession(ctx, client, sidecarID, identityFile, authSock)
+		if err != nil {
+			if sessErr := sshSessionError(err); sessErr != nil {
+				return sessErr
+			}
+			return err
 		}
+		// Run from the synced workspace directory so package managers can
+		// find their manifest files (go.mod, package.json, etc.).
+		workspaceCmd := step.Command
+		if ws != "" {
+			workspaceCmd = "cd " + sidecar.ShellEscape(ws) + " && " + step.Command
+		}
+		// cimg images set PATH via Docker ENV which e2b does not propagate to SSH
+		// sessions, so prepend the stack's binary locations explicitly.
+		if paths := env.BinaryPaths(); paths != "" {
+			workspaceCmd = "export PATH=" + paths + ":$PATH && " + workspaceCmd
+		}
+		loginCmd := "bash -l -c " + sidecar.ShellEscape(workspaceCmd)
+		result, err := sidecar.ExecOverSSH(ctx, session, loginCmd, nil, nil)
+		if err != nil {
+			if sessErr := sshSessionError(err); sessErr != nil {
+				return sessErr
+			}
+			return err
+		}
+		if result.Stdout != "" {
+			streams.Printf("%s", result.Stdout)
+		}
+		if result.Stderr != "" {
+			streams.ErrPrintf("%s", result.Stderr)
+		}
+		if result.ExitCode != 0 {
+			return &userError{
+				msg:        fmt.Sprintf("Setup step %q exited with status %d.", step.Name, result.ExitCode),
+				suggestion: "Check the output above for details.",
+				errMsg:     fmt.Sprintf("setup step %q exited with status %d", step.Name, result.ExitCode),
+			}
+		}
+		status(iostream.LevelDone, fmt.Sprintf("Step %q complete", step.Name))
 	}
-	status(iostream.LevelDone, "Install complete")
 	return nil
 }
 

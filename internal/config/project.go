@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 )
 
 // Command roles determine hook placement in settings.json.
@@ -48,6 +50,7 @@ type ProjectConfig struct {
 	Tasks               map[string]TaskConfig `json:"tasks,omitempty"`
 	VCS                 *VCSConfig            `json:"vcs,omitempty"`
 	StopHookMaxAttempts int                   `json:"stopHookMaxAttempts,omitempty"`
+	Environment         *envspec.Environment  `json:"environment,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.
