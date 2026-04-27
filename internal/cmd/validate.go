@@ -305,6 +305,10 @@ func resolveSidecarForValidate(ctx context.Context, sidecarID string, remote boo
 		if hook == nil {
 			statusFn(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
 		}
+		if hasRemoteCommands(cfg, name) {
+			// Some commands are marked remote: route only those to the sidecar.
+			return active.SidecarID, false, nil
+		}
 		return active.SidecarID, true, nil
 	}
 	// Per-command remote: auto-provision when some commands require remote execution.
@@ -374,7 +378,11 @@ func ensureRemoteSidecar(ctx context.Context, workDir string, hook *hookContext,
 		}
 		return "", &userError{msg: "Could not create sidecar for remote commands.", err: err}
 	}
-	if saveErr := sidecar.SaveActive(sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
+	sessionID := ""
+	if hook != nil {
+		sessionID = hook.sessionID
+	}
+	if saveErr := sidecar.SaveActiveForSession(sessionID, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	statusFn(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))

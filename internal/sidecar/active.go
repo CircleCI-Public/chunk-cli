@@ -64,6 +64,17 @@ func loadActiveNamed(filename string) (*ActiveSidecar, error) {
 // parent directory it is updated in place; otherwise the file is created in
 // cwd's .chunk/ directory.
 func SaveActive(a ActiveSidecar) error {
+	return SaveActiveForSession("", a)
+}
+
+// SaveActiveForSession writes the sidecar state file. When sessionID is
+// non-empty the file is keyed to that session (sidecar.<sessionID>.json);
+// otherwise the env-derived filename is used (see sidecarFileName).
+func SaveActiveForSession(sessionID string, a ActiveSidecar) error {
+	filename := sidecarFileName()
+	if sessionID != "" {
+		filename = "sidecar." + sessionID + ".json"
+	}
 	dir, err := saveDir()
 	if err != nil {
 		return err
@@ -75,7 +86,7 @@ func SaveActive(a ActiveSidecar) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, sidecarFileName()), data, 0o644)
+	return os.WriteFile(filepath.Join(dir, filename), data, 0o644)
 }
 
 // saveDir returns the .chunk directory to write into. It prefers an existing
