@@ -62,7 +62,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model\nProject keys: orgID",
+		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model\nProject keys: orgID, validation.sidecarImage",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -77,8 +77,14 @@ func newConfigSetCmd() *cobra.Command {
 				if err != nil {
 					projCfg = &config.ProjectConfig{}
 				}
-				if key == "orgID" {
+				switch key {
+				case "orgID":
 					projCfg.OrgID = value
+				case "validation.sidecarImage":
+					if projCfg.Validation == nil {
+						projCfg.Validation = &config.ValidationConfig{}
+					}
+					projCfg.Validation.SidecarImage = value
 				}
 				if err := config.SaveProjectConfig(workDir, projCfg); err != nil {
 					return &userError{msg: "Could not save project configuration.", suggestion: configFilePermHint, err: err}
@@ -90,7 +96,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, orgID.",
+					detail: "Supported keys: model, orgID, validation.sidecarImage.",
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}

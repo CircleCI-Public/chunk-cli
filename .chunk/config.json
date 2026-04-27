@@ -6,7 +6,8 @@
       "role": "gate",
       "fileExt": ".go",
       "timeout": 300,
-      "limit": 3
+      "limit": 3,
+      "remote": true
     },
     {
       "name": "test-changed",
@@ -36,5 +37,6 @@
   "vcs": {
     "org": "CircleCI-Public",
     "repo": "chunk-cli"
-  }
+  },
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c"
 }
