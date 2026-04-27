@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -60,7 +61,7 @@ func detectHook(r io.Reader) *hookContext {
 }
 
 func newValidateCmd() *cobra.Command {
-	var sidecarID, identityFile, workdir string
+	var sidecarID, identityFile, workdir, orgID string
 	var dryRun, list, save, remote bool
 	var inlineCmd, projectDir string
 
@@ -136,7 +137,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if remote {
-				if err := resolveSidecarID(&sidecarID); err != nil {
+				if err := resolveOrCreateSidecarID(cmd.Context(), &sidecarID, orgID, workDir, streams); err != nil {
 					return err
 				}
 			}
@@ -154,8 +155,9 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&remote, "remote", false, "Run on active sidecar (reads .chunk/sidecar.json)")
+	cmd.Flags().BoolVar(&remote, "remote", false, "Run on active sidecar, or create one if none is set")
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID for remote execution")
+	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sidecar (reads from sidecar.json, defaults to ./workspace)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
@@ -268,6 +270,70 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 		return result.Stdout, result.Stderr, result.ExitCode, nil
 	}
 	return execFn, dest, nil
+}
+
+// resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
+// a new sandbox when none is configured.
+func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, workDir string, streams iostream.Streams) error {
+	if *sidecarID != "" {
+		return nil
+	}
+	active, err := sidecar.LoadActive()
+	if err != nil {
+		return &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
+	}
+	if active != nil {
+		*sidecarID = active.SidecarID
+		return nil
+	}
+	streams.ErrPrintf("No active sidecar found, creating a new sandbox...\n")
+	client, err := ensureCircleCIClient(ctx, streams, tui.PromptHidden)
+	if err != nil {
+		return err
+	}
+	// Fallback: read org ID from project config if not provided via flag or env.
+	if orgID == "" {
+		if projCfg, loadErr := config.LoadProjectConfig(workDir); loadErr == nil && projCfg.OrgID != "" {
+			orgID = projCfg.OrgID
+		}
+	}
+	resolvedOrgID, err := resolveOrgID(orgID, orgPicker(ctx, client))
+	if err != nil {
+		return err
+	}
+	provider := os.Getenv(config.EnvSidecarProvider)
+	if provider == "" {
+		provider = defaultProvider
+	}
+	name := filepath.Base(workDir) + "-validate"
+	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, provider, "")
+	if err != nil {
+		if authErr := notAuthorized("create sidecars", err); authErr != nil {
+			return authErr
+		}
+		return &userError{
+			msg:        "Could not create a sandbox.",
+			suggestion: "Check your network connection or run 'chunk sidecar create' manually.",
+			err:        err,
+		}
+	}
+	if saveErr := sidecar.SaveActive(sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
+		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
+	}
+	// Persist the org ID so future sandbox creation skips the picker.
+	projCfg, loadErr := config.LoadProjectConfig(workDir)
+	if loadErr != nil {
+		projCfg = &config.ProjectConfig{}
+	}
+	if projCfg.OrgID == "" {
+		projCfg.OrgID = resolvedOrgID
+		if saveErr := config.SaveProjectConfig(workDir, projCfg); saveErr != nil {
+			streams.ErrPrintf("warning: could not save org ID to project config: %v\n", saveErr)
+		}
+	}
+	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sc.Name, sc.ID)))
+	*sidecarID = sc.ID
+	return nil
 }
 
 func mapValidateError(err error) error {

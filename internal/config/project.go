@@ -49,6 +49,7 @@ type ProjectConfig struct {
 	Triggers            map[string][]string   `json:"triggers,omitempty"`
 	Tasks               map[string]TaskConfig `json:"tasks,omitempty"`
 	VCS                 *VCSConfig            `json:"vcs,omitempty"`
+	OrgID               string                `json:"orgID,omitempty"`
 	StopHookMaxAttempts int                   `json:"stopHookMaxAttempts,omitempty"`
 	Environment         *envspec.Environment  `json:"environment,omitempty"`
 }
