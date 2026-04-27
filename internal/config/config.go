@@ -266,5 +266,6 @@ var ValidConfigKeys = map[string]bool{
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to
 // the project config (.chunk/config.json).
 var ValidProjectConfigKeys = map[string]bool{
-	"orgID": true,
+	"orgID":                   true,
+	"validation.sidecarImage": true,
 }

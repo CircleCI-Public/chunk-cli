@@ -6,7 +6,8 @@
       "role": "gate",
       "fileExt": ".go",
       "timeout": 300,
-      "limit": 3
+      "limit": 3,
+      "remote": true
     },
     {
       "name": "test-changed",
@@ -46,7 +47,7 @@
       },
       {
         "name": "system",
-        "command": "sudo apt-get update \u0026\u0026 sudo apt-get install -y git --no-install-recommends \u0026\u0026 sudo rm -rf /var/lib/apt/lists/*"
+        "command": "sudo apt-get update && sudo apt-get install -y git --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"
       },
       {
         "name": "install",
@@ -55,5 +56,6 @@
     ],
     "image": "cimg/go",
     "image_version": "1.26.2"
-  }
+  },
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c"
 }

@@ -18,14 +18,16 @@ const (
 
 // Command is a single validation command.
 type Command struct {
-	Name    string `json:"name"`
-	Run     string `json:"run"`
-	Role    string `json:"role,omitempty"`
-	FileExt string `json:"fileExt,omitempty"`
-	Timeout int    `json:"timeout,omitempty"`
-	Limit   int    `json:"limit,omitempty"`
-	Always  bool   `json:"always,omitempty"`
-	Staged  bool   `json:"staged,omitempty"`
+	Name         string `json:"name"`
+	Run          string `json:"run"`
+	Role         string `json:"role,omitempty"`
+	FileExt      string `json:"fileExt,omitempty"`
+	Timeout      int    `json:"timeout,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Always       bool   `json:"always,omitempty"`
+	Staged       bool   `json:"staged,omitempty"`
+	Remote       bool   `json:"remote,omitempty"`
+	SidecarImage string `json:"sidecarImage,omitempty"`
 }
 
 // TaskConfig holds task delegation configuration.
@@ -43,12 +45,18 @@ type VCSConfig struct {
 	Repo string `json:"repo,omitempty"`
 }
 
+// ValidationConfig holds project-level defaults for validation behaviour.
+type ValidationConfig struct {
+	SidecarImage string `json:"sidecarImage,omitempty"`
+}
+
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
 	Commands            []Command             `json:"commands,omitempty"`
 	Triggers            map[string][]string   `json:"triggers,omitempty"`
 	Tasks               map[string]TaskConfig `json:"tasks,omitempty"`
 	VCS                 *VCSConfig            `json:"vcs,omitempty"`
+	Validation          *ValidationConfig     `json:"validation,omitempty"`
 	OrgID               string                `json:"orgID,omitempty"`
 	StopHookMaxAttempts int                   `json:"stopHookMaxAttempts,omitempty"`
 	Environment         *envspec.Environment  `json:"environment,omitempty"`
@@ -71,6 +79,19 @@ func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
 // HasCommands reports whether any commands are configured.
 func (c *ProjectConfig) HasCommands() bool {
 	return len(c.Commands) > 0
+}
+
+// HasRemoteCommands reports whether any commands are marked for remote execution.
+func (c *ProjectConfig) HasRemoteCommands() bool {
+	if c == nil {
+		return false
+	}
+	for _, cmd := range c.Commands {
+		if cmd.Remote {
+			return true
+		}
+	}
+	return false
 }
 
 // FindCommand returns the command with the given name, or nil if not found.
