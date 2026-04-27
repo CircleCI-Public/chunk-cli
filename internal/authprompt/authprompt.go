@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
 // ErrNeedsAuth is returned by Resolve* functions when no credentials are
@@ -28,6 +29,7 @@ func ValidateCircleCIToken(ctx context.Context, token, baseURL string) error {
 		BaseURL:    baseURL,
 		AuthToken:  token,
 		AuthHeader: "Circle-Token",
+		UserAgent:  version.UserAgent(),
 	})
 	_, err := cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/me"))
 	if err != nil {
@@ -49,6 +51,7 @@ func ValidateAPIKey(ctx context.Context, apiKey, baseURL string) error {
 		BaseURL:    baseURL,
 		AuthToken:  apiKey,
 		AuthHeader: "x-api-key",
+		UserAgent:  version.UserAgent(),
 	})
 	type msg struct {
 		Role    string `json:"role"`
@@ -160,7 +163,7 @@ func ValidateGitHubToken(ctx context.Context, token, baseURL string) error {
 		BaseURL:    baseURL,
 		AuthToken:  "token " + token,
 		AuthHeader: "Authorization",
-		UserAgent:  "chunk-cli",
+		UserAgent:  version.UserAgent(),
 	})
 	_, err := cl.Call(ctx, hc.NewRequest(http.MethodGet, "/user"))
 	if err != nil {

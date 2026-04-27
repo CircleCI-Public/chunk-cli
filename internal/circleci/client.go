@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
 // ErrTokenNotFound indicates no CircleCI token was found in env or config.
@@ -35,6 +36,7 @@ func NewClient(cfg Config) (*Client, error) {
 		BaseURL:    cfg.BaseURL,
 		AuthToken:  cfg.Token,
 		AuthHeader: "Circle-Token",
+		UserAgent:  version.UserAgent(),
 	})
 	return &Client{cl: cl}, nil
 }

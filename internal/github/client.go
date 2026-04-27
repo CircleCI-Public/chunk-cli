@@ -7,6 +7,7 @@ import (
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
 type Config struct {
@@ -37,7 +38,7 @@ func New(cfg Config) (*Client, error) {
 		BaseURL:    cfg.BaseURL,
 		AuthToken:  "token " + cfg.Token,
 		AuthHeader: "Authorization",
-		UserAgent:  "chunk-cli",
+		UserAgent:  version.UserAgent(),
 	})
 	return &Client{http: c, logStatus: cfg.LogStatus}, nil
 }

@@ -7,12 +7,14 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/cmd"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	appversion "github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
 var version = "dev"
 
 func main() {
 	rewriteColonSyntax()
+	appversion.Value = version
 
 	rootCmd := cmd.NewRootCmd(version)
 	if err := rootCmd.Execute(); err != nil {
