@@ -200,7 +200,7 @@ func TestSaveCircleCIToken(t *testing.T) {
 	isolateConfig(t)
 
 	token := randToken("cci-")
-	err := authprompt.SaveCircleCIToken(token)
+	_, err := authprompt.SaveCircleCIToken(token, "", true)
 	assert.NilError(t, err)
 
 	cfg, err := config.Load()
@@ -212,7 +212,7 @@ func TestSaveAnthropicKey(t *testing.T) {
 	isolateConfig(t)
 
 	key := randToken("sk-ant-")
-	err := authprompt.SaveAnthropicKey(key)
+	_, err := authprompt.SaveAnthropicKey(key, "", true)
 	assert.NilError(t, err)
 
 	cfg, err := config.Load()
@@ -224,7 +224,7 @@ func TestSaveGitHubToken(t *testing.T) {
 	isolateConfig(t)
 
 	token := randToken("ghp_")
-	err := authprompt.SaveGitHubToken(token)
+	_, err := authprompt.SaveGitHubToken(token, "", true)
 	assert.NilError(t, err)
 
 	cfg, err := config.Load()
