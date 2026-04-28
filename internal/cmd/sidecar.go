@@ -691,8 +691,8 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 }
 
 func newSidecarSetupCmd() *cobra.Command {
-	var sidecarID, orgID, name, identityFile, snapshotName, dir string
-	var skipSync, skipSnapshot, force bool
+	var sidecarID, orgID, name, identityFile, dir string
+	var skipSync, force bool
 
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -753,10 +753,12 @@ Example:
 			if provider == "" {
 				provider = defaultProvider
 			}
-			var scDisplayName, workspace string
+			var workspace string
 			if sidecarID == "" {
+				var scDisplayName string
 				var resolveErr error
 				sidecarID, scDisplayName, workspace, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, provider, status, streams)
+				_ = scDisplayName
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -779,29 +781,8 @@ Example:
 				return err
 			}
 
-			// Step 6: Create snapshot.
-			if !skipSnapshot {
-				snap, err := sidecarSetupSnapshot(cmd.Context(), client, sidecarID, scDisplayName, snapshotName, status)
-				if err != nil {
-					return err
-				}
-
-				// Step 7: Record snapshot, persist image to config, clear active sidecar.
-				if saveErr := sidecar.SaveActiveSnapshot(sidecar.ActiveSnapshot{ID: snap.ID, Name: snap.Name}); saveErr != nil {
-					streams.ErrPrintf("warning: could not save active snapshot: %v\n", saveErr)
-				}
-				if cfg.Validation == nil {
-					cfg.Validation = &config.ValidationConfig{}
-				}
-				cfg.Validation.SidecarImage = snap.ID
-				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
-					streams.ErrPrintf("warning: could not save snapshot ID to project config: %v\n", saveErr)
-				}
-				if clearErr := sidecar.ClearActive(); clearErr != nil {
-					streams.ErrPrintf("warning: could not clear active sidecar: %v\n", clearErr)
-				}
-				status(iostream.LevelDone, fmt.Sprintf("Snapshot ID saved. Create a new sidecar from this snapshot with: chunk sidecar create --image %s", snap.ID))
-			}
+			streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it:\n")
+			streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n\n")
 
 			return nil
 		},
@@ -812,9 +793,7 @@ Example:
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().StringVar(&snapshotName, "snapshot-name", "", "Snapshot name (defaults to <sidecar-name>-setup)")
 	cmd.Flags().BoolVar(&skipSync, "skip-sync", false, "Skip syncing files to the sidecar")
-	cmd.Flags().BoolVar(&skipSnapshot, "skip-snapshot", false, "Skip creating a snapshot after install")
 	cmd.Flags().BoolVar(&force, "force", false, "Re-detect environment even if cached in .chunk/config.json")
 
 	return cmd
