@@ -13,6 +13,10 @@ func setupTempConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv(EnvXDGConfigHome, dir)
+	t.Setenv(EnvCircleToken, "dummy-circle-token")
+	t.Setenv(EnvCircleCIToken, "dummy-circleci-token")
+	t.Setenv(EnvAnthropicAPIKey, "dummy-anthropic-key")
+	t.Setenv(EnvGitHubToken, "dummy-github-token")
 	return dir
 }
 

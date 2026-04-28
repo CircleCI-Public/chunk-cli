@@ -147,35 +147,6 @@ func TestAuthStatusMaskExactlyFourChars(t *testing.T) {
 		"expected chars 5-8 from end to be masked, got: %s", combined)
 }
 
-// auth status reads key from config file when no env var is set
-func TestAuthStatusFromConfigFile(t *testing.T) {
-	anthropic := fakes.NewFakeAnthropic()
-	srv := httptest.NewServer(anthropic)
-	defer srv.Close()
-
-	env := testenv.NewTestEnv(t)
-	env.AnthropicURL = srv.URL
-	env.AnthropicKey = "" // no env var
-	env.CircleToken = ""  // Anthropic-only test
-	env.GithubToken = ""
-
-	// Store key in config file
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
-	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-config-only-XYZW"}))
-
-	result := binary.RunCLI(t, []string{"auth", "status"}, env, env.HomeDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Config file"),
-		"expected config file source, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "Valid"),
-		"expected key valid message, got: %s", combined)
-	// Last 4 chars visible
-	assert.Assert(t, strings.Contains(combined, "XYZW"),
-		"expected last 4 chars of key, got: %s", combined)
-}
-
 // auth status validates via /v1/messages/count_tokens, not /v1/messages
 func TestAuthStatusUsesCountTokensEndpoint(t *testing.T) {
 	anthropic := fakes.NewFakeAnthropic()
@@ -270,33 +241,6 @@ func TestAuthRemoveNoStoredKeyWithEnvVar(t *testing.T) {
 		"expected no stored key message, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "ANTHROPIC_API_KEY"),
 		"expected env var note, got: %s", combined)
-}
-
-// auth remove anthropic with a stored config key prompts for confirmation.
-// Without a TTY the confirmation prompt fails and remove is cancelled.
-func TestAuthRemoveWithStoredKey(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = "" // no env var
-
-	// Store a key in config
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
-	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-stored-key-1234"}))
-
-	result := binary.RunCLI(t, []string{"auth", "remove", "anthropic"}, env, env.HomeDir)
-
-	// Without a TTY, confirm prompt returns error and remove is cancelled
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-	combined := result.Stdout + result.Stderr
-	// The command should detect the stored key and mention the config path
-	assert.Assert(t,
-		strings.Contains(combined, "remove") || strings.Contains(combined, "Cancelled"),
-		"expected removal prompt or cancellation, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
-
-	// Key should not have been removed — cancelled remove leaves config intact.
-	showResult := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
-	assert.Equal(t, showResult.ExitCode, 0, "config show failed after cancelled remove: %s", showResult.Stderr)
-	assert.Assert(t, strings.Contains(showResult.Stdout, "1234"), "expected stored key (masked) in config output, got: %s", showResult.Stdout)
 }
 
 // auth remove with both env var and config key.

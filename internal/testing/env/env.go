@@ -45,15 +45,11 @@ func (e *TestEnv) Environ() []string {
 		"TERM=dumb",
 	}
 
-	if e.GithubToken != "" {
-		env = append(env, fmt.Sprintf("GITHUB_TOKEN=%s", e.GithubToken))
-	}
-	if e.AnthropicKey != "" {
-		env = append(env, fmt.Sprintf("ANTHROPIC_API_KEY=%s", e.AnthropicKey))
-	}
-	if e.CircleToken != "" {
-		env = append(env, fmt.Sprintf("CIRCLE_TOKEN=%s", e.CircleToken))
-	}
+	// Always set credential env vars so that Resolve() hits the env-var path
+	// and never accesses the system keychain from test subprocesses.
+	env = append(env, fmt.Sprintf("GITHUB_TOKEN=%s", e.GithubToken))
+	env = append(env, fmt.Sprintf("ANTHROPIC_API_KEY=%s", e.AnthropicKey))
+	env = append(env, fmt.Sprintf("CIRCLE_TOKEN=%s", e.CircleToken))
 	if e.GithubURL != "" {
 		env = append(env, fmt.Sprintf("GITHUB_API_URL=%s", e.GithubURL))
 	}
@@ -61,7 +57,7 @@ func (e *TestEnv) Environ() []string {
 		env = append(env, fmt.Sprintf("ANTHROPIC_BASE_URL=%s", e.AnthropicURL))
 	}
 	if e.CircleCIURL != "" {
-		env = append(env, fmt.Sprintf("CIRCLECI_BASE_URL=%s", e.CircleCIURL))
+		env = append(env, fmt.Sprintf("CIRCLE_HOST=%s", e.CircleCIURL))
 	}
 
 	for k, v := range e.Extra {
