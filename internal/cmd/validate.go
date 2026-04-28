@@ -213,7 +213,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 			if err != nil {
 				return err
 			}
-			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, streams)
+			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, statusFn, streams)
 		}
 		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, statusFn, streams)
 	}
@@ -224,7 +224,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 		if err != nil {
 			return err
 		}
-		return validate.RunRemote(ctx, execFn, cfg, name, dest, streams)
+		return validate.RunRemote(ctx, execFn, cfg, name, dest, statusFn, streams)
 	}
 
 	// Per-command remote routing: commands with Remote:true go to the sidecar,
@@ -237,7 +237,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 				if err != nil {
 					return err
 				}
-				return validate.RunRemote(ctx, execFn, cfg, name, dest, streams)
+				return validate.RunRemote(ctx, execFn, cfg, name, dest, statusFn, streams)
 			}
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
 			// Named command is not marked remote; fall through to local execution.
@@ -257,7 +257,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 					streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(remoteCfg.Commands))
 					localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
 				} else {
-					runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, streams)
+					runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, statusFn, streams)
 				}
 			}
 			if len(localCfg.Commands) > 0 {
