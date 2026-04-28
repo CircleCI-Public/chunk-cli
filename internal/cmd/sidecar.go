@@ -755,10 +755,8 @@ Example:
 			}
 			var workspace string
 			if sidecarID == "" {
-				var scDisplayName string
 				var resolveErr error
-				sidecarID, scDisplayName, workspace, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, provider, status, streams)
-				_ = scDisplayName
+				sidecarID, _, workspace, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, provider, status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -957,30 +955,4 @@ func sidecarSetupRunSetup(
 		status(iostream.LevelDone, fmt.Sprintf("Step %q complete", step.Name))
 	}
 	return nil
-}
-
-func sidecarSetupSnapshot(
-	ctx context.Context,
-	client *circleci.Client,
-	sidecarID, scDisplayName, snapshotName string,
-	status iostream.StatusFunc,
-) (*circleci.Snapshot, error) {
-	if snapshotName == "" {
-		if scDisplayName != "" {
-			snapshotName = scDisplayName + "-setup"
-		} else {
-			snapshotName = sidecarID[:min(len(sidecarID), 8)] + "-setup"
-		}
-	}
-	status(iostream.LevelStep, fmt.Sprintf("Creating snapshot %q...", snapshotName))
-	snap, err := client.CreateSnapshot(ctx, sidecarID, snapshotName)
-	if err != nil {
-		return nil, &userError{
-			msg:        "Could not create the snapshot.",
-			suggestion: "Check your network connection and try again.",
-			err:        err,
-		}
-	}
-	status(iostream.LevelDone, fmt.Sprintf("Snapshot created: %s (%s)", snap.Name, snap.ID))
-	return snap, nil
 }
