@@ -116,7 +116,7 @@ chunk sidecar snapshot create|get          Manage sidecar snapshots
 chunk init                                 Initialize project configuration
 chunk validate [name]                      Run quality checks
 chunk skill install|list                   Manage AI agent skills
-chunk task run                             Trigger CI tasks
+chunk task config|run                      Configure and trigger CI tasks
 chunk build-prompt                         Generate review context from PR comments
 chunk completion install|uninstall         Shell completions
 chunk upgrade                              Update CLI
