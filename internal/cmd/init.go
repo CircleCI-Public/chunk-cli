@@ -14,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/settings"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
@@ -136,6 +137,36 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 		}
 	}
 	streams.ErrPrintln(ui.Success("Wrote .claude/settings.example.json (existing settings.json preserved)"))
+	return nil
+}
+
+const postCommitHookContent = "#!/bin/sh\nchunk validate post-commit\n"
+
+// writePostCommitHook writes .git/hooks/post-commit to call chunk validate post-commit.
+// Skips if the file already contains the hook. Warns if the file exists with different content.
+func writePostCommitHook(workDir string, streams iostream.Streams) error {
+	root, err := gitutil.RepoRoot(workDir)
+	if err != nil {
+		return fmt.Errorf("find repo root: %w", err)
+	}
+	hookPath := filepath.Join(root, ".git", "hooks", "post-commit")
+
+	existing, readErr := os.ReadFile(hookPath)
+	if readErr == nil {
+		if strings.Contains(string(existing), "chunk validate post-commit") {
+			return nil
+		}
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping post-commit hook: %s already exists with different content", hookPath)))
+		return nil
+	}
+	if !errors.Is(readErr, fs.ErrNotExist) {
+		return fmt.Errorf("read post-commit hook: %w", readErr)
+	}
+
+	if err := os.WriteFile(hookPath, []byte(postCommitHookContent), 0o755); err != nil {
+		return fmt.Errorf("write post-commit hook: %w", err)
+	}
+	streams.ErrPrintln(ui.Success("Wrote .git/hooks/post-commit"))
 	return nil
 }
 
@@ -282,10 +313,13 @@ hook config files.`,
 				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
 			}
 
-			// Step 3: Write .claude/settings.json
+			// Step 3: Write .claude/settings.json and git hooks
 			if !skipHooks {
 				if err := writeSettings(workDir, cfg.Commands, streams, tui.Confirm); err != nil {
 					return err
+				}
+				if err := writePostCommitHook(workDir, streams); err != nil {
+					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not write post-commit hook: %v", err)))
 				}
 			}
 

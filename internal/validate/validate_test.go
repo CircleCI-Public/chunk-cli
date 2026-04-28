@@ -171,7 +171,8 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
+		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		assert.NilError(t, err)
 		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "Running install"), "got: %s", statusBuf.String())
@@ -182,7 +183,7 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "no validate commands")
 	})
 
@@ -193,7 +194,7 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "test command failed")
 	})
 
@@ -206,7 +207,7 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
 		assert.Assert(t, err != nil, "expected error")
 		assert.Assert(t, !strings.Contains(out.String(), "should-not-run"), "skipped command should not produce output, got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "test: skipped"), "got: %s", statusBuf.String())
@@ -220,7 +221,8 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
+		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		assert.NilError(t, err)
 		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
 	})
 }

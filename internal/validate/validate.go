@@ -39,34 +39,39 @@ func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 }
 
 // RunInline runs an inline command string.
-func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) error {
-	return runCommand(ctx, workDir, name, command, 0, status, streams)
+func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) ([]CommandResult, error) {
+	err := runCommand(ctx, workDir, name, command, 0, status, streams)
+	return []CommandResult{{Name: name, Passed: err == nil}}, err
 }
 
 // RunNamed runs a single named command from config.
-func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
+func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) ([]CommandResult, error) {
 	c := cfg.FindCommand(name)
 	if c == nil {
-		return fmt.Errorf("command %q not configured", name)
+		return nil, fmt.Errorf("command %q not configured", name)
 	}
-	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
+	err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
+	return []CommandResult{{Name: c.Name, Passed: err == nil}}, err
 }
 
 // RunAll runs all configured commands, stopping at the first failure.
-func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
+func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) ([]CommandResult, error) {
 	if !cfg.HasCommands() {
-		return ErrNotConfigured
+		return nil, ErrNotConfigured
 	}
 
+	var results []CommandResult
 	for i, c := range cfg.Commands {
-		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams); err != nil {
+		err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
+		results = append(results, CommandResult{Name: c.Name, Passed: err == nil})
+		if err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
 				status(iostream.LevelWarn, fmt.Sprintf("%s: skipped (%s failed)", cfg.Commands[j].Name, c.Name))
 			}
-			return err
+			return results, err
 		}
 	}
-	return nil
+	return results, nil
 }
 
 // RunDryRun prints commands without executing them.

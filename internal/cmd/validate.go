@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -15,6 +16,8 @@ import (
 	"golang.org/x/term"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
@@ -164,7 +167,13 @@ func newValidateCmd() *cobra.Command {
 				}
 			}
 
-			execErr := runValidate(cmd.Context(), workDir, name, inlineCmd, save, sidecarID, identityFile, workdir, allRemote, cfg, statusFn, streams)
+			results, execErr := runValidate(cmd.Context(), workDir, name, inlineCmd, save, sidecarID, identityFile, workdir, allRemote, cfg, statusFn, streams)
+
+			if results != nil {
+				if treeSHA, treeErr := gitutil.ComputeTreeSHA(workDir); treeErr == nil {
+					_ = validate.SaveResults(treeSHA, results)
+				}
+			}
 
 			if hook != nil {
 				maxAttempts := cfg.StopHookMaxAttempts
@@ -188,6 +197,8 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 
+	cmd.AddCommand(newPostCommitCmd())
+
 	return cmd
 }
 
@@ -195,8 +206,9 @@ func newValidateCmd() *cobra.Command {
 // provided options. It is shared by both direct and hook invocations.
 // allRemote is true when --remote is passed explicitly (all commands run on the
 // sidecar); false means only commands with Remote:true are routed to the sidecar.
-func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID, identityFile, workdir string, allRemote bool, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
-	// --cmd: inline command (always local in per-command mode)
+// Returns nil results for remote/sidecar runs (no result recording on those paths).
+func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID, identityFile, workdir string, allRemote bool, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) ([]validate.CommandResult, error) {
+	// --cmd: inline command
 	if inlineCmd != "" {
 		cmdName := name
 		if cmdName == "" {
@@ -204,16 +216,16 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 		}
 		if save {
 			if err := config.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
-				return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
+				return nil, &userError{msg: "Could not save command to .chunk/config.json.", err: err}
 			}
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 		}
 		if sidecarID != "" && allRemote {
 			execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, statusFn, streams)
+			return nil, validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, statusFn, streams)
 		}
 		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, statusFn, streams)
 	}
@@ -222,9 +234,9 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 	if sidecarID != "" && allRemote {
 		execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return validate.RunRemote(ctx, execFn, cfg, name, dest, statusFn, streams)
+		return nil, validate.RunRemote(ctx, execFn, cfg, name, dest, statusFn, streams)
 	}
 
 	// Per-command remote routing: commands with Remote:true go to the sidecar,
@@ -235,9 +247,9 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 				statusFn(iostream.LevelInfo, fmt.Sprintf("running %s on sidecar %s", name, sidecarID))
 				execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
 				if err != nil {
-					return err
+					return nil, err
 				}
-				return validate.RunRemote(ctx, execFn, cfg, name, dest, statusFn, streams)
+				return nil, validate.RunRemote(ctx, execFn, cfg, name, dest, statusFn, streams)
 			}
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
 			// Named command is not marked remote; fall through to local execution.
@@ -261,11 +273,12 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 				}
 			}
 			if len(localCfg.Commands) > 0 {
-				if err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams)); err != nil {
+				_, localErr := validate.RunAll(ctx, workDir, localCfg, statusFn, streams)
+				if err := mapValidateError(localErr); err != nil {
 					runErr = errors.Join(runErr, err)
 				}
 			}
-			return runErr
+			return nil, runErr
 		}
 	}
 
@@ -273,7 +286,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 	if name != "" {
 		if cfg.FindCommand(name) == nil {
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
-				return &userError{
+				return nil, &userError{
 					msg:        fmt.Sprintf("Command %q is not configured.", name),
 					suggestion: "Add it to .chunk/config.json.",
 					errMsg:     fmt.Sprintf("command %q is not configured", name),
@@ -284,28 +297,99 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 			streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
 			scanner := bufio.NewScanner(os.Stdin)
 			if !scanner.Scan() {
-				return &userError{msg: "No command entered.", errMsg: "no input received"}
+				return nil, &userError{msg: "No command entered.", errMsg: "no input received"}
 			}
 			input := strings.TrimSpace(scanner.Text())
 			if input == "" {
 				streams.ErrPrintln(ui.Dim("No command entered, aborting."))
-				return &userError{msg: "No command entered.", errMsg: "no command entered"}
+				return nil, &userError{msg: "No command entered.", errMsg: "no command entered"}
 			}
 			if err := config.SaveCommand(workDir, name, input); err != nil {
-				return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
+				return nil, &userError{msg: "Could not save command to .chunk/config.json.", err: err}
 			}
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
 			var err error
 			cfg, err = config.LoadProjectConfig(workDir)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
-		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, statusFn, streams))
+		results, err := validate.RunNamed(ctx, workDir, name, cfg, statusFn, streams)
+		return results, mapValidateError(err)
 	}
 
 	// Run all
-	return mapValidateError(validate.RunAll(ctx, workDir, cfg, statusFn, streams))
+	results, err := validate.RunAll(ctx, workDir, cfg, statusFn, streams)
+	return results, mapValidateError(err)
+}
+
+func newPostCommitCmd() *cobra.Command {
+	var projectDir string
+
+	cmd := &cobra.Command{
+		Use:          "post-commit",
+		Short:        "Report validate results as GitHub commit statuses",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			streams := iostream.FromCmd(cmd)
+			ctx := cmd.Context()
+
+			workDir := projectDir
+			if workDir == "" {
+				var err error
+				workDir, err = os.Getwd()
+				if err != nil {
+					return err
+				}
+			}
+
+			treeOut, err := exec.Command("git", "-C", workDir, "rev-parse", "HEAD^{tree}").Output()
+			if err != nil {
+				return fmt.Errorf("resolve HEAD tree: %w", err)
+			}
+			treeSHA := strings.TrimSpace(string(treeOut))
+
+			results, found, err := validate.LoadResults(treeSHA)
+			if err != nil {
+				return fmt.Errorf("load validate results: %w", err)
+			}
+			if !found {
+				return nil
+			}
+
+			commitOut, err := exec.Command("git", "-C", workDir, "rev-parse", "HEAD").Output()
+			if err != nil {
+				return fmt.Errorf("resolve HEAD: %w", err)
+			}
+			commitSHA := strings.TrimSpace(string(commitOut))
+
+			org, repo, err := gitremote.DetectOrgAndRepo(workDir)
+			if err != nil {
+				return fmt.Errorf("detect repo: %w", err)
+			}
+
+			ghClient, err := ensureGitHubClient(ctx, streams, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+
+			for _, r := range results {
+				state := "success"
+				if !r.Passed {
+					state = "failure"
+				}
+				if postErr := ghClient.CreateCommitStatus(ctx, org, repo, commitSHA, state, "chunk/"+r.Name, "chunk validate: "+r.Name); postErr != nil {
+					streams.ErrPrintf("  %s\n", ui.Warning(fmt.Sprintf("could not post status for %s: %v", r.Name, postErr)))
+					continue
+				}
+				streams.ErrPrintf("  %s %s/%s → %s\n", ui.Success("posted"), org, repo, r.Name)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
+	return cmd
 }
 
 // openSSHSession establishes an SSH session to the sidecar and returns an
