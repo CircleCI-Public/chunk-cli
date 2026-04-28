@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/sethvargo/go-envconfig"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 )
 
 // Model constants define the Claude models used for different operations.
@@ -23,6 +25,8 @@ const (
 
 	// SourceConfigFile is the source label used when a value comes from the user config file.
 	SourceConfigFile = "Config file (user config)"
+	// SourceKeychain is the source label used when a value comes from the system keychain.
+	SourceKeychain = "System keychain"
 )
 
 // Chunk-specific environment variable names.
@@ -158,22 +162,28 @@ func Save(cfg UserConfig) error {
 	return os.WriteFile(p, data, filePermission)
 }
 
-// Clear removes a stored config value by key.
+// Clear removes a stored config value by key (both keychain and config file).
 func Clear(key string) error {
 	cfg, err := Load()
 	if err != nil {
 		return err
 	}
+	var keychainKey string
 	switch key {
 	case "anthropicAPIKey":
 		cfg.AnthropicAPIKey = ""
+		keychainKey = keyring.KeyAnthropicAPIKey
 	case "circleCIToken":
 		cfg.CircleCIToken = ""
+		env, _ := LoadEnv(context.Background())
+		keychainKey = keyring.CircleCITokenKey(env.CircleCIBaseURL)
 	case "gitHubToken":
 		cfg.GitHubToken = ""
+		keychainKey = keyring.KeyGitHubToken
 	default:
 		return fmt.Errorf("unknown config key: %s", key)
 	}
+	_ = keyring.Delete(keychainKey) // best-effort
 	return Save(cfg)
 }
 
@@ -200,9 +210,14 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	case env.CircleCIToken != "":
 		rc.CircleCIToken = env.CircleCIToken
 		rc.CircleCITokenSource = "Environment variable (" + EnvCircleCIToken + ")"
-	case cfg.CircleCIToken != "":
-		rc.CircleCIToken = cfg.CircleCIToken
-		rc.CircleCITokenSource = SourceConfigFile
+	default:
+		if val, _ := keyring.Get(keyring.CircleCITokenKey(env.CircleCIBaseURL)); val != "" {
+			rc.CircleCIToken = val
+			rc.CircleCITokenSource = SourceKeychain
+		} else if cfg.CircleCIToken != "" {
+			rc.CircleCIToken = cfg.CircleCIToken
+			rc.CircleCITokenSource = SourceConfigFile
+		}
 	}
 
 	switch {
@@ -212,18 +227,28 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	case env.AnthropicAPIKey != "":
 		rc.AnthropicAPIKey = env.AnthropicAPIKey
 		rc.AnthropicAPIKeySource = "Environment variable"
-	case cfg.AnthropicAPIKey != "":
-		rc.AnthropicAPIKey = cfg.AnthropicAPIKey
-		rc.AnthropicAPIKeySource = SourceConfigFile
+	default:
+		if val, _ := keyring.Get(keyring.KeyAnthropicAPIKey); val != "" {
+			rc.AnthropicAPIKey = val
+			rc.AnthropicAPIKeySource = SourceKeychain
+		} else if cfg.AnthropicAPIKey != "" {
+			rc.AnthropicAPIKey = cfg.AnthropicAPIKey
+			rc.AnthropicAPIKeySource = SourceConfigFile
+		}
 	}
 
 	switch {
 	case env.GitHubToken != "":
 		rc.GitHubToken = env.GitHubToken
 		rc.GitHubTokenSource = "Environment variable (" + EnvGitHubToken + ")"
-	case cfg.GitHubToken != "":
-		rc.GitHubToken = cfg.GitHubToken
-		rc.GitHubTokenSource = SourceConfigFile
+	default:
+		if val, _ := keyring.Get(keyring.KeyGitHubToken); val != "" {
+			rc.GitHubToken = val
+			rc.GitHubTokenSource = SourceKeychain
+		} else if cfg.GitHubToken != "" {
+			rc.GitHubToken = cfg.GitHubToken
+			rc.GitHubTokenSource = SourceConfigFile
+		}
 	}
 
 	switch {
