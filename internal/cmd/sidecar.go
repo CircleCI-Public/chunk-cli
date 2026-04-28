@@ -781,9 +781,26 @@ Example:
 
 			// Step 6: Create snapshot.
 			if !skipSnapshot {
-				if err := sidecarSetupSnapshot(cmd.Context(), client, sidecarID, scDisplayName, snapshotName, status); err != nil {
+				snap, err := sidecarSetupSnapshot(cmd.Context(), client, sidecarID, scDisplayName, snapshotName, status)
+				if err != nil {
 					return err
 				}
+
+				// Step 7: Record snapshot, persist image to config, clear active sidecar.
+				if saveErr := sidecar.SaveActiveSnapshot(sidecar.ActiveSnapshot{ID: snap.ID, Name: snap.Name}); saveErr != nil {
+					streams.ErrPrintf("warning: could not save active snapshot: %v\n", saveErr)
+				}
+				if cfg.Validation == nil {
+					cfg.Validation = &config.ValidationConfig{}
+				}
+				cfg.Validation.SidecarImage = snap.ID
+				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
+					streams.ErrPrintf("warning: could not save snapshot ID to project config: %v\n", saveErr)
+				}
+				if clearErr := sidecar.ClearActive(); clearErr != nil {
+					streams.ErrPrintf("warning: could not clear active sidecar: %v\n", clearErr)
+				}
+				status(iostream.LevelDone, fmt.Sprintf("Snapshot ID saved. Create a new sidecar from this snapshot with: chunk sidecar create --image %s", snap.ID))
 			}
 
 			return nil
@@ -968,7 +985,7 @@ func sidecarSetupSnapshot(
 	client *circleci.Client,
 	sidecarID, scDisplayName, snapshotName string,
 	status iostream.StatusFunc,
-) error {
+) (*circleci.Snapshot, error) {
 	if snapshotName == "" {
 		if scDisplayName != "" {
 			snapshotName = scDisplayName + "-setup"
@@ -979,12 +996,12 @@ func sidecarSetupSnapshot(
 	status(iostream.LevelStep, fmt.Sprintf("Creating snapshot %q...", snapshotName))
 	snap, err := client.CreateSnapshot(ctx, sidecarID, snapshotName)
 	if err != nil {
-		return &userError{
+		return nil, &userError{
 			msg:        "Could not create the snapshot.",
 			suggestion: "Check your network connection and try again.",
 			err:        err,
 		}
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Snapshot created: %s (%s)", snap.Name, snap.ID))
-	return nil
+	return snap, nil
 }
