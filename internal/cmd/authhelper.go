@@ -22,13 +22,21 @@ const (
 	suggestionGitHubAuth    = "Set " + config.EnvGitHubToken + " or run 'chunk auth set github'."
 )
 
-func printSaveHint(streams iostream.Streams, label string) {
-	if cfgPath, err := config.Path(); err == nil {
-		streams.ErrPrintln(ui.Dim(fmt.Sprintf("%s will be saved to user config (%s, mode 0600)", label, cfgPath)))
+func printSaveHint(streams iostream.Streams, label string, insecureStorage bool) {
+	if insecureStorage {
+		if cfgPath, err := config.Path(); err == nil {
+			streams.ErrPrintln(ui.Dim(fmt.Sprintf("%s will be saved to user config (%s, mode 0600)", label, cfgPath)))
+		}
+	} else {
+		streams.ErrPrintln(ui.Dim(label + " will be saved to system keychain"))
 	}
 }
 
-func printSaved(streams iostream.Streams, label string) {
+func printSaved(streams iostream.Streams, label string, savedToKeychain bool) {
+	if savedToKeychain {
+		streams.ErrPrintln(ui.Success(label + " saved to system keychain"))
+		return
+	}
 	msg := label + " saved"
 	if cfgPath, err := config.Path(); err == nil {
 		msg = fmt.Sprintf("%s saved to user config (%s)", label, cfgPath)
@@ -49,7 +57,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("CircleCI token required"))
 	streams.ErrPrintln("Create a token at https://app.circleci.com/settings/user/tokens")
-	printSaveHint(streams, "Token")
+	printSaveHint(streams, "Token", false)
 	streams.ErrPrintln("")
 
 	token, err := prompter("CircleCI Token")
@@ -77,10 +85,11 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 		return nil, fmt.Errorf("invalid CircleCI token: %w", err)
 	}
 
-	if err := authprompt.SaveCircleCIToken(token); err != nil {
+	savedToKeychain, err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, false)
+	if err != nil {
 		return nil, err
 	}
-	printSaved(streams, "CircleCI token")
+	printSaved(streams, "CircleCI token", savedToKeychain)
 	return circleci.NewClient(circleci.Config{
 		Token:   token,
 		BaseURL: rc.CircleCIBaseURL,
@@ -100,7 +109,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Anthropic API key required"))
 	streams.ErrPrintln("Get a key at https://console.anthropic.com/")
-	printSaveHint(streams, "Key")
+	printSaveHint(streams, "Key", false)
 	streams.ErrPrintln("")
 
 	key, err := prompter("API Key")
@@ -136,10 +145,11 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 		return nil, fmt.Errorf("invalid Anthropic API key: %w", err)
 	}
 
-	if err := authprompt.SaveAnthropicKey(key); err != nil {
+	savedToKeychain, err := authprompt.SaveAnthropicKey(key, rc.AnthropicBaseURL, false)
+	if err != nil {
 		return nil, err
 	}
-	printSaved(streams, "Anthropic API key")
+	printSaved(streams, "Anthropic API key", savedToKeychain)
 	return anthropic.New(anthropic.Config{
 		APIKey:  key,
 		BaseURL: rc.AnthropicBaseURL,
@@ -160,7 +170,7 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("GitHub token required"))
 	streams.ErrPrintln("Create a token at https://github.com/settings/tokens")
-	printSaveHint(streams, "Token")
+	printSaveHint(streams, "Token", false)
 	streams.ErrPrintln("")
 
 	token, err := prompter("GitHub Token")
@@ -188,10 +198,11 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 		return nil, fmt.Errorf("invalid GitHub token: %w", err)
 	}
 
-	if err := authprompt.SaveGitHubToken(token); err != nil {
+	savedToKeychain, err := authprompt.SaveGitHubToken(token, rc.GitHubAPIURL, false)
+	if err != nil {
 		return nil, err
 	}
-	printSaved(streams, "GitHub token")
+	printSaved(streams, "GitHub token", savedToKeychain)
 	return github.New(github.Config{
 		Token:     token,
 		BaseURL:   rc.GitHubAPIURL,

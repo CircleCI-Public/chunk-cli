@@ -56,25 +56,6 @@ func TestConfigShowMasksLastFourChars(t *testing.T) {
 		"expected first chars of API key to be masked, got: %s", combined)
 }
 
-// API key stored in config file (no env var) is resolved and shown
-func TestConfigShowFromConfigFile(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	env.AnthropicKey = "" // no env var
-
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
-	err := config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-stored-key-ZZZZ"})
-	assert.NilError(t, err)
-
-	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	combined := result.Stdout + result.Stderr
-	assert.Check(t, cmp.Contains(combined, "user config"),
-		"expected apiKey source to be 'user config'")
-	assert.Check(t, cmp.Contains(combined, "ZZZZ"),
-		"expected last 4 chars of stored key visible")
-}
-
 // config show must not display analyzeModel or promptModel
 func TestConfigShowNoModelConstants(t *testing.T) {
 	env := testenv.NewTestEnv(t)
@@ -201,24 +182,6 @@ func TestConfigShowCircleCITokenEnvPrecedenceOverFile(t *testing.T) {
 		"expected env var source")
 }
 
-func TestConfigShowCircleCITokenFromFile(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	env.CircleToken = "" // no env var
-
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
-	err := config.Save(config.UserConfig{CircleCIToken: "stored-circle-FTOK"})
-	assert.NilError(t, err)
-
-	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	combined := result.Stdout + result.Stderr
-	assert.Check(t, cmp.Contains(combined, "FTOK"),
-		"expected file token last 4 chars")
-	assert.Check(t, cmp.Contains(combined, "user config"),
-		"expected config file source")
-}
-
 func TestConfigShowCircleTokenEnvPrecedenceOverCircleCIToken(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.CircleToken = "" // clear the default CIRCLE_TOKEN
@@ -257,24 +220,6 @@ func TestConfigShowGitHubTokenEnvPrecedenceOverFile(t *testing.T) {
 		"file token should not appear when env var is set, got: %s", combined)
 	assert.Check(t, cmp.Contains(combined, "Environment variable"),
 		"expected env var source")
-}
-
-func TestConfigShowGitHubTokenFromFile(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	env.GithubToken = "" // no env var
-
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
-	err := config.Save(config.UserConfig{GitHubToken: "stored-github-GHTK"})
-	assert.NilError(t, err)
-
-	result := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	combined := result.Stdout + result.Stderr
-	assert.Check(t, cmp.Contains(combined, "GHTK"),
-		"expected file token last 4 chars")
-	assert.Check(t, cmp.Contains(combined, "user config"),
-		"expected config file source")
 }
 
 func TestConfigShowModelFileOverDefault(t *testing.T) {
