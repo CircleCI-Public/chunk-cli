@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
@@ -114,43 +115,65 @@ func ResolveGitHubClient(rc config.ResolvedConfig, logStatus func(string)) (*git
 	})
 }
 
-// SaveCircleCIToken persists a CircleCI token to the config file.
-func SaveCircleCIToken(token string) error {
+// SaveCircleCIToken persists a CircleCI token to the system keychain, or to
+// the config file when insecureStorage is true or the keychain is unavailable.
+// baseURL is used to scope the keychain entry to the CircleCI host.
+// Returns true if saved to the keychain.
+func SaveCircleCIToken(token, baseURL string, insecureStorage bool) (bool, error) {
+	if !insecureStorage {
+		if err := keyring.Set(keyring.CircleCITokenKey(baseURL), token); err == nil {
+			return true, nil
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return false, fmt.Errorf("load config: %w", err)
 	}
 	cfg.CircleCIToken = token
 	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("save token: %w", err)
+		return false, fmt.Errorf("save token: %w", err)
 	}
-	return nil
+	return false, nil
 }
 
-// SaveAnthropicKey persists an Anthropic API key to the config file.
-func SaveAnthropicKey(key string) error {
+// SaveAnthropicKey persists an Anthropic API key to the system keychain, or to
+// the config file when insecureStorage is true or the keychain is unavailable.
+// Returns true if saved to the keychain.
+func SaveAnthropicKey(key string, insecureStorage bool) (bool, error) {
+	if !insecureStorage {
+		if err := keyring.Set(keyring.KeyAnthropicAPIKey, key); err == nil {
+			return true, nil
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return false, fmt.Errorf("load config: %w", err)
 	}
 	cfg.AnthropicAPIKey = key
 	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("save API key: %w", err)
+		return false, fmt.Errorf("save API key: %w", err)
 	}
-	return nil
+	return false, nil
 }
 
-// SaveGitHubToken persists a GitHub token to the config file.
-func SaveGitHubToken(token string) error {
+// SaveGitHubToken persists a GitHub token to the system keychain, or to the
+// config file when insecureStorage is true or the keychain is unavailable.
+// Returns true if saved to the keychain.
+func SaveGitHubToken(token string, insecureStorage bool) (bool, error) {
+	if !insecureStorage {
+		if err := keyring.Set(keyring.KeyGitHubToken, token); err == nil {
+			return true, nil
+		}
+	}
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return false, fmt.Errorf("load config: %w", err)
 	}
 	cfg.GitHubToken = token
 	if err := config.Save(cfg); err != nil {
-		return fmt.Errorf("save token: %w", err)
+		return false, fmt.Errorf("save token: %w", err)
 	}
-	return nil
+	return false, nil
 }
 
 // ValidateGitHubToken calls GET /user to confirm the token is accepted.
