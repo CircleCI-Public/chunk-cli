@@ -70,7 +70,7 @@ func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, 
 		_, _ = fmt.Fprint(io.Err, result.Stderr)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("command exited with status %d", result.ExitCode)
+		return fmt.Errorf("%q exited with status %d", command, result.ExitCode)
 	}
 	return nil
 }

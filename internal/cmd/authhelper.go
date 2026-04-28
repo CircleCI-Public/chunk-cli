@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
@@ -11,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -74,7 +76,10 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
 	if err := authprompt.ValidateCircleCIToken(ctx, token, rc.CircleCIBaseURL); err != nil {
-		return nil, fmt.Errorf("invalid CircleCI token: %w", err)
+		if hc.HasStatusCode(err, http.StatusUnauthorized) {
+			return nil, fmt.Errorf("invalid CircleCI token: %w", err)
+		}
+		return nil, fmt.Errorf("could not validate CircleCI token: %w", err)
 	}
 
 	if err := authprompt.SaveCircleCIToken(token); err != nil {
@@ -133,7 +138,10 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 
 	streams.ErrPrintln(ui.Dim("Validating API key..."))
 	if err := authprompt.ValidateAPIKey(ctx, key, rc.AnthropicBaseURL); err != nil {
-		return nil, fmt.Errorf("invalid Anthropic API key: %w", err)
+		if hc.HasStatusCode(err, http.StatusUnauthorized, http.StatusForbidden) {
+			return nil, fmt.Errorf("invalid Anthropic API key: %w", err)
+		}
+		return nil, fmt.Errorf("could not validate Anthropic API key: %w", err)
 	}
 
 	if err := authprompt.SaveAnthropicKey(key); err != nil {
@@ -185,7 +193,10 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 
 	streams.ErrPrintln(ui.Dim("Validating GitHub token..."))
 	if err := authprompt.ValidateGitHubToken(ctx, token, rc.GitHubAPIURL); err != nil {
-		return nil, fmt.Errorf("invalid GitHub token: %w", err)
+		if hc.HasStatusCode(err, http.StatusUnauthorized) {
+			return nil, fmt.Errorf("invalid GitHub token: %w", err)
+		}
+		return nil, fmt.Errorf("could not validate GitHub token: %w", err)
 	}
 
 	if err := authprompt.SaveGitHubToken(token); err != nil {

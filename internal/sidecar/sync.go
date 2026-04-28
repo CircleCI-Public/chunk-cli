@@ -181,7 +181,7 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 		if detail == "" {
 			detail = "git reset exited with a non-zero status"
 		}
-		return fmt.Errorf("reset failed (exit code: %d): %s", resetResult.ExitCode, detail)
+		return fmt.Errorf("git reset failed (exit code: %d): %s", resetResult.ExitCode, detail)
 	}
 
 	applyCmd := fmt.Sprintf("git -C %s apply", ShellEscape(repoPath))
