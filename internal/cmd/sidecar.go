@@ -394,7 +394,7 @@ func newSidecarSyncCmd() *cobra.Command {
 				if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
 					return &userError{
 						msg:        "Could not resolve remote base.",
-						suggestion: "Push your branch or ensure the repository has a remote configured.",
+						suggestion: "Push your branch to the remote before syncing.",
 						err:        err,
 					}
 				}
@@ -842,7 +842,7 @@ func sidecarSetupSync(
 	if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
 		return &userError{
 			msg:        "Could not resolve remote base.",
-			suggestion: "Push your branch or ensure the repository has a remote configured.",
+			suggestion: "Push your branch to the remote before syncing.",
 			err:        err,
 		}
 	}

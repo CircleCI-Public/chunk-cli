@@ -195,7 +195,7 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec i
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
-			return fmt.Errorf("%s command failed", name)
+			return fmt.Errorf("%s command failed with exit code %d", name, exitErr.ExitCode())
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
