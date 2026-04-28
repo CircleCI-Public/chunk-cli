@@ -85,6 +85,8 @@ func newConfigSetCmd() *cobra.Command {
 						projCfg.Validation = &config.ValidationConfig{}
 					}
 					projCfg.Validation.SidecarImage = value
+				default:
+					return fmt.Errorf("internal: unhandled project config key %q", key)
 				}
 				if err := config.SaveProjectConfig(workDir, projCfg); err != nil {
 					return &userError{msg: "Could not save project configuration.", suggestion: configFilePermHint, err: err}

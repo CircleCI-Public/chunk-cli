@@ -254,13 +254,15 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 			if len(remoteCfg.Commands) > 0 {
 				execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
 				if err != nil {
-					return err
+					streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(remoteCfg.Commands))
+					localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
+				} else {
+					runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, streams)
 				}
-				runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, streams)
 			}
 			if len(localCfg.Commands) > 0 {
-				if err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams)); err != nil && runErr == nil {
-					runErr = err
+				if err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams)); err != nil {
+					runErr = errors.Join(runErr, err)
 				}
 			}
 			return runErr
