@@ -33,10 +33,10 @@ type Sidecar struct {
 }
 
 type Snapshot struct {
-	ID             string `json:"id"`
-	OrganizationID string `json:"organization_id"`
-	Name           string `json:"name"`
-	Tag            string `json:"tag,omitempty"`
+	ID    string `json:"id"`
+	OrgID string `json:"org_id"`
+	Name  string `json:"name"`
+	Tag   string `json:"tag,omitempty"`
 }
 
 type RunResponse struct {
