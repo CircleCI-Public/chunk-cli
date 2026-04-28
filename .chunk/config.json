@@ -36,5 +36,24 @@
   "vcs": {
     "org": "CircleCI-Public",
     "repo": "chunk-cli"
+  },
+  "environment": {
+    "stack": "go",
+    "setup": [
+      {
+        "name": "runtime",
+        "command": "curl -fsSL https://go.dev/dl/go1.26.2.linux-$(dpkg --print-architecture).tar.gz | sudo tar -C /usr/local -xzf -"
+      },
+      {
+        "name": "system",
+        "command": "sudo apt-get update \u0026\u0026 sudo apt-get install -y git --no-install-recommends \u0026\u0026 sudo rm -rf /var/lib/apt/lists/*"
+      },
+      {
+        "name": "install",
+        "command": "go mod download"
+      }
+    ],
+    "image": "cimg/go",
+    "image_version": "1.26.2"
   }
 }

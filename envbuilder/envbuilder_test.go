@@ -741,9 +741,10 @@ func TestDockerfileContent(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "go.mod", "module github.com/foo/bar\n\ngo 1.22\n")
 		env := &Environment{
-			Stack:        stackGo,
-			Install:      "go mod download",
-			Test:         "go test ./...",
+			Stack: stackGo,
+			Setup: []Step{
+				{Name: "install", Command: "go mod download"},
+			},
 			Image:        "cimg/go",
 			ImageVersion: "1.22.3",
 		}
@@ -762,9 +763,10 @@ func TestDockerfileContent(t *testing.T) {
 	t.Run("non-cimg image uses plain COPY", func(t *testing.T) {
 		t.Parallel()
 		env := &Environment{
-			Stack:        stackPython,
-			Install:      "pip install -r requirements.txt",
-			Test:         "pytest",
+			Stack: stackPython,
+			Setup: []Step{
+				{Name: "install", Command: "pip install -r requirements.txt"},
+			},
 			Image:        "python",
 			ImageVersion: "3.12.0",
 		}
@@ -777,10 +779,11 @@ func TestDockerfileContent(t *testing.T) {
 	t.Run("system dep injects RUN", func(t *testing.T) {
 		t.Parallel()
 		env := &Environment{
-			Stack:        stackPython,
-			Install:      "pip install uv",
-			Test:         "uv run pytest",
-			SystemDeps:   []string{"uv"},
+			Stack: stackPython,
+			Setup: []Step{
+				{Name: "system", Command: "pip install uv"},
+				{Name: "install", Command: "uv sync"},
+			},
 			Image:        "cimg/python",
 			ImageVersion: "3.12.0",
 		}
@@ -797,9 +800,10 @@ members = ["crates/mypkg"]
 `)
 		writeFile(t, dir, "crates/mypkg/Cargo.toml", `[package]\nname="mypkg"\n`)
 		env := &Environment{
-			Stack:        stackPython,
-			Install:      "uv sync",
-			Test:         "uv run pytest",
+			Stack: stackPython,
+			Setup: []Step{
+				{Name: "install", Command: "uv sync"},
+			},
 			Image:        "cimg/python",
 			ImageVersion: "3.12.0",
 		}
@@ -811,10 +815,11 @@ members = ["crates/mypkg"]
 	t.Run("sudo apt-get for cimg system deps", func(t *testing.T) {
 		t.Parallel()
 		env := &Environment{
-			Stack:        stackGo,
-			Install:      "go mod download",
-			Test:         "go test ./...",
-			SystemDeps:   []string{"git"},
+			Stack: stackGo,
+			Setup: []Step{
+				{Name: "system", Command: "sudo apt-get update && sudo apt-get install -y git --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"},
+				{Name: "install", Command: "go mod download"},
+			},
 			Image:        "cimg/go",
 			ImageVersion: "1.22.0",
 		}
