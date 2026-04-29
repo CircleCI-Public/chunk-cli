@@ -196,7 +196,7 @@ func installSkillsStep(streams iostream.Streams) {
 	if homeDir == "" {
 		return
 	}
-	for _, r := range skills.InstallSidecar(homeDir) {
+	for _, r := range skills.InstallByName(homeDir, "chunk-sidecar") {
 		if r.Skipped {
 			continue
 		}

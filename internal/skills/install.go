@@ -97,29 +97,40 @@ func Install(homeDir string) []AgentInstallResult {
 	agents := Agents(homeDir)
 	results := make([]AgentInstallResult, 0, len(agents))
 	for _, agent := range agents {
-		results = append(results, installForAgent(agent))
+		results = append(results, installForAgent(agent, All))
 	}
 	return results
 }
 
-// InstallSidecar installs the chunk-sidecar skill for agents whose config dirs exist.
-func InstallSidecar(homeDir string) []AgentInstallResult {
+// InstallByName installs a single skill by name for agents whose config dirs exist.
+// Returns nil if the skill name is not found.
+func InstallByName(homeDir, name string) []AgentInstallResult {
+	var s *Skill
+	for i := range All {
+		if All[i].Name == name {
+			s = &All[i]
+			break
+		}
+	}
+	if s == nil {
+		return nil
+	}
 	agents := Agents(homeDir)
 	results := make([]AgentInstallResult, 0, len(agents))
 	for _, agent := range agents {
-		results = append(results, installSidecarForAgent(agent))
+		results = append(results, installForAgent(agent, []Skill{*s}))
 	}
 	return results
 }
 
-func installForAgent(agent Agent) AgentInstallResult {
+func installForAgent(agent Agent, subset []Skill) AgentInstallResult {
 	if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
 		return AgentInstallResult{Agent: agent.Name, Skipped: true}
 	}
 
 	result := AgentInstallResult{Agent: agent.Name}
 
-	for _, s := range All {
+	for _, s := range subset {
 		state := SkillState(agent.SkillsDir, s)
 		if state == StateCurrent {
 			continue
@@ -144,46 +155,6 @@ func installForAgent(agent Agent) AgentInstallResult {
 		} else {
 			result.Updated = append(result.Updated, s.Name)
 		}
-	}
-	return result
-}
-
-func installSidecarForAgent(agent Agent) AgentInstallResult {
-	if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
-		return AgentInstallResult{Agent: agent.Name, Skipped: true}
-	}
-
-	result := AgentInstallResult{Agent: agent.Name}
-
-	for _, s := range All {
-		if s.Name != "chunk-sidecar" {
-			continue
-		}
-		state := SkillState(agent.SkillsDir, s)
-		if state == StateCurrent {
-			break
-		}
-
-		data, err := skills.Content.ReadFile(filepath.Join(s.Name, "SKILL.md"))
-		if err != nil {
-			break
-		}
-
-		dir := filepath.Join(agent.SkillsDir, s.Name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			break
-		}
-		dest := filepath.Join(dir, "SKILL.md")
-		if err := os.WriteFile(dest, data, 0o644); err != nil {
-			break
-		}
-
-		if state == StateMissing {
-			result.Installed = append(result.Installed, s.Name)
-		} else {
-			result.Updated = append(result.Updated, s.Name)
-		}
-		break
 	}
 	return result
 }
