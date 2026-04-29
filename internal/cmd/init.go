@@ -201,10 +201,10 @@ func installSkillsStep(streams iostream.Streams) {
 			continue
 		}
 		for _, name := range r.Installed {
-			streams.ErrPrintln(ui.Dim(fmt.Sprintf("  installed %s for %s", name, r.Agent)))
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Installed %s skill for %s", name, r.Agent)))
 		}
 		for _, name := range r.Updated {
-			streams.ErrPrintln(ui.Dim(fmt.Sprintf("  updated %s for %s", name, r.Agent)))
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Updated %s skill for %s", name, r.Agent)))
 		}
 	}
 }
