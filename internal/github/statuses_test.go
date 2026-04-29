@@ -8,8 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/github"
 )
 
 func TestCreateCommitStatus(t *testing.T) {
