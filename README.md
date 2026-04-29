@@ -35,6 +35,58 @@ chunk validate tests        # specific command
 chunk validate --list       # list configured commands
 ```
 
+### Sidecar Environments
+
+Create and work in cloud sidecar environments. Sidecars are available to CircleCI customers on Performance and Scale plans.
+
+```bash
+# Authenticate
+chunk auth set circleci
+
+# Create a sidecar (sets it as active automatically)
+chunk sidecar create --name my-sidecar
+
+# Sync local files and validate remotely
+chunk sidecar sync
+chunk validate --remote
+
+# SSH in interactively or run a one-off command
+chunk sidecar ssh
+chunk sidecar ssh -- make test
+```
+
+#### Active sidecar
+
+Most sidecar commands operate on the *active* sidecar so you don't have to pass `--sidecar-id` every time:
+
+```bash
+chunk sidecar use <id>      # set active sidecar
+chunk sidecar current       # show which sidecar is active
+chunk sidecar forget        # clear the active sidecar
+```
+
+#### Environment Detection and Setup
+
+Auto-detect your tech stack, install dependencies, and snapshot the result so future sidecars boot fast:
+
+```bash
+# Detect environment, run install steps, and create a snapshot
+chunk sidecar setup --name my-sidecar
+
+# Or build a local Docker test image from the detected environment
+chunk sidecar env | chunk sidecar build --dir .
+```
+
+#### Snapshots
+
+Capture a configured environment so future sidecars start from a known-good state:
+
+```bash
+chunk sidecar snapshot create --name checkpoint
+# Later:
+chunk sidecar create --name new-sidecar --image <snapshot-id>
+```
+
 ### Context Generation
 
 Generate a review context prompt from your org's GitHub PR comments:
@@ -52,64 +104,22 @@ chunk build-prompt --org myorg --repos api,backend --top 10
 chunk skill install
 ```
 
-### Sidecar Environments (private preview, email ai-feedback@circleci.com)
-
-Create and work in cloud sidecar environments:
-
-```bash
-# Authenticate
-chunk auth set circleci
-
-# Create a sidecar
-chunk sidecar create --name my-sidecar --image ubuntu:22.04
-
-# Sync local files and SSH in
-chunk sidecar sync --sidecar-id <id>
-chunk sidecar ssh --sidecar-id <id>
-
-# Or run a command directly
-chunk sidecar ssh --sidecar-id <id> -- make test
-```
-
-#### Environment Detection and Setup
-
-Auto-detect your tech stack and set up a sidecar with the right dependencies:
-
-```bash
-# Detect environment — saves to .chunk/config.json
-chunk sidecar env --dir .
-
-# Set up a sidecar from the detected environment
-chunk sidecar env setup --name my-sidecar
-
-# Or build a local Docker test image
-chunk sidecar env | chunk sidecar build --dir .
-```
-
-#### Templates
-
-Create reusable sidecar templates from container images:
-
-```bash
-chunk sidecar template create --image ubuntu:22.04 --tag my-template
-chunk sidecar create --name my-sidecar --template-id <template-id>
-```
-
 ## Commands
 
 ```
-chunk auth set|status|remove         Authentication
-chunk sidecar list|create|exec|ssh   Manage cloud sidecar environments
-chunk sidecar sync|env|build         Sync files, detect env, build images
-chunk sidecar env setup              Create sidecar and run setup steps
-chunk sidecar template create        Create sidecar templates
-chunk init                           Initialize project configuration
-chunk validate [name]                Run quality checks
-chunk skill install|list             Manage AI agent skills
-chunk task config|run                Configure and trigger CI tasks
-chunk build-prompt                   Generate review context from PR comments
-chunk completion install|uninstall   Shell completions
-chunk upgrade                        Update CLI
+chunk auth set|status|remove               Authentication
+chunk sidecar list|create|exec|ssh         Manage cloud sidecar environments
+chunk sidecar sync|env|build               Sync files, detect env, build images
+chunk sidecar use|current|forget           Manage active sidecar
+chunk sidecar setup                        Detect env, install deps, snapshot
+chunk sidecar snapshot create|get          Manage sidecar snapshots
+chunk init                                 Initialize project configuration
+chunk validate [name]                      Run quality checks
+chunk skill install|list                   Manage AI agent skills
+chunk task config|run                      Configure and trigger CI tasks
+chunk build-prompt                         Generate review context from PR comments
+chunk completion install|uninstall         Shell completions
+chunk upgrade                              Update CLI
 ```
 
 See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
