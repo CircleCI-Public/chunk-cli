@@ -39,14 +39,12 @@ Run `chunk sidecar current`. Three cases:
 
 ## Step 3: One-time setup
 
-Skip this step unless the user explicitly asks to "prep the sidecar", "snapshot it", "set up the environment", or similar. This is a one-time flow that produces a reusable snapshot so future sessions boot fast.
+Skip this step unless the user explicitly asks to "prep the sidecar", "set up the environment", or similar. This is a one-time flow that produces a reusable snapshot so future sessions boot fast.
 
-1. `chunk sidecar env` — detects the tech stack and emits a JSON environment spec.
-2. Review the spec with the user.
-3. `chunk sidecar env | chunk sidecar build --tag <image-tag>` — writes `Dockerfile.test` and builds an image.
-4. `chunk sidecar create --name <name> --image <image-tag>` — creates a sidecar from that image.
-5. Install any extra deps over SSH: `chunk sidecar ssh -- bash -c "<install commands>"`.
-6. `chunk sidecar snapshot create --name <checkpoint-name>` — captures the configured state and returns a snapshot ID.
+1. `chunk sidecar setup --dir . --name <name>` — detects the stack, syncs files, and runs install steps on the sidecar. Prompts to create a sidecar if none is active.
+2. Verify the sidecar is working correctly by running a validate command against it directly: `chunk validate --remote --sidecar-id <sidecar-id>`. Use the exact sidecar ID from step 1.
+3. Once confirmed working, snapshot the sidecar: `chunk sidecar snapshot create --name <snapshot-name>`. This captures the configured state and returns a snapshot ID. **Always snapshot after confirming the sidecar is working — do not skip this step.**
+4. Record the snapshot ID in `.chunk/config.json` under `validation.sidecarImage` so future sidecars boot from it: `chunk config set validation.sidecarImage <snapshot-id>`.
 
 Future sessions boot from the snapshot: `chunk sidecar create --name <new-name> --image <snapshot-id>`.
 
