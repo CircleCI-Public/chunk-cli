@@ -168,12 +168,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			results, execErr := runValidate(cmd.Context(), workDir, name, inlineCmd, save, sidecarID, identityFile, workdir, allRemote, cfg, statusFn, streams)
-
-			if results != nil {
-				if treeSHA, treeErr := gitutil.ComputeTreeSHA(workDir); treeErr == nil {
-					_ = validate.SaveResults(treeSHA, results)
-				}
-			}
+			saveValidateResults(workDir, results)
 
 			if hook != nil {
 				maxAttempts := cfg.StopHookMaxAttempts
@@ -341,6 +336,11 @@ func newPostCommitCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+			}
+
+			projCfg, cfgErr := config.LoadProjectConfig(workDir)
+			if cfgErr != nil || projCfg.Validation == nil || !projCfg.Validation.CommitStatus {
+				return nil
 			}
 
 			treeOut, err := exec.Command("git", "-C", workDir, "rev-parse", "HEAD^{tree}").Output()
@@ -522,6 +522,15 @@ func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, ima
 	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sc.Name, sc.ID)))
 	*sidecarID = sc.ID
 	return nil
+}
+
+func saveValidateResults(workDir string, results []validate.CommandResult) {
+	if len(results) == 0 {
+		return
+	}
+	if treeSHA, err := gitutil.ComputeTreeSHA(workDir); err == nil {
+		_ = validate.SaveResults(treeSHA, results)
+	}
 }
 
 func mapValidateError(err error) error {
