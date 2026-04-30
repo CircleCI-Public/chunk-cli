@@ -37,7 +37,7 @@ chunk validate --list       # list configured commands
 
 ### Sidecar Environments
 
-Create and work in cloud sidecar environments. Sidecars are available to CircleCI customers on Performance and Scale plans.
+Create and work in cloud sidecar environments. Sidecars are available to CircleCI customers on a paid plan. Share feedback in the [CircleCI Discord](https://discord.gg/circleci).
 
 ```bash
 # Authenticate
