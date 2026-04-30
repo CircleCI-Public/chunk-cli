@@ -60,6 +60,7 @@ type ProjectConfig struct {
 	OrgID               string                `json:"orgID,omitempty"`
 	StopHookMaxAttempts int                   `json:"stopHookMaxAttempts,omitempty"`
 	Environment         *envspec.Environment  `json:"environment,omitempty"`
+	BundleSync          bool                  `json:"bundleSync,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.

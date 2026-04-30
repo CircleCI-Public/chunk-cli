@@ -379,6 +379,7 @@ func newSidecarSSHCmd() *cobra.Command {
 
 func newSidecarSyncCmd() *cobra.Command {
 	var sidecarID, identityFile, workdir string
+	var bundle bool
 
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -393,7 +394,24 @@ func newSidecarSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, newStatusFunc(io))
+			cwd, cwdErr := os.Getwd()
+			if cwdErr != nil {
+				return fmt.Errorf("sync: %w", cwdErr)
+			}
+			useBundle := bundle
+			if !useBundle {
+				cfg, cfgErr := config.LoadProjectConfig(cwd)
+				if cfgErr != nil {
+					io.ErrPrintf("warning: could not load project config: %v\n", cfgErr)
+				} else {
+					useBundle = cfg.BundleSync
+				}
+			}
+			if useBundle {
+				err = sidecar.BundleSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, newStatusFunc(io))
+			} else {
+				err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, newStatusFunc(io))
+			}
 			if err != nil {
 				if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
 					return &userError{
@@ -420,6 +438,7 @@ func newSidecarSyncCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (auto-detected as /workspace/<repo> when omitted)")
+	cmd.Flags().BoolVar(&bundle, "bundle", false, "Sync via git bundle instead of patch (no GitHub access required)")
 
 	return cmd
 }
@@ -773,7 +792,11 @@ Example:
 
 			// Step 4: Sync files to sidecar.
 			if !skipSync {
-				if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, status); err != nil {
+				useBundle := false
+				if cfg, cfgErr := config.LoadProjectConfig(dir); cfgErr == nil {
+					useBundle = cfg.BundleSync
+				}
+				if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, useBundle, dir, status); err != nil {
 					return err
 				}
 			}
@@ -868,10 +891,17 @@ func sidecarSetupSync(
 	ctx context.Context,
 	client *circleci.Client,
 	sidecarID, identityFile, authSock string,
+	useBundle bool,
+	cwd string,
 	status iostream.StatusFunc,
 ) error {
 	status(iostream.LevelStep, "Syncing files to sidecar...")
-	err := sidecar.Sync(ctx, client, sidecarID, identityFile, authSock, "", status)
+	var err error
+	if useBundle {
+		err = sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, "", cwd, status)
+	} else {
+		err = sidecar.Sync(ctx, client, sidecarID, identityFile, authSock, "", status)
+	}
 	if err == nil {
 		return nil
 	}
