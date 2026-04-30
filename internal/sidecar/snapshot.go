@@ -24,10 +24,15 @@ func snapshotFileName() string {
 // LoadActiveSnapshot reads the active snapshot for the current project from XDG_DATA_HOME.
 // Returns nil if not found.
 func LoadActiveSnapshot() (*ActiveSnapshot, error) {
-	dir, err := saveDir()
+	dir, err := StateDir()
 	if err != nil {
 		return nil, err
 	}
+	return LoadSnapshotFrom(dir)
+}
+
+// LoadSnapshotFrom reads the active snapshot from dir.
+func LoadSnapshotFrom(dir string) (*ActiveSnapshot, error) {
 	path, err := findSnapshotFile(dir)
 	if err != nil {
 		return nil, err
@@ -48,10 +53,15 @@ func LoadActiveSnapshot() (*ActiveSnapshot, error) {
 
 // SaveActiveSnapshot writes the active snapshot to XDG_DATA_HOME for the current project.
 func SaveActiveSnapshot(a ActiveSnapshot) error {
-	dir, err := saveDir()
+	dir, err := StateDir()
 	if err != nil {
 		return err
 	}
+	return SaveSnapshotTo(dir, a)
+}
+
+// SaveSnapshotTo writes the active snapshot to dir.
+func SaveSnapshotTo(dir string, a ActiveSnapshot) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -64,10 +74,15 @@ func SaveActiveSnapshot(a ActiveSnapshot) error {
 
 // ClearActiveSnapshot removes the active snapshot state file.
 func ClearActiveSnapshot() error {
-	dir, err := saveDir()
+	dir, err := StateDir()
 	if err != nil {
 		return err
 	}
+	return ClearSnapshotFrom(dir)
+}
+
+// ClearSnapshotFrom removes the active snapshot state file in dir.
+func ClearSnapshotFrom(dir string) error {
 	path, err := findSnapshotFile(dir)
 	if err != nil {
 		return err

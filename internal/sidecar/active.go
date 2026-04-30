@@ -26,6 +26,15 @@ func sidecarFileName() string {
 	return "sidecar.json"
 }
 
+// StateDir returns the XDG_DATA_HOME directory for the current project.
+// Callers performing multiple sidecar or snapshot operations can resolve once
+// and pass the result to the dir-accepting variants (LoadActiveFrom, SaveActiveTo,
+// ClearActiveFrom, LoadSnapshotFrom, SaveSnapshotTo, ClearSnapshotFrom) to avoid
+// repeated filesystem walks.
+func StateDir() (string, error) {
+	return saveDir()
+}
+
 // LoadActive reads the active sidecar for the current project from XDG_DATA_HOME.
 // Returns nil if not found.
 func LoadActive() (*ActiveSidecar, error) {
@@ -33,6 +42,11 @@ func LoadActive() (*ActiveSidecar, error) {
 	if err != nil {
 		return nil, err
 	}
+	return LoadActiveFrom(dir)
+}
+
+// LoadActiveFrom reads the active sidecar from dir.
+func LoadActiveFrom(dir string) (*ActiveSidecar, error) {
 	path, err := findSidecarFile(dir)
 	if err != nil {
 		return nil, err
@@ -57,6 +71,11 @@ func SaveActive(a ActiveSidecar) error {
 	if err != nil {
 		return err
 	}
+	return SaveActiveTo(dir, a)
+}
+
+// SaveActiveTo writes the active sidecar to dir.
+func SaveActiveTo(dir string, a ActiveSidecar) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -109,6 +128,11 @@ func ClearActive() error {
 	if err != nil {
 		return err
 	}
+	return ClearActiveFrom(dir)
+}
+
+// ClearActiveFrom removes the active sidecar state file in dir.
+func ClearActiveFrom(dir string) error {
 	path, err := findSidecarFile(dir)
 	if err != nil {
 		return err

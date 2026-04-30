@@ -20,14 +20,15 @@ func setupTempConfig(t *testing.T) string {
 // --- ProjectDataDir ---
 
 func TestProjectDataDir_RootedUnderXDG(t *testing.T) {
-	t.Setenv(EnvXDGDataHome, "/tmp/xdg-data")
+	xdgHome := t.TempDir()
+	t.Setenv(EnvXDGDataHome, xdgHome)
 	d, err := ProjectDataDir("/home/user/myproject")
 	assert.NilError(t, err)
-	assert.Assert(t, strings.HasPrefix(d, "/tmp/xdg-data/chunk/"), "expected path under XDG data dir, got %s", d)
+	assert.Assert(t, strings.HasPrefix(d, filepath.Join(xdgHome, "chunk")), "expected path under XDG data dir, got %s", d)
 }
 
 func TestProjectDataDir_Deterministic(t *testing.T) {
-	t.Setenv(EnvXDGDataHome, "/tmp/xdg-data")
+	t.Setenv(EnvXDGDataHome, t.TempDir())
 	d1, err := ProjectDataDir("/home/user/myproject")
 	assert.NilError(t, err)
 	d2, err := ProjectDataDir("/home/user/myproject")
@@ -37,7 +38,7 @@ func TestProjectDataDir_Deterministic(t *testing.T) {
 
 func TestProjectDataDir_CollisionFree(t *testing.T) {
 	// /foo/bar and /foo-bar would produce the same key ("foo-bar") without hashing.
-	t.Setenv(EnvXDGDataHome, "/tmp/xdg-data")
+	t.Setenv(EnvXDGDataHome, t.TempDir())
 	dSlash, err := ProjectDataDir("/foo/bar")
 	assert.NilError(t, err)
 	dHyphen, err := ProjectDataDir("/foo-bar")

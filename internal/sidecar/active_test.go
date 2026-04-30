@@ -31,6 +31,18 @@ func TestSaveActiveWritesToXDGDataPath(t *testing.T) {
 	assert.NilError(t, err)
 }
 
+func TestStatOrEmptyPermissionsError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping: root bypasses file permission checks")
+	}
+	dir := t.TempDir()
+	assert.NilError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	_, err := statOrEmpty(filepath.Join(dir, "sidecar.json"))
+	assert.Assert(t, err != nil, "expected error for inaccessible directory, got nil")
+}
+
 func setupXDGData(t *testing.T) {
 	t.Helper()
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
