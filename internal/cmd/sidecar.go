@@ -350,7 +350,11 @@ func newSidecarSSHCmd() *cobra.Command {
 				return &userError{msg: fmt.Sprintf("resolve secrets: %s", err), err: err}
 			}
 			envVars = resolved
-			err = sidecar.SSH(cmd.Context(), client, sidecarID, identityFile, authSock, args, envVars, io)
+			var stdin *os.File
+			if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
+				stdin = os.Stdin
+			}
+			err = sidecar.SSH(cmd.Context(), client, sidecarID, identityFile, authSock, args, envVars, io, stdin)
 			if err != nil {
 				if err := sshSessionError(err); err != nil {
 					return err
