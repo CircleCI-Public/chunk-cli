@@ -192,6 +192,26 @@ run the tests on the sidecar
 
 The skill handles the full loop: auth checks → find active sidecar → sync → validate → interpret failures → fix locally → repeat.
 
+### Syncing without pushing to GitHub
+
+By default `chunk sidecar sync` requires the branch to be pushed so the sidecar can clone it. If you want to sync unpushed commits, use `--bundle`:
+
+```bash
+chunk sidecar sync --bundle
+```
+
+The first sync sends a full git bundle of HEAD. Subsequent syncs send only the new commits since the last sync (`<lastRef>..HEAD`), so incremental syncs are fast. Uncommitted working-tree changes are applied on top as a patch after each bundle transfer.
+
+To avoid passing `--bundle` every time, set it in `.chunk/config.json`:
+
+```json
+{
+  "bundleSync": true
+}
+```
+
+`chunk sidecar setup` reads the same setting, so the initial environment setup also uses bundle sync when it is enabled.
+
 ### Environment setup
 
 Auto-detect your tech stack and build a sidecar image for it:
