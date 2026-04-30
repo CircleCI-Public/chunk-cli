@@ -2,7 +2,6 @@ package sidecar
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 
@@ -22,9 +21,14 @@ func snapshotFileName() string {
 	return "snapshot.json"
 }
 
-// LoadActiveSnapshot walks up from cwd looking for .chunk/snapshot.json. Returns nil if not found.
+// LoadActiveSnapshot reads the active snapshot for the current project from XDG_DATA_HOME.
+// Returns nil if not found.
 func LoadActiveSnapshot() (*ActiveSnapshot, error) {
-	path, err := findSnapshotFile()
+	dir, err := saveDir()
+	if err != nil {
+		return nil, err
+	}
+	path, err := findSnapshotFile(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +46,7 @@ func LoadActiveSnapshot() (*ActiveSnapshot, error) {
 	return &a, nil
 }
 
-// SaveActiveSnapshot writes .chunk/snapshot.json into the same directory as the active sidecar file.
+// SaveActiveSnapshot writes the active snapshot to XDG_DATA_HOME for the current project.
 func SaveActiveSnapshot(a ActiveSnapshot) error {
 	dir, err := saveDir()
 	if err != nil {
@@ -58,9 +62,13 @@ func SaveActiveSnapshot(a ActiveSnapshot) error {
 	return os.WriteFile(filepath.Join(dir, snapshotFileName()), data, 0o644)
 }
 
-// ClearActiveSnapshot removes the .chunk/snapshot.json file found by walking up from cwd.
+// ClearActiveSnapshot removes the active snapshot state file.
 func ClearActiveSnapshot() error {
-	path, err := findSnapshotFile()
+	dir, err := saveDir()
+	if err != nil {
+		return err
+	}
+	path, err := findSnapshotFile(dir)
 	if err != nil {
 		return err
 	}
@@ -70,28 +78,7 @@ func ClearActiveSnapshot() error {
 	return os.Remove(path)
 }
 
-// findSnapshotFile walks up from cwd looking for .chunk/snapshot.json, returning the path or "".
-// Bounded by the git root, same as findSidecarFile.
-func findSnapshotFile() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	gitRoot, _ := findGitRoot()
-	for {
-		candidate := filepath.Join(dir, ".chunk", snapshotFileName())
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		if gitRoot == "" || dir == gitRoot {
-			return "", nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", nil
-		}
-		dir = parent
-	}
+// findSnapshotFile returns the snapshot state file path in dir, or "" if it doesn't exist.
+func findSnapshotFile(dir string) (string, error) {
+	return statOrEmpty(filepath.Join(dir, snapshotFileName()))
 }

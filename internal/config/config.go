@@ -49,6 +49,7 @@ const (
 	EnvNoColor       = "NO_COLOR"
 	EnvXDGConfigHome = "XDG_CONFIG_HOME"
 	EnvXDGStateHome  = "XDG_STATE_HOME"
+	EnvXDGDataHome   = "XDG_DATA_HOME"
 	EnvClaudeSession = "CLAUDE_SESSION_ID"
 )
 
@@ -72,6 +73,7 @@ type EnvVars struct {
 	NoColor          string `env:"NO_COLOR"`
 	XDGConfigHome    string `env:"XDG_CONFIG_HOME"`
 	XDGStateHome     string `env:"XDG_STATE_HOME"`
+	XDGDataHome      string `env:"XDG_DATA_HOME"`
 	ClaudeSession    string `env:"CLAUDE_SESSION_ID"`
 }
 

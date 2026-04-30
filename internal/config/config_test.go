@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -14,6 +15,34 @@ func setupTempConfig(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv(EnvXDGConfigHome, dir)
 	return dir
+}
+
+// --- ProjectDataDir ---
+
+func TestProjectDataDir_RootedUnderXDG(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, "/tmp/xdg-data")
+	d, err := ProjectDataDir("/home/user/myproject")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.HasPrefix(d, "/tmp/xdg-data/chunk/"), "expected path under XDG data dir, got %s", d)
+}
+
+func TestProjectDataDir_Deterministic(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, "/tmp/xdg-data")
+	d1, err := ProjectDataDir("/home/user/myproject")
+	assert.NilError(t, err)
+	d2, err := ProjectDataDir("/home/user/myproject")
+	assert.NilError(t, err)
+	assert.Equal(t, d1, d2)
+}
+
+func TestProjectDataDir_CollisionFree(t *testing.T) {
+	// /foo/bar and /foo-bar would produce the same key ("foo-bar") without hashing.
+	t.Setenv(EnvXDGDataHome, "/tmp/xdg-data")
+	dSlash, err := ProjectDataDir("/foo/bar")
+	assert.NilError(t, err)
+	dHyphen, err := ProjectDataDir("/foo-bar")
+	assert.NilError(t, err)
+	assert.Assert(t, dSlash != dHyphen, "paths that differ only by separator vs hyphen must not collide: %s", dSlash)
 }
 
 // --- Dir / Path ---

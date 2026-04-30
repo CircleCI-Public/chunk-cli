@@ -25,7 +25,7 @@ chunk-cli/
     ├── anthropic/             # Anthropic Messages API client
     ├── buildprompt/           # Three-step pipeline: discover → analyze → generate
     ├── circleci/              # CircleCI REST API client
-    ├── config/                # User config (~/.chunk/config.json)
+    ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers
@@ -154,7 +154,7 @@ Not all values support all layers — for example, CircleCI and GitHub
 tokens have no flag, so their chain is `env var > config file`. The
 Anthropic API key and model support the full chain.
 
-User config lives at `~/.chunk/config.json`:
+User config lives at `$XDG_CONFIG_HOME/chunk/config.json` (default: `~/.config/chunk/config.json`):
 
 ```json
 {
@@ -180,6 +180,8 @@ in `config.Resolve` and makes clients testable.
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
 | `CLAUDE_PROJECT_DIR` | init | IDE-provided project directory |
+| `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
+| `XDG_DATA_HOME` | sidecar | Per-project state directory (default: `~/.local/share`) |
 
 ## Pre-Commit Hooks
 
