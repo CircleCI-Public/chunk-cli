@@ -53,7 +53,7 @@ This step produces a reusable snapshot so future sessions boot fast. Follow it w
 
 1. `chunk sidecar setup --dir . --name <name>` — detects the stack, syncs files, and runs install steps on the sidecar.
 2. Verify the sidecar is working correctly: `chunk validate`. This uses per-command routing — commands marked `remote: true` run on the sidecar, the rest run locally. If any command fails with a missing binary or dependency, see Troubleshooting below, then re-run `chunk validate` until it passes.
-3. Snapshot the working sidecar: `chunk sidecar snapshot create --name <snapshot-name>`. This captures the configured state and returns a snapshot ID. **Always snapshot after confirming the sidecar is working — do not skip this step.**
+3. Snapshot the working sidecar: `chunk sidecar snapshot create --name <snapshot-name>`. This captures the configured state and returns a snapshot ID. **Always snapshot after confirming the sidecar is working — do not skip this step.** Snapshot names are limited to 255 characters; the CLI will reject longer names before making the API call.
 4. Record the snapshot ID in `.chunk/config.json`: `chunk config set validation.sidecarImage <snapshot-id>`.
 5. Create a **new** sidecar from the snapshot and set it as active — this is the clean environment you will use going forward:
    ```

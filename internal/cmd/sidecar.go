@@ -640,6 +640,9 @@ func newSidecarSnapshotCreateCmd() *cobra.Command {
 		Short: "Create a snapshot of a sidecar",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
+			if len(name) > 255 {
+				return fmt.Errorf("snapshot name must be 255 characters or fewer (got %d)", len(name))
+			}
 			if err := resolveSidecarID(&sidecarID); err != nil {
 				return err
 			}
@@ -657,7 +660,7 @@ func newSidecarSnapshotCreateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
-	cmd.Flags().StringVar(&name, "name", "", "Snapshot name")
+	cmd.Flags().StringVar(&name, "name", "", "Snapshot name (max 255 characters)")
 	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
