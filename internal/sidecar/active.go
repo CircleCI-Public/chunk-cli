@@ -11,9 +11,10 @@ import (
 
 // ActiveSidecar holds the currently active sidecar for a project.
 type ActiveSidecar struct {
-	SidecarID string `json:"sidecar_id"`
-	Name      string `json:"name,omitempty"`
-	Workspace string `json:"workspace,omitempty"`
+	SidecarID     string `json:"sidecar_id"`
+	Name          string `json:"name,omitempty"`
+	Workspace     string `json:"workspace,omitempty"`
+	LastSyncedRef string `json:"last_synced_ref,omitempty"`
 }
 
 // sidecarFileName returns the name of the sidecar state file. When
@@ -48,7 +49,8 @@ func LoadActive() (*ActiveSidecar, error) {
 
 // SaveActive writes .chunk/sidecar.json. If the file already exists in a
 // parent directory it is updated in place; otherwise the file is created in
-// cwd's .chunk/ directory.
+// cwd's .chunk/ directory. The write is atomic (temp file + rename) to prevent
+// concurrent syncs from corrupting the state file.
 func SaveActive(a ActiveSidecar) error {
 	dir, err := saveDir()
 	if err != nil {
@@ -61,7 +63,26 @@ func SaveActive(a ActiveSidecar) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, sidecarFileName()), data, 0o644)
+	dest := filepath.Join(dir, sidecarFileName())
+	tmp, err := os.CreateTemp(dir, ".sidecar-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // saveDir returns the .chunk directory to write into. It prefers an existing

@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -97,6 +98,148 @@ func Sync(ctx context.Context,
 	}
 
 	status(iostream.LevelDone, "Synced")
+	return nil
+}
+
+// BundleSync synchronises local commits and working-tree changes to a sidecar
+// using git bundle, without requiring the branch to be pushed to GitHub.
+//
+// On first sync (no LastSyncedRef) a full bundle of HEAD is sent. On subsequent
+// syncs only commits since the last synced ref are bundled (incremental). In
+// both cases any uncommitted working-tree changes are applied on top as a patch.
+func BundleSync(ctx context.Context,
+	client *circleci.Client, sidecarID, identityFile, authSock, workdir, cwd string, status iostream.StatusFunc) error {
+
+	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
+	if err != nil {
+		return err
+	}
+
+	_, repo, err := gitremote.DetectOrgAndRepo(cwd)
+	if err != nil {
+		return fmt.Errorf("bundle sync: %w", err)
+	}
+
+	repoPath := resolveWorkspace(workdir, repo)
+	if err := persistWorkspace(repoPath); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
+	}
+
+	active, err := LoadActive()
+	if err != nil {
+		return fmt.Errorf("bundle sync: load active sidecar: %w", err)
+	}
+	if active == nil {
+		active = &ActiveSidecar{SidecarID: sidecarID}
+	}
+	lastRef := active.LastSyncedRef
+
+	headRef, err := gitutil.HeadRef(cwd)
+	if err != nil {
+		return fmt.Errorf("bundle sync: %w", err)
+	}
+
+	// Ensure the workspace directory exists on the sidecar.
+	parentDir := filepath.Dir(repoPath)
+	if result, err := ExecOverSSH(ctx, session, "mkdir -p "+ShellEscape(parentDir), nil, nil); err != nil {
+		return fmt.Errorf("bundle sync: mkdir: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("bundle sync: mkdir -p %s: %s", parentDir, result.Stderr)
+	}
+
+	// Init the repo on the sidecar if it's not already there.
+	testResult, err := ExecOverSSH(ctx, session, "test -d "+ShellEscape(repoPath), nil, nil)
+	if err != nil {
+		return fmt.Errorf("bundle sync: check repo dir: %w", err)
+	}
+	if testResult.ExitCode != 0 {
+		initCmd := fmt.Sprintf("git init %s && git -C %s commit --allow-empty -m init",
+			ShellEscape(repoPath), ShellEscape(repoPath))
+		if result, err := ExecOverSSH(ctx, session, initCmd, nil, nil); err != nil {
+			return fmt.Errorf("bundle sync: git init: %w", err)
+		} else if result.ExitCode != 0 {
+			return fmt.Errorf("bundle sync: git init: %s", result.Stderr)
+		}
+		lastRef = "" // force full bundle for a fresh repo
+	}
+
+	resetCmd := fmt.Sprintf("git -C %s reset --hard HEAD", ShellEscape(repoPath))
+	cleanCmd := fmt.Sprintf("git -C %s clean -fd", ShellEscape(repoPath))
+
+	// Sync commits: skip the bundle when already up-to-date, otherwise send and fetch.
+	if lastRef == headRef {
+		status(iostream.LevelInfo, "No new commits since last sync.")
+	} else {
+		if err := sendBundle(ctx, session, lastRef, cwd, repo, repoPath, status); err != nil {
+			return err
+		}
+	}
+
+	// Reset and clean the remote working tree after the bundle fetch (or no-op sync).
+	if result, err := ExecOverSSH(ctx, session, resetCmd, nil, nil); err != nil {
+		return fmt.Errorf("bundle sync: reset: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("bundle sync: reset: %s", result.Stderr)
+	}
+	if result, err := ExecOverSSH(ctx, session, cleanCmd, nil, nil); err != nil {
+		return fmt.Errorf("bundle sync: clean: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("bundle sync: clean: %s", result.Stderr)
+	}
+
+	// Apply any uncommitted working-tree changes as a patch on top.
+	patch, err := gitutil.GeneratePatch(headRef)
+	if err != nil {
+		return fmt.Errorf("bundle sync: %w", err)
+	}
+	if patch != "" {
+		status(iostream.LevelInfo, fmt.Sprintf("Applying working-tree changes (%d bytes)...", len(patch)))
+		applyCmd := fmt.Sprintf("git -C %s apply", ShellEscape(repoPath))
+		if result, err := ExecOverSSH(ctx, session, applyCmd, strings.NewReader(patch), nil); err != nil {
+			return fmt.Errorf("bundle sync: apply patch: %w", err)
+		} else if result.ExitCode != 0 {
+			return fmt.Errorf("bundle sync: apply patch: %s", result.Stderr)
+		}
+	}
+
+	// Persist the synced ref.
+	active.LastSyncedRef = headRef
+	if err := SaveActive(*active); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("Could not save last synced ref: %v", err))
+	}
+
+	status(iostream.LevelDone, "Synced")
+	return nil
+}
+
+// sendBundle creates and transfers a git bundle (full or incremental) to the
+// sidecar, then fetches it into the remote repo.
+func sendBundle(ctx context.Context, session *Session, lastRef, cwd, repo, repoPath string, status iostream.StatusFunc) error {
+	label := "incremental bundle"
+	if lastRef == "" {
+		label = "full bundle"
+	}
+
+	bundle, err := gitutil.CreateBundle(lastRef, cwd)
+	if err != nil {
+		return fmt.Errorf("bundle sync: %w", err)
+	}
+	status(iostream.LevelInfo, fmt.Sprintf("Sending %s (%d bytes)...", label, len(bundle)))
+
+	bundlePath := fmt.Sprintf("/tmp/chunk-sync-%s.bundle", repo)
+	writeCmd := "cat > " + ShellEscape(bundlePath)
+	if result, err := ExecOverSSH(ctx, session, writeCmd, bytes.NewReader(bundle), nil); err != nil {
+		return fmt.Errorf("bundle sync: write bundle: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("bundle sync: write bundle: %s", result.Stderr)
+	}
+
+	fetchCmd := fmt.Sprintf("git -C %s fetch %s HEAD:HEAD --update-head-ok", ShellEscape(repoPath), ShellEscape(bundlePath))
+	if result, err := ExecOverSSH(ctx, session, fetchCmd, nil, nil); err != nil {
+		return fmt.Errorf("bundle sync: fetch: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("bundle sync: fetch: %s", result.Stderr)
+	}
 	return nil
 }
 

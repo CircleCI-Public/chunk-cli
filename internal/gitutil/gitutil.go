@@ -102,6 +102,39 @@ func GeneratePatch(base string) (string, error) {
 	return string(out), nil
 }
 
+// HeadRef returns the SHA of the current HEAD commit in the repo at cwd.
+func HeadRef(cwd string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve HEAD: %w", err)
+	}
+	sha := strings.TrimSpace(string(out))
+	if sha == "" {
+		return "", fmt.Errorf("resolve HEAD: empty output")
+	}
+	return sha, nil
+}
+
+// CreateBundle creates a git bundle from base..HEAD in the repo at cwd and returns the raw bytes.
+// If base is empty, the full history up to HEAD is bundled.
+func CreateBundle(base, cwd string) ([]byte, error) {
+	var args []string
+	if base == "" {
+		args = []string{"bundle", "create", "-", "HEAD"}
+	} else {
+		args = []string{"bundle", "create", "-", base + "..HEAD"}
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("create bundle: %w", err)
+	}
+	return out, nil
+}
+
 func splitNonEmpty(s string) []string {
 	if s == "" {
 		return nil

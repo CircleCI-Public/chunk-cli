@@ -74,7 +74,7 @@ chunk
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --public-key <key>          # SSH public key string
 │   │   --public-key-file <path>    # Path to public key file
-│   ├── ssh                         # SSH into sidecar
+│   ├── ssh                         # SSH into sidecar (stdin forwarded when piped)
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --identity-file <path>      # SSH identity file
 │   │   -e / --env KEY=VALUE        # Set env var in remote session (repeatable)
@@ -83,6 +83,7 @@ chunk
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --identity-file <path>      # SSH identity file
 │   │   --workdir <path>            # Destination path on sidecar (auto-detected when omitted)
+│   │   --bundle                    # Sync via git bundle (no GitHub access required)
 │   ├── env                         # Detect tech stack and print environment spec as JSON
 │   │   --dir <path>                # Directory to analyse (default: .)
 │   │   --no-save                   # Print only, do not save to .chunk/config.json
@@ -122,6 +123,13 @@ chunk
   to disable.
 - `config set` accepts only `model` and `apiKey` as keys.
 - `chunk init` uses Claude to auto-detect the test command for the project.
+- `sidecar sync --bundle` sends a full git bundle on first use, then incremental
+  bundles (`<lastRef>..HEAD`) on subsequent syncs. The branch does not need to be
+  pushed to GitHub. Set `bundleSync: true` in `.chunk/config.json` to use bundle
+  sync by default without passing `--bundle` on every invocation; `sidecar setup`
+  reads the same config key.
+- `sidecar ssh -- <cmd>` forwards stdin when the process stdin is a pipe, enabling
+  patterns like `cat bundle | chunk sidecar ssh -- git fetch ...`.
   It generates `.claude/settings.json` with pre-commit hooks. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.
 - Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,

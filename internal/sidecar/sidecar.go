@@ -3,6 +3,7 @@ package sidecar
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -47,7 +48,9 @@ func AddSSHKey(ctx context.Context, client *circleci.Client, sidecarID, publicKe
 }
 
 // SSH opens a session and either runs a command or starts an interactive shell.
-func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, args []string, envVars map[string]string, io iostream.Streams) error {
+// stdin is forwarded to the remote command when non-nil; callers should pass
+// os.Stdin when the process stdin is a pipe, nil otherwise.
+func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, args []string, envVars map[string]string, io iostream.Streams, stdin io.Reader) error {
 	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
 	if err != nil {
 		return err
@@ -58,7 +61,7 @@ func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, 
 	}
 
 	command := ShellJoin(args)
-	result, err := ExecOverSSH(ctx, session, command, nil, envVars)
+	result, err := ExecOverSSH(ctx, session, command, stdin, envVars)
 	if err != nil {
 		return err
 	}
