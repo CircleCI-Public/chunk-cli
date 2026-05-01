@@ -929,11 +929,6 @@ func sidecarSetupRunSetup(
 		if ws != "" {
 			workspaceCmd = "cd " + sidecar.ShellEscape(ws) + " && " + step.Command
 		}
-		// cimg images set PATH via Docker ENV which e2b does not propagate to SSH
-		// sessions, so prepend the stack's binary locations explicitly.
-		if paths := env.BinaryPaths(); paths != "" {
-			workspaceCmd = "export PATH=" + paths + ":$PATH && " + workspaceCmd
-		}
 		loginCmd := "bash -l -c " + sidecar.ShellEscape(workspaceCmd)
 		result, err := sidecar.ExecOverSSH(ctx, session, loginCmd, nil, nil)
 		if err != nil {

@@ -24,15 +24,3 @@ func (e *Environment) SetupStep(name string) string {
 	return ""
 }
 
-// BinaryPaths returns colon-separated PATH prefixes needed for the detected stack.
-// cimg images set these via Docker ENV which e2b does not propagate to SSH sessions.
-func (e *Environment) BinaryPaths() string {
-	switch e.Stack {
-	case "go":
-		return "/usr/local/go/bin:/home/circleci/go/bin"
-	case "javascript", "typescript":
-		return "/home/circleci/.yarn/bin"
-	default:
-		return ""
-	}
-}
