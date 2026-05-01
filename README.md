@@ -1,6 +1,6 @@
 # chunk
 
-CLI for remote validation of changes — run code in a cloud environment before pushing — and generating agent context from code review patterns.
+Validate code changes remotely in a sidecar before pushing to CI — and generate agent context from code review patterns.
 
 ## Features
 
@@ -20,6 +20,27 @@ brew install CircleCI-Public/circleci/chunk
 ```
 
 ## Quick Start
+
+**1. Install the Chunk CLI**
+
+```bash
+brew install CircleCI-Public/circleci/chunk
+```
+
+**2. Initialize and authenticate**
+
+```bash
+chunk init
+chunk auth set circleci
+```
+
+**3. Run the `chunk-sidecar` skill in your agent**
+
+In Claude Code, Cursor, or your AI agent of choice, invoke the `chunk-sidecar` skill. It will sync your repo to a remote sidecar and run your validations there.
+
+Sidecars are available to CircleCI customers on a paid plan. Share feedback in the [CircleCI Discord](https://discord.gg/circleci).
+
+---
 
 ### Project Setup
 
