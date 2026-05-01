@@ -48,6 +48,7 @@ type VCSConfig struct {
 // ValidationConfig holds project-level defaults for validation behaviour.
 type ValidationConfig struct {
 	SidecarImage string `json:"sidecarImage,omitempty"`
+	CommitStatus bool   `json:"commitStatus,omitempty"`
 }
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.

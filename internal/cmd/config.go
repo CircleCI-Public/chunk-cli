@@ -62,7 +62,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model\nProject keys: orgID, validation.sidecarImage",
+		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model\nProject keys: orgID, validation.sidecarImage, validation.commitStatus",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -85,6 +85,11 @@ func newConfigSetCmd() *cobra.Command {
 						projCfg.Validation = &config.ValidationConfig{}
 					}
 					projCfg.Validation.SidecarImage = value
+				case "validation.commitStatus":
+					if projCfg.Validation == nil {
+						projCfg.Validation = &config.ValidationConfig{}
+					}
+					projCfg.Validation.CommitStatus = value == "true"
 				default:
 					return fmt.Errorf("internal: unhandled project config key %q", key)
 				}
@@ -98,7 +103,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, orgID, validation.sidecarImage.",
+					detail: "Supported keys: model, orgID, validation.sidecarImage, validation.commitStatus.",
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}
