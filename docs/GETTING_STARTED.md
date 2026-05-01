@@ -63,7 +63,7 @@ Check status at any time:
 chunk auth status
 ```
 
-Credentials are stored in `~/.chunk/config.json`. You can also set them as environment variables:
+Credentials are stored in `~/.config/chunk/config.json` (respects `XDG_CONFIG_HOME`). You can also set them as environment variables:
 
 | Variable | Used by |
 |---|---|
@@ -182,6 +182,8 @@ chunk sidecar use <id>
 chunk sidecar sync           # push local changes to sidecar
 chunk validate --remote      # run validate commands on sidecar
 ```
+
+The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project>/` (default: `~/.local/share/chunk/<project>/`) — never inside the repo. The project key is derived from the git root path.
 
 Or hand this off to the `chunk-sidecar` skill:
 

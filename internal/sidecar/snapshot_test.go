@@ -1,8 +1,6 @@
 package sidecar
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -13,6 +11,7 @@ import (
 func TestSaveAndLoadActiveSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	want := ActiveSnapshot{ID: "snap-abc", Name: "my-snap"}
 	assert.NilError(t, SaveActiveSnapshot(want))
@@ -27,6 +26,7 @@ func TestSaveAndLoadActiveSnapshot(t *testing.T) {
 func TestLoadActiveSnapshotReturnsNilWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	got, err := LoadActiveSnapshot()
 	assert.NilError(t, err)
@@ -36,6 +36,7 @@ func TestLoadActiveSnapshotReturnsNilWhenMissing(t *testing.T) {
 func TestClearActiveSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	assert.NilError(t, SaveActiveSnapshot(ActiveSnapshot{ID: "snap-xyz"}))
 
@@ -53,6 +54,7 @@ func TestClearActiveSnapshot(t *testing.T) {
 func TestClearActiveSnapshotNoopWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	assert.NilError(t, ClearActiveSnapshot())
 }
@@ -60,6 +62,7 @@ func TestClearActiveSnapshotNoopWhenMissing(t *testing.T) {
 func TestSnapshotSessionKeyed(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	// Save without a session — generic file.
 	assert.NilError(t, SaveActiveSnapshot(ActiveSnapshot{ID: "snap-generic"}))
@@ -84,39 +87,4 @@ func TestSnapshotSessionKeyed(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
 	assert.Equal(t, got.ID, "snap-generic")
-}
-
-func TestLoadActiveSnapshotWalksUpToParent(t *testing.T) {
-	parent := t.TempDir()
-	child := filepath.Join(parent, "sub", "dir")
-	assert.NilError(t, os.MkdirAll(child, 0o755))
-
-	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".git"), 0o755))
-	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
-	data := []byte(`{"id":"snap-parent","name":"parent-snap"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "snapshot.json"), data, 0o644))
-
-	t.Chdir(child)
-
-	got, err := LoadActiveSnapshot()
-	assert.NilError(t, err)
-	assert.Assert(t, got != nil)
-	assert.Equal(t, got.ID, "snap-parent")
-}
-
-func TestLoadActiveSnapshotStopsAtGitRoot(t *testing.T) {
-	grandparent := t.TempDir()
-	parent := filepath.Join(grandparent, "repo")
-	child := filepath.Join(parent, "sub")
-	assert.NilError(t, os.MkdirAll(child, 0o755))
-	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".git"), 0o755))
-	assert.NilError(t, os.MkdirAll(filepath.Join(grandparent, ".chunk"), 0o755))
-	data := []byte(`{"id":"snap-grandparent"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(grandparent, ".chunk", "snapshot.json"), data, 0o644))
-
-	t.Chdir(child)
-
-	got, err := LoadActiveSnapshot()
-	assert.NilError(t, err)
-	assert.Assert(t, got == nil, "walk should not cross the git root boundary")
 }

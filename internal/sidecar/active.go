@@ -26,9 +26,28 @@ func sidecarFileName() string {
 	return "sidecar.json"
 }
 
-// LoadActive walks up from cwd looking for .chunk/sidecar.json. Returns nil if not found.
+// StateDir returns the XDG_DATA_HOME directory for the current project.
+// Callers performing multiple sidecar or snapshot operations can resolve once
+// and pass the result to the dir-accepting variants (LoadActiveFrom, SaveActiveTo,
+// ClearActiveFrom, LoadSnapshotFrom, SaveSnapshotTo, ClearSnapshotFrom) to avoid
+// repeated filesystem walks.
+func StateDir() (string, error) {
+	return saveDir()
+}
+
+// LoadActive reads the active sidecar for the current project from XDG_DATA_HOME.
+// Returns nil if not found.
 func LoadActive() (*ActiveSidecar, error) {
-	path, err := findSidecarFile()
+	dir, err := saveDir()
+	if err != nil {
+		return nil, err
+	}
+	return LoadActiveFrom(dir)
+}
+
+// LoadActiveFrom reads the active sidecar from dir.
+func LoadActiveFrom(dir string) (*ActiveSidecar, error) {
+	path, err := findSidecarFile(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -46,14 +65,17 @@ func LoadActive() (*ActiveSidecar, error) {
 	return &a, nil
 }
 
-// SaveActive writes .chunk/sidecar.json. If the file already exists in a
-// parent directory it is updated in place; otherwise the file is created in
-// cwd's .chunk/ directory.
+// SaveActive writes the active sidecar to XDG_DATA_HOME for the current project.
 func SaveActive(a ActiveSidecar) error {
 	dir, err := saveDir()
 	if err != nil {
 		return err
 	}
+	return SaveActiveTo(dir, a)
+}
+
+// SaveActiveTo writes the active sidecar to dir.
+func SaveActiveTo(dir string, a ActiveSidecar) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -64,25 +86,21 @@ func SaveActive(a ActiveSidecar) error {
 	return os.WriteFile(filepath.Join(dir, sidecarFileName()), data, 0o644)
 }
 
-// saveDir returns the .chunk directory to write into. It prefers an existing
-// .chunk/sidecar.json found by walking upward; otherwise walks up to find the
-// git root and uses that; falls back to cwd/.chunk when not in a git repo.
+// saveDir returns the XDG_DATA_HOME directory for the current project.
 func saveDir() (string, error) {
-	existing, err := findSidecarFile()
+	root, err := projectRoot()
 	if err != nil {
 		return "", err
 	}
-	if existing != "" {
-		return filepath.Dir(existing), nil
-	}
+	return config.ProjectDataDir(root)
+}
+
+// projectRoot returns the git root when inside a git repo, otherwise cwd.
+func projectRoot() (string, error) {
 	if root, err := findGitRoot(); err == nil && root != "" {
-		return filepath.Join(root, ".chunk"), nil
+		return root, nil
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(cwd, ".chunk"), nil
+	return os.Getwd()
 }
 
 // findGitRoot walks up from cwd and returns the first directory containing .git,
@@ -104,9 +122,18 @@ func findGitRoot() (string, error) {
 	}
 }
 
-// ClearActive removes the .chunk/sidecar.json file found by walking up from cwd.
+// ClearActive removes the active sidecar state file.
 func ClearActive() error {
-	path, err := findSidecarFile()
+	dir, err := saveDir()
+	if err != nil {
+		return err
+	}
+	return ClearActiveFrom(dir)
+}
+
+// ClearActiveFrom removes the active sidecar state file in dir.
+func ClearActiveFrom(dir string) error {
+	path, err := findSidecarFile(dir)
 	if err != nil {
 		return err
 	}
@@ -116,31 +143,19 @@ func ClearActive() error {
 	return os.Remove(path)
 }
 
-// findSidecarFile walks up from cwd looking for .chunk/sidecar.json, returning the path or "".
-// When inside a git repository the walk is bounded by the repository root (the directory
-// containing .git); files above that root are never considered. When not inside any git
-// repository only the current directory is checked.
-func findSidecarFile() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
+// findSidecarFile returns the sidecar state file path in dir, or "" if it doesn't exist.
+func findSidecarFile(dir string) (string, error) {
+	return statOrEmpty(filepath.Join(dir, sidecarFileName()))
+}
+
+// statOrEmpty returns path if it exists, "" if it does not, or an error for other failures.
+func statOrEmpty(path string) (string, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return path, nil
 	}
-	gitRoot, _ := findGitRoot()
-	for {
-		candidate := filepath.Join(dir, ".chunk", sidecarFileName())
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		// Stop at the git root (or immediately if not in a git repo).
-		if gitRoot == "" || dir == gitRoot {
-			return "", nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", nil
-		}
-		dir = parent
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
 	}
+	return "", err
 }

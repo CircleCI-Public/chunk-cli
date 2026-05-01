@@ -11,9 +11,47 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
+func TestSaveActiveWritesToXDGDataPath(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv(config.EnvXDGDataHome, dataHome)
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-1"}))
+
+	// Must not appear inside the project's .chunk directory.
+	_, err := os.Stat(filepath.Join(dir, ".chunk", "sidecar.json"))
+	assert.Assert(t, os.IsNotExist(err), "sidecar.json must not be written inside .chunk/")
+
+	// Must appear at the deterministic XDG data path.
+	expected, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	_, err = os.Stat(filepath.Join(expected, "sidecar.json"))
+	assert.NilError(t, err)
+}
+
+func TestStatOrEmptyPermissionsError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping: root bypasses file permission checks")
+	}
+	dir := t.TempDir()
+	assert.NilError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	_, err := statOrEmpty(filepath.Join(dir, "sidecar.json"))
+	assert.Assert(t, err != nil, "expected error for inaccessible directory, got nil")
+}
+
+func setupXDGData(t *testing.T) {
+	t.Helper()
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+}
+
 func TestSaveAndLoadActive(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	want := ActiveSidecar{SidecarID: "sb-abc", Name: "my-box"}
 	err := SaveActive(want)
@@ -29,90 +67,65 @@ func TestSaveAndLoadActive(t *testing.T) {
 func TestLoadActiveReturnsNilWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	got, err := LoadActive()
 	assert.NilError(t, err)
 	assert.Assert(t, got == nil, "expected nil when no active sidecar file")
 }
 
-func TestLoadActiveWalksUpToParent(t *testing.T) {
+func TestLoadActiveUsesGitRootAsKey(t *testing.T) {
 	parent := t.TempDir()
 	child := filepath.Join(parent, "sub", "dir")
 	assert.NilError(t, os.MkdirAll(child, 0o755))
-
-	// Mark parent as a git root so the walk doesn't escape it.
 	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".git"), 0o755))
 
-	// Write .chunk/sidecar in parent
-	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
-	data := []byte(`{"sidecar_id":"sb-parent","name":"parent-box"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sidecar.json"), data, 0o644))
+	setupXDGData(t)
 
-	// cd into child — should still find the parent's file
+	// Save from child — keyed to parent (git root).
 	t.Chdir(child)
+	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-git-root"}))
+
+	// Load from child — should find it.
+	got, err := LoadActive()
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil)
+	assert.Equal(t, got.SidecarID, "sb-git-root")
+
+	// Load from parent (the git root) — same project, same file.
+	t.Chdir(parent)
+	got, err = LoadActive()
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil)
+	assert.Equal(t, got.SidecarID, "sb-git-root")
+}
+
+func TestLoadActiveUsesCwdWhenNoGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	setupXDGData(t)
+
+	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-cwd"}))
 
 	got, err := LoadActive()
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-parent")
-}
-
-func TestLoadActiveStopsAtGitRoot(t *testing.T) {
-	// grandparent has .chunk/sidecar; parent has .git; cwd is child of parent.
-	// The walk should stop at parent and not find grandparent's file.
-	grandparent := t.TempDir()
-	parent := filepath.Join(grandparent, "repo")
-	child := filepath.Join(parent, "sub")
-	assert.NilError(t, os.MkdirAll(child, 0o755))
-
-	// .git lives in parent (the repo root)
-	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".git"), 0o755))
-
-	// .chunk/sidecar lives in grandparent (above the repo root)
-	assert.NilError(t, os.MkdirAll(filepath.Join(grandparent, ".chunk"), 0o755))
-	data := []byte(`{"sidecar_id":"sb-grandparent"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(grandparent, ".chunk", "sidecar.json"), data, 0o644))
-
-	t.Chdir(child)
-
-	got, err := LoadActive()
-	assert.NilError(t, err)
-	assert.Assert(t, got == nil, "walk should not cross the git root boundary")
-}
-
-func TestLoadActiveNoGitRepo(t *testing.T) {
-	// No .git anywhere — only the cwd itself is checked.
-	parent := t.TempDir()
-	child := filepath.Join(parent, "sub")
-	assert.NilError(t, os.MkdirAll(child, 0o755))
-
-	// .chunk/sidecar in parent but no .git anywhere
-	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
-	data := []byte(`{"sidecar_id":"sb-parent"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sidecar.json"), data, 0o644))
-
-	t.Chdir(child)
-
-	// Without .git the walk stops at cwd, so the parent file is not found.
-	got, err := LoadActive()
-	assert.NilError(t, err)
-	assert.Assert(t, got == nil, "without a git repo the walk should not go above cwd")
+	assert.Equal(t, got.SidecarID, "sb-cwd")
 }
 
 func TestClearActive(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-xyz"}))
 
-	// File should exist
 	got, err := LoadActive()
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
 
 	assert.NilError(t, ClearActive())
 
-	// Should be gone now
 	got, err = LoadActive()
 	assert.NilError(t, err)
 	assert.Assert(t, got == nil)
@@ -121,6 +134,7 @@ func TestClearActive(t *testing.T) {
 func TestSessionKeyedSidecar(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	// Save without a session — generic file.
 	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-generic"}))
@@ -150,41 +164,15 @@ func TestSessionKeyedSidecar(t *testing.T) {
 func TestClearActiveNoopWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	assert.NilError(t, ClearActive())
-}
-
-func TestSaveActiveUpdatesParentFile(t *testing.T) {
-	parent := t.TempDir()
-	child := filepath.Join(parent, "sub")
-	assert.NilError(t, os.MkdirAll(child, 0o755))
-
-	// Mark parent as the git root so the walk can reach it.
-	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".git"), 0o755))
-
-	// Write an existing .chunk/sidecar in parent
-	assert.NilError(t, os.MkdirAll(filepath.Join(parent, ".chunk"), 0o755))
-	initial := []byte(`{"sidecar_id":"sb-old"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(parent, ".chunk", "sidecar.json"), initial, 0o644))
-
-	// Save from child — should update parent's file, not create child's
-	t.Chdir(child)
-	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-new"}))
-
-	// Child should have no .chunk dir
-	_, err := os.Stat(filepath.Join(child, ".chunk"))
-	assert.Assert(t, os.IsNotExist(err), "expected no .chunk in child")
-
-	// Parent's file should be updated
-	got, err := LoadActive()
-	assert.NilError(t, err)
-	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-new")
 }
 
 func TestWorkspaceFieldRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	want := ActiveSidecar{SidecarID: "sb-1", Name: "test", Workspace: "/workspace/myrepo"}
 	assert.NilError(t, SaveActive(want))
@@ -199,10 +187,13 @@ func TestWorkspaceFieldRoundTrip(t *testing.T) {
 func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-1"}))
 
-	data, err := os.ReadFile(filepath.Join(dir, ".chunk", sidecarFileName()))
+	stateDir, err := saveDir()
+	assert.NilError(t, err)
+	data, err := os.ReadFile(filepath.Join(stateDir, sidecarFileName()))
 	assert.NilError(t, err)
 	assert.Assert(t, !strings.Contains(string(data), "workspace"), "empty workspace should be omitted from JSON")
 }
@@ -210,6 +201,7 @@ func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
 func TestResolveWorkspaceCLIFlagWins(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-1", Workspace: "/workspace/saved"}))
 
@@ -220,6 +212,7 @@ func TestResolveWorkspaceCLIFlagWins(t *testing.T) {
 func TestResolveWorkspaceSidecarFallback(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	assert.NilError(t, SaveActive(ActiveSidecar{SidecarID: "sb-1", Workspace: "/workspace/saved"}))
 
@@ -230,6 +223,7 @@ func TestResolveWorkspaceSidecarFallback(t *testing.T) {
 func TestResolveWorkspaceDefaultFallback(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
+	setupXDGData(t)
 
 	got := resolveWorkspace("", "myrepo")
 	assert.Equal(t, got, "./workspace/myrepo")

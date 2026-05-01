@@ -35,10 +35,12 @@ func NewTestEnv(t *testing.T) *TestEnv {
 // Environ returns the environment as a []string for exec.Cmd.Env.
 func (e *TestEnv) Environ() []string {
 	configDir := filepath.Join(e.HomeDir, ".config")
+	dataDir := filepath.Join(e.HomeDir, ".local", "share")
 
 	env := []string{
 		fmt.Sprintf("HOME=%s", e.HomeDir),
 		fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir),
+		fmt.Sprintf("XDG_DATA_HOME=%s", dataDir),
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		"SHELL=/bin/zsh",
 		"NO_COLOR=1",
