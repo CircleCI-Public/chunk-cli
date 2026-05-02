@@ -60,9 +60,24 @@ func detectHook(r io.Reader) *hookContext {
 	return &hookContext{sessionID: p.SessionID, stopHookActive: p.StopHookActive}
 }
 
+func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, statusFn iostream.StatusFunc) error {
+	cfg, err := config.LoadProjectConfig(workDir)
+	if err != nil {
+		cfg = &config.ProjectConfig{}
+	}
+	if jsonOut {
+		cmds := cfg.Commands
+		if cmds == nil {
+			cmds = []config.Command{}
+		}
+		return iostream.PrintJSON(streams.Out, cmds)
+	}
+	return validate.List(cfg, statusFn)
+}
+
 func newValidateCmd() *cobra.Command {
 	var sidecarID, identityFile, workdir, orgID string
-	var dryRun, list, save, remote bool
+	var dryRun, list, save, remote, jsonOut bool
 	var inlineCmd, projectDir string
 
 	cmd := &cobra.Command{
@@ -105,11 +120,10 @@ func newValidateCmd() *cobra.Command {
 
 			// --list: show configured commands
 			if list {
-				cfg, err := config.LoadProjectConfig(workDir)
-				if err != nil {
-					cfg = &config.ProjectConfig{}
-				}
-				return validate.List(cfg, statusFn)
+				return runValidateList(workDir, jsonOut, streams, statusFn)
+			}
+			if jsonOut {
+				return fmt.Errorf("--json requires --list")
 			}
 
 			cfg, err := config.LoadProjectConfig(workDir)
@@ -184,6 +198,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory on sidecar (reads from sidecar.json, defaults to ./workspace)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show commands without executing")
 	cmd.Flags().BoolVar(&list, "list", false, "List all configured commands")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON (only applies with --list)")
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
 	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
@@ -255,6 +270,9 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 				execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
 				if err != nil {
 					streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(remoteCfg.Commands))
+					localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
+				} else if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
+					streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
 					localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
 				} else {
 					runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, statusFn, streams)

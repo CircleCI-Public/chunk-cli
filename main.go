@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -25,7 +26,22 @@ func main() {
 			os.Exit(ec.ExitCode())
 		}
 		m, d, s := errorDetails(err)
-		_, _ = fmt.Fprint(os.Stderr, ui.FormatError(m, d, s))
+		if jsonFlagPresent() {
+			type jsonErr struct {
+				Error      bool   `json:"error"`
+				Message    string `json:"message"`
+				Detail     string `json:"detail,omitempty"`
+				Suggestion string `json:"suggestion,omitempty"`
+			}
+			b, jsonMarshalErr := json.MarshalIndent(jsonErr{Error: true, Message: m, Detail: d, Suggestion: s}, "", "  ")
+			if jsonMarshalErr != nil {
+				_, _ = fmt.Fprint(os.Stderr, ui.FormatError(m, d, s))
+			} else {
+				_, _ = fmt.Fprintf(os.Stderr, "%s\n", b)
+			}
+		} else {
+			_, _ = fmt.Fprint(os.Stderr, ui.FormatError(m, d, s))
+		}
 		os.Exit(1)
 	}
 }
@@ -63,6 +79,20 @@ func errorSuggestion(err error) string {
 		return "Hint: Check your internet connection."
 	}
 	return ""
+}
+
+// jsonFlagPresent reports whether --json appears in the raw argument list.
+// Used to format errors as JSON when the flag is set, before cobra has run.
+func jsonFlagPresent() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == "--" {
+			break
+		}
+		if arg == "--json" || arg == "--json=true" {
+			return true
+		}
+	}
+	return false
 }
 
 // rewriteColonSyntax rewrites "validate:name" to "validate" "name" in os.Args

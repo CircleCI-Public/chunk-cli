@@ -1,6 +1,7 @@
 package iostream
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -27,3 +28,10 @@ func (s Streams) Println(a ...any)                  { _, _ = fmt.Fprintln(s.Out,
 func (s Streams) Printf(format string, a ...any)    { _, _ = fmt.Fprintf(s.Out, format, a...) }
 func (s Streams) ErrPrintln(a ...any)               { _, _ = fmt.Fprintln(s.Err, a...) }
 func (s Streams) ErrPrintf(format string, a ...any) { _, _ = fmt.Fprintf(s.Err, format, a...) }
+
+// PrintJSON writes v to w as indented JSON followed by a newline.
+func PrintJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}

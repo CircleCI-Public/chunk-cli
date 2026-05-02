@@ -32,7 +32,7 @@ func newTaskCmd() *cobra.Command {
 
 func newTaskRunCmd() *cobra.Command {
 	var definition, prompt, branch string
-	var newBranch, noPipelineAsTool bool
+	var newBranch, noPipelineAsTool, jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -75,6 +75,9 @@ func newTaskRunCmd() *cobra.Command {
 				return err
 			}
 
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, resp)
+			}
 			w := 12
 			io.Printf("%s %s\n", ui.Label("Run triggered:", w), ui.Green(resp.RunID))
 			io.Printf("%s %s\n", ui.Label("Pipeline:", w), resp.PipelineID)
@@ -87,6 +90,7 @@ func newTaskRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "Checkout branch override")
 	cmd.Flags().BoolVar(&newBranch, "new-branch", false, "Create a new branch")
 	cmd.Flags().BoolVar(&noPipelineAsTool, "no-pipeline-as-tool", false, "Disable running pipeline as a tool")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	_ = cmd.MarkFlagRequired("definition")
 	_ = cmd.MarkFlagRequired("prompt")

@@ -117,6 +117,7 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 
 func newSidecarListCmd() *cobra.Command {
 	var orgID string
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -142,6 +143,9 @@ func newSidecarListCmd() *cobra.Command {
 					err:        err,
 				}
 			}
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, sidecars)
+			}
 			if len(sidecars) == 0 {
 				io.ErrPrintln(ui.Dim("No sidecars found"))
 				return nil
@@ -154,6 +158,7 @@ func newSidecarListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
 }
@@ -437,7 +442,9 @@ func newSidecarUseCmd() *cobra.Command {
 }
 
 func newSidecarCurrentCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "current",
 		Short: "Show the active sidecar",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -447,8 +454,14 @@ func newSidecarCurrentCmd() *cobra.Command {
 				return &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
 			}
 			if active == nil {
+				if jsonOut {
+					return iostream.PrintJSON(io.Out, struct{}{})
+				}
 				io.ErrPrintln("No active sidecar")
 				return nil
+			}
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, active)
 			}
 			if active.Name != "" {
 				io.Printf("%s  %s\n", active.Name, active.SidecarID)
@@ -458,6 +471,10 @@ func newSidecarCurrentCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 func newSidecarForgetCmd() *cobra.Command {
@@ -686,6 +703,8 @@ snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 }
 
 func newSidecarSnapshotGetCmd() *cobra.Command {
+	var jsonOut bool
+
 	cmd := &cobra.Command{
 		Use:   "get <snapshot-id>",
 		Short: "Get a snapshot by ID",
@@ -700,6 +719,9 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, snap)
+			}
 			if snap.Name != "" {
 				io.Printf("%s  %s\n", snap.Name, snap.ID)
 			} else {
@@ -708,6 +730,8 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
 }
