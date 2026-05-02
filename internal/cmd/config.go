@@ -22,7 +22,9 @@ func newConfigCmd() *cobra.Command {
 }
 
 func newConfigShowCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "show",
 		Short: "Display resolved configuration",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -30,6 +32,31 @@ func newConfigShowCmd() *cobra.Command {
 			rc, resolveErr := config.Resolve("", "")
 			if resolveErr != nil {
 				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", resolveErr)))
+			}
+
+			if jsonOut {
+				type configEntry struct {
+					Value  string `json:"value"`
+					Source string `json:"source,omitempty"`
+				}
+				type configOutput struct {
+					Model           configEntry `json:"model"`
+					AnthropicAPIKey configEntry `json:"anthropicAPIKey"`
+					CircleCIToken   configEntry `json:"circleCIToken"`
+					GitHubToken     configEntry `json:"gitHubToken"`
+				}
+				maskOrEmpty := func(key string) string {
+					if key == "" {
+						return ""
+					}
+					return config.MaskKey(key)
+				}
+				return iostream.PrintJSON(io.Out, configOutput{
+					Model:           configEntry{Value: rc.Model, Source: rc.ModelSource},
+					AnthropicAPIKey: configEntry{Value: maskOrEmpty(rc.AnthropicAPIKey), Source: rc.AnthropicAPIKeySource},
+					CircleCIToken:   configEntry{Value: maskOrEmpty(rc.CircleCIToken), Source: rc.CircleCITokenSource},
+					GitHubToken:     configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
+				})
 			}
 
 			w := 15
@@ -56,6 +83,10 @@ func newConfigShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 func newConfigSetCmd() *cobra.Command {

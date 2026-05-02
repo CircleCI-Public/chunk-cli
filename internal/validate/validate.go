@@ -17,6 +17,21 @@ import (
 // ErrNotConfigured indicates no validate commands are configured.
 var ErrNotConfigured = errors.New("no validate commands configured")
 
+// ErrWorkspaceNotFound is returned when the remote workspace directory does not exist.
+var ErrWorkspaceNotFound = errors.New("workspace directory not found on sidecar")
+
+// WorkspaceExists checks whether dest exists as a directory on the remote sidecar.
+func WorkspaceExists(ctx context.Context, execFn func(context.Context, string) (string, string, int, error), dest string) error {
+	_, _, exitCode, err := execFn(ctx, "test -d "+shellEscape(dest))
+	if err != nil {
+		return err
+	}
+	if exitCode != 0 {
+		return ErrWorkspaceNotFound
+	}
+	return nil
+}
+
 // shellEscape wraps arg in single quotes for safe use in a POSIX sh -c command.
 func shellEscape(arg string) string {
 	return "'" + strings.ReplaceAll(arg, "'", "'\\''") + "'"

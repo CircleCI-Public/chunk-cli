@@ -74,7 +74,11 @@ func (m selectModel) View() tea.View {
 
 // SelectFromList presents a list of items and returns the selected index.
 // Returns ErrCancelled if the user presses Ctrl+C or Esc.
+// Returns ErrNoTTY if stdin is not a terminal.
 func SelectFromList(label string, items []string) (int, error) {
+	if err := requireTTY(); err != nil {
+		return -1, err
+	}
 	if len(items) == 0 {
 		return -1, fmt.Errorf("no items to select from")
 	}
