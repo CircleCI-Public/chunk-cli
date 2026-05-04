@@ -77,7 +77,7 @@ func Sync(ctx context.Context,
 		return nil
 	}
 	// We should only try again if the failure was in the apply phase.
-	if !errors.Is(err, errApplyFailed) {
+	if errors.Is(err, errApplyFailed) {
 		return err
 	}
 
