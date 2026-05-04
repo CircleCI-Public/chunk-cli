@@ -67,9 +67,6 @@ func Build(commands []config.Command) ([]byte, error) {
 			}
 			stopTimeout += t
 		}
-		if stopTimeout > maxStopTimeout {
-			stopTimeout = maxStopTimeout
-		}
 
 		s.Hooks = map[string][]hookGroup{
 			"PreToolUse": {
