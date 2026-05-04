@@ -38,7 +38,6 @@ const (
 	EnvGitHubAPIURL     = "GITHUB_API_URL"
 	EnvModel            = "CODE_REVIEW_CLI_MODEL"
 	EnvCircleCIOrgID    = "CIRCLECI_ORG_ID"
-	EnvSidecarProvider  = "CHUNK_SIDECAR_PROVIDER"
 )
 
 // System/standard environment variable names.
@@ -66,7 +65,6 @@ type EnvVars struct {
 	GitHubAPIURL     string `env:"GITHUB_API_URL,default=https://api.github.com"`
 	Model            string `env:"CODE_REVIEW_CLI_MODEL"`
 	CircleCIOrgID    string `env:"CIRCLECI_ORG_ID"`
-	SidecarProvider  string `env:"CHUNK_SIDECAR_PROVIDER"`
 	Home             string `env:"HOME"`
 	Shell            string `env:"SHELL"`
 	SSHAuthSock      string `env:"SSH_AUTH_SOCK"`

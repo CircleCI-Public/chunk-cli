@@ -108,7 +108,7 @@ func TestCreateSidecar(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	sb, err := client.CreateSidecar(ctx, "org-1", "my-sidecar", "", "ubuntu:22.04")
+	sb, err := client.CreateSidecar(ctx, "org-1", "my-sidecar", "ubuntu:22.04")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestAuthRequired(t *testing.T) {
 	})
 
 	t.Run("CreateSidecar", func(t *testing.T) {
-		_, err := client.CreateSidecar(ctx, "org-1", "name", "", "image")
+		_, err := client.CreateSidecar(ctx, "org-1", "name", "image")
 		if err == nil {
 			t.Fatal("expected error")
 		}
