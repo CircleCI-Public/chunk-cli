@@ -153,16 +153,13 @@ func newSidecarListCmd() *cobra.Command {
 	return cmd
 }
 
-const defaultProvider = "e2b"
-
 func newSidecarCreateCmd() *cobra.Command {
 	var orgID, name, image string
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a sidecar",
-		Long: "Create a sidecar.\n\nThe sidecar backend defaults to e2b. Override with the " + config.EnvSidecarProvider +
-			"\nenvironment variable (e.g. " + config.EnvSidecarProvider + "=unikraft).",
+		Long:  "Create a sidecar.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
@@ -173,11 +170,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			provider := os.Getenv(config.EnvSidecarProvider)
-			if provider == "" {
-				provider = defaultProvider
-			}
-			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, provider, image)
+			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image)
 			if err != nil {
 				if err := notAuthorized("create sidecars", err); err != nil {
 					return err
@@ -752,14 +745,10 @@ Example:
 			status(iostream.LevelInfo, fmt.Sprintf("stack: %s", env.Stack))
 
 			// Step 2: Resolve or create sidecar.
-			provider := os.Getenv(config.EnvSidecarProvider)
-			if provider == "" {
-				provider = defaultProvider
-			}
 			var workspace string
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, _, workspace, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, provider, status, streams)
+				sidecarID, _, workspace, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -803,7 +792,7 @@ Example:
 func sidecarSetupResolveSidecar(
 	ctx context.Context,
 	client *circleci.Client,
-	orgID, name, provider string,
+	orgID, name string,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
 ) (id, displayName, workspace string, err error) {
@@ -827,7 +816,7 @@ func sidecarSetupResolveSidecar(
 		return "", "", "", err
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q...", name))
-	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, provider, "")
+	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, "")
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
 			return "", "", "", authErr

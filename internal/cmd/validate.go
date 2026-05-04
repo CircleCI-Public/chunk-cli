@@ -405,12 +405,8 @@ func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, ima
 	if err != nil {
 		return err
 	}
-	provider := os.Getenv(config.EnvSidecarProvider)
-	if provider == "" {
-		provider = defaultProvider
-	}
 	sandboxName := filepath.Base(workDir) + "-validate"
-	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, provider, image)
+	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
 			return authErr
