@@ -94,7 +94,7 @@ func (c *Client) FetchReviewActivity(ctx context.Context, org, repo string, sinc
 		for _, pr := range prData.Nodes {
 			// Check if PR is older than since
 			prUpdated, _ := time.Parse(time.RFC3339, pr.UpdatedAt)
-			if !since.IsZero() && prUpdated.Before(since) {
+			if prUpdated.Before(since) {
 				return &FetchReviewActivityResult{Activity: activityMap, Details: details}, nil
 			}
 
