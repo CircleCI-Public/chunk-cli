@@ -12,7 +12,7 @@ type Resolver interface {
 
 // IsSecretRef reports whether value is a secret reference (op:// prefix).
 func IsSecretRef(value string) bool {
-	return strings.HasPrefix(value, "op://")
+	return strings.Contains(value, "op://")
 }
 
 // ResolveAll resolves op:// references in a map. Non-reference values pass through unchanged.
