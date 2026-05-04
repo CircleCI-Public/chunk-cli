@@ -110,7 +110,7 @@ func TopN(activities []*github.UserActivity, n int) ([]*github.UserActivity, err
 	if n <= 0 {
 		return nil, fmt.Errorf("top must be a positive integer, got %d", n)
 	}
-	if n >= len(activities) {
+	if n > len(activities) {
 		return activities, nil
 	}
 	return activities[:n], nil
