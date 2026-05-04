@@ -63,7 +63,11 @@ func (m textInputModel) View() tea.View {
 // PromptText prompts for text input with an optional default value shown as placeholder.
 // If the user enters nothing and presses Enter, the default value is returned.
 // Returns ErrCancelled if the user presses Ctrl+C or Esc.
+// Returns ErrNoTTY if stdin is not a terminal or CI is set.
 func PromptText(label, defaultVal string) (string, error) {
+	if err := requireTTY(); err != nil {
+		return "", err
+	}
 	model := newTextInputModel(label, defaultVal)
 	p := tea.NewProgram(model)
 	result, err := p.Run()
