@@ -38,7 +38,7 @@ func Build(commands []config.Command) ([]byte, error) {
 	for _, cmd := range commands {
 		timeout := cmd.Timeout
 		if timeout == 0 {
-			timeout = 60
+			timeout = 0
 		}
 		hooks = append(hooks, hookEntry{
 			Type:    "command",
