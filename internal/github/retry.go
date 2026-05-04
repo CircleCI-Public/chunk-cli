@@ -103,7 +103,7 @@ func (c *Client) doWithRetry(ctx context.Context, query string, vars map[string]
 
 // waitForRateLimit sleeps until the rate limit resets if remaining is below the threshold.
 func (c *Client) waitForRateLimit(ctx context.Context, rl RateLimit) error {
-	if rl.Remaining >= rateLimitThreshold {
+	if rl.Remaining > rateLimitThreshold {
 		return nil
 	}
 
