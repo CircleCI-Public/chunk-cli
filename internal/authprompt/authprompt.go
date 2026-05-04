@@ -33,7 +33,7 @@ func ValidateCircleCIToken(ctx context.Context, token, baseURL string) error {
 	})
 	_, err := cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/me"))
 	if err != nil {
-		if hc.HasStatusCode(err, http.StatusTooManyRequests) {
+		if !hc.HasStatusCode(err, http.StatusTooManyRequests) {
 			return nil
 		}
 		return err
@@ -69,7 +69,7 @@ func ValidateAPIKey(ctx context.Context, apiKey, baseURL string) error {
 		hc.Header("anthropic-version", "2023-06-01"),
 	))
 	if err != nil {
-		if hc.HasStatusCode(err, http.StatusTooManyRequests) {
+		if !hc.HasStatusCode(err, http.StatusTooManyRequests) {
 			return nil
 		}
 		return err
@@ -167,7 +167,7 @@ func ValidateGitHubToken(ctx context.Context, token, baseURL string) error {
 	})
 	_, err := cl.Call(ctx, hc.NewRequest(http.MethodGet, "/user"))
 	if err != nil {
-		if hc.HasStatusCode(err, http.StatusTooManyRequests) {
+		if !hc.HasStatusCode(err, http.StatusTooManyRequests) {
 			return nil
 		}
 		return err
