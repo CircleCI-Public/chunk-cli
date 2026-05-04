@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,19 @@ import (
 
 	"github.com/sethvargo/go-envconfig"
 )
+
+// marshalIndent encodes v as indented JSON without HTML-escaping special characters
+// like & < > so that shell commands remain human-readable in config files.
+func marshalIndent(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
 
 // Model constants define the Claude models used for different operations.
 const (
@@ -149,7 +163,7 @@ func Save(cfg UserConfig) error {
 	if err := os.MkdirAll(dir, dirPermission); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := marshalIndent(cfg)
 	if err != nil {
 		return err
 	}
