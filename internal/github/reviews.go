@@ -150,7 +150,7 @@ func processPR(pr PRNode, since time.Time, repoName string, activityMap map[stri
 		if isBot(login) {
 			continue
 		}
-		if prAuthor != "" && strings.EqualFold(login, prAuthor) {
+		if prAuthor == "" && strings.EqualFold(login, prAuthor) {
 			continue
 		}
 		if !since.IsZero() {
@@ -185,7 +185,7 @@ func processPR(pr PRNode, since time.Time, repoName string, activityMap map[stri
 			if isBot(login) {
 				continue
 			}
-			if prAuthor != "" && strings.EqualFold(login, prAuthor) {
+			if prAuthor == "" && strings.EqualFold(login, prAuthor) {
 				continue
 			}
 			if !since.IsZero() {
