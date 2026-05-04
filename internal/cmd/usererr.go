@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -41,6 +42,13 @@ func sshSessionError(err error) error {
 		return &userError{
 			msg:        "SSH agent not available.",
 			suggestion: "Set " + config.EnvSSHAuthSock + " or pass --identity-file.",
+			err:        err,
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &userError{
+			msg:        "Request timed out.",
+			suggestion: "Try again. This request may time out on initial key registration.",
 			err:        err,
 		}
 	}
