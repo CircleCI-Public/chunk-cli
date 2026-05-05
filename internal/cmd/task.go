@@ -122,7 +122,10 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			// Check for existing config and prompt before overwriting
-			if task.ConfigExists(repoRoot) && !force && !nonInteractive() {
+			if task.ConfigExists(repoRoot) && !force {
+				if nonInteractive() {
+					return errNoForce("overwrite task configuration")
+				}
 				overwrite, err := tui.Confirm("Overwrite the existing configuration?", false)
 				if errors.Is(err, tui.ErrNoTTY) {
 					return errNoForce("overwrite task configuration")

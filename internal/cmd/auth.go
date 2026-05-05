@@ -88,7 +88,10 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, e
 	}
 	if cfg.CircleCIToken != "" {
 		io.Printf("A CircleCI token is already stored in config.\n")
-		if !force && !nonInteractive() {
+		if !force {
+			if nonInteractive() {
+				return errNoForce("replace CircleCI token")
+			}
 			replace, err := tui.Confirm("Do you want to replace it?", false)
 			if errors.Is(err, tui.ErrNoTTY) {
 				return errNoForce("replace CircleCI token")
@@ -143,7 +146,10 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 	}
 	if cfg.AnthropicAPIKey != "" {
 		io.Printf("An Anthropic API key is already stored in config.\n")
-		if !force && !nonInteractive() {
+		if !force {
+			if nonInteractive() {
+				return errNoForce("replace Anthropic API key")
+			}
 			replace, err := tui.Confirm("Do you want to replace it?", false)
 			if errors.Is(err, tui.ErrNoTTY) {
 				return errNoForce("replace Anthropic API key")
@@ -382,7 +388,10 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
 		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored CircleCI token from %s\n", cfgPath)
-	if !force && !nonInteractive() {
+	if !force {
+		if nonInteractive() {
+			return errNoForce("remove CircleCI token")
+		}
 		confirmed, err := tui.Confirm("Are you sure?", false)
 		if errors.Is(err, tui.ErrNoTTY) {
 			return errNoForce("remove CircleCI token")
@@ -436,7 +445,10 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
 		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored API key from %s\n", cfgPath)
-	if !force && !nonInteractive() {
+	if !force {
+		if nonInteractive() {
+			return errNoForce("remove Anthropic API key")
+		}
 		confirmed, err := tui.Confirm("Are you sure?", false)
 		if errors.Is(err, tui.ErrNoTTY) {
 			return errNoForce("remove Anthropic API key")
@@ -489,7 +501,10 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 	}
 	if cfg.GitHubToken != "" {
 		io.Printf("A GitHub token is already stored in config.\n")
-		if !force && !nonInteractive() {
+		if !force {
+			if nonInteractive() {
+				return errNoForce("replace GitHub token")
+			}
 			replace, err := tui.Confirm("Do you want to replace it?", false)
 			if errors.Is(err, tui.ErrNoTTY) {
 				return errNoForce("replace GitHub token")
@@ -566,7 +581,10 @@ func authRemoveGitHub(io iostream.Streams, envSet, force bool) error {
 		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored GitHub token from %s\n", cfgPath)
-	if !force && !nonInteractive() {
+	if !force {
+		if nonInteractive() {
+			return errNoForce("remove GitHub token")
+		}
 		confirmed, err := tui.Confirm("Are you sure?", false)
 		if errors.Is(err, tui.ErrNoTTY) {
 			return errNoForce("remove GitHub token")
