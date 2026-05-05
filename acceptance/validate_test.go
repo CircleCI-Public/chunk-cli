@@ -394,7 +394,7 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	assert.Equal(t, len(execReqs), 0, "expected 0 HTTP exec requests (SSH should be used)")
 }
 
-func TestValidateAutoCreatesSidecarFromConfigImage(t *testing.T) {
+func TestValidateAutoCreatesSidecar(t *testing.T) {
 	// Verify that chunk validate (no --remote) auto-creates a sidecar using the
 	// image stored in validation.sidecarImage when no active sidecar exists.
 	cci := fakes.NewFakeCircleCI()
