@@ -630,7 +630,13 @@ func newSidecarSnapshotCreateCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a snapshot of a sidecar",
+		Short: "Create a snapshot of a sidecar and delete the source sidecar",
+		Long: `Create a snapshot of a sidecar and delete the source sidecar.
+
+Once the snapshot is captured, the source sidecar is deleted to avoid
+leaking the build instance. If the deleted sidecar was the active one,
+the local active-sidecar state is cleared. Launch a new sidecar from the
+snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if len(name) > 255 {

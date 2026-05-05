@@ -214,6 +214,8 @@ chunk sidecar snapshot create --name checkpoint
 chunk sidecar create --name new-sidecar --image <snapshot-id>
 ```
 
+`snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
+
 ---
 
 ## Hook behavior
