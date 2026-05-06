@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
@@ -22,6 +23,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
+
+func randomSidecarName() string {
+	return petname.Generate(3, "-")
+}
 
 func newSidecarCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -166,6 +171,9 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if name == "" {
+				name = randomSidecarName()
+			}
 			resolvedOrgID, err := resolveOrgID(orgID, orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
@@ -192,9 +200,8 @@ func newSidecarCreateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
-	cmd.Flags().StringVar(&name, "name", "", "Sidecar name")
+	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (auto-generated if not provided)")
 	cmd.Flags().StringVar(&image, "image", "", "E2B template ID or container image")
-	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
 }
@@ -805,11 +812,7 @@ func sidecarSetupResolveSidecar(
 		return active.SidecarID, active.Name, active.Workspace, nil
 	}
 	if name == "" {
-		return "", "", "", &userError{
-			msg:        "No active sidecar and --name not provided.",
-			suggestion: "Pass --name to create a new sidecar, or run 'chunk sidecar use <id>'.",
-			errMsg:     "no active sidecar and --name not provided",
-		}
+		name = randomSidecarName()
 	}
 	resolvedOrgID, err := resolveOrgID(orgID, orgPicker(ctx, client))
 	if err != nil {
