@@ -1,7 +1,7 @@
 ---
 name: chunk-sidecar
 description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, and customizing the sidecar image via `chunk sidecar`.
-version: 1.1.0
+version: 1.2.0
 allowed-tools:
   - Bash(chunk --version)
   - Bash(chunk auth status)
@@ -36,28 +36,28 @@ Run `chunk sidecar current`. Three cases:
 - **It prints a sidecar** — use it; go to Step 4.
 - **No active sidecar, and `validation.sidecarImage` is set in `.chunk/config.json`** — create a new sidecar from the snapshot, sync, and go straight to Step 4:
   ```
-  chunk sidecar create --name <name> --org-id <orgID> --image <sidecarImage>
+  chunk sidecar create --org-id <orgID> --image <sidecarImage>
   chunk sidecar sync
   ```
   Read `orgID` and `validation.sidecarImage` from `.chunk/config.json`. Ask the user for the org ID if it is not present in the config.
 - **No active sidecar, no `sidecarImage` configured** — full environment setup is needed. Inform the user, confirm the org ID (read from `.chunk/config.json` or ask), create a sidecar, then go to Step 3:
   ```
-  chunk sidecar create --name <name> --org-id <orgID>
+  chunk sidecar create --org-id <orgID>
   ```
 
-Always pass `--org-id` to `chunk sidecar create` — interactive org selection does not work in Claude sessions.
+Always pass `--org-id` to `chunk sidecar create` — interactive org selection does not work in Claude sessions. `--name` is optional; a random adjective-adverb-noun name (e.g. `happy-quickly-tesla`) is generated automatically if omitted.
 
 ## Step 3: One-time setup
 
 This step produces a reusable snapshot so future sessions boot fast. Follow it whenever a fresh sidecar has no snapshot to boot from (Step 2 case 3).
 
-1. `chunk sidecar setup --dir . --name <name>` — detects the stack, syncs files, and runs install steps on the sidecar.
+1. `chunk sidecar setup --dir .` — detects the stack, syncs files, and runs install steps on the sidecar. Pass `--name <name>` if you want a specific name; otherwise one is generated automatically.
 2. Verify the sidecar is working correctly: `chunk validate`. This uses per-command routing — commands marked `remote: true` run on the sidecar, the rest run locally. If any command fails with a missing binary or dependency, see Troubleshooting below, then re-run `chunk validate` until it passes.
 3. Snapshot the working sidecar: `chunk sidecar snapshot create --name <snapshot-name>`. This captures the configured state and returns a snapshot ID. **Always snapshot after confirming the sidecar is working — do not skip this step.** Snapshot names are limited to 255 characters; the CLI will reject longer names before making the API call.
 4. Record the snapshot ID in `.chunk/config.json`: `chunk config set validation.sidecarImage <snapshot-id>`.
 5. Create a **new** sidecar from the snapshot and set it as active — this is the clean environment you will use going forward:
    ```
-   chunk sidecar create --name <new-name> --org-id <orgID> --image <snapshot-id>
+   chunk sidecar create --org-id <orgID> --image <snapshot-id>
    chunk sidecar sync
    ```
 6. Re-verify with `chunk validate` to confirm the snapshot-booted sidecar is healthy before entering the loop.
