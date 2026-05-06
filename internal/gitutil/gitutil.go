@@ -2,6 +2,7 @@ package gitutil
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +101,53 @@ func GeneratePatch(base string) (string, error) {
 		return "", fmt.Errorf("generate diff: %w", err)
 	}
 	return string(out), nil
+}
+
+// ComputeTreeSHA computes the git tree SHA for the current worktree state
+// (including untracked files) without modifying the real index.
+// It copies the index to a temp file, stages all files into the copy,
+// and calls git write-tree against it.
+func ComputeTreeSHA(workDir string) (string, error) {
+	root, err := RepoRoot(workDir)
+	if err != nil {
+		return "", fmt.Errorf("compute tree sha: %w", err)
+	}
+
+	src, err := os.Open(filepath.Join(root, ".git", "index"))
+	if err != nil {
+		return "", fmt.Errorf("compute tree sha: open index: %w", err)
+	}
+	tmp, err := os.CreateTemp("", "chunk-index-*")
+	if err != nil {
+		_ = src.Close()
+		return "", fmt.Errorf("compute tree sha: create temp index: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := io.Copy(tmp, src); err != nil {
+		_ = src.Close()
+		_ = tmp.Close()
+		return "", fmt.Errorf("compute tree sha: copy index: %w", err)
+	}
+	_ = src.Close()
+	_ = tmp.Close()
+
+	indexEnv := "GIT_INDEX_FILE=" + tmpPath
+
+	addCmd := exec.Command("git", "-C", workDir, "add", "--all")
+	addCmd.Env = append(os.Environ(), indexEnv)
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("compute tree sha: git add: %w: %s", err, out)
+	}
+
+	treeCmd := exec.Command("git", "-C", workDir, "write-tree")
+	treeCmd.Env = append(os.Environ(), indexEnv)
+	out, err := treeCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("compute tree sha: git write-tree: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func splitNonEmpty(s string) []string {
