@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
@@ -52,7 +53,7 @@ func persistWorkspace(ctx context.Context, workspace string) error {
 func Sync(ctx context.Context,
 	client *circleci.Client, sidecarID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
 
-	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
+	session, err := openSessionWithRetry(ctx, client, sidecarID, identityFile, authSock)
 	if err != nil {
 		return err
 	}
@@ -155,6 +156,16 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 
 	status(iostream.LevelInfo, fmt.Sprintf("Synchronising local %s/%s to remote: %s...", org, repo, repoPath))
 
+	status(iostream.LevelInfo, "Fetching remote refs on sidecar...")
+	fetchCmd := fmt.Sprintf("git -C %s fetch origin", ShellEscape(repoPath))
+	fetchResult, err := ExecOverSSH(ctx, session, fetchCmd, nil, nil)
+	if err != nil {
+		return fmt.Errorf("sync: fetch: %w", err)
+	}
+	if fetchResult.ExitCode != 0 {
+		return fmt.Errorf("sync: fetch failed (exit code: %d): %s", fetchResult.ExitCode, fetchResult.Stderr)
+	}
+
 	base, err := gitutil.MergeBase()
 	if err != nil {
 		return &RemoteBaseError{Err: err}
@@ -200,4 +211,49 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 		return fmt.Errorf("%w (exit code: %d): %s", errApplyFailed, applyResult.ExitCode, detail)
 	}
 	return nil
+}
+
+// openSessionWithRetry calls OpenSession, retrying on transient errors to give
+// a newly-created sidecar time to finish booting before its SSH service is ready.
+func openSessionWithRetry(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string) (*Session, error) {
+	const retryDelay = 5 * time.Second
+	const maxAttempts = 12 // up to ~1 minute
+
+	var err error
+	for i := range maxAttempts {
+		var session *Session
+		session, err = OpenSession(ctx, client, sidecarID, identityFile, authSock)
+		if err == nil {
+			return session, nil
+		}
+		if !isTransientSSHError(err) || i == maxAttempts-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(retryDelay):
+		}
+	}
+	return nil, err
+}
+
+// isTransientSSHError returns true for errors that are worth retrying when
+// opening a session — timeouts and connection failures that indicate the
+// sidecar's SSH service is not yet ready. Auth failures, missing keys, and
+// definitive API errors are not transient.
+func isTransientSSHError(err error) bool {
+	if errors.Is(err, circleci.ErrNotAuthorized) {
+		return false
+	}
+	var statusErr *circleci.StatusError
+	if errors.As(err, &statusErr) {
+		return false
+	}
+	var keyErr *KeyNotFoundError
+	if errors.As(err, &keyErr) {
+		return false
+	}
+	var pubKeyErr *PublicKeyNotFoundError
+	return !errors.As(err, &pubKeyErr)
 }
