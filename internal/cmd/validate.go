@@ -150,7 +150,7 @@ func newValidateCmd() *cobra.Command {
 				}
 				statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", sidecarID))
 			} else if cfg.HasRemoteCommands() {
-				resolvePerCommandSidecarID(cmd.Context(), &sidecarID, orgID, image, workDir, hook, streams, statusFn)
+				resolveSidecar(cmd.Context(), &sidecarID, orgID, image, workDir, hook, streams)
 			}
 
 			execErr := runValidate(cmd.Context(), workDir, name, inlineCmd, save, sidecarID, identityFile, workdir, allRemote, cfg, statusFn, streams)
@@ -365,11 +365,12 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 	return ""
 }
 
-// resolvePerCommandSidecarID fills sidecarID for per-command remote routing
+// resolveSidecar fills sidecarID for per-command remote routing
 // (i.e. when --remote is not set but some commands have Remote:true).
 // It uses the active sidecar when available, auto-creates one when a sidecar
 // image is configured or the caller is a Stop hook, and warns otherwise.
-func resolvePerCommandSidecarID(ctx context.Context, sidecarID *string, orgID, image, workDir string, hook *hookContext, streams iostream.Streams, statusFn iostream.StatusFunc) {
+func resolveSidecar(ctx context.Context, sidecarID *string, orgID, image, workDir string, hook *hookContext, streams iostream.Streams) {
+	statusFn := newStatusFunc(streams)
 	if active, err := sidecar.LoadActive(); err == nil && active != nil {
 		*sidecarID = active.SidecarID
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
