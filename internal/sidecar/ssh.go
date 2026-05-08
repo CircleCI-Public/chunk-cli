@@ -24,6 +24,15 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 )
 
+// connError wraps a connection-level failure from dialSSH or NewSession — i.e.
+// the SSH channel could not be opened before any command ran. Callers can use
+// errors.As to distinguish these from command-exit errors and treat them as
+// transient boot failures worth retrying.
+type connError struct{ err error }
+
+func (e *connError) Error() string { return e.err.Error() }
+func (e *connError) Unwrap() error { return e.err }
+
 // ExecResult holds the output of a command executed over SSH.
 type ExecResult struct {
 	Stdout   string
@@ -134,7 +143,7 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 			_ = resp.Body.Close()
 		}
 		cleanup()
-		return nil, fmt.Errorf("websocket connect to %s: %w", wsURL, err)
+		return nil, &connError{fmt.Errorf("websocket connect to %s: %w", wsURL, err)}
 	}
 
 	netConn := websocket.NetConn(ctx, wsConn, websocket.MessageBinary)
@@ -148,7 +157,7 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 	if err != nil {
 		_ = netConn.Close()
 		cleanup()
-		return nil, fmt.Errorf("ssh handshake: %w", err)
+		return nil, &connError{fmt.Errorf("ssh handshake: %w", err)}
 	}
 
 	return &sshConn{Client: ssh.NewClient(conn, chans, reqs), cleanup: cleanup}, nil
@@ -179,7 +188,7 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 
 	sess, err := client.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("ssh session: %w", err)
+		return nil, &connError{fmt.Errorf("ssh session: %w", err)}
 	}
 	defer func() { _ = sess.Close() }()
 

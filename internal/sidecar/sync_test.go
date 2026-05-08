@@ -2,6 +2,7 @@ package sidecar
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"testing"
 
@@ -45,6 +46,21 @@ func TestIsTransientSSHError(t *testing.T) {
 	t.Run("PublicKeyNotFoundError is not transient", func(t *testing.T) {
 		err := &PublicKeyNotFoundError{KeyPath: "/home/user/.ssh/chunk_ai.pub"}
 		assert.Equal(t, isTransientSSHError(err), false)
+	})
+
+	t.Run("io.EOF is transient", func(t *testing.T) {
+		err := fmt.Errorf("ssh handshake: ssh: handshake failed: failed to get reader: failed to read frame header: %w", io.EOF)
+		assert.Equal(t, isTransientSSHError(err), true)
+	})
+
+	t.Run("websocket 502 is transient", func(t *testing.T) {
+		err := &connError{fmt.Errorf("websocket connect to wss://example.com: failed to WebSocket dial: expected handshake response status code 101 but got 502")}
+		assert.Equal(t, isTransientSSHError(err), true)
+	})
+
+	t.Run("ssh unexpected packet is transient", func(t *testing.T) {
+		err := &connError{fmt.Errorf("ssh session: ssh: unexpected packet in response to channel open: <nil>")}
+		assert.Equal(t, isTransientSSHError(err), true)
 	})
 
 	t.Run("generic error is not transient", func(t *testing.T) {

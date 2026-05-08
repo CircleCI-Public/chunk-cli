@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -78,6 +79,19 @@ func Sync(ctx context.Context,
 		status(iostream.LevelDone, "Synced")
 		return nil
 	}
+
+	// If the SSH connection dropped mid-sync (e.g. sidecar still booting),
+	// re-open the session and retry once before falling through to other recovery.
+	if isTransientSSHError(err) {
+		if session, err = openSessionWithRetry(ctx, client, sidecarID, identityFile, authSock, status); err == nil {
+			err = syncWorkspace(ctx, status, org, repo, repoPath, session)
+			if err == nil {
+				status(iostream.LevelDone, "Synced")
+				return nil
+			}
+		}
+	}
+
 	// We should only try again if the failure was in the apply phase.
 	if !errors.Is(err, errApplyFailed) {
 		return err
@@ -233,10 +247,18 @@ func openSessionWithRetry(ctx context.Context, client *circleci.Client, sidecarI
 	return nil, err
 }
 
-// isTransientSSHError returns true for network-level errors that are worth
-// retrying when opening a session — connection failures and timeouts that
-// indicate the sidecar's SSH service is not yet ready.
+// isTransientSSHError returns true for errors worth retrying when the sidecar's
+// SSH service is not yet ready. Covers net.Error (connection refused, timeout),
+// io.EOF (dropped connection during SSH handshake), and connError (any
+// connection-level failure from dialSSH or NewSession before a command ran).
 func isTransientSSHError(err error) bool {
 	var netErr net.Error
-	return errors.As(err, &netErr)
+	if errors.As(err, &netErr) {
+		return true
+	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	var ce *connError
+	return errors.As(err, &ce)
 }
