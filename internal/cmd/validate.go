@@ -180,6 +180,8 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 
+	cmd.AddCommand(newValidateVariantsCmd())
+
 	return cmd
 }
 
@@ -374,7 +376,7 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 // image is configured or the caller is a Stop hook, and warns otherwise.
 func resolveSidecar(ctx context.Context, sidecarID *string, orgID, image, workDir string, hook *hookContext, streams iostream.Streams) {
 	statusFn := newStatusFunc(streams)
-	if active, err := sidecar.LoadActive(); err == nil && active != nil {
+	if active, err := sidecar.LoadActive(ctx); err == nil && active != nil {
 		*sidecarID = active.SidecarID
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
 		return
