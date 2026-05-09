@@ -1,7 +1,13 @@
 package upgrade
 
 import (
-	"fmt"
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,81 +15,117 @@ import (
 	"testing"
 )
 
-// writeFakeGh creates a fake "gh" script in a temp directory that
-// records its arguments and returns the given exit code.
-// It returns the directory containing the fake.
-func writeFakeGh(t *testing.T, authExit, upgradeExit int) string {
+// makeTarGz returns a .tar.gz containing a single file named "chunk" with the given content.
+func makeTarGz(t *testing.T, content []byte) []byte {
 	t.Helper()
-	dir := t.TempDir()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
 
-	if runtime.GOOS == "windows" {
-		t.Skip("fake gh script not supported on Windows")
+	hdr := &tar.Header{
+		Name: "chunk",
+		Mode: 0o755,
+		Size: int64(len(content)),
 	}
-
-	// The fake gh script inspects its arguments to decide behavior.
-	// "auth status" → authExit
-	// "extension upgrade ..." → upgradeExit
-	script := fmt.Sprintf(`#!/bin/sh
-if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  exit %d
-fi
-if [ "$1" = "extension" ] && [ "$2" = "upgrade" ]; then
-  exit %d
-fi
-exit 0
-`, authExit, upgradeExit)
-	ghPath := filepath.Join(dir, "gh")
-	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+	if err := tw.WriteHeader(hdr); err != nil {
 		t.Fatal(err)
 	}
-	return dir
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// fakeServer sets up an httptest server that serves a GitHub-like release API
+// and a download endpoint. Returns the server and the install target path.
+func fakeServer(t *testing.T, apiStatus int, assetContent []byte) (*httptest.Server, string) {
+	t.Helper()
+
+	installDir := t.TempDir()
+	installPath := filepath.Join(installDir, "chunk")
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			if apiStatus != http.StatusOK {
+				w.WriteHeader(apiStatus)
+				return
+			}
+			assetName := PlatformAssetName()
+			rel := ghRelease{
+				TagName: "v9.9.9",
+				Assets: []ghAsset{
+					{
+						Name:               assetName,
+						BrowserDownloadURL: srv.URL + "/download/" + assetName,
+					},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(rel)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/download/") {
+			if assetContent == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write(assetContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv, installPath
 }
 
 func TestRun(t *testing.T) {
+	fakeBinary := []byte("#!/bin/sh\necho chunk v9.9.9\n")
+	archiveData := makeTarGz(t, fakeBinary)
+
 	tests := []struct {
 		name        string
-		path        string // override PATH; empty means use writeFakeGh
-		authExit    int
-		upgradeExit int
+		apiStatus   int
+		archive     []byte
 		wantErr     bool
 		errContains string
 	}{
 		{
-			name:        "gh not found",
-			path:        "/nonexistent",
-			wantErr:     true,
-			errContains: "gh CLI not found",
+			name:      "success",
+			apiStatus: http.StatusOK,
+			archive:   archiveData,
 		},
 		{
-			name:        "not authenticated",
-			authExit:    1,
+			name:        "API error",
+			apiStatus:   http.StatusInternalServerError,
 			wantErr:     true,
-			errContains: "not authenticated",
+			errContains: "fetch latest release",
 		},
 		{
-			name: "success",
-		},
-		{
-			name:        "upgrade fails",
-			upgradeExit: 1,
+			name:        "download fails",
+			apiStatus:   http.StatusOK,
+			archive:     nil, // server returns 404 for download
 			wantErr:     true,
-			errContains: "upgrade failed",
+			errContains: "install update",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.path != "" {
-				t.Setenv("PATH", tt.path)
-			} else {
-				dir := writeFakeGh(t, tt.authExit, tt.upgradeExit)
-				t.Setenv("PATH", dir)
-			}
+			srv, installPath := fakeServer(t, tt.apiStatus, tt.archive)
 
-			err := Run()
+			err := Run(io.Discard, srv.Client(), srv.URL, installPath)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatal("expected error")
+					t.Fatal("expected error, got nil")
 				}
 				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Fatalf("expected error containing %q, got: %v", tt.errContains, err)
@@ -93,6 +135,54 @@ func TestRun(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+
+			got, err := os.ReadFile(installPath)
+			if err != nil {
+				t.Fatalf("read installed binary: %v", err)
+			}
+			if !bytes.Equal(got, fakeBinary) {
+				t.Fatalf("installed binary content mismatch: got %q, want %q", got, fakeBinary)
+			}
 		})
+	}
+}
+
+func TestIsBrewManaged(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/opt/homebrew/bin/chunk", true},
+		{"/opt/homebrew/bin/something-else", true},
+		{"/usr/local/bin/chunk", false},
+		{"/home/user/.local/bin/chunk", false},
+		{"/tmp/chunk", false},
+	}
+	for _, tt := range tests {
+		got := isBrewManaged(tt.path)
+		if got != tt.want {
+			t.Errorf("isBrewManaged(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestPlatformAssetName(t *testing.T) {
+	name := PlatformAssetName()
+	if !strings.HasPrefix(name, "chunk_") {
+		t.Errorf("expected name to start with chunk_, got %q", name)
+	}
+	if !strings.HasSuffix(name, ".tar.gz") {
+		t.Errorf("expected name to end with .tar.gz, got %q", name)
+	}
+
+	switch runtime.GOARCH {
+	case "amd64":
+		if !strings.Contains(name, "x86_64") {
+			t.Errorf("expected x86_64 for amd64, got %q", name)
+		}
+	case "arm64":
+		if !strings.Contains(name, "arm64") {
+			t.Errorf("expected arm64, got %q", name)
+		}
 	}
 }

@@ -1,6 +1,12 @@
 package acceptance
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,85 +16,111 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
-func TestUpgradeNoGhCLI(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	// Remove PATH so gh cannot be found
-	env.Extra["PATH"] = "/nonexistent"
-
-	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when gh is missing")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "gh") || strings.Contains(combined, "cli.github.com"),
-		"expected gh CLI error message, got: %s", combined)
+func makeFakeArchive(t *testing.T) []byte {
+	t.Helper()
+	content := []byte("#!/bin/sh\necho chunk updated\n")
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	hdr := &tar.Header{Name: "chunk", Mode: 0o755, Size: int64(len(content))}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	gz.Close()
+	return buf.Bytes()
 }
 
-func TestUpgradeGhNotAuthenticated(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	// gh auth status will fail if GH_CONFIG_DIR points to an empty config
-	env.Extra["GH_CONFIG_DIR"] = t.TempDir()
-
-	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
-
-	// gh is available but not authenticated — expect error
-	assert.Assert(t, result.ExitCode != 0,
-		"expected non-zero exit when gh is not authenticated, stdout: %s, stderr: %s",
-		result.Stdout, result.Stderr)
-}
-
-func TestUpgradeExtensionNotInstalled(t *testing.T) {
-	// Create a fake gh script that passes auth but fails on extension upgrade
-	fakeGhDir := t.TempDir()
-	fakeGh := filepath.Join(fakeGhDir, "gh")
-	script := `#!/bin/sh
-if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  exit 0
-fi
-if [ "$1" = "extension" ] && [ "$2" = "upgrade" ]; then
-  echo "no extension found" >&2
-  exit 1
-fi
-exit 1
-`
-	err := os.WriteFile(fakeGh, []byte(script), 0o755)
-	assert.NilError(t, err)
-
-	env := testenv.NewTestEnv(t)
-	env.Extra["PATH"] = fakeGhDir
-
-	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0,
-		"expected non-zero exit when extension not installed")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "upgrade failed"),
-		"expected 'upgrade failed' error, got: %s", combined)
+func newUpgradeFakeServer(t *testing.T, archive []byte) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			assetName := upgrade.PlatformAssetName()
+			release := map[string]any{
+				"tag_name": "v9.9.9",
+				"assets": []map[string]any{
+					{
+						"name":                 assetName,
+						"browser_download_url": srv.URL + "/download/" + assetName,
+					},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(release)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/download/") {
+			w.WriteHeader(http.StatusOK)
+			w.Write(archive)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }
 
 func TestUpgradeHappyPath(t *testing.T) {
-	// Create a fake gh script that succeeds for both auth and extension upgrade
-	fakeGhDir := t.TempDir()
-	fakeGh := filepath.Join(fakeGhDir, "gh")
-	script := `#!/bin/sh
-if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  exit 0
-fi
-if [ "$1" = "extension" ] && [ "$2" = "upgrade" ]; then
-  exit 0
-fi
-exit 1
-`
-	err := os.WriteFile(fakeGh, []byte(script), 0o755)
-	assert.NilError(t, err)
+	archive := makeFakeArchive(t)
+	srv := newUpgradeFakeServer(t, archive)
+
+	// Redirect the binary replacement to a temp file so we don't overwrite the test binary.
+	installPath := filepath.Join(t.TempDir(), "chunk")
+	if err := os.WriteFile(installPath, []byte("placeholder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	env := testenv.NewTestEnv(t)
-	env.Extra["PATH"] = fakeGhDir
+	env.GithubURL = srv.URL
+	env.Extra["CHUNK_INSTALL_PATH"] = installPath
 
 	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0,
-		"expected successful upgrade, stdout: %s, stderr: %s",
-		result.Stdout, result.Stderr)
+		"expected successful upgrade, stdout: %s, stderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "v9.9.9"),
+		"expected version in output, got: %s", combined)
+
+	// Verify the binary was actually replaced.
+	got, err := os.ReadFile(installPath)
+	assert.NilError(t, err)
+	assert.Assert(t, !bytes.Equal(got, []byte("placeholder")),
+		"expected install path to be overwritten")
+}
+
+func TestUpgradeBrewManaged(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.Extra["CHUNK_INSTALL_PATH"] = "/opt/homebrew/bin/chunk"
+
+	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for brew-managed install")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "Homebrew"),
+		"expected error mentioning Homebrew, got: %s", combined)
+}
+
+func TestUpgradeAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	env := testenv.NewTestEnv(t)
+	env.GithubURL = srv.URL
+
+	result := binary.RunCLI(t, []string{"upgrade"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit on API error")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "fetch latest release"),
+		"expected error about fetching release, got: %s", combined)
 }
