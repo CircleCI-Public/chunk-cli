@@ -16,14 +16,17 @@ import (
 
 const workspaceDir = "./workspace"
 
-// resolveWorkspace determines the workspace path. Priority:
-// 1. CLI --workdir flag  2. sidecar.json workspace  3. default.
-func resolveWorkspace(ctx context.Context, cliWorkdir, repo string) string {
+// ResolveWorkspace determines the workspace path. Priority:
+// 1. CLI --workdir flag  2. sidecar.json workspace  3. default ./workspace/<repo>.
+func ResolveWorkspace(ctx context.Context, cliWorkdir, repo string) string {
 	if cliWorkdir != "" {
 		return cliWorkdir
 	}
 	if active, err := LoadActive(ctx); err == nil && active != nil && active.Workspace != "" {
 		return active.Workspace
+	}
+	if repo == "" {
+		return workspaceDir
 	}
 	return workspaceDir + "/" + repo
 }
@@ -64,7 +67,7 @@ func Sync(ctx context.Context,
 		return fmt.Errorf("sync: %w", err)
 	}
 
-	repoPath := resolveWorkspace(ctx, workdir, repo)
+	repoPath := ResolveWorkspace(ctx, workdir, repo)
 
 	if err := persistWorkspace(ctx, repoPath); err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))

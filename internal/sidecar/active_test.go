@@ -216,7 +216,7 @@ func TestResolveWorkspaceCLIFlagWins(t *testing.T) {
 	ctx := context.Background()
 	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-1", Workspace: "/workspace/saved"}))
 
-	got := resolveWorkspace(ctx, "/workspace/override", "myrepo")
+	got := ResolveWorkspace(ctx, "/workspace/override", "myrepo")
 	assert.Equal(t, got, "/workspace/override")
 }
 
@@ -228,7 +228,7 @@ func TestResolveWorkspaceSidecarFallback(t *testing.T) {
 	ctx := context.Background()
 	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-1", Workspace: "/workspace/saved"}))
 
-	got := resolveWorkspace(ctx, "", "myrepo")
+	got := ResolveWorkspace(ctx, "", "myrepo")
 	assert.Equal(t, got, "/workspace/saved")
 }
 
@@ -237,6 +237,6 @@ func TestResolveWorkspaceDefaultFallback(t *testing.T) {
 	t.Chdir(dir)
 	setupXDGData(t)
 
-	got := resolveWorkspace(context.Background(), "", "myrepo")
+	got := ResolveWorkspace(context.Background(), "", "myrepo")
 	assert.Equal(t, got, "./workspace/myrepo")
 }

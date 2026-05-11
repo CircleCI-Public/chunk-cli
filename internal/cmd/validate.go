@@ -15,6 +15,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -312,14 +313,9 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 	if err != nil {
 		return nil, "", &userError{msg: "Could not open SSH session to sidecar.", err: err}
 	}
-	dest := workdir
-	if dest == "" {
-		if active, err := sidecar.LoadActive(ctx); err == nil && active != nil && active.Workspace != "" {
-			dest = active.Workspace
-		} else {
-			dest = "./workspace"
-		}
-	}
+	cwd, _ := os.Getwd()
+	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
+	dest := sidecar.ResolveWorkspace(ctx, workdir, repo)
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
 		result, err := sidecar.ExecOverSSH(ctx, session, "sh -c "+sidecar.ShellEscape(script), nil, nil)
 		if err != nil {

@@ -771,10 +771,9 @@ Example:
 			status(iostream.LevelInfo, fmt.Sprintf("stack: %s", env.Stack))
 
 			// Step 2: Resolve or create sidecar.
-			var workspace string
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, _, workspace, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, status, streams)
+				sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -793,7 +792,7 @@ Example:
 			}
 
 			// Step 5: Run setup steps over SSH.
-			if err := sidecarSetupRunSetup(cmd.Context(), client, sidecarID, identityFile, authSock, env, workspace, streams, status); err != nil {
+			if err := sidecarSetupRunSetup(cmd.Context(), client, sidecarID, identityFile, authSock, env, streams, status); err != nil {
 				return err
 			}
 
@@ -821,29 +820,29 @@ func sidecarSetupResolveSidecar(
 	orgID, name string,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
-) (id, displayName, workspace string, err error) {
+) (id, displayName string, err error) {
 	active, err := sidecar.LoadActive(ctx)
 	if err != nil {
-		return "", "", "", &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
+		return "", "", &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
 	}
 	if active != nil {
 		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
-		return active.SidecarID, active.Name, active.Workspace, nil
+		return active.SidecarID, active.Name, nil
 	}
 	if name == "" {
 		name = randomSidecarName()
 	}
 	resolvedOrgID, err := resolveOrgID(orgID, orgPicker(ctx, client))
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q...", name))
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, "")
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
-			return "", "", "", authErr
+			return "", "", authErr
 		}
-		return "", "", "", &userError{
+		return "", "", &userError{
 			msg:        "Could not create the sidecar.",
 			suggestion: "Check your network connection and try again.",
 			err:        err,
@@ -853,7 +852,7 @@ func sidecarSetupResolveSidecar(
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))
-	return sc.ID, sc.Name, "", nil
+	return sc.ID, sc.Name, nil
 }
 
 func sidecarSetupEnsureSSHKey(identityFile string, status iostream.StatusFunc) error {
@@ -906,7 +905,6 @@ func sidecarSetupRunSetup(
 	client *circleci.Client,
 	sidecarID, identityFile, authSock string,
 	env *envbuilder.Environment,
-	workspace string,
 	streams iostream.Streams,
 	status iostream.StatusFunc,
 ) error {
@@ -915,11 +913,11 @@ func sidecarSetupRunSetup(
 		return nil
 	}
 
-	ws := workspace
-	if ws == "" {
-		if active, lerr := sidecar.LoadActive(ctx); lerr == nil && active != nil && active.Workspace != "" {
-			ws = active.Workspace
-		}
+	// ws is non-empty only when re-attaching to a pre-existing sidecar that had a
+	// workspace saved; for freshly created sidecars it stays "".
+	var ws string
+	if active, lerr := sidecar.LoadActive(ctx); lerr == nil && active != nil {
+		ws = active.Workspace
 	}
 
 	for _, step := range env.Setup {
