@@ -99,7 +99,7 @@ func PlatformAssetName() string {
 	if archName == "amd64" {
 		archName = "x86_64"
 	}
-	return fmt.Sprintf("chunk_%s_%s.tar.gz", osName, archName)
+	return fmt.Sprintf("chunk-cli_%s_%s.tar.gz", osName, archName)
 }
 
 func downloadAndReplace(client *http.Client, url, installPath string) error {

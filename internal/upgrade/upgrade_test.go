@@ -168,8 +168,8 @@ func TestIsBrewManaged(t *testing.T) {
 
 func TestPlatformAssetName(t *testing.T) {
 	name := PlatformAssetName()
-	if !strings.HasPrefix(name, "chunk_") {
-		t.Errorf("expected name to start with chunk_, got %q", name)
+	if !strings.HasPrefix(name, "chunk-cli_") {
+		t.Errorf("expected name to start with chunk-cli_, got %q", name)
 	}
 	if !strings.HasSuffix(name, ".tar.gz") {
 		t.Errorf("expected name to end with .tar.gz, got %q", name)
