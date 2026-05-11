@@ -81,6 +81,8 @@ func newValidateCmd() *cobra.Command {
 	var sidecarID, identityFile, workdir, orgID string
 	var dryRun, list, save, remote, jsonOut bool
 	var inlineCmd, projectDir string
+	var envVarsFlag []string
+	var envFile string
 
 	cmd := &cobra.Command{
 		Use:          "validate [name]",
@@ -159,6 +161,14 @@ func newValidateCmd() *cobra.Command {
 			// Per-command routing only applies when the sidecar is resolved implicitly.
 			allRemote := remote || sidecarID != ""
 
+			// Validate --env flag syntax before any remote resolution so bad
+			// values are caught immediately regardless of execution mode.
+			if len(envVarsFlag) > 0 {
+				if _, vErr := sidecar.ParseEnvPairs(envVarsFlag); vErr != nil {
+					return &userError{msg: fmt.Sprintf("invalid --env value: %s", vErr), err: vErr}
+				}
+			}
+
 			image := resolveImage(name, cfg)
 
 			freshlyCreated := false
@@ -174,7 +184,19 @@ func newValidateCmd() *cobra.Command {
 				freshlyCreated = resolveSidecar(ctx, &sidecarID, orgID, image, workDir, hook, streams)
 			}
 
-			execErr := runValidate(ctx, workDir, name, inlineCmd, save, sidecarID, freshlyCreated, identityFile, workdir, allRemote, cfg, statusFn, streams)
+			// Only load env vars and resolve secrets when a sidecar is actually
+			// being used — avoids parsing .env.local or hitting secrets APIs on
+			// purely local runs.
+			var envVars map[string]string
+			if sidecarID != "" {
+				var err error
+				envVars, err = resolveEnvVars(ctx, workDir, envFile, envVarsFlag)
+				if err != nil {
+					return err
+				}
+			}
+
+			execErr := runValidate(ctx, workDir, name, inlineCmd, save, sidecarID, freshlyCreated, identityFile, workdir, allRemote, envVars, cfg, statusFn, streams)
 
 			if hook != nil {
 				maxAttempts := cfg.StopHookMaxAttempts
@@ -198,6 +220,9 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&inlineCmd, "cmd", "", "Run an inline command instead of config")
 	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
+	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
+	cmd.Flags().StringVar(&envFile, "env-file", "", "Env file to load (default .env.local when flag is present)")
+	cmd.Flags().Lookup("env-file").NoOptDefVal = defaultEnvFile
 
 	return cmd
 }
@@ -206,7 +231,7 @@ func newValidateCmd() *cobra.Command {
 // provided options. It is shared by both direct and hook invocations.
 // allRemote is true when --remote is passed explicitly (all commands run on the
 // sidecar); false means only commands with Remote:true are routed to the sidecar.
-func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID string, freshlyCreated bool, identityFile, workdir string, allRemote bool, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID string, freshlyCreated bool, identityFile, workdir string, allRemote bool, envVars map[string]string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	// --cmd: inline command (always local in per-command mode)
 	if inlineCmd != "" {
 		cmdName := name
@@ -220,7 +245,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 		}
 		if sidecarID != "" && allRemote {
-			execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
+			execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, envVars, streams)
 			if err != nil {
 				return err
 			}
@@ -231,7 +256,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 
 	// All-remote execution (--remote flag): send everything to the sidecar.
 	if sidecarID != "" && allRemote {
-		execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
+		execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, envVars, streams)
 		if err != nil {
 			return err
 		}
@@ -244,7 +269,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 		if name != "" {
 			if cmd := cfg.FindCommand(name); cmd != nil && cmd.Remote {
 				statusFn(iostream.LevelInfo, fmt.Sprintf("running %s on sidecar %s", name, sidecarID))
-				execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
+				execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, envVars, streams)
 				if err != nil {
 					return err
 				}
@@ -253,7 +278,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
 			// Named command is not marked remote; fall through to local execution.
 		} else {
-			return runSplitCommands(ctx, sidecarID, freshlyCreated, identityFile, workdir, workDir, cfg, statusFn, streams)
+			return runSplitCommands(ctx, sidecarID, freshlyCreated, identityFile, workdir, workDir, envVars, cfg, statusFn, streams)
 		}
 	}
 
@@ -298,7 +323,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 
 // openSSHSession establishes an SSH session to the sidecar and returns an
 // exec function and the resolved remote working directory.
-func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string, streams iostream.Streams) (func(context.Context, string) (string, string, int, error), string, error) {
+func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string, envVars map[string]string, streams iostream.Streams) (func(context.Context, string) (string, string, int, error), string, error) {
 	client, err := ensureCircleCIClient(ctx, streams, tui.PromptHidden)
 	if err != nil {
 		return nil, "", err
@@ -312,7 +337,7 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
 	dest := sidecar.ResolveWorkspace(ctx, workdir, repo)
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
-		result, err := sidecar.ExecOverSSH(ctx, session, "sh -c "+sidecar.ShellEscape(script), nil, nil)
+		result, err := sidecar.ExecOverSSH(ctx, session, "sh -c "+sidecar.ShellEscape(script), nil, envVars)
 		if err != nil {
 			return "", "", 0, err
 		}
@@ -326,7 +351,7 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 // When freshlyCreated is true, SSH failures are hard errors rather than
 // silent local fallbacks (a newly provisioned sidecar that can't be reached
 // indicates a real problem, not temporary unavailability).
-func runSplitCommands(ctx context.Context, sidecarID string, freshlyCreated bool, identityFile, workdir, workDir string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+func runSplitCommands(ctx context.Context, sidecarID string, freshlyCreated bool, identityFile, workdir, workDir string, envVars map[string]string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	remoteCfg, localCfg := splitByRemote(cfg)
 	if len(remoteCfg.Commands) > 0 {
 		statusFn(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, commandNames(remoteCfg.Commands)))
@@ -336,7 +361,7 @@ func runSplitCommands(ctx context.Context, sidecarID string, freshlyCreated bool
 	}
 	var runErr error
 	if len(remoteCfg.Commands) > 0 {
-		execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
+		execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, envVars, streams)
 		if err != nil {
 			if freshlyCreated {
 				return newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).

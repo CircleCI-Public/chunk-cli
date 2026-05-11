@@ -24,11 +24,13 @@ import (
 // SSHServer is a WebSocket+SSH server for testing SSH-based sidecar interactions.
 // It accepts a single authorized public key and records exec requests.
 type SSHServer struct {
+	t        *testing.T
 	srv      *httptest.Server
 	mu       sync.Mutex
 	stdout   string
 	exitCode int
 	commands []string
+	envVars  map[string]string
 }
 
 // GenerateSSHKeypair generates an ed25519 keypair, writes the private and public
@@ -86,7 +88,7 @@ func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 	}
 	sshCfg.AddHostKey(hostSigner)
 
-	srv := &SSHServer{}
+	srv := &SSHServer{t: t}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ssh/tunnel", func(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +132,17 @@ func (s *SSHServer) Commands() []string {
 	return out
 }
 
+// EnvVars returns a copy of all environment variables received via "env" requests.
+func (s *SSHServer) EnvVars() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.envVars))
+	for k, v := range s.envVars {
+		out[k] = v
+	}
+	return out
+}
+
 func (s *SSHServer) handleConn(conn net.Conn, cfg *ssh.ServerConfig) {
 	defer conn.Close() //nolint:errcheck
 
@@ -161,6 +174,28 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		switch req.Type {
 		case "env":
 			_ = req.Reply(true, nil)
+			if len(req.Payload) < 4 {
+				s.t.Errorf("ssh fake: env payload too short (%d bytes)", len(req.Payload))
+				continue
+			}
+			nameLen := binary.BigEndian.Uint32(req.Payload[:4])
+			if int(nameLen)+8 > len(req.Payload) {
+				s.t.Errorf("ssh fake: env payload truncated reading name (nameLen=%d, payload=%d)", nameLen, len(req.Payload))
+				continue
+			}
+			name := string(req.Payload[4 : 4+nameLen])
+			valLen := binary.BigEndian.Uint32(req.Payload[4+nameLen : 8+nameLen])
+			if int(8+nameLen+valLen) > len(req.Payload) {
+				s.t.Errorf("ssh fake: env payload truncated reading value (valLen=%d, payload=%d)", valLen, len(req.Payload))
+				continue
+			}
+			val := string(req.Payload[8+nameLen : 8+nameLen+valLen])
+			s.mu.Lock()
+			if s.envVars == nil {
+				s.envVars = make(map[string]string)
+			}
+			s.envVars[name] = val
+			s.mu.Unlock()
 			continue
 		case "exec":
 			// handled below

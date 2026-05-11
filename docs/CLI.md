@@ -56,6 +56,8 @@ chunk
 │   --identity-file <path>          # SSH identity file for sidecar
 │   --workdir <path>                # Working directory on sidecar
 │   --project <path>                # Override project directory
+│   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
+│   --env-file <path>               # Load env file (defaults to .env.local when flag is present)
 │
 ├── sidecar
 │   ├── list --org-id <id>          # List sidecars
@@ -99,6 +101,8 @@ chunk
 │   │   --skip-sync                 # Skip syncing files to the sidecar
 │   │   --skip-snapshot             # Skip creating a snapshot after install
 │   │   --force                     # Re-detect environment even if cached
+│   │   -e / --env KEY=VALUE        # Set env var in remote sidecar session (repeatable)
+│   │   --env-file <path>           # Load env file (defaults to .env.local when flag is present)
 │   └── snapshot
 │       ├── create                  # Snapshot a sidecar, then delete the source sidecar
 │       │   --sidecar-id <id>       # Sidecar ID (defaults to active sidecar)

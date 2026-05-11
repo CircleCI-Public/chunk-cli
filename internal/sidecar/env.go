@@ -24,6 +24,9 @@ func ParseEnvPairs(pairs []string) (map[string]string, error) {
 			return nil, fmt.Errorf("%q is not a KEY=VALUE pair", pair)
 		}
 		key := pair[:idx]
+		if key == "" {
+			return nil, fmt.Errorf("%q has an empty key", pair)
+		}
 		val := pair[idx+1:]
 		result[key] = val
 	}

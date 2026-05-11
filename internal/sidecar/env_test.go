@@ -47,6 +47,11 @@ func TestParseEnvPairs(t *testing.T) {
 		_, err := ParseEnvPairs([]string{"NOEQUALS"})
 		assert.ErrorContains(t, err, "NOEQUALS")
 	})
+
+	t.Run("empty key returns error", func(t *testing.T) {
+		_, err := ParseEnvPairs([]string{"=value"})
+		assert.ErrorContains(t, err, "empty key")
+	})
 }
 
 func TestParseEnvFile(t *testing.T) {
