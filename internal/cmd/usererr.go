@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -119,6 +121,18 @@ func (e *userError) UserExitCode() int {
 		return e.exitCode
 	}
 	return ExitGeneral
+}
+
+// groupRunE is the RunE for group (parent) commands that have no action of
+// their own. It shows help when invoked with no arguments and returns a
+// structured error for unknown subcommands.
+func groupRunE(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return cmd.Help()
+	}
+	return newUserError(fmt.Sprintf("%q is not a %s command. Run '%s --help' for available commands.", args[0], cmd.Name(), cmd.CommandPath())).
+		withCode("command.unknown").
+		withExitCode(ExitBadArgs)
 }
 
 // errNoForce returns a structured error for when a confirmation prompt cannot

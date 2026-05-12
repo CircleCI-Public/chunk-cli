@@ -30,8 +30,10 @@ func randomSidecarName() string {
 
 func newSidecarCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "sidecar",
-		Short: "Manage sidecars",
+		Use:                "sidecar",
+		Short:              "Manage sidecars",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 
 	cmd.AddCommand(newSidecarListCmd())
@@ -641,8 +643,10 @@ Example:
 
 func newSidecarSnapshotCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "snapshot",
-		Short: "Manage sidecar snapshots",
+		Use:                "snapshot",
+		Short:              "Manage sidecar snapshots",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 	cmd.AddCommand(newSidecarSnapshotCreateCmd())
 	cmd.AddCommand(newSidecarSnapshotGetCmd())

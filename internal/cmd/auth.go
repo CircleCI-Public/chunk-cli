@@ -25,8 +25,10 @@ const configFilePermHint = "Check file permissions on the chunk config file."
 
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "auth",
-		Short: "Manage authentication",
+		Use:                "auth",
+		Short:              "Manage authentication",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 	cmd.AddCommand(newAuthSetCmd())
 	cmd.AddCommand(newAuthStatusCmd())
