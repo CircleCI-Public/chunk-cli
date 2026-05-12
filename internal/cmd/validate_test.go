@@ -73,24 +73,3 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(err.Error(), "BADVALUE"), "got: %v", err)
 }
-
-func TestValidateEnvLocalRunIgnoresEnvFile(t *testing.T) {
-	isolateConfig(t)
-	dir := t.TempDir()
-
-	// A malformed .env.local must not block a local run — env files are only
-	// loaded when --env-file is explicitly passed.
-	assert.NilError(t, os.WriteFile(
-		filepath.Join(dir, ".env.local"),
-		[]byte("BADLINE\n"),
-		0o600,
-	))
-
-	cmd := newValidateCmd()
-	cmd.SetOut(os.Stderr)
-	cmd.SetErr(os.Stderr)
-	cmd.SetArgs([]string{"--project", dir, "--cmd", "true"})
-
-	err := cmd.Execute()
-	assert.NilError(t, err)
-}

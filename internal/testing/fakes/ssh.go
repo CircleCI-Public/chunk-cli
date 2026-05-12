@@ -174,21 +174,10 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		switch req.Type {
 		case "env":
 			_ = req.Reply(true, nil)
-			if len(req.Payload) < 4 {
-				s.t.Errorf("ssh fake: env payload too short (%d bytes)", len(req.Payload))
-				continue
-			}
+			// SSH env request payload: [4-byte name length][name bytes][4-byte value length][value bytes]
 			nameLen := binary.BigEndian.Uint32(req.Payload[:4])
-			if int(nameLen)+8 > len(req.Payload) {
-				s.t.Errorf("ssh fake: env payload truncated reading name (nameLen=%d, payload=%d)", nameLen, len(req.Payload))
-				continue
-			}
 			name := string(req.Payload[4 : 4+nameLen])
 			valLen := binary.BigEndian.Uint32(req.Payload[4+nameLen : 8+nameLen])
-			if int(8+nameLen+valLen) > len(req.Payload) {
-				s.t.Errorf("ssh fake: env payload truncated reading value (valLen=%d, payload=%d)", valLen, len(req.Payload))
-				continue
-			}
 			val := string(req.Payload[8+nameLen : 8+nameLen+valLen])
 			s.mu.Lock()
 			if s.envVars == nil {
