@@ -99,7 +99,8 @@ func newTaskRunCmd() *cobra.Command {
 }
 
 func newTaskConfigCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Set up .chunk/run.json for this repository",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -121,12 +122,15 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			// Check for existing config and prompt before overwriting
-			if task.ConfigExists(repoRoot) {
-				overwrite, err := tui.Confirm("Overwrite the existing configuration?", false)
-				if err != nil {
-					return nil
+			if task.ConfigExists(repoRoot) && !force {
+				if nonInteractive() {
+					return errNoForce("overwrite task configuration")
 				}
-				if !overwrite {
+				overwrite, err := tui.Confirm("Overwrite the existing configuration?", false)
+				if errors.Is(err, tui.ErrNoTTY) {
+					return errNoForce("overwrite task configuration")
+				}
+				if err != nil || !overwrite {
 					io.Println("\nSetup cancelled.")
 					return nil
 				}
@@ -180,6 +184,8 @@ func newTaskConfigCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite existing configuration without confirmation")
+	return cmd
 }
 
 func fetchProjectsAndCollabs(ctx context.Context, client *circleci.Client) ([]circleci.FollowedProject, []circleci.Collaboration, error) {
