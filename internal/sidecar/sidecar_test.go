@@ -57,7 +57,7 @@ func TestList(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns sidecars for org", func(t *testing.T) {
-		sidecars, err := sidecar.List(ctx, cl, "org-1")
+		sidecars, err := sidecar.List(ctx, cl, "org-1", false)
 		assert.NilError(t, err)
 		assert.Equal(t, len(sidecars), 2)
 		assert.Equal(t, sidecars[0].Name, "alpha")
@@ -65,7 +65,7 @@ func TestList(t *testing.T) {
 	})
 
 	t.Run("empty for unknown org", func(t *testing.T) {
-		sidecars, err := sidecar.List(ctx, cl, "org-unknown")
+		sidecars, err := sidecar.List(ctx, cl, "org-unknown", false)
 		assert.NilError(t, err)
 		assert.Equal(t, len(sidecars), 0)
 	})

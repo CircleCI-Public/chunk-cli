@@ -62,7 +62,7 @@ func TestListSidecars(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("filters by org", func(t *testing.T) {
-		sidecars, err := client.ListSidecars(ctx, "org-1")
+		sidecars, err := client.ListSidecars(ctx, "org-1", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -75,7 +75,7 @@ func TestListSidecars(t *testing.T) {
 	})
 
 	t.Run("empty result", func(t *testing.T) {
-		sidecars, err := client.ListSidecars(ctx, "org-nonexistent")
+		sidecars, err := client.ListSidecars(ctx, "org-nonexistent", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -84,9 +84,9 @@ func TestListSidecars(t *testing.T) {
 		}
 	})
 
-	t.Run("records request", func(t *testing.T) {
+	t.Run("omits all param by default", func(t *testing.T) {
 		fake.Recorder.AllRequests() // baseline
-		_, err := client.ListSidecars(ctx, "org-1")
+		_, err := client.ListSidecars(ctx, "org-1", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -97,6 +97,22 @@ func TestListSidecars(t *testing.T) {
 		}
 		if got := last.URL.Query().Get("org_id"); got != "org-1" {
 			t.Errorf("expected org_id=org-1, got %s", got)
+		}
+		if got := last.URL.Query().Get("all"); got != "" {
+			t.Errorf("expected no all param, got %s", got)
+		}
+	})
+
+	t.Run("sends all=true when requested", func(t *testing.T) {
+		fake.Recorder.AllRequests() // baseline
+		_, err := client.ListSidecars(ctx, "org-1", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		reqs := fake.Recorder.AllRequests()
+		last := reqs[len(reqs)-1]
+		if got := last.URL.Query().Get("all"); got != "true" {
+			t.Errorf("expected all=true, got %q", got)
 		}
 	})
 }
@@ -373,7 +389,7 @@ func TestAuthRequired(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("ListSidecars", func(t *testing.T) {
-		_, err := client.ListSidecars(ctx, "org-1")
+		_, err := client.ListSidecars(ctx, "org-1", false)
 		if err == nil {
 			t.Fatal("expected error")
 		}

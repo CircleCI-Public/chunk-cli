@@ -10,8 +10,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-func List(ctx context.Context, client *circleci.Client, orgID string) ([]circleci.Sidecar, error) {
-	return client.ListSidecars(ctx, orgID)
+func List(ctx context.Context, client *circleci.Client, orgID string, all bool) ([]circleci.Sidecar, error) {
+	return client.ListSidecars(ctx, orgID, all)
 }
 
 func Create(ctx context.Context, client *circleci.Client, orgID, name, image string) (*circleci.Sidecar, error) {

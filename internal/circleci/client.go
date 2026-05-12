@@ -50,12 +50,16 @@ func (c *Client) GetCurrentUser(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) ListSidecars(ctx context.Context, orgID string) ([]Sidecar, error) {
+func (c *Client) ListSidecars(ctx context.Context, orgID string, all bool) ([]Sidecar, error) {
 	var resp listSidecarsResponse
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/sidecar/instances",
+	opts := []func(*hc.Request){
 		hc.QueryParam("org_id", orgID),
 		hc.JSONDecoder(&resp),
-	))
+	}
+	if all {
+		opts = append(opts, hc.QueryParam("all", "true"))
+	}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/sidecar/instances", opts...))
 	if err != nil {
 		return nil, mapErr("list sidecars", err)
 	}
