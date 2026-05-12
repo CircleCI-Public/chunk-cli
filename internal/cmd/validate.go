@@ -160,17 +160,20 @@ func newValidateCmd() *cobra.Command {
 
 			image := resolveImage(name, cfg)
 
+			freshlyCreated := false
 			if remote {
 				// --remote: force all commands to sidecar, creating one if needed.
-				if err := resolveOrCreateSidecarID(ctx, &sidecarID, orgID, image, workDir, streams); err != nil {
+				var err error
+				freshlyCreated, err = resolveOrCreateSidecarID(ctx, &sidecarID, orgID, image, workDir, streams)
+				if err != nil {
 					return err
 				}
 				statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", sidecarID))
 			} else if cfg.HasRemoteCommands() {
-				resolveSidecar(ctx, &sidecarID, orgID, image, workDir, hook, streams)
+				freshlyCreated = resolveSidecar(ctx, &sidecarID, orgID, image, workDir, hook, streams)
 			}
 
-			execErr := runValidate(ctx, workDir, name, inlineCmd, save, sidecarID, identityFile, workdir, allRemote, cfg, statusFn, streams)
+			execErr := runValidate(ctx, workDir, name, inlineCmd, save, sidecarID, freshlyCreated, identityFile, workdir, allRemote, cfg, statusFn, streams)
 
 			if hook != nil {
 				maxAttempts := cfg.StopHookMaxAttempts
@@ -202,7 +205,7 @@ func newValidateCmd() *cobra.Command {
 // provided options. It is shared by both direct and hook invocations.
 // allRemote is true when --remote is passed explicitly (all commands run on the
 // sidecar); false means only commands with Remote:true are routed to the sidecar.
-func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID, identityFile, workdir string, allRemote bool, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool, sidecarID string, freshlyCreated bool, identityFile, workdir string, allRemote bool, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	// --cmd: inline command (always local in per-command mode)
 	if inlineCmd != "" {
 		cmdName := name
@@ -249,33 +252,7 @@ func runValidate(ctx context.Context, workDir, name, inlineCmd string, save bool
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
 			// Named command is not marked remote; fall through to local execution.
 		} else {
-			remoteCfg, localCfg := splitByRemote(cfg)
-			if len(remoteCfg.Commands) > 0 {
-				names := commandNames(remoteCfg.Commands)
-				statusFn(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, names))
-			}
-			if len(localCfg.Commands) > 0 {
-				statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCfg.Commands)))
-			}
-			var runErr error
-			if len(remoteCfg.Commands) > 0 {
-				execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
-				if err != nil {
-					streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(remoteCfg.Commands))
-					localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
-				} else if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
-					streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
-					localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
-				} else {
-					runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, statusFn, streams)
-				}
-			}
-			if len(localCfg.Commands) > 0 {
-				if err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams)); err != nil {
-					runErr = errors.Join(runErr, err)
-				}
-			}
-			return runErr
+			return runSplitCommands(ctx, sidecarID, freshlyCreated, identityFile, workdir, workDir, cfg, statusFn, streams)
 		}
 	}
 
@@ -348,6 +325,54 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 	return execFn, dest, nil
 }
 
+// runSplitCommands handles per-command remote routing when no specific command
+// name is given: remote-tagged commands go to the sidecar, the rest run locally.
+// When freshlyCreated is true, SSH failures are hard errors rather than
+// silent local fallbacks (a newly provisioned sidecar that can't be reached
+// indicates a real problem, not temporary unavailability).
+func runSplitCommands(ctx context.Context, sidecarID string, freshlyCreated bool, identityFile, workdir, workDir string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+	remoteCfg, localCfg := splitByRemote(cfg)
+	if len(remoteCfg.Commands) > 0 {
+		statusFn(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, commandNames(remoteCfg.Commands)))
+	}
+	if len(localCfg.Commands) > 0 {
+		statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCfg.Commands)))
+	}
+	var runErr error
+	if len(remoteCfg.Commands) > 0 {
+		execFn, dest, err := openSSHSession(ctx, sidecarID, identityFile, workdir, streams)
+		if err != nil {
+			if freshlyCreated {
+				return newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).
+					withCode("sidecar.unreachable").
+					withSuggestion("The sidecar may still be starting. Try again in a moment.").
+					withExitCode(ExitAPIError).
+					wrap(err)
+			}
+			streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(remoteCfg.Commands))
+			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
+		} else if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
+			if freshlyCreated {
+				return newUserError(fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)).
+					withCode("sidecar.workspace_missing").
+					withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+					withExitCode(ExitNotFound).
+					wrap(wsErr)
+			}
+			streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
+			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
+		} else {
+			runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, statusFn, streams)
+		}
+	}
+	if len(localCfg.Commands) > 0 {
+		if err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams)); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+	}
+	return runErr
+}
+
 // splitByRemote partitions cfg.Commands into two configs: one containing only
 // commands with Remote:true, and one containing the rest.
 func splitByRemote(cfg *config.ProjectConfig) (remote, local *config.ProjectConfig) {
@@ -390,60 +415,64 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 // (i.e. when --remote is not set but some commands have Remote:true).
 // It uses the active sidecar when available, auto-creates one when a sidecar
 // image is configured or the caller is a Stop hook, and warns otherwise.
-func resolveSidecar(ctx context.Context, sidecarID *string, orgID, image, workDir string, hook *hookContext, streams iostream.Streams) {
+// Returns true when a brand-new sidecar was provisioned in this call.
+func resolveSidecar(ctx context.Context, sidecarID *string, orgID, image, workDir string, hook *hookContext, streams iostream.Streams) bool {
 	statusFn := newStatusFunc(streams)
 	if active, err := sidecar.LoadActive(ctx); err == nil && active != nil {
 		*sidecarID = active.SidecarID
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
-		return
+		return false
 	}
 	if hook != nil || image != "" {
 		// In Stop hook context, or when a sidecar image is configured: auto-create
 		// from the stored snapshot so remote commands get the prepared environment.
-		if err := resolveOrCreateSidecarID(ctx, sidecarID, orgID, image, workDir, streams); err != nil {
+		created, err := resolveOrCreateSidecarID(ctx, sidecarID, orgID, image, workDir, streams)
+		if err != nil {
 			streams.ErrPrintf("warning: no sandbox available (%v); run 'chunk config set orgID <id>' to enable remote validation, running locally instead\n", err)
 		}
-		return
+		return created
 	}
 	statusFn(iostream.LevelWarn, "no active sidecar found — remote commands will run locally")
+	return false
 }
 
 // resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
-// a new sandbox when none is configured.
-func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, image, workDir string, streams iostream.Streams) error {
+// a new sandbox when none is configured. Returns true when a new sidecar was
+// provisioned (as opposed to loaded from the active state file).
+func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, image, workDir string, streams iostream.Streams) (created bool, err error) {
 	if *sidecarID != "" {
-		return nil
+		return false, nil
 	}
-	active, err := sidecar.LoadActive(ctx)
-	if err != nil {
-		return &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
+	active, loadErr := sidecar.LoadActive(ctx)
+	if loadErr != nil {
+		return false, &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: loadErr}
 	}
 	if active != nil {
 		*sidecarID = active.SidecarID
-		return nil
+		return false, nil
 	}
 	streams.ErrPrintf("No active sidecar found, creating a new sandbox...\n")
 	client, err := ensureCircleCIClient(ctx, streams, tui.PromptHidden)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Fallback: read org ID from project config if not provided via flag or env.
 	if orgID == "" {
-		if projCfg, loadErr := config.LoadProjectConfig(workDir); loadErr == nil && projCfg.OrgID != "" {
+		if projCfg, cfgErr := config.LoadProjectConfig(workDir); cfgErr == nil && projCfg.OrgID != "" {
 			orgID = projCfg.OrgID
 		}
 	}
 	resolvedOrgID, err := resolveOrgID(orgID, orgPicker(ctx, client))
 	if err != nil {
-		return err
+		return false, err
 	}
 	sandboxName := filepath.Base(workDir) + "-validate"
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
-			return authErr
+			return false, authErr
 		}
-		return &userError{
+		return false, &userError{
 			msg:        "Could not create a sandbox.",
 			suggestion: "Check your network connection or run 'chunk sidecar create' manually.",
 			err:        err,
@@ -465,7 +494,7 @@ func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, ima
 	}
 	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sc.Name, sc.ID)))
 	*sidecarID = sc.ID
-	return nil
+	return true, nil
 }
 
 func mapValidateError(err error) error {
