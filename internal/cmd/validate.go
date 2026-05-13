@@ -157,13 +157,11 @@ func newValidateCmd() *cobra.Command {
 			// Hook: fail early when CircleCI auth is missing and remote commands need it.
 			// In non-hook context ensureCircleCIClient prompts interactively; hooks have
 			// no TTY so we surface a clear message here instead of a confusing fallback.
-			if hook != nil && cfg.HasRemoteCommands() {
-				rc, _ := config.Resolve("", "")
-				if rc.CircleCIToken == "" {
-					streams.ErrPrintln("CircleCI auth is not configured.")
-					streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
-					return errSilentExit
-				}
+			rc, _ := config.Resolve("", "")
+			if hook != nil && cfg.HasRemoteCommands() && rc.CircleCIToken == "" {
+				streams.ErrPrintln("CircleCI auth is not configured.")
+				streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
+				return errSilentExit
 			}
 
 			// allRemote is true when the caller explicitly targets the sidecar
