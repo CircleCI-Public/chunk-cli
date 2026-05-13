@@ -113,7 +113,8 @@ func newValidateCmd() *cobra.Command {
 			statusFn := newStatusFunc(streams)
 
 			// Hook: exit 1 with a message when hooks are disabled.
-			if hook != nil && validate.HooksDisabled(workDir) {
+			envDisabled := os.Getenv(config.EnvChunkHooksDisabled) != ""
+			if hook != nil && validate.HooksDisabled(workDir, envDisabled) {
 				streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 				return validate.NewHookExitError(1)
 			}

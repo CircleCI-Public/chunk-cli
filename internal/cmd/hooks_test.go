@@ -18,15 +18,10 @@ func runHooksCmd(t *testing.T, dir string, args ...string) (string, string, erro
 	var out, errOut bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errOut)
-	root.SetArgs(append([]string{"hooks"}, args...))
-
-	// Override the project root detection by changing the working directory.
-	orig, err := os.Getwd()
-	assert.NilError(t, err)
-	assert.NilError(t, os.Chdir(dir))
-	t.Cleanup(func() { _ = os.Chdir(orig) })
-
-	err = root.Execute()
+	allArgs := append([]string{"hooks"}, args...)
+	allArgs = append(allArgs, "--project", dir)
+	root.SetArgs(allArgs)
+	err := root.Execute()
 	return out.String(), errOut.String(), err
 }
 
@@ -62,16 +57,16 @@ func TestHooksStatus_Disabled(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "hooks-disabled"), []byte{}, 0o644))
 
-	_, errOut, err := runHooksCmd(t, dir, "status")
+	out, _, err := runHooksCmd(t, dir, "status")
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(errOut, "disabled"), "got: %s", errOut)
+	assert.Assert(t, strings.Contains(out, "disabled"), "got: %s", out)
 }
 
 func TestHooksStatus_Enabled(t *testing.T) {
 	dir := t.TempDir()
-	_, errOut, err := runHooksCmd(t, dir, "status")
+	out, _, err := runHooksCmd(t, dir, "status")
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(errOut, "enabled"), "got: %s", errOut)
+	assert.Assert(t, strings.Contains(out, "enabled"), "got: %s", out)
 }
 
 // TestValidateHookPath_HooksDisabled verifies that when CHUNK_HOOKS_DISABLED is

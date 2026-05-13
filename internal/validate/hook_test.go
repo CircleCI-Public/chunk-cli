@@ -120,19 +120,18 @@ func TestWrapHookResult_CustomMaxAttempts(t *testing.T) {
 // --- HooksDisabled ---
 
 func TestHooksDisabled_EnvVar(t *testing.T) {
-	t.Setenv(config.EnvChunkHooksDisabled, "1")
-	assert.Equal(t, HooksDisabled(t.TempDir()), true)
+	assert.Equal(t, HooksDisabled(t.TempDir(), true), true)
 }
 
 func TestHooksDisabled_SentinelFile(t *testing.T) {
 	dir := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk", "hooks-disabled"), []byte{}, 0o644))
-	assert.Equal(t, HooksDisabled(dir), true)
+	assert.Equal(t, HooksDisabled(dir, false), true)
 }
 
 func TestHooksDisabled_Neither(t *testing.T) {
-	assert.Equal(t, HooksDisabled(t.TempDir()), false)
+	assert.Equal(t, HooksDisabled(t.TempDir(), false), false)
 }
 
 // --- HasGitChanges ---

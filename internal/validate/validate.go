@@ -234,12 +234,12 @@ func (e *HookExitError) ExitCode() int { return e.code }
 func NewHookExitError(code int) error { return &HookExitError{code: code} }
 
 // HooksDisabled reports whether chunk validate hooks are currently suppressed.
-// It returns true when the CHUNK_HOOKS_DISABLED env var is non-empty or the
-// sentinel file .chunk/hooks-disabled exists under workDir.
-// On any error other than ErrNotExist the function fails open (returns false)
-// so hooks continue to run when the check is uncertain.
-func HooksDisabled(workDir string) bool {
-	if os.Getenv(config.EnvChunkHooksDisabled) != "" {
+// envDisabled should be set by the caller from CHUNK_HOOKS_DISABLED; it returns
+// true when that flag is set or the sentinel file .chunk/hooks-disabled exists
+// under workDir. On any error other than ErrNotExist the function fails open
+// (returns false) so hooks continue to run when the check is uncertain.
+func HooksDisabled(workDir string, envDisabled bool) bool {
+	if envDisabled {
 		return true
 	}
 	_, err := os.Stat(filepath.Join(workDir, ".chunk", "hooks-disabled"))
