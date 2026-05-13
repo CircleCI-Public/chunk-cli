@@ -128,7 +128,10 @@ func (e *userError) UserExitCode() int {
 // structured error for unknown subcommands.
 func groupRunE(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
-		return cmd.Help()
+		if err := cmd.Help(); err != nil {
+			return fmt.Errorf("show help: %w", err)
+		}
+		return nil
 	}
 	return newUserError(fmt.Sprintf("%q is not a %s command. Run '%s --help' for available commands.", args[0], cmd.Name(), cmd.CommandPath())).
 		withCode("command.unknown").
