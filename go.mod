@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.6
 	github.com/BurntSushi/toml v1.6.0
 	github.com/aymanbagabas/go-udiff v0.4.1
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/coder/websocket v1.8.14
 	github.com/dustinkirkland/golang-petname v0.0.0-20260215035315-f0c533e9ce9b
 	github.com/gin-gonic/gin v1.12.0
@@ -69,7 +70,6 @@ require (
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/catenacyber/perfsprint v0.10.1 // indirect
 	github.com/ccojocar/zxcvbn-go v1.0.4 // indirect
-	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charithe/durationcheck v0.0.11 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
