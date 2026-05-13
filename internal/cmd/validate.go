@@ -230,7 +230,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&save, "save", false, "Save --cmd to .chunk/config.json")
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
-	cmd.Flags().StringVar(&envFile, "env-file", "", "Env file to load (default .env.local when flag is present)")
+	cmd.Flags().StringVar(&envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
 	cmd.Flags().Lookup("env-file").NoOptDefVal = defaultEnvFile
 
 	return cmd
