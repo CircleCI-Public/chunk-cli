@@ -76,6 +76,14 @@ jobs:
                   ./dist/chunk skill install
                   echo "OK: skill content embedded correctly"
                   head -5 ~/.claude/skills/chunk-review/SKILL.md
+            - run:
+                name: Cross-compile for all release targets
+                command: |
+                  for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+                    GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -o /dev/null . \
+                      && echo "OK: $target" \
+                      || { echo "FAIL: $target"; exit 1; }
+                  done
 
 workflows:
   ci:
