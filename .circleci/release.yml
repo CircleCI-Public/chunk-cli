@@ -22,7 +22,7 @@ jobs:
       - run:
           name: Smoke test
           command: |
-            go build -o ~/chunk .
+            CGO_ENABLED=0 go build -o ~/chunk .
             ~/chunk --version
       - run: task release VERSION=<< pipeline.parameters.version >>
       - persist_to_workspace:
