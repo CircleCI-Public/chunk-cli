@@ -18,7 +18,7 @@ func runHooksCmd(t *testing.T, dir string, args ...string) (string, string, erro
 	var out, errOut bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errOut)
-	allArgs := append([]string{"hooks"}, args...)
+	allArgs := append([]string{"hook"}, args...)
 	allArgs = append(allArgs, "--project", dir)
 	root.SetArgs(allArgs)
 	err := root.Execute()

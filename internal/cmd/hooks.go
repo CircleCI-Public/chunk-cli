@@ -18,7 +18,7 @@ import (
 func newHooksCmd() *cobra.Command {
 	var projectDir string
 	cmd := &cobra.Command{
-		Use:   "hooks",
+		Use:   "hook",
 		Short: "Manage chunk hook execution",
 	}
 	cmd.PersistentFlags().StringVar(&projectDir, "project", "", "Override project directory")
@@ -59,7 +59,7 @@ func newHooksDisableCmd(projectDir *string) *cobra.Command {
 				return fmt.Errorf("create hooks-disabled sentinel: %w", err)
 			}
 			streams := iostream.FromCmd(cmd)
-			streams.ErrPrintln("Hooks disabled. Run 'chunk hooks enable' to re-enable.")
+			streams.ErrPrintln("Hooks disabled. Run 'chunk hook enable' to re-enable.")
 			return nil
 		},
 	}
