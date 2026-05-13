@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
@@ -157,12 +159,18 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 
 	status(iostream.LevelInfo, fmt.Sprintf("Synchronising local %s/%s to remote: %s...", org, repo, repoPath))
 
-	baseResult, err := ExecOverSSH(ctx, session, fmt.Sprintf("git -C %s rev-parse origin/HEAD", ShellEscape(repoPath)), nil, nil)
+	// Prefer origin/HEAD (set when the remote advertises a default branch), fall
+	// back to HEAD for repos where origin/HEAD is not configured.
+	baseCmd := fmt.Sprintf(
+		"git -C %[1]s rev-parse origin/HEAD 2>/dev/null || git -C %[1]s rev-parse HEAD",
+		ShellEscape(repoPath),
+	)
+	baseResult, err := ExecOverSSH(ctx, session, baseCmd, nil, nil)
 	if err != nil {
 		return fmt.Errorf("sync: resolve remote base: %w", err)
 	}
 	if baseResult.ExitCode != 0 {
-		return &RemoteBaseError{Err: fmt.Errorf("git rev-parse origin/HEAD: %s", baseResult.Stderr)}
+		return &RemoteBaseError{Err: fmt.Errorf("resolve base commit: %s", baseResult.Stderr)}
 	}
 	base := strings.TrimSpace(baseResult.Stdout)
 
@@ -211,29 +219,34 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 // openSessionWithRetry calls OpenSession, retrying on transient errors to give
 // a newly-created sidecar time to finish booting before its SSH service is ready.
 func openSessionWithRetry(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, status iostream.StatusFunc) (*Session, error) {
-	const retryDelay = 5 * time.Second
-	const maxAttempts = 12 // up to ~1 minute
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = 2 * time.Second
+	b.MaxInterval = 15 * time.Second
+	b.MaxElapsedTime = 90 * time.Second
 
-	var err error
-	for i := range maxAttempts {
-		var session *Session
-		session, err = OpenSession(ctx, client, sidecarID, identityFile, authSock)
-		if err == nil {
-			return session, nil
-		}
-		if !isTransientSSHError(err) || i == maxAttempts-1 {
-			break
-		}
-		if i == 0 {
-			status(iostream.LevelInfo, "Waiting for sidecar SSH to become available...")
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(retryDelay):
-		}
+	var session *Session
+	notified := false
+	err := backoff.RetryNotify(
+		func() error {
+			var e error
+			session, e = OpenSession(ctx, client, sidecarID, identityFile, authSock)
+			if e != nil && !isTransientSSHError(e) {
+				return backoff.Permanent(e)
+			}
+			return e
+		},
+		backoff.WithContext(b, ctx),
+		func(_ error, _ time.Duration) {
+			if !notified {
+				status(iostream.LevelInfo, "Waiting for sidecar SSH to become available...")
+				notified = true
+			}
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
-	return nil, err
+	return session, nil
 }
 
 // isTransientSSHError returns true for network-level errors that are worth

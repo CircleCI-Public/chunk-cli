@@ -29,6 +29,7 @@ type SSHServer struct {
 	stdout   string
 	exitCode int
 	commands []string
+	resultFn func(cmd string) (stdout string, exitCode int)
 }
 
 // GenerateSSHKeypair generates an ed25519 keypair, writes the private and public
@@ -121,6 +122,15 @@ func (s *SSHServer) SetResult(stdout string, exitCode int) {
 	s.exitCode = exitCode
 }
 
+// SetResultFunc installs a per-command handler. When set, it takes precedence
+// over SetResult for any command for which it returns a non-zero exit code or
+// non-empty stdout. Use it to return different results for different commands.
+func (s *SSHServer) SetResultFunc(fn func(cmd string) (stdout string, exitCode int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resultFn = fn
+}
+
 // Commands returns a copy of all exec command strings received so far.
 func (s *SSHServer) Commands() []string {
 	s.mu.Lock()
@@ -190,7 +200,12 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		s.commands = append(s.commands, cmd)
 		stdout := s.stdout
 		exitCode := s.exitCode
+		fn := s.resultFn
 		s.mu.Unlock()
+
+		if fn != nil {
+			stdout, exitCode = fn(cmd)
+		}
 
 		if req.WantReply {
 			_ = req.Reply(true, nil)
