@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,27 @@ func Path() (string, error) {
 	return filepath.Join(d, "config.json"), nil
 }
 
+// AppData returns the chunk data directory, respecting XDG_DATA_HOME.
+func AppData() (string, error) {
+	dh, err := dataHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dh, appName), nil
+}
+
+// ProjectDataDir returns the per-project data directory keyed by projectRoot.
+// The directory name is the hex-encoded SHA-256 of the cleaned absolute path,
+// which is guaranteed collision-free across all valid path strings.
+func ProjectDataDir(projectRoot string) (string, error) {
+	base, err := AppData()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(projectRoot)))
+	return filepath.Join(base, fmt.Sprintf("%x", sum)), nil
+}
+
 func configHome() (string, error) {
 	if v := os.Getenv(EnvXDGConfigHome); v != "" {
 		return v, nil
@@ -55,4 +77,15 @@ func stateHome() (string, error) {
 		return "", fmt.Errorf("resolve state home: %w", err)
 	}
 	return filepath.Join(home, ".local", "state"), nil
+}
+
+func dataHome() (string, error) {
+	if v := os.Getenv(EnvXDGDataHome); v != "" {
+		return v, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve data home: %w", err)
+	}
+	return filepath.Join(home, ".local", "share"), nil
 }

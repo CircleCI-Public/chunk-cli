@@ -2,6 +2,7 @@ package circleci
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"testing"
 
@@ -108,7 +109,7 @@ func TestCreateSidecar(t *testing.T) {
 	client := newTestClient(t, srv.URL)
 	ctx := context.Background()
 
-	sb, err := client.CreateSidecar(ctx, "org-1", "my-sidecar", "", "ubuntu:22.04")
+	sb, err := client.CreateSidecar(ctx, "org-1", "my-sidecar", "ubuntu:22.04")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,6 +125,62 @@ func TestCreateSidecar(t *testing.T) {
 	if sb.Image != "ubuntu:22.04" {
 		t.Errorf("expected image ubuntu:22.04, got %s", sb.Image)
 	}
+}
+
+func TestDeleteSidecar(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		fake.Sidecars = []fakes.Sidecar{{ID: "sb-1", OrgID: "org-1"}}
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+
+		client := newTestClient(t, srv.URL)
+		ctx := context.Background()
+
+		err := client.DeleteSidecar(ctx, "sb-1")
+		assert.NilError(t, err)
+
+		reqs := fake.Recorder.AllRequests()
+		last := reqs[len(reqs)-1]
+		if last.Method != "DELETE" {
+			t.Errorf("expected DELETE, got %s", last.Method)
+		}
+		if last.URL.Path != "/api/v2/sidecar/instances/sb-1" {
+			t.Errorf("unexpected path: %s", last.URL.Path)
+		}
+		if got := last.Header.Get("Circle-Token"); got != "test-token" {
+			t.Errorf("expected Circle-Token test-token, got %s", got)
+		}
+	})
+
+	t.Run("returns error on server failure", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		fake.DeleteStatusCode = 500
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+
+		client := newTestClient(t, srv.URL)
+		ctx := context.Background()
+
+		err := client.DeleteSidecar(ctx, "sb-1")
+		assert.Assert(t, err != nil, "expected error for 500 response")
+	})
+
+	t.Run("maps 401 to ErrNotAuthorized", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		fake.DeleteStatusCode = 401
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+
+		client := newTestClient(t, srv.URL)
+		ctx := context.Background()
+
+		err := client.DeleteSidecar(ctx, "sb-1")
+		assert.Assert(t, err != nil, "expected error for 401 response")
+		if !errors.Is(err, ErrNotAuthorized) {
+			t.Errorf("expected ErrNotAuthorized, got %v", err)
+		}
+	})
 }
 
 func TestAddSSHKey(t *testing.T) {
@@ -323,7 +380,7 @@ func TestAuthRequired(t *testing.T) {
 	})
 
 	t.Run("CreateSidecar", func(t *testing.T) {
-		_, err := client.CreateSidecar(ctx, "org-1", "name", "", "image")
+		_, err := client.CreateSidecar(ctx, "org-1", "name", "image")
 		if err == nil {
 			t.Fatal("expected error")
 		}

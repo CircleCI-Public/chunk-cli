@@ -14,8 +14,8 @@ func List(ctx context.Context, client *circleci.Client, orgID string) ([]circlec
 	return client.ListSidecars(ctx, orgID)
 }
 
-func Create(ctx context.Context, client *circleci.Client, orgID, name, provider, image string) (*circleci.Sidecar, error) {
-	return client.CreateSidecar(ctx, orgID, name, provider, image)
+func Create(ctx context.Context, client *circleci.Client, orgID, name, image string) (*circleci.Sidecar, error) {
+	return client.CreateSidecar(ctx, orgID, name, image)
 }
 
 func Exec(ctx context.Context, client *circleci.Client, sidecarID, command string, args []string) (*circleci.ExecResponse, error) {
@@ -70,7 +70,7 @@ func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, 
 		_, _ = fmt.Fprint(io.Err, result.Stderr)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("command exited with status %d", result.ExitCode)
+		return fmt.Errorf("%q exited with status %d", command, result.ExitCode)
 	}
 	return nil
 }

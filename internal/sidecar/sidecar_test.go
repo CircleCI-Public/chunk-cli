@@ -79,7 +79,7 @@ func TestCreate(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	sb, err := sidecar.Create(ctx, cl, "org-1", "my-sidecar", "e2b", "ubuntu:22.04")
+	sb, err := sidecar.Create(ctx, cl, "org-1", "my-sidecar", "ubuntu:22.04")
 	assert.NilError(t, err)
 	assert.Equal(t, sb.ID, "sidecar-new-123")
 	assert.Equal(t, sb.Name, "my-sidecar")

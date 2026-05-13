@@ -8,8 +8,11 @@ Complete command reference for the `chunk` CLI.
 chunk
 ├── auth
 │   ├── set <provider>               # Store credential (circleci | anthropic | github)
+│   │   --insecure-storage           # Save to config file instead of system keychain
+│   │   --force, -f                  # Overwrite existing credentials without confirmation
 │   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
 │   └── remove <provider>           # Remove stored credential (circleci | anthropic | github)
+│       --force, -f                  # Skip confirmation prompt
 │
 ├── build-prompt                    # Mine PR comments → analyze → generate prompt
 │   --org <org>                     # GitHub org (auto-detected from git remote)
@@ -49,11 +52,10 @@ chunk
 │   [name]                          # Optional: run a specific named command
 │   --dry-run                       # Print commands without executing
 │   --list                          # List all configured commands
-│   --status                        # Check cache only, don't execute
 │   --cmd <command>                 # Run an inline command
 │   --save                          # Save --cmd to config
-│   --force-run                     # Ignore cache, always run
-│   --sidecar-id <id>               # Remote execution in sidecar
+│   --remote                        # Run on the active sidecar
+│   --sidecar-id <id>               # Remote execution in specific sidecar
 │   --identity-file <path>          # SSH identity file for sidecar
 │   --workdir <path>                # Working directory on sidecar
 │   --project <path>                # Override project directory
@@ -63,23 +65,48 @@ chunk
 │   ├── create                      # Create a sidecar
 │   │   --org-id <id>               # Organization ID (required)
 │   │   --name <name>               # Sidecar name (required)
-│   │   --image <image>             # Container image
+│   │   --image <image>             # E2B template ID or container image
+│   ├── use <id>                    # Set the active sidecar for this project
+│   ├── current                     # Show the active sidecar
+│   ├── forget                      # Clear the active sidecar
 │   ├── exec                        # Execute command in sidecar
-│   │   --org-id <id>               # Organization ID (required)
-│   │   --sidecar-id <id>           # Sidecar ID (required)
+│   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --command <cmd>             # Command to run (required)
 │   │   --args <args>               # Command arguments
 │   ├── add-ssh-key                 # Add SSH key to sidecar
-│   │   --org-id <id>               # Organization ID (required)
-│   │   --sidecar-id <id>           # Sidecar ID (required)
+│   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --public-key <key>          # SSH public key string
 │   │   --public-key-file <path>    # Path to public key file
 │   ├── ssh                         # SSH into sidecar
-│   │   --sidecar-id <id>           # Sidecar ID (required)
+│   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --identity-file <path>      # SSH identity file
-│   │   --env-vars KEY=VALUE        # Set env var in remote session (repeatable)
-│   │   --no-env-file               # Skip auto-loading .env.local
-│   └── sync                        # Sync files to sidecar
+│   │   -e / --env KEY=VALUE        # Set env var in remote session (repeatable)
+│   │   --env-file <path>           # Load env file (defaults to .env.local when flag is present)
+│   ├── sync                        # Sync files to sidecar
+│   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
+│   │   --identity-file <path>      # SSH identity file
+│   │   --workdir <path>            # Destination path on sidecar (auto-detected when omitted)
+│   ├── env                         # Detect tech stack and print environment spec as JSON
+│   │   --dir <path>                # Directory to analyse (default: .)
+│   │   --no-save                   # Print only, do not save to .chunk/config.json
+│   ├── build                       # Generate Dockerfile and build test image from env spec
+│   │   --dir <path>                # Directory to write Dockerfile.test and build from
+│   │   --tag <tag>                 # Image tag (e.g. myapp:latest)
+│   ├── setup                       # Detect env, sync files, run install steps, snapshot
+│   │   --dir <path>                # Directory to detect environment in (default: .)
+│   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
+│   │   --org-id <id>               # Organization ID (used when creating a new sidecar)
+│   │   --name <name>               # Sidecar name (used when creating a new sidecar)
+│   │   --identity-file <path>      # SSH identity file
+│   │   --snapshot-name <name>      # Snapshot name (defaults to <sidecar-name>-setup)
+│   │   --skip-sync                 # Skip syncing files to the sidecar
+│   │   --skip-snapshot             # Skip creating a snapshot after install
+│   │   --force                     # Re-detect environment even if cached
+│   └── snapshot
+│       ├── create                  # Snapshot a sidecar, then delete the source sidecar
+│       │   --sidecar-id <id>       # Sidecar ID (defaults to active sidecar)
+│       │   --name <name>           # Snapshot name (required)
+│       └── get <snapshot-id>       # Get a snapshot by ID
 │
 ├── completion
 │   ├── install                     # Install zsh completion
@@ -103,8 +130,11 @@ chunk
 - Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,
   `validate --sidecar-id`) prompt for it inline at the point of need rather than
   failing with an error.
-- `chunk auth set github` stores a GitHub token in the config file; previously
-  only the `GITHUB_TOKEN` environment variable was supported.
+- `chunk auth set <provider>` saves credentials to the system keychain by default
+  (macOS Keychain / Linux secret-service). Pass `--insecure-storage` to write to
+  the config file instead. Use `--force` / `-f` to overwrite without confirmation.
+- `chunk auth remove <provider>` removes credentials from both keychain and config
+  file. Use `--force` / `-f` to skip the confirmation prompt.
 
 ## Flag Conventions
 

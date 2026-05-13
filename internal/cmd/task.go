@@ -32,7 +32,7 @@ func newTaskCmd() *cobra.Command {
 
 func newTaskRunCmd() *cobra.Command {
 	var definition, prompt, branch string
-	var newBranch, noPipelineAsTool bool
+	var newBranch, noPipelineAsTool, jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "run",
@@ -75,6 +75,9 @@ func newTaskRunCmd() *cobra.Command {
 				return err
 			}
 
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, resp)
+			}
 			w := 12
 			io.Printf("%s %s\n", ui.Label("Run triggered:", w), ui.Green(resp.RunID))
 			io.Printf("%s %s\n", ui.Label("Pipeline:", w), resp.PipelineID)
@@ -87,6 +90,7 @@ func newTaskRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "Checkout branch override")
 	cmd.Flags().BoolVar(&newBranch, "new-branch", false, "Create a new branch")
 	cmd.Flags().BoolVar(&noPipelineAsTool, "no-pipeline-as-tool", false, "Disable running pipeline as a tool")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	_ = cmd.MarkFlagRequired("definition")
 	_ = cmd.MarkFlagRequired("prompt")
@@ -95,7 +99,8 @@ func newTaskRunCmd() *cobra.Command {
 }
 
 func newTaskConfigCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Set up .chunk/run.json for this repository",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -117,12 +122,15 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			// Check for existing config and prompt before overwriting
-			if task.ConfigExists(repoRoot) {
-				overwrite, err := tui.Confirm("Overwrite the existing configuration?", false)
-				if err != nil {
-					return nil
+			if task.ConfigExists(repoRoot) && !force {
+				if nonInteractive() {
+					return errNoForce("overwrite task configuration")
 				}
-				if !overwrite {
+				overwrite, err := tui.Confirm("Overwrite the existing configuration?", false)
+				if errors.Is(err, tui.ErrNoTTY) {
+					return errNoForce("overwrite task configuration")
+				}
+				if err != nil || !overwrite {
 					io.Println("\nSetup cancelled.")
 					return nil
 				}
@@ -176,6 +184,8 @@ func newTaskConfigCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite existing configuration without confirmation")
+	return cmd
 }
 
 func fetchProjectsAndCollabs(ctx context.Context, client *circleci.Client) ([]circleci.FollowedProject, []circleci.Collaboration, error) {

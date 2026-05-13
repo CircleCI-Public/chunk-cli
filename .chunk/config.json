@@ -6,7 +6,8 @@
       "role": "gate",
       "fileExt": ".go",
       "timeout": 300,
-      "limit": 3
+      "limit": 3,
+      "remote": true
     },
     {
       "name": "test-changed",
@@ -36,5 +37,28 @@
   "vcs": {
     "org": "CircleCI-Public",
     "repo": "chunk-cli"
-  }
+  },
+  "validation": {
+    "sidecarImage": "ac042eab-a45f-452e-a4f5-1d56e1b026bd"
+  },
+  "environment": {
+    "stack": "go",
+    "setup": [
+      {
+        "name": "runtime",
+        "command": "curl -fsSL https://go.dev/dl/go1.26.2.linux-$(dpkg --print-architecture).tar.gz | sudo tar -C /usr/local -xzf -"
+      },
+      {
+        "name": "system",
+        "command": "sudo apt-get update && sudo apt-get install -y git --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"
+      },
+      {
+        "name": "install",
+        "command": "go mod download"
+      }
+    ],
+    "image": "cimg/go",
+    "image_version": "1.26.2"
+  },
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c"
 }

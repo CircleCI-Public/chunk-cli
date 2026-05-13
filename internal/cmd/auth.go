@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,6 +36,7 @@ func newAuthCmd() *cobra.Command {
 
 func newAuthSetCmd() *cobra.Command {
 	var insecureStorage bool
+	var force bool
 	cmd := &cobra.Command{
 		Use:       "set <provider>",
 		Short:     "Store credentials for a provider",
@@ -46,11 +48,11 @@ func newAuthSetCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			switch provider {
 			case providerCircleCI:
-				return authSetCircleCI(cmd.Context(), io, rc, insecureStorage)
+				return authSetCircleCI(cmd.Context(), io, rc, insecureStorage, force)
 			case providerAnthropic:
-				return authSetAnthropic(cmd.Context(), io, rc, insecureStorage)
+				return authSetAnthropic(cmd.Context(), io, rc, insecureStorage, force)
 			case providerGitHub:
-				return authSetGitHub(cmd.Context(), io, rc, insecureStorage)
+				return authSetGitHub(cmd.Context(), io, rc, insecureStorage, force)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
@@ -61,10 +63,11 @@ func newAuthSetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&insecureStorage, "insecure-storage", false, "Save credentials to config file instead of system keychain")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite existing credentials without confirmation")
 	return cmd
 }
 
-func authSetCircleCI(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage bool) error {
+func authSetCircleCI(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage, force bool) error {
 	envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - CircleCI Token Setup"))
@@ -81,18 +84,29 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, rc config.Resolve
 
 	if rc.CircleCIToken != "" && !envSet {
 		io.Printf("A CircleCI token is already stored.\n")
-		replace, err := tui.Confirm("Do you want to replace it?", false)
-		if err != nil {
-			io.Println("Cancelled.")
-			return nil
-		}
-		if !replace {
-			io.Println("Keeping existing token.")
-			return nil
+		if !force {
+			if nonInteractive() {
+				return errNoForce("replace CircleCI token")
+			}
+			replace, err := tui.Confirm("Do you want to replace it?", false)
+			if errors.Is(err, tui.ErrNoTTY) {
+				return errNoForce("replace CircleCI token")
+			}
+			if err != nil || !replace {
+				io.Println("Keeping existing token.")
+				return nil
+			}
 		}
 	}
 
 	token, err := tui.PromptHidden("CircleCI Token")
+	if errors.Is(err, tui.ErrNoTTY) {
+		return newUserError("Cannot prompt for CircleCI token without an interactive terminal.").
+			withCode("auth.circleci_token_required").
+			withSuggestion("Set " + config.EnvCircleToken + " to configure credentials non-interactively.").
+			withExitCode(ExitAuthError).
+			wrap(err)
+	}
 	if err != nil {
 		return nil
 	}
@@ -109,7 +123,7 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, rc config.Resolve
 	return saveCircleCIToken(ctx, token, io, rc.CircleCIBaseURL, insecureStorage)
 }
 
-func authSetAnthropic(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage bool) error {
+func authSetAnthropic(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage, force bool) error {
 	envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - Anthropic API Key Setup"))
@@ -125,17 +139,29 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, rc config.Resolv
 
 	if rc.AnthropicAPIKey != "" && !envSet {
 		io.Printf("An Anthropic API key is already stored.\n")
-		replace, err := tui.Confirm("Do you want to replace it?", false)
-		if err != nil {
-			return nil
-		}
-		if !replace {
-			io.Println("Keeping existing API key.")
-			return nil
+		if !force {
+			if nonInteractive() {
+				return errNoForce("replace Anthropic API key")
+			}
+			replace, err := tui.Confirm("Do you want to replace it?", false)
+			if errors.Is(err, tui.ErrNoTTY) {
+				return errNoForce("replace Anthropic API key")
+			}
+			if err != nil || !replace {
+				io.Println("Keeping existing API key.")
+				return nil
+			}
 		}
 	}
 
 	key, err := tui.PromptHidden("API Key")
+	if errors.Is(err, tui.ErrNoTTY) {
+		return newUserError("Cannot prompt for Anthropic API key without an interactive terminal.").
+			withCode("auth.anthropic_key_required").
+			withSuggestion("Set " + config.EnvAnthropicAPIKey + " to configure credentials non-interactively.").
+			withExitCode(ExitAuthError).
+			wrap(err)
+	}
 	if err != nil {
 		return nil
 	}
@@ -293,7 +319,8 @@ func newAuthStatusCmd() *cobra.Command {
 }
 
 func newAuthRemoveCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:       "remove <provider>",
 		Short:     "Remove stored credentials",
 		Args:      cobra.ExactArgs(1),
@@ -305,13 +332,13 @@ func newAuthRemoveCmd() *cobra.Command {
 			switch provider {
 			case providerCircleCI:
 				envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
-				return authRemoveCircleCI(io, envSet)
+				return authRemoveCircleCI(io, envSet, force)
 			case providerAnthropic:
 				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
-				return authRemoveAnthropic(io, envSet)
+				return authRemoveAnthropic(io, envSet, force)
 			case providerGitHub:
 				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
-				return authRemoveGitHub(io, envSet)
+				return authRemoveGitHub(io, envSet, force)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
@@ -321,9 +348,11 @@ func newAuthRemoveCmd() *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompt")
+	return cmd
 }
 
-func authRemoveCircleCI(io iostream.Streams, envSet bool) error {
+func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
@@ -344,12 +373,20 @@ func authRemoveCircleCI(io iostream.Streams, envSet bool) error {
 		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored CircleCI token from %s\n", cfgPath)
-	confirmed, err := tui.Confirm("Are you sure?", false)
-	if err != nil || !confirmed {
-		io.Println("")
-		io.Println("Cancelled.")
-		io.Println("")
-		return nil
+	if !force {
+		if nonInteractive() {
+			return errNoForce("remove CircleCI token")
+		}
+		confirmed, err := tui.Confirm("Are you sure?", false)
+		if errors.Is(err, tui.ErrNoTTY) {
+			return errNoForce("remove CircleCI token")
+		}
+		if err != nil || !confirmed {
+			io.Println("")
+			io.Println("Cancelled.")
+			io.Println("")
+			return nil
+		}
 	}
 
 	if err := config.Clear("circleCIToken"); err != nil {
@@ -372,7 +409,7 @@ func authRemoveCircleCI(io iostream.Streams, envSet bool) error {
 	return nil
 }
 
-func authRemoveAnthropic(io iostream.Streams, envSet bool) error {
+func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
@@ -393,12 +430,20 @@ func authRemoveAnthropic(io iostream.Streams, envSet bool) error {
 		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored API key from %s\n", cfgPath)
-	confirmed, err := tui.Confirm("Are you sure?", false)
-	if err != nil || !confirmed {
-		io.Println("")
-		io.Println("Cancelled.")
-		io.Println("")
-		return nil
+	if !force {
+		if nonInteractive() {
+			return errNoForce("remove Anthropic API key")
+		}
+		confirmed, err := tui.Confirm("Are you sure?", false)
+		if errors.Is(err, tui.ErrNoTTY) {
+			return errNoForce("remove Anthropic API key")
+		}
+		if !confirmed || err != nil {
+			io.Println("")
+			io.Println("Cancelled.")
+			io.Println("")
+			return nil
+		}
 	}
 
 	if err := config.Clear("anthropicAPIKey"); err != nil {
@@ -421,7 +466,7 @@ func authRemoveAnthropic(io iostream.Streams, envSet bool) error {
 	return nil
 }
 
-func authSetGitHub(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage bool) error {
+func authSetGitHub(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage, force bool) error {
 	envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - GitHub Token Setup"))
@@ -438,18 +483,29 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, rc config.ResolvedC
 
 	if rc.GitHubToken != "" && !envSet {
 		io.Printf("A GitHub token is already stored.\n")
-		replace, err := tui.Confirm("Do you want to replace it?", false)
-		if err != nil {
-			io.Println("Cancelled.")
-			return nil
-		}
-		if !replace {
-			io.Println("Keeping existing token.")
-			return nil
+		if !force {
+			if nonInteractive() {
+				return errNoForce("replace GitHub token")
+			}
+			replace, err := tui.Confirm("Do you want to replace it?", false)
+			if errors.Is(err, tui.ErrNoTTY) {
+				return errNoForce("replace GitHub token")
+			}
+			if err != nil || !replace {
+				io.Println("Keeping existing token.")
+				return nil
+			}
 		}
 	}
 
 	token, err := tui.PromptHidden("GitHub Token")
+	if errors.Is(err, tui.ErrNoTTY) {
+		return newUserError("Cannot prompt for GitHub token without an interactive terminal.").
+			withCode("auth.github_token_required").
+			withSuggestion("Set " + config.EnvGitHubToken + " to configure credentials non-interactively.").
+			withExitCode(ExitAuthError).
+			wrap(err)
+	}
 	if err != nil {
 		return nil
 	}
@@ -482,7 +538,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, rc config.ResolvedC
 	return nil
 }
 
-func authRemoveGitHub(io iostream.Streams, envSet bool) error {
+func authRemoveGitHub(io iostream.Streams, envSet, force bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
@@ -503,12 +559,20 @@ func authRemoveGitHub(io iostream.Streams, envSet bool) error {
 		return &userError{msg: "Could not access configuration.", err: err}
 	}
 	io.Printf("This will remove your stored GitHub token from %s\n", cfgPath)
-	confirmed, err := tui.Confirm("Are you sure?", false)
-	if err != nil || !confirmed {
-		io.Println("")
-		io.Println("Cancelled.")
-		io.Println("")
-		return nil
+	if !force {
+		if nonInteractive() {
+			return errNoForce("remove GitHub token")
+		}
+		confirmed, err := tui.Confirm("Are you sure?", false)
+		if errors.Is(err, tui.ErrNoTTY) {
+			return errNoForce("remove GitHub token")
+		}
+		if err != nil || !confirmed {
+			io.Println("")
+			io.Println("Cancelled.")
+			io.Println("")
+			return nil
+		}
 	}
 
 	if err := config.Clear("gitHubToken"); err != nil {

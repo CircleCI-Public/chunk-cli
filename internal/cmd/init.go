@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/settings"
+	"github.com/CircleCI-Public/chunk-cli/internal/skills"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
@@ -190,8 +191,26 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 	return nil
 }
 
+func installSkillsStep(streams iostream.Streams) {
+	homeDir := os.Getenv(config.EnvHome)
+	if homeDir == "" {
+		return
+	}
+	for _, r := range skills.InstallByName(homeDir, "chunk-sidecar") {
+		if r.Skipped {
+			continue
+		}
+		for _, name := range r.Installed {
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Installed %s skill for %s", name, r.Agent)))
+		}
+		for _, name := range r.Updated {
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Updated %s skill for %s", name, r.Agent)))
+		}
+	}
+}
+
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipValidate, skipCompletions bool
+	var force, skipHooks, skipValidate, skipCompletions, skipSkills bool
 	var projectDir string
 
 	cmd := &cobra.Command{
@@ -306,8 +325,12 @@ hook config files.`,
 				}
 			}
 
+			// Step 5: Agent skills
+			if !skipSkills {
+				installSkillsStep(streams)
+			}
+
 			streams.ErrPrintln(ui.Success("Project initialized"))
-			streams.ErrPrintln(ui.Dim("Tip: install agent skills with 'chunk skill install' (includes chunk-sidecar for the remote validate loop)."))
 			return nil
 		},
 	}
@@ -316,6 +339,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipHooks, "skip-hooks", false, "Skip hook file generation")
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
+	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 
 	return cmd

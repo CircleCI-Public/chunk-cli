@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
@@ -11,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
+	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -63,26 +65,29 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 	token, err := prompter("CircleCI Token")
 	if err != nil {
 		if errors.Is(err, tui.ErrNoTTY) {
-			return nil, &userError{
-				msg:        "CircleCI token required.",
-				suggestion: suggestionCircleCIAuth,
-				err:        err,
-			}
+			return nil, newUserError("CircleCI token required.").
+				withCode("auth.circleci_token_required").
+				withSuggestion(suggestionCircleCIAuth).
+				withExitCode(ExitAuthError).
+				wrap(err)
 		}
 		return nil, err
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return nil, &userError{
-			msg:        "CircleCI token required.",
-			suggestion: suggestionCircleCIAuth,
-			errMsg:     "empty token entered",
-		}
+		return nil, newUserError("CircleCI token required.").
+			withCode("auth.circleci_token_required").
+			withSuggestion(suggestionCircleCIAuth).
+			withExitCode(ExitAuthError).
+			wrapMsg("empty token entered")
 	}
 
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
 	if err := authprompt.ValidateCircleCIToken(ctx, token, rc.CircleCIBaseURL); err != nil {
-		return nil, fmt.Errorf("invalid CircleCI token: %w", err)
+		if hc.HasStatusCode(err, http.StatusUnauthorized) {
+			return nil, fmt.Errorf("invalid CircleCI token: %w", err)
+		}
+		return nil, fmt.Errorf("could not validate CircleCI token: %w", err)
 	}
 
 	savedToKeychain, err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, false)
@@ -115,34 +120,37 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 	key, err := prompter("API Key")
 	if err != nil {
 		if errors.Is(err, tui.ErrNoTTY) {
-			return nil, &userError{
-				msg:        "Anthropic API key required.",
-				suggestion: suggestionAnthropicAuth,
-				err:        err,
-			}
+			return nil, newUserError("Anthropic API key required.").
+				withCode("auth.anthropic_key_required").
+				withSuggestion(suggestionAnthropicAuth).
+				withExitCode(ExitAuthError).
+				wrap(err)
 		}
 		return nil, err
 	}
 	key = strings.TrimSpace(key)
 	if key == "" {
-		return nil, &userError{
-			msg:        "Anthropic API key required.",
-			suggestion: suggestionAnthropicAuth,
-			errMsg:     "empty key entered",
-		}
+		return nil, newUserError("Anthropic API key required.").
+			withCode("auth.anthropic_key_required").
+			withSuggestion(suggestionAnthropicAuth).
+			withExitCode(ExitAuthError).
+			wrapMsg("empty key entered")
 	}
 	if !strings.HasPrefix(key, "sk-ant-") {
-		return nil, &userError{
-			msg:        "Invalid API key format.",
-			detail:     "Keys should start with \"sk-ant-\".",
-			suggestion: "Get a valid key from https://console.anthropic.com/",
-			errMsg:     "invalid key prefix",
-		}
+		return nil, newUserError("Invalid API key format.").
+			withCode("auth.anthropic_key_invalid_format").
+			withDetail("Keys should start with \"sk-ant-\".").
+			withSuggestion("Get a valid key from https://console.anthropic.com/").
+			withExitCode(ExitBadArgs).
+			wrapMsg("invalid key prefix")
 	}
 
 	streams.ErrPrintln(ui.Dim("Validating API key..."))
 	if err := authprompt.ValidateAPIKey(ctx, key, rc.AnthropicBaseURL); err != nil {
-		return nil, fmt.Errorf("invalid Anthropic API key: %w", err)
+		if hc.HasStatusCode(err, http.StatusUnauthorized, http.StatusForbidden) {
+			return nil, fmt.Errorf("invalid Anthropic API key: %w", err)
+		}
+		return nil, fmt.Errorf("could not validate Anthropic API key: %w", err)
 	}
 
 	savedToKeychain, err := authprompt.SaveAnthropicKey(key, rc.AnthropicBaseURL, false)
@@ -176,26 +184,29 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 	token, err := prompter("GitHub Token")
 	if err != nil {
 		if errors.Is(err, tui.ErrNoTTY) {
-			return nil, &userError{
-				msg:        "GitHub token required.",
-				suggestion: suggestionGitHubAuth,
-				err:        err,
-			}
+			return nil, newUserError("GitHub token required.").
+				withCode("auth.github_token_required").
+				withSuggestion(suggestionGitHubAuth).
+				withExitCode(ExitAuthError).
+				wrap(err)
 		}
 		return nil, err
 	}
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return nil, &userError{
-			msg:        "GitHub token required.",
-			suggestion: suggestionGitHubAuth,
-			errMsg:     "empty token entered",
-		}
+		return nil, newUserError("GitHub token required.").
+			withCode("auth.github_token_required").
+			withSuggestion(suggestionGitHubAuth).
+			withExitCode(ExitAuthError).
+			wrapMsg("empty token entered")
 	}
 
 	streams.ErrPrintln(ui.Dim("Validating GitHub token..."))
 	if err := authprompt.ValidateGitHubToken(ctx, token, rc.GitHubAPIURL); err != nil {
-		return nil, fmt.Errorf("invalid GitHub token: %w", err)
+		if hc.HasStatusCode(err, http.StatusUnauthorized) {
+			return nil, fmt.Errorf("invalid GitHub token: %w", err)
+		}
+		return nil, fmt.Errorf("could not validate GitHub token: %w", err)
 	}
 
 	savedToKeychain, err := authprompt.SaveGitHubToken(token, rc.GitHubAPIURL, false)

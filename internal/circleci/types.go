@@ -53,17 +53,16 @@ type RunResponse struct {
 }
 
 type CreateSidecarRequest struct {
-	OrgID    string `json:"org_id"`
-	Name     string `json:"name"`
-	Provider string `json:"provider,omitempty"`
-	Image    string `json:"image,omitempty"`
+	OrgID string `json:"org_id"`
+	Name  string `json:"name"`
+	Image string `json:"image,omitempty"`
 }
 
 type Snapshot struct {
-	ID             string `json:"id"`
-	OrganizationID string `json:"organization_id"`
-	Name           string `json:"name"`
-	Tag            string `json:"tag,omitempty"`
+	ID    string `json:"id"`
+	OrgID string `json:"org_id"`
+	Name  string `json:"name"`
+	Tag   string `json:"tag,omitempty"`
 }
 
 type CreateSnapshotRequest struct {

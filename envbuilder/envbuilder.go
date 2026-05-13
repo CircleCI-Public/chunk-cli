@@ -14,6 +14,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
 
@@ -39,28 +40,10 @@ const (
 	toolPytest  = "pytest"
 )
 
-// Environment describes the detected tech stack and build configuration for a repository.
-type Environment struct {
-	Stack        string   `json:"stack"`
-	Install      string   `json:"install"`
-	Test         string   `json:"test"`
-	SystemDeps   []string `json:"system_deps"`
-	Image        string   `json:"image"`
-	ImageVersion string   `json:"image_version"`
-}
-
-// BinaryPaths returns colon-separated PATH prefixes needed for the detected stack.
-// cimg images set these via Docker ENV which e2b does not propagate to SSH sessions.
-func (e *Environment) BinaryPaths() string {
-	switch e.Stack {
-	case stackGo:
-		return "/usr/local/go/bin:/home/circleci/go/bin"
-	case stackJavaScript, stackTypeScript:
-		return "/home/circleci/.yarn/bin"
-	default:
-		return ""
-	}
-}
+// Step and Environment are defined in internal/envspec; alias them here so
+// existing callers using envbuilder.Step / envbuilder.Environment continue to work.
+type Step = envspec.Step
+type Environment = envspec.Environment
 
 func fileExists(dir, name string) bool {
 	_, err := os.Stat(filepath.Join(dir, name))
@@ -451,17 +434,8 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 
 	sb.WriteString("FROM " + env.Image + ":" + env.ImageVersion + "\n")
 
-	for _, dep := range env.SystemDeps {
-		if cmd, ok := extraDepInstalls[dep]; ok {
-			// cimg/* images run as a non-root user (circleci), so apt-get requires sudo.
-			if strings.HasPrefix(env.Image, cimgPrefix) {
-				cmd = strings.ReplaceAll(cmd, "apt-get", "sudo apt-get")
-				cmd = strings.ReplaceAll(cmd, "rm -rf /var/lib/apt/lists/*", "sudo rm -rf /var/lib/apt/lists/*")
-				cmd = strings.ReplaceAll(cmd, "locale-gen", "sudo locale-gen")
-				cmd = strings.ReplaceAll(cmd, "update-locale", "sudo update-locale")
-			}
-			sb.WriteString("\nRUN " + cmd + "\n")
-		}
+	if sysCmd := env.SetupStep("system"); sysCmd != "" {
+		sb.WriteString("\nRUN " + sysCmd + "\n")
 	}
 
 	// When a Python project has Rust workspace members (e.g. maturin extensions like
@@ -526,7 +500,9 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 			chown = "--chown=circleci:circleci "
 		}
 		sb.WriteString("COPY " + chown + "go.mod go.sum ./\n")
-		sb.WriteString("RUN " + env.Install + "\n")
+		if installCmd := env.SetupStep("install"); installCmd != "" {
+			sb.WriteString("RUN " + installCmd + "\n")
+		}
 		sb.WriteString("\nCOPY " + chown + ". .\n")
 	case stackRuby:
 		// Use the split-COPY pattern (mirrors the Go approach) to avoid
@@ -566,7 +542,9 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		if hasGemspec && fileExists(dir, "lib") {
 			sb.WriteString("COPY " + chown + "lib/ lib/\n")
 		}
-		sb.WriteString("RUN " + env.Install + "\n")
+		if installCmd := env.SetupStep("install"); installCmd != "" {
+			sb.WriteString("RUN " + installCmd + "\n")
+		}
 		sb.WriteString("\nCOPY " + chown + ". .\n")
 	default:
 		if strings.HasPrefix(env.Image, cimgPrefix) {
@@ -596,7 +574,7 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		sdkRe := regexp.MustCompile(`^(\d+)\.`)
 		tfmRe := regexp.MustCompile(`--framework net(\d+)\.0`)
 		if sdkM := sdkRe.FindStringSubmatch(env.ImageVersion); len(sdkM) == 2 {
-			if tfmM := tfmRe.FindStringSubmatch(env.Test); len(tfmM) == 2 {
+			if tfmM := tfmRe.FindStringSubmatch(env.SetupStep("test")); len(tfmM) == 2 {
 				sdkMajor, sdkErr := strconv.Atoi(sdkM[1])
 				tfmMajor, tfmErr := strconv.Atoi(tfmM[1])
 				if sdkErr == nil && tfmErr == nil && sdkMajor > tfmMajor && tfmMajor >= 6 {
@@ -620,14 +598,16 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 	// cache under ~/.gradle/wrapper/dists/, but /home/circleci may not be
 	// writable in the Docker build context.  Redirect GRADLE_USER_HOME to
 	// /tmp so the wrapper can always unpack and lock its distribution files.
-	if env.Stack == stackJava && strings.Contains(env.Install, "gradlew") {
+	if env.Stack == stackJava && strings.Contains(env.SetupStep("install"), "gradlew") {
 		sb.WriteString("\nENV GRADLE_USER_HOME=/tmp/.gradle\n")
 	}
 
 	// Go and Ruby already emitted their install steps inside the split-COPY
 	// block above.
 	if env.Stack != stackGo && env.Stack != stackRuby {
-		sb.WriteString("\nRUN " + env.Install + "\n")
+		if installCmd := env.SetupStep("install"); installCmd != "" {
+			sb.WriteString("\nRUN " + installCmd + "\n")
+		}
 	}
 
 	// Elixir-specific fixups applied after deps are fetched:
@@ -712,8 +692,8 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		// test them one at a time.  $$ is the shell PID, used to give the
 		// temp file a unique name so concurrent runs don't collide.
 		sb.WriteString("\nCMD go list ./... > /tmp/mod-pkgs-$$ && go list -deps ./... | grep -Fxf /tmp/mod-pkgs-$$ | while IFS= read -r pkg; do go test \"$pkg\" || exit 1; done\n")
-	} else {
-		sb.WriteString("\nCMD " + env.Test + "\n")
+	} else if testCmd := env.SetupStep("test"); testCmd != "" {
+		sb.WriteString("\nCMD " + testCmd + "\n")
 	}
 
 	return sb.String()
@@ -1943,11 +1923,33 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 		}
 	}
 
+	var setup []Step
+
+	var sysCmds []string
+	for _, dep := range systemDeps {
+		if cmd, ok := extraDepInstalls[dep]; ok {
+			if strings.HasPrefix(image, cimgPrefix) {
+				cmd = strings.ReplaceAll(cmd, "apt-get", "sudo apt-get")
+				cmd = strings.ReplaceAll(cmd, "rm -rf /var/lib/apt/lists/*", "sudo rm -rf /var/lib/apt/lists/*")
+				cmd = strings.ReplaceAll(cmd, "locale-gen", "sudo locale-gen")
+				cmd = strings.ReplaceAll(cmd, "update-locale", "sudo update-locale")
+			}
+			sysCmds = append(sysCmds, cmd)
+		}
+	}
+	if len(sysCmds) > 0 {
+		setup = append(setup, Step{Name: "system", Command: strings.Join(sysCmds, " && ")})
+	}
+	if install != "" && install != stackUnknown {
+		setup = append(setup, Step{Name: "install", Command: install})
+	}
+	if test != "" && test != stackUnknown {
+		setup = append(setup, Step{Name: "test", Command: test})
+	}
+
 	return &Environment{
 		Stack:        stack,
-		Install:      install,
-		Test:         test,
-		SystemDeps:   systemDeps,
+		Setup:        setup,
 		Image:        image,
 		ImageVersion: imageVersion,
 	}, nil

@@ -243,6 +243,34 @@ func TestAuthRemoveNoStoredKeyWithEnvVar(t *testing.T) {
 		"expected env var note, got: %s", combined)
 }
 
+// auth remove anthropic with a stored config key prompts for confirmation.
+// Without a TTY the confirmation prompt fails and remove is cancelled.
+func TestAuthRemoveWithStoredKey(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = "" // no env var
+
+	// Store a key in config
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(env.HomeDir, ".config"))
+	assert.NilError(t, config.Save(config.UserConfig{AnthropicAPIKey: "sk-ant-stored-key-1234"}))
+
+	result := binary.RunCLI(t, []string{"auth", "remove", "anthropic"}, env, env.HomeDir)
+
+	// Without a TTY, confirm prompt fails and remove is not performed (exit 2, --force required)
+	assert.Equal(t, result.ExitCode, 2, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	// The command should detect the stored key and mention the config path
+	assert.Assert(t,
+		strings.Contains(combined, "remove") || strings.Contains(combined, "force"),
+		"expected removal prompt or --force suggestion, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
+
+	// Key should not have been removed — load config directly to avoid env-var override in Resolve.
+	cfg, err := config.Load()
+	assert.NilError(t, err, "config.Load failed after cancelled remove")
+	assert.Assert(t, strings.Contains(cfg.AnthropicAPIKey, "stored-key-1234"),
+		"expected stored key to be intact after cancelled remove, got: %q", cfg.AnthropicAPIKey)
+}
+
 // auth remove with both env var and config key.
 // Without a TTY the confirmation fails, but the output proves the stored key was detected.
 func TestAuthRemoveWithEnvAndConfigKey(t *testing.T) {
@@ -255,16 +283,17 @@ func TestAuthRemoveWithEnvAndConfigKey(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{"auth", "remove", "anthropic"}, env, env.HomeDir)
 
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	// Without a TTY, confirm prompt fails and remove is not performed (exit 2, --force required)
+	assert.Equal(t, result.ExitCode, 2, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t,
-		strings.Contains(combined, "remove") || strings.Contains(combined, "Cancelled"),
-		"expected removal prompt or cancellation, got: %s", combined)
+		strings.Contains(combined, "remove") || strings.Contains(combined, "force"),
+		"expected removal prompt or --force suggestion, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
 
-	// Key should not have been removed — cancelled remove leaves config intact.
+	// Key should not have been removed — failed remove leaves config intact.
 	showResult := binary.RunCLI(t, []string{"config", "show"}, env, env.HomeDir)
-	assert.Equal(t, showResult.ExitCode, 0, "config show failed after cancelled remove: %s", showResult.Stderr)
+	assert.Equal(t, showResult.ExitCode, 0, "config show failed after remove error: %s", showResult.Stderr)
 	assert.Assert(t, strings.Contains(showResult.Stdout, "EEEE"), "expected env key (masked) in config output, got: %s", showResult.Stdout)
 }
 
@@ -291,31 +320,31 @@ func TestAuthRemoveCircleCI(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{"auth", "remove", "circleci"}, env, env.HomeDir)
 
-	// Without a TTY, confirm prompt cancels
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	// Without a TTY, confirm prompt fails and remove is not performed (exit 2, --force required)
+	assert.Equal(t, result.ExitCode, 2, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t,
-		strings.Contains(combined, "remove") || strings.Contains(combined, "Cancelled"),
-		"expected removal prompt or cancellation, got: %s", combined)
+		strings.Contains(combined, "remove") || strings.Contains(combined, "force"),
+		"expected removal prompt or --force suggestion, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
 }
 
 // --- auth set ---
 
-// auth set anthropic without TTY exits cleanly
+// auth set anthropic without TTY fails with a helpful error (exit 3, set env var)
 func TestAuthSetAnthropicNoTTYExitsCleanly(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{"auth", "set", "anthropic"}, env, env.HomeDir)
 
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Equal(t, result.ExitCode, 3, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "API Key Setup"),
 		"expected Anthropic login header, got: %s", combined)
 }
 
-// auth set circleci without TTY exits cleanly
+// auth set circleci without TTY fails with a helpful error (exit 3, set env var)
 func TestAuthSetCircleCI(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.CircleToken = ""
@@ -323,7 +352,7 @@ func TestAuthSetCircleCI(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{"auth", "set", "circleci"}, env, env.HomeDir)
 
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Equal(t, result.ExitCode, 3, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "CircleCI Token Setup"),
 		"expected CircleCI setup header, got: %s", combined)

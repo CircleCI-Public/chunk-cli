@@ -87,6 +87,60 @@ func TestSidecarSnapshotCreateUsesActiveSidecar(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, body["sidecar_id"], "sidecar-new-123",
 		"expected active sidecar ID in request body")
+
+	// After a successful snapshot, the source sidecar should have been deleted
+	// and the local active-sidecar state cleared.
+	currentResult := binary.RunCLI(t, []string{"sidecar", "current"}, env, workDir)
+	assert.Equal(t, currentResult.ExitCode, 0)
+	assert.Assert(t, strings.Contains(currentResult.Stderr, "No active sidecar"),
+		"expected active sidecar to be cleared after snapshot, got stderr: %s stdout: %s",
+		currentResult.Stderr, currentResult.Stdout)
+}
+
+func TestSidecarSnapshotCreateDeletesSourceSidecar(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "snapshot", "create",
+		"--sidecar-id", "sb-111",
+		"--name", "my-checkpoint",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Deleted sidecar sb-111"),
+		"expected delete confirmation in stderr, got: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	deleteReqs := filterByMethod(reqs, "DELETE", "/api/v2/sidecar/instances/sb-111")
+	assert.Equal(t, len(deleteReqs), 1, "expected exactly 1 DELETE request, got %d", len(deleteReqs))
+}
+
+func TestSidecarSnapshotCreateWarnsWhenDeleteFails(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.DeleteStatusCode = 500
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "snapshot", "create",
+		"--sidecar-id", "sb-222",
+		"--name", "my-checkpoint",
+	}, env, env.HomeDir)
+
+	// Snapshot itself succeeded, so exit code stays 0.
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Warning"),
+		"expected warning in stderr, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "sb-222"),
+		"expected sidecar id in warning, got: %s", result.Stderr)
 }
 
 func TestSidecarSnapshotCreateNoActiveSidecar(t *testing.T) {

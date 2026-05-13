@@ -62,12 +62,11 @@ func (c *Client) ListSidecars(ctx context.Context, orgID string) ([]Sidecar, err
 	return resp.Items, nil
 }
 
-func (c *Client) CreateSidecar(ctx context.Context, orgID, name, provider, image string) (*Sidecar, error) {
+func (c *Client) CreateSidecar(ctx context.Context, orgID, name, image string) (*Sidecar, error) {
 	body := CreateSidecarRequest{
-		OrgID:    orgID,
-		Name:     name,
-		Provider: provider,
-		Image:    image,
+		OrgID: orgID,
+		Name:  name,
+		Image: image,
 	}
 	var resp Sidecar
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/sidecar/instances",
@@ -78,6 +77,16 @@ func (c *Client) CreateSidecar(ctx context.Context, orgID, name, provider, image
 		return nil, mapErr("create sidecar", err)
 	}
 	return &resp, nil
+}
+
+func (c *Client) DeleteSidecar(ctx context.Context, sidecarID string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodDelete, "/api/v2/sidecar/instances/%s",
+		hc.RouteParams(sidecarID),
+	))
+	if err != nil {
+		return mapErr("delete sidecar", err)
+	}
+	return nil
 }
 
 func (c *Client) AddSSHKey(ctx context.Context, sidecarID, publicKey string) (*AddSSHKeyResponse, error) {
