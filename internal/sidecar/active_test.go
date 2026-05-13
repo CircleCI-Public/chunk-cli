@@ -203,7 +203,7 @@ func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
 
 	stateDir, err := saveDir()
 	assert.NilError(t, err)
-	data, err := os.ReadFile(filepath.Join(stateDir, sidecarFileName("")))
+	data, err := os.ReadFile(filepath.Join(stateDir, sidecarFileName("", "")))
 	assert.NilError(t, err)
 	assert.Assert(t, !strings.Contains(string(data), "workspace"), "empty workspace should be omitted from JSON")
 }
@@ -239,4 +239,39 @@ func TestResolveWorkspaceDefaultFallback(t *testing.T) {
 
 	got := ResolveWorkspace(context.Background(), "", "myrepo")
 	assert.Equal(t, got, "./workspace/myrepo")
+}
+
+func TestSidecarFileNameCases(t *testing.T) {
+	cases := []struct {
+		session string
+		branch  string
+		want    string
+	}{
+		{"", "", "sidecar.json"},
+		{"sess-1", "", "sidecar.sess-1.json"},
+		{"", "main", "sidecar.json"},
+		{"sess-1", "main", ""},
+	}
+	for _, tc := range cases {
+		got := sidecarFileName(tc.session, tc.branch)
+		if tc.want != "" {
+			assert.Equal(t, got, tc.want, "session=%q branch=%q", tc.session, tc.branch)
+		} else {
+			// Both present: verify format and hash stability.
+			assert.Assert(t, strings.HasPrefix(got, "sidecar.sess-1-"), "expected hash suffix format, got %q", got)
+			assert.Assert(t, strings.HasSuffix(got, ".json"), "expected .json suffix, got %q", got)
+			// Hash must be exactly 8 hex characters.
+			parts := strings.Split(strings.TrimSuffix(got, ".json"), "-")
+			hash8 := parts[len(parts)-1]
+			assert.Equal(t, len(hash8), 8, "expected 8-char hash in %q", got)
+			// Stability: same inputs → same output.
+			assert.Equal(t, got, sidecarFileName(tc.session, tc.branch))
+		}
+	}
+}
+
+func TestSidecarFileNameHashUniquenessAcrossBranches(t *testing.T) {
+	f1 := sidecarFileName("sess-abc", "main")
+	f2 := sidecarFileName("sess-abc", "feature/my-branch")
+	assert.Assert(t, f1 != f2, "different branches must produce different file names")
 }
