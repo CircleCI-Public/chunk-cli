@@ -15,20 +15,20 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
-func newHooksCmd() *cobra.Command {
+func newHookCmd() *cobra.Command {
 	var projectDir string
 	cmd := &cobra.Command{
-		Use:   "hooks",
+		Use:   "hook",
 		Short: "Manage chunk hook execution",
 	}
 	cmd.PersistentFlags().StringVar(&projectDir, "project", "", "Override project directory")
-	cmd.AddCommand(newHooksDisableCmd(&projectDir))
-	cmd.AddCommand(newHooksEnableCmd(&projectDir))
-	cmd.AddCommand(newHooksStatusCmd(&projectDir))
+	cmd.AddCommand(newHookDisableCmd(&projectDir))
+	cmd.AddCommand(newHookEnableCmd(&projectDir))
+	cmd.AddCommand(newHookStatusCmd(&projectDir))
 	return cmd
 }
 
-func resolveHooksRoot(override string) string {
+func resolveHookRoot(override string) string {
 	if override != "" {
 		return override
 	}
@@ -45,13 +45,13 @@ func resolveHooksRoot(override string) string {
 	return cwd
 }
 
-func newHooksDisableCmd(projectDir *string) *cobra.Command {
+func newHookDisableCmd(projectDir *string) *cobra.Command {
 	return &cobra.Command{
 		Use:          "disable",
 		Short:        "Disable chunk validate hooks",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := filepath.Join(resolveHooksRoot(*projectDir), ".chunk", "hooks-disabled")
+			p := filepath.Join(resolveHookRoot(*projectDir), ".chunk", "hooks-disabled")
 			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 				return fmt.Errorf("create .chunk directory: %w", err)
 			}
@@ -59,19 +59,19 @@ func newHooksDisableCmd(projectDir *string) *cobra.Command {
 				return fmt.Errorf("create hooks-disabled sentinel: %w", err)
 			}
 			streams := iostream.FromCmd(cmd)
-			streams.ErrPrintln("Hooks disabled. Run 'chunk hooks enable' to re-enable.")
+			streams.ErrPrintln("Hooks disabled. Run 'chunk hook enable' to re-enable.")
 			return nil
 		},
 	}
 }
 
-func newHooksEnableCmd(projectDir *string) *cobra.Command {
+func newHookEnableCmd(projectDir *string) *cobra.Command {
 	return &cobra.Command{
 		Use:          "enable",
 		Short:        "Re-enable chunk validate hooks",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := filepath.Join(resolveHooksRoot(*projectDir), ".chunk", "hooks-disabled")
+			p := filepath.Join(resolveHookRoot(*projectDir), ".chunk", "hooks-disabled")
 			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("remove hooks-disabled sentinel: %w", err)
 			}
@@ -82,14 +82,14 @@ func newHooksEnableCmd(projectDir *string) *cobra.Command {
 	}
 }
 
-func newHooksStatusCmd(projectDir *string) *cobra.Command {
+func newHookStatusCmd(projectDir *string) *cobra.Command {
 	return &cobra.Command{
 		Use:          "status",
 		Short:        "Show whether hooks are enabled or disabled",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			streams := iostream.FromCmd(cmd)
-			root := resolveHooksRoot(*projectDir)
+			root := resolveHookRoot(*projectDir)
 			envDisabled := os.Getenv(config.EnvChunkHooksDisabled) != ""
 			if validate.HooksDisabled(root, envDisabled) {
 				streams.Println("disabled")
