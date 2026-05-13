@@ -23,6 +23,18 @@ const (
 
 const suggestionReauth = "Check your CircleCI token and try again."
 
+// silentExitError carries a specific exit code. main.go detects ExitCode() and
+// calls os.Exit directly, skipping any further error printing. Use this when
+// the command has already written its own message to stderr.
+type silentExitError struct{ code int }
+
+func (e *silentExitError) Error() string { return "" }
+func (e *silentExitError) ExitCode() int { return e.code }
+
+// ErrSilentExit causes the process to exit 1 without printing further error
+// text. Return it after writing your own message to stderr.
+var ErrSilentExit error = &silentExitError{code: 1}
+
 func notAuthorized(action string, err error) error {
 	if !errors.Is(err, circleci.ErrNotAuthorized) {
 		return nil
