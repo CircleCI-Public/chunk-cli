@@ -356,7 +356,7 @@ func newSidecarSSHCmd() *cobra.Command {
 			}
 			envVars = resolved
 			var stdin *os.File
-			if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
+			if fi, statErr := os.Stdin.Stat(); statErr == nil && fi.Mode()&os.ModeCharDevice == 0 {
 				stdin = os.Stdin
 			}
 			err = sidecar.SSH(cmd.Context(), client, sidecarID, identityFile, authSock, args, envVars, io, stdin)
@@ -834,7 +834,9 @@ Example:
 			// Step 4: Sync files to sidecar.
 			if !skipSync {
 				useBundle := false
-				if cfg, cfgErr := config.LoadProjectConfig(dir); cfgErr == nil {
+				if cfg, cfgErr := config.LoadProjectConfig(dir); cfgErr != nil {
+					status(iostream.LevelWarn, fmt.Sprintf("warning: could not load project config: %v", cfgErr))
+				} else {
 					useBundle = cfg.BundleSync
 				}
 				if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, useBundle, dir, status); err != nil {

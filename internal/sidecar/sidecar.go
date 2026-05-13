@@ -50,7 +50,7 @@ func AddSSHKey(ctx context.Context, client *circleci.Client, sidecarID, publicKe
 // SSH opens a session and either runs a command or starts an interactive shell.
 // stdin is forwarded to the remote command when non-nil; callers should pass
 // os.Stdin when the process stdin is a pipe, nil otherwise.
-func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, args []string, envVars map[string]string, io iostream.Streams, stdin io.Reader) error {
+func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, args []string, envVars map[string]string, streams iostream.Streams, stdin io.Reader) error {
 	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
 	if err != nil {
 		return err
@@ -67,10 +67,10 @@ func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, 
 	}
 
 	if result.Stdout != "" {
-		_, _ = fmt.Fprint(io.Out, result.Stdout)
+		_, _ = fmt.Fprint(streams.Out, result.Stdout)
 	}
 	if result.Stderr != "" {
-		_, _ = fmt.Fprint(io.Err, result.Stderr)
+		_, _ = fmt.Fprint(streams.Err, result.Stderr)
 	}
 	if result.ExitCode != 0 {
 		return fmt.Errorf("%q exited with status %d", command, result.ExitCode)

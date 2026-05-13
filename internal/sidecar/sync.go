@@ -136,6 +136,9 @@ func BundleSync(ctx context.Context,
 		active = &ActiveSidecar{SidecarID: sidecarID}
 	}
 	lastRef := active.LastSyncedRef
+	if active.SidecarID != sidecarID {
+		lastRef = "" // sidecar changed; force full bundle
+	}
 
 	headRef, err := gitutil.HeadRef(cwd)
 	if err != nil {
