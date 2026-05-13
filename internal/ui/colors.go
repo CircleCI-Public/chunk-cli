@@ -9,22 +9,36 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
-var colorEnabled = detectColor()
+var (
+	stdoutColorEnabled = detectColorFor(os.Stdout)
+	stderrColorEnabled = detectColorFor(os.Stderr)
+)
 
-func detectColor() bool {
+func detectColorFor(f *os.File) bool {
 	if os.Getenv(config.EnvNoColor) != "" {
 		return false
 	}
-	return term.IsTerminal(int(os.Stderr.Fd()))
+	if os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
 }
 
-// SetColorEnabled overrides automatic color detection.
+// SetColorEnabled overrides automatic color detection for both stdout and stderr.
 func SetColorEnabled(enabled bool) {
-	colorEnabled = enabled
+	stdoutColorEnabled = enabled
+	stderrColorEnabled = enabled
 }
 
 func wrap(code, text string) string {
-	if !colorEnabled {
+	if !stdoutColorEnabled {
+		return text
+	}
+	return fmt.Sprintf("\x1b[%sm%s\x1b[0m", code, text)
+}
+
+func wrapErr(code, text string) string {
+	if !stderrColorEnabled {
 		return text
 	}
 	return fmt.Sprintf("\x1b[%sm%s\x1b[0m", code, text)
@@ -37,3 +51,15 @@ func Cyan(text string) string   { return wrap("36", text) }
 func Gray(text string) string   { return wrap("90", text) }
 func Bold(text string) string   { return wrap("1", text) }
 func Dim(text string) string    { return wrap("2", text) }
+
+// ErrGreen applies green color using stderr color detection.
+func ErrGreen(text string) string { return wrapErr("32", text) }
+
+// ErrYellow applies yellow color using stderr color detection.
+func ErrYellow(text string) string { return wrapErr("33", text) }
+
+// ErrBold applies bold using stderr color detection.
+func ErrBold(text string) string { return wrapErr("1", text) }
+
+// ErrDim applies dim using stderr color detection.
+func ErrDim(text string) string { return wrapErr("2", text) }

@@ -13,8 +13,10 @@ import (
 
 func newSkillCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "skill",
-		Short: "Install and manage AI agent skills",
+		Use:                "skill",
+		Short:              "Install and manage AI agent skills",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 
 	cmd.AddCommand(newSkillInstallCmd())

@@ -20,8 +20,10 @@ import (
 
 func newTaskCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "task",
-		Short: "Manage task runs",
+		Use:                "task",
+		Short:              "Manage task runs",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 
 	cmd.AddCommand(newTaskRunCmd())

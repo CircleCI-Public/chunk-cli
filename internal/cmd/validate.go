@@ -28,13 +28,13 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 	return func(level iostream.Level, msg string) {
 		switch level {
 		case iostream.LevelStep:
-			streams.ErrPrintln(ui.Bold(msg))
+			streams.ErrPrintln(ui.ErrBold(msg))
 		case iostream.LevelInfo:
-			streams.ErrPrintf("  %s\n", ui.Dim(msg))
+			streams.ErrPrintf("  %s\n", ui.ErrDim(msg))
 		case iostream.LevelWarn:
-			streams.ErrPrintf("  %s\n", ui.Warning(msg))
+			streams.ErrPrintf("  %s\n", ui.ErrWarning(msg))
 		case iostream.LevelDone:
-			streams.ErrPrintf("  %s\n", ui.Success(msg))
+			streams.ErrPrintf("  %s\n", ui.ErrSuccess(msg))
 		}
 	}
 }
