@@ -119,6 +119,7 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 
 func newSidecarListCmd() *cobra.Command {
 	var orgID string
+	var all bool
 	var jsonOut bool
 
 	cmd := &cobra.Command{
@@ -134,10 +135,21 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sidecars, err := sidecar.List(cmd.Context(), client, resolvedOrgID)
+			sidecars, err := client.ListSidecars(cmd.Context(), resolvedOrgID, all)
 			if err != nil {
-				if err := notAuthorized("list sidecars", err); err != nil {
-					return err
+				if errors.Is(err, circleci.ErrNotAuthorized) {
+					if all {
+						return &userError{
+							msg:        "Not authorized to list all sidecars.",
+							suggestion: "Listing all sidecars requires org admin privileges.",
+							err:        err,
+						}
+					}
+					return &userError{
+						msg:        "Not authorized to list sidecars.",
+						suggestion: suggestionReauth,
+						err:        err,
+					}
 				}
 				return &userError{
 					msg:        "Could not list sidecars.",
@@ -160,6 +172,7 @@ func newSidecarListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
+	cmd.Flags().BoolVar(&all, "all", false, "List all sidecars in the org (requires org admin)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
