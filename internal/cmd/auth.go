@@ -31,25 +31,7 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthSetCmd())
 	cmd.AddCommand(newAuthStatusCmd())
 	cmd.AddCommand(newAuthRemoveCmd())
-	cmd.AddCommand(newAuthCheckCmd())
 	return cmd
-}
-
-func newAuthCheckCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "check",
-		Short: "Exit 1 if required auth is not configured",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			rc, _ := config.Resolve("", "")
-			if rc.CircleCIToken == "" {
-				io := iostream.FromCmd(cmd)
-				io.ErrPrintln("chunk: CircleCI auth is not configured.")
-				io.ErrPrintln("Run: chunk auth set circleci")
-				return ErrSilentExit
-			}
-			return nil
-		},
-	}
 }
 
 func newAuthSetCmd() *cobra.Command {
