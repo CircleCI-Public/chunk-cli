@@ -11,6 +11,10 @@ type listSidecarsResponse struct {
 	Items []Sidecar `json:"items"`
 }
 
+type listSnapshotsResponse struct {
+	Items []Snapshot `json:"items"`
+}
+
 type ExecRequest struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
