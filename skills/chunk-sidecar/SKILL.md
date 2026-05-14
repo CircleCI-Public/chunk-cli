@@ -1,7 +1,7 @@
 ---
 name: chunk-sidecar
-description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, and customizing the sidecar image via `chunk sidecar`.
-version: 1.2.0
+description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", "scaffold test-suites.yml", "set up smarter testing", or "write .circleci/test-suites.yml", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, customizing the sidecar image via `chunk sidecar`, and scaffolding `.circleci/test-suites.yml` for CircleCI Smarter Testing.
+version: 1.3.0
 allowed-tools:
   - Bash(chunk --version)
   - Bash(chunk auth status)
@@ -10,6 +10,8 @@ allowed-tools:
   - Bash(cat .chunk/config.json)
   - Bash(cat .chunk/sidecar.json)
   - Read
+  - Write
+  - Edit
   - Grep
   - Glob
 ---
@@ -80,6 +82,64 @@ When validate returns non-zero:
 - Map error paths back to local files: the sidecar mirrors your tree at `/workspace/<repo>` (or the workspace configured in `.chunk/sidecar.json`).
 - Fix locally, then repeat Step 4. Do **not** edit files over SSH — changes will be overwritten on the next sync.
 - If the error looks environmental (missing binary, wrong language version, unreachable service), go to Troubleshooting.
+
+## Scaffolding `.circleci/test-suites.yml`
+
+CircleCI Smarter Testing splits a project's test suite into **atoms** (independent units) and runs only the subset the platform picks for a given shard. The split is driven by `.circleci/test-suites.yml`. `chunk init` skips generating this file by default because the built-in templates only cover Go and pytest — for other stacks, write it directly.
+
+### When to scaffold
+
+- The user asks to "scaffold test-suites.yml", "set up smarter testing", or "write `.circleci/test-suites.yml`".
+- During the validate loop, you notice `.circleci/test-suites.yml` is missing and the project has a recognizable test runner.
+
+### File shape
+
+```yaml
+---
+name: <suite-name>
+discover: <shell command that prints one test atom per line>
+run: <shell command that runs the atoms in `<< test.atoms >>`, writing junit XML to `<< outputs.junit >>`>
+outputs:
+  junit: <path/to/junit.xml>
+```
+
+CircleCI substitutes at run time:
+- `<< test.atoms >>` — space-separated subset of atoms picked for this shard.
+- `<< outputs.junit >>` — the path declared under `outputs.junit`; the platform ingests this file to report results.
+
+### Choosing `discover` and `run`
+
+An atom is the smallest independent unit the runner accepts. Match the runner's natural sharding granularity:
+
+- **Go** — atoms are import paths.
+  ```yaml
+  discover: go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./...
+  run: go tool gotestsum --junitfile="<< outputs.junit >>" -- -race << test.atoms >>
+  ```
+- **Python (pytest)** — atoms are node ids.
+  ```yaml
+  discover: python -m pytest --collect-only -q
+  run: python -m pytest --junit-xml=<< outputs.junit >> << test.atoms >>
+  ```
+- **Node (Jest)** — atoms are test file paths.
+  ```yaml
+  discover: npx jest --listTests
+  run: JEST_JUNIT_OUTPUT_FILE=<< outputs.junit >> npx jest --reporters=default --reporters=jest-junit << test.atoms >>
+  ```
+- **Other stacks** — keep the same pattern: `discover` prints one atom per line; `run` accepts whatever subset `discover` could output. Install a junit reporter if the runner does not emit junit natively.
+
+### Constraints
+
+- `discover` must be deterministic and exit non-zero on error — the platform calls it once per pipeline.
+- `run` must accept any subset of `discover`'s output, including a single atom and the full set. Verify locally with a hand-picked subset before committing.
+- `outputs.junit` must be a junit XML file the runner actually writes. The platform reads it to report pass/fail and timing.
+- `.circleci/test-suites.yml` is referenced from `.circleci/config.yml` via the Smarter Testing orb. After writing the suite, confirm the orb usage references the suite `name` you chose.
+
+### After writing
+
+1. Run `discover` locally — confirm it prints one atom per line on stdout and exits zero.
+2. Run `run` locally with `<< test.atoms >>` substituted by one or two atoms — confirm a junit XML file appears at the `outputs.junit` path.
+3. Read `.circleci/config.yml` and verify the Smarter Testing orb references the suite name.
 
 ## Parallel sessions
 
