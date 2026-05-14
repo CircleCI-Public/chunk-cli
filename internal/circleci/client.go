@@ -146,6 +146,18 @@ func (c *Client) GetSnapshot(ctx context.Context, id string) (*Snapshot, error) 
 	return &resp, nil
 }
 
+func (c *Client) ListSnapshots(ctx context.Context, orgID string) ([]Snapshot, error) {
+	var resp listSnapshotsResponse
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/sidecar/snapshots",
+		hc.QueryParam("org_id", orgID),
+		hc.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return nil, mapErr("list snapshots", err)
+	}
+	return resp.Items, nil
+}
+
 func (c *Client) TriggerRun(ctx context.Context, orgID, projectID string, body TriggerRunRequest) (*RunResponse, error) {
 	var resp RunResponse
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/agents/org/%s/project/%s/runs",

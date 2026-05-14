@@ -28,6 +28,8 @@ func randomSidecarName() string {
 	return petname.Generate(3, "-")
 }
 
+const cmdList = "list"
+
 func newSidecarCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                "sidecar",
@@ -123,7 +125,7 @@ func newSidecarListCmd() *cobra.Command {
 	var jsonOut bool
 
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   cmdList,
 		Short: "List sidecars",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
@@ -663,6 +665,7 @@ func newSidecarSnapshotCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newSidecarSnapshotCreateCmd())
 	cmd.AddCommand(newSidecarSnapshotGetCmd())
+	cmd.AddCommand(newSidecarSnapshotListCmd())
 	return cmd
 }
 
@@ -748,6 +751,51 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func newSidecarSnapshotListCmd() *cobra.Command {
+	var orgID string
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   cmdList,
+		Short: "List snapshots",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+			resolvedOrgID, err := resolveOrgID(orgID, orgPicker(cmd.Context(), client))
+			if err != nil {
+				return err
+			}
+			snapshots, err := client.ListSnapshots(cmd.Context(), resolvedOrgID)
+			if err != nil {
+				return &userError{
+					msg:        "Could not list snapshots.",
+					suggestion: suggestionNetworkRetry,
+					err:        err,
+				}
+			}
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, snapshots)
+			}
+			if len(snapshots) == 0 {
+				io.ErrPrintln(ui.Dim("No snapshots found"))
+				return nil
+			}
+			for _, s := range snapshots {
+				io.Printf("%s  %s\n", s.Name, s.ID)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
