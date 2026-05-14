@@ -2,13 +2,17 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -469,7 +473,7 @@ func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, ima
 	if err != nil {
 		return false, err
 	}
-	sandboxName := filepath.Base(workDir) + "-validate"
+	sandboxName := sidecarAutoName(ctx, workDir)
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
@@ -498,6 +502,59 @@ func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, ima
 	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sc.Name, sc.ID)))
 	*sidecarID = sc.ID
 	return true, nil
+}
+
+// branchSanitizer is kept for the no-session fallback path.
+var branchSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// sidecarAutoName builds a sidecar name from workDir, the Claude session ID,
+// and the current git branch.
+//
+// When a session ID is present the branch is encoded as an 8-hex-char suffix
+// (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed:
+//   - Both present → "<base>-<sessionID>-<hash8>"
+//   - Session only → "<base>-<sessionID>"
+//
+// Without a session ID the branch is sanitised and included directly (legacy
+// fallback):
+//   - Branch only → "<base>-<branch>-validate"
+//   - Neither     → "<base>-validate"
+func sidecarAutoName(ctx context.Context, workDir string) string {
+	base := filepath.Base(workDir)
+	sessionID := session.IDFromCtx(ctx)
+
+	var out bytes.Buffer
+	cmd := exec.Command("git", "-C", workDir, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Stdout = &out
+	var branch string
+	if err := cmd.Run(); err == nil {
+		if b := strings.TrimSpace(out.String()); b != "" && b != "HEAD" {
+			branch = b
+		}
+	}
+
+	if sessionID != "" {
+		if branch != "" {
+			sum := sha256.Sum256([]byte(sessionID + ":" + branch))
+			hash8 := fmt.Sprintf("%x", sum[:4])
+			return base + "-" + sessionID + "-" + hash8
+		}
+		return base + "-" + sessionID
+	}
+
+	// No session ID: fall back to sanitised branch name for human readability.
+	if branch != "" {
+		branch = strings.ReplaceAll(branch, "/", "-")
+		branch = strings.ToLower(branch)
+		branch = branchSanitizer.ReplaceAllString(branch, "")
+		if len(branch) > 30 {
+			branch = branch[:30]
+		}
+		if branch != "" {
+			return base + "-" + branch + "-validate"
+		}
+	}
+	return base + "-validate"
 }
 
 func mapValidateError(err error) error {
