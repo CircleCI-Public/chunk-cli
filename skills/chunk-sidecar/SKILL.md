@@ -22,6 +22,8 @@ Run the user's build, test, and validate commands on a remote `chunk` sidecar in
 
 Sidecars are ephemeral Linux environments provisioned via CircleCI. They isolate work, avoid local port conflicts, and can be reset to known-good snapshots. Your local tree is mirrored to `/workspace/<repo>` on the sidecar each time you sync.
 
+The `circleci` CLI and the `circleci-testsuite` Smarter Testing plugin are pre-installed on every template sidecar, so commands like `circleci config validate`, `circleci config process`, and `circleci-testsuite` run without any setup step. `CIRCLE_TOKEN` is forwarded over SSH automatically, so authenticated calls also work out of the box.
+
 ## Step 1: Prerequisites
 
 Run these checks in order. Stop and report to the user if anything fails.
