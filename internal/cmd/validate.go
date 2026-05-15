@@ -312,7 +312,11 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 	}
 	if identityFile == "" {
 		if userCfg, err := config.Load(); err == nil && userCfg.UseSSHIdentityFile {
-			identityFile, _ = sidecar.DefaultKeyPath()
+			var keyErr error
+			identityFile, keyErr = sidecar.DefaultKeyPath()
+			if keyErr != nil {
+				streams.ErrPrintf("warning: could not resolve SSH identity file: %v\n", keyErr)
+			}
 		}
 	}
 	var authSock string
@@ -374,9 +378,6 @@ func runSplitCommands(ctx context.Context, sidecarID string, freshlyCreated bool
 			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
 		} else {
 			runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, statusFn, streams)
-			if runErr != nil {
-				streams.ErrPrintf("warning: remote %s: %v\n", commandNames(remoteCfg.Commands), runErr)
-			}
 		}
 	}
 	if len(localCfg.Commands) > 0 {

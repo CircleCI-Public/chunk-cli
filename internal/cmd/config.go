@@ -82,9 +82,7 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s\n", ui.Label("gitHubToken:", w), ui.Dim("(not set)"))
 			}
 
-			if userCfg, err := config.Load(); err == nil {
-				io.Printf("%s %v\n", ui.Label("useSSHIdentityFile:", w), userCfg.UseSSHIdentityFile)
-			}
+			io.Printf("%s %v\n", ui.Label("useSSHIdentityFile:", w), rc.UseSSHIdentityFile)
 
 			return nil
 		},

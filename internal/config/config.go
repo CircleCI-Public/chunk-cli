@@ -126,6 +126,7 @@ type ResolvedConfig struct {
 	ModelSource           string
 	AnalyzeModel          string
 	PromptModel           string
+	UseSSHIdentityFile    bool
 }
 
 // Load reads the config file. Returns empty config if not found.
@@ -258,6 +259,7 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	rc.CircleCIBaseURL = env.CircleCIBaseURL
 	rc.AnthropicBaseURL = env.AnthropicBaseURL
 	rc.GitHubAPIURL = env.GitHubAPIURL
+	rc.UseSSHIdentityFile = cfg.UseSSHIdentityFile
 
 	return rc, err
 }
