@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -114,6 +115,23 @@ func TestWrapHookResult_CustomMaxAttempts(t *testing.T) {
 	err := WrapHookResult(sid, errors.New("failed"), 1, &buf)
 	assert.NilError(t, err, "expected give-up after 1 attempt")
 	assert.Assert(t, strings.Contains(buf.String(), "ask the user"), "got: %s", buf.String())
+}
+
+// --- HooksDisabled ---
+
+func TestHooksDisabled_EnvVar(t *testing.T) {
+	assert.Equal(t, HooksDisabled(t.TempDir(), true), true)
+}
+
+func TestHooksDisabled_SentinelFile(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk", "hooks-disabled"), []byte{}, 0o644))
+	assert.Equal(t, HooksDisabled(dir, false), true)
+}
+
+func TestHooksDisabled_Neither(t *testing.T) {
+	assert.Equal(t, HooksDisabled(t.TempDir(), false), false)
 }
 
 // --- HasGitChanges ---

@@ -35,7 +35,13 @@ chunk validate tests        # specific command
 chunk validate --list       # list configured commands
 ```
 
-### Sidecar Environments
+### Agent Onboarding for Sidecars (Preferred method)
+
+Chunk init will install skills for working with Chunk sidecars. After the init, start a claude session and run `/chunk-sidecars` and your agent will create a sidecar and configure it for use running tests and creating snapshots of good Chunk sidecars.
+
+### Manual setup
+
+#### Sidecar Environments
 
 Create and work in cloud sidecar environments. Sidecars are available to CircleCI customers on a paid plan. Share feedback in the [CircleCI Discord](https://discord.gg/circleci).
 
@@ -55,7 +61,7 @@ chunk sidecar ssh
 chunk sidecar ssh -- make test
 ```
 
-#### Active sidecar
+##### Active sidecar
 
 Most sidecar commands operate on the *active* sidecar so you don't have to pass `--sidecar-id` every time:
 
@@ -65,7 +71,7 @@ chunk sidecar current       # show which sidecar is active
 chunk sidecar forget        # clear the active sidecar
 ```
 
-#### Environment Detection and Setup
+##### Environment Detection and Setup
 
 Auto-detect your tech stack, install dependencies, and snapshot the result so future sidecars boot fast:
 
@@ -77,7 +83,7 @@ chunk sidecar setup --name my-sidecar
 chunk sidecar env | chunk sidecar build --dir .
 ```
 
-#### Snapshots
+##### Snapshots
 
 Capture a configured environment so future sidecars start from a known-good state:
 

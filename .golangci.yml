@@ -125,6 +125,28 @@ linters:
           - prealloc
           - unparam
 
+        # Suppress goconst for test helpers, declarative configs, and
+        # packages where repeated strings are API/domain literals.
+      - linters: [goconst]
+        path: internal/testing/
+      - linters: [goconst]
+        path: internal/validate/setup\.go
+      - linters: [goconst]
+        path: envbuilder/
+      - linters: [goconst]
+        path: internal/github/
+      - linters: [goconst]
+        path: internal/config/config\.go
+      - linters: [goconst]
+        path: internal/settings/
+      - linters: [goconst]
+        path: internal/task/
+
+        # Cobra command Use names and step name comparisons are not constants.
+      - linters: [goconst]
+        path: internal/cmd/
+        text: 'string `(install|test)`'
+
     paths:
       - third_party$
       - builtin$

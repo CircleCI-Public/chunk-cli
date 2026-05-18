@@ -20,8 +20,10 @@ import (
 
 func newTaskCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "task",
-		Short: "Manage task runs",
+		Use:                "task",
+		Short:              "Manage task runs",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 
 	cmd.AddCommand(newTaskRunCmd())
@@ -40,13 +42,13 @@ func newTaskRunCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
-				return &userError{msg: "Could not determine working directory.", err: fmt.Errorf("get working directory: %w", err)}
+				return &userError{msg: msgCouldNotDetermineWorkDir, err: fmt.Errorf("get working directory: %w", err)}
 			}
 			repoRoot, err := gitutil.RepoRoot(cwd)
 			if err != nil {
 				return &userError{
 					msg:        "Not in a git repository.",
-					suggestion: "Run this command from inside a git repo.",
+					suggestion: suggestionGitRepo,
 					err:        fmt.Errorf("not in a git repository: %w", err),
 				}
 			}
@@ -110,13 +112,13 @@ func newTaskConfigCmd() *cobra.Command {
 			// Find git repo root instead of using cwd
 			cwd, err := os.Getwd()
 			if err != nil {
-				return &userError{msg: "Could not determine working directory.", err: fmt.Errorf("get working directory: %w", err)}
+				return &userError{msg: msgCouldNotDetermineWorkDir, err: fmt.Errorf("get working directory: %w", err)}
 			}
 			repoRoot, err := gitutil.RepoRoot(cwd)
 			if err != nil {
 				return &userError{
 					msg:        "Not in a git repository.",
-					suggestion: "Run this command from inside a git repo.",
+					suggestion: suggestionGitRepo,
 					err:        fmt.Errorf("not in a git repository: %w", err),
 				}
 			}

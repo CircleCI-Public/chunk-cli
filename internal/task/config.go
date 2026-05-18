@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-const orgTypeGitHub = "github"
+const (
+	orgTypeGitHub   = "github"
+	orgTypeCircleCI = "circleci"
+)
 
 var uuidRegex = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
@@ -86,7 +89,7 @@ func MapVcsTypeToOrgType(vcsType string) string {
 	if lower == orgTypeGitHub || lower == "gh" {
 		return orgTypeGitHub
 	}
-	return "circleci"
+	return orgTypeCircleCI
 }
 
 // ConfigExists checks whether .chunk/run.json exists at the given root directory.

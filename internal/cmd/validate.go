@@ -28,13 +28,13 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 	return func(level iostream.Level, msg string) {
 		switch level {
 		case iostream.LevelStep:
-			streams.ErrPrintln(ui.Bold(msg))
+			streams.ErrPrintln(ui.ErrBold(msg))
 		case iostream.LevelInfo:
-			streams.ErrPrintf("  %s\n", ui.Dim(msg))
+			streams.ErrPrintf("  %s\n", ui.ErrDim(msg))
 		case iostream.LevelWarn:
-			streams.ErrPrintf("  %s\n", ui.Warning(msg))
+			streams.ErrPrintf("  %s\n", ui.ErrWarning(msg))
 		case iostream.LevelDone:
-			streams.ErrPrintf("  %s\n", ui.Success(msg))
+			streams.ErrPrintf("  %s\n", ui.ErrSuccess(msg))
 		}
 	}
 }
@@ -111,6 +111,13 @@ func newValidateCmd() *cobra.Command {
 				streams = iostream.Streams{Out: streams.Err, Err: streams.Err}
 			}
 			statusFn := newStatusFunc(streams)
+
+			// Hook: exit 1 with a message when hooks are disabled.
+			envDisabled := os.Getenv(config.EnvChunkHooksDisabled) != ""
+			if hook != nil && validate.HooksDisabled(workDir, envDisabled) {
+				streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
+				return validate.NewHookExitError(1)
+			}
 
 			// Hook: skip entirely when the working tree is clean.
 			if hook != nil && !validate.HasGitChanges(workDir) {
@@ -441,7 +448,7 @@ func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, ima
 	}
 	active, loadErr := sidecar.LoadActive(ctx)
 	if loadErr != nil {
-		return false, &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: loadErr}
+		return false, &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: loadErr}
 	}
 	if active != nil {
 		*sidecarID = active.SidecarID

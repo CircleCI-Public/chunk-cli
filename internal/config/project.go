@@ -110,7 +110,7 @@ func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := marshalIndent(cfg)
 	if err != nil {
 		return err
 	}

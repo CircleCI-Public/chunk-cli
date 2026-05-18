@@ -13,8 +13,10 @@ import (
 
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "config",
-		Short: "Manage configuration",
+		Use:                "config",
+		Short:              "Manage configuration",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 	cmd.AddCommand(newConfigShowCmd())
 	cmd.AddCommand(newConfigSetCmd())
@@ -136,7 +138,7 @@ func newConfigSetCmd() *cobra.Command {
 
 			cfg, err := config.Load()
 			if err != nil {
-				return &userError{msg: "Could not load configuration.", suggestion: configFilePermHint, err: err}
+				return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 			}
 
 			if key == "model" {

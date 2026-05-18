@@ -37,5 +37,8 @@ PLANS.md
 .chunk/sidecar.json
 .chunk/sidecar.*.json
 
+# hook disable sentinel
+.chunk/hooks-disabled
+
 # unikraft
 .unikraft/

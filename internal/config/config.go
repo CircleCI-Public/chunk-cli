@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,19 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 )
+
+// marshalIndent encodes v as indented JSON without HTML-escaping special characters
+// like & < > so that shell commands remain human-readable in config files.
+func marshalIndent(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
 
 // Model constants define the Claude models used for different operations.
 const (
@@ -33,15 +47,16 @@ const (
 //
 //nolint:gosec // env var names, not credentials
 const (
-	EnvCircleToken      = "CIRCLE_TOKEN"
-	EnvCircleCIToken    = "CIRCLECI_TOKEN"
-	EnvCircleHost       = "CIRCLE_HOST"
-	EnvAnthropicAPIKey  = "ANTHROPIC_API_KEY"
-	EnvAnthropicBaseURL = "ANTHROPIC_BASE_URL"
-	EnvGitHubToken      = "GITHUB_TOKEN"
-	EnvGitHubAPIURL     = "GITHUB_API_URL"
-	EnvModel            = "CODE_REVIEW_CLI_MODEL"
-	EnvCircleCIOrgID    = "CIRCLECI_ORG_ID"
+	EnvCircleToken        = "CIRCLE_TOKEN"
+	EnvCircleCIToken      = "CIRCLECI_TOKEN"
+	EnvCircleHost         = "CIRCLE_HOST"
+	EnvAnthropicAPIKey    = "ANTHROPIC_API_KEY"
+	EnvAnthropicBaseURL   = "ANTHROPIC_BASE_URL"
+	EnvGitHubToken        = "GITHUB_TOKEN"
+	EnvGitHubAPIURL       = "GITHUB_API_URL"
+	EnvModel              = "CODE_REVIEW_CLI_MODEL"
+	EnvCircleCIOrgID      = "CIRCLECI_ORG_ID"
+	EnvChunkHooksDisabled = "CHUNK_HOOKS_DISABLED"
 )
 
 // System/standard environment variable names.
@@ -149,7 +164,7 @@ func Save(cfg UserConfig) error {
 	if err := os.MkdirAll(dir, dirPermission); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := marshalIndent(cfg)
 	if err != nil {
 		return err
 	}

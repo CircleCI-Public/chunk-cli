@@ -13,8 +13,10 @@ import (
 
 func newSkillCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "skill",
-		Short: "Install and manage AI agent skills",
+		Use:                "skill",
+		Short:              "Install and manage AI agent skills",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 
 	cmd.AddCommand(newSkillInstallCmd())
@@ -31,7 +33,7 @@ func newSkillInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := os.Getenv(config.EnvHome)
 			if home == "" {
-				return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
+				return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
 			}
 			io := iostream.FromCmd(cmd)
 			results := skills.Install(home)

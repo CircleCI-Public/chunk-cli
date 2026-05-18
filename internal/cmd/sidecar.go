@@ -30,8 +30,10 @@ func randomSidecarName() string {
 
 func newSidecarCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "sidecar",
-		Short: "Manage sidecars",
+		Use:                "sidecar",
+		Short:              "Manage sidecars",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 
 	cmd.AddCommand(newSidecarListCmd())
@@ -58,7 +60,7 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	}
 	active, err := sidecar.LoadActive(ctx)
 	if err != nil {
-		return &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
+		return &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 	}
 	if active == nil {
 		return &userError{
@@ -117,6 +119,7 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 
 func newSidecarListCmd() *cobra.Command {
 	var orgID string
+	var all bool
 	var jsonOut bool
 
 	cmd := &cobra.Command{
@@ -132,14 +135,25 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sidecars, err := sidecar.List(cmd.Context(), client, resolvedOrgID)
+			sidecars, err := client.ListSidecars(cmd.Context(), resolvedOrgID, all)
 			if err != nil {
-				if err := notAuthorized("list sidecars", err); err != nil {
-					return err
+				if errors.Is(err, circleci.ErrNotAuthorized) {
+					if all {
+						return &userError{
+							msg:        "Not authorized to list all sidecars.",
+							suggestion: "Listing all sidecars requires org admin privileges.",
+							err:        err,
+						}
+					}
+					return &userError{
+						msg:        "Not authorized to list sidecars.",
+						suggestion: suggestionReauth,
+						err:        err,
+					}
 				}
 				return &userError{
 					msg:        "Could not list sidecars.",
-					suggestion: "Check your network connection and try again.",
+					suggestion: suggestionNetworkRetry,
 					err:        err,
 				}
 			}
@@ -158,6 +172,7 @@ func newSidecarListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
+	cmd.Flags().BoolVar(&all, "all", false, "List all sidecars in the org (requires org admin)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
@@ -190,7 +205,7 @@ func newSidecarCreateCmd() *cobra.Command {
 				}
 				return &userError{
 					msg:        "Could not create the sidecar.",
-					suggestion: "Check your network connection and try again.",
+					suggestion: suggestionNetworkRetry,
 					err:        err,
 				}
 			}
@@ -451,7 +466,7 @@ func newSidecarCurrentCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			active, err := sidecar.LoadActive(cmd.Context())
 			if err != nil {
-				return &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
+				return &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 			}
 			if active == nil {
 				if jsonOut {
@@ -641,8 +656,10 @@ Example:
 
 func newSidecarSnapshotCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "snapshot",
-		Short: "Manage sidecar snapshots",
+		Use:                "snapshot",
+		Short:              "Manage sidecar snapshots",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 	cmd.AddCommand(newSidecarSnapshotCreateCmd())
 	cmd.AddCommand(newSidecarSnapshotGetCmd())
@@ -847,7 +864,7 @@ func sidecarSetupResolveSidecar(
 ) (id, displayName string, err error) {
 	active, err := sidecar.LoadActive(ctx)
 	if err != nil {
-		return "", "", &userError{msg: "Could not load the active sidecar.", suggestion: configFilePermHint, err: err}
+		return "", "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 	}
 	if active != nil {
 		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
@@ -868,7 +885,7 @@ func sidecarSetupResolveSidecar(
 		}
 		return "", "", &userError{
 			msg:        "Could not create the sidecar.",
-			suggestion: "Check your network connection and try again.",
+			suggestion: suggestionNetworkRetry,
 			err:        err,
 		}
 	}

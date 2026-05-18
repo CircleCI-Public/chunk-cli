@@ -69,7 +69,7 @@ func detectShell(home string) (shellConfig, error) {
 func completionInstalled() (bool, error) {
 	home := os.Getenv(config.EnvHome)
 	if home == "" {
-		return false, &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
+		return false, &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
 	}
 
 	sh, err := detectShell(home)
@@ -88,7 +88,7 @@ func completionInstalled() (bool, error) {
 func installCompletion(streams iostream.Streams) (err error) {
 	home := os.Getenv(config.EnvHome)
 	if home == "" {
-		return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
+		return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
 	}
 
 	sh, err := detectShell(home)
@@ -109,7 +109,7 @@ func installCompletion(streams iostream.Streams) (err error) {
 	if err != nil {
 		return &userError{
 			msg:        fmt.Sprintf("Could not update %s.", sh.rcFile),
-			suggestion: "Check file permissions.",
+			suggestion: suggestionCheckPerms,
 			err:        err,
 		}
 	}
@@ -118,7 +118,7 @@ func installCompletion(streams iostream.Streams) (err error) {
 	if _, err := f.WriteString("\n" + line); err != nil {
 		return &userError{
 			msg:        fmt.Sprintf("Could not update %s.", sh.rcFile),
-			suggestion: "Check file permissions.",
+			suggestion: suggestionCheckPerms,
 			err:        err,
 		}
 	}
@@ -167,7 +167,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			home := os.Getenv(config.EnvHome)
 			if home == "" {
-				return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
+				return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
 			}
 
 			sh, err := detectShell(home)
@@ -202,7 +202,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 			if err := os.WriteFile(sh.rcFile, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 				return &userError{
 					msg:        fmt.Sprintf("Could not update %s.", sh.rcFile),
-					suggestion: "Check file permissions.",
+					suggestion: suggestionCheckPerms,
 					err:        err,
 				}
 			}
