@@ -318,7 +318,8 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 	cwd, _ := os.Getwd()
 	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
 	dest := sidecar.ResolveWorkspace(ctx, workdir, repo)
-	envVars := hostForwardEnv()
+	rc, _ := config.Resolve("", "")
+	envVars := hostForwardEnv(rc.CircleCIToken)
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
 		result, err := sidecar.ExecOverSSH(ctx, session, "sh -c "+sidecar.ShellEscape(script), nil, envVars)
 		if err != nil {
@@ -330,21 +331,16 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 }
 
 // hostForwardEnv collects host environment variables that should be forwarded
-// into commands running on the sidecar. CIRCLE_TOKEN / CIRCLECI_TOKEN let
-// remote validate commands authenticate to CircleCI APIs (e.g. smarter-testing
-// endpoints) using the caller's credentials, mirroring the local behavior
-// where these are picked up implicitly from the environment.
-func hostForwardEnv() map[string]string {
-	env := map[string]string{}
-	for _, name := range []string{config.EnvCircleToken, config.EnvCircleCIToken} {
-		if v := os.Getenv(name); v != "" {
-			env[name] = v
-		}
-	}
-	if len(env) == 0 {
+// into commands running on the sidecar. The resolved CircleCI token (which may
+// come from env, the on-disk config, or any future keychain backend) is
+// forwarded as CIRCLE_TOKEN so remote validate commands can authenticate to
+// CircleCI APIs (e.g. smarter-testing endpoints), mirroring the local behavior
+// where the token is picked up from the resolved config.
+func hostForwardEnv(token string) map[string]string {
+	if token == "" {
 		return nil
 	}
-	return env
+	return map[string]string{config.EnvCircleToken: token}
 }
 
 // runSplitCommands handles per-command remote routing when no specific command
