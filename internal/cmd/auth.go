@@ -35,6 +35,7 @@ func newAuthCmd() *cobra.Command {
 }
 
 func newAuthSetCmd() *cobra.Command {
+	var insecureStorage bool
 	var force bool
 	cmd := &cobra.Command{
 		Use:       "set <provider>",
@@ -47,14 +48,11 @@ func newAuthSetCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			switch provider {
 			case providerCircleCI:
-				envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
-				return authSetCircleCI(cmd.Context(), io, rc.CircleCIBaseURL, envSet, force)
+				return authSetCircleCI(cmd.Context(), io, rc, insecureStorage, force)
 			case providerAnthropic:
-				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
-				return authSetAnthropic(cmd.Context(), io, rc.AnthropicBaseURL, envSet, force)
+				return authSetAnthropic(cmd.Context(), io, rc, insecureStorage, force)
 			case providerGitHub:
-				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
-				return authSetGitHub(cmd.Context(), io, rc.GitHubAPIURL, envSet, force)
+				return authSetGitHub(cmd.Context(), io, rc, insecureStorage, force)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
@@ -64,16 +62,18 @@ func newAuthSetCmd() *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().BoolVar(&insecureStorage, "insecure-storage", false, "Save credentials to config file instead of system keychain")
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite existing credentials without confirmation")
 	return cmd
 }
 
-func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, envSet, force bool) error {
+func authSetCircleCI(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage, force bool) error {
+	envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - CircleCI Token Setup"))
 	io.Println("")
 	io.Println("Create a CircleCI token at https://app.circleci.com/settings/user/tokens")
-	printSaveHint(io, "Token")
+	printSaveHint(io, "Token", insecureStorage)
 	io.Println("")
 
 	if envSet {
@@ -82,12 +82,8 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, e
 		io.Println("")
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	if cfg.CircleCIToken != "" {
-		io.Printf("A CircleCI token is already stored in config.\n")
+	if rc.CircleCIToken != "" && !envSet {
+		io.Printf("A CircleCI token is already stored.\n")
 		if !force {
 			if nonInteractive() {
 				return errNoForce("replace CircleCI token")
@@ -124,15 +120,16 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, e
 		}
 	}
 
-	return saveCircleCIToken(ctx, token, io, baseURL)
+	return saveCircleCIToken(ctx, token, io, rc.CircleCIBaseURL, insecureStorage)
 }
 
-func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, envSet, force bool) error {
+func authSetAnthropic(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage, force bool) error {
+	envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - Anthropic API Key Setup"))
 	io.Println("")
 	io.Println("Enter your Anthropic API key (starts with sk-ant-).")
-	printSaveHint(io, "Key")
+	printSaveHint(io, "Key", insecureStorage)
 	io.Println("")
 	if envSet {
 		io.Println(ui.Warning("An Anthropic API key is set in environment variables (" + config.EnvAnthropicAPIKey + ")."))
@@ -140,12 +137,8 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 		io.Println("")
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	if cfg.AnthropicAPIKey != "" {
-		io.Printf("An Anthropic API key is already stored in config.\n")
+	if rc.AnthropicAPIKey != "" && !envSet {
+		io.Printf("An Anthropic API key is already stored.\n")
 		if !force {
 			if nonInteractive() {
 				return errNoForce("replace Anthropic API key")
@@ -192,7 +185,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 	}
 
 	io.ErrPrintln(ui.Dim("Validating API key..."))
-	if err := authprompt.ValidateAPIKey(ctx, key, baseURL); err != nil {
+	if err := authprompt.ValidateAPIKey(ctx, key, rc.AnthropicBaseURL); err != nil {
 		return &userError{
 			msg:        "API key validation failed.",
 			suggestion: "Check that your key is correct and has not been revoked.",
@@ -200,22 +193,18 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 		}
 	}
 
-	cfg, err = config.Load()
+	savedToKeychain, err := authprompt.SaveAnthropicKey(key, rc.AnthropicBaseURL, insecureStorage)
 	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	cfg.AnthropicAPIKey = key
-	if err := config.Save(cfg); err != nil {
 		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
 	}
 
 	io.Println("")
-	printSaved(io, "Anthropic API key")
+	printSaved(io, "Anthropic API key", savedToKeychain)
 	io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
 	return nil
 }
 
-func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams, circleCIBaseURL string) error {
+func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams, circleCIBaseURL string, insecureStorage bool) error {
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
 	if err := authprompt.ValidateCircleCIToken(ctx, token, circleCIBaseURL); err != nil {
 		return &userError{
@@ -225,12 +214,8 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 		}
 	}
 
-	cfg, err := config.Load()
+	savedToKeychain, err := authprompt.SaveCircleCIToken(token, circleCIBaseURL, insecureStorage)
 	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	cfg.CircleCIToken = token
-	if err := config.Save(cfg); err != nil {
 		return &userError{
 			msg:        "Failed to save CircleCI token.",
 			suggestion: "Check that your config file is writable.",
@@ -239,7 +224,7 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 	}
 
 	streams.ErrPrintln("")
-	printSaved(streams, "CircleCI token")
+	printSaved(streams, "CircleCI token", savedToKeychain)
 	return nil
 }
 
@@ -481,12 +466,13 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
 	return nil
 }
 
-func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, envSet, force bool) error {
+func authSetGitHub(ctx context.Context, io iostream.Streams, rc config.ResolvedConfig, insecureStorage, force bool) error {
+	envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - GitHub Token Setup"))
 	io.Println("")
 	io.Println("Create a token at https://github.com/settings/tokens")
-	printSaveHint(io, "Token")
+	printSaveHint(io, "Token", insecureStorage)
 	io.Println("")
 
 	if envSet {
@@ -495,12 +481,8 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 		io.Println("")
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	if cfg.GitHubToken != "" {
-		io.Printf("A GitHub token is already stored in config.\n")
+	if rc.GitHubToken != "" && !envSet {
+		io.Printf("A GitHub token is already stored.\n")
 		if !force {
 			if nonInteractive() {
 				return errNoForce("replace GitHub token")
@@ -538,7 +520,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 	}
 
 	io.ErrPrintln(ui.Dim("Validating GitHub token..."))
-	if err := authprompt.ValidateGitHubToken(ctx, token, baseURL); err != nil {
+	if err := authprompt.ValidateGitHubToken(ctx, token, rc.GitHubAPIURL); err != nil {
 		return &userError{
 			msg:        "GitHub token validation failed.",
 			suggestion: "Check that your token is correct and has not been revoked.",
@@ -546,17 +528,13 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 		}
 	}
 
-	cfg, err = config.Load()
+	savedToKeychain, err := authprompt.SaveGitHubToken(token, rc.GitHubAPIURL, insecureStorage)
 	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	cfg.GitHubToken = token
-	if err := config.Save(cfg); err != nil {
 		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
 	}
 
 	io.Println("")
-	printSaved(io, "GitHub token")
+	printSaved(io, "GitHub token", savedToKeychain)
 	return nil
 }
 

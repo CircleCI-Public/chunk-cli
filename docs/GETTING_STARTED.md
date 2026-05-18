@@ -63,7 +63,7 @@ Check status at any time:
 chunk auth status
 ```
 
-Credentials are stored in `~/.config/chunk/config.json` (respects `XDG_CONFIG_HOME`). You can also set them as environment variables:
+Credentials are saved to the system keychain (macOS Keychain, Linux secret-service) by default. Add `--insecure-storage` to save to `~/.config/chunk/config.json` instead. You can also set them as environment variables:
 
 | Variable | Used by |
 |---|---|

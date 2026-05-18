@@ -8,8 +8,11 @@ Complete command reference for the `chunk` CLI.
 chunk
 ├── auth
 │   ├── set <provider>               # Store credential (circleci | anthropic | github)
+│   │   --insecure-storage           # Save to config file instead of system keychain
+│   │   --force, -f                  # Overwrite existing credentials without confirmation
 │   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
 │   └── remove <provider>           # Remove stored credential (circleci | anthropic | github)
+│       --force, -f                  # Skip confirmation prompt
 │
 ├── build-prompt                    # Mine PR comments → analyze → generate prompt
 │   --org <org>                     # GitHub org (auto-detected from git remote)
@@ -127,8 +130,11 @@ chunk
 - Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,
   `validate --sidecar-id`) prompt for it inline at the point of need rather than
   failing with an error.
-- `chunk auth set github` stores a GitHub token in the config file; previously
-  only the `GITHUB_TOKEN` environment variable was supported.
+- `chunk auth set <provider>` saves credentials to the system keychain by default
+  (macOS Keychain / Linux secret-service). Pass `--insecure-storage` to write to
+  the config file instead. Use `--force` / `-f` to overwrite without confirmation.
+- `chunk auth remove <provider>` removes credentials from both keychain and config
+  file. Use `--force` / `-f` to skip the confirmation prompt.
 
 ## Flag Conventions
 

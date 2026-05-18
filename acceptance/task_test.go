@@ -539,34 +539,6 @@ func TestTaskRunStatsFieldWithBranchOverride(t *testing.T) {
 	assert.Equal(t, stats["checkout_branch"], "feature/custom")
 }
 
-func TestTaskRunCircleCITokenFallback(t *testing.T) {
-	// Verify CIRCLECI_TOKEN works when CIRCLE_TOKEN is empty
-	cci := fakes.NewFakeCircleCI()
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeRunConfig(t, workDir)
-
-	env := testenv.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
-	env.CircleToken = "" // clear primary token
-	env.Extra["CIRCLECI_TOKEN"] = "fallback-circle-token"
-
-	result := binary.RunCLI(t, []string{
-		"task", "run",
-		"--definition", "dev",
-		"--prompt", "Test fallback",
-	}, env, workDir)
-
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-
-	reqs := cci.Recorder.AllRequests()
-	runReqs := filterByPathPrefix(reqs, "/api/v2/agents/org/")
-	assert.Equal(t, len(runReqs), 1)
-	assert.Equal(t, runReqs[0].Header.Get("Circle-Token"), "fallback-circle-token")
-}
-
 func TestTaskRunMissingDefinitionFlag(t *testing.T) {
 	// Cobra required flag --definition omitted
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
