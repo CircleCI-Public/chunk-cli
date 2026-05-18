@@ -99,10 +99,11 @@ func LoadEnv(ctx context.Context) (EnvVars, error) {
 
 // UserConfig is the on-disk JSON config.
 type UserConfig struct {
-	AnthropicAPIKey string `json:"anthropicAPIKey,omitempty"`
-	CircleCIToken   string `json:"circleCIToken,omitempty"`
-	GitHubToken     string `json:"gitHubToken,omitempty"`
-	Model           string `json:"model,omitempty"`
+	AnthropicAPIKey    string `json:"anthropicAPIKey,omitempty"`
+	CircleCIToken      string `json:"circleCIToken,omitempty"`
+	GitHubToken        string `json:"gitHubToken,omitempty"`
+	Model              string `json:"model,omitempty"`
+	UseSSHIdentityFile bool   `json:"useSSHIdentityFile,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
@@ -125,6 +126,7 @@ type ResolvedConfig struct {
 	ModelSource           string
 	AnalyzeModel          string
 	PromptModel           string
+	UseSSHIdentityFile    bool
 }
 
 // Load reads the config file. Returns empty config if not found.
@@ -257,6 +259,7 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	rc.CircleCIBaseURL = env.CircleCIBaseURL
 	rc.AnthropicBaseURL = env.AnthropicBaseURL
 	rc.GitHubAPIURL = env.GitHubAPIURL
+	rc.UseSSHIdentityFile = cfg.UseSSHIdentityFile
 
 	return rc, err
 }
@@ -273,7 +276,8 @@ func MaskKey(key string) string {
 // Credentials (anthropicAPIKey, circleCIToken) are intentionally excluded —
 // users should use "auth set" which validates before storing.
 var ValidConfigKeys = map[string]bool{
-	"model": true,
+	"model":              true,
+	"useSSHIdentityFile": true,
 }
 
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to

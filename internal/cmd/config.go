@@ -82,6 +82,8 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s\n", ui.Label("gitHubToken:", w), ui.Dim("(not set)"))
 			}
 
+			io.Printf("%s %v\n", ui.Label("useSSHIdentityFile:", w), rc.UseSSHIdentityFile)
+
 			return nil
 		},
 	}
@@ -95,7 +97,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model\nProject keys: orgID, validation.sidecarImage",
+		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, useSSHIdentityFile\nProject keys: orgID, validation.sidecarImage",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -131,7 +133,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, orgID, validation.sidecarImage.",
+					detail: "Supported keys: model, useSSHIdentityFile, orgID, validation.sidecarImage.",
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}
@@ -141,8 +143,22 @@ func newConfigSetCmd() *cobra.Command {
 				return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 			}
 
-			if key == "model" {
+			switch key {
+			case "model":
 				cfg.Model = value
+			case "useSSHIdentityFile":
+				switch value {
+				case "true", "1":
+					cfg.UseSSHIdentityFile = true
+				case "false", "0":
+					cfg.UseSSHIdentityFile = false
+				default:
+					return &userError{
+						msg:    fmt.Sprintf("Invalid value %q for useSSHIdentityFile.", value),
+						detail: "Accepted values: true, false.",
+						errMsg: fmt.Sprintf("invalid boolean value %q", value),
+					}
+				}
 			}
 
 			if err := config.Save(cfg); err != nil {

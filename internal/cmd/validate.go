@@ -320,7 +320,19 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 	if err != nil {
 		return nil, "", err
 	}
-	authSock := os.Getenv(config.EnvSSHAuthSock)
+	if identityFile == "" {
+		if userCfg, err := config.Load(); err == nil && userCfg.UseSSHIdentityFile {
+			var keyErr error
+			identityFile, keyErr = sidecar.DefaultKeyPath()
+			if keyErr != nil {
+				streams.ErrPrintf("warning: could not resolve SSH identity file: %v\n", keyErr)
+			}
+		}
+	}
+	var authSock string
+	if identityFile == "" {
+		authSock = os.Getenv(config.EnvSSHAuthSock)
+	}
 	session, err := sidecar.OpenSession(ctx, client, sidecarID, identityFile, authSock)
 	if err != nil {
 		return nil, "", &userError{msg: "Could not open SSH session to sidecar.", err: err}
