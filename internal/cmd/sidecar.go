@@ -409,7 +409,11 @@ func newSidecarSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, newStatusFunc(io))
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("sync: %w", err)
+			}
+			err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, newStatusFunc(io))
 			if err != nil {
 				if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
 					return &userError{
@@ -827,7 +831,7 @@ Example:
 
 			// Step 4: Sync files to sidecar.
 			if !skipSync {
-				if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, status); err != nil {
+				if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, dir, status); err != nil {
 					return err
 				}
 			}
@@ -917,11 +921,11 @@ func sidecarSetupEnsureSSHKey(identityFile string, status iostream.StatusFunc) e
 func sidecarSetupSync(
 	ctx context.Context,
 	client *circleci.Client,
-	sidecarID, identityFile, authSock string,
+	sidecarID, identityFile, authSock, cwd string,
 	status iostream.StatusFunc,
 ) error {
 	status(iostream.LevelStep, "Syncing files to sidecar...")
-	err := sidecar.Sync(ctx, client, sidecarID, identityFile, authSock, "", status)
+	err := sidecar.Bootstrap(ctx, client, sidecarID, identityFile, authSock, "", cwd, status)
 	if err == nil {
 		return nil
 	}
