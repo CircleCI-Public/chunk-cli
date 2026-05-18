@@ -24,11 +24,16 @@ import (
 func TestSync_NonApplyFailureReturnsImmediately(t *testing.T) {
 	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
 
-	// SSH server: all commands succeed (exitCode 0), so mkdir-p and test-d pass.
-	// syncWorkspace then calls gitutil.MergeBase(), which fails because the test
-	// repo has no upstream tracking branch — a non-errApplyFailed error.
+	// SSH server: mkdir-p and test-d succeed; git rev-parse fails (exit 1) to
+	// simulate a sidecar where origin/HEAD is not configured — a RemoteBaseError,
+	// which is a non-errApplyFailed error and must not trigger rm -rf.
 	sshSrv := fakes.NewSSHServer(t, pubKey)
-	sshSrv.SetResult("", 0)
+	sshSrv.SetResultFunc(func(cmd string) (string, int) {
+		if strings.Contains(cmd, "rev-parse") {
+			return "fatal: ambiguous argument 'origin/HEAD'", 1
+		}
+		return "", 0
+	})
 
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = sshSrv.Addr()
