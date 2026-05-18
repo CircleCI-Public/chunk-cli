@@ -16,17 +16,16 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
-// TestSync_NonApplyFailureReturnsImmediately verifies that Sync does not send a
-// "rm -rf" cleanup command when syncWorkspace fails for a reason other than a
-// git-apply failure. MUT-013 caught this gap by inverting the errApplyFailed
-// check, which caused Sync to retry (and rm -rf the remote workspace) for all
-// failure types, not just patch-apply failures.
-func TestSync_NonApplyFailureReturnsImmediately(t *testing.T) {
+// TestSync_StaleBaselineBootstrapsAndReturnsRemoteBaseError verifies that Sync
+// triggers Bootstrap when no baseline is stored, and that Bootstrap surfaces a
+// RemoteBaseError when the branch is not pushed and MergeBase fails (no upstream
+// tracking branch). Crucially, no rm -rf must be issued at any point.
+func TestSync_StaleBaselineBootstrapsAndReturnsRemoteBaseError(t *testing.T) {
 	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
 
-	// SSH server: all commands succeed (exitCode 0), so mkdir-p and test-d pass.
-	// syncWorkspace then calls gitutil.MergeBase(), which fails because the test
-	// repo has no upstream tracking branch — a non-errApplyFailed error.
+	// SSH server: all commands succeed (exitCode 0), so mkdir-p, test-d, fetch
+	// all pass. Bootstrap then calls gitutil.MergeBase() locally, which fails
+	// because the test repo has no upstream tracking branch.
 	sshSrv := fakes.NewSSHServer(t, pubKey)
 	sshSrv.SetResult("", 0)
 
@@ -46,21 +45,19 @@ func TestSync_NonApplyFailureReturnsImmediately(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
 
-	err := sidecar.Sync(context.Background(), cl, "sb-1", keyFile, "", "", noopStatus)
+	err := sidecar.Sync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus)
 
 	// Sync must return an error (MergeBase failed — no upstream branch).
 	assert.Assert(t, err != nil, "expected Sync to return an error")
 
-	// The error must be a RemoteBaseError, not an apply failure.
+	// The error must be a RemoteBaseError.
 	var remoteBaseErr *sidecar.RemoteBaseError
 	assert.Assert(t, errors.As(err, &remoteBaseErr),
 		"expected RemoteBaseError, got: %T %v", err, err)
 
-	// Critically: no rm -rf must have been sent. With MUT-013, Sync would treat
-	// the RemoteBaseError as a retryable apply failure and issue a rm -rf before
-	// the second syncWorkspace attempt.
+	// No rm -rf must have been sent at any point.
 	for _, cmd := range sshSrv.Commands() {
 		assert.Assert(t, !strings.Contains(cmd, "rm -rf"),
-			"Sync must not send rm -rf for non-apply failures; got command: %q", cmd)
+			"Sync must not send rm -rf; got command: %q", cmd)
 	}
 }
