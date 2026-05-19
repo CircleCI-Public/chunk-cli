@@ -7,6 +7,7 @@ Skills are instruction files for AI coding agents. Installing them teaches agent
 ```bash
 chunk skill install     # install or update all skills
 chunk skill list        # show installation status per agent
+# Add --json to either command for machine-readable output
 ```
 
 Skills are installed into the configuration directories of whichever agents are present on your machine:
@@ -14,8 +15,7 @@ Skills are installed into the configuration directories of whichever agents are 
 | Agent | Install path |
 |---|---|
 | Claude Code (CLI / desktop) | `~/.claude/skills/` |
-| Cursor | `~/.cursor/skills/` |
-| Codex | `~/.codex/skills/` |
+| Codex-compatible agents | `~/.agents/skills/` |
 
 `chunk skill list` shows the status for each skill on each agent:
 
@@ -156,8 +156,8 @@ Skills are markdown files the agent reads. You can read them directly for refere
 
 ```bash
 # Claude Code skill files after install
-cat ~/.claude/skills/chunk-review.md
-cat ~/.claude/skills/chunk-sidecar.md
+cat ~/.claude/skills/chunk-review/SKILL.md
+cat ~/.claude/skills/chunk-sidecar/SKILL.md
 ```
 
 ---

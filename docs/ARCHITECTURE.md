@@ -6,7 +6,8 @@ Module layout and dependency rules for the `chunk` Go CLI.
 
 ```
 chunk-cli/
-├── main.go                    # Entry point: cobra bootstrap + usererr handling
+├── main.go                    # Entry point: cobra bootstrap + structured error handling
+├── envbuilder/                # Environment detection and Dockerfile generation
 ├── skills/                    # Skill definitions (go:embed) and skill subdirectories
 ├── acceptance/                # Acceptance tests
 └── internal/
@@ -14,32 +15,40 @@ chunk-cli/
     │   ├── root.go            # Root command, registers all subcommands
     │   ├── auth.go            # auth set, auth status, auth remove
     │   ├── buildprompt.go     # build-prompt
+    │   ├── commands.go        # commands
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set
+    │   ├── hook.go            # hook enable/disable/status
     │   ├── init.go            # init (project setup, settings.json generation)
-    │   ├── sidecar.go         # sidecar list/create/exec/add-ssh-key/ssh/sync/env/build
+    │   ├── sidecar.go         # sidecar list/create/exec/add-ssh-key/ssh/sync/env/build/setup/snapshot
     │   ├── skills.go          # skill install/list
-    │   ├── task.go            # task run
+    │   ├── task.go            # task config/run
     │   ├── upgrade.go         # upgrade
     │   └── validate.go        # validate
     ├── anthropic/             # Anthropic Messages API client
+    ├── authprompt/            # Interactive auth resolution and validation
     ├── buildprompt/           # Three-step pipeline: discover → analyze → generate
     ├── circleci/              # CircleCI REST API client
+    ├── closer/                # defer helpers for close errors
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
+    ├── envspec/               # Shared environment spec types
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
+    ├── secrets/               # Secret resolution helpers for sidecar env vars
+    ├── session/               # Session ID context for per-session sidecar state
+    ├── settings/              # .claude/settings.json generation and merge
     ├── sidecar/               # CircleCI sidecar operations
     ├── skills/                # Skill definitions (go:embed) and installation
     ├── task/                  # Task run config and CircleCI trigger
-    ├── testing/recorder/      # HTTP recorder for tests
+    ├── testing/               # Test helpers, fakes, fixtures, git repos, recorder
     ├── tui/                   # Terminal UI components (confirm, input, select)
     ├── ui/                    # Colors, formatting, spinner
     ├── upgrade/               # CLI self-upgrade
-    ├── usererr/               # User-facing error wrapper
-    └── validate/              # Validation command logic
+    ├── validate/              # Validation command logic
+    └── version/               # Version and user-agent values
 ```
 
 ## Layering Rules
@@ -48,13 +57,17 @@ Dependencies flow strictly downward:
 
 ```
 main.go → internal/cmd/ → internal/{business packages} → internal/httpcl/
+                      ↘ envbuilder/ → internal/envspec/
 ```
 
 - `main.go` creates the root command and handles top-level errors
 - `internal/cmd/` contains thin cobra wrappers that parse flags and delegate
 - Business packages (`buildprompt/`, `task/`, etc.) contain the logic
+- `envbuilder/` is a top-level package because it is also exercised by the
+  acceptance harness; it may depend on shared internal leaf packages
 - `internal/httpcl/` is an independent library — no imports are allowed to other `internal/` packages
-- `config/` is a leaf — no imports from other `internal/` packages
+- `config/` stays low in the dependency graph; it imports only shared leaf
+  types such as `envspec`
 
 No upward or lateral imports between business packages, except where a
 package naturally composes another (e.g. `task/` uses `circleci/`).
@@ -65,9 +78,10 @@ package naturally composes another (e.g. `task/` uses `circleci/`).
 main() → cmd.NewRootCmd(version) → rootCmd.Execute()
 ```
 
-Errors are caught in `main()`. If the error is a `usererr.Error`, only the
-user-facing message is printed (no stack trace). Otherwise the raw error
-is printed. Both exit with code 1.
+Errors are caught in `main()`. Commands return errors that may expose
+`UserMessage`, `Detail`, `Suggestion`, `ErrorCode`, or `UserExitCode` methods;
+`main()` formats those for users and falls back to the raw error detail when
+the interfaces are absent.
 
 ## Data Flow: `build-prompt`
 
@@ -103,13 +117,14 @@ Three-step pipeline orchestrated by `buildprompt.Run()`:
 
 ### Single source of truth for env var names
 
-Define every environment variable name as a `const` in the `config`
-package. Use these constants in user-facing messages and `t.Setenv` calls.
-Never use bare `os.Getenv("CIRCLE_TOKEN")` strings.
+Define chunk-specific environment variable names as `const` values in the
+`config` package. Use these constants in user-facing messages and `t.Setenv`
+calls; avoid bare strings for variables already represented there.
 
 ```go
 const (
     EnvCircleToken     = "CIRCLE_TOKEN"
+    EnvCircleCIToken   = "CIRCLECI_TOKEN"
     EnvAnthropicAPIKey = "ANTHROPIC_API_KEY"
     EnvGitHubToken     = "GITHUB_TOKEN"
     EnvModel           = "CODE_REVIEW_CLI_MODEL"
@@ -158,10 +173,15 @@ User config lives at `$XDG_CONFIG_HOME/chunk/config.json` (default: `~/.config/c
 
 ```json
 {
-  "apiKey": "sk-...",
+  "anthropicAPIKey": "sk-...",
+  "circleCIToken": "...",
+  "gitHubToken": "...",
   "model": "claude-sonnet-4-6"
 }
 ```
+
+Project config lives at `.chunk/config.json`. Task-run configuration lives at
+`.chunk/run.json`.
 
 ### Client constructors accept config, not env
 
@@ -179,9 +199,19 @@ in `config.Resolve` and makes clients testable.
 | `GITHUB_API_URL` | github | GitHub API endpoint override |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
-| `CLAUDE_PROJECT_DIR` | init | IDE-provided project directory |
+| `CIRCLECI_ORG_ID` | sidecar, task | CircleCI organization selection |
+| `CODE_REVIEW_CLI_MODEL` | config | Default Claude model override |
+| `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set |
+| `HOME` | completion, skills, sidecar | User home directory |
+| `SHELL` | completion | Shell detection for completion install |
+| `SSH_AUTH_SOCK` | sidecar, validate | SSH agent socket for sidecar auth |
+| `NO_COLOR` | ui | Disable colored output |
+| `CI` | cmd | Treat confirmation prompts as non-interactive |
+| `CLAUDE_PROJECT_DIR` | settings | Hook working directory used in generated PreToolUse commands |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
+| `XDG_STATE_HOME` | config | App state directory (default: `~/.local/state`) |
 | `XDG_DATA_HOME` | sidecar | Per-project state directory (default: `~/.local/share`) |
+| `CHUNK_INSTALL_PATH` | upgrade | Override the binary path updated by `chunk upgrade` |
 
 ## Pre-Commit Hooks
 
@@ -189,8 +219,9 @@ in `config.Resolve` and makes clients testable.
 runs configured validation commands before the AI agent commits code. See
 **[docs/HOOKS.md](HOOKS.md)** for details.
 
-`chunk validate` runs those same commands manually, with SHA256-based content
-caching so unchanged files skip re-execution.
+`chunk validate` runs those same commands manually, stopping at the first
+failure and marking later commands as skipped. `{{CHANGED_PACKAGES}}` in a
+command expands from `git diff HEAD` to changed Go package paths.
 
 ## HTTP Client (`internal/httpcl/`)
 

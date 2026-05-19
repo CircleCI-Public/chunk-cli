@@ -43,7 +43,7 @@ Sidecars are in preview for CircleCI customers on Performance and Scale plans.
 
 ### Skills
 
-**Skills** are instructions for AI coding agents (Claude Code, Cursor, Codex). Running `chunk skill install` copies skill files into your agent's configuration directory, teaching it commands like `/chunk-review` and how to run the sidecar dev loop.
+**Skills** are instructions for AI coding agents (Claude Code and Codex-compatible agents). Running `chunk skill install` copies skill files into your agent's configuration directory, teaching it commands like `chunk-review` and how to run the sidecar dev loop.
 
 ---
 
@@ -52,7 +52,7 @@ Sidecars are in preview for CircleCI customers on Performance and Scale plans.
 Store credentials for the services you plan to use:
 
 ```bash
-chunk auth set anthropic   # required for build-prompt and init
+chunk auth set anthropic   # required for build-prompt; used by init command detection
 chunk auth set github      # required for build-prompt
 chunk auth set circleci    # required for sidecars and task runs
 ```
@@ -69,13 +69,14 @@ Credentials are stored in `~/.config/chunk/config.json` (respects `XDG_CONFIG_HO
 |---|---|
 | `ANTHROPIC_API_KEY` | `build-prompt`, `init` |
 | `GITHUB_TOKEN` | `build-prompt` |
-| `CIRCLE_TOKEN` | `sidecar`, `task` |
+| `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | `sidecar`, `task` |
+| `CIRCLECI_ORG_ID` | Sidecar/task organization selection |
 
 ---
 
 ## Step 2: Initialize your project
 
-Run this once per project. It auto-detects your test and lint commands (using Claude), creates `.chunk/config.json`, and wires up `.claude/settings.json` so hooks run automatically when your AI coding agent commits code.
+Run this once per project. It auto-detects your test and lint commands (using Claude when an Anthropic key is available), creates `.chunk/config.json`, wires up `.claude/settings.json` so hooks run automatically when your AI coding agent commits code, and installs the `chunk-sidecar` skill when a supported agent config directory is present.
 
 ```bash
 chunk init
@@ -85,6 +86,11 @@ What it creates:
 
 - **`.chunk/config.json`** — list of validation commands (test, lint, format)
 - **`.claude/settings.json`** — hooks that run validation before commits and after each agent session
+
+`chunk init` also adds ignored active-sidecar tracking patterns to `.gitignore`.
+It skips `.circleci/test-suites.yml` by default; pass
+`--skip-test-suites=false` to write the built-in Go or pytest Smarter Testing
+template when one applies.
 
 Review the generated config and adjust commands if needed:
 
@@ -133,7 +139,7 @@ Output lands at `.chunk/context/review-prompt.md`. Commit this file — your tea
 
 ## Step 4: Install skills
 
-Skills install slash commands into your AI coding agents so they can run reviews and use sidecars.
+Skills install instructions into your AI coding agents so they can run reviews and use sidecars.
 
 ```bash
 chunk skill install     # install or update all skills
@@ -184,7 +190,7 @@ chunk sidecar sync           # push local changes to sidecar
 chunk validate --remote      # run validate commands on sidecar
 ```
 
-The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project>/` (default: `~/.local/share/chunk/<project>/`) — never inside the repo. The project key is derived from the git root path.
+The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project-hash>/` (default: `~/.local/share/chunk/<project-hash>/`) — never inside the repo. The project key is derived from the git root path.
 
 Or hand this off to the `chunk-sidecar` skill:
 
@@ -227,6 +233,14 @@ After `chunk init`, two hooks run automatically in Claude Code and Cursor:
 - **Stop** — runs when the agent finishes a session. Skips if the working tree is clean; runs all configured commands otherwise.
 
 The Stop hook retries up to `stopHookMaxAttempts` times (default: 3) before giving up and letting the session end.
+
+Temporarily disable or re-enable hooks with:
+
+```bash
+chunk hook disable
+chunk hook status
+chunk hook enable
+```
 
 See [docs/HOOKS.md](HOOKS.md) for configuration details.
 

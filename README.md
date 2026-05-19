@@ -5,7 +5,7 @@ CLI for remote validation of changes — run code in a cloud environment before 
 ## Features
 
 - **Context Generation** — Mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to your team's standards
-- **Hook Automation** — Wire tests and lint into your AI coding agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
+- **Hook Automation** — Wire tests and lint into your AI coding agent's lifecycle with generated `.claude/settings.json`
 - **Environment Detection** — Auto-detect tech stack, generate Dockerfiles, and set up sidecars with the right dependencies
 - **Sidecar Environments** — Validate changes in a clean cloud environment on CircleCI
 
@@ -26,7 +26,7 @@ brew install CircleCI-Public/circleci/chunk
 Initialize your project for hook automation and validation:
 
 ```bash
-# Detect test commands, configure hooks, set up .claude/settings.json
+# Detect test commands, configure hooks, and install sidecar skill if available
 chunk init
 
 # Run configured validations
@@ -37,7 +37,7 @@ chunk validate --list       # list configured commands
 
 ### Agent Onboarding for Sidecars (Preferred method)
 
-Chunk init will install skills for working with Chunk sidecars. After the init, start a claude session and run `/chunk-sidecars` and your agent will create a sidecar and configure it for use running tests and creating snapshots of good Chunk sidecars.
+Chunk init will install the `chunk-sidecar` skill when a supported agent config directory is present. After init, start an agent session and ask it to "validate on the sidecar"; it will create a sidecar when needed and guide snapshot setup after the environment is verified.
 
 ### Manual setup
 
@@ -73,10 +73,10 @@ chunk sidecar forget        # clear the active sidecar
 
 ##### Environment Detection and Setup
 
-Auto-detect your tech stack, install dependencies, and snapshot the result so future sidecars boot fast:
+Auto-detect your tech stack, sync files, and run install steps on a sidecar. Snapshot the verified sidecar separately so future sidecars boot fast:
 
 ```bash
-# Detect environment, run install steps, and create a snapshot
+# Detect environment, sync files, and run install steps
 chunk sidecar setup --name my-sidecar
 
 # Or build a local Docker test image from the detected environment
@@ -108,7 +108,7 @@ chunk build-prompt --org myorg --repos api,backend --top 10
 
 # Output lands in .chunk/context/review-prompt.md
 
-# Install review skills for Claude Code, Codex, and Cursor
+# Install review skills for Claude Code and Codex-compatible agents
 chunk skill install
 ```
 
@@ -116,17 +116,20 @@ chunk skill install
 
 ```
 chunk auth set|status|remove               Authentication
+chunk config show|set                       Manage user and project configuration
 chunk sidecar list|create|exec|ssh         Manage cloud sidecar environments
-chunk sidecar sync|env|build               Sync files, detect env, build images
+chunk sidecar add-ssh-key|sync|env|build   SSH access, sync files, detect env, build images
 chunk sidecar use|current|forget           Manage active sidecar
-chunk sidecar setup                        Detect env, install deps, snapshot
+chunk sidecar setup                        Detect env and install dependencies
 chunk sidecar snapshot create|get          Manage sidecar snapshots
 chunk init                                 Initialize project configuration
 chunk validate [name]                      Run quality checks
 chunk skill install|list                   Manage AI agent skills
 chunk task config|run                      Configure and trigger CI tasks
 chunk build-prompt                         Generate review context from PR comments
+chunk hook enable|disable|status           Temporarily control validation hooks
 chunk completion install|uninstall         Shell completions
+chunk commands                             List available commands
 chunk upgrade                              Update CLI
 ```
 
@@ -150,7 +153,9 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key (required for `build-prompt`; optional for `init`) |
 | `GITHUB_TOKEN` | GitHub PAT with `repo` scope (for `build-prompt`) |
-| `CIRCLE_TOKEN` | CircleCI personal API token (for `sidecar` and `task`) |
+| `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | CircleCI personal API token (for `sidecar` and `task`) |
+| `CIRCLECI_ORG_ID` | CircleCI organization ID used by sidecar and task setup commands |
+| `CHUNK_HOOKS_DISABLED` | Disable validation hooks when set |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment variable reference.
 

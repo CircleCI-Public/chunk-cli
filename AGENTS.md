@@ -24,8 +24,8 @@ Read these when working in the relevant area:
 
 ## Key Architectural Constraints
 
-- Dependencies flow strictly downward: `cmd/ → internal/`
-- `cmd/` contains cobra command definitions — thin wrappers that delegate to `internal/`
+- Dependencies flow strictly downward from `main.go` into command wrappers, then business packages and leaf utilities
+- `internal/cmd/` contains cobra command definitions — thin wrappers that delegate to `internal/` packages or the top-level `envbuilder/` package
 - Leaf packages must not import from `cmd/`
 
 ## Code Conventions
@@ -37,7 +37,7 @@ Read these when working in the relevant area:
 ## Testing Rules
 
 - **Integration over mocks**: Critical workflows use real git operations in temp directories
-- **No Claude API mocking**: Tests requiring `ANTHROPIC_API_KEY` skip gracefully if missing
+- **Fake HTTP servers over real credentials**: Anthropic, GitHub, and CircleCI clients are tested with fakes; tests that truly need external tools or services skip gracefully
 - **Fakes over mocks**: Use fake HTTP servers instead of mocking libraries
 - **Test isolation**: Each test creates its own temp directory and cleans up
 - **Race detector**: Always run tests with `-race`
