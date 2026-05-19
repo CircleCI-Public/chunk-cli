@@ -267,6 +267,9 @@ func resolveGitHubToken(rc *ResolvedConfig, cfg UserConfig, env EnvVars) {
 // Priority for model: flag > env > config file > default.
 func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	cfg, err := Load()
+	if err != nil {
+		return ResolvedConfig{}, fmt.Errorf("load config: %w", err)
+	}
 
 	env, envErr := LoadEnv(context.Background())
 	if envErr != nil {
@@ -305,7 +308,7 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	rc.AnthropicBaseURL = env.AnthropicBaseURL
 	rc.GitHubAPIURL = env.GitHubAPIURL
 
-	return rc, err
+	return rc, nil
 }
 
 // MaskKey masks all but the last 4 characters with *.

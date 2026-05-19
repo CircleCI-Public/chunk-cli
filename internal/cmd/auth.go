@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -340,14 +341,11 @@ func newAuthRemoveCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			switch provider {
 			case providerCircleCI:
-				envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
-				return authRemoveCircleCI(io, envSet, force)
+				return authRemoveCircleCI(io, rc, force)
 			case providerAnthropic:
-				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
-				return authRemoveAnthropic(io, envSet, force)
+				return authRemoveAnthropic(io, rc, force)
 			case providerGitHub:
-				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
-				return authRemoveGitHub(io, envSet, force)
+				return authRemoveGitHub(io, rc, force)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
@@ -361,13 +359,17 @@ func newAuthRemoveCmd() *cobra.Command {
 	return cmd
 }
 
-func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
+func authRemoveCircleCI(io iostream.Streams, rc config.ResolvedConfig, force bool) error {
+	envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
+
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 	}
-	if cfg.CircleCIToken == "" {
-		io.Println(ui.Warning("No CircleCI token stored in config file."))
+	keychainToken, _ := keyring.Get(keyring.CircleCITokenKey(rc.CircleCIBaseURL))
+
+	if cfg.CircleCIToken == "" && keychainToken == "" {
+		io.Println(ui.Warning("No CircleCI token stored in keychain or config."))
 		if envSet {
 			io.Println("Note: A CircleCI token is set in environment variables.")
 			io.Println("To remove it, unset the environment variable.")
@@ -376,12 +378,19 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
 		return nil
 	}
 
-	io.Println("")
-	cfgPath, err := config.Path()
-	if err != nil {
-		return &userError{msg: msgCouldNotAccessConfig, err: err}
+	var location string
+	if keychainToken != "" {
+		location = "system keychain"
+	} else {
+		cfgPath, err := config.Path()
+		if err != nil {
+			return &userError{msg: msgCouldNotAccessConfig, err: err}
+		}
+		location = cfgPath
 	}
-	io.Printf("This will remove your stored CircleCI token from %s\n", cfgPath)
+
+	io.Println("")
+	io.Printf("This will remove your stored CircleCI token from %s\n", location)
 	if !force {
 		if nonInteractive() {
 			return errNoForce("remove CircleCI token")
@@ -405,7 +414,7 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
 		}
 		return &userError{
 			msg:        "Failed to remove CircleCI token.",
-			detail:     "An error occurred while trying to remove the token from the config file.",
+			detail:     "An error occurred while trying to remove the token.",
 			suggestion: hint,
 			err:        err,
 		}
@@ -418,13 +427,17 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
 	return nil
 }
 
-func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
+func authRemoveAnthropic(io iostream.Streams, rc config.ResolvedConfig, force bool) error {
+	envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
+
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 	}
-	if cfg.AnthropicAPIKey == "" {
-		io.Println(ui.Warning("No API key stored in config file."))
+	keychainKey, _ := keyring.Get(keyring.AnthropicKeyKey(rc.AnthropicBaseURL))
+
+	if cfg.AnthropicAPIKey == "" && keychainKey == "" {
+		io.Println(ui.Warning("No API key stored in keychain or config."))
 		if envSet {
 			io.Println("Note: " + config.EnvAnthropicAPIKey + " is set in your environment variables.")
 			io.Println("To remove it, unset the environment variable.")
@@ -433,12 +446,19 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
 		return nil
 	}
 
-	io.Println("")
-	cfgPath, err := config.Path()
-	if err != nil {
-		return &userError{msg: msgCouldNotAccessConfig, err: err}
+	var location string
+	if keychainKey != "" {
+		location = "system keychain"
+	} else {
+		cfgPath, err := config.Path()
+		if err != nil {
+			return &userError{msg: msgCouldNotAccessConfig, err: err}
+		}
+		location = cfgPath
 	}
-	io.Printf("This will remove your stored API key from %s\n", cfgPath)
+
+	io.Println("")
+	io.Printf("This will remove your stored API key from %s\n", location)
 	if !force {
 		if nonInteractive() {
 			return errNoForce("remove Anthropic API key")
@@ -462,7 +482,7 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
 		}
 		return &userError{
 			msg:        "Failed to remove API key.",
-			detail:     "An error occurred while trying to remove the API key from the config file.",
+			detail:     "An error occurred while trying to remove the API key.",
 			suggestion: hint,
 			err:        err,
 		}
@@ -547,13 +567,17 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, rc config.ResolvedC
 	return nil
 }
 
-func authRemoveGitHub(io iostream.Streams, envSet, force bool) error {
+func authRemoveGitHub(io iostream.Streams, rc config.ResolvedConfig, force bool) error {
+	envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
+
 	cfg, err := config.Load()
 	if err != nil {
 		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 	}
-	if cfg.GitHubToken == "" {
-		io.Println(ui.Warning("No GitHub token stored in config file."))
+	keychainToken, _ := keyring.Get(keyring.GitHubTokenKey(rc.GitHubAPIURL))
+
+	if cfg.GitHubToken == "" && keychainToken == "" {
+		io.Println(ui.Warning("No GitHub token stored in keychain or config."))
 		if envSet {
 			io.Println("Note: A GitHub token is set in environment variables.")
 			io.Println("To remove it, unset the environment variable.")
@@ -562,12 +586,19 @@ func authRemoveGitHub(io iostream.Streams, envSet, force bool) error {
 		return nil
 	}
 
-	io.Println("")
-	cfgPath, err := config.Path()
-	if err != nil {
-		return &userError{msg: msgCouldNotAccessConfig, err: err}
+	var location string
+	if keychainToken != "" {
+		location = "system keychain"
+	} else {
+		cfgPath, err := config.Path()
+		if err != nil {
+			return &userError{msg: msgCouldNotAccessConfig, err: err}
+		}
+		location = cfgPath
 	}
-	io.Printf("This will remove your stored GitHub token from %s\n", cfgPath)
+
+	io.Println("")
+	io.Printf("This will remove your stored GitHub token from %s\n", location)
 	if !force {
 		if nonInteractive() {
 			return errNoForce("remove GitHub token")
@@ -591,7 +622,7 @@ func authRemoveGitHub(io iostream.Streams, envSet, force bool) error {
 		}
 		return &userError{
 			msg:        "Failed to remove GitHub token.",
-			detail:     "An error occurred while trying to remove the token from the config file.",
+			detail:     "An error occurred while trying to remove the token.",
 			suggestion: hint,
 			err:        err,
 		}

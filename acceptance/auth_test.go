@@ -3,6 +3,7 @@ package acceptance
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -264,11 +265,13 @@ func TestAuthRemoveWithStoredKey(t *testing.T) {
 		"expected removal prompt or --force suggestion, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, env.HomeDir), "expected config path in output, got: %s", combined)
 
-	// Key should not have been removed — load config directly to avoid env-var override in Resolve.
-	cfg, err := config.Load()
-	assert.NilError(t, err, "config.Load failed after cancelled remove")
-	assert.Assert(t, strings.Contains(cfg.AnthropicAPIKey, "stored-key-1234"),
-		"expected stored key to be intact after cancelled remove, got: %q", cfg.AnthropicAPIKey)
+	// Key should not have been removed — read config file directly to verify.
+	cfgPath, err := config.Path()
+	assert.NilError(t, err, "config.Path failed")
+	data, err := os.ReadFile(cfgPath)
+	assert.NilError(t, err, "config file read failed after cancelled remove")
+	assert.Assert(t, strings.Contains(string(data), "stored-key-1234"),
+		"expected stored key to be intact after cancelled remove, got: %s", string(data))
 }
 
 // auth remove with both env var and config key.

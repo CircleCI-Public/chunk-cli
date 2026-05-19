@@ -44,7 +44,7 @@ func printSaved(streams iostream.Streams, label string, savedToKeychain bool) {
 		msg = fmt.Sprintf("%s saved to user config (%s)", label, cfgPath)
 	}
 	streams.ErrPrintln(ui.Success(msg))
-	streams.ErrPrintln(ui.Warning("Credential is stored on disk. Run 'chunk auth set' to move it to the system keychain."))
+	streams.ErrPrintln(ui.Warning("Credential is stored on disk. Run 'chunk auth set <provider>' to move it to the system keychain."))
 }
 
 func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*circleci.Client, error) {
