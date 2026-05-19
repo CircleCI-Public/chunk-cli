@@ -195,7 +195,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, rc config.Resolv
 
 	savedToKeychain, err := authprompt.SaveAnthropicKey(key, rc.AnthropicBaseURL, insecureStorage)
 	if err != nil {
-		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
+		return &userError{msg: "Could not save credentials.", suggestion: keychainHint, err: err}
 	}
 
 	io.Println("")
@@ -218,7 +218,7 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 	if err != nil {
 		return &userError{
 			msg:        "Failed to save CircleCI token.",
-			suggestion: "Check that your config file is writable.",
+			suggestion: keychainHint,
 			err:        fmt.Errorf("save token: %w", err),
 		}
 	}
@@ -253,6 +253,9 @@ func newAuthStatusCmd() *cobra.Command {
 			} else {
 				io.Printf("  Source: %s\n", rc.CircleCITokenSource)
 				io.Printf("  Token:  %s\n", config.MaskKey(rc.CircleCIToken))
+				if rc.CircleCITokenSource == config.SourceConfigFile {
+					io.Println(ui.Warning("  Credential is stored on disk. Run 'chunk auth set circleci' to move it to the system keychain."))
+				}
 				io.ErrPrintln(ui.Dim("Validating CircleCI token..."))
 				if err := authprompt.ValidateCircleCIToken(cmd.Context(), rc.CircleCIToken, rc.CircleCIBaseURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
@@ -274,6 +277,9 @@ func newAuthStatusCmd() *cobra.Command {
 			} else {
 				io.Printf("  Source: %s\n", rc.AnthropicAPIKeySource)
 				io.Printf("  Key:    %s\n", config.MaskKey(rc.AnthropicAPIKey))
+				if rc.AnthropicAPIKeySource == config.SourceConfigFile {
+					io.Println(ui.Warning("  Credential is stored on disk. Run 'chunk auth set anthropic' to move it to the system keychain."))
+				}
 				io.ErrPrintln(ui.Dim("Validating API key..."))
 				if err := authprompt.ValidateAPIKey(cmd.Context(), rc.AnthropicAPIKey, rc.AnthropicBaseURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
@@ -296,6 +302,9 @@ func newAuthStatusCmd() *cobra.Command {
 			} else {
 				io.Printf("  Source: %s\n", rc.GitHubTokenSource)
 				io.Printf("  Token:  %s\n", config.MaskKey(rc.GitHubToken))
+				if rc.GitHubTokenSource == config.SourceConfigFile {
+					io.Println(ui.Warning("  Credential is stored on disk. Run 'chunk auth set github' to move it to the system keychain."))
+				}
 				io.ErrPrintln(ui.Dim("Validating GitHub token..."))
 				if err := authprompt.ValidateGitHubToken(cmd.Context(), rc.GitHubToken, rc.GitHubAPIURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
@@ -530,7 +539,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, rc config.ResolvedC
 
 	savedToKeychain, err := authprompt.SaveGitHubToken(token, rc.GitHubAPIURL, insecureStorage)
 	if err != nil {
-		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
+		return &userError{msg: "Could not save credentials.", suggestion: keychainHint, err: err}
 	}
 
 	io.Println("")

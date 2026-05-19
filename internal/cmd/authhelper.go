@@ -44,6 +44,7 @@ func printSaved(streams iostream.Streams, label string, savedToKeychain bool) {
 		msg = fmt.Sprintf("%s saved to user config (%s)", label, cfgPath)
 	}
 	streams.ErrPrintln(ui.Success(msg))
+	streams.ErrPrintln(ui.Warning("Credential is stored on disk. Run 'chunk auth set' to move it to the system keychain."))
 }
 
 func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompter func(string) (string, error)) (*circleci.Client, error) {
@@ -92,7 +93,7 @@ func ensureCircleCIClient(ctx context.Context, streams iostream.Streams, prompte
 
 	savedToKeychain, err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, false)
 	if err != nil {
-		return nil, err
+		return nil, newUserError("Could not save CircleCI token.").withSuggestion(keychainHint).wrap(err)
 	}
 	printSaved(streams, "CircleCI token", savedToKeychain)
 	return circleci.NewClient(circleci.Config{
@@ -155,7 +156,7 @@ func ensureAnthropicClient(ctx context.Context, streams iostream.Streams, prompt
 
 	savedToKeychain, err := authprompt.SaveAnthropicKey(key, rc.AnthropicBaseURL, false)
 	if err != nil {
-		return nil, err
+		return nil, newUserError("Could not save Anthropic API key.").withSuggestion(keychainHint).wrap(err)
 	}
 	printSaved(streams, "Anthropic API key", savedToKeychain)
 	return anthropic.New(anthropic.Config{
@@ -211,7 +212,7 @@ func ensureGitHubClient(ctx context.Context, streams iostream.Streams, prompter 
 
 	savedToKeychain, err := authprompt.SaveGitHubToken(token, rc.GitHubAPIURL, false)
 	if err != nil {
-		return nil, err
+		return nil, newUserError("Could not save GitHub token.").withSuggestion(keychainHint).wrap(err)
 	}
 	printSaved(streams, "GitHub token", savedToKeychain)
 	return github.New(github.Config{
