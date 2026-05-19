@@ -116,14 +116,15 @@ func ResolveGitHubClient(rc config.ResolvedConfig, logStatus func(string)) (*git
 }
 
 // SaveCircleCIToken persists a CircleCI token to the system keychain, or to
-// the config file when insecureStorage is true or the keychain is unavailable.
+// the config file when insecureStorage is true.
 // baseURL is used to scope the keychain entry to the CircleCI host.
 // Returns true if saved to the keychain.
 func SaveCircleCIToken(token, baseURL string, insecureStorage bool) (bool, error) {
 	if !insecureStorage {
-		if err := keyring.Set(keyring.CircleCITokenKey(baseURL), token); err == nil {
-			return true, nil
+		if err := keyring.Set(keyring.CircleCITokenKey(baseURL), token); err != nil {
+			return false, fmt.Errorf("save to keychain: %w", err)
 		}
+		return true, nil
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -137,14 +138,15 @@ func SaveCircleCIToken(token, baseURL string, insecureStorage bool) (bool, error
 }
 
 // SaveAnthropicKey persists an Anthropic API key to the system keychain, or to
-// the config file when insecureStorage is true or the keychain is unavailable.
+// the config file when insecureStorage is true.
 // baseURL is used to scope the keychain entry to the Anthropic host.
 // Returns true if saved to the keychain.
 func SaveAnthropicKey(key, baseURL string, insecureStorage bool) (bool, error) {
 	if !insecureStorage {
-		if err := keyring.Set(keyring.AnthropicKeyKey(baseURL), key); err == nil {
-			return true, nil
+		if err := keyring.Set(keyring.AnthropicKeyKey(baseURL), key); err != nil {
+			return false, fmt.Errorf("save to keychain: %w", err)
 		}
+		return true, nil
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -158,14 +160,15 @@ func SaveAnthropicKey(key, baseURL string, insecureStorage bool) (bool, error) {
 }
 
 // SaveGitHubToken persists a GitHub token to the system keychain, or to the
-// config file when insecureStorage is true or the keychain is unavailable.
+// config file when insecureStorage is true.
 // apiURL is used to scope the keychain entry to the GitHub host.
 // Returns true if saved to the keychain.
 func SaveGitHubToken(token, apiURL string, insecureStorage bool) (bool, error) {
 	if !insecureStorage {
-		if err := keyring.Set(keyring.GitHubTokenKey(apiURL), token); err == nil {
-			return true, nil
+		if err := keyring.Set(keyring.GitHubTokenKey(apiURL), token); err != nil {
+			return false, fmt.Errorf("save to keychain: %w", err)
 		}
+		return true, nil
 	}
 	cfg, err := config.Load()
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 )
@@ -82,6 +83,7 @@ func TestEnsureGitHubClient_NoTTY(t *testing.T) {
 
 func TestEnsureGitHubClient_PromptAndSave(t *testing.T) {
 	isolateConfig(t)
+	keyring.MockInit()
 
 	gh := fakes.NewFakeGitHub()
 	srv := httptest.NewServer(gh)
@@ -97,13 +99,14 @@ func TestEnsureGitHubClient_PromptAndSave(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 
-	cfg, err := config.Load()
+	stored, err := keyring.Get(keyring.GitHubTokenKey(srv.URL))
 	assert.NilError(t, err)
-	assert.Equal(t, cfg.GitHubToken, token)
+	assert.Equal(t, stored, token)
 }
 
 func TestEnsureAnthropicClient_PromptAndSave(t *testing.T) {
 	isolateConfig(t)
+	keyring.MockInit()
 
 	ant := fakes.NewFakeAnthropic("ok")
 	srv := httptest.NewServer(ant)
@@ -119,9 +122,9 @@ func TestEnsureAnthropicClient_PromptAndSave(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 
-	cfg, err := config.Load()
+	stored, err := keyring.Get(keyring.AnthropicKeyKey(srv.URL))
 	assert.NilError(t, err)
-	assert.Equal(t, cfg.AnthropicAPIKey, key)
+	assert.Equal(t, stored, key)
 }
 
 func TestEnsureAnthropicClient_InvalidPrefix(t *testing.T) {

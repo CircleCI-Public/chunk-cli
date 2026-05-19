@@ -41,6 +41,12 @@ func AnthropicKeyKey(baseURL string) string {
 	return service + ":" + baseURL
 }
 
+// MockInit replaces the keychain backend with an in-memory store. Call it in
+// tests that exercise code paths which write to the keychain.
+func MockInit() {
+	zkeyring.MockInit()
+}
+
 // Get retrieves a credential from the system keychain.
 // Returns ("", nil) if the key is not found.
 func Get(key string) (string, error) {
