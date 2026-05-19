@@ -77,6 +77,52 @@ func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, sta
 	return validate.List(cfg, statusFn)
 }
 
+// applyHookContext sets up the context and streams for hook invocations.
+// It returns the updated context and streams, and resets per-session state
+// when the hook is running for the first time (not a retry).
+func applyHookContext(ctx context.Context, hook *hookContext, streams iostream.Streams) (context.Context, iostream.Streams) {
+	ctx = session.WithID(ctx, hook.sessionID)
+	if !hook.stopHookActive {
+		validate.ResetAttempts(hook.sessionID)
+	}
+	// Route stdout to stderr so all output appears in the Stop
+	// hook feedback block that Claude Code shows the agent.
+	streams = iostream.Streams{Out: streams.Err, Err: streams.Err}
+	return ctx, streams
+}
+
+// checkHookEarlyExit returns true when a hook invocation should exit without
+// running validation, along with the error (if any) to return to the caller.
+func checkHookEarlyExit(workDir string, streams iostream.Streams) (bool, error) {
+	envDisabled := os.Getenv(config.EnvChunkHooksDisabled) != ""
+	if validate.HooksDisabled(workDir, envDisabled) {
+		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
+		return true, validate.NewHookExitError(1)
+	}
+	if !validate.HasGitChanges(workDir) {
+		return true, nil
+	}
+	return false, nil
+}
+
+// resolveSidecarForRun sets up the sidecar ID for the validate run and
+// returns whether a new sidecar was freshly created.
+func resolveSidecarForRun(ctx context.Context, remote bool, sidecarID *string, orgID, image, workDir string, hook *hookContext, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (bool, error) {
+	if remote {
+		// --remote: force all commands to sidecar, creating one if needed.
+		freshlyCreated, err := resolveOrCreateSidecarID(ctx, sidecarID, orgID, image, workDir, streams)
+		if err != nil {
+			return false, err
+		}
+		statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", *sidecarID))
+		return freshlyCreated, nil
+	}
+	if cfg.HasRemoteCommands() {
+		return resolveSidecar(ctx, sidecarID, orgID, image, workDir, hook, streams), nil
+	}
+	return false, nil
+}
+
 func newValidateCmd() *cobra.Command {
 	var sidecarID, identityFile, workdir, orgID string
 	var dryRun, list, save, remote, jsonOut bool
@@ -102,26 +148,14 @@ func newValidateCmd() *cobra.Command {
 			hook := detectHook(cmd.InOrStdin())
 			ctx := cmd.Context()
 			if hook != nil {
-				ctx = session.WithID(ctx, hook.sessionID)
-				if !hook.stopHookActive {
-					validate.ResetAttempts(hook.sessionID)
-				}
-				// Route stdout to stderr so all output appears in the Stop
-				// hook feedback block that Claude Code shows the agent.
-				streams = iostream.Streams{Out: streams.Err, Err: streams.Err}
+				ctx, streams = applyHookContext(ctx, hook, streams)
 			}
 			statusFn := newStatusFunc(streams)
 
-			// Hook: exit 1 with a message when hooks are disabled.
-			envDisabled := os.Getenv(config.EnvChunkHooksDisabled) != ""
-			if hook != nil && validate.HooksDisabled(workDir, envDisabled) {
-				streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
-				return validate.NewHookExitError(1)
-			}
-
-			// Hook: skip entirely when the working tree is clean.
-			if hook != nil && !validate.HasGitChanges(workDir) {
-				return nil
+			if hook != nil {
+				if shouldExit, exitErr := checkHookEarlyExit(workDir, streams); shouldExit {
+					return exitErr
+				}
 			}
 
 			var name string
@@ -178,17 +212,9 @@ func newValidateCmd() *cobra.Command {
 
 			image := resolveImage(name, cfg)
 
-			freshlyCreated := false
-			if remote {
-				// --remote: force all commands to sidecar, creating one if needed.
-				var err error
-				freshlyCreated, err = resolveOrCreateSidecarID(ctx, &sidecarID, orgID, image, workDir, streams)
-				if err != nil {
-					return err
-				}
-				statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", sidecarID))
-			} else if cfg.HasRemoteCommands() {
-				freshlyCreated = resolveSidecar(ctx, &sidecarID, orgID, image, workDir, hook, streams)
+			freshlyCreated, err := resolveSidecarForRun(ctx, remote, &sidecarID, orgID, image, workDir, hook, cfg, statusFn, streams)
+			if err != nil {
+				return err
 			}
 
 			execErr := runValidate(ctx, workDir, name, inlineCmd, save, sidecarID, freshlyCreated, identityFile, workdir, allRemote, cfg, statusFn, streams)
