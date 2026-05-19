@@ -1,7 +1,7 @@
 ---
 name: chunk-sidecar
 description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", "scaffold test-suites.yml", "set up smarter testing", or "write .circleci/test-suites.yml", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, customizing the sidecar image via `chunk sidecar`, and scaffolding `.circleci/test-suites.yml` for CircleCI Smarter Testing.
-version: 1.3.0
+version: 1.4.0
 allowed-tools:
   - Bash(chunk --version)
   - Bash(chunk auth status)
@@ -20,9 +20,11 @@ allowed-tools:
 
 Run the user's build, test, and validate commands on a remote `chunk` sidecar instead of locally. The 90% job is the **sync → validate** loop. This skill also covers one-time setup (create, snapshot, environment customization).
 
-Sidecars are ephemeral Linux environments provisioned via CircleCI. They isolate work, avoid local port conflicts, and can be reset to known-good snapshots. Your local tree is mirrored to `/workspace/<repo>` on the sidecar each time you sync.
+Sidecars are ephemeral Linux environments provisioned via CircleCI. They isolate work, avoid local port conflicts, and can be reset to known-good snapshots. Your local tree is mirrored to `~/workspace/<repo>` on the sidecar each time you sync — the absolute path depends on the SSH user's home (e.g. `/home/circleci/workspace/<repo>` on `cimg/*` images, `/home/user/workspace/<repo>` on the default Ubuntu template). To see the resolved workspace, run `chunk sidecar current --json` and read the `Workspace` field.
 
-The `circleci` CLI and the `circleci-testsuite` Smarter Testing plugin are pre-installed on every template sidecar, so commands like `circleci config validate`, `circleci config process`, and `circleci-testsuite` run without any setup step. `CIRCLE_TOKEN` is forwarded over SSH automatically, so authenticated calls also work out of the box.
+`CIRCLE_TOKEN` is forwarded over SSH automatically, so authenticated CircleCI API calls work out of the box once a token is configured locally.
+
+The bare default sidecar image does **not** include the `circleci` CLI or the `circleci-testsuite` Smarter Testing plugin. If your validate commands need either, install them during one-time setup (Step 3) and snapshot the result so future sidecars boot with them ready. A snapshot built from a `cimg/*` base does not include `circleci-testsuite` either.
 
 ## Step 1: Prerequisites
 
@@ -81,7 +83,7 @@ For each round of edits:
 When validate returns non-zero:
 
 - Parse stderr — `chunk validate` prints per-command headers and propagates the first non-zero exit.
-- Map error paths back to local files: the sidecar mirrors your tree at `/workspace/<repo>` (or the workspace configured in `.chunk/sidecar.json`).
+- Map error paths back to local files: the sidecar mirrors your tree at `~/workspace/<repo>` (or the workspace configured in `.chunk/sidecar.json`). Run `chunk sidecar current --json` to see the resolved absolute path.
 - Fix locally, then repeat Step 4. Do **not** edit files over SSH — changes will be overwritten on the next sync.
 - If the error looks environmental (missing binary, wrong language version, unreachable service), go to Troubleshooting.
 
