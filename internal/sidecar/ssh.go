@@ -16,12 +16,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 // ExecResult holds the output of a command executed over SSH.
@@ -335,4 +339,63 @@ func tofuHostKeyCallback(knownHostsPath, host string) ssh.HostKeyCallback {
 		_, err = fmt.Fprintf(f, "%s %s\n", host, fp)
 		return err
 	}
+}
+
+// waitForSSHReady probes the SSH connection with exponential backoff, retrying
+// on transient errors so a newly-created sidecar has time to finish booting
+// before its SSH service accepts connections.
+func waitForSSHReady(ctx context.Context, session *Session, status iostream.StatusFunc) error {
+	return waitForSSHReadyWithDial(ctx, session, status, dialSSH)
+}
+
+// waitForSSHReadyWithDial is the underlying implementation; dialFn is injectable
+// for testing the retry control flow without a live network.
+func waitForSSHReadyWithDial(
+	ctx context.Context,
+	session *Session,
+	status iostream.StatusFunc,
+	dialFn func(context.Context, *Session) (*sshConn, error),
+) error {
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = 2 * time.Second
+	b.MaxInterval = 15 * time.Second
+	b.MaxElapsedTime = 90 * time.Second
+
+	notified := false
+	return backoff.RetryNotify(
+		func() error {
+			conn, err := dialFn(ctx, session)
+			if err != nil {
+				if !isTransientSSHError(err) {
+					return backoff.Permanent(err)
+				}
+				return err
+			}
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return nil
+		},
+		backoff.WithContext(b, ctx),
+		func(_ error, _ time.Duration) {
+			if !notified {
+				status(iostream.LevelInfo, "Waiting for sidecar SSH to become available...")
+				notified = true
+			}
+		},
+	)
+}
+
+// isTransientSSHError reports whether err is a network-level error worth
+// retrying when dialling the sidecar SSH service — specifically connection
+// refused and timeouts that indicate the daemon is not yet ready.
+func isTransientSSHError(err error) bool {
+	var netErr net.Error
+	if !errors.As(err, &netErr) {
+		return false
+	}
+	if netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
