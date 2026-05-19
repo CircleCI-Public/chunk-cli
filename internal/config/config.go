@@ -281,4 +281,5 @@ var ValidConfigKeys = map[string]bool{
 var ValidProjectConfigKeys = map[string]bool{
 	"orgID":                   true,
 	"validation.sidecarImage": true,
+	"validation.commitStatus": true,
 }

@@ -208,3 +208,34 @@ func TestGeneratePatchNoChanges(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, patch, "", "patch should be empty when no changes")
 }
+
+func TestComputeTreeSHA(t *testing.T) {
+	dir := setupRepo(t)
+
+	// Write a tracked file and commit it
+	_ = os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("tracked\n"), 0o644)
+	gitRun(t, dir, "add", "tracked.txt")
+	gitRun(t, dir, "commit", "-m", "add tracked")
+
+	// Add a staged change and an untracked file
+	_ = os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("staged\n"), 0o644)
+	gitRun(t, dir, "add", "staged.txt")
+	_ = os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("untracked\n"), 0o644)
+
+	// Compute tree SHA before commit
+	preCommitSHA, err := ComputeTreeSHA(dir)
+	assert.NilError(t, err)
+	assert.Assert(t, len(preCommitSHA) == 40, "expected a 40-char SHA, got %q", preCommitSHA)
+
+	// Verify real index is untouched: untracked.txt should still be untracked
+	statusOut := gitRun(t, dir, "status", "--porcelain")
+	assert.Assert(t, strings.Contains(statusOut, "?? untracked.txt"), "real index must not be modified")
+
+	// Also stage the untracked file and commit everything
+	gitRun(t, dir, "add", "untracked.txt")
+	gitRun(t, dir, "commit", "-m", "add staged and untracked")
+
+	// Post-commit tree SHA must match what we computed before the commit
+	postCommitTreeSHA := gitRun(t, dir, "rev-parse", "HEAD^{tree}")
+	assert.Equal(t, preCommitSHA, postCommitTreeSHA)
+}
