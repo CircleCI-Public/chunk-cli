@@ -548,13 +548,7 @@ func resolveOrCreateSidecarID(ctx context.Context, sidecarID *string, orgID, ima
 	if err != nil {
 		return false, err
 	}
-	// Fallback: read org ID from project config if not provided via flag or env.
-	if orgID == "" {
-		if projCfg, cfgErr := config.LoadProjectConfig(workDir); cfgErr == nil && projCfg.OrgID != "" {
-			orgID = projCfg.OrgID
-		}
-	}
-	resolvedOrgID, err := resolveOrgID(orgID, orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
 		return false, err
 	}
