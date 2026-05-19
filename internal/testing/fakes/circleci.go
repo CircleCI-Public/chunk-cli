@@ -72,6 +72,7 @@ type FakeCircleCI struct {
 	CollaborationsStatusCode int // override for GET /me/collaborations
 	ListStatusCode           int // override for GET /sidecar/instances
 	CreateStatusCode         int // override for POST /sidecar/instances
+	DeleteStatusCode         int // override for DELETE /sidecar/instances/:id
 	ExecStatusCode           int // override for POST /sidecar/instances/:id/exec
 	AddKeyStatusCode         int // override for POST /sidecar/instances/:id/ssh/add-key
 	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
@@ -94,6 +95,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	// Sidecar endpoints
 	r.GET("/api/v2/sidecar/instances", f.handleListSidecars)
 	r.POST("/api/v2/sidecar/instances", f.handleCreateSidecar)
+	r.DELETE("/api/v2/sidecar/instances/:id", f.handleDeleteSidecar)
 	r.POST("/api/v2/sidecar/instances/:id/ssh/add-key", f.handleAddSSHKey)
 	r.POST("/api/v2/sidecar/instances/:id/exec", f.handleExec)
 
@@ -206,6 +208,27 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 	f.mu.Unlock()
 
 	c.JSON(http.StatusCreated, sidecar)
+}
+
+func (f *FakeCircleCI) handleDeleteSidecar(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.DeleteStatusCode != 0 {
+		c.JSON(f.DeleteStatusCode, gin.H{"message": "API error"})
+		return
+	}
+	id := c.Param("id")
+	kept := f.Sidecars[:0]
+	for _, s := range f.Sidecars {
+		if s.ID != id {
+			kept = append(kept, s)
+		}
+	}
+	f.Sidecars = kept
+	c.Status(http.StatusNoContent)
 }
 
 func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {

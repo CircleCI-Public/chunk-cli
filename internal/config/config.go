@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,19 @@ import (
 
 	"github.com/sethvargo/go-envconfig"
 )
+
+// marshalIndent encodes v as indented JSON without HTML-escaping special characters
+// like & < > so that shell commands remain human-readable in config files.
+func marshalIndent(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
 
 // Model constants define the Claude models used for different operations.
 const (
@@ -29,16 +43,16 @@ const (
 //
 //nolint:gosec // env var names, not credentials
 const (
-	EnvCircleToken      = "CIRCLE_TOKEN"
-	EnvCircleCIToken    = "CIRCLECI_TOKEN"
-	EnvCircleCIBaseURL  = "CIRCLECI_BASE_URL"
-	EnvAnthropicAPIKey  = "ANTHROPIC_API_KEY"
-	EnvAnthropicBaseURL = "ANTHROPIC_BASE_URL"
-	EnvGitHubToken      = "GITHUB_TOKEN"
-	EnvGitHubAPIURL     = "GITHUB_API_URL"
-	EnvModel            = "CODE_REVIEW_CLI_MODEL"
-	EnvCircleCIOrgID    = "CIRCLECI_ORG_ID"
-	EnvSidecarProvider  = "CHUNK_SIDECAR_PROVIDER"
+	EnvCircleToken        = "CIRCLE_TOKEN"
+	EnvCircleCIToken      = "CIRCLECI_TOKEN"
+	EnvCircleCIBaseURL    = "CIRCLECI_BASE_URL"
+	EnvAnthropicAPIKey    = "ANTHROPIC_API_KEY"
+	EnvAnthropicBaseURL   = "ANTHROPIC_BASE_URL"
+	EnvGitHubToken        = "GITHUB_TOKEN"
+	EnvGitHubAPIURL       = "GITHUB_API_URL"
+	EnvModel              = "CODE_REVIEW_CLI_MODEL"
+	EnvCircleCIOrgID      = "CIRCLECI_ORG_ID"
+	EnvChunkHooksDisabled = "CHUNK_HOOKS_DISABLED"
 )
 
 // System/standard environment variable names.
@@ -49,7 +63,7 @@ const (
 	EnvNoColor       = "NO_COLOR"
 	EnvXDGConfigHome = "XDG_CONFIG_HOME"
 	EnvXDGStateHome  = "XDG_STATE_HOME"
-	EnvClaudeSession = "CLAUDE_SESSION_ID"
+	EnvXDGDataHome   = "XDG_DATA_HOME"
 )
 
 // EnvVars holds all environment variables the application reads.
@@ -65,14 +79,13 @@ type EnvVars struct {
 	GitHubAPIURL     string `env:"GITHUB_API_URL,default=https://api.github.com"`
 	Model            string `env:"CODE_REVIEW_CLI_MODEL"`
 	CircleCIOrgID    string `env:"CIRCLECI_ORG_ID"`
-	SidecarProvider  string `env:"CHUNK_SIDECAR_PROVIDER"`
 	Home             string `env:"HOME"`
 	Shell            string `env:"SHELL"`
 	SSHAuthSock      string `env:"SSH_AUTH_SOCK"`
 	NoColor          string `env:"NO_COLOR"`
 	XDGConfigHome    string `env:"XDG_CONFIG_HOME"`
 	XDGStateHome     string `env:"XDG_STATE_HOME"`
-	ClaudeSession    string `env:"CLAUDE_SESSION_ID"`
+	XDGDataHome      string `env:"XDG_DATA_HOME"`
 }
 
 // LoadEnv populates an EnvVars struct from the process environment.
@@ -147,7 +160,7 @@ func Save(cfg UserConfig) error {
 	if err := os.MkdirAll(dir, dirPermission); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := marshalIndent(cfg)
 	if err != nil {
 		return err
 	}

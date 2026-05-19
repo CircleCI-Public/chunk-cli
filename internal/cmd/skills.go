@@ -13,8 +13,10 @@ import (
 
 func newSkillCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "skill",
-		Short: "Install and manage AI agent skills",
+		Use:                "skill",
+		Short:              "Install and manage AI agent skills",
+		RunE:               groupRunE,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 
 	cmd.AddCommand(newSkillInstallCmd())
@@ -23,16 +25,21 @@ func newSkillCmd() *cobra.Command {
 }
 
 func newSkillInstallCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install or update all skills into agent config directories",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := os.Getenv(config.EnvHome)
 			if home == "" {
-				return &userError{msg: "HOME environment variable is not set.", errMsg: "HOME not set"}
+				return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
 			}
 			io := iostream.FromCmd(cmd)
 			results := skills.Install(home)
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, results)
+			}
 			for _, r := range results {
 				if r.Skipped {
 					io.Println(ui.Dim(r.Agent + ": skipped (not installed)"))
@@ -52,16 +59,26 @@ func newSkillInstallCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 func newSkillListCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List bundled skills and their per-agent installation status",
-		Run: func(cmd *cobra.Command, _ []string) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := os.Getenv(config.EnvHome)
 			io := iostream.FromCmd(cmd)
 			statuses := skills.Status(home)
+
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, statuses)
+			}
 
 			skillDefs := skills.All
 			io.Printf("\nBundled skills (%d):\n\n", len(skillDefs))
@@ -81,8 +98,13 @@ func newSkillListCmd() *cobra.Command {
 				}
 				io.Println()
 			}
+			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
 }
 
 func stateDisplay(state skills.State) (icon, label string) {

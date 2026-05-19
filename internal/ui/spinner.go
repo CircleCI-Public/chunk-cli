@@ -119,7 +119,7 @@ func (s *Spinner) render() {
 
 	line := fmt.Sprintf("%s %s", frame, msg)
 	if elapsed := time.Since(start); elapsed >= elapsedThreshold {
-		line += Dim(fmt.Sprintf(" (%ds)", int(elapsed.Seconds())))
+		line += ErrDim(fmt.Sprintf(" (%ds)", int(elapsed.Seconds())))
 	}
 	_, _ = fmt.Fprintf(s.w, "\r\x1b[2K%s", line)
 }

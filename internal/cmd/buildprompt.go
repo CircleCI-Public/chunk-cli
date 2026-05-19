@@ -39,7 +39,7 @@ func newBuildPromptCmd() *cobra.Command {
 
 			cwd, err := os.Getwd()
 			if err != nil {
-				return &userError{msg: "Could not determine working directory.", err: err}
+				return &userError{msg: msgCouldNotDetermineWorkDir, err: err}
 			}
 			resolvedOrg, resolvedRepos, err := buildprompt.ResolveOrgAndRepos(org, repos, cwd)
 			if err != nil {
@@ -107,7 +107,7 @@ func newBuildPromptCmd() *cobra.Command {
 					}
 					return &userError{
 						msg:        fmt.Sprintf("GitHub API request failed after %d retries.", e.Retries),
-						suggestion: "Check your network connection and try again.",
+						suggestion: suggestionNetworkRetry,
 						err:        err,
 					}
 				}

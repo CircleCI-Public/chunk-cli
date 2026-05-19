@@ -85,10 +85,10 @@ func SkillState(skillsDir string, s Skill) State {
 
 // AgentInstallResult reports what happened for one agent during install.
 type AgentInstallResult struct {
-	Agent     string
-	Skipped   bool     // true when agent config dir doesn't exist
-	Installed []string // newly installed skill names
-	Updated   []string // updated (outdated -> current) skill names
+	Agent     string   `json:"agent"`
+	Skipped   bool     `json:"skipped"`
+	Installed []string `json:"installed"`
+	Updated   []string `json:"updated"`
 }
 
 // Install installs all embedded skills for agents whose config dirs exist.
@@ -96,22 +96,41 @@ type AgentInstallResult struct {
 func Install(homeDir string) []AgentInstallResult {
 	agents := Agents(homeDir)
 	results := make([]AgentInstallResult, 0, len(agents))
-
 	for _, agent := range agents {
-		result := installForAgent(agent)
-		results = append(results, result)
+		results = append(results, installForAgent(agent, All))
 	}
 	return results
 }
 
-func installForAgent(agent Agent) AgentInstallResult {
+// InstallByName installs a single skill by name for agents whose config dirs exist.
+// Returns nil if the skill name is not found.
+func InstallByName(homeDir, name string) []AgentInstallResult {
+	var s *Skill
+	for i := range All {
+		if All[i].Name == name {
+			s = &All[i]
+			break
+		}
+	}
+	if s == nil {
+		return nil
+	}
+	agents := Agents(homeDir)
+	results := make([]AgentInstallResult, 0, len(agents))
+	for _, agent := range agents {
+		results = append(results, installForAgent(agent, []Skill{*s}))
+	}
+	return results
+}
+
+func installForAgent(agent Agent, subset []Skill) AgentInstallResult {
 	if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
-		return AgentInstallResult{Agent: agent.Name, Skipped: true}
+		return AgentInstallResult{Agent: agent.Name, Skipped: true, Installed: make([]string, 0), Updated: make([]string, 0)}
 	}
 
-	result := AgentInstallResult{Agent: agent.Name}
+	result := AgentInstallResult{Agent: agent.Name, Installed: make([]string, 0), Updated: make([]string, 0)}
 
-	for _, s := range All {
+	for _, s := range subset {
 		state := SkillState(agent.SkillsDir, s)
 		if state == StateCurrent {
 			continue
@@ -142,16 +161,16 @@ func installForAgent(agent Agent) AgentInstallResult {
 
 // AgentSkillStatus describes the state of a single skill for an agent.
 type AgentSkillStatus struct {
-	Name        string
-	Description string
-	State       State
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	State       State  `json:"state"`
 }
 
 // AgentStatus describes per-agent availability and skill states.
 type AgentStatus struct {
-	Agent     string
-	Available bool // false when agent config dir doesn't exist
-	Skills    []AgentSkillStatus
+	Agent     string             `json:"agent"`
+	Available bool               `json:"available"`
+	Skills    []AgentSkillStatus `json:"skills"`
 }
 
 // Status returns per-agent, per-skill installation state without modifying anything.

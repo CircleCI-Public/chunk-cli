@@ -43,34 +43,6 @@ func TestOpenSessionDefaultKeyFallback(t *testing.T) {
 		"error should not reference empty path, got: %v", err)
 }
 
-func TestList(t *testing.T) {
-	cci := fakes.NewFakeCircleCI()
-	cci.Sidecars = []fakes.Sidecar{
-		{ID: "sb-1", Name: "alpha", OrgID: "org-1"},
-		{ID: "sb-2", Name: "beta", OrgID: "org-1"},
-		{ID: "sb-3", Name: "gamma", OrgID: "org-2"},
-	}
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	cl := newClient(t, srv.URL)
-	ctx := context.Background()
-
-	t.Run("returns sidecars for org", func(t *testing.T) {
-		sidecars, err := sidecar.List(ctx, cl, "org-1")
-		assert.NilError(t, err)
-		assert.Equal(t, len(sidecars), 2)
-		assert.Equal(t, sidecars[0].Name, "alpha")
-		assert.Equal(t, sidecars[1].Name, "beta")
-	})
-
-	t.Run("empty for unknown org", func(t *testing.T) {
-		sidecars, err := sidecar.List(ctx, cl, "org-unknown")
-		assert.NilError(t, err)
-		assert.Equal(t, len(sidecars), 0)
-	})
-}
-
 func TestCreate(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
@@ -79,7 +51,7 @@ func TestCreate(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	sb, err := sidecar.Create(ctx, cl, "org-1", "my-sidecar", "e2b", "ubuntu:22.04")
+	sb, err := sidecar.Create(ctx, cl, "org-1", "my-sidecar", "ubuntu:22.04")
 	assert.NilError(t, err)
 	assert.Equal(t, sb.ID, "sidecar-new-123")
 	assert.Equal(t, sb.Name, "my-sidecar")

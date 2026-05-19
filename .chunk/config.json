@@ -38,6 +38,9 @@
     "org": "CircleCI-Public",
     "repo": "chunk-cli"
   },
+  "validation": {
+    "sidecarImage": "ac042eab-a45f-452e-a4f5-1d56e1b026bd"
+  },
   "environment": {
     "stack": "go",
     "setup": [

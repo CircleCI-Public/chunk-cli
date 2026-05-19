@@ -104,7 +104,7 @@ Agent: syncing local changes...
        ✓ all validations passed
 ```
 
-**Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar via `.chunk/sidecar.<session-id>.json`. No manual configuration is needed.
+**Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar. State is keyed by `CLAUDE_SESSION_ID` and stored in `XDG_DATA_HOME` (see Architecture docs). No manual configuration is needed.
 
 ---
 

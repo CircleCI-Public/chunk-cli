@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,21 @@ import (
 
 // ErrNotConfigured indicates no validate commands are configured.
 var ErrNotConfigured = errors.New("no validate commands configured")
+
+// ErrWorkspaceNotFound is returned when the remote workspace directory does not exist.
+var ErrWorkspaceNotFound = errors.New("workspace directory not found on sidecar")
+
+// WorkspaceExists checks whether dest exists as a directory on the remote sidecar.
+func WorkspaceExists(ctx context.Context, execFn func(context.Context, string) (string, string, int, error), dest string) error {
+	_, _, exitCode, err := execFn(ctx, "test -d "+shellEscape(dest))
+	if err != nil {
+		return err
+	}
+	if exitCode != 0 {
+		return ErrWorkspaceNotFound
+	}
+	return nil
+}
 
 // shellEscape wraps arg in single quotes for safe use in a POSIX sh -c command.
 func shellEscape(arg string) string {
@@ -218,6 +234,22 @@ type HookExitError struct {
 
 func (e *HookExitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
 func (e *HookExitError) ExitCode() int { return e.code }
+
+// NewHookExitError returns a HookExitError with the given exit code.
+func NewHookExitError(code int) error { return &HookExitError{code: code} }
+
+// HooksDisabled reports whether chunk validate hooks are currently suppressed.
+// envDisabled should be set by the caller from CHUNK_HOOKS_DISABLED; it returns
+// true when that flag is set or the sentinel file .chunk/hooks-disabled exists
+// under workDir. On any error other than ErrNotExist the function fails open
+// (returns false) so hooks continue to run when the check is uncertain.
+func HooksDisabled(workDir string, envDisabled bool) bool {
+	if envDisabled {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(workDir, ".chunk", "hooks-disabled"))
+	return err == nil
+}
 
 // HasGitChanges reports whether the working tree at workDir has any
 // uncommitted modifications (staged or unstaged). Returns true when git

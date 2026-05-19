@@ -1,12 +1,12 @@
 package sidecar
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
 // ActiveSnapshot holds the most recently created snapshot for a project.
@@ -15,16 +15,26 @@ type ActiveSnapshot struct {
 	Name string `json:"name,omitempty"`
 }
 
-func snapshotFileName() string {
-	if id := os.Getenv(config.EnvClaudeSession); id != "" {
-		return "snapshot." + id + ".json"
+func snapshotFileName(sessionID string) string {
+	if sessionID != "" {
+		return "snapshot." + sessionID + ".json"
 	}
 	return "snapshot.json"
 }
 
-// LoadActiveSnapshot walks up from cwd looking for .chunk/snapshot.json. Returns nil if not found.
-func LoadActiveSnapshot() (*ActiveSnapshot, error) {
-	path, err := findSnapshotFile()
+// LoadActiveSnapshot reads the active snapshot for the current project from XDG_DATA_HOME.
+// Returns nil if not found.
+func LoadActiveSnapshot(ctx context.Context) (*ActiveSnapshot, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return nil, err
+	}
+	return LoadSnapshotFrom(ctx, dir)
+}
+
+// LoadSnapshotFrom reads the active snapshot from dir.
+func LoadSnapshotFrom(ctx context.Context, dir string) (*ActiveSnapshot, error) {
+	path, err := findSnapshotFile(dir, session.IDFromCtx(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -42,12 +52,17 @@ func LoadActiveSnapshot() (*ActiveSnapshot, error) {
 	return &a, nil
 }
 
-// SaveActiveSnapshot writes .chunk/snapshot.json into the same directory as the active sidecar file.
-func SaveActiveSnapshot(a ActiveSnapshot) error {
-	dir, err := saveDir()
+// SaveActiveSnapshot writes the active snapshot to XDG_DATA_HOME for the current project.
+func SaveActiveSnapshot(ctx context.Context, a ActiveSnapshot) error {
+	dir, err := StateDir()
 	if err != nil {
 		return err
 	}
+	return SaveSnapshotTo(ctx, dir, a)
+}
+
+// SaveSnapshotTo writes the active snapshot to dir.
+func SaveSnapshotTo(ctx context.Context, dir string, a ActiveSnapshot) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -55,12 +70,21 @@ func SaveActiveSnapshot(a ActiveSnapshot) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, snapshotFileName()), data, 0o644)
+	return os.WriteFile(filepath.Join(dir, snapshotFileName(session.IDFromCtx(ctx))), data, 0o644)
 }
 
-// ClearActiveSnapshot removes the .chunk/snapshot.json file found by walking up from cwd.
-func ClearActiveSnapshot() error {
-	path, err := findSnapshotFile()
+// ClearActiveSnapshot removes the active snapshot state file.
+func ClearActiveSnapshot(ctx context.Context) error {
+	dir, err := StateDir()
+	if err != nil {
+		return err
+	}
+	return ClearSnapshotFrom(ctx, dir)
+}
+
+// ClearSnapshotFrom removes the active snapshot state file in dir.
+func ClearSnapshotFrom(ctx context.Context, dir string) error {
+	path, err := findSnapshotFile(dir, session.IDFromCtx(ctx))
 	if err != nil {
 		return err
 	}
@@ -70,28 +94,7 @@ func ClearActiveSnapshot() error {
 	return os.Remove(path)
 }
 
-// findSnapshotFile walks up from cwd looking for .chunk/snapshot.json, returning the path or "".
-// Bounded by the git root, same as findSidecarFile.
-func findSnapshotFile() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	gitRoot, _ := findGitRoot()
-	for {
-		candidate := filepath.Join(dir, ".chunk", snapshotFileName())
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		if gitRoot == "" || dir == gitRoot {
-			return "", nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", nil
-		}
-		dir = parent
-	}
+// findSnapshotFile returns the snapshot state file path in dir, or "" if it doesn't exist.
+func findSnapshotFile(dir, sessionID string) (string, error) {
+	return statOrEmpty(filepath.Join(dir, snapshotFileName(sessionID)))
 }

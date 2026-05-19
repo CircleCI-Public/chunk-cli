@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/settings"
+	"github.com/CircleCI-Public/chunk-cli/internal/skills"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
@@ -48,7 +49,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return &userError{
 			msg:        "Could not create .claude directory.",
-			suggestion: "Check file permissions.",
+			suggestion: suggestionCheckPerms,
 			err:        fmt.Errorf("create .claude dir: %w", err),
 		}
 	}
@@ -59,7 +60,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 		if !errors.Is(readErr, fs.ErrNotExist) {
 			return &userError{
 				msg:        "Could not read .claude/settings.json.",
-				suggestion: "Check file permissions.",
+				suggestion: suggestionCheckPerms,
 				err:        fmt.Errorf("read existing settings.json: %w", readErr),
 			}
 		}
@@ -67,7 +68,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 		if err := os.WriteFile(path, withTrailingNewline(generated), 0o644); err != nil {
 			return &userError{
 				msg:        "Could not write .claude/settings.json.",
-				suggestion: "Check file permissions.",
+				suggestion: suggestionCheckPerms,
 				err:        fmt.Errorf("write settings.json: %w", err),
 			}
 		}
@@ -119,7 +120,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 	if err := os.WriteFile(path, withTrailingNewline(result.Merged), 0o644); err != nil {
 		return &userError{
 			msg:        "Could not write .claude/settings.json.",
-			suggestion: "Check file permissions.",
+			suggestion: suggestionCheckPerms,
 			err:        fmt.Errorf("write settings.json: %w", err),
 		}
 	}
@@ -221,8 +222,26 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 	return nil
 }
 
+func installSkillsStep(streams iostream.Streams) {
+	homeDir := os.Getenv(config.EnvHome)
+	if homeDir == "" {
+		return
+	}
+	for _, r := range skills.InstallByName(homeDir, "chunk-sidecar") {
+		if r.Skipped {
+			continue
+		}
+		for _, name := range r.Installed {
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Installed %s skill for %s", name, r.Agent)))
+		}
+		for _, name := range r.Updated {
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Updated %s skill for %s", name, r.Agent)))
+		}
+	}
+}
+
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipValidate, skipCompletions bool
+	var force, skipHooks, skipValidate, skipCompletions, skipSkills bool
 	var projectDir string
 
 	cmd := &cobra.Command{
@@ -241,14 +260,14 @@ hook config files.`,
 				var err error
 				workDir, err = os.Getwd()
 				if err != nil {
-					return &userError{msg: "Could not determine working directory.", err: err}
+					return &userError{msg: msgCouldNotDetermineWorkDir, err: err}
 				}
 			}
 
 			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
 			gitCmd.Dir = workDir
 			if err := gitCmd.Run(); err != nil {
-				return &userError{msg: "Not a git repository.", suggestion: "Run this command from inside a git repo.", err: err}
+				return &userError{msg: "Not a git repository.", suggestion: suggestionGitRepo, err: err}
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
@@ -303,7 +322,7 @@ hook config files.`,
 			if err := config.SaveProjectConfig(workDir, cfg); err != nil {
 				return &userError{
 					msg:        "Could not write .chunk/config.json.",
-					suggestion: "Check file permissions.",
+					suggestion: suggestionCheckPerms,
 					err:        fmt.Errorf("write config: %w", err),
 				}
 			}
@@ -340,8 +359,12 @@ hook config files.`,
 				}
 			}
 
+			// Step 5: Agent skills
+			if !skipSkills {
+				installSkillsStep(streams)
+			}
+
 			streams.ErrPrintln(ui.Success("Project initialized"))
-			streams.ErrPrintln(ui.Dim("Tip: install agent skills with 'chunk skill install' (includes chunk-sidecar for the remote validate loop)."))
 			return nil
 		},
 	}
@@ -350,6 +373,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipHooks, "skip-hooks", false, "Skip hook file generation")
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
+	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 
 	return cmd

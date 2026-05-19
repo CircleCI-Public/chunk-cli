@@ -1,12 +1,14 @@
 package sidecar
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
 // ActiveSidecar holds the currently active sidecar for a project.
@@ -16,19 +18,38 @@ type ActiveSidecar struct {
 	Workspace string `json:"workspace,omitempty"`
 }
 
-// sidecarFileName returns the name of the sidecar state file. When
-// CLAUDE_SESSION_ID is set the file is keyed to that session so concurrent
-// Claude sessions in the same repo each maintain their own active sidecar.
-func sidecarFileName() string {
-	if id := os.Getenv(config.EnvClaudeSession); id != "" {
-		return "sidecar." + id + ".json"
+// sidecarFileName returns the name of the sidecar state file. When sessionID
+// is non-empty the file is keyed to that session so concurrent Claude sessions
+// in the same repo each maintain their own active sidecar.
+func sidecarFileName(sessionID string) string {
+	if sessionID != "" {
+		return "sidecar." + sessionID + ".json"
 	}
 	return "sidecar.json"
 }
 
-// LoadActive walks up from cwd looking for .chunk/sidecar.json. Returns nil if not found.
-func LoadActive() (*ActiveSidecar, error) {
-	path, err := findSidecarFile()
+// StateDir returns the XDG_DATA_HOME directory for the current project.
+// Callers performing multiple sidecar or snapshot operations can resolve once
+// and pass the result to the dir-accepting variants (LoadActiveFrom, SaveActiveTo,
+// ClearActiveFrom, LoadSnapshotFrom, SaveSnapshotTo, ClearSnapshotFrom) to avoid
+// repeated filesystem walks.
+func StateDir() (string, error) {
+	return saveDir()
+}
+
+// LoadActive reads the active sidecar for the current project from XDG_DATA_HOME.
+// Returns nil if not found.
+func LoadActive(ctx context.Context) (*ActiveSidecar, error) {
+	dir, err := saveDir()
+	if err != nil {
+		return nil, err
+	}
+	return LoadActiveFrom(ctx, dir)
+}
+
+// LoadActiveFrom reads the active sidecar from dir.
+func LoadActiveFrom(ctx context.Context, dir string) (*ActiveSidecar, error) {
+	path, err := findSidecarFile(dir, session.IDFromCtx(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -46,14 +67,17 @@ func LoadActive() (*ActiveSidecar, error) {
 	return &a, nil
 }
 
-// SaveActive writes .chunk/sidecar.json. If the file already exists in a
-// parent directory it is updated in place; otherwise the file is created in
-// cwd's .chunk/ directory.
-func SaveActive(a ActiveSidecar) error {
+// SaveActive writes the active sidecar to XDG_DATA_HOME for the current project.
+func SaveActive(ctx context.Context, a ActiveSidecar) error {
 	dir, err := saveDir()
 	if err != nil {
 		return err
 	}
+	return SaveActiveTo(ctx, dir, a)
+}
+
+// SaveActiveTo writes the active sidecar to dir.
+func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -61,28 +85,24 @@ func SaveActive(a ActiveSidecar) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, sidecarFileName()), data, 0o644)
+	return os.WriteFile(filepath.Join(dir, sidecarFileName(session.IDFromCtx(ctx))), data, 0o644)
 }
 
-// saveDir returns the .chunk directory to write into. It prefers an existing
-// .chunk/sidecar.json found by walking upward; otherwise walks up to find the
-// git root and uses that; falls back to cwd/.chunk when not in a git repo.
+// saveDir returns the XDG_DATA_HOME directory for the current project.
 func saveDir() (string, error) {
-	existing, err := findSidecarFile()
+	root, err := projectRoot()
 	if err != nil {
 		return "", err
 	}
-	if existing != "" {
-		return filepath.Dir(existing), nil
-	}
+	return config.ProjectDataDir(root)
+}
+
+// projectRoot returns the git root when inside a git repo, otherwise cwd.
+func projectRoot() (string, error) {
 	if root, err := findGitRoot(); err == nil && root != "" {
-		return filepath.Join(root, ".chunk"), nil
+		return root, nil
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(cwd, ".chunk"), nil
+	return os.Getwd()
 }
 
 // findGitRoot walks up from cwd and returns the first directory containing .git,
@@ -104,9 +124,18 @@ func findGitRoot() (string, error) {
 	}
 }
 
-// ClearActive removes the .chunk/sidecar.json file found by walking up from cwd.
-func ClearActive() error {
-	path, err := findSidecarFile()
+// ClearActive removes the active sidecar state file.
+func ClearActive(ctx context.Context) error {
+	dir, err := saveDir()
+	if err != nil {
+		return err
+	}
+	return ClearActiveFrom(ctx, dir)
+}
+
+// ClearActiveFrom removes the active sidecar state file in dir.
+func ClearActiveFrom(ctx context.Context, dir string) error {
+	path, err := findSidecarFile(dir, session.IDFromCtx(ctx))
 	if err != nil {
 		return err
 	}
@@ -116,31 +145,19 @@ func ClearActive() error {
 	return os.Remove(path)
 }
 
-// findSidecarFile walks up from cwd looking for .chunk/sidecar.json, returning the path or "".
-// When inside a git repository the walk is bounded by the repository root (the directory
-// containing .git); files above that root are never considered. When not inside any git
-// repository only the current directory is checked.
-func findSidecarFile() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", err
+// findSidecarFile returns the sidecar state file path in dir, or "" if it doesn't exist.
+func findSidecarFile(dir, sessionID string) (string, error) {
+	return statOrEmpty(filepath.Join(dir, sidecarFileName(sessionID)))
+}
+
+// statOrEmpty returns path if it exists, "" if it does not, or an error for other failures.
+func statOrEmpty(path string) (string, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return path, nil
 	}
-	gitRoot, _ := findGitRoot()
-	for {
-		candidate := filepath.Join(dir, ".chunk", sidecarFileName())
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		// Stop at the git root (or immediately if not in a git repo).
-		if gitRoot == "" || dir == gitRoot {
-			return "", nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", nil
-		}
-		dir = parent
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
 	}
+	return "", err
 }
