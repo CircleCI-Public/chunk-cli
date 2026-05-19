@@ -150,15 +150,7 @@ func newValidateCmd() *cobra.Command {
 			}
 
 			if dryRun {
-				if inlineCmd != "" {
-					cmdName := name
-					if cmdName == "" {
-						cmdName = "custom"
-					}
-					statusFn(iostream.LevelInfo, fmt.Sprintf("%s: %s", cmdName, inlineCmd))
-					return nil
-				}
-				return mapValidateError(validate.RunDryRun(cfg, name, statusFn))
+				return runValidateDryRun(cfg, name, inlineCmd, statusFn)
 			}
 
 			// Hook: fail early when CircleCI auth is missing and remote commands need it.
@@ -217,6 +209,18 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&projectDir, "project", "", "Override project directory")
 
 	return cmd
+}
+
+func runValidateDryRun(cfg *config.ProjectConfig, name, inlineCmd string, statusFn iostream.StatusFunc) error {
+	if inlineCmd != "" {
+		cmdName := name
+		if cmdName == "" {
+			cmdName = "custom"
+		}
+		statusFn(iostream.LevelInfo, fmt.Sprintf("%s: %s", cmdName, inlineCmd))
+		return nil
+	}
+	return mapValidateError(validate.RunDryRun(cfg, name, statusFn))
 }
 
 // runValidate dispatches to the appropriate Run* function based on the
@@ -328,7 +332,10 @@ func openSSHSession(ctx context.Context, sidecarID, identityFile, workdir string
 	cwd, _ := os.Getwd()
 	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
 	dest := sidecar.ResolveWorkspace(ctx, workdir, repo)
-	rc, _ := config.Resolve("", "")
+	rc, err := config.Resolve("", "")
+	if err != nil {
+		return nil, "", &userError{msg: "Could not resolve config.", err: err}
+	}
 	envVars := hostForwardEnv(rc.CircleCIToken)
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
 		result, err := sidecar.ExecOverSSH(ctx, session, "sh -c "+sidecar.ShellEscape(script), nil, envVars)
