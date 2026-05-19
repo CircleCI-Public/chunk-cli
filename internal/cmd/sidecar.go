@@ -820,7 +820,17 @@ Example:
 			}
 
 			// Step 6: Run setup steps over SSH.
-			if err := sidecarSetupRunSetup(cmd.Context(), client, sidecarID, identityFile, authSock, env, envVars, streams, status); err != nil {
+			opts := sidecarRunSetupOpts{
+				client:       client,
+				sidecarID:    sidecarID,
+				identityFile: identityFile,
+				authSock:     authSock,
+				env:          env,
+				envVars:      envVars,
+				streams:      streams,
+				status:       status,
+			}
+			if err := sidecarSetupRunSetup(cmd.Context(), opts); err != nil {
 				return err
 			}
 
@@ -931,17 +941,20 @@ func sidecarSetupSync(
 	return err
 }
 
-func sidecarSetupRunSetup(
-	ctx context.Context,
-	client *circleci.Client,
-	sidecarID, identityFile, authSock string,
-	env *envbuilder.Environment,
-	envVars map[string]string,
-	streams iostream.Streams,
-	status iostream.StatusFunc,
-) error {
-	if len(env.Setup) == 0 {
-		status(iostream.LevelInfo, "No setup steps detected, skipping")
+type sidecarRunSetupOpts struct {
+	client       *circleci.Client
+	sidecarID    string
+	identityFile string
+	authSock     string
+	env          *envbuilder.Environment
+	envVars      map[string]string
+	streams      iostream.Streams
+	status       iostream.StatusFunc
+}
+
+func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
+	if len(opts.env.Setup) == 0 {
+		opts.status(iostream.LevelInfo, "No setup steps detected, skipping")
 		return nil
 	}
 
@@ -952,12 +965,12 @@ func sidecarSetupRunSetup(
 		ws = active.Workspace
 	}
 
-	for _, step := range env.Setup {
+	for _, step := range opts.env.Setup {
 		if step.Name == "test" {
 			continue // test step is for Dockerfile CMD only, not for SSH execution
 		}
-		status(iostream.LevelStep, fmt.Sprintf("Running setup step %q: %s", step.Name, step.Command))
-		session, err := sidecar.OpenSession(ctx, client, sidecarID, identityFile, authSock)
+		opts.status(iostream.LevelStep, fmt.Sprintf("Running setup step %q: %s", step.Name, step.Command))
+		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, opts.identityFile, opts.authSock)
 		if err != nil {
 			if sessErr := sshSessionError(err); sessErr != nil {
 				return sessErr
@@ -972,11 +985,11 @@ func sidecarSetupRunSetup(
 		}
 		// cimg images set PATH via Docker ENV which e2b does not propagate to SSH
 		// sessions, so prepend the stack's binary locations explicitly.
-		if paths := env.BinaryPaths(); paths != "" {
+		if paths := opts.env.BinaryPaths(); paths != "" {
 			workspaceCmd = "export PATH=" + paths + ":$PATH && " + workspaceCmd
 		}
 		loginCmd := "bash -l -c " + sidecar.ShellEscape(workspaceCmd)
-		result, err := sidecar.ExecOverSSH(ctx, session, loginCmd, nil, envVars)
+		result, err := sidecar.ExecOverSSH(ctx, session, loginCmd, nil, opts.envVars)
 		if err != nil {
 			if sessErr := sshSessionError(err); sessErr != nil {
 				return sessErr
@@ -984,10 +997,10 @@ func sidecarSetupRunSetup(
 			return err
 		}
 		if result.Stdout != "" {
-			streams.Printf("%s", result.Stdout)
+			opts.streams.Printf("%s", result.Stdout)
 		}
 		if result.Stderr != "" {
-			streams.ErrPrintf("%s", result.Stderr)
+			opts.streams.ErrPrintf("%s", result.Stderr)
 		}
 		if result.ExitCode != 0 {
 			return &userError{
@@ -996,7 +1009,7 @@ func sidecarSetupRunSetup(
 				errMsg:     fmt.Sprintf("setup step %q exited with status %d", step.Name, result.ExitCode),
 			}
 		}
-		status(iostream.LevelDone, fmt.Sprintf("Step %q complete", step.Name))
+		opts.status(iostream.LevelDone, fmt.Sprintf("Step %q complete", step.Name))
 	}
 	return nil
 }

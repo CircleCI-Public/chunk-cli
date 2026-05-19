@@ -32,7 +32,7 @@ func resolveEnvVars(ctx context.Context, workDir, envFile string, envVarsFlag []
 	if len(envVars) > 0 {
 		envVars, err = secrets.ResolveAll(ctx, envVars, nil)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("resolve secrets: %w", err)
 		}
 	}
 	return envVars, nil
