@@ -42,3 +42,13 @@ Read these when working in the relevant area:
 - **Test isolation**: Each test creates its own temp directory and cleans up
 - **Race detector**: Always run tests with `-race`
 - Acceptance tests live in `acceptance/`
+
+## Cursor Cloud specific instructions
+
+- **Go 1.26** is installed at `/usr/local/go/bin/go`. Ensure `PATH` includes `/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin`.
+- **Task** (go-task) is at `/usr/local/bin/task`. All build/test/lint/fmt commands use `task` — see "Common Commands" above.
+- **uv** is at `$HOME/.local/bin/uv`. It's only needed for the `task lint` pylint step (the `harness/` Python sub-project).
+- Go tool dependencies (`gotestsum`, `golangci-lint`, `gosimports`) are declared in `go.mod` under `tool (...)` and invoked via `go tool <name>` — no separate install needed.
+- `chunk validate` requires a `.chunk/config.json` with commands configured; it will hang in a bare repo without one. Use `task test` and `task lint` directly for CI-style checks.
+- The `build-prompt` and `sidecar` commands require `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, and/or `CIRCLECI_TOKEN` env vars. Tests that need these keys skip gracefully when missing.
+- Acceptance tests that clone external repos are gated by `CHUNK_ENV_BUILDER_ACCEPTANCE=1`.
