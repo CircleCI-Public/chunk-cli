@@ -51,4 +51,3 @@ Read these when working in the relevant area:
 - Go tool dependencies (`gotestsum`, `golangci-lint`, `gosimports`) are declared in `go.mod` under `tool (...)` and invoked via `go tool <name>` — no separate install needed.
 - `chunk validate` hangs in non-TTY shells (like Cloud Agent) because `detectHook` reads JSON from stdin when it's not a terminal. Always redirect stdin: `./dist/chunk validate < /dev/null`. Alternatively, use `task test` and `task lint` directly.
 - The `build-prompt` and `sidecar` commands require `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, and/or `CIRCLECI_TOKEN` env vars. Tests that need these keys skip gracefully when missing.
-- Acceptance tests that clone external repos are gated by `CHUNK_ENV_BUILDER_ACCEPTANCE=1`.
