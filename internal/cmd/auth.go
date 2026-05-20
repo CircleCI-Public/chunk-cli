@@ -438,6 +438,13 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 	}
 
 	io.Println(ui.Success("CircleCI token removed successfully."))
+	if !insecureStorage {
+		if cfg, err := config.Load(); err == nil && cfg.CircleCIToken != "" {
+			cfgPath, _ := config.Path()
+			io.Println(ui.Warning("A CircleCI token is still stored in the config file: " + cfgPath))
+			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage circleci` to remove it, or edit the file directly."))
+		}
+	}
 	if envSet {
 		io.Println(ui.Warning("Note: " + config.EnvCircleToken + "/" + config.EnvCircleCIToken + " is still set in your environment variables."))
 	}
@@ -494,6 +501,13 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force, insecureStorage boo
 	}
 
 	io.Println(ui.Success("API key removed successfully."))
+	if !insecureStorage {
+		if cfg, err := config.Load(); err == nil && cfg.AnthropicAPIKey != "" {
+			cfgPath, _ := config.Path()
+			io.Println(ui.Warning("An Anthropic API key is still stored in the config file: " + cfgPath))
+			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage anthropic` to remove it, or edit the file directly."))
+		}
+	}
 	if envSet {
 		io.Println(ui.Warning("Note: " + config.EnvAnthropicAPIKey + " is still set in your environment variables."))
 	}
@@ -624,6 +638,13 @@ func authRemoveGitHub(io iostream.Streams, envSet, force, insecureStorage bool) 
 	}
 
 	io.Println(ui.Success("GitHub token removed successfully."))
+	if !insecureStorage {
+		if cfg, err := config.Load(); err == nil && cfg.GitHubToken != "" {
+			cfgPath, _ := config.Path()
+			io.Println(ui.Warning("A GitHub token is still stored in the config file: " + cfgPath))
+			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage github` to remove it, or edit the file directly."))
+		}
+	}
 	if envSet {
 		io.Println(ui.Warning("Note: " + config.EnvGitHubToken + " is still set in your environment variables."))
 	}
