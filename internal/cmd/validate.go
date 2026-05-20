@@ -148,6 +148,13 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, streams io
 	return ctx, streams, false, nil
 }
 
+func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, allRemote bool, cfg *config.ProjectConfig, streams iostream.Streams) (*circleci.Client, error) {
+	if !allRemote && !cfg.HasRemoteCommands() {
+		return nil, nil
+	}
+	return ensureCircleCIClient(ctx, cmd, rc, streams, tui.PromptHidden)
+}
+
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
 	streams := iostream.FromCmd(cmd)
 
@@ -229,7 +236,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	image := resolveImage(name, cfg)
 
-	circleCIClient, err := ensureCircleCIClient(cmd.Context(), cmd, rc, streams, tui.PromptHidden)
+	circleCIClient, err := maybeEnsureCircleCIClient(cmd.Context(), cmd, rc, allRemote, cfg, streams)
 	if err != nil {
 		return err
 	}
