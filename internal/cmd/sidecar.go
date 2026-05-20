@@ -72,15 +72,29 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 }
 
 // resolveOrgID returns orgID from the flag, the CIRCLECI_ORG_ID env var,
-// or by calling pickOrg as a last resort (e.g. to present a TUI picker).
-func resolveOrgID(orgID string, pickOrg func() (string, error)) (string, error) {
+// the project config, or by calling pickOrg as a last resort (e.g. to present
+// a TUI picker).
+func resolveOrgID(orgID, projOrgID string, pickOrg func() (string, error)) (string, error) {
 	if orgID != "" {
 		return orgID, nil
 	}
 	if envID := os.Getenv(config.EnvCircleCIOrgID); envID != "" {
 		return envID, nil
 	}
+	if projOrgID != "" {
+		return projOrgID, nil
+	}
 	return pickOrg()
+}
+
+// configOrgID returns the orgID stored in .chunk/config.json for dir, or ""
+// if the config cannot be loaded or has no orgID set.
+func configOrgID(dir string) string {
+	cfg, err := config.LoadProjectConfig(dir)
+	if err != nil {
+		return ""
+	}
+	return cfg.OrgID
 }
 
 func orgPicker(ctx context.Context, client *circleci.Client) func() (string, error) {
@@ -131,7 +145,11 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, orgPicker(cmd.Context(), client))
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+			resolvedOrgID, err := resolveOrgID(orgID, configOrgID(cwd), orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
@@ -196,7 +214,11 @@ func newSidecarCreateCmd() *cobra.Command {
 			if name == "" {
 				name = randomSidecarName()
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, orgPicker(cmd.Context(), client))
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+			resolvedOrgID, err := resolveOrgID(orgID, configOrgID(cwd), orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
@@ -812,7 +834,7 @@ Example:
 			// Step 2: Resolve or create sidecar.
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, status, streams)
+				sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -874,7 +896,7 @@ Example:
 func sidecarSetupResolveSidecar(
 	ctx context.Context,
 	client *circleci.Client,
-	orgID, name string,
+	orgID, name, workDir string,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
 ) (id, displayName string, err error) {
@@ -889,7 +911,7 @@ func sidecarSetupResolveSidecar(
 	if name == "" {
 		name = randomSidecarName()
 	}
-	resolvedOrgID, err := resolveOrgID(orgID, orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, configOrgID(workDir), orgPicker(ctx, client))
 	if err != nil {
 		return "", "", err
 	}

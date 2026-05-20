@@ -550,13 +550,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		return false, nil
 	}
 	streams.ErrPrintf("No active sidecar found, creating a new sandbox...\n")
-	// Fallback: read org ID from project config if not provided via flag or env.
-	if orgID == "" {
-		if projCfg, cfgErr := config.LoadProjectConfig(workDir); cfgErr == nil && projCfg.OrgID != "" {
-			orgID = projCfg.OrgID
-		}
-	}
-	resolvedOrgID, err := resolveOrgID(orgID, orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, configOrgID(workDir), orgPicker(ctx, client))
 	if err != nil {
 		return false, err
 	}
