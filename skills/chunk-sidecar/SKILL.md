@@ -135,13 +135,16 @@ An atom is the smallest independent unit the runner accepts. Match the runner's 
 - `discover` must be deterministic and exit non-zero on error — the platform calls it once per pipeline.
 - `run` must accept any subset of `discover`'s output, including a single atom and the full set. Verify locally with a hand-picked subset before committing.
 - `outputs.junit` must be a junit XML file the runner actually writes. The platform reads it to report pass/fail and timing.
-- `.circleci/test-suites.yml` is referenced from `.circleci/config.yml` via the Smarter Testing orb. After writing the suite, confirm the orb usage references the suite `name` you chose.
+- `.circleci/test-suites.yml` is referenced from `.circleci/config.yml` via the `circleci-testsuite` plugin invoked directly in a test job (not via the Smarter Testing orb). After writing the suite, confirm the `circleci-testsuite exec --suite <name>` call uses the suite `name` you chose.
 
 ### After writing
 
-1. Run `discover` locally — confirm it prints one atom per line on stdout and exits zero.
-2. Run `run` locally with `<< test.atoms >>` substituted by one or two atoms — confirm a junit XML file appears at the `outputs.junit` path.
-3. Read `.circleci/config.yml` and verify the Smarter Testing orb references the suite name.
+Validate on the sidecar — the `circleci-testsuite` plugin and `circleci` CLI are pre-installed there, matching the CI environment.
+
+1. `chunk sidecar sync` — push the new file to the active sidecar.
+2. `chunk validate --remote --cmd "<discover-command>"` — confirm it prints one atom per line and exits zero.
+3. `chunk validate --remote --cmd "<run-command with one or two atoms>"` — confirm a junit XML file appears at the `outputs.junit` path.
+4. `chunk validate --remote --cmd "circleci config validate"` — confirm `.circleci/config.yml` parses and the `circleci-testsuite exec --suite <name>` call uses the suite `name` you chose.
 
 ## Parallel sessions
 
