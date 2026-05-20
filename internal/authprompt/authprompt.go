@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
@@ -114,8 +115,12 @@ func ResolveGitHubClient(rc config.ResolvedConfig, logStatus func(string)) (*git
 	})
 }
 
-// SaveCircleCIToken persists a CircleCI token to the config file.
-func SaveCircleCIToken(token string) error {
+// SaveCircleCIToken persists a CircleCI token. When insecureStorage is false it uses
+// the system keychain; when true it falls back to the config file.
+func SaveCircleCIToken(token, baseURL string, insecureStorage bool) error {
+	if !insecureStorage {
+		return keyring.Set(keyring.ServiceCircleCI(baseURL), token)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -127,8 +132,12 @@ func SaveCircleCIToken(token string) error {
 	return nil
 }
 
-// SaveAnthropicKey persists an Anthropic API key to the config file.
-func SaveAnthropicKey(key string) error {
+// SaveAnthropicKey persists an Anthropic API key. When insecureStorage is false it uses
+// the system keychain; when true it falls back to the config file.
+func SaveAnthropicKey(key, baseURL string, insecureStorage bool) error {
+	if !insecureStorage {
+		return keyring.Set(keyring.ServiceAnthropic(baseURL), key)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -140,8 +149,12 @@ func SaveAnthropicKey(key string) error {
 	return nil
 }
 
-// SaveGitHubToken persists a GitHub token to the config file.
-func SaveGitHubToken(token string) error {
+// SaveGitHubToken persists a GitHub token. When insecureStorage is false it uses
+// the system keychain; when true it falls back to the config file.
+func SaveGitHubToken(token, baseURL string, insecureStorage bool) error {
+	if !insecureStorage {
+		return keyring.Set(keyring.ServiceGitHub(baseURL), token)
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

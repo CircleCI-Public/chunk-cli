@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/sethvargo/go-envconfig"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 )
 
 // marshalIndent encodes v as indented JSON without HTML-escaping special characters
@@ -191,9 +193,10 @@ func Clear(key string) error {
 }
 
 // Resolve computes the final config from flags, env, and file.
-// Priority for API key: flag > env > config file > (none).
+// Priority for API key: flag > env > keychain (when !insecureStorage) > config file > (none).
 // Priority for model: flag > env > config file > default.
-func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
+// When insecureStorage is true, keychain reads are skipped entirely.
+func Resolve(flagAPIKey, flagModel string, insecureStorage bool) (ResolvedConfig, error) {
 	cfg, err := Load()
 
 	env, envErr := LoadEnv(context.Background())
@@ -213,9 +216,17 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	case env.CircleCIToken != "":
 		rc.CircleCIToken = env.CircleCIToken
 		rc.CircleCITokenSource = "Environment variable (" + EnvCircleCIToken + ")"
-	case cfg.CircleCIToken != "":
-		rc.CircleCIToken = cfg.CircleCIToken
-		rc.CircleCITokenSource = SourceConfigFile
+	default:
+		if !insecureStorage {
+			if token, krErr := keyring.Get(keyring.ServiceCircleCI(env.CircleCIBaseURL)); krErr == nil {
+				rc.CircleCIToken = token
+				rc.CircleCITokenSource = keyring.SourceKeychain
+			}
+		}
+		if rc.CircleCIToken == "" && cfg.CircleCIToken != "" {
+			rc.CircleCIToken = cfg.CircleCIToken
+			rc.CircleCITokenSource = SourceConfigFile
+		}
 	}
 
 	switch {
@@ -225,18 +236,34 @@ func Resolve(flagAPIKey, flagModel string) (ResolvedConfig, error) {
 	case env.AnthropicAPIKey != "":
 		rc.AnthropicAPIKey = env.AnthropicAPIKey
 		rc.AnthropicAPIKeySource = "Environment variable"
-	case cfg.AnthropicAPIKey != "":
-		rc.AnthropicAPIKey = cfg.AnthropicAPIKey
-		rc.AnthropicAPIKeySource = SourceConfigFile
+	default:
+		if !insecureStorage {
+			if apiKey, krErr := keyring.Get(keyring.ServiceAnthropic(env.AnthropicBaseURL)); krErr == nil {
+				rc.AnthropicAPIKey = apiKey
+				rc.AnthropicAPIKeySource = keyring.SourceKeychain
+			}
+		}
+		if rc.AnthropicAPIKey == "" && cfg.AnthropicAPIKey != "" {
+			rc.AnthropicAPIKey = cfg.AnthropicAPIKey
+			rc.AnthropicAPIKeySource = SourceConfigFile
+		}
 	}
 
 	switch {
 	case env.GitHubToken != "":
 		rc.GitHubToken = env.GitHubToken
 		rc.GitHubTokenSource = "Environment variable (" + EnvGitHubToken + ")"
-	case cfg.GitHubToken != "":
-		rc.GitHubToken = cfg.GitHubToken
-		rc.GitHubTokenSource = SourceConfigFile
+	default:
+		if !insecureStorage {
+			if token, krErr := keyring.Get(keyring.ServiceGitHub(env.GitHubAPIURL)); krErr == nil {
+				rc.GitHubToken = token
+				rc.GitHubTokenSource = keyring.SourceKeychain
+			}
+		}
+		if rc.GitHubToken == "" && cfg.GitHubToken != "" {
+			rc.GitHubToken = cfg.GitHubToken
+			rc.GitHubTokenSource = SourceConfigFile
+		}
 	}
 
 	switch {

@@ -31,7 +31,8 @@ func newConfigShowCmd() *cobra.Command {
 		Short: "Display resolved configuration",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			rc, resolveErr := config.Resolve("", "")
+			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
+			rc, resolveErr := config.Resolve("", "", insecureStorage)
 			if resolveErr != nil {
 				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", resolveErr)))
 			}

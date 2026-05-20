@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -40,12 +41,21 @@ func noTTYPrompter(_ string) (string, error) {
 	return "", tui.ErrNoTTY
 }
 
+func testCmd() *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("insecure-storage", false, "")
+	// Use insecure (config file) storage in tests to avoid hitting the system keychain.
+	_ = cmd.Flags().Set("insecure-storage", "true")
+	return cmd
+}
+
 func TestEnsureCircleCIClient_NoTTY(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")
 	t.Setenv(config.EnvCircleCIToken, "")
 
-	_, err := ensureCircleCIClient(context.Background(), discardStreams(), noTTYPrompter)
+	rc, _ := config.Resolve("", "", true)
+	_, err := ensureCircleCIClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
 	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
 
@@ -58,7 +68,8 @@ func TestEnsureAnthropicClient_NoTTY(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvAnthropicAPIKey, "")
 
-	_, err := ensureAnthropicClient(context.Background(), discardStreams(), noTTYPrompter)
+	rc, _ := config.Resolve("", "", true)
+	_, err := ensureAnthropicClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
 	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
 
@@ -71,7 +82,8 @@ func TestEnsureGitHubClient_NoTTY(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvGitHubToken, "")
 
-	_, err := ensureGitHubClient(context.Background(), discardStreams(), noTTYPrompter)
+	rc, _ := config.Resolve("", "", true)
+	_, err := ensureGitHubClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
 	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
 
@@ -93,7 +105,8 @@ func TestEnsureGitHubClient_PromptAndSave(t *testing.T) {
 	token := randToken("ghp_")
 	prompter := func(_ string) (string, error) { return token, nil }
 
-	client, err := ensureGitHubClient(context.Background(), discardStreams(), prompter)
+	rc, _ := config.Resolve("", "", true)
+	client, err := ensureGitHubClient(context.Background(), testCmd(), rc, discardStreams(), prompter)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 
@@ -115,7 +128,8 @@ func TestEnsureAnthropicClient_PromptAndSave(t *testing.T) {
 	key := randToken("sk-ant-")
 	prompter := func(_ string) (string, error) { return key, nil }
 
-	client, err := ensureAnthropicClient(context.Background(), discardStreams(), prompter)
+	rc, _ := config.Resolve("", "", true)
+	client, err := ensureAnthropicClient(context.Background(), testCmd(), rc, discardStreams(), prompter)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 
@@ -130,7 +144,8 @@ func TestEnsureAnthropicClient_InvalidPrefix(t *testing.T) {
 
 	prompter := func(_ string) (string, error) { return "bad-key", nil }
 
-	_, err := ensureAnthropicClient(context.Background(), discardStreams(), prompter)
+	rc, _ := config.Resolve("", "", true)
+	_, err := ensureAnthropicClient(context.Background(), testCmd(), rc, discardStreams(), prompter)
 	assert.Assert(t, err != nil)
 
 	var ue *userError
@@ -145,7 +160,8 @@ func TestEnsureCircleCIClient_EmptyToken(t *testing.T) {
 
 	prompter := func(_ string) (string, error) { return "", nil }
 
-	_, err := ensureCircleCIClient(context.Background(), discardStreams(), prompter)
+	rc, _ := config.Resolve("", "", true)
+	_, err := ensureCircleCIClient(context.Background(), testCmd(), rc, discardStreams(), prompter)
 	assert.Assert(t, err != nil)
 
 	var ue *userError
