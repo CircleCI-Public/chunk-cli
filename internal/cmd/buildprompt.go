@@ -73,12 +73,14 @@ func newBuildPromptCmd() *cobra.Command {
 				}
 			}
 
-			ghClient, err := ensureGitHubClient(cmd.Context(), cmd, streams, tui.PromptHidden)
+			insecureStorage := insecureStorageFlag(cmd)
+			rc, _ := config.Resolve("", "", insecureStorage)
+			ghClient, err := ensureGitHubClient(cmd.Context(), cmd, rc, streams, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
 
-			anthropicClient, err := ensureAnthropicClient(cmd.Context(), cmd, streams, tui.PromptHidden)
+			anthropicClient, err := ensureAnthropicClient(cmd.Context(), cmd, rc, streams, tui.PromptHidden)
 			if err != nil {
 				return err
 			}

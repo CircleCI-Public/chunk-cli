@@ -53,9 +53,8 @@ func printSaved(streams iostream.Streams, label string, insecureStorage bool) {
 	streams.ErrPrintln(ui.Success(msg))
 }
 
-func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, prompter func(string) (string, error)) (*circleci.Client, error) {
+func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, streams iostream.Streams, prompter func(string) (string, error)) (*circleci.Client, error) {
 	insecureStorage := insecureStorageFlag(cmd)
-	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveCircleCIClient(rc)
 	if err == nil {
 		return client, nil
@@ -108,9 +107,8 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, streams iostr
 	})
 }
 
-func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, prompter func(string) (string, error)) (*anthropic.Client, error) {
+func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, streams iostream.Streams, prompter func(string) (string, error)) (*anthropic.Client, error) {
 	insecureStorage := insecureStorageFlag(cmd)
-	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveAnthropicClient(rc)
 	if err == nil {
 		return client, nil
@@ -171,9 +169,8 @@ func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, streams iost
 	})
 }
 
-func ensureGitHubClient(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, prompter func(string) (string, error)) (*github.Client, error) {
+func ensureGitHubClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, streams iostream.Streams, prompter func(string) (string, error)) (*github.Client, error) {
 	insecureStorage := insecureStorageFlag(cmd)
-	rc, _ := config.Resolve("", "", insecureStorage)
 	logStatus := func(msg string) { streams.ErrPrintln("  " + msg) }
 	client, err := authprompt.ResolveGitHubClient(rc, logStatus)
 	if err == nil {

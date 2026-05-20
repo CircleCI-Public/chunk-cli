@@ -126,7 +126,7 @@ func TestOpenSSHSessionPassesEnvVars(t *testing.T) {
 	assert.NilError(t, err)
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
-	execFn, _, err := openSSHSession(context.Background(), client, "sidecar-123", keyFile, "", envVars, false)
+	execFn, _, err := openSSHSession(context.Background(), client, "sidecar-123", keyFile, "", envVars, config.ResolvedConfig{})
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")
