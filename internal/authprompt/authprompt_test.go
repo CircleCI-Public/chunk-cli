@@ -16,6 +16,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
+const insecureStorage = true // skip keychain in unit tests; use config file only
+
 func isolateConfig(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
@@ -66,7 +68,7 @@ func TestResolveCircleCIClient_TokenInEnv(t *testing.T) {
 	t.Setenv(config.EnvCircleToken, randToken("cci-"))
 	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveCircleCIClient(rc)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
@@ -88,7 +90,7 @@ func TestResolveCircleCIClient_TokenInConfig(t *testing.T) {
 	cfg.CircleCIToken = randToken("cci-")
 	assert.NilError(t, config.Save(cfg))
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveCircleCIClient(rc)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
@@ -99,7 +101,7 @@ func TestResolveCircleCIClient_NeedsAuth(t *testing.T) {
 	t.Setenv(config.EnvCircleToken, "")
 	t.Setenv(config.EnvCircleCIToken, "")
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	_, err := authprompt.ResolveCircleCIClient(rc)
 	assert.Assert(t, errors.Is(err, authprompt.ErrNeedsAuth))
 }
@@ -114,7 +116,7 @@ func TestResolveAnthropicClient_KeyInEnv(t *testing.T) {
 	t.Setenv(config.EnvAnthropicAPIKey, randToken("sk-ant-"))
 	t.Setenv(config.EnvAnthropicBaseURL, srv.URL)
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveAnthropicClient(rc)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
@@ -135,7 +137,7 @@ func TestResolveAnthropicClient_KeyInConfig(t *testing.T) {
 	cfg.AnthropicAPIKey = randToken("sk-ant-")
 	assert.NilError(t, config.Save(cfg))
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveAnthropicClient(rc)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
@@ -145,7 +147,7 @@ func TestResolveAnthropicClient_NeedsAuth(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvAnthropicAPIKey, "")
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	_, err := authprompt.ResolveAnthropicClient(rc)
 	assert.Assert(t, errors.Is(err, authprompt.ErrNeedsAuth))
 }
@@ -160,7 +162,7 @@ func TestResolveGitHubClient_TokenInEnv(t *testing.T) {
 	t.Setenv(config.EnvGitHubToken, randToken("ghp_"))
 	t.Setenv(config.EnvGitHubAPIURL, srv.URL)
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveGitHubClient(rc, nil)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
@@ -181,7 +183,7 @@ func TestResolveGitHubClient_TokenInConfig(t *testing.T) {
 	cfg.GitHubToken = randToken("ghp_")
 	assert.NilError(t, config.Save(cfg))
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveGitHubClient(rc, nil)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
@@ -191,7 +193,7 @@ func TestResolveGitHubClient_NeedsAuth(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvGitHubToken, "")
 
-	rc, _ := config.Resolve("", "", false)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	_, err := authprompt.ResolveGitHubClient(rc, nil)
 	assert.Assert(t, errors.Is(err, authprompt.ErrNeedsAuth))
 }
@@ -200,7 +202,7 @@ func TestSaveCircleCIToken(t *testing.T) {
 	isolateConfig(t)
 
 	token := randToken("cci-")
-	err := authprompt.SaveCircleCIToken(token, "https://circleci.com", false)
+	err := authprompt.SaveCircleCIToken(token, "https://circleci.com", true)
 	assert.NilError(t, err)
 
 	cfg, err := config.Load()
@@ -212,7 +214,7 @@ func TestSaveAnthropicKey(t *testing.T) {
 	isolateConfig(t)
 
 	key := randToken("sk-ant-")
-	err := authprompt.SaveAnthropicKey(key, "https://api.anthropic.com", false)
+	err := authprompt.SaveAnthropicKey(key, "https://api.anthropic.com", true)
 	assert.NilError(t, err)
 
 	cfg, err := config.Load()
@@ -224,7 +226,7 @@ func TestSaveGitHubToken(t *testing.T) {
 	isolateConfig(t)
 
 	token := randToken("ghp_")
-	err := authprompt.SaveGitHubToken(token, "https://api.github.com", false)
+	err := authprompt.SaveGitHubToken(token, "https://api.github.com", true)
 	assert.NilError(t, err)
 
 	cfg, err := config.Load()

@@ -44,7 +44,7 @@ func newAuthSetCmd() *cobra.Command {
 		ValidArgs: []string{"circleci", "anthropic", "github"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
-			rc, _ := config.Resolve("", "", !insecureStorage)
+			rc, _ := config.Resolve("", "", insecureStorage)
 			provider := args[0]
 			io := iostream.FromCmd(cmd)
 			switch provider {
@@ -202,7 +202,7 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 		}
 	}
 
-	if err := authprompt.SaveAnthropicKey(key, baseURL, !insecureStorage); err != nil {
+	if err := authprompt.SaveAnthropicKey(key, baseURL, insecureStorage); err != nil {
 		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
 	}
 
@@ -222,7 +222,7 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 		}
 	}
 
-	if err := authprompt.SaveCircleCIToken(token, circleCIBaseURL, !insecureStorage); err != nil {
+	if err := authprompt.SaveCircleCIToken(token, circleCIBaseURL, insecureStorage); err != nil {
 		return &userError{
 			msg:        "Failed to save CircleCI token.",
 			suggestion: "Check that your config file is writable.",
@@ -247,7 +247,7 @@ func newAuthStatusCmd() *cobra.Command {
 			io.Println("")
 
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
-			rc, resolveErr := config.Resolve("", "", !insecureStorage)
+			rc, resolveErr := config.Resolve("", "", insecureStorage)
 			if resolveErr != nil {
 				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", resolveErr)))
 			}
@@ -335,7 +335,7 @@ func newAuthRemoveCmd() *cobra.Command {
 		ValidArgs: []string{"circleci", "anthropic", "github"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
-			rc, _ := config.Resolve("", "", !insecureStorage)
+			rc, _ := config.Resolve("", "", insecureStorage)
 			provider := args[0]
 			io := iostream.FromCmd(cmd)
 			switch provider {
@@ -361,8 +361,8 @@ func newAuthRemoveCmd() *cobra.Command {
 	return cmd
 }
 
-func hasStoredCircleCIToken(secureStorage bool, baseURL string) bool {
-	if secureStorage {
+func hasStoredCircleCIToken(insecureStorage bool, baseURL string) bool {
+	if !insecureStorage {
 		_, err := keyring.Get(keyring.ServiceCircleCI(baseURL))
 		return err == nil
 	}
@@ -370,8 +370,8 @@ func hasStoredCircleCIToken(secureStorage bool, baseURL string) bool {
 	return cfg.CircleCIToken != ""
 }
 
-func hasStoredAnthropicKey(secureStorage bool, baseURL string) bool {
-	if secureStorage {
+func hasStoredAnthropicKey(insecureStorage bool, baseURL string) bool {
+	if !insecureStorage {
 		_, err := keyring.Get(keyring.ServiceAnthropic(baseURL))
 		return err == nil
 	}
@@ -379,8 +379,8 @@ func hasStoredAnthropicKey(secureStorage bool, baseURL string) bool {
 	return cfg.AnthropicAPIKey != ""
 }
 
-func hasStoredGitHubToken(secureStorage bool, baseURL string) bool {
-	if secureStorage {
+func hasStoredGitHubToken(insecureStorage bool, baseURL string) bool {
+	if !insecureStorage {
 		_, err := keyring.Get(keyring.ServiceGitHub(baseURL))
 		return err == nil
 	}
@@ -389,9 +389,8 @@ func hasStoredGitHubToken(secureStorage bool, baseURL string) bool {
 }
 
 func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool) error {
-	secureStorage := !insecureStorage
-	rc, _ := config.Resolve("", "", secureStorage)
-	hasStored := hasStoredCircleCIToken(secureStorage, rc.CircleCIBaseURL)
+	rc, _ := config.Resolve("", "", insecureStorage)
+	hasStored := hasStoredCircleCIToken(insecureStorage, rc.CircleCIBaseURL)
 	if !hasStored {
 		io.Println(ui.Warning("No CircleCI token stored."))
 		if envSet {
@@ -403,7 +402,7 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 	}
 
 	io.Println("")
-	if secureStorage {
+	if !insecureStorage {
 		io.Println("This will remove your stored CircleCI token from the system keychain.")
 	} else {
 		cfgPath, err := config.Path()
@@ -428,7 +427,7 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 		}
 	}
 
-	if secureStorage {
+	if !insecureStorage {
 		if err := keyring.Delete(keyring.ServiceCircleCI(rc.CircleCIBaseURL)); err != nil {
 			return &userError{msg: "Failed to remove CircleCI token from keychain.", err: err}
 		}
@@ -446,9 +445,8 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 }
 
 func authRemoveAnthropic(io iostream.Streams, envSet, force, insecureStorage bool) error {
-	secureStorage := !insecureStorage
-	rc, _ := config.Resolve("", "", secureStorage)
-	hasStored := hasStoredAnthropicKey(secureStorage, rc.AnthropicBaseURL)
+	rc, _ := config.Resolve("", "", insecureStorage)
+	hasStored := hasStoredAnthropicKey(insecureStorage, rc.AnthropicBaseURL)
 	if !hasStored {
 		io.Println(ui.Warning("No API key stored."))
 		if envSet {
@@ -460,7 +458,7 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force, insecureStorage boo
 	}
 
 	io.Println("")
-	if secureStorage {
+	if !insecureStorage {
 		io.Println("This will remove your stored Anthropic API key from the system keychain.")
 	} else {
 		cfgPath, err := config.Path()
@@ -485,7 +483,7 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force, insecureStorage boo
 		}
 	}
 
-	if secureStorage {
+	if !insecureStorage {
 		if err := keyring.Delete(keyring.ServiceAnthropic(rc.AnthropicBaseURL)); err != nil {
 			return &userError{msg: "Failed to remove Anthropic API key from keychain.", err: err}
 		}
@@ -567,7 +565,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 		}
 	}
 
-	if err := authprompt.SaveGitHubToken(token, baseURL, !insecureStorage); err != nil {
+	if err := authprompt.SaveGitHubToken(token, baseURL, insecureStorage); err != nil {
 		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
 	}
 
@@ -577,9 +575,8 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 }
 
 func authRemoveGitHub(io iostream.Streams, envSet, force, insecureStorage bool) error {
-	secureStorage := !insecureStorage
-	rc, _ := config.Resolve("", "", secureStorage)
-	hasStored := hasStoredGitHubToken(secureStorage, rc.GitHubAPIURL)
+	rc, _ := config.Resolve("", "", insecureStorage)
+	hasStored := hasStoredGitHubToken(insecureStorage, rc.GitHubAPIURL)
 	if !hasStored {
 		io.Println(ui.Warning("No GitHub token stored."))
 		if envSet {
@@ -591,7 +588,7 @@ func authRemoveGitHub(io iostream.Streams, envSet, force, insecureStorage bool) 
 	}
 
 	io.Println("")
-	if secureStorage {
+	if !insecureStorage {
 		io.Println("This will remove your stored GitHub token from the system keychain.")
 	} else {
 		cfgPath, err := config.Path()
@@ -616,7 +613,7 @@ func authRemoveGitHub(io iostream.Streams, envSet, force, insecureStorage bool) 
 		}
 	}
 
-	if secureStorage {
+	if !insecureStorage {
 		if err := keyring.Delete(keyring.ServiceGitHub(rc.GitHubAPIURL)); err != nil {
 			return &userError{msg: "Failed to remove GitHub token from keychain.", err: err}
 		}

@@ -115,10 +115,10 @@ func ResolveGitHubClient(rc config.ResolvedConfig, logStatus func(string)) (*git
 	})
 }
 
-// SaveCircleCIToken persists a CircleCI token. When secureStorage is true it uses
-// the system keychain; when false it falls back to the config file.
-func SaveCircleCIToken(token, baseURL string, secureStorage bool) error {
-	if secureStorage {
+// SaveCircleCIToken persists a CircleCI token. When insecureStorage is false it uses
+// the system keychain; when true it falls back to the config file.
+func SaveCircleCIToken(token, baseURL string, insecureStorage bool) error {
+	if !insecureStorage {
 		return keyring.Set(keyring.ServiceCircleCI(baseURL), token)
 	}
 	cfg, err := config.Load()
@@ -132,10 +132,10 @@ func SaveCircleCIToken(token, baseURL string, secureStorage bool) error {
 	return nil
 }
 
-// SaveAnthropicKey persists an Anthropic API key. When secureStorage is true it uses
-// the system keychain; when false it falls back to the config file.
-func SaveAnthropicKey(key, baseURL string, secureStorage bool) error {
-	if secureStorage {
+// SaveAnthropicKey persists an Anthropic API key. When insecureStorage is false it uses
+// the system keychain; when true it falls back to the config file.
+func SaveAnthropicKey(key, baseURL string, insecureStorage bool) error {
+	if !insecureStorage {
 		return keyring.Set(keyring.ServiceAnthropic(baseURL), key)
 	}
 	cfg, err := config.Load()
@@ -149,10 +149,10 @@ func SaveAnthropicKey(key, baseURL string, secureStorage bool) error {
 	return nil
 }
 
-// SaveGitHubToken persists a GitHub token. When secureStorage is true it uses
-// the system keychain; when false it falls back to the config file.
-func SaveGitHubToken(token, baseURL string, secureStorage bool) error {
-	if secureStorage {
+// SaveGitHubToken persists a GitHub token. When insecureStorage is false it uses
+// the system keychain; when true it falls back to the config file.
+func SaveGitHubToken(token, baseURL string, insecureStorage bool) error {
+	if !insecureStorage {
 		return keyring.Set(keyring.ServiceGitHub(baseURL), token)
 	}
 	cfg, err := config.Load()

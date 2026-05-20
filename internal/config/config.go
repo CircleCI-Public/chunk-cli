@@ -193,10 +193,10 @@ func Clear(key string) error {
 }
 
 // Resolve computes the final config from flags, env, and file.
-// Priority for API key: flag > env > keychain (when secureStorage) > config file > (none).
+// Priority for API key: flag > env > keychain (when !insecureStorage) > config file > (none).
 // Priority for model: flag > env > config file > default.
-// When secureStorage is false, keychain reads are skipped entirely.
-func Resolve(flagAPIKey, flagModel string, secureStorage bool) (ResolvedConfig, error) {
+// When insecureStorage is true, keychain reads are skipped entirely.
+func Resolve(flagAPIKey, flagModel string, insecureStorage bool) (ResolvedConfig, error) {
 	cfg, err := Load()
 
 	env, envErr := LoadEnv(context.Background())
@@ -217,7 +217,7 @@ func Resolve(flagAPIKey, flagModel string, secureStorage bool) (ResolvedConfig, 
 		rc.CircleCIToken = env.CircleCIToken
 		rc.CircleCITokenSource = "Environment variable (" + EnvCircleCIToken + ")"
 	default:
-		if secureStorage {
+		if !insecureStorage {
 			if token, krErr := keyring.Get(keyring.ServiceCircleCI(env.CircleCIBaseURL)); krErr == nil {
 				rc.CircleCIToken = token
 				rc.CircleCITokenSource = keyring.SourceKeychain
@@ -237,7 +237,7 @@ func Resolve(flagAPIKey, flagModel string, secureStorage bool) (ResolvedConfig, 
 		rc.AnthropicAPIKey = env.AnthropicAPIKey
 		rc.AnthropicAPIKeySource = "Environment variable"
 	default:
-		if secureStorage {
+		if !insecureStorage {
 			if apiKey, krErr := keyring.Get(keyring.ServiceAnthropic(env.AnthropicBaseURL)); krErr == nil {
 				rc.AnthropicAPIKey = apiKey
 				rc.AnthropicAPIKeySource = keyring.SourceKeychain
@@ -254,7 +254,7 @@ func Resolve(flagAPIKey, flagModel string, secureStorage bool) (ResolvedConfig, 
 		rc.GitHubToken = env.GitHubToken
 		rc.GitHubTokenSource = "Environment variable (" + EnvGitHubToken + ")"
 	default:
-		if secureStorage {
+		if !insecureStorage {
 			if token, krErr := keyring.Get(keyring.ServiceGitHub(env.GitHubAPIURL)); krErr == nil {
 				rc.GitHubToken = token
 				rc.GitHubTokenSource = keyring.SourceKeychain

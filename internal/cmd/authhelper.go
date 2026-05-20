@@ -26,9 +26,9 @@ const (
 	suggestionGitHubAuth    = "Set " + config.EnvGitHubToken + " or run 'chunk auth set github'."
 )
 
-func isSecureStorage(cmd *cobra.Command) bool {
-	insecure, _ := cmd.Flags().GetBool("insecure-storage")
-	return !insecure
+func insecureStorageFlag(cmd *cobra.Command) bool {
+	v, _ := cmd.Flags().GetBool("insecure-storage")
+	return v
 }
 
 func printSaveHint(streams iostream.Streams, label string, insecureStorage bool) {
@@ -54,8 +54,8 @@ func printSaved(streams iostream.Streams, label string, insecureStorage bool) {
 }
 
 func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, prompter func(string) (string, error)) (*circleci.Client, error) {
-	secureStorage := isSecureStorage(cmd)
-	rc, _ := config.Resolve("", "", secureStorage)
+	insecureStorage := insecureStorageFlag(cmd)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveCircleCIClient(rc)
 	if err == nil {
 		return client, nil
@@ -67,7 +67,7 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, streams iostr
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("CircleCI token required"))
 	streams.ErrPrintln("Create a token at https://app.circleci.com/settings/user/tokens")
-	printSaveHint(streams, "Token", !secureStorage)
+	printSaveHint(streams, "Token", insecureStorage)
 	streams.ErrPrintln("")
 
 	token, err := prompter("CircleCI Token")
@@ -98,10 +98,10 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, streams iostr
 		return nil, fmt.Errorf("could not validate CircleCI token: %w", err)
 	}
 
-	if err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, secureStorage); err != nil {
+	if err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, insecureStorage); err != nil {
 		return nil, err
 	}
-	printSaved(streams, "CircleCI token", !secureStorage)
+	printSaved(streams, "CircleCI token", insecureStorage)
 	return circleci.NewClient(circleci.Config{
 		Token:   token,
 		BaseURL: rc.CircleCIBaseURL,
@@ -109,8 +109,8 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, streams iostr
 }
 
 func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, prompter func(string) (string, error)) (*anthropic.Client, error) {
-	secureStorage := isSecureStorage(cmd)
-	rc, _ := config.Resolve("", "", secureStorage)
+	insecureStorage := insecureStorageFlag(cmd)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	client, err := authprompt.ResolveAnthropicClient(rc)
 	if err == nil {
 		return client, nil
@@ -122,7 +122,7 @@ func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, streams iost
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("Anthropic API key required"))
 	streams.ErrPrintln("Get a key at https://console.anthropic.com/")
-	printSaveHint(streams, "Key", !secureStorage)
+	printSaveHint(streams, "Key", insecureStorage)
 	streams.ErrPrintln("")
 
 	key, err := prompter("API Key")
@@ -161,10 +161,10 @@ func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, streams iost
 		return nil, fmt.Errorf("could not validate Anthropic API key: %w", err)
 	}
 
-	if err := authprompt.SaveAnthropicKey(key, rc.AnthropicBaseURL, secureStorage); err != nil {
+	if err := authprompt.SaveAnthropicKey(key, rc.AnthropicBaseURL, insecureStorage); err != nil {
 		return nil, err
 	}
-	printSaved(streams, "Anthropic API key", !secureStorage)
+	printSaved(streams, "Anthropic API key", insecureStorage)
 	return anthropic.New(anthropic.Config{
 		APIKey:  key,
 		BaseURL: rc.AnthropicBaseURL,
@@ -172,8 +172,8 @@ func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, streams iost
 }
 
 func ensureGitHubClient(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, prompter func(string) (string, error)) (*github.Client, error) {
-	secureStorage := isSecureStorage(cmd)
-	rc, _ := config.Resolve("", "", secureStorage)
+	insecureStorage := insecureStorageFlag(cmd)
+	rc, _ := config.Resolve("", "", insecureStorage)
 	logStatus := func(msg string) { streams.ErrPrintln("  " + msg) }
 	client, err := authprompt.ResolveGitHubClient(rc, logStatus)
 	if err == nil {
@@ -186,7 +186,7 @@ func ensureGitHubClient(ctx context.Context, cmd *cobra.Command, streams iostrea
 	streams.ErrPrintln("")
 	streams.ErrPrintln(ui.Bold("GitHub token required"))
 	streams.ErrPrintln("Create a token at https://github.com/settings/tokens")
-	printSaveHint(streams, "Token", !secureStorage)
+	printSaveHint(streams, "Token", insecureStorage)
 	streams.ErrPrintln("")
 
 	token, err := prompter("GitHub Token")
@@ -217,10 +217,10 @@ func ensureGitHubClient(ctx context.Context, cmd *cobra.Command, streams iostrea
 		return nil, fmt.Errorf("could not validate GitHub token: %w", err)
 	}
 
-	if err := authprompt.SaveGitHubToken(token, rc.GitHubAPIURL, secureStorage); err != nil {
+	if err := authprompt.SaveGitHubToken(token, rc.GitHubAPIURL, insecureStorage); err != nil {
 		return nil, err
 	}
-	printSaved(streams, "GitHub token", !secureStorage)
+	printSaved(streams, "GitHub token", insecureStorage)
 	return github.New(github.Config{
 		Token:     token,
 		BaseURL:   rc.GitHubAPIURL,

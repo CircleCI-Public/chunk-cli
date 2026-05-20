@@ -311,7 +311,7 @@ hook config files.`,
 
 			// Step 2: Validate command detection
 			if !skipValidate {
-				rc, _ := config.Resolve("", "", !insecureStorage)
+				rc, _ := config.Resolve("", "", insecureStorage)
 				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
 				commands, detectErr := validate.DetectCommands(ctx, claude, workDir)
 				if detectErr != nil {
