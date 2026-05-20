@@ -226,17 +226,20 @@ chunk sidecar create --image myimg                   # name auto-generated
 
 ### Environment variables
 
-`chunk sidecar ssh` and `chunk sidecar setup` automatically load `.env.local` from your working directory and forward its variables to the remote sidecar session. This lets you pass secrets and configuration without embedding them in your shell or committing them to the repo.
+`chunk sidecar ssh`, `chunk sidecar setup`, and `chunk validate` (when running remotely) automatically load `.env.local` from your working directory and forward its variables to the remote sidecar session. This lets you pass secrets and configuration without embedding them in your shell or committing them to the repo.
 
 ```bash
 # .env.local is loaded automatically — no flag needed
 chunk sidecar ssh
+chunk validate --remote
 
 # Override with a different file
 chunk sidecar ssh --env-file /path/to/other.env
+chunk validate --remote --env-file /path/to/other.env
 
 # Add individual variables (merged on top of the file)
 chunk sidecar ssh --env MY_VAR=value
+chunk validate --remote --env MY_VAR=value
 ```
 
 Variables from `--env` flags take precedence over those in `--env-file`. `.env.local` is gitignored by convention, so it's a safe place to store project-specific secrets.

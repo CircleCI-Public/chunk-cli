@@ -92,6 +92,20 @@ without prompting.
 | **Claude Code** (CLI / terminal) | Fully supported | Canonical provider |
 | **Cursor** | Supported | Reads `.claude/settings.json` directly |
 
+## Disabling Hooks
+
+Temporarily disable hooks without modifying `.claude/settings.json`:
+
+```bash
+chunk hook disable   # Creates .chunk/hooks-disabled sentinel file
+chunk hook enable    # Removes the sentinel file
+chunk hook status    # Shows "enabled" or "disabled"
+```
+
+Hooks are also skipped when the `CHUNK_HOOKS_DISABLED` environment variable is set to any non-empty value — useful for CI environments where the hooks should not run.
+
+The `--project` flag overrides the project root used to locate the sentinel file.
+
 ## Manual Validation
 
 Use `chunk validate` to run checks manually (outside of hooks):

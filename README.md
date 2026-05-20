@@ -128,6 +128,7 @@ chunk sidecar setup                        Detect env, install deps, snapshot
 chunk sidecar snapshot create|get|list       Manage sidecar snapshots
 chunk init                                 Initialize project configuration
 chunk validate [name]                      Run quality checks
+chunk hook disable|enable|status           Manage hook execution
 chunk skill install|list                   Manage AI agent skills
 chunk task config|run                      Configure and trigger CI tasks
 chunk build-prompt                         Generate review context from PR comments

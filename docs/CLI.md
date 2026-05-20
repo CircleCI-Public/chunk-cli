@@ -24,24 +24,28 @@ chunk
 │
 ├── config
 │   ├── show                        # Display resolved configuration
+│   │   --json                      # Output as JSON
 │   └── set <key> <value>           # Set a config value (see Config keys below)
 │
 ├── init                            # Initialize project configuration
 │   --force                         # Overwrite existing config
 │   --skip-hooks                    # Skip hook file generation
 │   --skip-validate                 # Skip validate command detection
-│   --skip-completions               # Skip shell completion installation
-│   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (default: true; pass =false to generate)
+│   --skip-completions              # Skip shell completion installation
 │   --skip-skills                   # Skip agent skill installation
+│   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (default: true; pass =false to generate)
 │   --project-dir <path>            # Project directory (defaults to cwd)
 │
 ├── task
-│   └── run                         # Trigger a task run
-│       --definition <name|uuid>    # Definition name or UUID (required)
-│       --prompt <text>             # Prompt text (required)
-│       --branch <branch>           # Branch override
-│       --new-branch                # Create a new branch
-│       --no-pipeline-as-tool       # Disable pipeline-as-tool mode
+│   ├── run                         # Trigger a task run
+│   │   --definition <name|uuid>    # Definition name or UUID (required)
+│   │   --prompt <text>             # Prompt text (required)
+│   │   --branch <branch>           # Branch override
+│   │   --new-branch                # Create a new branch
+│   │   --no-pipeline-as-tool       # Disable pipeline-as-tool mode
+│   │   --json                      # Output as JSON
+│   └── config                      # Set up .chunk/run.json for this repository
+│       --force                     # Overwrite existing configuration without confirmation
 │
 ├── skill
 │   ├── install                     # Install all skills
@@ -51,10 +55,12 @@ chunk
 │   [name]                          # Optional: run a specific named command
 │   --dry-run                       # Print commands without executing
 │   --list                          # List all configured commands
+│   --json                          # Output as JSON (only applies with --list)
 │   --cmd <command>                 # Run an inline command
 │   --save                          # Save --cmd to config
 │   --remote                        # Run on the active sidecar
 │   --sidecar-id <id>               # Remote execution in specific sidecar
+│   --org-id <id>                   # Organization ID (used when creating a new sidecar)
 │   --identity-file <path>          # SSH identity file for sidecar
 │   --workdir <path>                # Working directory on sidecar
 │   --project <path>                # Override project directory
@@ -62,13 +68,17 @@ chunk
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
 │
 ├── sidecar
-│   ├── list --org-id <id>          # List sidecars
+│   ├── list                        # List sidecars
+│   │   --org-id <id>               # Organization ID
+│   │   --all                       # List all sidecars in the org (requires org admin)
+│   │   --json                      # Output as JSON
 │   ├── create                      # Create a sidecar
 │   │   --org-id <id>               # Organization ID (see Org ID resolution)
 │   │   --name <name>               # Sidecar name (auto-generated if omitted)
 │   │   --image <image>             # E2B template ID or container image
 │   ├── use <id>                    # Set the active sidecar for this project
 │   ├── current                     # Show the active sidecar
+│   │   --json                      # Output as JSON
 │   ├── forget                      # Clear the active sidecar
 │   ├── exec                        # Execute command in sidecar
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
@@ -93,15 +103,13 @@ chunk
 │   ├── build                       # Generate Dockerfile and build test image from env spec
 │   │   --dir <path>                # Directory to write Dockerfile.test and build from
 │   │   --tag <tag>                 # Image tag (e.g. myapp:latest)
-│   ├── setup                       # Detect env, sync files, run install steps, snapshot
+│   ├── setup                       # Detect env, sync files, and run install steps
 │   │   --dir <path>                # Directory to detect environment in (default: .)
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --org-id <id>               # Organization ID (used when creating a new sidecar)
 │   │   --name <name>               # Sidecar name (used when creating a new sidecar)
 │   │   --identity-file <path>      # SSH identity file
-│   │   --snapshot-name <name>      # Snapshot name (defaults to <sidecar-name>-setup)
 │   │   --skip-sync                 # Skip syncing files to the sidecar
-│   │   --skip-snapshot             # Skip creating a snapshot after install
 │   │   --force                     # Re-detect environment even if cached
 │   │   -e / --env KEY=VALUE        # Set env var in remote sidecar session (repeatable)
 │   │   --env-file <path>           # Env file to load (default: .env.local; pass a path to override)
@@ -110,7 +118,16 @@ chunk
 │       │   --sidecar-id <id>       # Sidecar ID (defaults to active sidecar)
 │       │   --name <name>           # Snapshot name (required)
 │       ├── get <snapshot-id>       # Get a snapshot by ID
-│       └── list --org-id <id>      # List snapshots
+│       │   --json                  # Output as JSON
+│       └── list                    # List snapshots
+│           --org-id <id>           # Organization ID
+│           --json                  # Output as JSON
+│
+├── hook                            # Manage chunk hook execution
+│   --project <path>                # Override project directory
+│   ├── disable                     # Disable chunk validate hooks
+│   ├── enable                      # Re-enable chunk validate hooks
+│   └── status                      # Show whether hooks are enabled or disabled
 │
 ├── completion
 │   ├── install                     # Install zsh completion
@@ -142,6 +159,7 @@ chunk
   failing with an error.
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
+- `chunk hook disable` creates a `.chunk/hooks-disabled` sentinel file; `hook enable` removes it. Hooks are also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
 
 ## Config keys
 
