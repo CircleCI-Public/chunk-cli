@@ -12,6 +12,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
@@ -118,8 +119,14 @@ func setupSSHSession(t *testing.T) (*fakes.SSHServer, string) {
 func TestOpenSSHSessionPassesEnvVars(t *testing.T) {
 	sshSrv, keyFile := setupSSHSession(t)
 
+	client, err := circleci.NewClient(circleci.Config{
+		Token:   "test-token",
+		BaseURL: os.Getenv(config.EnvCircleCIBaseURL),
+	})
+	assert.NilError(t, err)
+
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
-	execFn, _, err := openSSHSession(context.Background(), "sidecar-123", keyFile, "", envVars, discardStreams())
+	execFn, _, err := openSSHSession(context.Background(), client, "sidecar-123", keyFile, "", envVars, false)
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")

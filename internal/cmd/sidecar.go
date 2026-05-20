@@ -125,7 +125,7 @@ func newSidecarListCmd() *cobra.Command {
 		Short: "List sidecars",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -185,7 +185,7 @@ func newSidecarCreateCmd() *cobra.Command {
 		Long:  "Create a sidecar.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -237,7 +237,7 @@ func newSidecarExecCmd() *cobra.Command {
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
 			}
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -281,7 +281,7 @@ func newSidecarAddSSHKeyCmd() *cobra.Command {
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
 			}
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -337,7 +337,7 @@ func newSidecarSSHCmd() *cobra.Command {
 				return err
 			}
 			authSock := os.Getenv(config.EnvSSHAuthSock)
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -383,7 +383,7 @@ func newSidecarSyncCmd() *cobra.Command {
 				return err
 			}
 			authSock := os.Getenv(config.EnvSSHAuthSock)
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -664,7 +664,7 @@ snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
 			}
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -706,7 +706,7 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -758,7 +758,7 @@ Example:
 			status := newStatusFunc(streams)
 			authSock := os.Getenv("SSH_AUTH_SOCK")
 
-			client, err := ensureCircleCIClient(cmd.Context(), streams, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, streams, tui.PromptHidden)
 			if err != nil {
 				return err
 			}

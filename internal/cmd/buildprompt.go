@@ -73,12 +73,12 @@ func newBuildPromptCmd() *cobra.Command {
 				}
 			}
 
-			ghClient, err := ensureGitHubClient(cmd.Context(), streams, tui.PromptHidden)
+			ghClient, err := ensureGitHubClient(cmd.Context(), cmd, streams, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
 
-			anthropicClient, err := ensureAnthropicClient(cmd.Context(), streams, tui.PromptHidden)
+			anthropicClient, err := ensureAnthropicClient(cmd.Context(), cmd, streams, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
