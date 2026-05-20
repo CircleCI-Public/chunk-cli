@@ -49,6 +49,6 @@ Read these when working in the relevant area:
 - **Task** (go-task) is at `/usr/local/bin/task`. All build/test/lint/fmt commands use `task` — see "Common Commands" above.
 - **uv** is at `$HOME/.local/bin/uv`. It's only needed for the `task lint` pylint step (the `harness/` Python sub-project).
 - Go tool dependencies (`gotestsum`, `golangci-lint`, `gosimports`) are declared in `go.mod` under `tool (...)` and invoked via `go tool <name>` — no separate install needed.
-- `chunk validate` requires a `.chunk/config.json` with commands configured; it will hang in a bare repo without one. Use `task test` and `task lint` directly for CI-style checks.
+- `chunk validate` hangs in non-TTY shells (like Cloud Agent) because `detectHook` reads JSON from stdin when it's not a terminal. Always redirect stdin: `./dist/chunk validate < /dev/null`. Alternatively, use `task test` and `task lint` directly.
 - The `build-prompt` and `sidecar` commands require `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, and/or `CIRCLECI_TOKEN` env vars. Tests that need these keys skip gracefully when missing.
 - Acceptance tests that clone external repos are gated by `CHUNK_ENV_BUILDER_ACCEPTANCE=1`.
