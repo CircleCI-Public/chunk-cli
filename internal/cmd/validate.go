@@ -242,16 +242,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	freshlyCreated := false
-	if opts.remote {
-		// --remote: force all commands to sidecar, creating one if needed.
-		freshlyCreated, err = resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, streams)
-		if err != nil {
-			return err
-		}
-		statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", opts.sidecarID))
-	} else if cfg.HasRemoteCommands() {
-		freshlyCreated = resolveSidecar(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, hook, streams)
+	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, hook, statusFn, workDir, streams)
+	if err != nil {
+		return err
 	}
 
 	// Only load env vars and resolve secrets when a sidecar is actually
@@ -261,6 +254,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if opts.sidecarID != "" {
 		envVars, err = resolveEnvVars(ctx, workDir, opts.envFile, opts.envVarsFlag)
 		if err != nil {
+			return err
+		}
+		if err := syncToSidecar(ctx, circleCIClient, opts.sidecarID, opts.identityFile, opts.workdir, statusFn); err != nil {
 			return err
 		}
 	}
@@ -381,6 +377,40 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 
 	// Run all
 	return mapValidateError(validate.RunAll(ctx, workDir, cfg, statusFn, streams))
+}
+
+// setupRemote resolves (or creates) the sidecar ID based on the validate flags
+// and config, then returns whether a new sidecar was provisioned.
+func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, hook *hookContext, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
+	if opts.remote || cfg.HasRemoteCommands() {
+		if opts.remote {
+			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, streams)
+			if err != nil {
+				return false, err
+			}
+			statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", opts.sidecarID))
+			return created, nil
+		}
+		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, hook, streams), nil
+	}
+	return false, nil
+}
+
+func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc) error {
+	authSock := os.Getenv(config.EnvSSHAuthSock)
+	err := sidecar.Sync(ctx, client, sidecarID, identityFile, authSock, workdir, statusFn)
+	if err == nil {
+		return nil
+	}
+	var baseErr *sidecar.RemoteBaseError
+	if errors.As(err, &baseErr) {
+		return &userError{
+			msg:        "Could not sync to sidecar: your current branch has not been pushed.",
+			suggestion: "Push your branch and try again.",
+			err:        err,
+		}
+	}
+	return &userError{msg: "Could not sync to sidecar.", err: err}
 }
 
 // openSSHSession establishes an SSH session to the sidecar and returns an
