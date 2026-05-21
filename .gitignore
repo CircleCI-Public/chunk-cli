@@ -24,6 +24,7 @@ dist/
 harness/logs/
 
 # Execution plans (working documents)
+plans/
 execplans/
 PLANS.md
 
