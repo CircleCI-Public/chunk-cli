@@ -39,6 +39,8 @@ func CurrentBranch(root string) string {
 	return b
 }
 
+const defaultSidecarFile = "sidecar.json"
+
 // sidecarFileName returns the name of the sidecar state file.
 //   - Both empty → "sidecar.json" (legacy fallback)
 //   - Session only → "sidecar.<sessionID>.json" (unchanged behaviour)
@@ -46,7 +48,7 @@ func CurrentBranch(root string) string {
 //     8 hex chars of sha256(sessionID + ":" + branch), encoding the branch uniquely.
 func sidecarFileName(sessionID, branch string) string {
 	if sessionID == "" {
-		return "sidecar.json"
+		return defaultSidecarFile
 	}
 	if branch == "" {
 		return "sidecar." + sessionID + ".json"
