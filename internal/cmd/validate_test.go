@@ -119,10 +119,10 @@ func TestOpenSSHSessionPassesEnvVars(t *testing.T) {
 	sshSrv, keyFile := setupSSHSession(t)
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
-	execFn, _, err := openSSHSession(context.Background(), "sidecar-123", keyFile, "", envVars, discardStreams())
+	remoteExec, err := openSSHSession(context.Background(), "sidecar-123", keyFile, "", envVars, discardStreams())
 	assert.NilError(t, err)
 
-	_, _, _, err = execFn(context.Background(), "echo hello")
+	_, _, _, err = remoteExec.ExecFn()(context.Background(), "echo hello")
 	assert.NilError(t, err)
 
 	got := sshSrv.EnvVars()

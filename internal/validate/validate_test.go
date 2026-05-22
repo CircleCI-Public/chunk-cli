@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -19,31 +18,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
-
-func TestShellEscape(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"plain path", "/workspace/src", "'/workspace/src'"},
-		{"single quote", "it's", "'it'\\''s'"},
-		{"multiple single quotes", "a'b'c", "'a'\\''b'\\''c'"},
-		{"dollar sign", "$HOME", "'$HOME'"},
-		{"newline", "foo\nbar", "'foo\nbar'"},
-		{"backtick", "`cmd`", "'`cmd`'"},
-		{"backslash", `foo\bar`, `'foo\bar'`},
-		{"spaces", "hello world", "'hello world'"},
-		{"empty string", "", "''"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shellEscape(tt.input)
-			assert.Equal(t, got, tt.want)
-		})
-	}
-}
 
 func writeConfig(t *testing.T, dir string, commands []config.Command) string {
 	t.Helper()
@@ -60,12 +34,6 @@ func writeConfig(t *testing.T, dir string, commands []config.Command) string {
 func newStreams() (iostream.Streams, *bytes.Buffer, *bytes.Buffer) {
 	var out, errBuf bytes.Buffer
 	return iostream.Streams{Out: &out, Err: &errBuf}, &out, &errBuf
-}
-
-func testStatus(buf *bytes.Buffer) iostream.StatusFunc {
-	return func(_ iostream.Level, msg string) {
-		fmt.Fprintln(buf, msg)
-	}
 }
 
 // --- LoadProjectConfig tests ---
@@ -135,96 +103,6 @@ func TestFindCommand(t *testing.T) {
 	assert.Assert(t, cfg.FindCommand("nonexistent") == nil)
 }
 
-// --- RunDryRun tests ---
-
-func TestRunDryRun(t *testing.T) {
-	t.Run("prints commands", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "install", Run: "npm install"},
-			{Name: "test", Run: "npm test"},
-		}}
-		var out bytes.Buffer
-
-		assert.NilError(t, RunDryRun(cfg, "", testStatus(&out)))
-
-		assert.Assert(t, strings.Contains(out.String(), "install: npm install"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(out.String(), "test: npm test"), "got: %s", out.String())
-	})
-
-	t.Run("no commands", func(t *testing.T) {
-		cfg := &config.ProjectConfig{}
-		var out bytes.Buffer
-
-		err := RunDryRun(cfg, "", testStatus(&out))
-		assert.ErrorContains(t, err, "no validate commands")
-	})
-}
-
-// --- RunAll tests ---
-
-func TestRunAll(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "install", Run: "echo installed"},
-			{Name: "test", Run: "echo tested"},
-		}}
-		streams, out, _ := newStreams()
-		var statusBuf bytes.Buffer
-
-		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
-		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "Running install"), "got: %s", statusBuf.String())
-	})
-
-	t.Run("no commands", func(t *testing.T) {
-		cfg := &config.ProjectConfig{}
-		streams, _, _ := newStreams()
-		var statusBuf bytes.Buffer
-
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
-		assert.ErrorContains(t, err, "no validate commands")
-	})
-
-	t.Run("command failure", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "false"},
-		}}
-		streams, _, _ := newStreams()
-		var statusBuf bytes.Buffer
-
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
-		assert.ErrorContains(t, err, "test command failed")
-	})
-
-	t.Run("skips remaining after failure", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "install", Run: "false"},
-			{Name: "test", Run: "echo should-not-run"},
-			{Name: "lint", Run: "echo should-not-run-either"},
-		}}
-		streams, out, _ := newStreams()
-		var statusBuf bytes.Buffer
-
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
-		assert.Assert(t, err != nil, "expected error")
-		assert.Assert(t, !strings.Contains(out.String(), "should-not-run"), "skipped command should not produce output, got: %s", out.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "test: skipped"), "got: %s", statusBuf.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "lint: skipped"), "got: %s", statusBuf.String())
-	})
-
-	t.Run("single command success", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "echo ok"},
-		}}
-		streams, out, _ := newStreams()
-		var statusBuf bytes.Buffer
-
-		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
-		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
-	})
-}
-
 // --- Config with FileExt / Timeout tests ---
 
 func TestCommandFileExtRoundTrip(t *testing.T) {
@@ -265,107 +143,9 @@ func TestCommandFileExtOmitted(t *testing.T) {
 	assert.Assert(t, !strings.Contains(string(data), "timeout"), "expected timeout to be omitted, got: %s", data)
 }
 
-// --- RunRemote tests ---
+// --- RemoteExecutor integration with real SSH server ---
 
-func TestRunRemote(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		var execCount int
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			execCount++
-			return "remote output\n", "", 0, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "install", Run: "echo install"},
-			{Name: "test", Run: "echo test"},
-		}}
-		streams, out, _ := newStreams()
-
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", func(iostream.Level, string) {}, streams))
-		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
-		assert.Equal(t, execCount, 2)
-	})
-
-	t.Run("non-zero exit code", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 1, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "failing"},
-		}}
-		streams, _, _ := newStreams()
-
-		err := RunRemote(context.Background(), execFn, cfg, "", "/workspace", func(iostream.Level, string) {}, streams)
-		assert.ErrorContains(t, err, "remote test failed")
-	})
-
-	t.Run("empty stdout not written", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 0, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "silent"},
-		}}
-		streams, out, _ := newStreams()
-
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", func(iostream.Level, string) {}, streams))
-		assert.Equal(t, out.Len(), 0)
-	})
-
-	t.Run("named runs only matching command", func(t *testing.T) {
-		var capturedScripts []string
-		execFn := func(_ context.Context, script string) (string, string, int, error) {
-			capturedScripts = append(capturedScripts, script)
-			return "", "", 0, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "install", Run: "echo install"},
-			{Name: "test", Run: "echo test"},
-		}}
-		streams, _, _ := newStreams()
-
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "test", "/workspace", func(iostream.Level, string) {}, streams))
-		assert.Equal(t, len(capturedScripts), 1)
-		assert.Assert(t, strings.Contains(capturedScripts[0], "echo test"), "got: %s", capturedScripts[0])
-	})
-
-	t.Run("named returns error for unknown command", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 0, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "echo test"},
-		}}
-		streams, _, _ := newStreams()
-
-		err := RunRemote(context.Background(), execFn, cfg, "lint", "/workspace", func(iostream.Level, string) {}, streams)
-		assert.ErrorContains(t, err, `"lint" not configured`)
-	})
-
-	t.Run("script uses dest directory", func(t *testing.T) {
-		var capturedScript string
-		execFn := func(_ context.Context, script string) (string, string, int, error) {
-			capturedScript = script
-			return "", "", 0, nil
-		}
-
-		cfg := &config.ProjectConfig{Commands: []config.Command{
-			{Name: "test", Run: "go test ./..."},
-		}}
-		streams, _, _ := newStreams()
-
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/custom/path", func(iostream.Level, string) {}, streams))
-		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/custom/path' &&"), "got: %s", capturedScript)
-	})
-}
-
-// TestRunRemoteSSH tests RunRemote end-to-end with a real fake SSH server,
-// verifying the exec callback correctly passes stdout/stderr/exitCode through.
-func TestRunRemoteSSH(t *testing.T) {
+func TestRemoteExecutor_SSHIntegration(t *testing.T) {
 	newCCIClient := func(t *testing.T, serverURL string) *circleci.Client {
 		t.Helper()
 		client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: serverURL})
@@ -403,8 +183,11 @@ func TestRunRemoteSSH(t *testing.T) {
 			{Name: "test", Run: "echo hello"},
 		}}
 		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", func(iostream.Level, string) {}, streams))
+		exec := NewRemoteExecutor(execCallback(t, session), "/workspace/repo", streams)
+		runner := NewRunner(cfg, exec, testStatus(&statusBuf), streams)
+		assert.NilError(t, runner.RunAll(context.Background()))
 		assert.Assert(t, strings.Contains(out.String(), "hello from remote"), "got: %s", out.String())
 		assert.Equal(t, len(sshSrv.Commands()), 1)
 	})
@@ -428,8 +211,11 @@ func TestRunRemoteSSH(t *testing.T) {
 			{Name: "test", Run: "false"},
 		}}
 		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		err = RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", func(iostream.Level, string) {}, streams)
+		exec := NewRemoteExecutor(execCallback(t, session), "/workspace/repo", streams)
+		runner := NewRunner(cfg, exec, testStatus(&statusBuf), streams)
+		err = runner.RunAll(context.Background())
 		assert.ErrorContains(t, err, "remote test failed")
 	})
 
@@ -453,45 +239,12 @@ func TestRunRemoteSSH(t *testing.T) {
 			{Name: "test", Run: "npm test"},
 		}}
 		streams, _, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		err = RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", func(iostream.Level, string) {}, streams)
+		exec := NewRemoteExecutor(execCallback(t, session), "/workspace/repo", streams)
+		runner := NewRunner(cfg, exec, testStatus(&statusBuf), streams)
+		err = runner.RunAll(context.Background())
 		assert.ErrorContains(t, err, "remote install failed")
 		assert.Equal(t, len(sshSrv.Commands()), 1)
-	})
-}
-
-func TestRunRemoteInline(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		var capturedScript string
-		execFn := func(_ context.Context, script string) (string, string, int, error) {
-			capturedScript = script
-			return "inline output\n", "", 0, nil
-		}
-		streams, out, _ := newStreams()
-
-		assert.NilError(t, RunRemoteInline(context.Background(), execFn, "custom", "echo hello", "/workspace/repo", func(iostream.Level, string) {}, streams))
-		assert.Assert(t, strings.Contains(out.String(), "inline output"), "got: %s", out.String())
-		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/workspace/repo' &&"), "got: %s", capturedScript)
-	})
-
-	t.Run("non-zero exit code", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 1, nil
-		}
-		streams, _, _ := newStreams()
-
-		err := RunRemoteInline(context.Background(), execFn, "custom", "false", "/workspace", func(iostream.Level, string) {}, streams)
-		assert.ErrorContains(t, err, "remote custom failed")
-	})
-
-	t.Run("exec error", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 0, fmt.Errorf("connection lost")
-		}
-		streams, _, _ := newStreams()
-
-		err := RunRemoteInline(context.Background(), execFn, "custom", "echo hi", "/workspace", func(iostream.Level, string) {}, streams)
-		assert.ErrorContains(t, err, "remote custom")
-		assert.ErrorContains(t, err, "connection lost")
 	})
 }
