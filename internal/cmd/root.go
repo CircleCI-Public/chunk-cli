@@ -147,6 +147,7 @@ func recordTelemetry(cmd *cobra.Command, t tracker) {
 			"command": cmd.CommandPath(),
 			"flags":   strings.Join(flags, ","),
 			"success": runErr == nil,
+			"action":  "invoked",
 		})
 
 		done := make(chan struct{})
@@ -170,14 +171,6 @@ func recordTelemetryForSubcommands(cmd *cobra.Command, t tracker) {
 	}
 }
 
-// disableTelemetry marks cmd so that recordTelemetry skips it.
-func disableTelemetry(cmd *cobra.Command) {
-	if cmd.Annotations == nil {
-		cmd.Annotations = map[string]string{}
-	}
-	cmd.Annotations["telemetry"] = "disabled"
-}
-
 // newTelemetryClient determines the appropriate mode and constructs the client.
 func newTelemetryClient(ctx context.Context, version string, noTelemetryFlag bool) (*telemetry.Client, error) {
 	mode := telemetry.ModeSend
@@ -193,6 +186,11 @@ func newTelemetryClient(ctx context.Context, version string, noTelemetryFlag boo
 		mode = telemetry.ModeNOOP
 	}
 
+	env, err := config.LoadEnv(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	instanceID := cfg.InstanceID
 	freshID := instanceID == ""
 	if freshID {
@@ -205,10 +203,11 @@ func newTelemetryClient(ctx context.Context, version string, noTelemetryFlag boo
 		Mode:     mode,
 		WriteKey: writeKey,
 		User: telemetry.User{
-			InstanceID: instanceID,
-			OS:         runtime.GOOS,
-			Arch:       runtime.GOARCH,
-			Version:    version,
+			InstanceID:     instanceID,
+			OrganizationID: env.CircleCIOrgID,
+			OS:             runtime.GOOS,
+			Arch:           runtime.GOARCH,
+			Version:        version,
 		},
 	})
 	if err != nil {

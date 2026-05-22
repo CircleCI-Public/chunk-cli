@@ -67,7 +67,11 @@ func TestClient_Track(t *testing.T) {
 	assert.Assert(t, trackMsg != nil, "expected a track message")
 	assert.Equal(t, trackMsg.Event, "build-prompt")
 	assert.Equal(t, trackMsg.AnonymousID, instanceID)
-	assert.Check(t, cmp.DeepEqual(trackMsg.Properties, map[string]any{"success": true}))
+	assert.Check(t, cmp.DeepEqual(trackMsg.Properties, map[string]any{
+		"success":   true,
+		"sender":    "chunk-cli",
+		"team_name": "factory",
+	}))
 }
 
 func TestClient_ModeNOOP(t *testing.T) {

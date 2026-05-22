@@ -40,10 +40,11 @@ type Config struct {
 
 type User struct {
 	// InstanceID is a stable identifier for this device. A random UUID is generated if empty.
-	InstanceID string
-	OS         string
-	Arch       string
-	Version    string
+	InstanceID     string
+	OrganizationID string
+	OS             string
+	Arch           string
+	Version        string
 }
 
 func (u User) toContext() *analytics.Context {
@@ -114,6 +115,11 @@ func (c *Client) Close() error {
 // Track sends an analytics event.
 func (c *Client) Track(eventName string, props map[string]any) error {
 	extras := analytics.NewProperties()
+	extras.Set("sender", "chunk-cli")
+	extras.Set("team_name", "factory")
+	if c.user.OrganizationID != "" {
+		extras.Set("organization_id", c.user.OrganizationID)
+	}
 	for key, val := range props {
 		extras.Set(key, val)
 	}
