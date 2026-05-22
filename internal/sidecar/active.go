@@ -1,11 +1,16 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -18,14 +23,43 @@ type ActiveSidecar struct {
 	Workspace string `json:"workspace,omitempty"`
 }
 
-// sidecarFileName returns the name of the sidecar state file. When sessionID
-// is non-empty the file is keyed to that session so concurrent Claude sessions
-// in the same repo each maintain their own active sidecar.
-func sidecarFileName(sessionID string) string {
-	if sessionID != "" {
+// CurrentBranch returns the current git branch for the repo rooted at root.
+// Returns "" on any error (no git, detached HEAD, etc.).
+func CurrentBranch(root string) string {
+	var out bytes.Buffer
+	cmd := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	b := strings.TrimSpace(out.String())
+	if b == "HEAD" {
+		return "" // detached HEAD
+	}
+	return b
+}
+
+// sidecarFileName returns the name of the sidecar state file.
+//   - Both empty → "sidecar.json" (legacy fallback)
+//   - Session only → "sidecar.<sessionID>.json" (unchanged behaviour)
+//   - Both present → "sidecar.<sessionID>-<hash8>.json" where hash8 is the first
+//     8 hex chars of sha256(sessionID + ":" + branch), encoding the branch uniquely.
+func sidecarFileName(sessionID, branch string) string {
+	if sessionID == "" {
+		return "sidecar.json"
+	}
+	if branch == "" {
 		return "sidecar." + sessionID + ".json"
 	}
-	return "sidecar.json"
+	sum := sha256.Sum256([]byte(sessionID + ":" + branch))
+	hash8 := fmt.Sprintf("%x", sum[:4])
+	return "sidecar." + sessionID + "-" + hash8 + ".json"
+}
+
+// StateFileName returns the sidecar state file name for the given session ID
+// and git branch. Exposed so acceptance tests can construct expected paths.
+func StateFileName(sessionID, branch string) string {
+	return sidecarFileName(sessionID, branch)
 }
 
 // StateDir returns the XDG_DATA_HOME directory for the current project.
@@ -49,7 +83,9 @@ func LoadActive(ctx context.Context) (*ActiveSidecar, error) {
 
 // LoadActiveFrom reads the active sidecar from dir.
 func LoadActiveFrom(ctx context.Context, dir string) (*ActiveSidecar, error) {
-	path, err := findSidecarFile(dir, session.IDFromCtx(ctx))
+	root, _ := projectRoot()
+	branch := CurrentBranch(root)
+	path, err := findSidecarFile(dir, session.IDFromCtx(ctx), branch)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +121,9 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, sidecarFileName(session.IDFromCtx(ctx))), data, 0o644)
+	root, _ := projectRoot()
+	branch := CurrentBranch(root)
+	return os.WriteFile(filepath.Join(dir, sidecarFileName(session.IDFromCtx(ctx), branch)), data, 0o644)
 }
 
 // saveDir returns the XDG_DATA_HOME directory for the current project.
@@ -135,7 +173,9 @@ func ClearActive(ctx context.Context) error {
 
 // ClearActiveFrom removes the active sidecar state file in dir.
 func ClearActiveFrom(ctx context.Context, dir string) error {
-	path, err := findSidecarFile(dir, session.IDFromCtx(ctx))
+	root, _ := projectRoot()
+	branch := CurrentBranch(root)
+	path, err := findSidecarFile(dir, session.IDFromCtx(ctx), branch)
 	if err != nil {
 		return err
 	}
@@ -146,8 +186,8 @@ func ClearActiveFrom(ctx context.Context, dir string) error {
 }
 
 // findSidecarFile returns the sidecar state file path in dir, or "" if it doesn't exist.
-func findSidecarFile(dir, sessionID string) (string, error) {
-	return statOrEmpty(filepath.Join(dir, sidecarFileName(sessionID)))
+func findSidecarFile(dir, sessionID, branch string) (string, error) {
+	return statOrEmpty(filepath.Join(dir, sidecarFileName(sessionID, branch)))
 }
 
 // statOrEmpty returns path if it exists, "" if it does not, or an error for other failures.
