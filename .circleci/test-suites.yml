@@ -1,6 +1,6 @@
 ---
 name: ci tests
 discover: go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./...
-run: go tool gotestsum --junitfile="<< outputs.junit >>" -- -race -coverprofile=coverage.out << test.atoms >>
+run: go tool gotestsum --junitfile="<< outputs.junit >>" -- -race << test.atoms >>
 outputs:
   junit: test-reports/tests.xml

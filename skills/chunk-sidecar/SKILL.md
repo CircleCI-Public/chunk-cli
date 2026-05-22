@@ -1,7 +1,7 @@
 ---
 name: chunk-sidecar
 description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", "scaffold test-suites.yml", "set up smarter testing", or "write .circleci/test-suites.yml", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, customizing the sidecar image via `chunk sidecar`, and scaffolding `.circleci/test-suites.yml` for CircleCI Smarter Testing.
-version: 1.3.0
+version: 1.4.0
 allowed-tools:
   - Bash(chunk --version)
   - Bash(chunk auth status)
@@ -20,9 +20,11 @@ allowed-tools:
 
 Run the user's build, test, and validate commands on a remote `chunk` sidecar instead of locally. The 90% job is the **sync → validate** loop. This skill also covers one-time setup (create, snapshot, environment customization).
 
-Sidecars are ephemeral Linux environments provisioned via CircleCI. They isolate work, avoid local port conflicts, and can be reset to known-good snapshots. Your local tree is mirrored to `/workspace/<repo>` on the sidecar each time you sync.
+Sidecars are ephemeral Linux environments provisioned via CircleCI. They isolate work, avoid local port conflicts, and can be reset to known-good snapshots. Your local tree is mirrored to `~/workspace/<repo>` on the sidecar each time you sync — the absolute path depends on the SSH user's home (e.g. `/home/circleci/workspace/<repo>` on `cimg/*` images, `/home/user/workspace/<repo>` on the default Ubuntu template). To see the resolved workspace, run `chunk sidecar current --json` and read the `workspace` field.
 
-The `circleci` CLI and the `circleci-testsuite` Smarter Testing plugin are pre-installed on every template sidecar, so commands like `circleci config validate`, `circleci config process`, and `circleci-testsuite` run without any setup step. `CIRCLE_TOKEN` is forwarded over SSH automatically, so authenticated calls also work out of the box.
+`CIRCLE_TOKEN` is forwarded over SSH automatically, so authenticated CircleCI API calls work out of the box once a token is configured locally.
+
+The bare default sidecar image does **not** include the `circleci` CLI or the `circleci-testsuite` Smarter Testing plugin. If your validate commands need either, install them during one-time setup (Step 3) and snapshot the result so future sidecars boot with them ready. A snapshot built from a `cimg/*` base does not include `circleci-testsuite` either.
 
 ## Step 1: Prerequisites
 
@@ -81,7 +83,7 @@ For each round of edits:
 When validate returns non-zero:
 
 - Parse stderr — `chunk validate` prints per-command headers and propagates the first non-zero exit.
-- Map error paths back to local files: the sidecar mirrors your tree at `/workspace/<repo>` (or the workspace configured in `.chunk/sidecar.json`).
+- Map error paths back to local files: the sidecar mirrors your tree at `~/workspace/<repo>` (or the workspace configured in `.chunk/sidecar.json`). Run `chunk sidecar current --json` to see the resolved absolute path.
 - Fix locally, then repeat Step 4. Do **not** edit files over SSH — changes will be overwritten on the next sync.
 - If the error looks environmental (missing binary, wrong language version, unreachable service), go to Troubleshooting.
 
@@ -135,13 +137,16 @@ An atom is the smallest independent unit the runner accepts. Match the runner's 
 - `discover` must be deterministic and exit non-zero on error — the platform calls it once per pipeline.
 - `run` must accept any subset of `discover`'s output, including a single atom and the full set. Verify locally with a hand-picked subset before committing.
 - `outputs.junit` must be a junit XML file the runner actually writes. The platform reads it to report pass/fail and timing.
-- `.circleci/test-suites.yml` is referenced from `.circleci/config.yml` via the Smarter Testing orb. After writing the suite, confirm the orb usage references the suite `name` you chose.
+- `.circleci/test-suites.yml` is referenced from `.circleci/config.yml` via the `circleci-testsuite` plugin invoked directly in a test job (not via the Smarter Testing orb). After writing the suite, confirm the `circleci-testsuite exec --suite <name>` call uses the suite `name` you chose.
 
 ### After writing
 
-1. Run `discover` locally — confirm it prints one atom per line on stdout and exits zero.
-2. Run `run` locally with `<< test.atoms >>` substituted by one or two atoms — confirm a junit XML file appears at the `outputs.junit` path.
-3. Read `.circleci/config.yml` and verify the Smarter Testing orb references the suite name.
+Validate on the sidecar — the `circleci-testsuite` plugin and `circleci` CLI are pre-installed there, matching the CI environment.
+
+1. `chunk sidecar sync` — push the new file to the active sidecar.
+2. `chunk validate --remote --cmd "<discover-command>"` — confirm it prints one atom per line and exits zero.
+3. `chunk validate --remote --cmd "<run-command with one or two atoms>"` — confirm a junit XML file appears at the `outputs.junit` path.
+4. `chunk validate --remote --cmd "circleci config validate"` — confirm `.circleci/config.yml` parses and the `circleci-testsuite exec --suite <name>` call uses the suite `name` you chose.
 
 ## Parallel sessions
 

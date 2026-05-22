@@ -447,7 +447,7 @@ func newSidecarSyncCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (auto-detected as /workspace/<repo> when omitted)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (auto-detected as ~/workspace/<repo> when omitted)")
 
 	return cmd
 }

@@ -31,6 +31,8 @@ chunk
 │   --skip-hooks                    # Skip hook file generation
 │   --skip-validate                 # Skip validate command detection
 │   --skip-completions               # Skip shell completion installation
+│   --skip-test-suites              # Skip .circleci/test-suites.yml scaffolding (default: true; pass =false to generate)
+│   --skip-skills                   # Skip agent skill installation
 │   --project-dir <path>            # Project directory (defaults to cwd)
 │
 ├── task
