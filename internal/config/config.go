@@ -105,6 +105,9 @@ type UserConfig struct {
 	CircleCIToken   string `json:"circleCIToken,omitempty"`
 	GitHubToken     string `json:"gitHubToken,omitempty"`
 	Model           string `json:"model,omitempty"`
+	// InstanceID is a stable UUID generated on first run and used as the
+	// telemetry device identifier.
+	InstanceID string `json:"instanceID,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into

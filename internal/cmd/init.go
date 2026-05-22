@@ -263,7 +263,7 @@ func newInitCmd() *cobra.Command {
 
 Detects VCS org/repo from git remote, detects test commands, and generates
 hook config files.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: trackRunE("init", func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 			ctx := cmd.Context()
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
@@ -385,7 +385,7 @@ hook config files.`,
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
 			return nil
-		},
+		}),
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing config")

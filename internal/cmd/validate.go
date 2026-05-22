@@ -102,9 +102,9 @@ func newValidateCmd() *cobra.Command {
 		Short:        "Run validation commands",
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: trackRunE("validate", func(cmd *cobra.Command, args []string) error {
 			return runValidateCmdE(cmd, args, &opts)
-		},
+		}),
 	}
 
 	cmd.Flags().BoolVar(&opts.remote, "remote", false, "Run on active sidecar, or create one if none is set")

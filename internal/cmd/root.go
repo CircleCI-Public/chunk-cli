@@ -1,8 +1,30 @@
 package cmd
 
 import (
+	"context"
+	"runtime"
+
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 )
+
+// writeKey is the Segment write key injected at build time via -ldflags.
+// Empty by default; telemetry is silently disabled when unset.
+var writeKey string
+
+type telemetryKey struct{}
+
+func withTelemetryClient(ctx context.Context, c *telemetry.Client) context.Context {
+	return context.WithValue(ctx, telemetryKey{}, c)
+}
+
+func telemetryClientFromContext(ctx context.Context) *telemetry.Client {
+	c, _ := ctx.Value(telemetryKey{}).(*telemetry.Client)
+	return c
+}
 
 func NewRootCmd(version string) *cobra.Command {
 	cobra.EnableTraverseRunHooks = true
@@ -14,6 +36,17 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
+			tc, err := newTelemetryClient(version)
+			if err == nil {
+				_ = tc.Identify()
+				cmd.SetContext(withTelemetryClient(cmd.Context(), tc))
+			}
+			return nil
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
+			if tc := telemetryClientFromContext(cmd.Context()); tc != nil {
+				_ = tc.Close()
+			}
 			return nil
 		},
 	}
@@ -64,4 +97,41 @@ Configuration:
 	_ = rootCmd.PersistentFlags().MarkHidden("insecure-storage")
 
 	return rootCmd
+}
+
+// newTelemetryClient loads or generates a stable instance ID, then constructs
+// the Segment-backed client. Returns nil (not an error) when telemetry is disabled.
+func newTelemetryClient(version string) (*telemetry.Client, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+
+	instanceID, parseErr := uuid.Parse(cfg.InstanceID)
+	if parseErr != nil {
+		instanceID = uuid.New()
+		cfg.InstanceID = instanceID.String()
+		_ = config.Save(cfg) // best-effort; failures are non-fatal
+	}
+
+	return telemetry.New(telemetry.Config{
+		WriteKey: writeKey,
+		User: telemetry.User{
+			InstanceID: instanceID,
+			OS:         runtime.GOOS,
+			Version:    version,
+		},
+	})
+}
+
+// trackRunE wraps a cobra RunE to emit a "command" telemetry event on completion.
+func trackRunE(name string, fn func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		err := fn(cmd, args)
+		_ = telemetryClientFromContext(cmd.Context()).Track("command", map[string]any{
+			"command": name,
+			"success": err == nil,
+		})
+		return err
+	}
 }

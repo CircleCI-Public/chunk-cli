@@ -10,7 +10,10 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/dustinkirkland/golang-petname v0.0.0-20260215035315-f0c533e9ce9b
 	github.com/gin-gonic/gin v1.12.0
+	github.com/google/go-cmp v0.7.0
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
+	github.com/segmentio/analytics-go/v3 v3.3.0
 	github.com/sethvargo/go-envconfig v1.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
@@ -59,6 +62,7 @@ require (
 	github.com/bitfield/gotestdox v0.2.2 // indirect
 	github.com/bkielbasa/cyclop v1.2.3 // indirect
 	github.com/blizzy78/varnamelen v0.8.0 // indirect
+	github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869 // indirect
 	github.com/bombsimon/wsl/v4 v4.7.0 // indirect
 	github.com/bombsimon/wsl/v5 v5.8.0 // indirect
 	github.com/breml/bidichk v0.3.3 // indirect
@@ -131,7 +135,6 @@ require (
 	github.com/golangci/rowserrcheck v0.0.0-20260419091836-c5f79b8a11ba // indirect
 	github.com/golangci/swaggoswag v0.0.0-20250504205917-77f2aca3143e // indirect
 	github.com/golangci/unconvert v0.0.0-20250410112200-a129a6e6413e // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/gordonklaus/ineffassign v0.2.0 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
@@ -213,6 +216,7 @@ require (
 	github.com/sashamelentyev/interfacebloat v1.1.0 // indirect
 	github.com/sashamelentyev/usestdlibvars v1.29.0 // indirect
 	github.com/securego/gosec/v2 v2.26.1 // indirect
+	github.com/segmentio/backo-go v1.0.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/sivchari/containedctx v1.0.3 // indirect
 	github.com/sonatard/noctx v0.5.1 // indirect

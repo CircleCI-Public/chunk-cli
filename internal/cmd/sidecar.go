@@ -203,7 +203,7 @@ func newSidecarCreateCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a sidecar",
 		Long:  "Create a sidecar.",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: trackRunE("sidecar create", func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -240,7 +240,7 @@ func newSidecarCreateCmd() *cobra.Command {
 				io.ErrPrintf("Set %s as active sidecar\n", sb.ID)
 			}
 			return nil
-		},
+		}),
 	}
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
@@ -361,7 +361,7 @@ func newSidecarSSHCmd() *cobra.Command {
 		Use:   "ssh [flags] [-- command...]",
 		Short: "SSH into a sidecar",
 		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: trackRunE("sidecar ssh", func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
@@ -392,7 +392,7 @@ func newSidecarSSHCmd() *cobra.Command {
 				return err
 			}
 			return nil
-		},
+		}),
 	}
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
@@ -409,7 +409,7 @@ func newSidecarSyncCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Sync files to a sidecar",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: trackRunE("sidecar sync", func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
@@ -442,7 +442,7 @@ func newSidecarSyncCmd() *cobra.Command {
 				}
 			}
 			return nil
-		},
+		}),
 	}
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")

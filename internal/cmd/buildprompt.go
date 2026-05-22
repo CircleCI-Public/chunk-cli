@@ -32,7 +32,7 @@ func newBuildPromptCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build-prompt",
 		Short: "Analyze GitHub PR comments and generate a review prompt for AI coding agents",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: trackRunE("build-prompt", func(cmd *cobra.Command, _ []string) error {
 			if top <= 0 {
 				return &userError{msg: "--top must be a positive integer.", errMsg: fmt.Sprintf("invalid --top value: %d", top)}
 			}
@@ -116,7 +116,7 @@ func newBuildPromptCmd() *cobra.Command {
 				return err
 			}
 			return nil
-		},
+		}),
 	}
 
 	cmd.Flags().StringVar(&org, "org", "", "GitHub organization")

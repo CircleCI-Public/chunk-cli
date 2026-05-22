@@ -39,7 +39,7 @@ func newTaskRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Trigger a task run",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: trackRunE("task run", func(cmd *cobra.Command, _ []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
 				return &userError{msg: msgCouldNotDetermineWorkDir, err: fmt.Errorf("get working directory: %w", err)}
@@ -86,7 +86,7 @@ func newTaskRunCmd() *cobra.Command {
 			io.Printf("%s %s\n", ui.Label("Run triggered:", w), ui.Green(resp.RunID))
 			io.Printf("%s %s\n", ui.Label("Pipeline:", w), resp.PipelineID)
 			return nil
-		},
+		}),
 	}
 
 	cmd.Flags().StringVar(&definition, "definition", "", "Definition name or UUID")
