@@ -81,6 +81,7 @@ Telemetry:
 
   To disable telemetry:
     Set CHUNK_NO_TELEMETRY=1 in your environment
+    Run: chunk telemetry disable
     Pass --no-telemetry to disable for a single invocation
 
 Configuration:
@@ -101,6 +102,7 @@ Configuration:
 	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
 	rootCmd.AddCommand(newCommandsCmd())
+	rootCmd.AddCommand(newTelemetryCmd())
 
 	recordTelemetryForSubcommands(rootCmd, telem)
 

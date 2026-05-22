@@ -154,6 +154,36 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment variable reference.
 
+## Telemetry
+
+chunk collects anonymous usage statistics to help improve the tool.
+
+**What we collect:**
+- Which commands and subcommands are used
+- Whether commands succeed or fail (no error messages or details)
+- chunk version, OS, and architecture
+
+**What we do NOT collect:**
+- Command arguments or flag values
+- File or directory names
+- IP addresses or hostnames
+- Any personally identifiable information
+
+**To disable telemetry:**
+
+```bash
+# Permanently via the telemetry command
+chunk telemetry disable
+
+# Environment variable (persists for the session or CI run)
+CHUNK_NO_TELEMETRY=1 chunk <command>
+
+# Per-invocation flag
+chunk --no-telemetry <command>
+```
+
+The standard `NO_ANALYTICS=1`, `DO_NOT_TRACK=1`, and `CI=true` environment variables are also respected.
+
 ## Platform Support
 
 | Platform | Status |

@@ -308,7 +308,8 @@ func MaskKey(key string) string {
 // Credentials (anthropicAPIKey, circleCIToken) are intentionally excluded —
 // users should use "auth set" which validates before storing.
 var ValidConfigKeys = map[string]bool{
-	"model": true,
+	"model":     true,
+	"telemetry": true,
 }
 
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to

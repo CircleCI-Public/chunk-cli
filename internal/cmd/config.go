@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -96,7 +97,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model\nProject keys: orgID, validation.sidecarImage",
+		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, telemetry\nProject keys: orgID, validation.sidecarImage",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -132,7 +133,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, orgID, validation.sidecarImage.",
+					detail: "Supported keys: model, telemetry, orgID, validation.sidecarImage.",
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}
@@ -142,12 +143,22 @@ func newConfigSetCmd() *cobra.Command {
 				return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 			}
 
-			if key == "model" {
+			switch key {
+			case "model":
 				cfg.Model = value
+			case "telemetry":
+				enabled, parseErr := strconv.ParseBool(value)
+				if parseErr != nil {
+					return &userError{
+						msg:    fmt.Sprintf("Invalid value for telemetry: %q. Use true or false.", value),
+						errMsg: fmt.Sprintf("invalid telemetry value %q", value),
+					}
+				}
+				cfg.NoTelemetry = !enabled
 			}
 
 			if err := config.Save(cfg); err != nil {
-				return &userError{msg: "Could not save configuration.", suggestion: configFilePermHint, err: err}
+				return &userError{msg: msgCouldNotSaveConfig, suggestion: configFilePermHint, err: err}
 			}
 
 			io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))
