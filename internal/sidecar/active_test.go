@@ -238,5 +238,5 @@ func TestResolveWorkspaceDefaultFallback(t *testing.T) {
 	setupXDGData(t)
 
 	got := ResolveWorkspace(context.Background(), "", "myrepo")
-	assert.Equal(t, got, "./workspace/myrepo")
+	assert.Equal(t, got, "/home/user/myrepo")
 }

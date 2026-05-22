@@ -14,10 +14,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-const workspaceDir = "./workspace"
+const workspaceDir = "/home/user"
 
 // ResolveWorkspace determines the workspace path. Priority:
-// 1. CLI --workdir flag  2. sidecar.json workspace  3. default ./workspace/<repo>.
+// 1. CLI --workdir flag  2. sidecar.json workspace  3. default /home/user/<repo>.
 func ResolveWorkspace(ctx context.Context, cliWorkdir, repo string) string {
 	if cliWorkdir != "" {
 		return cliWorkdir
@@ -48,7 +48,7 @@ func persistWorkspace(ctx context.Context, workspace string) error {
 // Sync synchronises local changes to a sidecar over SSH.
 // It ensures the workspace base exists, clones the repo into workdir if absent,
 // then resets to the remote base and applies a patch of local changes.
-// workdir overrides the destination path; defaults to /workspace/<repo>.
+// workdir overrides the destination path; defaults to /home/user/<repo>.
 func Sync(ctx context.Context,
 	client *circleci.Client, sidecarID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
 
