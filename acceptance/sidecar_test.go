@@ -365,7 +365,11 @@ func TestSidecarsSshSyncFlags(t *testing.T) {
 			env := testenv.NewTestEnv(t)
 			env.CircleCIURL = srv.URL
 
-			result := binary.RunCLI(t, tt.args, env, env.HomeDir)
+			// sync runs git operations (branch detection) before opening SSH, so
+			// the working directory must be a git repo.
+			workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+			result := binary.RunCLI(t, tt.args, env, workDir)
 
 			// Commands should fail at SSH key step, not at flag parsing
 			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")

@@ -60,15 +60,37 @@ func MergeBase() (string, error) {
 		}
 	}
 
-	out, err = exec.Command("git", "rev-parse", "origin/HEAD").Output()
+	out, err = exec.Command("git", "merge-base", "HEAD", "origin/HEAD").Output()
 	if err != nil {
 		return "", fmt.Errorf("resolve remote base: no upstream tracking branch or origin/HEAD found")
 	}
 	sha := strings.TrimSpace(string(out))
 	if sha == "" {
-		return "", fmt.Errorf("resolve remote base: origin/HEAD is empty")
+		return "", fmt.Errorf("resolve remote base: could not determine merge-base with origin/HEAD")
 	}
 	return sha, nil
+}
+
+// HeadRef returns the SHA of the current HEAD commit in the repo at cwd.
+func HeadRef(cwd string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve HEAD: %w", err)
+	}
+	sha := strings.TrimSpace(string(out))
+	if sha == "" {
+		return "", fmt.Errorf("resolve HEAD: empty output")
+	}
+	return sha, nil
+}
+
+// IsAncestor returns true if candidate is an ancestor of head in the repo at cwd.
+func IsAncestor(candidate, head, cwd string) bool {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", candidate, head)
+	cmd.Dir = cwd
+	return cmd.Run() == nil
 }
 
 // GeneratePatch generates a binary diff from the given base commit,
