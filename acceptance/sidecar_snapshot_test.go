@@ -30,14 +30,14 @@ func TestSidecarSnapshotCreateSendsSidecarIDInBody(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	snapReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/snapshots")
+	snapReqs := filterByMethod(reqs, "POST", "/api/v3/sidecar/snapshots")
 	assert.Equal(t, len(snapReqs), 1, "expected 1 create snapshot request")
 
 	var body map[string]interface{}
 	err := json.Unmarshal(snapReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["sidecar_id"], "sb-111")
-	assert.Equal(t, body["name"], "my-checkpoint")
+	assert.Equal(t, body["data"].(map[string]any)["references"].(map[string]any)["sidecar_instance"].(map[string]any)["id"], "sb-111")
+	assert.Equal(t, body["data"].(map[string]any)["attributes"].(map[string]any)["name"], "my-checkpoint")
 }
 
 func TestSidecarSnapshotCreateMissingName(t *testing.T) {
@@ -79,13 +79,13 @@ func TestSidecarSnapshotCreateUsesActiveSidecar(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "snapshot create stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	snapReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/snapshots")
+	snapReqs := filterByMethod(reqs, "POST", "/api/v3/sidecar/snapshots")
 	assert.Assert(t, len(snapReqs) >= 1, "expected at least 1 create snapshot request")
 
 	var body map[string]interface{}
 	err := json.Unmarshal(snapReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["sidecar_id"], "sidecar-new-123",
+	assert.Equal(t, body["data"].(map[string]any)["references"].(map[string]any)["sidecar_instance"].(map[string]any)["id"], "sidecar-new-123",
 		"expected active sidecar ID in request body")
 
 	// After a successful snapshot, the source sidecar should have been deleted
@@ -116,7 +116,7 @@ func TestSidecarSnapshotCreateDeletesSourceSidecar(t *testing.T) {
 		"expected delete confirmation in stderr, got: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	deleteReqs := filterByMethod(reqs, "DELETE", "/api/v2/sidecar/instances/sb-111")
+	deleteReqs := filterByMethod(reqs, "DELETE", "/api/v3/sidecar/instances/sb-111")
 	assert.Equal(t, len(deleteReqs), 1, "expected exactly 1 DELETE request, got %d", len(deleteReqs))
 }
 
