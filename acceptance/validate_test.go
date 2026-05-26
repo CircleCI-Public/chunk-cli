@@ -389,11 +389,11 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	reqs := cci.Recorder.AllRequests()
 
 	// AddSSHKey must be called — proves SSH path was taken.
-	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sidecar-123/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-123/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request; got: %v", reqs)
 
 	// HTTP exec must NOT be called — SSH is used instead.
-	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sidecar-123/exec")
+	execReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-123/exec")
 	assert.Equal(t, len(execReqs), 0, "expected 0 HTTP exec requests (SSH should be used)")
 }
 
@@ -477,15 +477,21 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
 
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByPath(reqs, "/api/v2/sidecar/instances")
+
+	// A sidecar must have been created with the configured image.
+	createReqs := filterByPath(reqs, "/api/v3/sidecar/instances")
 	assert.Equal(t, len(createReqs), 1, "expected 1 create-sidecar request; got: %v", reqs)
 
-	var body map[string]interface{}
+	var body map[string]any
 	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
-	assert.Equal(t, body["image"], "my-snapshot-abc123")
-	assert.Equal(t, body["org_id"], "org-aaa")
+	envelope := body["data"].(map[string]any)
+	attrs := envelope["attributes"].(map[string]any)
+	refs := envelope["references"].(map[string]any)
+	assert.Equal(t, attrs["image"], "my-snapshot-abc123", "expected sidecar image from config")
+	assert.Equal(t, refs["org"].(map[string]any)["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
 
-	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sidecar-new-123/ssh/add-key")
+	// AddSSHKey must be called on the newly created sidecar — proves it was used.
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-new-123/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
 }
 

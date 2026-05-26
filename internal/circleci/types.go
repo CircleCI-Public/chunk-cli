@@ -7,14 +7,6 @@ type Sidecar struct {
 	Image string `json:"image,omitempty"`
 }
 
-type listSidecarsResponse struct {
-	Items []Sidecar `json:"items"`
-}
-
-type listSnapshotsResponse struct {
-	Items []Snapshot `json:"items"`
-}
-
 type ExecRequest struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
@@ -72,4 +64,14 @@ type Snapshot struct {
 type CreateSnapshotRequest struct {
 	SidecarID string `json:"sidecar_id"`
 	Name      string `json:"name"`
+}
+
+type Command struct {
+	ID                string  `json:"id"`
+	CreatedAt         string  `json:"created_at"`
+	EndedAt           *string `json:"ended_at,omitempty"`
+	ExitCode          *int    `json:"exit_code,omitempty"`
+	Outcome           *string `json:"outcome,omitempty"`
+	Phase             string  `json:"phase"`
+	SidecarInstanceID string  `json:"sidecar_instance_id"`
 }

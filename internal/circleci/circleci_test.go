@@ -84,7 +84,7 @@ func TestListSidecars(t *testing.T) {
 		}
 	})
 
-	t.Run("omits all param by default", func(t *testing.T) {
+	t.Run("sends all=false by default", func(t *testing.T) {
 		fake.Recorder.AllRequests() // baseline
 		_, err := client.ListSidecars(ctx, "org-1", false)
 		assert.NilError(t, err)
@@ -92,7 +92,7 @@ func TestListSidecars(t *testing.T) {
 		last := reqs[len(reqs)-1]
 		assert.Equal(t, last.Method, "GET")
 		assert.Equal(t, last.URL.Query().Get("org_id"), "org-1")
-		assert.Equal(t, last.URL.Query().Get("all"), "")
+		assert.Equal(t, last.URL.Query().Get("all"), "false")
 	})
 
 	t.Run("sends all=true when requested", func(t *testing.T) {
@@ -126,9 +126,6 @@ func TestCreateSidecar(t *testing.T) {
 	if sb.OrgID != "org-1" {
 		t.Errorf("expected org org-1, got %s", sb.OrgID)
 	}
-	if sb.Image != "ubuntu:22.04" {
-		t.Errorf("expected image ubuntu:22.04, got %s", sb.Image)
-	}
 }
 
 func TestDeleteSidecar(t *testing.T) {
@@ -149,7 +146,7 @@ func TestDeleteSidecar(t *testing.T) {
 		if last.Method != "DELETE" {
 			t.Errorf("expected DELETE, got %s", last.Method)
 		}
-		if last.URL.Path != "/api/v2/sidecar/instances/sb-1" {
+		if last.URL.Path != "/api/v3/sidecar/instances/sb-1" {
 			t.Errorf("unexpected path: %s", last.URL.Path)
 		}
 		if got := last.Header.Get("Circle-Token"); got != "test-token" {
@@ -211,7 +208,7 @@ func TestAddSSHKey(t *testing.T) {
 		t.Errorf("expected Circle-Token test-token, got %s", got)
 	}
 	// Verify sidecar ID in URL path.
-	if last.URL.Path != "/api/v2/sidecar/instances/sb-1/ssh/add-key" {
+	if last.URL.Path != "/api/v3/sidecar/instances/sb-1/ssh/add-key" {
 		t.Errorf("unexpected path: %s", last.URL.Path)
 	}
 }
@@ -285,8 +282,8 @@ func TestExec(t *testing.T) {
 
 		reqs := fake.Recorder.AllRequests()
 		last := reqs[len(reqs)-1]
-		if last.URL.Path != "/api/v2/sidecar/instances/sb-1/exec" {
-			t.Errorf("expected /api/v2/sidecar/instances/sb-1/exec, got %s", last.URL.Path)
+		if last.URL.Path != "/api/v3/sidecar/instances/sb-1/exec" {
+			t.Errorf("expected /api/v3/sidecar/instances/sb-1/exec, got %s", last.URL.Path)
 		}
 	})
 }
