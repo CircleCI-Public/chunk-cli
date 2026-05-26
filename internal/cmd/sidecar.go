@@ -781,11 +781,17 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 		Short: "List snapshots",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			client, err := ensureCircleCIClient(cmd.Context(), io, tui.PromptHidden)
+			insecureStorage := insecureStorageFlag(cmd)
+			rc, _ := config.Resolve("", "", insecureStorage)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
 			if err != nil {
 				return err
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, orgPicker(cmd.Context(), client))
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+			resolvedOrgID, err := resolveOrgID(orgID, configOrgID(cwd), orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
