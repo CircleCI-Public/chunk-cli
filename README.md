@@ -1,13 +1,17 @@
 # chunk
 
-CLI for remote validation of changes — run code in a cloud environment before pushing — and generating agent context from code review patterns.
+CLI for [Chunk](https://chunk.ai/) — inner loop validation and AI-ready code review context for software teams building with AI agents. The chunk CLI currently has two main capabilities:
 
-## Features
+- **Sidecars** — lightweight microVM environments that run alongside your AI agent and validate changes locally before they reach CI
+- **build-prompt** — mines PR review comments from your GitHub org and uses Claude to generate a context file tuned to your team's code review standards
 
-- **Context Generation** — Mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to your team's standards
-- **Hook Automation** — Wire tests and lint into your AI coding agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
-- **Environment Detection** — Auto-detect tech stack, generate Dockerfiles, and set up sidecars with the right dependencies
-- **Sidecar Environments** — Validate changes in a clean cloud environment on CircleCI
+## Why chunk?
+
+As AI churns out more and more code, CI pipelines get flooded with commits that haven't been well validated. Failures surface late, forcing expensive re-prompting cycles and slowing delivery.
+
+Chunk sidecars fix this by running lightweight microbuilds to validate inside the inner loop — while the agent is still working — ensuring basic checks pass before anything hits CI. Save the CI for the integration and release work that gets code to production.
+
+The build-prompt command complements this by capturing your team's real review patterns and turning them into agent context, so the code agents write reflects your standards from the start.
 
 ## Requirements
 
