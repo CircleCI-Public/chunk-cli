@@ -1,0 +1,72 @@
+{
+  "run_id": "20260527-205229",
+  "arm": "sidecar",
+  "credit_usd_rate": 0.0006,
+  "sidecar_credits_per_min": 15.0,
+  "llm_measured": true,
+  "llm_note": "10 agent iteration(s) via experiments/sidecar-race/scripts/lib/agent_task.py",
+  "llm_source": "claude-agent-sdk",
+  "totals": {
+    "iterations": 10,
+    "tts_seconds_sum": 214,
+    "ci_workflow_credits_sum": 25,
+    "ci_gate_credits_sum": 25,
+    "ci_cost_usd_sum": 0.015,
+    "ci_cost_display": "$0.015",
+    "sidecar_credits_est_sum": 214,
+    "sidecar_cost_usd_sum": 0.1284,
+    "sidecar_cost_display": "$0.1284",
+    "llm_input_tokens": 652,
+    "llm_output_tokens": 19352,
+    "llm_tokens_sum": 20004,
+    "llm_cost_usd_sum": 0.867629,
+    "llm_cost_display": "$0.8676"
+  },
+  "epilogue_workflow_jobs": {
+    "test": {
+      "job_number": 7404,
+      "status": "success",
+      "started_at": "2026-05-27T21:05:37Z",
+      "stopped_at": "2026-05-27T21:06:03Z",
+      "duration_s": 26.0,
+      "credits_est": 4.1,
+      "cost_usd_est": 0.00246
+    },
+    "shellcheck/check": {
+      "job_number": 7405,
+      "status": "success",
+      "started_at": "2026-05-27T21:05:36Z",
+      "stopped_at": "2026-05-27T21:06:26Z",
+      "duration_s": 50.0,
+      "credits_est": 7.9,
+      "cost_usd_est": 0.00474
+    },
+    "lint": {
+      "job_number": 7403,
+      "status": "success",
+      "started_at": "2026-05-27T21:05:37Z",
+      "stopped_at": "2026-05-27T21:06:15Z",
+      "duration_s": 38.0,
+      "credits_est": 6.0,
+      "cost_usd_est": 0.0036
+    },
+    "acceptance-test": {
+      "job_number": 7402,
+      "status": "success",
+      "started_at": "2026-05-27T21:05:36Z",
+      "stopped_at": "2026-05-27T21:05:57Z",
+      "duration_s": 21.0,
+      "credits_est": 3.3,
+      "cost_usd_est": 0.00198
+    },
+    "build-smoke-test": {
+      "job_number": 7406,
+      "status": "success",
+      "started_at": "2026-05-27T21:06:28Z",
+      "stopped_at": "2026-05-27T21:06:51Z",
+      "duration_s": 23.0,
+      "credits_est": 3.6,
+      "cost_usd_est": 0.00216
+    }
+  }
+}
