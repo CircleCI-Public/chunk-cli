@@ -68,10 +68,11 @@ if costs_path.exists():
         "",
         "Costs (see costs_summary.json):",
         f"  CI credits (sum):     {costs.get('totals', {}).get('ci_workflow_credits_sum')}",
-        f"  CI cost USD (sum):    {costs.get('totals', {}).get('ci_cost_usd_sum')}",
+        f"  CI cost (sum):        {costs.get('totals', {}).get('ci_cost_display', costs.get('totals', {}).get('ci_cost_usd_sum'))}",
         f"  Sidecar credits est:  {costs.get('totals', {}).get('sidecar_credits_est_sum')}",
-        f"  Sidecar cost USD est: {costs.get('totals', {}).get('sidecar_cost_usd_sum')}",
-        f"  LLM tokens:           {costs.get('totals', {}).get('llm_tokens_sum')} ({costs.get('llm_note', '')})",
+        f"  Sidecar cost (est.):  {costs.get('totals', {}).get('sidecar_cost_display', costs.get('totals', {}).get('sidecar_cost_usd_sum'))}",
+        f"  LLM tokens:           {costs.get('totals', {}).get('llm_tokens_sum') if costs.get('llm_measured') else 'n/a'}",
+        f"  LLM cost:             {costs.get('totals', {}).get('llm_cost_display', 'n/a')}",
     ])
 
 epilogue_path = meta_path.parent / "epilogue.json"

@@ -48,6 +48,27 @@ git push -u origin HEAD
 
 Gate jobs (`lint`, `test`) are the primary comparison. The epilogue also records the **full `ci` workflow** (shellcheck, acceptance-test, build-smoke-test, etc.) to confirm pipeline-level confidence.
 
+## LLM tokens and cost
+
+**This harness does not spend LLM tokens.** Each iteration applies a deterministic patch from `task-bank/` and runs `chunk validate` (lint + test-changed on the sidecar, or CircleCI gate jobs on the CI arm). Nothing in the loop calls Claude, `chunk build-prompt`, or `chunk task run`.
+
+PR metrics show **LLM tokens / cost as `n/a`**, not `$0` — zeros looked like a measurement bug.
+
+To attach real LLM usage (e.g. if you run an external agent alongside the harness), add before `finalize-metrics` / PR update:
+
+```json
+// experiments/sidecar-race/results/<run-id>/llm_usage.json
+{
+  "input_tokens": 125000,
+  "output_tokens": 18000,
+  "cost_usd": 1.42,
+  "source": "cursor-session-estimate",
+  "note": "optional"
+}
+```
+
+A future harness revision may integrate `chunk task run` per iteration to measure agent tokens in-band.
+
 ## Prerequisites
 
 - `chunk` CLI, `task`, `uv` on PATH locally

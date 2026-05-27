@@ -82,7 +82,7 @@ LINT_OK="$(bool_from_exit "${LINT_EXIT}")"
 TEST_OK="$(bool_from_exit "${TEST_EXIT}")"
 
 append_csv_row \
-  "sidecar,${RUN_ID},${ITER},${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DURATION},${TEST_DURATION},${SYNC_DURATION},,,,,${SHA},${NOTES},,,,,0,0"
+  "sidecar,${RUN_ID},${ITER},${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DURATION},${TEST_DURATION},${SYNC_DURATION},,,,,${SHA},${NOTES},,,,,,"
 
 RUN_DIR="$(resolve_run_dir)"
 python3 - "${RUN_DIR}" <<PY

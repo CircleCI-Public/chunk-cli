@@ -79,7 +79,7 @@ ENDED="$(iso_timestamp)"
 SHA="$(git_short_sha)"
 
 append_csv_row \
-  "ci,${RUN_ID},${ITER},${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DUR},${TEST_DUR},,${PIPELINE_ID},${WORKFLOW_ID},${LINT_JOB},${TEST_JOB},${SHA},${NOTES},${WF_CRED:-},${GATE_CRED:-},${CI_COST:-},,,0,0"
+  "ci,${RUN_ID},${ITER},${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DUR},${TEST_DUR},,${PIPELINE_ID},${WORKFLOW_ID},${LINT_JOB},${TEST_JOB},${SHA},${NOTES},${WF_CRED:-},${GATE_CRED:-},${CI_COST:-},,,,"
 
 RUN_DIR="$(resolve_run_dir)"
 python3 - "${RUN_DIR}" <<PY

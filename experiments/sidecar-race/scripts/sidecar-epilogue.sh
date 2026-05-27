@@ -135,7 +135,7 @@ CI_COST="$(python3 -c "import json; print(json.load(open('${EPILOGUE_JSON}')).ge
 GATE_CRED="$(python3 -c "import json; print(json.load(open('${EPILOGUE_JSON}'))['gate'].get('ci_gate_credits',0))")"
 
 append_csv_row \
-  "sidecar,${RUN_ID},epilogue,${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DUR},${TEST_DUR},,${PIPELINE_ID},${WORKFLOW_ID},${LINT_JOB},${TEST_JOB},${SHA},${NOTES} (workflow=${WF_OK}),${WF_CRED},${GATE_CRED},${CI_COST},,,0,0"
+  "sidecar,${RUN_ID},epilogue,${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DUR},${TEST_DUR},,${PIPELINE_ID},${WORKFLOW_ID},${LINT_JOB},${TEST_JOB},${SHA},${NOTES} (workflow=${WF_OK}),${WF_CRED},${GATE_CRED},${CI_COST},,,,"
 
 # Patch run.json
 python3 - "${RUN_DIR}/run.json" "${EPILOGUE_JSON}" <<'PY'

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[4])
+from llm_usage import format_usd, load_llm_totals  # noqa: E402
 from metrics import (  # noqa: E402
     credits_to_usd,
     gate_job_credits,
@@ -64,8 +65,8 @@ def to_float(v, default=0.0):
 # Backfill CI credits from workflow_id when missing.
 for r in rows:
     if not r.get("llm_tokens"):
-        r["llm_tokens"] = "0"
-        r["llm_cost_usd"] = "0"
+        r["llm_tokens"] = ""
+        r["llm_cost_usd"] = ""
     wf = r.get("ci_workflow_id") or ""
     if wf and not to_int(r.get("ci_workflow_credits")):
         lint_d = to_int(r.get("lint_duration_s"))
@@ -131,22 +132,30 @@ def sum_col(name):
 def sum_float(name):
     return round(sum(to_float(r.get(name)) for r in rows), 4)
 
+llm = load_llm_totals(meta_path.parent)
 summary = {
     "run_id": meta.get("run_id"),
     "arm": meta.get("arm"),
     "credit_usd_rate": float(__import__("os").environ.get("CIRCLECI_CREDIT_USD", "0.0006")),
     "sidecar_credits_per_min": sidecar_rate,
-    "llm_note": "Harness does not call Claude; llm_* columns are zero.",
+    "llm_measured": llm["measured"],
+    "llm_note": llm.get("note"),
+    "llm_source": llm.get("source"),
     "totals": {
         "iterations": len(iter_rows),
         "tts_seconds_sum": sum(to_int(r.get("tts_seconds")) for r in iter_rows),
         "ci_workflow_credits_sum": sum_col("ci_workflow_credits"),
         "ci_gate_credits_sum": sum_col("ci_gate_credits"),
         "ci_cost_usd_sum": sum_float("ci_cost_usd"),
+        "ci_cost_display": format_usd(sum_float("ci_cost_usd")),
         "sidecar_credits_est_sum": sum_col("sidecar_credits_est"),
         "sidecar_cost_usd_sum": sum_float("sidecar_cost_usd"),
-        "llm_tokens_sum": sum_col("llm_tokens"),
-        "llm_cost_usd_sum": sum_float("llm_cost_usd"),
+        "sidecar_cost_display": format_usd(sum_float("sidecar_cost_usd")),
+        "llm_input_tokens": llm.get("input_tokens"),
+        "llm_output_tokens": llm.get("output_tokens"),
+        "llm_tokens_sum": llm.get("total_tokens"),
+        "llm_cost_usd_sum": llm.get("cost_usd"),
+        "llm_cost_display": format_usd(llm.get("cost_usd")),
     },
     "epilogue_workflow_jobs": workflow_jobs,
 }

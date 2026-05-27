@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+from llm_usage import format_tokens, format_usd, load_llm_totals
+
 
 def _status(run_dir: Path) -> str:
     if (run_dir / "costs_summary.json").exists() and (run_dir / "results.csv").exists():
@@ -18,6 +20,12 @@ def _status(run_dir: Path) -> str:
     return "pending"
 
 
+def _money_cell(value: str) -> str:
+    if not value or value == "0" or value == "0.0":
+        return "—"
+    return format_usd(value)
+
+
 def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
     run_id = meta.get("run_id", run_dir.name)
     arm = meta.get("arm", "?")
@@ -28,8 +36,8 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
     lines = [
         f"## Sidecar race — run `{run_id}` ({arm} arm)",
         "",
-        f"| Field | Value |",
-        f"|-------|-------|",
+        "| Field | Value |",
+        "|-------|-------|",
         f"| Status | **{status}** |",
         f"| Arm | `{arm}` |",
         f"| Branch | `{branch}` |",
@@ -55,9 +63,9 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
                 "",
                 "Tracked per iteration and in totals:",
                 "- Wall time (TTS, lint/test job durations, sync)",
-                "- CircleCI credits and USD (gate + full workflow on epilogue)",
-                "- Sidecar credits estimate and USD (`SIDECAR_CREDITS_PER_MIN`)",
-                "- LLM tokens and USD (zero for this harness; no Claude calls)",
+                "- CircleCI credits and cost (gate + full workflow on epilogue)",
+                "- Sidecar credits estimate and cost (`SIDECAR_CREDITS_PER_MIN`)",
+                "- LLM tokens and cost — **n/a** unless `llm_usage.json` is supplied (see harness README)",
                 "",
             ]
         )
@@ -69,6 +77,10 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
     if costs_path.exists():
         costs = json.loads(costs_path.read_text())
         t = costs.get("totals") or {}
+        llm_tokens_display = format_tokens(t.get("llm_tokens_sum")) if costs.get("llm_measured") else "n/a"
+        llm_cost_display = t.get("llm_cost_display") or "n/a"
+        if not costs.get("llm_measured"):
+            llm_cost_display = "n/a"
         lines.extend(
             [
                 "### Cost totals",
@@ -76,16 +88,16 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
                 "| Metric | Value |",
                 "|--------|------:|",
                 f"| CI workflow credits (sum) | {t.get('ci_workflow_credits_sum', 0)} |",
-                f"| CI cost USD (sum) | {t.get('ci_cost_usd_sum', 0)} |",
+                f"| CI cost (sum) | {t.get('ci_cost_display', format_usd(t.get('ci_cost_usd_sum')))} |",
                 f"| Sidecar credits (est. sum) | {t.get('sidecar_credits_est_sum', 0)} |",
-                f"| Sidecar cost USD (est. sum) | {t.get('sidecar_cost_usd_sum', 0)} |",
-                f"| LLM tokens | {t.get('llm_tokens_sum', 0)} |",
-                f"| LLM cost USD | {t.get('llm_cost_usd_sum', 0)} |",
+                f"| Sidecar cost (est. sum) | {t.get('sidecar_cost_display', format_usd(t.get('sidecar_cost_usd_sum')))} |",
+                f"| LLM tokens | {llm_tokens_display} |",
+                f"| LLM cost | {llm_cost_display} |",
                 "",
             ]
         )
         note = costs.get("llm_note")
-        if note:
+        if note and not costs.get("llm_measured"):
             lines.append(f"_{note}_\n")
 
     if csv_path.exists():
@@ -97,8 +109,8 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
                 [
                     "### Per-iteration timings & costs",
                     "",
-                    "| iter | tts (s) | lint | test | lint dur | test dur | sync | CI credits | CI USD | sidecar cr. est | sidecar USD |",
-                    "|-----:|--------:|:----:|:----:|---------:|---------:|-----:|-----------:|-------:|----------------:|------------:|",
+                    "| iter | tts (s) | lint | test | lint dur | test dur | sync | CI credits | CI cost | sidecar cr. est | sidecar cost |",
+                    "|-----:|--------:|:----:|:----:|---------:|---------:|-----:|-----------:|--------:|----------------:|-------------:|",
                 ]
             )
             for r in iter_rows:
@@ -106,8 +118,8 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
                     f"| {r.get('iter')} | {r.get('tts_seconds', '')} | {r.get('lint_ok', '')} | "
                     f"{r.get('test_ok', '')} | {r.get('lint_duration_s', '')} | "
                     f"{r.get('test_duration_s', '')} | {r.get('sync_duration_s', '') or '—'} | "
-                    f"{r.get('ci_workflow_credits', '') or '—'} | {r.get('ci_cost_usd', '') or '—'} | "
-                    f"{r.get('sidecar_credits_est', '') or '—'} | {r.get('sidecar_cost_usd', '') or '—'} |"
+                    f"{r.get('ci_workflow_credits', '') or '—'} | {_money_cell(r.get('ci_cost_usd', ''))} | "
+                    f"{r.get('sidecar_credits_est', '') or '—'} | {_money_cell(r.get('sidecar_cost_usd', ''))} |"
                 )
             lines.append("")
         if epilogue_rows:
@@ -117,7 +129,7 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
                     "### Epilogue (final push → CI)",
                     "",
                     f"- TTS: {e.get('tts_seconds')}s — gate lint={e.get('lint_ok')} test={e.get('test_ok')}",
-                    f"- CI credits: {e.get('ci_workflow_credits', '—')} — USD: {e.get('ci_cost_usd', '—')}",
+                    f"- CI credits: {e.get('ci_workflow_credits', '—')} — cost: {_money_cell(e.get('ci_cost_usd', ''))}",
                     "",
                 ]
             )
@@ -132,20 +144,20 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
                 [
                     "### Full `ci` workflow jobs (epilogue)",
                     "",
-                    "| job | status | duration (s) | credits est | cost USD est |",
-                    "|-----|--------|-------------:|------------:|-------------:|",
+                    "| job | status | duration (s) | credits est | cost est |",
+                    "|-----|--------|-------------:|------------:|---------:|",
                 ]
             )
             for name, info in sorted(jobs.items()):
                 lines.append(
                     f"| {name} | {info.get('status', '')} | {info.get('duration_s', '')} | "
-                    f"{info.get('credits_est', '')} | {info.get('cost_usd_est', '')} |"
+                    f"{info.get('credits_est', '')} | {format_usd(info.get('cost_usd_est'))} |"
                 )
             lines.append("")
 
     metrics_path = run_dir / "metrics.jsonl"
     if metrics_path.exists():
-        lines.append(f"_Event log: `{metrics_path.relative_to(run_dir.parent.parent)}` ({metrics_path.name})_\n")
+        lines.append(f"_Event log: `{metrics_path.name}`_\n")
 
     lines.extend(
         [
