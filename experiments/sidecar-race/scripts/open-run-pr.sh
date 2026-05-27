@@ -108,6 +108,12 @@ ensure_branch() {
       || git -C "${REPO_ROOT}" checkout -B "${RUN_BRANCH}" "${BASE_BRANCH}"
   fi
   git -C "${REPO_ROOT}" push -u origin "${RUN_BRANCH}"
+  # GitHub requires at least one commit difference from base for a PR.
+  if git -C "${REPO_ROOT}" rev-parse "${RUN_BRANCH}" \
+    | grep -q "$(git -C "${REPO_ROOT}" rev-parse "origin/${BASE_BRANCH}" 2>/dev/null || git -C "${REPO_ROOT}" rev-parse "${BASE_BRANCH}")"; then
+    git -C "${REPO_ROOT}" commit --allow-empty -m "experiment: begin run ${RUN_LABEL} (${ARM})"
+    git -C "${REPO_ROOT}" push origin "${RUN_BRANCH}"
+  fi
 }
 
 if [[ "${BOOTSTRAP}" == true ]]; then
