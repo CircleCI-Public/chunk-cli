@@ -6,38 +6,47 @@ This directory is scaffolding only. **Do not treat results under `results/` as p
 
 ## When to merge (read this first)
 
-**Do not merge the harness into `main` until every planned run is finished** (sidecar arm, CI arm, and any reruns you care about). The open PR can stay a draft while you work.
+**Do not merge `experiment/sidecar-race` into `main` until every planned run is finished** (sidecar arm, CI arm, and any reruns you care about). The open PR can stay a draft while you work.
 
-1. Run the experiment on **run branches** (below) branched from `experiment/sidecar-race-harness`.
+1. Run the experiment on **run branches** (below) branched from `experiment/sidecar-race`.
 2. Collect and review results.
-3. **Then** merge `experiment/sidecar-race-harness` → `main` if you want the tooling public.
+3. **Then** merge `experiment/sidecar-race` → `main` if you want the tooling public.
 
 `main` should stay free of experiment runs and `internal/racefixture/` until you are ready.
 
 ## Branching strategy
 
-Git cannot use `experiment/sidecar-race/run-*` **and** a sibling branch named `experiment/sidecar-race` at the same time (ref hierarchy conflict). The harness therefore lives on **`experiment/sidecar-race-harness`**; run branches use the `experiment/sidecar-race/run-*` namespace you want.
-
 | Branch | Purpose |
 |--------|---------|
-| `experiment/sidecar-race-harness` | Harness, docs, task bank — **base for all runs; merge to `main` only after runs** |
-| `experiment/sidecar-race/run-<id>-sidecar` | Execute sidecar arm only (branch **from** harness, not `main`) |
-| `experiment/sidecar-race/run-<id>-ci` | Execute CI arm only (same base; fresh branch, not from the sidecar run branch) |
-| `experiment/sidecar-race/run-<id>-combined` | Optional: same machine, both arms interleaved (control order) |
+| `experiment/sidecar-race` | Harness, docs, task bank — **base for all runs; merge to `main` only after runs** |
+| `experiment/sidecar-race-run-<id>-sidecar` | Sidecar arm (branch **from** `experiment/sidecar-race`, not `main`) |
+| `experiment/sidecar-race-run-<id>-ci` | CI arm (fresh branch from harness, not from the sidecar run branch) |
+| `experiment/sidecar-race-run-<id>-combined` | Optional: both arms interleaved |
 
-Always create run branches from `experiment/sidecar-race-harness`:
+### Why not `experiment/sidecar-race/run-001-sidecar`?
+
+Git stores branch names as refs. A branch named `experiment/sidecar-race` occupies the ref path `refs/heads/experiment/sidecar-race`, so Git **cannot** also create `refs/heads/experiment/sidecar-race/run-001-sidecar` (directory vs file conflict):
+
+```text
+fatal: cannot lock ref 'refs/heads/experiment/sidecar-race/run-001-sidecar':
+'refs/heads/experiment/sidecar-race' exists
+```
+
+The run branches above use a hyphen (`experiment/sidecar-race-run-…`) so the harness can stay on `experiment/sidecar-race`. Same experiment namespace, valid refs.
+
+Always create run branches from `experiment/sidecar-race`:
 
 ```bash
 git fetch origin
-git checkout experiment/sidecar-race-harness
+git checkout experiment/sidecar-race
 
 # Sidecar arm
-git checkout -b experiment/sidecar-race/run-001-sidecar
+git checkout -b experiment/sidecar-race-run-001-sidecar
 git push -u origin HEAD   # required so sidecar sync clones this branch
 
-# CI arm (start again from harness, not from the sidecar run branch)
-git checkout experiment/sidecar-race-harness
-git checkout -b experiment/sidecar-race/run-001-ci
+# CI arm (start again from experiment/sidecar-race, not from the sidecar run branch)
+git checkout experiment/sidecar-race
+git checkout -b experiment/sidecar-race-run-001-ci
 git push -u origin HEAD
 ```
 
@@ -72,8 +81,8 @@ You can run the full experiment from the Cursor terminal (or ask the agent to ru
 
 ```bash
 git fetch origin
-git checkout experiment/sidecar-race-harness
-git checkout -b experiment/sidecar-race/run-001-sidecar   # or run-001-ci
+git checkout experiment/sidecar-race
+git checkout -b experiment/sidecar-race-run-001-sidecar   # or -run-001-ci
 git push -u origin HEAD
 ```
 
@@ -90,8 +99,8 @@ cd experiments/sidecar-race
 ### 3. CI arm (~30–60+ minutes; needs push per task)
 
 ```bash
-git checkout experiment/sidecar-race-harness
-git checkout -b experiment/sidecar-race/run-001-ci
+git checkout experiment/sidecar-race
+git checkout -b experiment/sidecar-race-run-001-ci
 git push -u origin HEAD
 cd experiments/sidecar-race
 ./scripts/prep-check.sh --arm ci

@@ -31,7 +31,7 @@ Options:
   --no-commit         CI arm: push without committing (tree must already match task)
 
 Requires:
-  - On a run branch (experiment/sidecar-race/run-<id>-<arm>)
+  - On a run branch (experiment/sidecar-race-run-<id>-<arm>)
   - prep-check.sh --arm <arm> passes
   - Sidecar arm: active sidecar (or --ensure-sidecar)
   - CI arm: CIRCLE_TOKEN; commits + push per task by default
@@ -69,12 +69,11 @@ done
 "${SCRIPT_DIR}/prep-check.sh" --arm "${ARM}"
 
 branch="$(git -C "${REPO_ROOT}" branch --show-current)"
-HARNESS_BRANCH="experiment/sidecar-race-harness"
-if [[ "${branch}" == "${HARNESS_BRANCH}" || "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
-  die "checkout a run branch first, e.g. experiment/sidecar-race/run-001-${ARM} (from ${HARNESS_BRANCH})"
+if [[ "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
+  die "checkout a run branch first, e.g. experiment/sidecar-race-run-001-${ARM} (from experiment/sidecar-race)"
 fi
-if [[ ! "${branch}" =~ ^experiment/sidecar-race/run- ]]; then
-  die "run branch must match experiment/sidecar-race/run-<id>-<arm>, got: ${branch}"
+if [[ ! "${branch}" =~ ^experiment/sidecar-race-run- ]]; then
+  die "run branch must match experiment/sidecar-race-run-<id>-<arm>, got: ${branch}"
 fi
 
 if [[ "${ARM}" == "sidecar" && "${FROM_TASK}" -eq 1 && "${DRY_RUN}" != true ]]; then
