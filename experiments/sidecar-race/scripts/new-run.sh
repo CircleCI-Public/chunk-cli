@@ -76,6 +76,7 @@ meta = {
     'notes': os.environ.get('RUN_META_NOTES', ''),
     'gate_jobs': ['lint', 'test'],
     'sidecar_validate': ['lint', 'test-changed'],
+    'sidecar_remote': True,
 }
 with open('${RUN_DIR}/run.json', 'w') as f:
     json.dump(meta, f, indent=2)

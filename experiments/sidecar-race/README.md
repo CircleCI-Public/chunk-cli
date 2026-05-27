@@ -19,9 +19,11 @@ This directory is scaffolding only. **Do not treat results under `results/` as p
 | Branch | Purpose |
 |--------|---------|
 | `experiment/sidecar-race` | Harness, docs, task bank — **base for all runs; merge to `main` only after runs** |
-| `experiment/sidecar-race/run-<id>-sidecar` | Execute sidecar arm only (branch **from** `experiment/sidecar-race`, not `main`) |
-| `experiment/sidecar-race/run-<id>-ci` | Execute CI arm only (same base; fresh branch, not from the sidecar run branch) |
-| `experiment/sidecar-race/run-<id>-combined` | Optional: same machine, both arms interleaved (control order) |
+| `sidecar-race-run-<id>-sidecar` | Execute sidecar arm only (branch **from** `experiment/sidecar-race`, not `main`) |
+| `sidecar-race-run-<id>-ci` | Execute CI arm only (same base; fresh branch, not from the sidecar run branch) |
+| `sidecar-race-run-<id>-combined` | Optional: same machine, both arms interleaved (control order) |
+
+Git cannot use `experiment/sidecar-race/run-*` names while the `experiment/sidecar-race` branch exists (ref hierarchy conflict). Use the `sidecar-race-run-*` prefix instead.
 
 Always create run branches from `experiment/sidecar-race`:
 
@@ -30,11 +32,12 @@ git fetch origin
 git checkout experiment/sidecar-race
 
 # Sidecar arm
-git checkout -b experiment/sidecar-race/run-001-sidecar
+git checkout -b sidecar-race-run-001-sidecar
+git push -u origin HEAD   # required so sidecar sync clones this branch
 
 # CI arm (start again from experiment/sidecar-race, not from the sidecar run branch)
 git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race/run-001-ci
+git checkout -b sidecar-race-run-001-ci
 ```
 
 Push run branches to `origin` when you need CI (CI arm) or remote backup. That does **not** require merging to `main`.
@@ -47,16 +50,18 @@ Compare sidecar microbuild gates to CircleCI **`lint`** and **`test`** jobs only
 
 | Arm | Command / trigger |
 |-----|-------------------|
-| Sidecar | `chunk sidecar sync` then `chunk validate lint test-changed` |
+| Sidecar | `chunk sidecar sync` then `chunk validate --remote lint` and `chunk validate --remote test-changed` (gates run on the sidecar) |
 | CI | `git push` then poll until `lint` + `test` reach terminal state |
 
 ## Prerequisites
 
 - `chunk` CLI installed and on `PATH`
+- `task` and `uv` on `PATH` (used by lint/test commands on the sidecar)
 - `chunk auth status` — CircleCI token configured (`chunk auth set circleci`)
 - `.chunk/config.json` with `validation.sidecarImage` set (snapshot from one-time `chunk sidecar setup`)
+- `lint` and `test-changed` commands configured in `.chunk/config.json`
 - `CIRCLE_TOKEN` for CI polling scripts
-- Run branches pushed to `origin` so CI arm can trigger pipelines
+- Run branches pushed to `origin` (sidecar sync clones the pushed branch; CI arm needs push for pipelines)
 
 ## Running in Cursor (automated)
 
@@ -67,7 +72,8 @@ You can run the full experiment from the Cursor terminal (or ask the agent to ru
 ```bash
 git fetch origin
 git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race/run-001-sidecar   # or run-001-ci
+git checkout -b sidecar-race-run-001-sidecar   # or sidecar-race-run-001-ci
+git push -u origin HEAD
 ```
 
 ### 2. Sidecar arm (~10–20 minutes)
@@ -84,7 +90,8 @@ cd experiments/sidecar-race
 
 ```bash
 git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race/run-001-ci
+git checkout -b sidecar-race-run-001-ci
+git push -u origin HEAD
 cd experiments/sidecar-race
 ./scripts/prep-check.sh --arm ci
 ./scripts/run-arm.sh --arm ci --notes "run 001 ci"

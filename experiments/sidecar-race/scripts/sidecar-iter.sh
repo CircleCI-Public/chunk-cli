@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Record one sidecar-arm iteration: sync + validate lint + test-changed.
+# Record one sidecar-arm iteration: sync + remote validate lint + test-changed.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,6 +16,7 @@ Usage: sidecar-iter.sh <iter> [--notes <text>]
 Requires RUN_ID or RUN_DIR from new-run.sh (arm=sidecar).
 Requires active sidecar (chunk sidecar current).
 
+Runs gates on the sidecar via: chunk validate --remote lint|test-changed
 Does not commit changes. Run apply-task.sh first.
 EOF
 }
@@ -49,7 +50,7 @@ START_EPOCH="$(epoch_seconds)"
 
 SYNC_START="$(epoch_seconds)"
 set +e
-chunk sidecar sync 2>&1
+chunk_in_repo sidecar sync 2>&1
 SYNC_EXIT=$?
 set -e
 SYNC_END="$(epoch_seconds)"
@@ -58,7 +59,7 @@ SYNC_DURATION=$((SYNC_END - SYNC_START))
 
 LINT_START="$(epoch_seconds)"
 set +e
-chunk validate lint 2>&1
+chunk_in_repo validate --remote lint 2>&1
 LINT_EXIT=$?
 set -e
 LINT_END="$(epoch_seconds)"
@@ -66,7 +67,7 @@ LINT_DURATION=$((LINT_END - LINT_START))
 
 TEST_START="$(epoch_seconds)"
 set +e
-chunk validate test-changed 2>&1
+chunk_in_repo validate --remote test-changed 2>&1
 TEST_EXIT=$?
 set -e
 TEST_END="$(epoch_seconds)"

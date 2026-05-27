@@ -44,7 +44,7 @@ echo "  repo:        ${REPO_ROOT}"
 echo "  experiment:  ${EXPERIMENT_ROOT}"
 echo "  git branch:  $(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null || echo '?')"
 
-for cmd in git python3 chunk; do
+for cmd in git python3 chunk task uv; do
   if command -v "${cmd}" >/dev/null 2>&1; then
     say_ok "${cmd} on PATH"
   else
@@ -64,6 +64,19 @@ fi
 
 if [[ -f "${REPO_ROOT}/.chunk/config.json" ]]; then
   say_ok ".chunk/config.json present"
+  for cmd_name in lint test-changed; do
+    if python3 -c "
+import json, sys
+from pathlib import Path
+d = json.loads(Path('${REPO_ROOT}/.chunk/config.json').read_text())
+names = {c.get('name') for c in d.get('commands', [])}
+sys.exit(0 if '${cmd_name}' in names else 1)
+" 2>/dev/null; then
+      say_ok "validate command: ${cmd_name}"
+    else
+      say_fail "validate command '${cmd_name}' in .chunk/config.json (chunk init / validate --save)"
+    fi
+  done
 else
   say_fail ".chunk/config.json (run chunk init in repo root)"
 fi

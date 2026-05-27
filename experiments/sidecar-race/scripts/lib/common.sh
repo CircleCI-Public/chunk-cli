@@ -98,3 +98,7 @@ has_active_sidecar() {
   json="$(chunk sidecar current --json 2>/dev/null || echo "{}")"
   python3 -c "import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get('sidecar_id') else 1)" "${json}"
 }
+
+chunk_in_repo() {
+  (cd "${REPO_ROOT}" && chunk "$@")
+}

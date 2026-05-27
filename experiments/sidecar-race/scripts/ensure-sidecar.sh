@@ -28,6 +28,6 @@ print(d.get('orgID', ''), d.get('validation', {}).get('sidecarImage', ''))
 [[ -n "${SNAPSHOT}" ]] || die "validation.sidecarImage missing — run chunk sidecar setup and snapshot create first"
 
 echo "Creating sidecar from snapshot ${SNAPSHOT}..."
-chunk sidecar create --org-id "${ORG_ID}" --image "${SNAPSHOT}"
-chunk sidecar sync
+chunk_in_repo sidecar create --org-id "${ORG_ID}" --image "${SNAPSHOT}"
+chunk_in_repo sidecar sync
 echo "Sidecar ready."

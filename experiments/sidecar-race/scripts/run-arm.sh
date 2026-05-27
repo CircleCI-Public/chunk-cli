@@ -31,7 +31,7 @@ Options:
   --no-commit         CI arm: push without committing (tree must already match task)
 
 Requires:
-  - On a run branch (experiment/sidecar-race/run-*-<arm>)
+  - On a run branch (sidecar-race-run-<id>-<arm>)
   - prep-check.sh --arm <arm> passes
   - Sidecar arm: active sidecar (or --ensure-sidecar)
   - CI arm: CIRCLE_TOKEN; commits + push per task by default
@@ -75,11 +75,22 @@ if [[ "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
   die "checkout a run branch first, e.g. sidecar-race-run-001-${ARM}"
 fi
 
+if [[ "${ARM}" == "sidecar" && "${FROM_TASK}" -eq 1 && "${DRY_RUN}" != true ]]; then
+  echo "Resetting repo working tree to HEAD (clean experiment state)..."
+  git -C "${REPO_ROOT}" reset --hard HEAD
+  git -C "${REPO_ROOT}" clean -fd internal/racefixture 2>/dev/null || true
+fi
+
 if [[ "${ARM}" == "sidecar" && "${ENSURE_SIDECAR}" == true ]]; then
   if [[ "${DRY_RUN}" == true ]]; then
     echo "[dry-run] ensure-sidecar.sh"
   else
     "${SCRIPT_DIR}/ensure-sidecar.sh"
+  fi
+  if [[ "${FROM_TASK}" -eq 1 && "${DRY_RUN}" != true ]]; then
+    echo "Warming sidecar toolchain (sync + remote lint)..."
+    chunk_in_repo sidecar sync
+    chunk_in_repo validate --remote lint
   fi
 fi
 
