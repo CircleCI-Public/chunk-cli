@@ -5,3 +5,4 @@ results/*/
 
 # Editor / OS
 .DS_Store
+__pycache__/
