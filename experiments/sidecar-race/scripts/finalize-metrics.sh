@@ -126,19 +126,36 @@ if epilogue_path.exists():
     gate = ep.get("gate") or {}
     for r in rows:
         if r.get("iter") == "epilogue":
-            if not to_int(r.get("ci_workflow_credits")):
+            if gate.get("lint_duration_s") is not None:
+                r["lint_duration_s"] = str(gate.get("lint_duration_s"))
+            if gate.get("test_duration_s") is not None:
+                r["test_duration_s"] = str(gate.get("test_duration_s"))
+            if gate.get("ci_workflow_credits") is not None:
+                r["ci_workflow_credits"] = str(gate.get("ci_workflow_credits"))
+            if gate.get("ci_gate_credits") is not None:
+                r["ci_gate_credits"] = str(gate.get("ci_gate_credits"))
+            elif gate.get("lint_duration_s") and gate.get("test_duration_s"):
+                wf_id = gate.get("workflow_id") or r.get("ci_workflow_id") or ""
+                if wf_id:
+                    _, lint_c, test_c = gate_job_credits(
+                        slug,
+                        wf_id,
+                        float(gate.get("lint_duration_s", 0)),
+                        float(gate.get("test_duration_s", 0)),
+                    )
+                    r["ci_gate_credits"] = str(lint_c + test_c)
+            if gate.get("ci_cost_usd") is not None:
+                r["ci_cost_usd"] = str(gate.get("ci_cost_usd"))
+            elif not to_int(r.get("ci_workflow_credits")):
                 wf_id = gate.get("workflow_id") or r.get("ci_workflow_id") or ""
                 if wf_id:
                     total, _, _ = gate_job_credits(
                         slug,
                         wf_id,
-                        gate.get("lint_duration_s", 0),
-                        gate.get("test_duration_s", 0),
+                        float(gate.get("lint_duration_s", 0)),
+                        float(gate.get("test_duration_s", 0)),
                     )
                     r["ci_workflow_credits"] = str(total)
-                    r["ci_gate_credits"] = str(
-                        gate.get("lint_duration_s", 0) + gate.get("test_duration_s", 0)
-                    )
                     r["ci_cost_usd"] = str(credits_to_usd(total))
 
 with csv_path.open("w", newline="") as f:
