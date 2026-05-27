@@ -1,0 +1,7 @@
+# Local run artifacts (opt in per run — see results/README.md)
+results/*/
+!results/README.md
+!results/schema.csv
+
+# Editor / OS
+.DS_Store

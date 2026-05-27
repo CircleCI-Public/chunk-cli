@@ -1,0 +1,75 @@
+{
+  "base_ref": "main",
+  "tasks": [
+    {
+      "id": 1,
+      "slug": "fix-unit-test",
+      "description": "Fix a failing unit test in a single package.",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "pass" }
+    },
+    {
+      "id": 2,
+      "slug": "introduce-lint-violation",
+      "description": "Introduce a golangci-lint violation, then fix in task 3.",
+      "patch": null,
+      "expect": { "lint": "fail", "test": "pass" }
+    },
+    {
+      "id": 3,
+      "slug": "fix-lint-violation",
+      "description": "Resolve lint failure from task 2.",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "pass" }
+    },
+    {
+      "id": 4,
+      "slug": "two-package-change",
+      "description": "Change code in two packages so test-changed scope matters.",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "pass" }
+    },
+    {
+      "id": 5,
+      "slug": "break-test-then-fix",
+      "description": "Break a test; task 6 fixes it (signal recovery narrative).",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "fail" }
+    },
+    {
+      "id": 6,
+      "slug": "fix-broken-test",
+      "description": "Fix test broken in task 5.",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "pass" }
+    },
+    {
+      "id": 7,
+      "slug": "fmt-drift",
+      "description": "Minor formatting drift (optional format check locally).",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "pass" }
+    },
+    {
+      "id": 8,
+      "slug": "internal-refactor",
+      "description": "Small refactor with no behavior change; tests stay green.",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "pass" }
+    },
+    {
+      "id": 9,
+      "slug": "add-test-case",
+      "description": "Add a table-driven test case in an existing file.",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "pass" }
+    },
+    {
+      "id": 10,
+      "slug": "error-handling-tweak",
+      "description": "Adjust error wrapping or message in one function.",
+      "patch": null,
+      "expect": { "lint": "pass", "test": "pass" }
+    }
+  ]
+}
