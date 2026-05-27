@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from llm_usage import format_tokens, format_usd, load_llm_totals
+from metrics import format_credits, format_duration_s
 
 
 def _status(run_dir: Path) -> str:
@@ -150,8 +151,10 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
             )
             for name, info in sorted(jobs.items()):
                 lines.append(
-                    f"| {name} | {info.get('status', '')} | {info.get('duration_s', '')} | "
-                    f"{info.get('credits_est', '')} | {format_usd(info.get('cost_usd_est'))} |"
+                    f"| {name} | {info.get('status', '')} | "
+                    f"{format_duration_s(info.get('duration_s'))} | "
+                    f"{format_credits(info.get('credits_est'))} | "
+                    f"{format_usd(info.get('cost_usd_est'))} |"
                 )
             lines.append("")
 

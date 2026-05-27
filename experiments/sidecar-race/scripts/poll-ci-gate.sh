@@ -120,14 +120,15 @@ def ok(status: str | None) -> str:
 
 lint = jobs["lint"]
 test = jobs["test"]
-lint_dur = int(lint.get("duration") or 0)
-test_dur = int(test.get("duration") or 0)
 tts = int(time.time()) - start
 
 import sys
 
 sys.path.insert(0, os.environ.get("METRICS_LIB", ""))
-from metrics import credits_to_usd, gate_job_credits  # noqa: E402
+from metrics import credits_to_usd, gate_job_credits, job_duration_seconds  # noqa: E402
+
+lint_dur = round(job_duration_seconds(lint), 1)
+test_dur = round(job_duration_seconds(test), 1)
 
 wf_credits, lint_credits, test_credits = gate_job_credits(
     slug, workflow_id, lint_dur, test_dur

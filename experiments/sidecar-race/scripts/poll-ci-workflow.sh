@@ -120,7 +120,8 @@ while time.time() < deadline:
             jobs[name] = {
                 "job_number": j.get("job_number"),
                 "status": j.get("status"),
-                "duration_s": int(j.get("duration") or 0),
+                "started_at": j.get("started_at"),
+                "stopped_at": j.get("stopped_at"),
             }
     if items and all(terminal(j.get("status")) for j in items):
         break
@@ -136,12 +137,12 @@ def job_ok(name: str) -> str:
 import sys
 
 sys.path.insert(0, os.environ.get("METRICS_LIB", ""))
-from metrics import credits_to_usd, workflow_total_credits_from_jobs  # noqa: E402
+from metrics import enrich_workflow_jobs, job_duration_seconds  # noqa: E402
 
-wf_credits, job_credits = workflow_total_credits_from_jobs(slug, workflow_id)
 for name, info in jobs.items():
-    info["credits_est"] = job_credits.get(name, 0)
-    info["cost_usd_est"] = credits_to_usd(info["credits_est"])
+    info["duration_s"] = round(job_duration_seconds(info), 1)
+
+wf_credits, jobs = enrich_workflow_jobs(slug, workflow_id, jobs)
 
 result = {
     "pipeline_id": pipeline_id,
