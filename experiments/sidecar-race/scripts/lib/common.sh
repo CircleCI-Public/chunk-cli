@@ -119,6 +119,6 @@ run_label_from_branch() {
   local branch="$1"
   local arm="$2"
   local label="${branch#experiment/sidecar-race--run-}"
-  label="${label%-${arm}}"
+  label="${label%-"${arm}"}"
   echo "${label}"
 }

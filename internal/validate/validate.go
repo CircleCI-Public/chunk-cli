@@ -108,7 +108,8 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 
 // RunRemote runs commands on a remote sidecar via SSH.
 // If name is non-empty, only the named command is run.
-func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest string, status iostream.StatusFunc, streams iostream.Streams) error {
+// localWorkDir expands {{CHANGED_PACKAGES}} from local git state before sending the script.
+func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, localWorkDir, dest string, status iostream.StatusFunc, streams iostream.Streams) error {
 	commands := cfg.Commands
 	if name != "" {
 		c := cfg.FindCommand(name)
@@ -118,8 +119,9 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		commands = []config.Command{*c}
 	}
 	for _, c := range commands {
-		script := "cd " + shellEscape(dest) + " && " + c.Run
-		status(iostream.LevelInfo, fmt.Sprintf("Running %s (remote): %s", c.Name, c.Run))
+		run := expandCommand(localWorkDir, c.Run)
+		script := "cd " + shellEscape(dest) + " && " + run
+		status(iostream.LevelInfo, fmt.Sprintf("Running %s (remote): %s", c.Name, run))
 		stdout, stderr, exitCode, err := execFn(ctx, script)
 		if err != nil {
 			return fmt.Errorf("remote %s: %w", c.Name, err)
@@ -138,7 +140,8 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 }
 
 // RunRemoteInline runs a single inline command on a remote sidecar via SSH.
-func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, status iostream.StatusFunc, streams iostream.Streams) error {
+func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, localWorkDir, dest string, status iostream.StatusFunc, streams iostream.Streams) error {
+	command = expandCommand(localWorkDir, command)
 	script := "cd " + shellEscape(dest) + " && " + command
 	status(iostream.LevelInfo, fmt.Sprintf("Running %s (remote): %s", name, command))
 	stdout, stderr, exitCode, err := execFn(ctx, script)

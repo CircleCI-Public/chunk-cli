@@ -96,7 +96,7 @@ cd experiments/sidecar-race
 1. Reset to a clean tree (task 1)
 2. Warm the sidecar (`sync` + remote `lint`)
 3. Run tasks 1–10 (patch → sync → remote gates)
-4. **Epilogue:** commit cumulative state → push → poll gate jobs + full workflow → `epilogue.json`
+4. **Epilogue:** verify tree passes shellcheck + `task lint` + tests locally → commit cumulative state → push → poll gate jobs + full `ci` workflow (must pass) → `epilogue.json`
 
 Skip epilogue: `./scripts/run-arm.sh --arm sidecar --no-epilogue`  
 Epilogue only: `./scripts/sidecar-epilogue.sh` (after a partial run, set `RUN_ID`)

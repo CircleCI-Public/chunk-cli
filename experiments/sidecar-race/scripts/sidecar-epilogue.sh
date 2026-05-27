@@ -55,6 +55,9 @@ export START_EPOCH
 RUN_DIR="$(resolve_run_dir)"
 EPILOGUE_JSON="${RUN_DIR}/epilogue.json"
 
+echo "Verifying epilogue tree passes local CI gates (shellcheck, lint, test)..."
+"${SCRIPT_DIR}/verify-epilogue-ready.sh" --to-task "${TO_TASK}"
+
 if [[ "${SKIP_COMMIT}" != true ]]; then
   echo "Committing cumulative task 1-${TO_TASK} state for CI epilogue..."
   git -C "${REPO_ROOT}" add internal/racefixture 2>/dev/null || true
@@ -74,7 +77,7 @@ fi
 
 echo "Polling CI gate jobs (lint, test)..."
 GATE_CSV="$("${SCRIPT_DIR}/poll-ci-gate.sh" --branch "${BRANCH}")"
-IFS=',' read -r PIPELINE_ID WORKFLOW_ID LINT_JOB TEST_JOB LINT_OK TEST_OK LINT_DUR TEST_DUR GATE_TTS WF_CRED GATE_CRED CI_COST <<<"${GATE_CSV}"
+IFS=',' read -r PIPELINE_ID WORKFLOW_ID LINT_JOB TEST_JOB LINT_OK TEST_OK LINT_DUR TEST_DUR _GATE_TTS WF_CRED GATE_CRED CI_COST <<<"${GATE_CSV}"
 
 echo "Polling full ci workflow..."
 WF_TMP="${EPILOGUE_JSON}.tmp"

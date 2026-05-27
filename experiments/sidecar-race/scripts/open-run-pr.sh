@@ -109,8 +109,9 @@ ensure_branch() {
   fi
   git -C "${REPO_ROOT}" push -u origin "${RUN_BRANCH}"
   # GitHub requires at least one commit difference from base for a PR.
-  if git -C "${REPO_ROOT}" rev-parse "${RUN_BRANCH}" \
-    | grep -q "$(git -C "${REPO_ROOT}" rev-parse "origin/${BASE_BRANCH}" 2>/dev/null || git -C "${REPO_ROOT}" rev-parse "${BASE_BRANCH}")"; then
+  base_sha="$(git -C "${REPO_ROOT}" rev-parse "origin/${BASE_BRANCH}" 2>/dev/null \
+    || git -C "${REPO_ROOT}" rev-parse "${BASE_BRANCH}")"
+  if [[ "$(git -C "${REPO_ROOT}" rev-parse "${RUN_BRANCH}")" == "${base_sha}" ]]; then
     git -C "${REPO_ROOT}" commit --allow-empty -m "experiment: begin run ${RUN_LABEL} (${ARM})"
     git -C "${REPO_ROOT}" push origin "${RUN_BRANCH}"
   fi
@@ -127,7 +128,8 @@ if [[ "${BOOTSTRAP}" == true ]]; then
     echo "Updated existing draft PR #${existing} for ${RUN_BRANCH}"
     gh pr view "${existing}" --web 2>/dev/null || gh pr view "${existing}"
   else
-    args=(pr create --base "${BASE_BRANCH}" --head "${RUN_BRANCH}" --title "${TITLE}" --body-file "${body}" --draft)
+    args=(pr create --base "${BASE_BRANCH}" --head "${RUN_BRANCH}" --title "${TITLE}" --body-file "${body}")
+    [[ "${DRAFT}" == true ]] && args+=(--draft)
     gh "${args[@]}"
   fi
   exit 0

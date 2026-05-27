@@ -60,4 +60,7 @@ if [[ "${failures}" -gt 0 ]]; then
   die "${failures} task(s) did not match manifest expect"
 fi
 
+echo "Verifying cumulative tree passes epilogue CI gates..."
+"${SCRIPT_DIR}/verify-epilogue-ready.sh" --to-task "$(python3 -c "import json; print(len(json.load(open('${MANIFEST}'))['tasks']))")"
+
 echo "All tasks match manifest expect."
