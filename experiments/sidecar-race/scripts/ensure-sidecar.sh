@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 require_cmd chunk
 
-if chunk sidecar current >/dev/null 2>&1; then
+if has_active_sidecar; then
   echo "Active sidecar already set:"
   chunk sidecar current
   exit 0

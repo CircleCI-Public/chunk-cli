@@ -91,3 +91,10 @@ bool_from_exit() {
 git_short_sha() {
   git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo ""
 }
+
+# chunk sidecar current exits 0 even when no sidecar is set; use JSON.
+has_active_sidecar() {
+  local json
+  json="$(chunk sidecar current --json 2>/dev/null || echo "{}")"
+  python3 -c "import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get('sidecar_id') else 1)" "${json}"
+}

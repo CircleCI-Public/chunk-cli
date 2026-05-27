@@ -69,8 +69,10 @@ done
 "${SCRIPT_DIR}/prep-check.sh" --arm "${ARM}"
 
 branch="$(git -C "${REPO_ROOT}" branch --show-current)"
-if [[ ! "${branch}" =~ ^experiment/sidecar-race/run- ]]; then
-  die "checkout a run branch first, e.g. experiment/sidecar-race/run-001-${ARM}"
+# Git cannot create experiment/sidecar-race/run-* while branch experiment/sidecar-race exists.
+# Use sidecar-race-run-<id>-<arm> (see README).
+if [[ "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
+  die "checkout a run branch first, e.g. sidecar-race-run-001-${ARM}"
 fi
 
 if [[ "${ARM}" == "sidecar" && "${ENSURE_SIDECAR}" == true ]]; then
