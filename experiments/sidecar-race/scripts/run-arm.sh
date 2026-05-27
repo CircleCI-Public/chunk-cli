@@ -184,7 +184,7 @@ PY
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     echo "Updating run PR (metrics + ready for review)..."
     "${SCRIPT_DIR}/open-run-pr.sh" --run-id "${RUN_LABEL}" --arm "${ARM}" --update --commit-results \
-      || echo "warning: could not update run PR (bootstrap with open-run-pr.sh --bootstrap first)"
+      || echo "warning: could not update run PR"
   else
     echo "Skipping run PR update: install and authenticate gh, or run open-run-pr.sh --update manually"
   fi

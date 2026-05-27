@@ -50,8 +50,8 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
             [
                 "### Metrics summary",
                 "",
-                "_Run not started yet. After `./scripts/run-arm.sh --arm "
-                f"{arm}` completes, results will be committed and this PR will be marked **ready for review**._",
+                "_Run in progress. Metrics will appear as iterations complete; this PR will be marked "
+                "**ready for review** when `run-arm.sh` finishes._",
                 "",
                 "Tracked per iteration and in totals:",
                 "- Wall time (TTS, lint/test job durations, sync)",

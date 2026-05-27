@@ -63,6 +63,11 @@ if [[ "${SKIP_PUSH}" != true ]]; then
   echo "Pushing ${REPO_ROOT} (branch ${BRANCH})..."
   git -C "${REPO_ROOT}" push -u origin "${BRANCH}"
   sleep 5
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    RUN_LABEL="$(run_label_from_branch "${BRANCH}" "ci")"
+    "${SCRIPT_DIR}/open-run-pr.sh" --run-id "${RUN_LABEL}" --arm ci --ensure-draft \
+      || echo "warning: could not open draft PR (needs RUN_ID and run.json)"
+  fi
 fi
 
 echo "Polling CircleCI gate jobs (lint, test)..."

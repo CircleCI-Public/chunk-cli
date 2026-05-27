@@ -73,6 +73,11 @@ if [[ "${SKIP_PUSH}" != true ]]; then
   echo "Pushing ${BRANCH} to origin..."
   git -C "${REPO_ROOT}" push -u origin "${BRANCH}"
   sleep 5
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    RUN_LABEL="$(run_label_from_branch "${BRANCH}" "sidecar")"
+    "${SCRIPT_DIR}/open-run-pr.sh" --run-id "${RUN_LABEL}" --arm sidecar --ensure-draft \
+      || echo "warning: could not open draft PR"
+  fi
 fi
 
 echo "Polling CI gate jobs (lint, test)..."

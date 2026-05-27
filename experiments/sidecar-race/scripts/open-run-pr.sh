@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create or update a PR for a run branch with a metrics summary in the body.
+# Open or update a run PR with metrics in the body (draft until the run completes).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 RUN_LABEL=""
 ARM=""
-BOOTSTRAP=false
+ENSURE_DRAFT=false
 UPDATE=false
 COMMIT_RESULTS=false
 BASE_BRANCH="${EXPERIMENT_BASE_BRANCH:-experiment/sidecar-race}"
@@ -18,25 +18,19 @@ MARK_READY=true
 
 usage() {
   cat <<EOF
-Usage: open-run-pr.sh --run-id <label> --arm <sidecar|ci> [--bootstrap | --update] [options]
+Usage: open-run-pr.sh --run-id <label> --arm <sidecar|ci> [--ensure-draft | --update] [options]
 
-  --run-id <label>  Run label in branch name (e.g. 001 → experiment/sidecar-race--run-001-sidecar)
-  --bootstrap       Create run branch, push, open **draft** PR (pre-run)
-  --update          Refresh PR body from results; mark **ready for review** when run completed
-  --commit-results  git add -f results/<RUN_ID>/ and push before updating PR
-  --no-mark-ready   Leave PR as draft after --update (default: mark ready when results exist)
+  --ensure-draft    Open a draft PR only if the run branch has ≥1 commit ahead of ${BASE_BRANCH}
+                    and no PR exists yet (called automatically after first push/commit).
+  --update          Refresh PR body from results; mark ready for review when the run completed
+  --commit-results  git add -f results/<RUN_ID>/ and push before --update
 
 Environment:
-  RUN_ID              Results directory id (timestamp from new-run.sh); required for --update
-  EXPERIMENT_BASE_BRANCH   Base branch (default: experiment/sidecar-race)
+  RUN_ID            Results directory id (required for --update)
 
-Example (before running):
-  ./scripts/open-run-pr.sh --run-id 001 --arm sidecar --bootstrap
-  ./scripts/open-run-pr.sh --run-id 001 --arm ci --bootstrap
-
-After run-arm.sh:
-  export RUN_ID=20260527-120000
-  ./scripts/open-run-pr.sh --run-id 001 --arm sidecar --update --commit-results
+Example:
+  # No manual step before run-arm — draft PR opens on first commit (CI task 1 or sidecar epilogue).
+  ./scripts/run-arm.sh --arm sidecar --notes "run 001"
 EOF
 }
 
@@ -44,7 +38,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --run-id | --label) RUN_LABEL="$2"; shift 2 ;;
     --arm) ARM="$2"; shift 2 ;;
-    --bootstrap) BOOTSTRAP=true; shift ;;
+    --ensure-draft) ENSURE_DRAFT=true; shift ;;
     --update) UPDATE=true; shift ;;
     --commit-results) COMMIT_RESULTS=true; shift ;;
     --base) BASE_BRANCH="$2"; shift 2 ;;
@@ -58,10 +52,18 @@ done
 [[ -n "${RUN_LABEL}" ]] || die "--run-id <label> is required (e.g. 001)"
 [[ -n "${ARM}" ]] || die "--arm is required (sidecar or ci)"
 [[ "${ARM}" == "sidecar" || "${ARM}" == "ci" ]] || die "--arm must be sidecar or ci"
-[[ "${BOOTSTRAP}" == true || "${UPDATE}" == true ]] || die "use --bootstrap or --update"
+[[ "${ENSURE_DRAFT}" == true || "${UPDATE}" == true ]] || die "use --ensure-draft or --update"
 
 RUN_BRANCH="$(run_branch_example "${ARM}" "${RUN_LABEL}")"
 TITLE="experiment: sidecar race run ${RUN_LABEL} (${ARM})"
+
+commits_ahead_of_base() {
+  git -C "${REPO_ROOT}" fetch origin "${BASE_BRANCH}" 2>/dev/null || true
+  local base_sha
+  base_sha="$(git -C "${REPO_ROOT}" rev-parse "origin/${BASE_BRANCH}" 2>/dev/null \
+    || git -C "${REPO_ROOT}" rev-parse "${BASE_BRANCH}")"
+  git -C "${REPO_ROOT}" rev-list --count "${base_sha}..HEAD" 2>/dev/null || echo "0"
+}
 
 run_completed() {
   local run_dir="$1"
@@ -78,66 +80,52 @@ pr_body_file() {
   local run_dir="${1:-}"
   local tmp
   tmp="$(mktemp)"
-  if [[ -n "${run_dir}" && -d "${run_dir}" ]]; then
+  if [[ -n "${run_dir}" && -d "${run_dir}" && -f "${run_dir}/run.json" ]]; then
     python3 "${SCRIPT_DIR}/lib/render_run_pr_body.py" "${run_dir}" "${HARNESS_PR_URL}" >"${tmp}"
   else
-    local bootstrap_dir="${EXPERIMENT_ROOT}/results/.bootstrap-${RUN_LABEL}-${ARM}"
-    mkdir -p "${bootstrap_dir}"
-    python3 -c "
-import json
-from pathlib import Path
-p = Path('${bootstrap_dir}/run.json')
-p.write_text(json.dumps({
-    'run_id': '${RUN_LABEL}',
-    'arm': '${ARM}',
-    'branch': '${RUN_BRANCH}',
-    'notes': 'bootstrap PR — metrics pending',
-}, indent=2) + '\n')
-"
-    python3 "${SCRIPT_DIR}/lib/render_run_pr_body.py" "${bootstrap_dir}" "${HARNESS_PR_URL}" >"${tmp}"
+    die "cannot render PR body: no results run directory (set RUN_ID)"
   fi
   echo "${tmp}"
 }
 
-ensure_branch() {
-  git -C "${REPO_ROOT}" fetch origin "${BASE_BRANCH}" 2>/dev/null || true
-  if git -C "${REPO_ROOT}" show-ref --verify --quiet "refs/heads/${RUN_BRANCH}"; then
-    git -C "${REPO_ROOT}" checkout "${RUN_BRANCH}"
-  else
-    git -C "${REPO_ROOT}" checkout -B "${RUN_BRANCH}" "origin/${BASE_BRANCH}" 2>/dev/null \
-      || git -C "${REPO_ROOT}" checkout -B "${RUN_BRANCH}" "${BASE_BRANCH}"
-  fi
-  git -C "${REPO_ROOT}" push -u origin "${RUN_BRANCH}"
-  # GitHub requires at least one commit difference from base for a PR.
-  base_sha="$(git -C "${REPO_ROOT}" rev-parse "origin/${BASE_BRANCH}" 2>/dev/null \
-    || git -C "${REPO_ROOT}" rev-parse "${BASE_BRANCH}")"
-  if [[ "$(git -C "${REPO_ROOT}" rev-parse "${RUN_BRANCH}")" == "${base_sha}" ]]; then
-    git -C "${REPO_ROOT}" commit --allow-empty -m "experiment: begin run ${RUN_LABEL} (${ARM})"
-    git -C "${REPO_ROOT}" push origin "${RUN_BRANCH}"
-  fi
+existing_pr_num() {
+  gh pr list --head "${RUN_BRANCH}" --base "${BASE_BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true
 }
 
-if [[ "${BOOTSTRAP}" == true ]]; then
+if [[ "${ENSURE_DRAFT}" == true ]]; then
   require_cmd gh
-  ensure_branch
-  body="$(pr_body_file "")"
-  trap 'rm -f "${body}"' EXIT
-  existing="$(gh pr list --head "${RUN_BRANCH}" --base "${BASE_BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
-  if [[ -n "${existing}" && "${existing}" != "null" ]]; then
-    gh pr edit "${existing}" --title "${TITLE}" --body-file "${body}"
-    echo "Updated existing draft PR #${existing} for ${RUN_BRANCH}"
-    gh pr view "${existing}" --web 2>/dev/null || gh pr view "${existing}"
-  else
-    args=(pr create --base "${BASE_BRANCH}" --head "${RUN_BRANCH}" --title "${TITLE}" --body-file "${body}")
-    [[ "${DRAFT}" == true ]] && args+=(--draft)
-    gh "${args[@]}"
+  branch="$(git -C "${REPO_ROOT}" branch --show-current)"
+  [[ "${branch}" == "${RUN_BRANCH}" ]] || die "checkout ${RUN_BRANCH} (on ${branch})"
+
+  ahead="$(commits_ahead_of_base)"
+  if [[ "${ahead}" -lt 1 ]]; then
+    echo "No draft PR: ${RUN_BRANCH} has no commits ahead of ${BASE_BRANCH} yet."
+    exit 0
   fi
+
+  pr_num="$(existing_pr_num)"
+  if [[ -n "${pr_num}" && "${pr_num}" != "null" ]]; then
+    echo "Draft PR already exists: #${pr_num}"
+    exit 0
+  fi
+
+  run_dir=""
+  if [[ -n "${RUN_ID:-}" ]]; then
+    run_dir="$(resolve_run_dir 2>/dev/null)" || true
+  fi
+  [[ -n "${run_dir}" && -f "${run_dir}/run.json" ]] || die "RUN_ID must be set and run.json must exist before opening draft PR"
+
+  body="$(pr_body_file "${run_dir}")"
+  trap 'rm -f "${body}"' EXIT
+  args=(pr create --base "${BASE_BRANCH}" --head "${RUN_BRANCH}" --title "${TITLE}" --body-file "${body}")
+  [[ "${DRAFT}" == true ]] && args+=(--draft)
+  gh "${args[@]}"
   exit 0
 fi
 
 if [[ "${UPDATE}" == true ]]; then
   require_cmd gh
-  : "${RUN_ID:?RUN_ID is required for --update (timestamp from new-run.sh / run-arm.sh)}"
+  : "${RUN_ID:?RUN_ID is required for --update}"
 
   RUN_DIR="$(resolve_run_dir)"
   branch="$(git -C "${REPO_ROOT}" branch --show-current)"
@@ -153,10 +141,19 @@ if [[ "${UPDATE}" == true ]]; then
     fi
   fi
 
+  ahead="$(commits_ahead_of_base)"
+  [[ "${ahead}" -ge 1 ]] || die "no commits on ${RUN_BRANCH} ahead of ${BASE_BRANCH}; nothing to publish"
+
+  pr_num="$(existing_pr_num)"
+  if [[ -z "${pr_num}" || "${pr_num}" == "null" ]]; then
+    export RUN_ID
+    "${SCRIPT_DIR}/open-run-pr.sh" --run-id "${RUN_LABEL}" --arm "${ARM}" --ensure-draft
+    pr_num="$(existing_pr_num)"
+  fi
+  [[ -n "${pr_num}" && "${pr_num}" != "null" ]] || die "could not find or create PR for ${RUN_BRANCH}"
+
   body="$(pr_body_file "${RUN_DIR}")"
   trap 'rm -f "${body}"' EXIT
-  pr_num="$(gh pr list --head "${RUN_BRANCH}" --base "${BASE_BRANCH}" --json number --jq '.[0].number')"
-  [[ -n "${pr_num}" && "${pr_num}" != "null" ]] || die "no PR found for ${RUN_BRANCH} → ${BASE_BRANCH}; run --bootstrap first"
   gh pr edit "${pr_num}" --title "${TITLE}" --body-file "${body}"
 
   if [[ "${MARK_READY}" == true ]] && run_completed "${RUN_DIR}"; then

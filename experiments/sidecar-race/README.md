@@ -54,23 +54,22 @@ Gate jobs (`lint`, `test`) are the primary comparison. The epilogue also records
 - **`uv` (and Go toolchain) on the sidecar snapshot** — install before `chunk sidecar snapshot create`, then set `validation.sidecarImage`
 - `chunk auth status` + `CIRCLE_TOKEN` (sidecar epilogue and CI arm)
 - `.chunk/config.json` with `lint` and `test-changed` commands
-- Run branch **pushed to `origin`** before starting
+- Run branch checked out locally (see below); first **push** creates the remote branch
 
 ## Pull requests (one per run arm)
 
-Before starting runs, open **draft** PRs (metrics placeholder). When `run-arm.sh` finishes, it commits results, refreshes the PR body with timings/costs, and marks the PR **ready for review**.
+Do **not** open a PR before the run. A **draft** PR is created automatically on the first commit pushed to the run branch:
 
-```bash
-cd experiments/sidecar-race
-./scripts/bootstrap-run-prs.sh 001   # sidecar + CI draft PRs
-# or individually:
-./scripts/open-run-pr.sh --run-id 001 --arm sidecar --bootstrap
-./scripts/open-run-pr.sh --run-id 001 --arm ci --bootstrap
-```
+| Arm | First commit | Draft PR opens |
+|-----|----------------|----------------|
+| CI | Task 1 (`git push` in `ci-iter.sh`) | After first push |
+| Sidecar | Epilogue (`tasks 1–10` commit + push) | After epilogue push |
+
+When `run-arm.sh` finishes, it commits results, refreshes the PR body, and marks it **ready for review**.
 
 | Phase | PR state | Body |
 |-------|----------|------|
-| Pre-run (`--bootstrap`) | Draft | Pending metrics table |
+| First push on run branch | Draft | Run in progress (`run.json` only) |
 | Post-run (`run-arm.sh` end) | Ready for review | `summary.txt`, `costs_summary.json`, per-iter table |
 
 Manual update after a partial run:
