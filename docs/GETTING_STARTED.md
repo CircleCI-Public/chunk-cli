@@ -227,12 +227,13 @@ Variables from `--env` flags take precedence over those in `--env-file`. `.env.l
 Capture a configured environment so future sidecars boot fast:
 
 ```bash
+chunk sidecar snapshot list
 chunk sidecar snapshot create --name checkpoint
 # Later:
 chunk sidecar create --image <snapshot-id>           # name auto-generated
 ```
 
-`snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
+`snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
 
 ---
 

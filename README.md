@@ -88,12 +88,13 @@ chunk sidecar env | chunk sidecar build --dir .
 Capture a configured environment so future sidecars start from a known-good state:
 
 ```bash
+chunk sidecar snapshot list
 chunk sidecar snapshot create --name checkpoint
 # Later:
 chunk sidecar create --name new-sidecar --image <snapshot-id>
 ```
 
-**Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`.
+**Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`. Use `chunk sidecar snapshot list` to look up snapshot IDs for your org.
 
 ### Context Generation
 
@@ -120,7 +121,7 @@ chunk sidecar list|create|exec|ssh         Manage cloud sidecar environments
 chunk sidecar sync|env|build               Sync files, detect env, build images
 chunk sidecar use|current|forget           Manage active sidecar
 chunk sidecar setup                        Detect env, install deps, snapshot
-chunk sidecar snapshot create|get          Manage sidecar snapshots
+chunk sidecar snapshot create|get|list       Manage sidecar snapshots
 chunk init                                 Initialize project configuration
 chunk validate [name]                      Run quality checks
 chunk skill install|list                   Manage AI agent skills

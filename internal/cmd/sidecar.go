@@ -928,7 +928,8 @@ Example:
 			}
 
 			streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it:\n")
-			streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n\n")
+			streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n")
+			streams.ErrPrintf("  chunk sidecar snapshot list              # list snapshot IDs for your org\n\n")
 
 			return nil
 		},

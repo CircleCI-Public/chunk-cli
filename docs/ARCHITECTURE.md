@@ -17,7 +17,7 @@ chunk-cli/
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set
     │   ├── init.go            # init (project setup, settings.json generation)
-    │   ├── sidecar.go         # sidecar list/create/exec/add-ssh-key/ssh/sync/env/build
+    │   ├── sidecar.go         # sidecar list/create/exec/add-ssh-key/ssh/sync/env/build/setup/snapshot
     │   ├── skills.go          # skill install/list
     │   ├── task.go            # task run
     │   ├── upgrade.go         # upgrade

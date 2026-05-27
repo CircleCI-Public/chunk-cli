@@ -109,7 +109,8 @@ chunk
 │       ├── create                  # Snapshot a sidecar, then delete the source sidecar
 │       │   --sidecar-id <id>       # Sidecar ID (defaults to active sidecar)
 │       │   --name <name>           # Snapshot name (required)
-│       └── get <snapshot-id>       # Get a snapshot by ID
+│       ├── get <snapshot-id>       # Get a snapshot by ID
+│       └── list --org-id <id>      # List snapshots
 │
 ├── completion
 │   ├── install                     # Install zsh completion
