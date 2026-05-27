@@ -1,0 +1,38 @@
+Sidecar race run summary: 20260527-200851
+  arm:     sidecar
+  branch:  experiment/sidecar-race--run-002-sidecar
+  git_sha: 742ef51303cf75a35c34e96fccf52b9443c2afa5
+  notes:   run 002 sidecar (agent)
+
+Iterations recorded: 10
+Time to signal (seconds): {
+  "n": 10,
+  "median_s": 22.0,
+  "p95_s": 25,
+  "min_s": 17,
+  "max_s": 27
+}
+
+Per iteration:
+  iter 1: tts=23s lint=pass test=pass
+  iter 2: tts=19s lint=fail test=pass
+  iter 3: tts=22s lint=pass test=pass
+  iter 4: tts=25s lint=pass test=pass
+  iter 5: tts=22s lint=pass test=pass
+  iter 6: tts=21s lint=pass test=pass
+  iter 7: tts=17s lint=fail test=pass
+  iter 8: tts=27s lint=pass test=pass
+  iter 9: tts=20s lint=pass test=pass
+  iter 10: tts=22s lint=pass test=pass
+
+Costs (see costs_summary.json):
+  CI credits (sum):     26
+  CI cost (sum):        $0.0156
+  Sidecar credits est:  290
+  Sidecar cost (est.):  $0.174
+  LLM tokens:           22720
+  LLM cost:             $1.0271
+
+Epilogue (final push → CI):
+  tts=6s gate lint=pass test=pass
+  workflow=success shellcheck=pass acceptance=pass build-smoke=pass
