@@ -1,4 +1,4 @@
-# Review checklist (experiment/sidecar-race)
+# Review checklist (experiment/sidecar-race-harness)
 
 Use this before cutting run sub-branches. **Merge to `main` only after all experiment runs are done** (see README “When to merge”).
 
@@ -18,10 +18,10 @@ Use this before cutting run sub-branches. **Merge to `main` only after all exper
 
 ## Run branches (before merge to main)
 
-- [ ] `experiment/sidecar-race-run-001-sidecar` branched from `experiment/sidecar-race` (not from `main`)
-- [ ] `experiment/sidecar-race-run-001-ci` branched from `experiment/sidecar-race` (fresh, not from the sidecar run branch)
+- [ ] `experiment/sidecar-race/run-001-sidecar` branched from `experiment/sidecar-race-harness` (not from `main`)
+- [ ] `experiment/sidecar-race/run-001-ci` branched from `experiment/sidecar-race-harness` (fresh, not from the sidecar run branch)
 - [ ] All planned iterations recorded on both arms
-- [ ] Happy with results — only then merge `experiment/sidecar-race` → `main`
+- [ ] Happy with results — only then merge `experiment/sidecar-race-harness` → `main`
 - [ ] Sidecar snapshot ID recorded in `run.json` matches org snapshot
 - [ ] CI run branch pushed to `origin` before `ci-iter.sh`
 - [ ] Results committed with `git add -f` only when publishing (see `results/README.md`)

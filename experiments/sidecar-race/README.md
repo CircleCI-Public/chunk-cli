@@ -6,38 +6,39 @@ This directory is scaffolding only. **Do not treat results under `results/` as p
 
 ## When to merge (read this first)
 
-**Do not merge `experiment/sidecar-race` into `main` until every planned run is finished** (sidecar arm, CI arm, and any reruns you care about). The open PR can stay a draft while you work.
+**Do not merge the harness into `main` until every planned run is finished** (sidecar arm, CI arm, and any reruns you care about). The open PR can stay a draft while you work.
 
-1. Run the experiment on **child branches** (below) branched from `experiment/sidecar-race`.
+1. Run the experiment on **run branches** (below) branched from `experiment/sidecar-race-harness`.
 2. Collect and review results.
-3. **Then** merge the harness to `main` (or close/reopen the PR) if you want the tooling public.
+3. **Then** merge `experiment/sidecar-race-harness` → `main` if you want the tooling public.
 
 `main` should stay free of experiment runs and `internal/racefixture/` until you are ready.
 
 ## Branching strategy
 
+Git cannot use `experiment/sidecar-race/run-*` **and** a sibling branch named `experiment/sidecar-race` at the same time (ref hierarchy conflict). The harness therefore lives on **`experiment/sidecar-race-harness`**; run branches use the `experiment/sidecar-race/run-*` namespace you want.
+
 | Branch | Purpose |
 |--------|---------|
-| `experiment/sidecar-race` | Harness, docs, task bank — **base for all runs; merge to `main` only after runs** |
-| `experiment/sidecar-race-run-<id>-sidecar` | Execute sidecar arm only (branch **from** `experiment/sidecar-race`, not `main`) |
-| `experiment/sidecar-race-run-<id>-ci` | Execute CI arm only (same base; fresh branch, not from the sidecar run branch) |
-| `experiment/sidecar-race-run-<id>-combined` | Optional: same machine, both arms interleaved (control order) |
+| `experiment/sidecar-race-harness` | Harness, docs, task bank — **base for all runs; merge to `main` only after runs** |
+| `experiment/sidecar-race/run-<id>-sidecar` | Execute sidecar arm only (branch **from** harness, not `main`) |
+| `experiment/sidecar-race/run-<id>-ci` | Execute CI arm only (same base; fresh branch, not from the sidecar run branch) |
+| `experiment/sidecar-race/run-<id>-combined` | Optional: same machine, both arms interleaved (control order) |
 
-Git cannot use `experiment/sidecar-race/run-*` while branch `experiment/sidecar-race` exists (ref hierarchy conflict). Use the sibling name `experiment/sidecar-race-run-*` instead — still under the `experiment/` prefix.
-
-Always create run branches from `experiment/sidecar-race`:
+Always create run branches from `experiment/sidecar-race-harness`:
 
 ```bash
 git fetch origin
-git checkout experiment/sidecar-race
+git checkout experiment/sidecar-race-harness
 
 # Sidecar arm
-git checkout -b experiment/sidecar-race-run-001-sidecar
+git checkout -b experiment/sidecar-race/run-001-sidecar
 git push -u origin HEAD   # required so sidecar sync clones this branch
 
-# CI arm (start again from experiment/sidecar-race, not from the sidecar run branch)
-git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race-run-001-ci
+# CI arm (start again from harness, not from the sidecar run branch)
+git checkout experiment/sidecar-race-harness
+git checkout -b experiment/sidecar-race/run-001-ci
+git push -u origin HEAD
 ```
 
 Push run branches to `origin` when you need CI (CI arm) or remote backup. That does **not** require merging to `main`.
@@ -56,7 +57,7 @@ Compare sidecar microbuild gates to CircleCI **`lint`** and **`test`** jobs only
 ## Prerequisites
 
 - `chunk` CLI installed and on `PATH`
-- `task` and `uv` on `PATH` (used by lint/test commands on the sidecar)
+- `task` and `uv` on `PATH` locally; **`uv` must also be on the sidecar** (install before snapshot, or lint will fail remotely)
 - `chunk auth status` — CircleCI token configured (`chunk auth set circleci`)
 - `.chunk/config.json` with `validation.sidecarImage` set (snapshot from one-time `chunk sidecar setup`)
 - `lint` and `test-changed` commands configured in `.chunk/config.json`
@@ -71,8 +72,8 @@ You can run the full experiment from the Cursor terminal (or ask the agent to ru
 
 ```bash
 git fetch origin
-git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race-run-001-sidecar   # or experiment/sidecar-race-run-001-ci
+git checkout experiment/sidecar-race-harness
+git checkout -b experiment/sidecar-race/run-001-sidecar   # or run-001-ci
 git push -u origin HEAD
 ```
 
@@ -89,8 +90,8 @@ cd experiments/sidecar-race
 ### 3. CI arm (~30–60+ minutes; needs push per task)
 
 ```bash
-git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race-run-001-ci
+git checkout experiment/sidecar-race-harness
+git checkout -b experiment/sidecar-race/run-001-ci
 git push -u origin HEAD
 cd experiments/sidecar-race
 ./scripts/prep-check.sh --arm ci

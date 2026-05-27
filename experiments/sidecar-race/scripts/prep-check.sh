@@ -96,12 +96,12 @@ else
 fi
 
 branch="$(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null || true)"
-if [[ "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
-  echo "  note: create a run branch before run-arm.sh (e.g. experiment/sidecar-race-run-001-sidecar)"
-elif [[ "${branch}" =~ ^experiment/sidecar-race-run- ]]; then
+if [[ "${branch}" == "experiment/sidecar-race-harness" || "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
+  echo "  note: create a run branch before run-arm.sh (e.g. experiment/sidecar-race/run-001-sidecar)"
+elif [[ "${branch}" =~ ^experiment/sidecar-race/run- ]]; then
   say_ok "on run branch (${branch})"
 else
-  echo "  note: branch is '${branch}' — expected experiment/sidecar-race-run-<id>-<arm>"
+  echo "  note: branch is '${branch}' — expected experiment/sidecar-race/run-<id>-<arm>"
 fi
 
 if [[ "${ARM}" == "sidecar" ]]; then
