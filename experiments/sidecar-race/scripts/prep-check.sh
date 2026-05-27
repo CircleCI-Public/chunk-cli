@@ -97,11 +97,11 @@ fi
 
 branch="$(git -C "${REPO_ROOT}" branch --show-current 2>/dev/null || true)"
 if [[ "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
-  echo "  note: create a run branch before run-arm.sh (e.g. experiment/sidecar-race-run-001-sidecar)"
-elif [[ "${branch}" =~ ^experiment/sidecar-race-run- ]]; then
+  echo "  note: create a run branch before run-arm.sh (e.g. $(run_branch_example sidecar))"
+elif is_run_branch "${branch}"; then
   say_ok "on run branch (${branch})"
 else
-  echo "  note: branch is '${branch}' — expected experiment/sidecar-race-run-<id>-<arm>"
+  echo "  note: branch is '${branch}' — expected experiment/sidecar-race--run-<id>-<arm>"
 fi
 
 if [[ "${ARM}" == "sidecar" ]]; then
@@ -122,6 +122,11 @@ if p.exists():
     say_ok "active sidecar"
   else
     echo "  note: no active sidecar — run-arm.sh will call ensure-sidecar.sh first"
+  fi
+  if [[ -n "${CIRCLE_TOKEN:-${CIRCLECI_TOKEN:-}}" ]]; then
+    say_ok "CIRCLE_TOKEN set (required for epilogue)"
+  else
+    say_fail "CIRCLE_TOKEN (required for sidecar epilogue CI validation)"
   fi
 fi
 

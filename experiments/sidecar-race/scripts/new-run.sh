@@ -77,6 +77,7 @@ meta = {
     'gate_jobs': ['lint', 'test'],
     'sidecar_validate': ['lint', 'test-changed'],
     'sidecar_remote': True,
+    'sidecar_epilogue': '${ARM}' == 'sidecar',
 }
 with open('${RUN_DIR}/run.json', 'w') as f:
     json.dump(meta, f, indent=2)
@@ -96,6 +97,7 @@ echo "Next steps:"
 echo "  ./scripts/apply-task.sh 1"
 if [[ "${ARM}" == "sidecar" ]]; then
   echo "  ./scripts/sidecar-iter.sh 1"
+  echo "  # after task 10: run-arm.sh runs sidecar-epilogue.sh (or ./scripts/sidecar-epilogue.sh)"
 else
   echo "  git commit && git push   # then"
   echo "  ./scripts/ci-iter.sh 1"

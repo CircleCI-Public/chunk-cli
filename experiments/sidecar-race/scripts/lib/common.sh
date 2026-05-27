@@ -102,3 +102,14 @@ has_active_sidecar() {
 chunk_in_repo() {
   (cd "${REPO_ROOT}" && chunk "$@")
 }
+
+# Run branches: experiment/sidecar-race--run-<id>-<arm> (double hyphen; sibling of harness).
+is_run_branch() {
+  [[ "$1" =~ ^experiment/sidecar-race--run- ]]
+}
+
+run_branch_example() {
+  local arm="$1"
+  local id="${2:-001}"
+  echo "experiment/sidecar-race--run-${id}-${arm}"
+}

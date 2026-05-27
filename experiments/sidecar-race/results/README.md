@@ -18,4 +18,6 @@ By default, `results/*/` is **gitignored** so accidental local runs do not pollu
 git add -f results/20260527-143022/
 ```
 
-Commit results on the **run branch** (`experiment/sidecar-race-run-*`), not on `experiment/sidecar-race`, unless you are updating the harness.
+Commit results on the **run branch** (`experiment/sidecar-race--run-*`), not on `experiment/sidecar-race`, unless you are updating the harness.
+
+Sidecar runs also produce `epilogue.json` (final push CI validation) beside `results.csv`.

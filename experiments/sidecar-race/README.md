@@ -9,7 +9,7 @@ This directory is scaffolding only. **Do not treat results under `results/` as p
 **Do not merge `experiment/sidecar-race` into `main` until every planned run is finished** (sidecar arm, CI arm, and any reruns you care about). The open PR can stay a draft while you work.
 
 1. Run the experiment on **run branches** (below) branched from `experiment/sidecar-race`.
-2. Collect and review results.
+2. Collect and review results (including sidecar **epilogue** CI validation).
 3. **Then** merge `experiment/sidecar-race` → `main` if you want the tooling public.
 
 `main` should stay free of experiment runs and `internal/racefixture/` until you are ready.
@@ -18,147 +18,80 @@ This directory is scaffolding only. **Do not treat results under `results/` as p
 
 | Branch | Purpose |
 |--------|---------|
-| `experiment/sidecar-race` | Harness, docs, task bank — **base for all runs; merge to `main` only after runs** |
-| `experiment/sidecar-race-run-<id>-sidecar` | Sidecar arm (branch **from** `experiment/sidecar-race`, not `main`) |
-| `experiment/sidecar-race-run-<id>-ci` | CI arm (fresh branch from harness, not from the sidecar run branch) |
-| `experiment/sidecar-race-run-<id>-combined` | Optional: both arms interleaved |
+| `experiment/sidecar-race` | Harness, docs, task bank — **base for all runs** |
+| `experiment/sidecar-race--run-<id>-sidecar` | Sidecar arm + final CI epilogue |
+| `experiment/sidecar-race--run-<id>-ci` | CI arm (fresh from harness; per-task push) |
+| `experiment/sidecar-race--run-<id>-combined` | Optional: both arms interleaved |
 
-### Why not `experiment/sidecar-race/run-001-sidecar`?
-
-Git stores branch names as refs. A branch named `experiment/sidecar-race` occupies the ref path `refs/heads/experiment/sidecar-race`, so Git **cannot** also create `refs/heads/experiment/sidecar-race/run-001-sidecar` (directory vs file conflict):
-
-```text
-fatal: cannot lock ref 'refs/heads/experiment/sidecar-race/run-001-sidecar':
-'refs/heads/experiment/sidecar-race' exists
-```
-
-The run branches above use a hyphen (`experiment/sidecar-race-run-…`) so the harness can stay on `experiment/sidecar-race`. Same experiment namespace, valid refs.
-
-Always create run branches from `experiment/sidecar-race`:
+Run branches use a **double hyphen** (`--run-`) so they never collide with the harness ref `experiment/sidecar-race` and old polluted `experiment/sidecar-race-run-*` names are easy to spot and delete.
 
 ```bash
 git fetch origin
 git checkout experiment/sidecar-race
 
 # Sidecar arm
-git checkout -b experiment/sidecar-race-run-001-sidecar
-git push -u origin HEAD   # required so sidecar sync clones this branch
+git checkout -b experiment/sidecar-race--run-001-sidecar
+git push -u origin HEAD
 
-# CI arm (start again from experiment/sidecar-race, not from the sidecar run branch)
+# CI arm (from harness again, not from the sidecar run branch)
 git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race-run-001-ci
+git checkout -b experiment/sidecar-race--run-001-ci
 git push -u origin HEAD
 ```
-
-Push run branches to `origin` when you need CI (CI arm) or remote backup. That does **not** require merging to `main`.
-
-Commit **results** on the run branch (they are gitignored here by default; see `results/README.md` to opt in).
 
 ## What counts as “same signal”
 
-Compare sidecar microbuild gates to CircleCI **`lint`** and **`test`** jobs only — the checks a developer would want before sharing code. The full `ci` workflow also runs shellcheck, acceptance-test, and build-smoke-test; record full-workflow timing separately if you want an “outer loop tax” sidebar.
+| Arm | Per-iteration | After sidecar run (epilogue) |
+|-----|----------------|------------------------------|
+| Sidecar | `chunk sidecar sync` + `chunk validate --remote lint` + `test-changed` | **Commit tasks 1–10 → push → poll `lint` + `test` + full `ci` workflow** |
+| CI | Commit → push → poll `lint` + `test` each task | (N/A — CI *is* the inner loop) |
 
-| Arm | Command / trigger |
-|-----|-------------------|
-| Sidecar | `chunk sidecar sync` then `chunk validate --remote lint` and `chunk validate --remote test-changed` (gates run on the sidecar) |
-| CI | `git push` then poll until `lint` + `test` reach terminal state |
+Gate jobs (`lint`, `test`) are the primary comparison. The epilogue also records the **full `ci` workflow** (shellcheck, acceptance-test, build-smoke-test, etc.) to confirm pipeline-level confidence.
 
 ## Prerequisites
 
-- `chunk` CLI installed and on `PATH`
-- `task` and `uv` on `PATH` locally; **`uv` must also be on the sidecar** (install before snapshot, or lint will fail remotely)
-- `chunk auth status` — CircleCI token configured (`chunk auth set circleci`)
-- `.chunk/config.json` with `validation.sidecarImage` set (snapshot from one-time `chunk sidecar setup`)
-- `lint` and `test-changed` commands configured in `.chunk/config.json`
-- `CIRCLE_TOKEN` for CI polling scripts
-- Run branches pushed to `origin` (sidecar sync clones the pushed branch; CI arm needs push for pipelines)
+- `chunk` CLI, `task`, `uv` on PATH locally
+- **`uv` (and Go toolchain) on the sidecar snapshot** — install before `chunk sidecar snapshot create`, then set `validation.sidecarImage`
+- `chunk auth status` + `CIRCLE_TOKEN` (sidecar epilogue and CI arm)
+- `.chunk/config.json` with `lint` and `test-changed` commands
+- Run branch **pushed to `origin`** before starting
 
-## Running in Cursor (automated)
-
-You can run the full experiment from the Cursor terminal (or ask the agent to run these commands). One arm at a time.
-
-### 1. Create a run branch (once per arm)
+## Running the sidecar arm
 
 ```bash
-git fetch origin
-git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race-run-001-sidecar   # or -run-001-ci
-git push -u origin HEAD
-```
-
-### 2. Sidecar arm (~10–20 minutes)
-
-```bash
+git checkout experiment/sidecar-race--run-001-sidecar
 cd experiments/sidecar-race
 ./scripts/prep-check.sh --arm sidecar
 ./scripts/run-arm.sh --arm sidecar --notes "run 001 sidecar"
 ```
 
-`run-arm.sh` creates the sidecar from your snapshot (if needed), applies all 10 patches, syncs + validates each task, and prints a summary.
+`run-arm.sh` will:
 
-### 3. CI arm (~30–60+ minutes; needs push per task)
+1. Reset to a clean tree (task 1)
+2. Warm the sidecar (`sync` + remote `lint`)
+3. Run tasks 1–10 (patch → sync → remote gates)
+4. **Epilogue:** commit cumulative state → push → poll gate jobs + full workflow → `epilogue.json`
+
+Skip epilogue: `./scripts/run-arm.sh --arm sidecar --no-epilogue`  
+Epilogue only: `./scripts/sidecar-epilogue.sh` (after a partial run, set `RUN_ID`)
+
+## Running the CI arm
 
 ```bash
-git checkout experiment/sidecar-race
-git checkout -b experiment/sidecar-race-run-001-ci
-git push -u origin HEAD
+git checkout experiment/sidecar-race--run-001-ci
 cd experiments/sidecar-race
 ./scripts/prep-check.sh --arm ci
 ./scripts/run-arm.sh --arm ci --notes "run 001 ci"
 ```
 
-Each task is committed and pushed; the script polls CircleCI until `lint` and `test` finish.
+## Results layout
 
-### 4. Save results (optional)
-
-```bash
-git add -f experiments/sidecar-race/results/<run-id>/
-git commit -m "experiment: sidecar run 001 results"
-git push -u origin HEAD
-```
-
-Dry-run the loop without touching sidecar or CI:
-
-```bash
-./scripts/run-arm.sh --arm sidecar --dry-run
-```
-
-## Quick start (manual, one task at a time)
-
-```bash
-cd experiments/sidecar-race
-
-# 1. Initialize a run directory (creates results/<run-id>/)
-./scripts/new-run.sh --arm sidecar --notes "pilot"
-
-# 2. Apply a task-bank patch (once patches exist)
-./scripts/apply-task.sh 1
-
-# 3. Record one iteration
-./scripts/sidecar-iter.sh 1
-# or, on a CI run branch:
-./scripts/ci-iter.sh 1
-
-# 4. Summarize (after all iterations)
-./scripts/summarize-run.sh
-```
-
-## Task bank
-
-See `task-bank/manifest.json` for the planned iteration sequence. Add `task-bank/NN-slug.patch` files and list them in the manifest before executing a run.
-
-## Metrics
-
-Primary outputs land in `results/<run-id>/results.csv`. Columns are documented in `results/schema.csv`.
-
-After a run, `summarize-run.sh` prints median/p95 time-to-signal and pass/fail agreement vs CI job outcomes (when job IDs were recorded).
-
-## Article alignment
-
-This experiment supports the Chunk sidecars narrative ([blog](https://circleci.com/blog/chunk-sidecars/)):
-
-- **Time** — feedback in seconds (snapshot sidecar) vs minutes (CI gate jobs)
-- **Cost** — shorter jobs × smaller effective cost per agent iteration; extrapolate with `scripts/extrapolate.sh`
+| File | Contents |
+|------|----------|
+| `results/<run-id>/results.csv` | Per-iteration rows + `iter=epilogue` row |
+| `results/<run-id>/epilogue.json` | Gate + full workflow job outcomes (sidecar only) |
+| `results/<run-id>/run.json` | Metadata; includes `epilogue` when present |
+| `results/<run-id>/summary.txt` | From `summarize-run.sh` |
 
 ## Related docs
 

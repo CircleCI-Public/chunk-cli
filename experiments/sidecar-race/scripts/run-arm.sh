@@ -14,6 +14,7 @@ NOTES=""
 DRY_RUN=false
 ENSURE_SIDECAR=true
 COMMIT_CI=true
+EPILOGUE=true
 
 usage() {
   cat <<EOF
@@ -28,12 +29,13 @@ Options:
   --notes <text>      Stored in run.json
   --dry-run           Print steps without executing
   --no-ensure-sidecar Skip sidecar create (sidecar arm only)
+  --no-epilogue         Sidecar arm: skip final push + CI validation
   --no-commit         CI arm: push without committing (tree must already match task)
 
 Requires:
-  - On a run branch (experiment/sidecar-race-run-<id>-<arm>)
+  - On a run branch (experiment/sidecar-race--run-<id>-<arm>)
   - prep-check.sh --arm <arm> passes
-  - Sidecar arm: active sidecar (or --ensure-sidecar)
+  - Sidecar arm: active sidecar; CIRCLE_TOKEN for epilogue
   - CI arm: CIRCLE_TOKEN; commits + push per task by default
 
 Example (Cursor / terminal):
@@ -57,6 +59,7 @@ while [[ $# -gt 0 ]]; do
     --notes) NOTES="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     --no-ensure-sidecar) ENSURE_SIDECAR=false; shift ;;
+    --no-epilogue) EPILOGUE=false; shift ;;
     --no-commit) COMMIT_CI=false; shift ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -70,10 +73,10 @@ done
 
 branch="$(git -C "${REPO_ROOT}" branch --show-current)"
 if [[ "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
-  die "checkout a run branch first, e.g. experiment/sidecar-race-run-001-${ARM} (from experiment/sidecar-race)"
+  die "checkout a run branch first, e.g. $(run_branch_example "${ARM}") (from experiment/sidecar-race)"
 fi
-if [[ ! "${branch}" =~ ^experiment/sidecar-race-run- ]]; then
-  die "run branch must match experiment/sidecar-race-run-<id>-<arm>, got: ${branch}"
+if ! is_run_branch "${branch}"; then
+  die "run branch must match experiment/sidecar-race--run-<id>-<arm>, got: ${branch}"
 fi
 
 if [[ "${ARM}" == "sidecar" && "${FROM_TASK}" -eq 1 && "${DRY_RUN}" != true ]]; then
@@ -144,6 +147,12 @@ for ((iter = FROM_TASK; iter <= TO_TASK; iter++)); do
     "${SCRIPT_DIR}/sidecar-iter.sh" "${iter}"
   fi
 done
+
+if [[ "${ARM}" == "sidecar" && "${EPILOGUE}" == true && "${DRY_RUN}" != true ]]; then
+  echo ""
+  echo "=== Sidecar epilogue: final push + CI validation ==="
+  "${SCRIPT_DIR}/sidecar-epilogue.sh" --to-task "${TO_TASK}" --notes "${NOTES}"
+fi
 
 if [[ "${DRY_RUN}" != true ]]; then
   echo ""

@@ -25,11 +25,10 @@ meta_path = Path(sys.argv[3])
 
 meta = json.loads(meta_path.read_text())
 rows = list(csv.DictReader(csv_path.open()))
+iter_rows = [r for r in rows if r.get("iter") != "epilogue"]
+epilogue_rows = [r for r in rows if r.get("iter") == "epilogue"]
 
-def col(name):
-    return [r for r in rows if r.get(name)]
-
-tts = [int(r["tts_seconds"]) for r in rows if r.get("tts_seconds", "").isdigit()]
+tts = [int(r["tts_seconds"]) for r in iter_rows if r.get("tts_seconds", "").isdigit()]
 
 def stats(vals):
     if not vals:
@@ -42,11 +41,6 @@ def stats(vals):
         "max_s": max(vals),
     }
 
-lint_agree = sum(
-    1 for r in rows
-    if r.get("lint_ok") in ("pass", "fail") and r.get("test_ok") in ("pass", "fail")
-)
-
 lines = [
     f"Sidecar race run summary: {meta.get('run_id')}",
     f"  arm:     {meta.get('arm')}",
@@ -54,18 +48,35 @@ lines = [
     f"  git_sha: {meta.get('git_sha')}",
     f"  notes:   {meta.get('notes', '')}",
     "",
-    f"Iterations recorded: {len(rows)}",
+    f"Iterations recorded: {len(iter_rows)}",
     f"Time to signal (seconds): {json.dumps(stats(tts), indent=2)}",
     "",
 ]
 
-if rows:
+if iter_rows:
     lines.append("Per iteration:")
-    for r in rows:
+    for r in iter_rows:
         lines.append(
             f"  iter {r.get('iter')}: tts={r.get('tts_seconds')}s "
             f"lint={r.get('lint_ok')} test={r.get('test_ok')}"
         )
+
+epilogue_path = meta_path.parent / "epilogue.json"
+if epilogue_rows:
+    e = epilogue_rows[0]
+    lines.extend([
+        "",
+        "Epilogue (final push → CI):",
+        f"  tts={e.get('tts_seconds')}s gate lint={e.get('lint_ok')} test={e.get('test_ok')}",
+    ])
+if epilogue_path.exists():
+    ep = json.loads(epilogue_path.read_text())
+    wf = ep.get("workflow", {})
+    lines.append(
+        f"  workflow={wf.get('workflow_status')} "
+        f"shellcheck={wf.get('shellcheck_ok')} acceptance={wf.get('acceptance_ok')} "
+        f"build-smoke={wf.get('build_smoke_ok')}"
+    )
 
 text = "\n".join(lines) + "\n"
 out_path.write_text(text)
