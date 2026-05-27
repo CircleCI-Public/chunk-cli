@@ -116,6 +116,18 @@ cd experiments/sidecar-race
 Skip epilogue: `./scripts/run-arm.sh --arm sidecar --no-epilogue`  
 Epilogue only: `./scripts/sidecar-epilogue.sh` (after a partial run, set `RUN_ID`)
 
+## Compare replicates (sidecar vs CI)
+
+After recording runs on both arms, roll up medians and costs:
+
+```bash
+cd experiments/sidecar-race
+./scripts/compare-runs.sh --from-git --labels 001,002,003,004,005
+./scripts/compare-runs.sh --from-git -o comparison.md
+```
+
+Uses `results/<run-id>/` on disk when present; `--from-git` reads committed results from `origin/experiment/sidecar-race--run-<label>-<arm>` (recommended when `results/*/` is gitignored).
+
 ## Running the CI arm
 
 ```bash
