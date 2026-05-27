@@ -52,13 +52,14 @@ ARM="$(read_run_field arm)"
 
 RUN_ID="$(read_run_field run_id)"
 STARTED="$(iso_timestamp)"
-export START_EPOCH="$(epoch_seconds)"
+START_EPOCH="$(epoch_seconds)"
+export START_EPOCH
 
 if [[ -z "${BRANCH}" ]]; then
   BRANCH="$(git -C "${REPO_ROOT}" branch --show-current)"
 fi
 
-if ! ${SKIP_PUSH}; then
+if [[ "${SKIP_PUSH}" != true ]]; then
   echo "Pushing ${REPO_ROOT} (branch ${BRANCH})..."
   git -C "${REPO_ROOT}" push -u origin "${BRANCH}"
   sleep 5

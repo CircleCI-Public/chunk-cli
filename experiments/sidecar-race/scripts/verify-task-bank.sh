@@ -26,17 +26,17 @@ while IFS= read -r line; do
   echo "--- Task ${iter} ---"
   "${SCRIPT_DIR}/apply-task.sh" "${iter}"
 
-  lint_pkgs="./internal/racefixture/..."
-  test_pkgs="./internal/racefixture/..."
+  lint_pkgs=(./internal/racefixture/...)
+  test_pkgs=(./internal/racefixture/...)
   if [[ "${iter}" -ge 4 ]]; then
-    lint_pkgs="./internal/racefixture/... ./internal/config/..."
-    test_pkgs="./internal/racefixture/... ./internal/config/..."
+    lint_pkgs+=(./internal/config/...)
+    test_pkgs+=(./internal/config/...)
   fi
 
   set +e
-  go tool golangci-lint run ${lint_pkgs} >/dev/null 2>&1
+  go tool golangci-lint run "${lint_pkgs[@]}" >/dev/null 2>&1
   lint_exit=$?
-  go test -race ${test_pkgs} >/dev/null 2>&1
+  go test -race "${test_pkgs[@]}" >/dev/null 2>&1
   test_exit=$?
   set -e
 

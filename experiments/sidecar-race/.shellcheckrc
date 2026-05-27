@@ -1,0 +1,2 @@
+# Harness scripts source lib/common.sh via SCRIPT_DIR; checked together locally.
+disable=SC1091

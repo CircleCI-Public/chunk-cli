@@ -64,7 +64,7 @@ fi
 PATCH_PATH="${EXPERIMENT_ROOT}/task-bank/${PATCH}"
 [[ -f "${PATCH_PATH}" ]] || die "patch not found: ${PATCH_PATH}"
 
-if ${RESET}; then
+if [[ "${RESET}" == true ]]; then
   echo "Resetting ${REPO_ROOT} to ${BASE_REF}..."
   git -C "${REPO_ROOT}" fetch origin "${BASE_REF}" 2>/dev/null || true
   git -C "${REPO_ROOT}" checkout "${BASE_REF}"
