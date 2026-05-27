@@ -19,11 +19,11 @@ This directory is scaffolding only. **Do not treat results under `results/` as p
 | Branch | Purpose |
 |--------|---------|
 | `experiment/sidecar-race` | Harness, docs, task bank — **base for all runs; merge to `main` only after runs** |
-| `sidecar-race-run-<id>-sidecar` | Execute sidecar arm only (branch **from** `experiment/sidecar-race`, not `main`) |
-| `sidecar-race-run-<id>-ci` | Execute CI arm only (same base; fresh branch, not from the sidecar run branch) |
-| `sidecar-race-run-<id>-combined` | Optional: same machine, both arms interleaved (control order) |
+| `experiment/sidecar-race-run-<id>-sidecar` | Execute sidecar arm only (branch **from** `experiment/sidecar-race`, not `main`) |
+| `experiment/sidecar-race-run-<id>-ci` | Execute CI arm only (same base; fresh branch, not from the sidecar run branch) |
+| `experiment/sidecar-race-run-<id>-combined` | Optional: same machine, both arms interleaved (control order) |
 
-Git cannot use `experiment/sidecar-race/run-*` names while the `experiment/sidecar-race` branch exists (ref hierarchy conflict). Use the `sidecar-race-run-*` prefix instead.
+Git cannot use `experiment/sidecar-race/run-*` while branch `experiment/sidecar-race` exists (ref hierarchy conflict). Use the sibling name `experiment/sidecar-race-run-*` instead — still under the `experiment/` prefix.
 
 Always create run branches from `experiment/sidecar-race`:
 
@@ -32,12 +32,12 @@ git fetch origin
 git checkout experiment/sidecar-race
 
 # Sidecar arm
-git checkout -b sidecar-race-run-001-sidecar
+git checkout -b experiment/sidecar-race-run-001-sidecar
 git push -u origin HEAD   # required so sidecar sync clones this branch
 
 # CI arm (start again from experiment/sidecar-race, not from the sidecar run branch)
 git checkout experiment/sidecar-race
-git checkout -b sidecar-race-run-001-ci
+git checkout -b experiment/sidecar-race-run-001-ci
 ```
 
 Push run branches to `origin` when you need CI (CI arm) or remote backup. That does **not** require merging to `main`.
@@ -72,7 +72,7 @@ You can run the full experiment from the Cursor terminal (or ask the agent to ru
 ```bash
 git fetch origin
 git checkout experiment/sidecar-race
-git checkout -b sidecar-race-run-001-sidecar   # or sidecar-race-run-001-ci
+git checkout -b experiment/sidecar-race-run-001-sidecar   # or experiment/sidecar-race-run-001-ci
 git push -u origin HEAD
 ```
 
@@ -90,7 +90,7 @@ cd experiments/sidecar-race
 
 ```bash
 git checkout experiment/sidecar-race
-git checkout -b sidecar-race-run-001-ci
+git checkout -b experiment/sidecar-race-run-001-ci
 git push -u origin HEAD
 cd experiments/sidecar-race
 ./scripts/prep-check.sh --arm ci

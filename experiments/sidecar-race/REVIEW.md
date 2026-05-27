@@ -18,8 +18,8 @@ Use this before cutting run sub-branches. **Merge to `main` only after all exper
 
 ## Run branches (before merge to main)
 
-- [ ] `experiment/sidecar-race/run-001-sidecar` branched from `experiment/sidecar-race` (not from `main`)
-- [ ] `experiment/sidecar-race/run-001-ci` branched from `experiment/sidecar-race` (fresh, not from the sidecar run branch)
+- [ ] `experiment/sidecar-race-run-001-sidecar` branched from `experiment/sidecar-race` (not from `main`)
+- [ ] `experiment/sidecar-race-run-001-ci` branched from `experiment/sidecar-race` (fresh, not from the sidecar run branch)
 - [ ] All planned iterations recorded on both arms
 - [ ] Happy with results — only then merge `experiment/sidecar-race` → `main`
 - [ ] Sidecar snapshot ID recorded in `run.json` matches org snapshot

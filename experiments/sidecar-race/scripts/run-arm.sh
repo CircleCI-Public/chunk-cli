@@ -31,7 +31,7 @@ Options:
   --no-commit         CI arm: push without committing (tree must already match task)
 
 Requires:
-  - On a run branch (sidecar-race-run-<id>-<arm>)
+  - On a run branch (experiment/sidecar-race-run-<id>-<arm>)
   - prep-check.sh --arm <arm> passes
   - Sidecar arm: active sidecar (or --ensure-sidecar)
   - CI arm: CIRCLE_TOKEN; commits + push per task by default
@@ -70,9 +70,12 @@ done
 
 branch="$(git -C "${REPO_ROOT}" branch --show-current)"
 # Git cannot create experiment/sidecar-race/run-* while branch experiment/sidecar-race exists.
-# Use sidecar-race-run-<id>-<arm> (see README).
+# Use experiment/sidecar-race-run-<id>-<arm> (see README; not experiment/sidecar-race/run-*).
 if [[ "${branch}" == "experiment/sidecar-race" || "${branch}" == "main" ]]; then
-  die "checkout a run branch first, e.g. sidecar-race-run-001-${ARM}"
+  die "checkout a run branch first, e.g. experiment/sidecar-race-run-001-${ARM}"
+fi
+if [[ ! "${branch}" =~ ^experiment/sidecar-race-run- ]]; then
+  die "run branch must match experiment/sidecar-race-run-<id>-<arm>, got: ${branch}"
 fi
 
 if [[ "${ARM}" == "sidecar" && "${FROM_TASK}" -eq 1 && "${DRY_RUN}" != true ]]; then
