@@ -82,6 +82,22 @@ LINT_OK="$(bool_from_exit "${LINT_EXIT}")"
 TEST_OK="$(bool_from_exit "${TEST_EXIT}")"
 
 append_csv_row \
-  "sidecar,${RUN_ID},${ITER},${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DURATION},${TEST_DURATION},${SYNC_DURATION},,,,,${SHA},${NOTES}"
+  "sidecar,${RUN_ID},${ITER},${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DURATION},${TEST_DURATION},${SYNC_DURATION},,,,,${SHA},${NOTES},,,,,0,0"
+
+RUN_DIR="$(resolve_run_dir)"
+python3 - "${RUN_DIR}" <<PY
+import sys
+from pathlib import Path
+sys.path.insert(0, "${SCRIPT_DIR}/lib")
+from log_metrics import append_event
+append_event(Path(sys.argv[1]), {
+    "kind": "sidecar_iter",
+    "iter": ${ITER},
+    "tts_seconds": ${TTS},
+    "lint_duration_s": ${LINT_DURATION},
+    "test_duration_s": ${TEST_DURATION},
+    "sync_duration_s": ${SYNC_DURATION},
+})
+PY
 
 echo "Recorded sidecar iteration ${ITER}: tts=${TTS}s lint=${LINT_OK} test=${TEST_OK} sync=${SYNC_DURATION}s"

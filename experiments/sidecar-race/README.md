@@ -56,6 +56,32 @@ Gate jobs (`lint`, `test`) are the primary comparison. The epilogue also records
 - `.chunk/config.json` with `lint` and `test-changed` commands
 - Run branch **pushed to `origin`** before starting
 
+## Pull requests (one per run arm)
+
+Before starting runs, open **draft** PRs (metrics placeholder). When `run-arm.sh` finishes, it commits results, refreshes the PR body with timings/costs, and marks the PR **ready for review**.
+
+```bash
+cd experiments/sidecar-race
+./scripts/bootstrap-run-prs.sh 001   # sidecar + CI draft PRs
+# or individually:
+./scripts/open-run-pr.sh --run-id 001 --arm sidecar --bootstrap
+./scripts/open-run-pr.sh --run-id 001 --arm ci --bootstrap
+```
+
+| Phase | PR state | Body |
+|-------|----------|------|
+| Pre-run (`--bootstrap`) | Draft | Pending metrics table |
+| Post-run (`run-arm.sh` end) | Ready for review | `summary.txt`, `costs_summary.json`, per-iter table |
+
+Manual update after a partial run:
+
+```bash
+export RUN_ID=<timestamp-from-new-run>
+./scripts/open-run-pr.sh --run-id 001 --arm sidecar --update --commit-results
+```
+
+Set `SIDECAR_CREDITS_PER_MIN` and `CIRCLECI_CREDIT_USD` before runs for cost columns (see `finalize-metrics.sh`).
+
 ## Running the sidecar arm
 
 ```bash

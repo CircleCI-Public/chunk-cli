@@ -61,6 +61,19 @@ if iter_rows:
             f"lint={r.get('lint_ok')} test={r.get('test_ok')}"
         )
 
+costs_path = meta_path.parent / "costs_summary.json"
+if costs_path.exists():
+    costs = json.loads(costs_path.read_text())
+    lines.extend([
+        "",
+        "Costs (see costs_summary.json):",
+        f"  CI credits (sum):     {costs.get('totals', {}).get('ci_workflow_credits_sum')}",
+        f"  CI cost USD (sum):    {costs.get('totals', {}).get('ci_cost_usd_sum')}",
+        f"  Sidecar credits est:  {costs.get('totals', {}).get('sidecar_credits_est_sum')}",
+        f"  Sidecar cost USD est: {costs.get('totals', {}).get('sidecar_cost_usd_sum')}",
+        f"  LLM tokens:           {costs.get('totals', {}).get('llm_tokens_sum')} ({costs.get('llm_note', '')})",
+    ])
+
 epilogue_path = meta_path.parent / "epilogue.json"
 if epilogue_rows:
     e = epilogue_rows[0]

@@ -47,6 +47,7 @@ fi
 
 export CIRCLE_TOKEN PROJECT_SLUG BRANCH PIPELINE_ID WORKFLOW_NAME POLL_INTERVAL MAX_WAIT
 export START_EPOCH="${START_EPOCH:-$(epoch_seconds)}"
+export METRICS_LIB="${SCRIPT_DIR}/lib"
 
 RESULT_FILE="$(mktemp)"
 trap 'rm -f "${RESULT_FILE}"' EXIT
@@ -132,6 +133,16 @@ def job_ok(name: str) -> str:
     st = jobs.get(name, {}).get("status")
     return "pass" if st == "success" else "fail"
 
+import sys
+
+sys.path.insert(0, os.environ.get("METRICS_LIB", ""))
+from metrics import credits_to_usd, workflow_total_credits_from_jobs  # noqa: E402
+
+wf_credits, job_credits = workflow_total_credits_from_jobs(slug, workflow_id)
+for name, info in jobs.items():
+    info["credits_est"] = job_credits.get(name, 0)
+    info["cost_usd_est"] = credits_to_usd(info["credits_est"])
+
 result = {
     "pipeline_id": pipeline_id,
     "workflow_id": workflow_id,
@@ -140,6 +151,8 @@ result = {
     "workflow_ok": workflow_ok,
     "workflow_duration_s": tts,
     "tts_seconds": tts,
+    "ci_workflow_credits": wf_credits,
+    "ci_cost_usd": credits_to_usd(wf_credits),
     "jobs": jobs,
     "shellcheck_ok": job_ok("shellcheck/check"),
     "lint_ok": job_ok("lint"),

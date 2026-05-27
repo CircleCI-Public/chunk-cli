@@ -74,7 +74,7 @@ fi
 
 echo "Polling CI gate jobs (lint, test)..."
 GATE_CSV="$("${SCRIPT_DIR}/poll-ci-gate.sh" --branch "${BRANCH}")"
-IFS=',' read -r PIPELINE_ID WORKFLOW_ID LINT_JOB TEST_JOB LINT_OK TEST_OK LINT_DUR TEST_DUR _GATE_TTS <<<"${GATE_CSV}"
+IFS=',' read -r PIPELINE_ID WORKFLOW_ID LINT_JOB TEST_JOB LINT_OK TEST_OK LINT_DUR TEST_DUR GATE_TTS WF_CRED GATE_CRED CI_COST <<<"${GATE_CSV}"
 
 echo "Polling full ci workflow..."
 WF_TMP="${EPILOGUE_JSON}.tmp"
@@ -104,6 +104,9 @@ epilogue = {
         "lint_duration_s": int(gate_csv[6] or 0),
         "test_duration_s": int(gate_csv[7] or 0),
         "tts_seconds": int(gate_csv[8] or 0),
+        "ci_workflow_credits": int(gate_csv[9] or 0) if len(gate_csv) > 9 else 0,
+        "ci_gate_credits": int(gate_csv[10] or 0) if len(gate_csv) > 10 else 0,
+        "ci_cost_usd": float(gate_csv[11] or 0) if len(gate_csv) > 11 else 0,
     },
     "workflow": wf,
 }
@@ -119,8 +122,12 @@ SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 WF_OK="$(python3 -c "import json; print('pass' if json.load(open('${EPILOGUE_JSON}'))['workflow'].get('workflow_ok') else 'fail')")"
 
 init_csv_if_missing
+WF_CRED="$(python3 -c "import json; print(json.load(open('${EPILOGUE_JSON}')).get('workflow',{}).get('ci_workflow_credits',0))")"
+CI_COST="$(python3 -c "import json; print(json.load(open('${EPILOGUE_JSON}')).get('workflow',{}).get('ci_cost_usd',0))")"
+GATE_CRED="$(python3 -c "import json; print(json.load(open('${EPILOGUE_JSON}'))['gate'].get('ci_gate_credits',0))")"
+
 append_csv_row \
-  "sidecar,${RUN_ID},epilogue,${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DUR},${TEST_DUR},,${PIPELINE_ID},${WORKFLOW_ID},${LINT_JOB},${TEST_JOB},${SHA},${NOTES} (workflow=${WF_OK})"
+  "sidecar,${RUN_ID},epilogue,${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DUR},${TEST_DUR},,${PIPELINE_ID},${WORKFLOW_ID},${LINT_JOB},${TEST_JOB},${SHA},${NOTES} (workflow=${WF_OK}),${WF_CRED},${GATE_CRED},${CI_COST},,,0,0"
 
 # Patch run.json
 python3 - "${RUN_DIR}/run.json" "${EPILOGUE_JSON}" <<'PY'

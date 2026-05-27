@@ -44,6 +44,7 @@ fi
 
 export CIRCLE_TOKEN PROJECT_SLUG BRANCH PIPELINE_ID POLL_INTERVAL MAX_WAIT
 export START_EPOCH="${START_EPOCH:-$(epoch_seconds)}"
+export METRICS_LIB="${SCRIPT_DIR}/lib"
 
 RESULT_FILE="$(mktemp)"
 trap 'rm -f "${RESULT_FILE}"' EXIT
@@ -123,6 +124,17 @@ lint_dur = int(lint.get("duration") or 0)
 test_dur = int(test.get("duration") or 0)
 tts = int(time.time()) - start
 
+import sys
+
+sys.path.insert(0, os.environ.get("METRICS_LIB", ""))
+from metrics import credits_to_usd, gate_job_credits  # noqa: E402
+
+wf_credits, lint_credits, test_credits = gate_job_credits(
+    slug, workflow_id, lint_dur, test_dur
+)
+gate_credits = lint_credits + test_credits
+ci_cost = credits_to_usd(wf_credits)
+
 result = {
     "pipeline_id": pipeline_id,
     "workflow_id": workflow_id,
@@ -133,10 +145,14 @@ result = {
     "lint_duration_s": lint_dur,
     "test_duration_s": test_dur,
     "tts_seconds": tts,
+    "ci_workflow_credits": wf_credits,
+    "ci_gate_credits": gate_credits,
+    "ci_cost_usd": ci_cost,
 }
 out_path.write_text(json.dumps(result))
 print(
     f"{pipeline_id},{workflow_id},{result['lint_job_num']},{result['test_job_num']},"
-    f"{result['lint_ok']},{result['test_ok']},{lint_dur},{test_dur},{tts}"
+    f"{result['lint_ok']},{result['test_ok']},{lint_dur},{test_dur},{tts},"
+    f"{wf_credits},{gate_credits},{ci_cost}"
 )
 PY

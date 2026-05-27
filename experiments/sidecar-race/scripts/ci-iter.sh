@@ -68,12 +68,31 @@ fi
 echo "Polling CircleCI gate jobs (lint, test)..."
 CSV_LINE="$("${SCRIPT_DIR}/poll-ci-gate.sh" --branch "${BRANCH}")"
 
-IFS=',' read -r PIPELINE_ID WORKFLOW_ID LINT_JOB TEST_JOB LINT_OK TEST_OK LINT_DUR TEST_DUR TTS <<<"${CSV_LINE}"
+IFS=',' read -r PIPELINE_ID WORKFLOW_ID LINT_JOB TEST_JOB LINT_OK TEST_OK LINT_DUR TEST_DUR TTS WF_CRED GATE_CRED CI_COST <<<"${CSV_LINE}"
 
 ENDED="$(iso_timestamp)"
 SHA="$(git_short_sha)"
 
 append_csv_row \
-  "ci,${RUN_ID},${ITER},${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DUR},${TEST_DUR},,${PIPELINE_ID},${WORKFLOW_ID},${LINT_JOB},${TEST_JOB},${SHA},${NOTES}"
+  "ci,${RUN_ID},${ITER},${STARTED},${ENDED},${TTS},${LINT_OK},${TEST_OK},${LINT_DUR},${TEST_DUR},,${PIPELINE_ID},${WORKFLOW_ID},${LINT_JOB},${TEST_JOB},${SHA},${NOTES},${WF_CRED:-},${GATE_CRED:-},${CI_COST:-},,,0,0"
+
+RUN_DIR="$(resolve_run_dir)"
+python3 - "${RUN_DIR}" <<PY
+import json, sys
+from pathlib import Path
+sys.path.insert(0, "${SCRIPT_DIR}/lib")
+from log_metrics import append_event
+append_event(Path(sys.argv[1]), {
+    "kind": "ci_iter",
+    "iter": ${ITER},
+    "tts_seconds": ${TTS},
+    "lint_duration_s": ${LINT_DUR},
+    "test_duration_s": ${TEST_DUR},
+    "ci_workflow_credits": ${WF_CRED:-0},
+    "ci_gate_credits": ${GATE_CRED:-0},
+    "ci_cost_usd": ${CI_COST:-0},
+    "workflow_id": "${WORKFLOW_ID}",
+})
+PY
 
 echo "Recorded CI iteration ${ITER}: tts=${TTS}s lint=${LINT_OK} test=${TEST_OK}"

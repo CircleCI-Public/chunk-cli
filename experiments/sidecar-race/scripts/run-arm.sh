@@ -113,6 +113,18 @@ else
   export RUN_ID
 fi
 
+if [[ "${DRY_RUN}" != true ]]; then
+  python3 - "${RUN_DIR:-$(resolve_run_dir)}/run.json" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+p = Path(sys.argv[1])
+meta = json.loads(p.read_text())
+meta["run_wall_started_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+p.write_text(json.dumps(meta, indent=2) + "\n")
+PY
+fi
+
 echo ""
 echo "=== Running ${ARM} arm: tasks ${FROM_TASK}-${TO_TASK} (run_id=${RUN_ID}) ==="
 echo ""
@@ -155,9 +167,27 @@ if [[ "${ARM}" == "sidecar" && "${EPILOGUE}" == true && "${DRY_RUN}" != true ]];
 fi
 
 if [[ "${DRY_RUN}" != true ]]; then
+  python3 - "$(resolve_run_dir)/run.json" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+p = Path(sys.argv[1])
+meta = json.loads(p.read_text())
+meta["run_wall_ended_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+p.write_text(json.dumps(meta, indent=2) + "\n")
+PY
+  "${SCRIPT_DIR}/finalize-metrics.sh"
   echo ""
   "${SCRIPT_DIR}/summarize-run.sh"
   echo ""
+  RUN_LABEL="$(run_label_from_branch "${branch}" "${ARM}")"
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    echo "Updating run PR (metrics + ready for review)..."
+    "${SCRIPT_DIR}/open-run-pr.sh" --run-id "${RUN_LABEL}" --arm "${ARM}" --update --commit-results \
+      || echo "warning: could not update run PR (bootstrap with open-run-pr.sh --bootstrap first)"
+  else
+    echo "Skipping run PR update: install and authenticate gh, or run open-run-pr.sh --update manually"
+  fi
+  echo ""
   echo "Done. Results: $(resolve_run_dir)/results.csv"
-  echo "Optional: git add -f $(resolve_run_dir) && git commit on this run branch"
 fi

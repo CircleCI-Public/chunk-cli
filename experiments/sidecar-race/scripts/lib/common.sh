@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "${EXPERIMENT_ROOT}/../.." && pwd)"
 
 export EXPERIMENT_ROOT REPO_ROOT
 
-CSV_HEADER="arm,run_id,iter,started_at,ended_at,tts_seconds,lint_ok,test_ok,lint_duration_s,test_duration_s,sync_duration_s,ci_pipeline_id,ci_workflow_id,ci_lint_job_num,ci_test_job_num,git_sha,notes"
+CSV_HEADER="arm,run_id,iter,started_at,ended_at,tts_seconds,lint_ok,test_ok,lint_duration_s,test_duration_s,sync_duration_s,ci_pipeline_id,ci_workflow_id,ci_lint_job_num,ci_test_job_num,git_sha,notes,ci_workflow_credits,ci_gate_credits,ci_cost_usd,sidecar_credits_est,sidecar_cost_usd,llm_tokens,llm_cost_usd"
 
 die() {
   echo "error: $*" >&2
@@ -112,4 +112,13 @@ run_branch_example() {
   local arm="$1"
   local id="${2:-001}"
   echo "experiment/sidecar-race--run-${id}-${arm}"
+}
+
+# Label embedded in run branch: experiment/sidecar-race--run-<label>-<arm>
+run_label_from_branch() {
+  local branch="$1"
+  local arm="$2"
+  local label="${branch#experiment/sidecar-race--run-}"
+  label="${label%-${arm}}"
+  echo "${label}"
 }
