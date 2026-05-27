@@ -9,11 +9,11 @@
     "test_job_num": "7344",
     "lint_ok": "pass",
     "test_ok": "pass",
-    "lint_duration_s": 0,
-    "test_duration_s": 0,
+    "lint_duration_s": 31.0,
+    "test_duration_s": 26.0,
     "tts_seconds": 108,
     "ci_workflow_credits": 24,
-    "ci_gate_credits": 0,
+    "ci_gate_credits": 24,
     "ci_cost_usd": 0.0144
   },
   "workflow": {
@@ -30,37 +30,37 @@
       "test": {
         "job_number": 7344,
         "status": "success",
-        "duration_s": 0,
-        "credits_est": 0,
-        "cost_usd_est": 0.0
+        "duration_s": 26.0,
+        "credits_est": 4.6,
+        "cost_usd_est": 0.00276
       },
       "shellcheck/check": {
         "job_number": 7342,
         "status": "success",
-        "duration_s": 0,
-        "credits_est": 0,
-        "cost_usd_est": 0.0
+        "duration_s": 7.0,
+        "credits_est": 1.2,
+        "cost_usd_est": 0.00072
       },
       "lint": {
         "job_number": 7345,
         "status": "success",
-        "duration_s": 0,
-        "credits_est": 0,
-        "cost_usd_est": 0.0
+        "duration_s": 31.0,
+        "credits_est": 5.5,
+        "cost_usd_est": 0.0033
       },
       "acceptance-test": {
         "job_number": 7343,
         "status": "success",
-        "duration_s": 0,
-        "credits_est": 0,
-        "cost_usd_est": 0.0
+        "duration_s": 53.0,
+        "credits_est": 9.4,
+        "cost_usd_est": 0.00564
       },
       "build-smoke-test": {
         "job_number": 7346,
         "status": "success",
-        "duration_s": 0,
-        "credits_est": 0,
-        "cost_usd_est": 0.0
+        "duration_s": 18.0,
+        "credits_est": 3.2,
+        "cost_usd_est": 0.00192
       }
     },
     "shellcheck_ok": "pass",

@@ -10,7 +10,7 @@
     "iterations": 10,
     "tts_seconds_sum": 209,
     "ci_workflow_credits_sum": 24,
-    "ci_gate_credits_sum": 0,
+    "ci_gate_credits_sum": 24,
     "ci_cost_usd_sum": 0.0144,
     "ci_cost_display": "$0.0144",
     "sidecar_credits_est_sum": 229,
@@ -26,37 +26,37 @@
     "test": {
       "job_number": 7344,
       "status": "success",
-      "duration_s": 0,
-      "credits_est": 0,
-      "cost_usd_est": 0.0
+      "duration_s": 26.0,
+      "credits_est": 4.6,
+      "cost_usd_est": 0.00276
     },
     "shellcheck/check": {
       "job_number": 7342,
       "status": "success",
-      "duration_s": 0,
-      "credits_est": 0,
-      "cost_usd_est": 0.0
+      "duration_s": 7.0,
+      "credits_est": 1.2,
+      "cost_usd_est": 0.00072
     },
     "lint": {
       "job_number": 7345,
       "status": "success",
-      "duration_s": 0,
-      "credits_est": 0,
-      "cost_usd_est": 0.0
+      "duration_s": 31.0,
+      "credits_est": 5.5,
+      "cost_usd_est": 0.0033
     },
     "acceptance-test": {
       "job_number": 7343,
       "status": "success",
-      "duration_s": 0,
-      "credits_est": 0,
-      "cost_usd_est": 0.0
+      "duration_s": 53.0,
+      "credits_est": 9.4,
+      "cost_usd_est": 0.00564
     },
     "build-smoke-test": {
       "job_number": 7346,
       "status": "success",
-      "duration_s": 0,
-      "credits_est": 0,
-      "cost_usd_est": 0.0
+      "duration_s": 18.0,
+      "credits_est": 3.2,
+      "cost_usd_est": 0.00192
     }
   }
 }
