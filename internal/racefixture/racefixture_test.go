@@ -9,7 +9,7 @@ func TestSum(t *testing.T) {
 }
 
 func TestMultiply(t *testing.T) {
-	if got := Multiply(3, 4); got != 13 {
-		t.Fatalf("Multiply(3, 4) = %d, want 13", got)
+	if got := Multiply(3, 4); got != 12 {
+		t.Fatalf("Multiply(3, 4) = %d, want 12", got)
 	}
 }
