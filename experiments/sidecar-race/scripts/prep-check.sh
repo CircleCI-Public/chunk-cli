@@ -52,6 +52,20 @@ for cmd in git python3 chunk task uv; do
   fi
 done
 
+if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+  say_ok "ANTHROPIC_API_KEY set (Claude Agent SDK)"
+else
+  say_fail "ANTHROPIC_API_KEY (export or: chunk auth set anthropic)"
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  if uv sync --project "${EXPERIMENT_ROOT}" >/dev/null 2>&1; then
+    say_ok "agent SDK deps (uv sync in experiments/sidecar-race)"
+  else
+    say_fail "uv sync --project experiments/sidecar-race"
+  fi
+fi
+
 if command -v chunk >/dev/null 2>&1; then
   if chunk auth status >/dev/null 2>&1; then
     say_ok "chunk auth"

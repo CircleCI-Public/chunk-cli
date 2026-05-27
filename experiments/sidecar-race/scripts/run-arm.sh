@@ -15,12 +15,13 @@ DRY_RUN=false
 ENSURE_SIDECAR=true
 COMMIT_CI=true
 EPILOGUE=true
+REPLAY_PATCHES=false
 
 usage() {
   cat <<EOF
 Usage: run-arm.sh --arm <sidecar|ci> [options]
 
-Automates the full experiment loop: apply patch → record timing for each task.
+Automates the full experiment loop: Claude Agent SDK edit → record validation timing.
 
 Options:
   --run-id <id>       Use existing run dir (must match arm); default creates new via new-run.sh
@@ -28,6 +29,7 @@ Options:
   --to-task <n>       Last task (default 10)
   --notes <text>      Stored in run.json
   --dry-run           Print steps without executing
+  --replay-patches    Use git apply from task-bank (debug only; not a real agent run)
   --no-ensure-sidecar Skip sidecar create (sidecar arm only)
   --no-epilogue         Sidecar arm: skip final push + CI validation
   --no-commit         CI arm: push without committing (tree must already match task)
@@ -35,6 +37,7 @@ Options:
 Requires:
   - On a run branch (experiment/sidecar-race--run-<id>-<arm>)
   - prep-check.sh --arm <arm> passes
+  - ANTHROPIC_API_KEY (Claude Agent SDK; unless --replay-patches)
   - Sidecar arm: active sidecar; CIRCLE_TOKEN for epilogue
   - CI arm: CIRCLE_TOKEN; commits + push per task by default
 
@@ -61,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     --no-ensure-sidecar) ENSURE_SIDECAR=false; shift ;;
     --no-epilogue) EPILOGUE=false; shift ;;
     --no-commit) COMMIT_CI=false; shift ;;
+    --replay-patches) REPLAY_PATCHES=true; shift ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -132,7 +136,11 @@ echo ""
 for ((iter = FROM_TASK; iter <= TO_TASK; iter++)); do
   echo "---------- Task ${iter} / ${TO_TASK} ----------"
   if [[ "${DRY_RUN}" == true ]]; then
-    echo "[dry-run] apply-task.sh ${iter}"
+    if [[ "${REPLAY_PATCHES}" == true ]]; then
+      echo "[dry-run] apply-task.sh ${iter}"
+    else
+      echo "[dry-run] run-agent-task.sh ${iter}"
+    fi
     if [[ "${ARM}" == "ci" && "${COMMIT_CI}" == true ]]; then
       echo "[dry-run] git commit task ${iter}"
     fi
@@ -140,7 +148,11 @@ for ((iter = FROM_TASK; iter <= TO_TASK; iter++)); do
     continue
   fi
 
-  "${SCRIPT_DIR}/apply-task.sh" "${iter}"
+  if [[ "${REPLAY_PATCHES}" == true ]]; then
+    "${SCRIPT_DIR}/apply-task.sh" "${iter}"
+  else
+    "${SCRIPT_DIR}/run-agent-task.sh" "${iter}"
+  fi
 
   if [[ "${ARM}" == "ci" ]]; then
     if [[ "${COMMIT_CI}" == true ]]; then

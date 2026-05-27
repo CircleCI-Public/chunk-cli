@@ -1,0 +1,9 @@
+[project]
+name = "sidecar-race-agent"
+version = "0.1.0"
+description = "Claude Agent SDK runner for the sidecar-race experiment"
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk",
+    "anyio",
+]

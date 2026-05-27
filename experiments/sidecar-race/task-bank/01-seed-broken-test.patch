@@ -1,0 +1,27 @@
+diff --git a/internal/racefixture/racefixture.go b/internal/racefixture/racefixture.go
+new file mode 100644
+index 0000000..112d9c0
+--- /dev/null
++++ b/internal/racefixture/racefixture.go
+@@ -0,0 +1,6 @@
++package racefixture
++
++// Sum returns the sum of a and b.
++func Sum(a, b int) int {
++	return a + b
++}
+diff --git a/internal/racefixture/racefixture_test.go b/internal/racefixture/racefixture_test.go
+new file mode 100644
+index 0000000..b8e4f21
+--- /dev/null
++++ b/internal/racefixture/racefixture_test.go
+@@ -0,0 +1,9 @@
++package racefixture
++
++import "testing"
++
++func TestSum(t *testing.T) {
++	if got := Sum(1, 2); got != 99 {
++		t.Fatalf("Sum(1, 2) = %d, want 3", got)
++	}
++}

@@ -65,7 +65,7 @@ def render(run_dir: Path, meta: dict, *, harness_pr: str = "") -> str:
                 "- Wall time (TTS, lint/test job durations, sync)",
                 "- CircleCI credits and cost (gate + full workflow on epilogue)",
                 "- Sidecar credits estimate and cost (`SIDECAR_CREDITS_PER_MIN`)",
-                "- LLM tokens and cost — **n/a** unless `llm_usage.json` is supplied (see harness README)",
+                "- LLM tokens and cost from Claude Agent SDK (`agent_usage.jsonl` → `llm_usage.json`)",
                 "",
             ]
         )

@@ -62,6 +62,16 @@ def to_float(v, default=0.0):
     except ValueError:
         return default
 
+# Per-iteration LLM tokens/cost from agent_usage.jsonl.
+agent_by_iter: dict[str, dict] = {}
+agent_path = meta_path.parent / "agent_usage.jsonl"
+if agent_path.exists():
+    for line in agent_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        agent_by_iter[str(row.get("iter"))] = row
+
 # Backfill CI credits from workflow_id when missing.
 for r in rows:
     if not r.get("llm_tokens"):
@@ -95,6 +105,16 @@ if meta.get("arm") == "sidecar" and sidecar_rate > 0 and iter_rows:
       cred = int(total_sidecar_credits * share)
       r["sidecar_credits_est"] = str(cred)
       r["sidecar_cost_usd"] = str(credits_to_usd(cred))
+
+for r in iter_rows:
+    i = str(r.get("iter"))
+    agent = agent_by_iter.get(i)
+    if agent:
+        tokens = int(agent.get("input_tokens") or 0) + int(agent.get("output_tokens") or 0)
+        r["llm_tokens"] = str(tokens)
+        cost = agent.get("cost_usd")
+        if cost is not None:
+            r["llm_cost_usd"] = str(round(float(cost), 6))
 
 # Epilogue workflow job breakdown from epilogue.json
 epilogue_path = meta_path.parent / "epilogue.json"

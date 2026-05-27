@@ -17,7 +17,7 @@ Requires RUN_ID or RUN_DIR from new-run.sh (arm=sidecar).
 Requires active sidecar (chunk sidecar current).
 
 Runs gates on the sidecar via: chunk validate --remote lint|test-changed
-Does not commit changes. Run apply-task.sh first.
+Does not commit changes. Run run-agent-task.sh first (or apply-task.sh with --replay-patches).
 EOF
 }
 

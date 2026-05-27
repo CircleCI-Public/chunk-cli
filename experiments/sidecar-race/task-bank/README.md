@@ -1,25 +1,25 @@
 # Task bank
 
-Each **iteration** is a small, realistic edit an agent would make while implementing a feature or fixing review feedback. Patches keep runs reproducible across arms and sub-branches.
+Each **iteration** is a small, realistic edit an agent would make. **`agent_prompt`** in `manifest.json` drives real runs via Claude Agent SDK; **`patch`** files are the oracle for `verify-task-bank.sh` and optional `--replay-patches` debugging.
 
 ## Adding a task
 
-1. Create the change on a throwaway branch and export a patch:
+1. Implement the change (agent or branch) and export a patch for verification:
    ```bash
-   git format-patch -1 HEAD --stdout > experiments/sidecar-race/task-bank/01-fix-test.patch
+   git format-patch -1 HEAD --stdout > experiments/sidecar-race/task-bank/11-my-task.patch
    ```
-2. Register it in `manifest.json` (`patch` filename, `expect` pass/fail for lint and test).
-3. On a run branch, apply before each iteration:
+2. Register in `manifest.json`: `agent_prompt`, `patch`, optional `seed_patch`, `expect` (lint/test pass/fail).
+3. Run on a run branch:
    ```bash
-   ./scripts/apply-task.sh 1
+   ./scripts/run-agent-task.sh 11
    ```
 
 ## Patch rules
 
-- One logical agent step per patch (single concern).
-- Patches apply cleanly on top of the previous iteration **or** reset the tree to a known base between tasks (document which in `run.json` `notes`).
-- Include at least one task that should **fail** lint or test first, then a follow-up task that fixes it (validates signal detection).
+- One logical agent step per task.
+- Cumulative state across tasks 1–10 (task 1 reset clears `internal/racefixture` only).
+- Include tasks that should **fail** lint or test, then a follow-up that fixes (signal detection).
 
 ## Planned tasks
 
-See `manifest.json`. Patches are not committed until authors add them; the manifest lists intent only.
+See `manifest.json`.

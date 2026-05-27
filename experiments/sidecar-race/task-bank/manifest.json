@@ -1,11 +1,14 @@
 {
   "base_ref": "main",
+  "agent_model": "claude-sonnet-4-20250514",
   "tasks": [
     {
       "id": 1,
       "slug": "fix-unit-test",
       "description": "Fix a failing unit test in a single package.",
+      "seed_patch": "01-seed-broken-test.patch",
       "patch": "01-fix-unit-test.patch",
+      "agent_prompt": "Fix the failing unit test in package internal/racefixture. Run `go test -race ./internal/racefixture/...` to verify. Only edit files under internal/racefixture/.",
       "expect": {
         "lint": "pass",
         "test": "pass"
@@ -16,6 +19,7 @@
       "slug": "introduce-lint-violation",
       "description": "Introduce a golangci-lint violation, then fix in task 3.",
       "patch": "02-introduce-lint-violation.patch",
+      "agent_prompt": "In internal/racefixture/racefixture.go, add an unused package-level variable (for example `var lintTrap = 1`) that will fail golangci-lint unused checks. Do not remove it in this step. Only edit internal/racefixture/.",
       "expect": {
         "lint": "fail",
         "test": "pass"
@@ -26,6 +30,7 @@
       "slug": "fix-lint-violation",
       "description": "Resolve lint failure from task 2.",
       "patch": "03-fix-lint-violation.patch",
+      "agent_prompt": "Remove the unused variable introduced in the previous task so golangci-lint passes for internal/racefixture. Run `go tool golangci-lint run ./internal/racefixture/...` to verify.",
       "expect": {
         "lint": "pass",
         "test": "pass"
@@ -36,6 +41,7 @@
       "slug": "two-package-change",
       "description": "Change code in two packages so test-changed scope matters.",
       "patch": "04-two-package-change.patch",
+      "agent_prompt": "Add Multiply(a, b int) int and TestMultiply in internal/racefixture (with tests). Also add a short comment above setupTempConfig in internal/config/config_test.go. Run tests for ./internal/racefixture/... and ./internal/config/...",
       "expect": {
         "lint": "pass",
         "test": "pass"
@@ -46,6 +52,7 @@
       "slug": "break-test-then-fix",
       "description": "Break a test; task 6 fixes it (signal recovery narrative).",
       "patch": "05-break-test-then-fix.patch",
+      "agent_prompt": "Break TestMultiply in internal/racefixture so it fails (wrong expected value). Do not fix it in this step.",
       "expect": {
         "lint": "pass",
         "test": "fail"
@@ -56,6 +63,7 @@
       "slug": "fix-broken-test",
       "description": "Fix test broken in task 5.",
       "patch": "06-fix-broken-test.patch",
+      "agent_prompt": "Fix the failing TestMultiply in internal/racefixture from the previous task. Run `go test -race ./internal/racefixture/...`.",
       "expect": {
         "lint": "pass",
         "test": "pass"
@@ -66,6 +74,7 @@
       "slug": "fmt-drift",
       "description": "gofmt drift in Sum (caught by golangci-lint gofmt).",
       "patch": "07-fmt-drift.patch",
+      "agent_prompt": "Introduce gofmt formatting drift in the Sum function in internal/racefixture/racefixture.go (misaligned braces or spacing) so golangci-lint gofmt fails. Do not run gofmt to fix it in this step.",
       "expect": {
         "lint": "fail",
         "test": "pass"
@@ -76,6 +85,7 @@
       "slug": "internal-refactor",
       "description": "Small refactor with no behavior change; tests stay green.",
       "patch": "08-internal-refactor.patch",
+      "agent_prompt": "Fix the gofmt/lint issue in internal/racefixture from the previous task, then do a small no-behavior-change refactor in racefixture (e.g. extract a helper or clarify a comment). Keep all tests passing.",
       "expect": {
         "lint": "pass",
         "test": "pass"
@@ -86,6 +96,7 @@
       "slug": "add-test-case",
       "description": "Add a table-driven test case in an existing file.",
       "patch": "09-add-test-case.patch",
+      "agent_prompt": "Add a table-driven subtest case to an existing test in internal/racefixture (Sum or Multiply). Keep lint and tests green.",
       "expect": {
         "lint": "pass",
         "test": "pass"
@@ -96,6 +107,7 @@
       "slug": "error-handling-tweak",
       "description": "Adjust error wrapping or message in one function.",
       "patch": "10-error-handling-tweak.patch",
+      "agent_prompt": "In internal/racefixture, adjust error handling in one function (clearer message or fmt.Errorf wrap) without changing behavior covered by tests.",
       "expect": {
         "lint": "pass",
         "test": "pass"

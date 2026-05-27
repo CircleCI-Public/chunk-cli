@@ -37,10 +37,8 @@ def load_llm_totals(run_dir: Path) -> dict:
             "cost_usd": None,
             "source": None,
             "note": (
-                "Not measured: this harness runs gate validation only "
-                "(chunk validate lint/test-changed). It does not invoke Claude, "
-                "chunk build-prompt, or chunk task run. Add llm_usage.json or "
-                "extend the harness to record agent usage."
+                "Not measured: no agent_usage.jsonl / llm_usage.json for this run. "
+                "Normal runs invoke Claude Agent SDK via run-agent-task.sh."
             ),
         }
     data = json.loads(path.read_text())

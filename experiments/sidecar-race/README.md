@@ -48,30 +48,25 @@ git push -u origin HEAD
 
 Gate jobs (`lint`, `test`) are the primary comparison. The epilogue also records the **full `ci` workflow** (shellcheck, acceptance-test, build-smoke-test, etc.) to confirm pipeline-level confidence.
 
-## LLM tokens and cost
+## Agent edits and LLM tokens
 
-**This harness does not spend LLM tokens.** Each iteration applies a deterministic patch from `task-bank/` and runs `chunk validate` (lint + test-changed on the sidecar, or CircleCI gate jobs on the CI arm). Nothing in the loop calls Claude, `chunk build-prompt`, or `chunk task run`.
+Each iteration runs **Claude Agent SDK locally** (`run-agent-task.sh` → `scripts/lib/agent_task.py`):
 
-PR metrics show **LLM tokens / cost as `n/a`**, not `$0` — zeros looked like a measurement bug.
+1. Optional **seed patch** (task 1 only) sets up broken state
+2. Agent applies the task **`agent_prompt`** from `task-bank/manifest.json`
+3. Tokens and cost are appended to `results/<run-id>/agent_usage.jsonl` and rolled up to `llm_usage.json`
 
-To attach real LLM usage (e.g. if you run an external agent alongside the harness), add before `finalize-metrics` / PR update:
+Use **`--replay-patches`** on `run-arm.sh` only to debug validation timing without spending tokens (applies `task-bank/*.patch` instead of the agent).
 
-```json
-// experiments/sidecar-race/results/<run-id>/llm_usage.json
-{
-  "input_tokens": 125000,
-  "output_tokens": 18000,
-  "cost_usd": 1.42,
-  "source": "cursor-session-estimate",
-  "note": "optional"
-}
-```
+Patches remain the **oracle** for `verify-task-bank.sh`, not the default run path.
 
-A future harness revision may integrate `chunk task run` per iteration to measure agent tokens in-band.
+Override model: `SIDECAR_RACE_AGENT_MODEL=...` or `agent_model` in `manifest.json`.
 
 ## Prerequisites
 
 - `chunk` CLI, `task`, `uv` on PATH locally
+- **`ANTHROPIC_API_KEY`** (or `chunk auth set anthropic`) for Agent SDK runs
+- `uv sync --project experiments/sidecar-race` (installs `claude-agent-sdk`)
 - **`uv` (and Go toolchain) on the sidecar snapshot** — install before `chunk sidecar snapshot create`, then set `validation.sidecarImage`
 - `chunk auth status` + `CIRCLE_TOKEN` (sidecar epilogue and CI arm)
 - `.chunk/config.json` with `lint` and `test-changed` commands
@@ -115,7 +110,7 @@ cd experiments/sidecar-race
 
 1. Reset to a clean tree (task 1)
 2. Warm the sidecar (`sync` + remote `lint`)
-3. Run tasks 1–10 (patch → sync → remote gates)
+3. Run tasks 1–10 (agent edit → sync → remote gates)
 4. **Epilogue:** verify tree passes shellcheck + `task lint` + tests locally → commit cumulative state → push → poll gate jobs + full `ci` workflow (must pass) → `epilogue.json`
 
 Skip epilogue: `./scripts/run-arm.sh --arm sidecar --no-epilogue`  
