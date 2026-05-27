@@ -10,6 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+// setupTempConfig creates an isolated XDG config home for tests.
 func setupTempConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
