@@ -10,6 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+// setupTempConfig creates an isolated temporary config directory for testing.
 func setupTempConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
