@@ -58,7 +58,55 @@ Compare sidecar microbuild gates to CircleCI **`lint`** and **`test`** jobs only
 - `CIRCLE_TOKEN` for CI polling scripts
 - Run branches pushed to `origin` so CI arm can trigger pipelines
 
-## Quick start (when ready to run)
+## Running in Cursor (automated)
+
+You can run the full experiment from the Cursor terminal (or ask the agent to run these commands). One arm at a time.
+
+### 1. Create a run branch (once per arm)
+
+```bash
+git fetch origin
+git checkout experiment/sidecar-race
+git checkout -b experiment/sidecar-race/run-001-sidecar   # or run-001-ci
+```
+
+### 2. Sidecar arm (~10–20 minutes)
+
+```bash
+cd experiments/sidecar-race
+./scripts/prep-check.sh --arm sidecar
+./scripts/run-arm.sh --arm sidecar --notes "run 001 sidecar"
+```
+
+`run-arm.sh` creates the sidecar from your snapshot (if needed), applies all 10 patches, syncs + validates each task, and prints a summary.
+
+### 3. CI arm (~30–60+ minutes; needs push per task)
+
+```bash
+git checkout experiment/sidecar-race
+git checkout -b experiment/sidecar-race/run-001-ci
+cd experiments/sidecar-race
+./scripts/prep-check.sh --arm ci
+./scripts/run-arm.sh --arm ci --notes "run 001 ci"
+```
+
+Each task is committed and pushed; the script polls CircleCI until `lint` and `test` finish.
+
+### 4. Save results (optional)
+
+```bash
+git add -f experiments/sidecar-race/results/<run-id>/
+git commit -m "experiment: sidecar run 001 results"
+git push -u origin HEAD
+```
+
+Dry-run the loop without touching sidecar or CI:
+
+```bash
+./scripts/run-arm.sh --arm sidecar --dry-run
+```
+
+## Quick start (manual, one task at a time)
 
 ```bash
 cd experiments/sidecar-race
