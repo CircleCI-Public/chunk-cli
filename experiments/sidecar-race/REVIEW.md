@@ -12,9 +12,9 @@ Use this before merging the scaffolding branch or cutting run sub-branches.
 
 ## Task bank
 
-- [ ] Ten tasks in `manifest.json` cover lint fail, test fail, multi-package, and happy path
-- [ ] Patches added under `task-bank/*.patch` and `patch` fields set in manifest
-- [ ] Patches apply cleanly on `base_ref` from a clean tree
+- [x] Ten tasks in `manifest.json` cover lint fail, test fail, multi-package, and happy path
+- [x] Patches added under `task-bank/*.patch` and `patch` fields set in manifest
+- [x] `./scripts/verify-task-bank.sh` passes (cumulative apply; matches manifest `expect`)
 
 ## Run branches (later)
 
