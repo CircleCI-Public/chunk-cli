@@ -1,0 +1,10 @@
+{"kind":"sidecar_iter","iter":1,"tts_seconds":87,"lint_duration_s":11,"test_duration_s":72,"sync_duration_s":4}
+{"kind":"sidecar_iter","iter":2,"tts_seconds":18,"lint_duration_s":6,"test_duration_s":8,"sync_duration_s":4}
+{"kind":"sidecar_iter","iter":3,"tts_seconds":23,"lint_duration_s":11,"test_duration_s":8,"sync_duration_s":4}
+{"kind":"sidecar_iter","iter":4,"tts_seconds":22,"lint_duration_s":12,"test_duration_s":6,"sync_duration_s":4}
+{"kind":"sidecar_iter","iter":5,"tts_seconds":21,"lint_duration_s":11,"test_duration_s":6,"sync_duration_s":4}
+{"kind":"sidecar_iter","iter":6,"tts_seconds":19,"lint_duration_s":11,"test_duration_s":5,"sync_duration_s":3}
+{"kind":"sidecar_iter","iter":7,"tts_seconds":17,"lint_duration_s":7,"test_duration_s":5,"sync_duration_s":3}
+{"kind":"sidecar_iter","iter":8,"tts_seconds":20,"lint_duration_s":10,"test_duration_s":6,"sync_duration_s":4}
+{"kind":"sidecar_iter","iter":9,"tts_seconds":20,"lint_duration_s":11,"test_duration_s":5,"sync_duration_s":4}
+{"kind":"sidecar_iter","iter":10,"tts_seconds":21,"lint_duration_s":11,"test_duration_s":6,"sync_duration_s":4}

@@ -1,0 +1,37 @@
+Sidecar race run summary: 20260527-175354
+  arm:     sidecar
+  branch:  experiment/sidecar-race--run-001-sidecar
+  git_sha: a637f95af3cee8f2e58d00022dacd724982a5619
+  notes:   run 001 sidecar
+
+Iterations recorded: 10
+Time to signal (seconds): {
+  "n": 10,
+  "median_s": 20.5,
+  "p95_s": 23,
+  "min_s": 17,
+  "max_s": 87
+}
+
+Per iteration:
+  iter 1: tts=87s lint=pass test=pass
+  iter 2: tts=18s lint=fail test=pass
+  iter 3: tts=23s lint=pass test=pass
+  iter 4: tts=22s lint=pass test=pass
+  iter 5: tts=21s lint=pass test=pass
+  iter 6: tts=19s lint=pass test=pass
+  iter 7: tts=17s lint=fail test=pass
+  iter 8: tts=20s lint=pass test=pass
+  iter 9: tts=20s lint=pass test=pass
+  iter 10: tts=21s lint=pass test=pass
+
+Costs (see costs_summary.json):
+  CI credits (sum):     20
+  CI cost USD (sum):    0.012
+  Sidecar credits est:  77
+  Sidecar cost USD est: 0.0462
+  LLM tokens:           0 (Harness does not call Claude; llm_* columns are zero.)
+
+Epilogue (final push → CI):
+  tts=57s gate lint=pass test=pass
+  workflow=failed shellcheck=fail acceptance=pass build-smoke=fail
