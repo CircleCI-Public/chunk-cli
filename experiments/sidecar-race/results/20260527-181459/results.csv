@@ -1,0 +1,12 @@
+arm,run_id,iter,started_at,ended_at,tts_seconds,lint_ok,test_ok,lint_duration_s,test_duration_s,sync_duration_s,ci_pipeline_id,ci_workflow_id,ci_lint_job_num,ci_test_job_num,git_sha,notes,ci_workflow_credits,ci_gate_credits,ci_cost_usd,sidecar_credits_est,sidecar_cost_usd,llm_tokens,llm_cost_usd
+sidecar,20260527-181459,1,2026-05-27T18:15:00Z,2026-05-27T18:15:24Z,24,pass,pass,11,9,4,,,,,0b06879,,,,,8,0.0048,0,
+sidecar,20260527-181459,2,2026-05-27T18:15:25Z,2026-05-27T18:15:42Z,17,fail,pass,7,7,3,,,,,0b06879,,,,,5,0.003,0,
+sidecar,20260527-181459,3,2026-05-27T18:15:43Z,2026-05-27T18:16:05Z,22,pass,pass,11,8,3,,,,,0b06879,,,,,7,0.0042,0,
+sidecar,20260527-181459,4,2026-05-27T18:16:05Z,2026-05-27T18:16:27Z,22,pass,pass,11,6,5,,,,,0b06879,,,,,7,0.0042,0,
+sidecar,20260527-181459,5,2026-05-27T18:16:28Z,2026-05-27T18:16:49Z,21,pass,pass,12,5,4,,,,,0b06879,,,,,7,0.0042,0,
+sidecar,20260527-181459,6,2026-05-27T18:16:49Z,2026-05-27T18:17:10Z,21,pass,pass,10,6,5,,,,,0b06879,,,,,7,0.0042,0,
+sidecar,20260527-181459,7,2026-05-27T18:17:10Z,2026-05-27T18:17:25Z,15,fail,pass,6,5,4,,,,,0b06879,,,,,5,0.003,0,
+sidecar,20260527-181459,8,2026-05-27T18:17:25Z,2026-05-27T18:17:46Z,21,pass,pass,12,5,4,,,,,0b06879,,,,,7,0.0042,0,
+sidecar,20260527-181459,9,2026-05-27T18:17:46Z,2026-05-27T18:18:06Z,20,pass,pass,11,5,4,,,,,0b06879,,,,,6,0.0036,0,
+sidecar,20260527-181459,10,2026-05-27T18:18:06Z,2026-05-27T18:18:27Z,21,pass,pass,11,6,4,,,,,0b06879,,,,,7,0.0042,0,
+sidecar,20260527-181459,epilogue,2026-05-27T18:18:28Z,2026-05-27T18:19:45Z,77,pass,pass,0,0,,655b3120-cbeb-43f8-8652-6ed200713f18,44ddb6f0-b5e9-46e5-8172-8722392b8add,7307,7308,488648050f602bff3e5bf73d56051fda8a589da2,run 001 sidecar replicate (workflow=pass),19,0,0.0114,,,0,0
