@@ -1,5 +1,7 @@
 package racefixture
 
+import "fmt"
+
 // Operation represents the type of arithmetic operation being performed.
 // This enum-like approach provides better documentation and potential for future enhancements.
 const (
@@ -18,8 +20,8 @@ func performOperation(op int, a, b int) int {
 	case operationMultiply:
 		return a * b
 	default:
-		// This should never happen with current usage
-		return 0
+		// This should never happen with current usage, but if it does, fail fast
+		panic(fmt.Sprintf("invalid operation code %d: expected %d (add) or %d (multiply)", op, operationAdd, operationMultiply))
 	}
 }
 
