@@ -220,6 +220,7 @@ func TestSidecarSnapshotMissingToken(t *testing.T) {
 	}{
 		{"create", []string{"sidecar", "snapshot", "create", "--sidecar-id", "sb-111", "--name", "snap"}},
 		{"get", []string{"sidecar", "snapshot", "get", "snap-abc"}},
+		{"list", []string{"sidecar", "snapshot", "list", "--org-id", "org-abc"}},
 	}
 
 	for _, tt := range tests {
@@ -231,4 +232,43 @@ func TestSidecarSnapshotMissingToken(t *testing.T) {
 			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code without token")
 		})
 	}
+}
+
+func TestSidecarSnapshotListHappyPath(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Snapshots = []fakes.Snapshot{
+		{ID: "snap-1", OrgID: "org-abc", Name: "baseline"},
+		{ID: "snap-2", OrgID: "org-abc", Name: "with-deps"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "snapshot", "list", "--org-id", "org-abc",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout, "baseline"), "expected 'baseline' in output: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "snap-1"), "expected 'snap-1' in output: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "with-deps"), "expected 'with-deps' in output: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "snap-2"), "expected 'snap-2' in output: %s", result.Stdout)
+}
+
+func TestSidecarSnapshotListEmpty(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "snapshot", "list", "--org-id", "org-abc",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "No snapshots found"), "expected 'No snapshots found' in stderr: %s", result.Stderr)
 }
