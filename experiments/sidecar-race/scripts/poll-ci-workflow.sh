@@ -137,7 +137,7 @@ def job_ok(name: str) -> str:
 import sys
 
 sys.path.insert(0, os.environ.get("METRICS_LIB", ""))
-from metrics import enrich_workflow_jobs, job_duration_seconds  # noqa: E402
+from metrics import credits_to_usd, enrich_workflow_jobs, job_duration_seconds  # noqa: E402
 
 for name, info in jobs.items():
     info["duration_s"] = round(job_duration_seconds(info), 1)
