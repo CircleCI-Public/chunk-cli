@@ -42,3 +42,4 @@ PLANS.md
 
 # unikraft
 .unikraft/
+test-fetch-on-stale-sidecar.log

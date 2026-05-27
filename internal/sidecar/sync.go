@@ -14,21 +14,31 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-const workspaceDir = "/home/user"
+// sidecarHome returns the base home directory on the sidecar. It reads
+// CHUNK_SIDECAR_HOME so the default "/home/user" can be overridden when the
+// image uses a different OS user.
+func sidecarHome() string {
+	if h := os.Getenv("CHUNK_SIDECAR_HOME"); h != "" {
+		return h
+	}
+	return "/home/user"
+}
 
 // ResolveWorkspace determines the workspace path. Priority:
-// 1. CLI --workdir flag  2. sidecar.json workspace  3. default /home/user/<repo>.
-func ResolveWorkspace(ctx context.Context, cliWorkdir, repo string) string {
+// 1. CLI --workdir flag  2. sidecar.json workspace  3. default <sidecarHome>/<repo>.
+// Returns an error if no repo-specific path can be determined (repo empty and no
+// saved workspace), because the bare home dir is not safe to pass to rm -rf.
+func ResolveWorkspace(ctx context.Context, cliWorkdir, repo string) (string, error) {
 	if cliWorkdir != "" {
-		return cliWorkdir
+		return cliWorkdir, nil
 	}
 	if active, err := LoadActive(ctx); err == nil && active != nil && active.Workspace != "" {
-		return active.Workspace
+		return active.Workspace, nil
 	}
 	if repo == "" {
-		return workspaceDir
+		return "", fmt.Errorf("sync: cannot determine workspace: repo name is empty and no workspace is saved")
 	}
-	return workspaceDir + "/" + repo
+	return sidecarHome() + "/" + repo, nil
 }
 
 // persistWorkspace saves the resolved workspace back to the sidecar file if it
@@ -67,7 +77,10 @@ func Sync(ctx context.Context,
 		return fmt.Errorf("sync: %w", err)
 	}
 
-	repoPath := ResolveWorkspace(ctx, workdir, repo)
+	repoPath, err := ResolveWorkspace(ctx, workdir, repo)
+	if err != nil {
+		return err
+	}
 
 	if err := persistWorkspace(ctx, repoPath); err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))

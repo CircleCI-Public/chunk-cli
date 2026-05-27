@@ -423,7 +423,10 @@ func openSSHSession(ctx context.Context, client *circleci.Client, sidecarID, ide
 	}
 	cwd, _ := os.Getwd()
 	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
-	dest := sidecar.ResolveWorkspace(ctx, workdir, repo)
+	dest, err := sidecar.ResolveWorkspace(ctx, workdir, repo)
+	if err != nil {
+		return nil, "", &userError{msg: "Could not determine workspace path.", err: err}
+	}
 	merged := hostForwardEnv(rc.CircleCIToken)
 	if merged == nil {
 		merged = make(map[string]string, len(envVars))
