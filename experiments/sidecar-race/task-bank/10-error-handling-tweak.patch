@@ -1,0 +1,46 @@
+diff --git a/internal/racefixture/errors.go b/internal/racefixture/errors.go
+new file mode 100644
+index 0000000..fc4f3e1
+--- /dev/null
++++ b/internal/racefixture/errors.go
+@@ -0,0 +1,17 @@
++package racefixture
++
++import (
++	"errors"
++	"fmt"
++)
++
++// ErrNegative is returned when a value is below zero.
++var ErrNegative = errors.New("negative value")
++
++// ValidatePositive returns an error if n is negative.
++func ValidatePositive(n int) error {
++	if n < 0 {
++		return fmt.Errorf("racefixture: %w", ErrNegative)
++	}
++	return nil
++}
+diff --git a/internal/racefixture/errors_test.go b/internal/racefixture/errors_test.go
+new file mode 100644
+index 0000000..1e7e113
+--- /dev/null
++++ b/internal/racefixture/errors_test.go
+@@ -0,0 +1,17 @@
++package racefixture
++
++import (
++	"errors"
++	"testing"
++)
++
++func TestValidatePositive(t *testing.T) {
++	if err := ValidatePositive(-1); err == nil {
++		t.Fatal("expected error for negative value")
++	} else if !errors.Is(err, ErrNegative) {
++		t.Fatalf("expected ErrNegative, got %v", err)
++	}
++	if err := ValidatePositive(0); err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++}

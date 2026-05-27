@@ -1,0 +1,39 @@
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index 83c983f..24b5d16 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -10,6 +10,7 @@ import (
+ 	"gotest.tools/v3/assert"
+ )
+ 
++// setupTempConfig creates an isolated XDG config home for tests.
+ func setupTempConfig(t *testing.T) string {
+ 	t.Helper()
+ 	dir := t.TempDir()
+diff --git a/internal/racefixture/multiply.go b/internal/racefixture/multiply.go
+new file mode 100644
+index 0000000..1f80a09
+--- /dev/null
++++ b/internal/racefixture/multiply.go
+@@ -0,0 +1,6 @@
++package racefixture
++
++// Multiply returns the product of a and b.
++func Multiply(a, b int) int {
++	return a * b
++}
+diff --git a/internal/racefixture/multiply_test.go b/internal/racefixture/multiply_test.go
+new file mode 100644
+index 0000000..ad1ef22
+--- /dev/null
++++ b/internal/racefixture/multiply_test.go
+@@ -0,0 +1,9 @@
++package racefixture
++
++import "testing"
++
++func TestMultiply(t *testing.T) {
++	if got := Multiply(3, 4); got != 12 {
++		t.Fatalf("Multiply(3, 4) = %d, want 12", got)
++	}
++}

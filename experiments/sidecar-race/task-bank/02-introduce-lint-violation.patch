@@ -1,0 +1,9 @@
+diff --git a/internal/racefixture/racefixture.go b/internal/racefixture/racefixture.go
+index 112d9c0..ebad155 100644
+--- a/internal/racefixture/racefixture.go
++++ b/internal/racefixture/racefixture.go
+@@ -4,3 +4,4 @@ package racefixture
+ func Sum(a, b int) int {
+ 	return a + b
+ }
++var lintTrap = 1

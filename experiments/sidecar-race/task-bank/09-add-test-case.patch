@@ -1,0 +1,22 @@
+diff --git a/internal/racefixture/multiply_test.go b/internal/racefixture/multiply_test.go
+index ad1ef22..98b8cf2 100644
+--- a/internal/racefixture/multiply_test.go
++++ b/internal/racefixture/multiply_test.go
+@@ -7,3 +7,17 @@ func TestMultiply(t *testing.T) {
+ 		t.Fatalf("Multiply(3, 4) = %d, want 12", got)
+ 	}
+ }
++
++func TestMultiplyTable(t *testing.T) {
++	tests := []struct {
++		a, b, want int
++	}{
++		{2, 3, 6},
++		{0, 5, 0},
++	}
++	for _, tc := range tests {
++		if got := Multiply(tc.a, tc.b); got != tc.want {
++			t.Fatalf("Multiply(%d, %d) = %d, want %d", tc.a, tc.b, got, tc.want)
++		}
++	}
++}
