@@ -41,7 +41,14 @@ for RUN in "${RUNS[@]}"; do
   "${SCRIPT_DIR}/prep-check.sh" --arm ci
   "${SCRIPT_DIR}/run-arm.sh" --arm ci --notes "run ${RUN} ci (agent)"
 
-  RUN_ID="$(ls -t "${EXPERIMENT_ROOT}/results" 2>/dev/null | grep -E '^[0-9]{8}-' | head -1 || true)"
+  RUN_ID=""
+  shopt -s nullglob
+  run_dirs=("${EXPERIMENT_ROOT}"/results/[0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]/)
+  shopt -u nullglob
+  if ((${#run_dirs[@]} > 0)); then
+    # shellcheck disable=SC2012
+    RUN_ID="$(basename "$(ls -dt "${run_dirs[@]}" | head -1)")"
+  fi
   echo "RUN ${RUN} CI complete. RUN_ID=${RUN_ID:-unknown}"
 
   if [[ -n "${RUN_ID}" && -d "${EXPERIMENT_ROOT}/results/${RUN_ID}" ]]; then
