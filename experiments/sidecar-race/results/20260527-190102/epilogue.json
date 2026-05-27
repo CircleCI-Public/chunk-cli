@@ -1,0 +1,72 @@
+{
+  "kind": "sidecar_ci_epilogue",
+  "started_at": "2026-05-27T19:15:00Z",
+  "branch": "experiment/sidecar-race--run-001-sidecar",
+  "gate": {
+    "pipeline_id": "69c7c19c-789f-4783-850b-6f9404fd8429",
+    "workflow_id": "2762155d-c4bd-4aa1-ba10-efe72ecc4e52",
+    "lint_job_num": "7345",
+    "test_job_num": "7344",
+    "lint_ok": "pass",
+    "test_ok": "pass",
+    "lint_duration_s": 0,
+    "test_duration_s": 0,
+    "tts_seconds": 108,
+    "ci_workflow_credits": 24,
+    "ci_gate_credits": 0,
+    "ci_cost_usd": 0.0144
+  },
+  "workflow": {
+    "pipeline_id": "69c7c19c-789f-4783-850b-6f9404fd8429",
+    "workflow_id": "2762155d-c4bd-4aa1-ba10-efe72ecc4e52",
+    "workflow_name": "ci",
+    "workflow_status": "success",
+    "workflow_ok": true,
+    "workflow_duration_s": 109,
+    "tts_seconds": 109,
+    "ci_workflow_credits": 24,
+    "ci_cost_usd": 0.0144,
+    "jobs": {
+      "test": {
+        "job_number": 7344,
+        "status": "success",
+        "duration_s": 0,
+        "credits_est": 0,
+        "cost_usd_est": 0.0
+      },
+      "shellcheck/check": {
+        "job_number": 7342,
+        "status": "success",
+        "duration_s": 0,
+        "credits_est": 0,
+        "cost_usd_est": 0.0
+      },
+      "lint": {
+        "job_number": 7345,
+        "status": "success",
+        "duration_s": 0,
+        "credits_est": 0,
+        "cost_usd_est": 0.0
+      },
+      "acceptance-test": {
+        "job_number": 7343,
+        "status": "success",
+        "duration_s": 0,
+        "credits_est": 0,
+        "cost_usd_est": 0.0
+      },
+      "build-smoke-test": {
+        "job_number": 7346,
+        "status": "success",
+        "duration_s": 0,
+        "credits_est": 0,
+        "cost_usd_est": 0.0
+      }
+    },
+    "shellcheck_ok": "pass",
+    "lint_ok": "pass",
+    "test_ok": "pass",
+    "acceptance_ok": "pass",
+    "build_smoke_ok": "pass"
+  }
+}
