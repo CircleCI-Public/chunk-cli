@@ -10,6 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+// setupTempConfig creates a temporary config directory and sets the XDG_CONFIG_HOME environment variable.
 func setupTempConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
