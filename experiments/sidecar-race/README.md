@@ -4,21 +4,40 @@ Measure **time to signal** and **compute per iteration** when an AI coding agent
 
 This directory is scaffolding only. **Do not treat results under `results/` as published data until a recorded run completes on a child branch.**
 
+## When to merge (read this first)
+
+**Do not merge `experiment/sidecar-race` into `main` until every planned run is finished** (sidecar arm, CI arm, and any reruns you care about). The open PR can stay a draft while you work.
+
+1. Run the experiment on **child branches** (below) branched from `experiment/sidecar-race`.
+2. Collect and review results.
+3. **Then** merge the harness to `main` (or close/reopen the PR) if you want the tooling public.
+
+`main` should stay free of experiment runs and `internal/racefixture/` until you are ready.
+
 ## Branching strategy
 
 | Branch | Purpose |
 |--------|---------|
-| `experiment/sidecar-race` | Harness, docs, task bank manifest (this branch) |
-| `experiment/sidecar-race/run-<id>-sidecar` | Execute sidecar arm only |
-| `experiment/sidecar-race/run-<id>-ci` | Execute CI arm only |
+| `experiment/sidecar-race` | Harness, docs, task bank — **base for all runs; merge to `main` only after runs** |
+| `experiment/sidecar-race/run-<id>-sidecar` | Execute sidecar arm only (branch **from** `experiment/sidecar-race`, not `main`) |
+| `experiment/sidecar-race/run-<id>-ci` | Execute CI arm only (same base; fresh branch, not from the sidecar run branch) |
 | `experiment/sidecar-race/run-<id>-combined` | Optional: same machine, both arms interleaved (control order) |
 
-Create run branches from this branch so reviewers can diff harness changes separately from raw results commits.
+Always create run branches from `experiment/sidecar-race`:
 
 ```bash
+git fetch origin
 git checkout experiment/sidecar-race
+
+# Sidecar arm
 git checkout -b experiment/sidecar-race/run-001-sidecar
+
+# CI arm (start again from experiment/sidecar-race, not from the sidecar run branch)
+git checkout experiment/sidecar-race
+git checkout -b experiment/sidecar-race/run-001-ci
 ```
+
+Push run branches to `origin` when you need CI (CI arm) or remote backup. That does **not** require merging to `main`.
 
 Commit **results** on the run branch (they are gitignored here by default; see `results/README.md` to opt in).
 
