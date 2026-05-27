@@ -3,8 +3,50 @@ package racefixture
 import "testing"
 
 func TestSum(t *testing.T) {
-	if got := Sum(1, 2); got != 3 {
-		t.Fatalf("Sum(1, 2) = %d, want 3", got)
+	tests := []struct {
+		name string
+		a    int
+		b    int
+		want int
+	}{
+		{
+			name: "positive numbers",
+			a:    1,
+			b:    2,
+			want: 3,
+		},
+		{
+			name: "negative numbers",
+			a:    -5,
+			b:    -3,
+			want: -8,
+		},
+		{
+			name: "zero and positive",
+			a:    0,
+			b:    7,
+			want: 7,
+		},
+		{
+			name: "positive and negative",
+			a:    10,
+			b:    -4,
+			want: 6,
+		},
+		{
+			name: "both zero",
+			a:    0,
+			b:    0,
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Sum(tt.a, tt.b); got != tt.want {
+				t.Fatalf("Sum(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
+			}
+		})
 	}
 }
 
