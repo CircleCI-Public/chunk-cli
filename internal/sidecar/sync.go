@@ -155,6 +155,16 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 
 	status(iostream.LevelInfo, fmt.Sprintf("Synchronising local %s/%s to remote: %s...", org, repo, repoPath))
 
+	status(iostream.LevelInfo, "Fetching remote refs on sidecar...")
+	fetchCmd := fmt.Sprintf("git -C %s fetch origin", ShellEscape(repoPath))
+	fetchResult, err := ExecOverSSH(ctx, session, fetchCmd, nil, nil)
+	if err != nil {
+		return fmt.Errorf("sync: fetch: %w", err)
+	}
+	if fetchResult.ExitCode != 0 {
+		return fmt.Errorf("sync: fetch failed (exit code: %d): %s", fetchResult.ExitCode, fetchResult.Stderr)
+	}
+
 	base, err := gitutil.MergeBase()
 	if err != nil {
 		return &RemoteBaseError{Err: err}

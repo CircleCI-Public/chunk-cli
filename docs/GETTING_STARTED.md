@@ -70,6 +70,7 @@ Credentials are stored in `~/.config/chunk/config.json` (respects `XDG_CONFIG_HO
 | `ANTHROPIC_API_KEY` | `build-prompt`, `init` |
 | `GITHUB_TOKEN` | `build-prompt` |
 | `CIRCLE_TOKEN` | `sidecar`, `task` |
+| `CIRCLECI_ORG_ID` | `sidecar` (optional; overrides `orgID` in `.chunk/config.json`) |
 
 ---
 
@@ -169,10 +170,28 @@ The agent loads your team's prompt, diffs the changes, and returns filtered find
 
 ## Sidecar workflow (preview)
 
+### First-time sidecar setup
+
+Before creating a sidecar in a non-interactive session (AI agents, scripts), set
+your CircleCI org ID once per project:
+
+```bash
+chunk auth set circleci
+chunk config set orgID <your-org-id>
+chunk sidecar create
+```
+
+`chunk config show` displays the resolved `orgID` when set. One-off overrides:
+`chunk sidecar create --org-id <id>` or `CIRCLECI_ORG_ID=<id> chunk sidecar create`.
+See [docs/CLI.md](CLI.md) for the full resolution order (`--org-id` → env →
+project config → interactive picker).
+
+### Dev loop
+
 Sidecars let you run validations in a clean cloud environment. The typical loop:
 
 ```bash
-# One-time: create a sidecar (--name is optional; a random name is generated if omitted)
+# Create a sidecar (--name is optional; a random name is generated if omitted)
 chunk sidecar create
 chunk sidecar create --name my-sidecar
 
@@ -207,17 +226,20 @@ chunk sidecar create --image myimg                   # name auto-generated
 
 ### Environment variables
 
-`chunk sidecar ssh` and `chunk sidecar setup` automatically load `.env.local` from your working directory and forward its variables to the remote sidecar session. This lets you pass secrets and configuration without embedding them in your shell or committing them to the repo.
+`chunk sidecar ssh`, `chunk sidecar setup`, and `chunk validate` (when running remotely) automatically load `.env.local` from your working directory and forward its variables to the remote sidecar session. This lets you pass secrets and configuration without embedding them in your shell or committing them to the repo.
 
 ```bash
 # .env.local is loaded automatically — no flag needed
 chunk sidecar ssh
+chunk validate --remote
 
 # Override with a different file
 chunk sidecar ssh --env-file /path/to/other.env
+chunk validate --remote --env-file /path/to/other.env
 
 # Add individual variables (merged on top of the file)
 chunk sidecar ssh --env MY_VAR=value
+chunk validate --remote --env MY_VAR=value
 ```
 
 Variables from `--env` flags take precedence over those in `--env-file`. `.env.local` is gitignored by convention, so it's a safe place to store project-specific secrets.
@@ -227,12 +249,13 @@ Variables from `--env` flags take precedence over those in `--env-file`. `.env.l
 Capture a configured environment so future sidecars boot fast:
 
 ```bash
+chunk sidecar snapshot list
 chunk sidecar snapshot create --name checkpoint
 # Later:
 chunk sidecar create --image <snapshot-id>           # name auto-generated
 ```
 
-`snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
+`snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
 
 ---
 

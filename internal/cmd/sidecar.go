@@ -27,6 +27,8 @@ func randomSidecarName() string {
 	return petname.Generate(3, "-")
 }
 
+const cmdList = "list"
+
 func newSidecarCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                "sidecar",
@@ -72,30 +74,17 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	return nil
 }
 
-// resolveOrgID returns orgID from the flag, the CIRCLECI_ORG_ID env var,
-// the project config, or by calling pickOrg as a last resort (e.g. to present
-// a TUI picker).
-func resolveOrgID(orgID, projOrgID string, pickOrg func() (string, error)) (string, error) {
+// resolveOrgID returns orgID from the flag, then delegates to
+// config.ResolveOrgID for the env-vs-project-config precedence, and finally
+// calls pickOrg as a last resort (e.g. to present a TUI picker).
+func resolveOrgID(orgID, workDir string, pickOrg func() (string, error)) (string, error) {
 	if orgID != "" {
 		return orgID, nil
 	}
-	if envID := os.Getenv(config.EnvCircleCIOrgID); envID != "" {
-		return envID, nil
-	}
-	if projOrgID != "" {
-		return projOrgID, nil
+	if v, _ := config.ResolveOrgID(workDir); v != "" {
+		return v, nil
 	}
 	return pickOrg()
-}
-
-// configOrgID returns the orgID stored in .chunk/config.json for dir, or ""
-// if the config cannot be loaded or has no orgID set.
-func configOrgID(dir string) string {
-	cfg, err := config.LoadProjectConfig(dir)
-	if err != nil {
-		return ""
-	}
-	return cfg.OrgID
 }
 
 func orgPicker(ctx context.Context, client *circleci.Client) func() (string, error) {
@@ -136,7 +125,7 @@ func newSidecarListCmd() *cobra.Command {
 	var jsonOut bool
 
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   cmdList,
 		Short: "List sidecars",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
@@ -150,7 +139,7 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, configOrgID(cwd), orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
@@ -219,7 +208,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, configOrgID(cwd), orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
@@ -687,6 +676,7 @@ func newSidecarSnapshotCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newSidecarSnapshotCreateCmd())
 	cmd.AddCommand(newSidecarSnapshotGetCmd())
+	cmd.AddCommand(newSidecarSnapshotListCmd())
 	return cmd
 }
 
@@ -776,6 +766,57 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func newSidecarSnapshotListCmd() *cobra.Command {
+	var orgID string
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   cmdList,
+		Short: "List snapshots",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			insecureStorage := insecureStorageFlag(cmd)
+			rc, _ := config.Resolve("", "", insecureStorage)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("get working directory: %w", err)
+			}
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
+			if err != nil {
+				return err
+			}
+			snapshots, err := client.ListSnapshots(cmd.Context(), resolvedOrgID)
+			if err != nil {
+				return &userError{
+					msg:        "Could not list snapshots.",
+					suggestion: suggestionNetworkRetry,
+					err:        err,
+				}
+			}
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, snapshots)
+			}
+			if len(snapshots) == 0 {
+				io.ErrPrintln(ui.Dim("No snapshots found"))
+				return nil
+			}
+			for _, s := range snapshots {
+				io.Printf("%s  %s\n", s.Name, s.ID)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
@@ -886,7 +927,8 @@ Example:
 			}
 
 			streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it:\n")
-			streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n\n")
+			streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n")
+			streams.ErrPrintf("  chunk sidecar snapshot list              # list snapshot IDs for your org\n\n")
 
 			return nil
 		},
@@ -923,7 +965,7 @@ func sidecarSetupResolveSidecar(
 	if name == "" {
 		name = randomSidecarName()
 	}
-	resolvedOrgID, err := resolveOrgID(orgID, configOrgID(workDir), orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
 		return "", "", err
 	}
