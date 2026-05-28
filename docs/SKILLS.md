@@ -73,7 +73,7 @@ If no issues survive filtering, the skill reports "No significant issues identif
 
 ### chunk-sidecar
 
-**Trigger phrases**: "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "validate remotely"
+**Trigger phrases**: "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "validate remotely", "run smarter testing doctor", "diagnose smarter testing"
 
 Runs the sync → validate loop on a remote CircleCI sidecar. Also handles one-time sidecar creation, environment setup, and snapshotting.
 

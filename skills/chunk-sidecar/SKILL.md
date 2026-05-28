@@ -1,7 +1,7 @@
 ---
 name: chunk-sidecar
-description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", "scaffold test-suites.yml", "set up smarter testing", or "write .circleci/test-suites.yml", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, customizing the sidecar image via `chunk sidecar`, and scaffolding `.circleci/test-suites.yml` for CircleCI Smarter Testing.
-version: 1.5.0
+description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", "scaffold test-suites.yml", "set up smarter testing", "write .circleci/test-suites.yml", "run smarter testing doctor", or "diagnose smarter testing", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, customizing the sidecar image via `chunk sidecar`, and scaffolding `.circleci/test-suites.yml` for CircleCI Smarter Testing.
+version: 1.6.0
 allowed-tools:
   - Bash(chunk --version)
   - Bash(chunk auth status)
@@ -157,9 +157,21 @@ An atom is the smallest independent unit the runner accepts. Match the runner's 
 Validate on the sidecar — the `circleci-testsuite` plugin and `circleci` CLI are pre-installed there, matching the CI environment.
 
 1. `chunk sidecar sync` — push the new file to the active sidecar.
-2. `chunk validate --remote --cmd "<discover-command>"` — confirm it prints one atom per line and exits zero.
-3. `chunk validate --remote --cmd "<run-command with one or two atoms>"` — confirm a junit XML file appears at the `outputs.junit` path.
-4. `chunk validate --remote --cmd "circleci config validate"` — confirm `.circleci/config.yml` parses and the `circleci-testsuite exec --suite <name>` call uses the suite `name` you chose.
+2. Run the doctor diagnostic on the sidecar:
+   ```
+   chunk validate --remote --cmd 'script -q /dev/null circleci run testsuite "<suite-name>" --doctor'
+   ```
+   Doctor validates YAML structure, the discover command, the run command with sample atoms, JUnit output, and config wiring in a single pass. Read its output and fix any reported issues locally, then sync and re-run doctor. Repeat until all checks pass.
+
+If `circleci-testsuite` is not installed on the sidecar (see Step 3 for installing it), fall back to manual validation:
+
+1. `chunk validate --remote --cmd "<discover-command>"` — confirm it prints one atom per line and exits zero.
+2. `chunk validate --remote --cmd "<run-command with one or two atoms>"` — confirm a junit XML file appears at the `outputs.junit` path.
+3. `chunk validate --remote --cmd "circleci config validate"` — confirm `.circleci/config.yml` parses and the `circleci-testsuite exec --suite <name>` call uses the suite `name` you chose.
+
+### Beyond scaffolding
+
+This skill covers writing `test-suites.yml` and validating it with doctor on the sidecar. For deeper Smarter Testing configuration — test impact analysis, dynamic test splitting, auto-rerun, CI job wiring, or troubleshooting doctor failures beyond YAML/command issues — see the **`circleci-smarter-testing`** skill (available as a CircleCI plugin skill via `CircleCI-Public/skills`). It provides runner-specific templates, reference docs, and a full onboarding workflow.
 
 ## Parallel sessions
 
