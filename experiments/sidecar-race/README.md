@@ -2,17 +2,17 @@
 
 Measure **time to signal** and **compute per iteration** when an AI coding agent validates changes via Chunk sidecar microbuilds (snapshot-backed) versus pushing to CircleCI for the same gate checks.
 
-This directory is scaffolding only. **Do not treat results under `results/` as published data until a recorded run completes on a child branch.**
+**Experiment complete (May 2026).** Published metrics and rollup live on this branch:
+
+- [`FINDINGS.md`](FINDINGS.md) — executive summary
+- [`results/comparison.md`](results/comparison.md) — sidecar vs CI tables
+- [`results/published/`](results/published/) — per-replicate artifacts (`001-sidecar` … `005-ci`)
 
 ## When to merge (read this first)
 
-**Do not merge `experiment/sidecar-race` into `main` until every planned run is finished** (sidecar arm, CI arm, and any reruns you care about). The open PR can stay a draft while you work.
+**Do not merge `experiment/sidecar-race` into `main` until you are ready** for the harness + published results to be public. Per-run PRs on `experiment/sidecar-race--run-*` are archival only and were closed after consolidation into PR #370.
 
-1. Run the experiment on **run branches** (below) branched from `experiment/sidecar-race`.
-2. Collect and review results (including sidecar **epilogue** CI validation).
-3. **Then** merge `experiment/sidecar-race` → `main` if you want the tooling public.
-
-`main` should stay free of experiment runs and `internal/racefixture/` until you are ready.
+`main` should stay free of `internal/racefixture/` (fixture code exists only on run branches).
 
 ## Branching strategy
 
@@ -72,9 +72,15 @@ Override model: `SIDECAR_RACE_AGENT_MODEL=...` or `agent_model` in `manifest.jso
 - `.chunk/config.json` with `lint` and `test-changed` commands
 - Run branch checked out locally (see below); first **push** creates the remote branch
 
-## Pull requests (one per run arm)
+## Pull requests
 
-Do **not** open a PR before the run. A **draft** PR is created automatically on the first commit pushed to the run branch:
+**Consolidated:** [PR #370](https://github.com/CircleCI-Public/chunk-cli/pull/370) (`experiment/sidecar-race`) holds harness + published results.
+
+**Historical (closed):** Per-run PRs `#374`–`#384` targeted this branch during execution; metrics were copied into `results/published/` and those PRs were closed without merging.
+
+### Run-branch PR workflow (historical)
+
+A **draft** PR was created automatically on the first commit pushed to each run branch:
 
 | Arm | First commit | Draft PR opens |
 |-----|----------------|----------------|
@@ -118,15 +124,13 @@ Epilogue only: `./scripts/sidecar-epilogue.sh` (after a partial run, set `RUN_ID
 
 ## Compare replicates (sidecar vs CI)
 
-After recording runs on both arms, roll up medians and costs:
-
 ```bash
 cd experiments/sidecar-race
-./scripts/compare-runs.sh --from-git --labels 001,002,003,004,005
-./scripts/compare-runs.sh --from-git -o comparison.md
+./scripts/collect-published-results.sh
+./scripts/compare-runs.sh --labels 001,002,003,004,005 --output results/comparison.md
 ```
 
-Uses `results/<run-id>/` on disk when present; `--from-git` reads committed results from `origin/experiment/sidecar-race--run-<label>-<arm>` (recommended when `results/*/` is gitignored).
+Reads `results/published/` when present. `--from-git` still loads from `origin/experiment/sidecar-race--run-<label>-<arm>` if you need to refresh before collecting.
 
 ## Running the CI arm
 

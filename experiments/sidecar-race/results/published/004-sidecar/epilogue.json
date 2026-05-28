@@ -1,0 +1,82 @@
+{
+  "kind": "sidecar_ci_epilogue",
+  "started_at": "2026-05-27T21:05:26Z",
+  "branch": "experiment/sidecar-race--run-004-sidecar",
+  "gate": {
+    "pipeline_id": "4dac5eb9-845f-48c2-a852-f0e7a58fc3e7",
+    "workflow_id": "69da118d-5932-4b64-85af-eb6a86bf69a0",
+    "lint_job_num": "7403",
+    "test_job_num": "7404",
+    "lint_ok": "pass",
+    "test_ok": "pass",
+    "lint_duration_s": 38.0,
+    "test_duration_s": 26.0,
+    "tts_seconds": 93,
+    "ci_workflow_credits": 25,
+    "ci_gate_credits": 25,
+    "ci_cost_usd": 0.015
+  },
+  "workflow": {
+    "pipeline_id": "4dac5eb9-845f-48c2-a852-f0e7a58fc3e7",
+    "workflow_id": "69da118d-5932-4b64-85af-eb6a86bf69a0",
+    "workflow_name": "ci",
+    "workflow_status": "success",
+    "workflow_ok": true,
+    "workflow_duration_s": 94,
+    "tts_seconds": 94,
+    "ci_workflow_credits": 25,
+    "ci_cost_usd": 0.015,
+    "jobs": {
+      "test": {
+        "job_number": 7404,
+        "status": "success",
+        "started_at": "2026-05-27T21:05:37Z",
+        "stopped_at": "2026-05-27T21:06:03Z",
+        "duration_s": 26.0,
+        "credits_est": 4.1,
+        "cost_usd_est": 0.00246
+      },
+      "shellcheck/check": {
+        "job_number": 7405,
+        "status": "success",
+        "started_at": "2026-05-27T21:05:36Z",
+        "stopped_at": "2026-05-27T21:06:26Z",
+        "duration_s": 50.0,
+        "credits_est": 7.9,
+        "cost_usd_est": 0.00474
+      },
+      "lint": {
+        "job_number": 7403,
+        "status": "success",
+        "started_at": "2026-05-27T21:05:37Z",
+        "stopped_at": "2026-05-27T21:06:15Z",
+        "duration_s": 38.0,
+        "credits_est": 6.0,
+        "cost_usd_est": 0.0036
+      },
+      "acceptance-test": {
+        "job_number": 7402,
+        "status": "success",
+        "started_at": "2026-05-27T21:05:36Z",
+        "stopped_at": "2026-05-27T21:05:57Z",
+        "duration_s": 21.0,
+        "credits_est": 3.3,
+        "cost_usd_est": 0.00198
+      },
+      "build-smoke-test": {
+        "job_number": 7406,
+        "status": "success",
+        "started_at": "2026-05-27T21:06:28Z",
+        "stopped_at": "2026-05-27T21:06:51Z",
+        "duration_s": 23.0,
+        "credits_est": 3.6,
+        "cost_usd_est": 0.00216
+      }
+    },
+    "shellcheck_ok": "pass",
+    "lint_ok": "pass",
+    "test_ok": "pass",
+    "acceptance_ok": "pass",
+    "build_smoke_ok": "pass"
+  }
+}

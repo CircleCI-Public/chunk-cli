@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import statistics
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from llm_usage import format_usd
@@ -138,9 +139,37 @@ def discover_local(results_root: Path) -> list[RunSnapshot]:
     for run_dir in sorted(results_root.iterdir()):
         if not run_dir.is_dir() or run_dir.name.startswith("."):
             continue
+        if run_dir.name == "published":
+            continue
         snap = _snapshot_from_dir(run_dir, source=str(run_dir))
         if snap:
             out.append(snap)
+    return out
+
+
+def _label_arm_from_published_name(name: str) -> tuple[str, str] | None:
+    match = re.match(r"^(\d{3})-(sidecar|ci)$", name)
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def discover_published(results_root: Path) -> list[RunSnapshot]:
+    published = results_root / "published"
+    if not published.is_dir():
+        return []
+    out: list[RunSnapshot] = []
+    for run_dir in sorted(published.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        parsed = _label_arm_from_published_name(run_dir.name)
+        if not parsed:
+            continue
+        snap = _snapshot_from_dir(run_dir, source=f"published/{run_dir.name}")
+        if not snap:
+            continue
+        label, arm = parsed
+        out.append(replace(snap, label=label, arm=arm))
     return out
 
 
@@ -405,6 +434,7 @@ def main() -> None:
     repo_root = Path(args.repo_root) if args.repo_root else experiment_root.parent.parent
 
     local = discover_local(results_root)
+    published = discover_published(results_root)
     git_snaps: list[RunSnapshot] = []
     if args.from_git:
         labels_guess = parse_labels(args.labels) if args.labels else [
@@ -412,7 +442,8 @@ def main() -> None:
         ]
         git_snaps = discover_git(repo_root, labels_guess, ["sidecar", "ci"])
 
-    snaps = merge_snapshots(local, git_snaps)
+    # Published copies on the harness branch win over git run branches.
+    snaps = merge_snapshots(git_snaps, local, published)
     if not snaps:
         print("No runs found. Use --from-git or commit results under results/<run-id>/", file=sys.stderr)
         sys.exit(1)

@@ -1,0 +1,75 @@
+{
+  "collected_at": "2026-05-28T14:05:32Z",
+  "runs": [
+    {
+      "label": "001",
+      "arm": "ci",
+      "run_id": "20260527-214223",
+      "branch": "experiment/sidecar-race--run-001-ci",
+      "pr": 380
+    },
+    {
+      "label": "001",
+      "arm": "sidecar",
+      "run_id": "20260527-190102",
+      "branch": "experiment/sidecar-race--run-001-sidecar",
+      "pr": 374
+    },
+    {
+      "label": "002",
+      "arm": "ci",
+      "run_id": "20260527-220610",
+      "branch": "experiment/sidecar-race--run-002-ci",
+      "pr": 381
+    },
+    {
+      "label": "002",
+      "arm": "sidecar",
+      "run_id": "20260527-200851",
+      "branch": "experiment/sidecar-race--run-002-sidecar",
+      "pr": 375
+    },
+    {
+      "label": "003",
+      "arm": "ci",
+      "run_id": "20260527-222903",
+      "branch": "experiment/sidecar-race--run-003-ci",
+      "pr": 382
+    },
+    {
+      "label": "003",
+      "arm": "sidecar",
+      "run_id": "20260527-203710",
+      "branch": "experiment/sidecar-race--run-003-sidecar",
+      "pr": 376
+    },
+    {
+      "label": "004",
+      "arm": "ci",
+      "run_id": "20260527-224812",
+      "branch": "experiment/sidecar-race--run-004-ci",
+      "pr": 383
+    },
+    {
+      "label": "004",
+      "arm": "sidecar",
+      "run_id": "20260527-205229",
+      "branch": "experiment/sidecar-race--run-004-sidecar",
+      "pr": 377
+    },
+    {
+      "label": "005",
+      "arm": "ci",
+      "run_id": "20260527-231212",
+      "branch": "experiment/sidecar-race--run-005-ci",
+      "pr": 384
+    },
+    {
+      "label": "005",
+      "arm": "sidecar",
+      "run_id": "20260527-210725",
+      "branch": "experiment/sidecar-race--run-005-sidecar",
+      "pr": 378
+    }
+  ]
+}

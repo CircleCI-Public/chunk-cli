@@ -14,14 +14,12 @@ Each run gets its own subdirectory: `results/<run-id>/`.
 
 ## Git
 
-By default, `results/*/` is **gitignored** so accidental local runs do not pollute PRs. To commit results for a published article run:
+By default, ad-hoc `results/<run-id>/` trees are **gitignored**. Published experiment output lives under **`results/published/`** (committed on `experiment/sidecar-race`). Regenerate with:
 
 ```bash
-# In experiments/sidecar-race/.gitignore, comment out the results/*/ line
-# or force-add a specific run:
-git add -f results/20260527-143022/
+./scripts/collect-published-results.sh
 ```
 
-Commit results on the **run branch** (`experiment/sidecar-race--run-*`), not on `experiment/sidecar-race`, unless you are updating the harness.
+During execution, runs also committed metrics on **run branches** (`experiment/sidecar-race--run-*`); those PRs are closed after consolidation.
 
 Sidecar runs also produce `epilogue.json` (final push CI validation) beside `results.csv`.
