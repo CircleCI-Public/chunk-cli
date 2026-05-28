@@ -2,7 +2,7 @@
 
 CLI for [Chunk](https://chunk.ai/) — inner loop validation and AI-ready code review context for software teams building with AI agents. The chunk CLI currently has two main capabilities:
 
-- **Sidecars** — lightweight microVM environments that run alongside your AI agent and validate changes locally before they reach CI
+- **Chunk sidecars** — lightweight microVM environments that run alongside your AI agent and validate changes in the inner loop before they reach CI
 - **build-prompt** — mines PR review comments from your GitHub org and uses Claude to generate a context file tuned to your team's code review standards
 
 ## Why chunk?
