@@ -73,30 +73,17 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	return nil
 }
 
-// resolveOrgID returns orgID from the flag, the CIRCLECI_ORG_ID env var,
-// the project config, or by calling pickOrg as a last resort (e.g. to present
-// a TUI picker).
-func resolveOrgID(orgID, projOrgID string, pickOrg func() (string, error)) (string, error) {
+// resolveOrgID returns orgID from the flag, then delegates to
+// config.ResolveOrgID for the env-vs-project-config precedence, and finally
+// calls pickOrg as a last resort (e.g. to present a TUI picker).
+func resolveOrgID(orgID, workDir string, pickOrg func() (string, error)) (string, error) {
 	if orgID != "" {
 		return orgID, nil
 	}
-	if envID := os.Getenv(config.EnvCircleCIOrgID); envID != "" {
-		return envID, nil
-	}
-	if projOrgID != "" {
-		return projOrgID, nil
+	if v, _ := config.ResolveOrgID(workDir); v != "" {
+		return v, nil
 	}
 	return pickOrg()
-}
-
-// configOrgID returns the orgID stored in .chunk/config.json for dir, or ""
-// if the config cannot be loaded or has no orgID set.
-func configOrgID(dir string) string {
-	cfg, err := config.LoadProjectConfig(dir)
-	if err != nil {
-		return ""
-	}
-	return cfg.OrgID
 }
 
 func orgPicker(ctx context.Context, client *circleci.Client) func() (string, error) {
@@ -151,7 +138,7 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, configOrgID(cwd), orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
@@ -220,7 +207,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, configOrgID(cwd), orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
@@ -791,7 +778,7 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, configOrgID(cwd), orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
 			if err != nil {
 				return err
 			}
@@ -966,7 +953,7 @@ func sidecarSetupResolveSidecar(
 	if name == "" {
 		name = randomSidecarName()
 	}
-	resolvedOrgID, err := resolveOrgID(orgID, configOrgID(workDir), orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
 		return "", "", err
 	}
