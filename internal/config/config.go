@@ -39,6 +39,9 @@ const (
 
 	// SourceConfigFile is the source label used when a value comes from the user config file.
 	SourceConfigFile = "Config file (user config)"
+
+	// SourceProjectConfig is the source label for values from .chunk/config.json.
+	SourceProjectConfig = "Project config (.chunk/config.json)"
 )
 
 // Chunk-specific environment variable names.
@@ -294,6 +297,20 @@ func MaskKey(key string) string {
 		return "****"
 	}
 	return strings.Repeat("*", len(key)-4) + key[len(key)-4:]
+}
+
+// ResolveOrgID returns the CircleCI org ID for display in config show.
+// Priority: CIRCLECI_ORG_ID env var > orgID in .chunk/config.json for workDir.
+func ResolveOrgID(workDir string) (value, source string) {
+	env, err := LoadEnv(context.Background())
+	if err == nil && env.CircleCIOrgID != "" {
+		return env.CircleCIOrgID, "Environment variable (" + EnvCircleCIOrgID + ")"
+	}
+	projCfg, err := LoadProjectConfig(workDir)
+	if err == nil && projCfg.OrgID != "" {
+		return projCfg.OrgID, SourceProjectConfig
+	}
+	return "", ""
 }
 
 // ValidConfigKeys are the keys accepted by "config set" that write to the user config.

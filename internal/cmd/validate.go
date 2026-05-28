@@ -3,12 +3,14 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -581,11 +583,11 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		return false, nil
 	}
 	streams.ErrPrintf("No active sidecar found, creating a new sandbox...\n")
-	resolvedOrgID, err := resolveOrgID(orgID, configOrgID(workDir), orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
 		return false, err
 	}
-	sandboxName := filepath.Base(workDir) + "-validate"
+	sandboxName := sidecarAutoName(ctx, workDir)
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
@@ -614,6 +616,50 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sc.Name, sc.ID)))
 	*sidecarID = sc.ID
 	return true, nil
+}
+
+// branchSanitizer is kept for the no-session fallback path.
+var branchSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// sidecarAutoName builds a sidecar name from workDir, the Claude session ID,
+// and the current git branch.
+//
+// When a session ID is present the branch is encoded as an 8-hex-char suffix
+// (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed:
+//   - Both present → "<base>-<sessionID>-<hash8>"
+//   - Session only → "<base>-<sessionID>"
+//
+// Without a session ID the branch is sanitised and included directly (legacy
+// fallback):
+//   - Branch only → "<base>-<branch>-validate"
+//   - Neither     → "<base>-validate"
+func sidecarAutoName(ctx context.Context, workDir string) string {
+	base := filepath.Base(workDir)
+	sessionID := session.IDFromCtx(ctx)
+	branch := sidecar.CurrentBranch(workDir)
+
+	if sessionID != "" {
+		if branch != "" {
+			sum := sha256.Sum256([]byte(sessionID + ":" + branch))
+			hash8 := fmt.Sprintf("%x", sum[:4])
+			return base + "-" + sessionID + "-" + hash8
+		}
+		return base + "-" + sessionID
+	}
+
+	// No session ID: fall back to sanitised branch name for human readability.
+	if branch != "" {
+		branch = strings.ReplaceAll(branch, "/", "-")
+		branch = strings.ToLower(branch)
+		branch = branchSanitizer.ReplaceAllString(branch, "")
+		if len(branch) > 30 {
+			branch = branch[:30]
+		}
+		if branch != "" {
+			return base + "-" + branch + "-validate"
+		}
+	}
+	return base + "-validate"
 }
 
 func mapValidateError(err error) error {

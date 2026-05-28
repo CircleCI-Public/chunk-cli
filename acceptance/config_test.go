@@ -1,6 +1,7 @@
 package acceptance
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 func TestConfigSetAndShow(t *testing.T) {
@@ -311,4 +313,52 @@ func TestConfigSetMissingKeyAndValue(t *testing.T) {
 	result := binary.RunCLI(t, []string{"config", "set"}, env, env.HomeDir)
 	assert.Assert(t, result.ExitCode != 0,
 		"expected non-zero exit for missing args\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+}
+
+func TestConfigSetOrgID(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
+
+	setResult := binary.RunCLI(t, []string{"config", "set", "orgID", "org-xyz"}, env, workDir)
+	assert.Equal(t, setResult.ExitCode, 0, "config set orgID failed\nstdout: %s\nstderr: %s", setResult.Stdout, setResult.Stderr)
+
+	data, err := os.ReadFile(filepath.Join(workDir, ".chunk", "config.json"))
+	assert.NilError(t, err)
+	var cfg map[string]string
+	err = json.Unmarshal(data, &cfg)
+	assert.NilError(t, err)
+	assert.Equal(t, cfg["orgID"], "org-xyz")
+}
+
+func TestConfigShowOrgIDFromProjectConfig(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
+
+	setResult := binary.RunCLI(t, []string{"config", "set", "orgID", "org-show-test"}, env, workDir)
+	assert.Equal(t, setResult.ExitCode, 0, "config set orgID failed")
+
+	showResult := binary.RunCLI(t, []string{"config", "show"}, env, workDir)
+	assert.Equal(t, showResult.ExitCode, 0, "config show failed\nstdout: %s\nstderr: %s", showResult.Stdout, showResult.Stderr)
+
+	combined := showResult.Stdout + showResult.Stderr
+	assert.Check(t, cmp.Contains(combined, "org-show-test"))
+	assert.Check(t, cmp.Contains(combined, "Project config"))
+}
+
+func TestConfigShowOrgIDEnvPrecedence(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
+
+	err := config.SaveProjectConfig(workDir, &config.ProjectConfig{OrgID: "org-from-file"})
+	assert.NilError(t, err)
+
+	env.Extra["CIRCLECI_ORG_ID"] = "org-from-env"
+	result := binary.RunCLI(t, []string{"config", "show"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Contains(combined, "org-from-env"))
+	assert.Check(t, !strings.Contains(combined, "org-from-file"),
+		"project orgID should not appear when env var is set, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "CIRCLECI_ORG_ID"))
 }
