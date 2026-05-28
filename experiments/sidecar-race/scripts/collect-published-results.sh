@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Copy committed run artifacts from origin run branches into results/published/.
+# Run branches were deleted after May 2026 consolidation; re-collect only if branches exist.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

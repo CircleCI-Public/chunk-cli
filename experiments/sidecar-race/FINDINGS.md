@@ -19,12 +19,12 @@ LLM spend is effectively the same across arms (same agent, same tasks). The win 
 
 - **Agent path**: `run-agent-task.sh` + task prompts in `task-bank/manifest.json` (not patch replay).
 - **Comparable signal**: gate jobs `lint` and `test` on both arms; sidecar epilogue additionally records full `ci` workflow pass.
-- **Run branches** (`experiment/sidecar-race--run-*`) were archival during execution; published metrics are consolidated on `experiment/sidecar-race` (PR #370).
+- **Run branches** (`experiment/sidecar-race--run-*`) were archival during execution and deleted after consolidation; published metrics live on `experiment/sidecar-race` (PR #370).
 
 ## Reproduce rollup
 
 ```bash
 cd experiments/sidecar-race
-./scripts/collect-published-results.sh   # refresh from origin run branches
+./scripts/collect-published-results.sh   # refresh from origin run branches (if still present)
 ./scripts/compare-runs.sh --labels 001,002,003,004,005 --output results/comparison.md
 ```
