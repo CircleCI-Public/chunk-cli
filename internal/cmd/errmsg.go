@@ -3,6 +3,7 @@ package cmd
 const (
 	configFilePermHint          = "Check file permissions on the chunk config file."
 	msgCouldNotLoadConfig       = "Could not load configuration."
+	msgCouldNotSaveConfig       = "Could not save configuration."
 	msgCouldNotAccessConfig     = "Could not access configuration."
 	msgCouldNotDetermineWorkDir = "Could not determine working directory."
 	msgCouldNotLoadSidecar      = "Could not load the active sidecar."

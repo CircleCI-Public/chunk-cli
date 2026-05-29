@@ -15,7 +15,7 @@ builds:
       - -trimpath
 
     ldflags:
-      - "-s -w -X main.version={{.Version}}"
+      - "-s -w -X main.version={{.Version}} -X github.com/CircleCI-Public/chunk-cli/internal/cmd.writeKey={{.Env.SEGMENT_WRITE_KEY}}"
 
     goos:
       - linux

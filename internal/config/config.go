@@ -58,6 +58,7 @@ const (
 	EnvModel              = "CODE_REVIEW_CLI_MODEL"
 	EnvCircleCIOrgID      = "CIRCLECI_ORG_ID"
 	EnvChunkHooksDisabled = "CHUNK_HOOKS_DISABLED"
+	EnvChunkNoTelemetry   = "CHUNK_NO_TELEMETRY"
 )
 
 // System/standard environment variable names.
@@ -69,6 +70,9 @@ const (
 	EnvXDGConfigHome = "XDG_CONFIG_HOME"
 	EnvXDGStateHome  = "XDG_STATE_HOME"
 	EnvXDGDataHome   = "XDG_DATA_HOME"
+	EnvNoAnalytics   = "NO_ANALYTICS"
+	EnvDoNotTrack    = "DO_NOT_TRACK"
+	EnvCI            = "CI"
 )
 
 // EnvVars holds all environment variables the application reads.
@@ -108,6 +112,10 @@ type UserConfig struct {
 	CircleCIToken   string `json:"circleCIToken,omitempty"`
 	GitHubToken     string `json:"gitHubToken,omitempty"`
 	Model           string `json:"model,omitempty"`
+	// InstanceID is a stable UUID generated on first run and used as the
+	// telemetry device identifier.
+	InstanceID  string `json:"instanceID,omitempty"`
+	NoTelemetry bool   `json:"noTelemetry,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
