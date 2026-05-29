@@ -11,7 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
-// defaultTestCommand is used when no toolchain is detected and Claude is unavailable.
+// defaultTestCommand is used by the Node.js case when no lock file narrows the package manager.
 const defaultTestCommand = "npm test"
 
 // PackageManager holds the name and CI-safe install command for a detected package manager.
@@ -73,9 +73,29 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: 300, Limit: 3},
 		}, nil
 
-	case has["pyproject.toml"]:
+	case has["pyproject.toml"], has["requirements.txt"], has["setup.py"], has["Pipfile"]:
 		return []config.Command{
 			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: 300, Limit: 3},
+		}, nil
+
+	case has["Gemfile"]:
+		// Assumes Rake-based test task (Rails default). RSpec/Minitest-only stacks may need manual adjustment.
+		return []config.Command{
+			{Name: "test", Run: "bundle exec rake test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+		}, nil
+
+	case has["pom.xml"]:
+		return []config.Command{
+			{Name: "test", Run: "mvn test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+		}, nil
+
+	case has["build.gradle"], has["build.gradle.kts"]:
+		gradleCmd := "gradle test"
+		if has["gradlew"] {
+			gradleCmd = "./gradlew test"
+		}
+		return []config.Command{
+			{Name: "test", Run: gradleCmd, Role: config.RoleGate, Timeout: 300, Limit: 3},
 		}, nil
 
 	case has["package.json"]:
@@ -98,7 +118,7 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 
 	// Unknown toolchain — ask Claude
 	if claude == nil {
-		return []config.Command{{Name: "test", Run: defaultTestCommand, Role: config.RoleGate}}, nil
+		return nil, nil
 	}
 
 	pm := DetectPackageManager(workDir)
@@ -123,7 +143,7 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 
 	result := strings.TrimSpace(resp)
 	if result == "" {
-		result = defaultTestCommand
+		return nil, nil
 	}
 	return []config.Command{{Name: "test", Run: result, Role: config.RoleGate}}, nil
 }

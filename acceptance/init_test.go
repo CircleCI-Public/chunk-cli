@@ -322,6 +322,160 @@ func TestInitDetectsPyprojectCommands(t *testing.T) {
 	assert.Equal(t, test["run"], "pytest")
 }
 
+func TestInitDetectsRequirementsTxtCommands(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "requirements.txt"), []byte("pytest\n"), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	test := commandByName(cfg, "test")
+	assert.Assert(t, test != nil, "expected test command")
+	assert.Equal(t, test["run"], "pytest")
+}
+
+func TestInitDetectsSetupPyCommands(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "setup.py"), []byte("from setuptools import setup\nsetup(name='test')\n"), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	test := commandByName(cfg, "test")
+	assert.Assert(t, test != nil, "expected test command")
+	assert.Equal(t, test["run"], "pytest")
+}
+
+func TestInitDetectsPipfileCommands(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "Pipfile"), []byte("[packages]\npytest = \"*\"\n"), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	test := commandByName(cfg, "test")
+	assert.Assert(t, test != nil, "expected test command")
+	assert.Equal(t, test["run"], "pytest")
+}
+
+func TestInitDetectsGemfileCommands(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "Gemfile"), []byte("source 'https://rubygems.org'\ngem 'rails'\n"), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	test := commandByName(cfg, "test")
+	assert.Assert(t, test != nil, "expected test command")
+	assert.Equal(t, test["run"], "bundle exec rake test")
+}
+
+func TestInitDetectsPomXmlCommands(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "pom.xml"), []byte("<project><modelVersion>4.0.0</modelVersion></project>\n"), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	test := commandByName(cfg, "test")
+	assert.Assert(t, test != nil, "expected test command")
+	assert.Equal(t, test["run"], "mvn test")
+}
+
+func TestInitDetectsGradleCommands(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "build.gradle"), []byte("apply plugin: 'java'\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "gradlew"), []byte("#!/bin/sh\n"), 0o755))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	test := commandByName(cfg, "test")
+	assert.Assert(t, test != nil, "expected test command")
+	assert.Equal(t, test["run"], "./gradlew test")
+}
+
+func TestInitDetectsGradleWithoutWrapper(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "build.gradle"), []byte("apply plugin: 'java'\n"), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	test := commandByName(cfg, "test")
+	assert.Assert(t, test != nil, "expected test command")
+	assert.Equal(t, test["run"], "gradle test")
+}
+
+func TestInitDetectsGradleKtsCommands(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "build.gradle.kts"), []byte("plugins { java }\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "gradlew"), []byte("#!/bin/sh\n"), 0o755))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	test := commandByName(cfg, "test")
+	assert.Assert(t, test != nil, "expected test command")
+	assert.Equal(t, test["run"], "./gradlew test")
+}
+
 func TestInitDetectsPackageJsonWithYarnLock(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "package.json"), []byte(`{"name":"test"}`), 0o644))
@@ -388,8 +542,7 @@ func TestInitDetectsUnknownToolchainNoClaude(t *testing.T) {
 
 	cfg := readInitConfig(t, workDir)
 	test := commandByName(cfg, "test")
-	assert.Assert(t, test != nil, "expected fallback test command")
-	assert.Equal(t, test["run"], "npm test", "expected npm test fallback for unknown toolchain")
+	assert.Assert(t, test == nil, "expected no test command for unknown toolchain without Claude")
 }
 
 // --- Hook setup (Gap 3) ---
