@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
@@ -412,10 +413,21 @@ func newSidecarSyncCmd() *cobra.Command {
 			}
 			err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, newStatusFunc(io))
 			if err != nil {
+				if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
+					return &userError{
+						msg:        "Git remote \"origin\" is required for sidecar sync.",
+						suggestion: "Run: git remote add origin <url>",
+						err:        err,
+					}
+				}
 				if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
+					suggestion := "Push your branch to the remote before syncing."
+					if errors.Is(err, gitutil.ErrNoOriginHEAD) {
+						suggestion = "Run: git fetch origin && git remote set-head origin -a"
+					}
 					return &userError{
 						msg:        "Could not resolve remote base.",
-						suggestion: "Push your branch to the remote before syncing.",
+						suggestion: suggestion,
 						err:        err,
 					}
 				}
@@ -1005,10 +1017,21 @@ func sidecarSetupSync(
 	if err == nil {
 		return nil
 	}
+	if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
+		return &userError{
+			msg:        "Git remote \"origin\" is required for sidecar sync.",
+			suggestion: "Run: git remote add origin <url>",
+			err:        err,
+		}
+	}
 	if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
+		suggestion := "Push your branch to the remote before syncing."
+		if errors.Is(err, gitutil.ErrNoOriginHEAD) {
+			suggestion = "Run: git fetch origin && git remote set-head origin -a"
+		}
 		return &userError{
 			msg:        "Could not resolve remote base.",
-			suggestion: "Push your branch to the remote before syncing.",
+			suggestion: suggestion,
 			err:        err,
 		}
 	}

@@ -64,7 +64,7 @@ func Sync(ctx context.Context,
 
 	org, repo, err := gitremote.DetectOrgAndRepo(cwd)
 	if err != nil {
-		return fmt.Errorf("sync: %w", err)
+		return &NoOriginRemoteError{Err: err}
 	}
 
 	repoPath := ResolveWorkspace(ctx, workdir, repo)
