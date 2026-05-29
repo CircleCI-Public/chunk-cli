@@ -216,12 +216,10 @@ The skill handles the full loop: auth checks → find active sidecar → sync �
 
 ### Environment setup
 
-Auto-detect your tech stack and build a sidecar image for it:
+Auto-detect your tech stack and save it to config:
 
 ```bash
-chunk sidecar env                                    # detect stack, save to config
-chunk sidecar env | chunk sidecar build --tag myimg  # build Docker image
-chunk sidecar create --image myimg                   # name auto-generated
+chunk sidecar env   # detect stack, save to config
 ```
 
 ### Environment variables
