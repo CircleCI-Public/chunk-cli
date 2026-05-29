@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -168,7 +169,6 @@ func (s *SSHServer) handleConn(conn net.Conn, cfg *ssh.ServerConfig) {
 }
 
 func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) {
-	defer func() { _ = ch.Close() }()
 
 	for req := range requests {
 		switch req.Type {
@@ -225,6 +225,12 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		exitPayload := make([]byte, 4)
 		binary.BigEndian.PutUint32(exitPayload, uint32(exitCode)) //nolint:gosec // exit codes are 0-255
 		_, _ = ch.SendRequest("exit-status", false, exitPayload)
+		// Signal EOF on stdout/stderr, then drain stdin before closing the
+		// channel. Without the drain, the client's stdin write (e.g. a patch
+		// piped to git apply) races with channel close and returns io.EOF.
+		_ = ch.CloseWrite()
+		_, _ = io.Copy(io.Discard, ch)
+		_ = ch.Close()
 		return // one exec per session
 	}
 }

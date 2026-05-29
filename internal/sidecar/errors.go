@@ -45,3 +45,14 @@ func (e *RemoteBaseError) Error() string {
 }
 
 func (e *RemoteBaseError) Unwrap() error { return e.Err }
+
+// NoOriginRemoteError indicates git remote "origin" is not configured.
+type NoOriginRemoteError struct {
+	Err error
+}
+
+func (e *NoOriginRemoteError) Error() string {
+	return fmt.Sprintf("no origin remote: %v", e.Err)
+}
+
+func (e *NoOriginRemoteError) Unwrap() error { return e.Err }

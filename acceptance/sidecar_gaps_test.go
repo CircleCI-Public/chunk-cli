@@ -8,6 +8,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
@@ -195,7 +196,7 @@ func TestSidecarEnvNonexistentDir(t *testing.T) {
 
 // --- create error paths ---
 
-func TestSidecarCreateOrgIDFromConfig(t *testing.T) {
+func TestSidecarCreateOrgIDFromEnv(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -204,17 +205,16 @@ func TestSidecarCreateOrgIDFromConfig(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
-	env.Extra["CIRCLECI_ORG_ID"] = "org-from-config"
+	env.Extra["CIRCLECI_ORG_ID"] = "org-from-env"
 
 	// No --org-id flag; should read from CIRCLECI_ORG_ID
 	result := binary.RunCLI(t, []string{
 		"sidecar", "create",
-		"--name", "config-sidecar",
+		"--name", "env-sidecar",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
-	// Verify org_id in request body came from config
 	reqs := cci.Recorder.AllRequests()
 	createReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/instances")
 	assert.Equal(t, len(createReqs), 1)
@@ -222,7 +222,36 @@ func TestSidecarCreateOrgIDFromConfig(t *testing.T) {
 	var body map[string]interface{}
 	err := json.Unmarshal(createReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["org_id"], "org-from-config")
+	assert.Equal(t, body["org_id"], "org-from-env")
+}
+
+func TestSidecarCreateOrgIDFromProjectConfig(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	err := config.SaveProjectConfig(workDir, &config.ProjectConfig{OrgID: "org-from-project"})
+	assert.NilError(t, err)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "create",
+		"--name", "project-sidecar",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	reqs := cci.Recorder.AllRequests()
+	createReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/instances")
+	assert.Equal(t, len(createReqs), 1)
+
+	var body map[string]interface{}
+	err = json.Unmarshal(createReqs[0].Body, &body)
+	assert.NilError(t, err)
+	assert.Equal(t, body["org_id"], "org-from-project")
 }
 
 func TestSidecarCreateNoOrgIDNoConfig(t *testing.T) {

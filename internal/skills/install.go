@@ -39,7 +39,7 @@ var All = []Skill{
 	},
 	{
 		Name:        "chunk-sidecar",
-		Description: `Run build/test/validate on a remote chunk sidecar instead of locally. Use when asked to "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "check this on the sidecar", or when edits need remote verification. Also covers creating sidecars, snapshots, and env customization.`,
+		Description: `Run build/test/validate on a remote chunk sidecar instead of locally. Use when asked to "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "check this on the sidecar", "run smarter testing doctor", "diagnose smarter testing", or when edits need remote verification. Also covers creating sidecars, snapshots, and env customization.`,
 	},
 }
 

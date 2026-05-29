@@ -37,6 +37,12 @@ func newConfigShowCmd() *cobra.Command {
 				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", resolveErr)))
 			}
 
+			workDir, wdErr := os.Getwd()
+			if wdErr != nil {
+				return wdErr
+			}
+			orgID, orgIDSource := config.ResolveOrgID(workDir)
+
 			if jsonOut {
 				type configEntry struct {
 					Value  string `json:"value"`
@@ -47,6 +53,7 @@ func newConfigShowCmd() *cobra.Command {
 					AnthropicAPIKey configEntry `json:"anthropicAPIKey"`
 					CircleCIToken   configEntry `json:"circleCIToken"`
 					GitHubToken     configEntry `json:"gitHubToken"`
+					OrgID           configEntry `json:"orgID"`
 				}
 				maskOrEmpty := func(key string) string {
 					if key == "" {
@@ -59,6 +66,7 @@ func newConfigShowCmd() *cobra.Command {
 					AnthropicAPIKey: configEntry{Value: maskOrEmpty(rc.AnthropicAPIKey), Source: rc.AnthropicAPIKeySource},
 					CircleCIToken:   configEntry{Value: maskOrEmpty(rc.CircleCIToken), Source: rc.CircleCITokenSource},
 					GitHubToken:     configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
+					OrgID:           configEntry{Value: orgID, Source: orgIDSource},
 				})
 			}
 
@@ -81,6 +89,12 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s %s\n", ui.Label("gitHubToken:", w), config.MaskKey(rc.GitHubToken), ui.Dim("("+rc.GitHubTokenSource+")"))
 			} else {
 				io.Printf("%s %s\n", ui.Label("gitHubToken:", w), ui.Dim("(not set)"))
+			}
+
+			if orgID != "" {
+				io.Printf("%s %s %s\n", ui.Label("orgID:", w), orgID, ui.Dim("("+orgIDSource+")"))
+			} else {
+				io.Printf("%s %s\n", ui.Label("orgID:", w), ui.Dim("(not set)"))
 			}
 
 			return nil

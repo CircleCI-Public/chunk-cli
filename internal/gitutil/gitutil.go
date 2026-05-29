@@ -1,12 +1,17 @@
 package gitutil
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+// ErrNoOriginHEAD is returned by MergeBase when the upstream tracking branch is
+// set but origin/HEAD is not — a common state after git init + push without fetch.
+var ErrNoOriginHEAD = errors.New("origin/HEAD is not set")
 
 // RepoRoot returns the root directory of the current git repository
 // by walking up from the given directory looking for .git/.
@@ -62,6 +67,9 @@ func MergeBase() (string, error) {
 
 	out, err = exec.Command("git", "rev-parse", "origin/HEAD").Output()
 	if err != nil {
+		if exec.Command("git", "rev-parse", "--verify", "@{upstream}").Run() == nil {
+			return "", fmt.Errorf("resolve remote base: %w", ErrNoOriginHEAD)
+		}
 		return "", fmt.Errorf("resolve remote base: no upstream tracking branch or origin/HEAD found")
 	}
 	sha := strings.TrimSpace(string(out))

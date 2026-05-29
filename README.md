@@ -1,13 +1,17 @@
 # chunk
 
-CLI for remote validation of changes — run code in a cloud environment before pushing — and generating agent context from code review patterns.
+CLI for [Chunk](https://chunk.ai/) — inner loop validation and AI-ready code review context for software teams building with AI agents. The chunk CLI currently has two main capabilities:
 
-## Features
+- **Chunk sidecars** — lightweight microVM environments that run alongside your AI agent and validate changes in the inner loop before they reach CI
+- **build-prompt** — mines PR review comments from your GitHub org and uses Claude to generate a context file tuned to your team's code review standards
 
-- **Context Generation** — Mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to your team's standards
-- **Hook Automation** — Wire tests and lint into your AI coding agent's lifecycle (Claude Code, Cursor, VS Code Copilot)
-- **Environment Detection** — Auto-detect tech stack, generate Dockerfiles, and set up sidecars with the right dependencies
-- **Sidecar Environments** — Validate changes in a clean cloud environment on CircleCI
+## Why chunk?
+
+As AI churns out more and more code, CI pipelines get flooded with commits that haven't been well validated. Failures surface late, forcing expensive re-prompting cycles and slowing delivery.
+
+Chunk sidecars fix this by running lightweight microbuilds to validate inside the inner loop — while the agent is still working — ensuring basic checks pass before anything hits CI. Save the CI for the integration and release work that gets code to production.
+
+The build-prompt command complements this by capturing your team's real review patterns and turning them into agent context, so the code agents write reflects your standards from the start.
 
 ## Requirements
 
@@ -37,7 +41,7 @@ chunk validate --list       # list configured commands
 
 ### Agent Onboarding for Sidecars (Preferred method)
 
-Chunk init will install skills for working with Chunk sidecars. After the init, start a claude session and run `/chunk-sidecars` and your agent will create a sidecar and configure it for use running tests and creating snapshots of good Chunk sidecars.
+Chunk init will install skills for working with Chunk sidecars. After the init, start a claude session and run `/chunk-sidecar` and your agent will create a sidecar and configure it for use running tests and creating snapshots of good Chunk sidecars.
 
 ### Manual setup
 
@@ -120,10 +124,11 @@ chunk auth set|status|remove               Authentication
 chunk sidecar list|create|exec|ssh         Manage cloud sidecar environments
 chunk sidecar sync|env|build               Sync files, detect env, build images
 chunk sidecar use|current|forget           Manage active sidecar
-chunk sidecar setup                        Detect env, install deps, snapshot
-chunk sidecar snapshot create|get|list       Manage sidecar snapshots
+chunk sidecar setup                        Detect env and install deps
+chunk sidecar snapshot create|get|list     Manage sidecar snapshots
 chunk init                                 Initialize project configuration
 chunk validate [name]                      Run quality checks
+chunk hook disable|enable|status           Manage hook execution
 chunk skill install|list                   Manage AI agent skills
 chunk task config|run                      Configure and trigger CI tasks
 chunk build-prompt                         Generate review context from PR comments
