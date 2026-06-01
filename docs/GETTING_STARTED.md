@@ -70,6 +70,7 @@ Credentials are stored in `~/.config/chunk/config.json` (respects `XDG_CONFIG_HO
 | `ANTHROPIC_API_KEY` | `build-prompt`, `init` |
 | `GITHUB_TOKEN` | `build-prompt` |
 | `CIRCLE_TOKEN` | `sidecar`, `task` |
+| `CIRCLECI_ORG_ID` | `sidecar` (optional; overrides `orgID` in `.chunk/config.json`) |
 
 ---
 
@@ -169,10 +170,28 @@ The agent loads your team's prompt, diffs the changes, and returns filtered find
 
 ## Sidecar workflow (preview)
 
+### First-time sidecar setup
+
+Before creating a sidecar in a non-interactive session (AI agents, scripts), set
+your CircleCI org ID once per project:
+
+```bash
+chunk auth set circleci
+chunk config set orgID <your-org-id>
+chunk sidecar create
+```
+
+`chunk config show` displays the resolved `orgID` when set. One-off overrides:
+`chunk sidecar create --org-id <id>` or `CIRCLECI_ORG_ID=<id> chunk sidecar create`.
+See [docs/CLI.md](CLI.md) for the full resolution order (`--org-id` → env →
+project config → interactive picker).
+
+### Dev loop
+
 Sidecars let you run validations in a clean cloud environment. The typical loop:
 
 ```bash
-# One-time: create a sidecar (--name is optional; a random name is generated if omitted)
+# Create a sidecar (--name is optional; a random name is generated if omitted)
 chunk sidecar create
 chunk sidecar create --name my-sidecar
 
@@ -205,17 +224,127 @@ chunk sidecar env | chunk sidecar build --tag myimg  # build Docker image
 chunk sidecar create --image myimg                   # name auto-generated
 ```
 
+### Environment variables
+
+`chunk sidecar ssh`, `chunk sidecar setup`, and `chunk validate` (when running remotely) automatically load `.env.local` from your working directory and forward its variables to the remote sidecar session. This lets you pass secrets and configuration without embedding them in your shell or committing them to the repo.
+
+```bash
+# .env.local is loaded automatically — no flag needed
+chunk sidecar ssh
+chunk validate --remote
+
+# Override with a different file
+chunk sidecar ssh --env-file /path/to/other.env
+chunk validate --remote --env-file /path/to/other.env
+
+# Add individual variables (merged on top of the file)
+chunk sidecar ssh --env MY_VAR=value
+chunk validate --remote --env MY_VAR=value
+```
+
+Variables from `--env` flags take precedence over those in `--env-file`. `.env.local` is gitignored by convention, so it's a safe place to store project-specific secrets.
+
 ### Snapshots
 
 Capture a configured environment so future sidecars boot fast:
 
 ```bash
+chunk sidecar snapshot list
 chunk sidecar snapshot create --name checkpoint
 # Later:
 chunk sidecar create --image <snapshot-id>           # name auto-generated
 ```
 
-`snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
+`snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
+
+---
+
+## Smarter Testing on a sidecar
+
+CircleCI Smarter Testing splits your test suite into independent **atoms** and distributes them across parallel shards so CI runs finish faster. The split is driven by `.circleci/test-suites.yml`, a file that declares how to **discover** atoms and how to **run** them. Sidecars are an ideal place to validate this file before pushing — they run Linux (matching CI), have the `circleci-testsuite` plugin and `circleci` CLI pre-installed, and automatically receive your `CIRCLE_TOKEN` over SSH.
+
+### Scaffold `.circleci/test-suites.yml`
+
+**Built-in templates (Go and pytest):**
+
+```bash
+chunk init --skip-test-suites=false
+```
+
+> `--skip-test-suites` defaults to `true`, so you must pass `=false` explicitly. The `=` is required — `--skip-test-suites false` does not work with boolean cobra flags.
+
+This detects `go.mod` or `pyproject.toml` and writes a matching template. If the file already exists it is left as-is.
+
+**Other stacks (Jest, RSpec, etc.):** write the file manually or ask your AI agent to `"scaffold test-suites.yml"` (the `chunk-sidecar` skill covers per-language patterns). The file schema:
+
+```yaml
+---
+name: <suite-name>
+discover: <shell command that prints one test atom per line>
+run: <shell command that runs atoms in << test.atoms >>, writing junit XML to << outputs.junit >>>
+outputs:
+  junit: <path/to/junit.xml>
+```
+
+CircleCI substitutes `<< test.atoms >>` and `<< outputs.junit >>` at run time. Example for Jest:
+
+```yaml
+---
+name: ci tests
+discover: npx jest --listTests
+run: JEST_JUNIT_OUTPUT_FILE=<< outputs.junit >> npx jest --reporters=default --reporters=jest-junit << test.atoms >>
+outputs:
+  junit: test-reports/tests.xml
+```
+
+### Validate on the sidecar
+
+After writing `.circleci/test-suites.yml`, use the sidecar to verify it works in a CI-like environment:
+
+```bash
+# 1. Push your local tree (including the new file) to the sidecar
+chunk sidecar sync
+
+# 2. Test discover — should print one atom per line and exit zero
+chunk validate --remote --cmd "go list -f '{{ if or (len .TestGoFiles) (len .XTestGoFiles) }} {{ .ImportPath }} {{end}}' ./..."
+
+# 3. Test run with a sample atom — should produce junit XML at the declared path
+chunk validate --remote --cmd "go tool gotestsum --junitfile=test-reports/tests.xml -- -race ./internal/config/..."
+
+# 4. Validate your CircleCI config references the suite correctly
+chunk validate --remote --cmd "circleci config validate"
+```
+
+Replace the Go commands above with your stack's `discover` and `run` commands. For the run step, substitute `<< test.atoms >>` with one or two atoms from discover's output and `<< outputs.junit >>` with the `outputs.junit` path from your YAML.
+
+### Why use a sidecar for this
+
+- **Pre-installed tooling** — `circleci-testsuite` and `circleci` CLI are available on every sidecar without any install step.
+- **Automatic auth** — `CIRCLE_TOKEN` is forwarded over SSH to the sidecar session, so authenticated `circleci` commands work out of the box. You do not need to set the token manually on the sidecar.
+- **CI parity** — the sidecar runs Linux, catching path separator issues, case sensitivity, and missing system dependencies that pass on macOS but fail in CI.
+
+### Wire up `.circleci/config.yml`
+
+After validating the suite, reference it from your CircleCI config using the `circleci-testsuite` plugin in your test job:
+
+```yaml
+jobs:
+  test:
+    docker:
+      - image: cimg/go:1.26
+    steps:
+      - checkout
+      - run:
+          name: Run tests
+          command: |
+            circleci-testsuite exec \
+              --suite "ci tests" \
+              --results-dir test-reports
+      - store_test_results:
+          path: test-reports
+```
+
+The `--suite` value must match the `name` field in `.circleci/test-suites.yml`. The plugin handles discovery, atom assignment, and result collection.
 
 ---
 

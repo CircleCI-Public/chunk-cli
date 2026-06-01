@@ -288,7 +288,7 @@ func TestResolve_Defaults(t *testing.T) {
 	setupTempConfig(t)
 	t.Setenv(EnvAnthropicAPIKey, "")
 
-	rc, _ := Resolve("", "")
+	rc, _ := Resolve("", "", false)
 
 	assert.Equal(t, rc.AnthropicAPIKey, "")
 	assert.Equal(t, rc.Model, DefaultModel)
@@ -301,7 +301,7 @@ func TestResolve_EnvKey(t *testing.T) {
 	setupTempConfig(t)
 	t.Setenv(EnvAnthropicAPIKey, "sk-from-env")
 
-	rc, _ := Resolve("", "")
+	rc, _ := Resolve("", "", false)
 	assert.Equal(t, rc.AnthropicAPIKey, "sk-from-env")
 	assert.Equal(t, rc.AnthropicAPIKeySource, "Environment variable")
 }
@@ -312,7 +312,7 @@ func TestResolve_EnvOverridesConfigFile(t *testing.T) {
 
 	assert.NilError(t, Save(UserConfig{AnthropicAPIKey: "sk-from-file"}))
 
-	rc, _ := Resolve("", "")
+	rc, _ := Resolve("", "", false)
 	assert.Equal(t, rc.AnthropicAPIKey, "sk-from-env")
 	assert.Equal(t, rc.AnthropicAPIKeySource, "Environment variable")
 }
@@ -322,7 +322,7 @@ func TestResolve_FlagOverridesAll(t *testing.T) {
 	t.Setenv(EnvAnthropicAPIKey, "sk-from-env")
 	assert.NilError(t, Save(UserConfig{AnthropicAPIKey: "sk-from-file", Model: "file-model"}))
 
-	rc, _ := Resolve("sk-from-flag", "flag-model")
+	rc, _ := Resolve("sk-from-flag", "flag-model", false)
 	assert.Equal(t, rc.AnthropicAPIKey, "sk-from-flag")
 	assert.Equal(t, rc.AnthropicAPIKeySource, "Flag")
 	assert.Equal(t, rc.Model, "flag-model")
@@ -333,7 +333,7 @@ func TestResolve_ModelFromConfig(t *testing.T) {
 	setupTempConfig(t)
 	assert.NilError(t, Save(UserConfig{Model: "config-model"}))
 
-	rc, _ := Resolve("", "")
+	rc, _ := Resolve("", "", false)
 	assert.Equal(t, rc.Model, "config-model")
 	assert.Equal(t, rc.ModelSource, SourceConfigFile)
 }
@@ -342,6 +342,7 @@ func TestResolve_ModelFromConfig(t *testing.T) {
 
 func TestValidConfigKeys(t *testing.T) {
 	assert.Assert(t, ValidConfigKeys["model"])
+	assert.Assert(t, ValidConfigKeys["useSSHIdentityFile"])
 	assert.Assert(t, !ValidConfigKeys["anthropicAPIKey"])
 	assert.Assert(t, !ValidConfigKeys["badkey"])
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -42,19 +43,20 @@ func newAuthSetCmd() *cobra.Command {
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"circleci", "anthropic", "github"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rc, _ := config.Resolve("", "")
+			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
+			rc, _ := config.Resolve("", "", insecureStorage)
 			provider := args[0]
 			io := iostream.FromCmd(cmd)
 			switch provider {
 			case providerCircleCI:
 				envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
-				return authSetCircleCI(cmd.Context(), io, rc.CircleCIBaseURL, envSet, force)
+				return authSetCircleCI(cmd.Context(), io, rc.CircleCIBaseURL, envSet, force, insecureStorage)
 			case providerAnthropic:
 				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
-				return authSetAnthropic(cmd.Context(), io, rc.AnthropicBaseURL, envSet, force)
+				return authSetAnthropic(cmd.Context(), io, rc.AnthropicBaseURL, envSet, force, insecureStorage)
 			case providerGitHub:
 				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
-				return authSetGitHub(cmd.Context(), io, rc.GitHubAPIURL, envSet, force)
+				return authSetGitHub(cmd.Context(), io, rc.GitHubAPIURL, envSet, force, insecureStorage)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
@@ -68,12 +70,12 @@ func newAuthSetCmd() *cobra.Command {
 	return cmd
 }
 
-func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, envSet, force bool) error {
+func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, envSet, force, insecureStorage bool) error {
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - CircleCI Token Setup"))
 	io.Println("")
 	io.Println("Create a CircleCI token at https://app.circleci.com/settings/user/tokens")
-	printSaveHint(io, "Token")
+	printSaveHint(io, "Token", insecureStorage)
 	io.Println("")
 
 	if envSet {
@@ -124,15 +126,15 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, e
 		}
 	}
 
-	return saveCircleCIToken(ctx, token, io, baseURL)
+	return saveCircleCIToken(ctx, token, io, baseURL, insecureStorage)
 }
 
-func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, envSet, force bool) error {
+func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, envSet, force, insecureStorage bool) error {
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - Anthropic API Key Setup"))
 	io.Println("")
 	io.Println("Enter your Anthropic API key (starts with sk-ant-).")
-	printSaveHint(io, "Key")
+	printSaveHint(io, "Key", insecureStorage)
 	io.Println("")
 	if envSet {
 		io.Println(ui.Warning("An Anthropic API key is set in environment variables (" + config.EnvAnthropicAPIKey + ")."))
@@ -200,22 +202,17 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 		}
 	}
 
-	cfg, err = config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	cfg.AnthropicAPIKey = key
-	if err := config.Save(cfg); err != nil {
+	if err := authprompt.SaveAnthropicKey(key, baseURL, insecureStorage); err != nil {
 		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
 	}
 
 	io.Println("")
-	printSaved(io, "Anthropic API key")
+	printSaved(io, "Anthropic API key", insecureStorage)
 	io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
 	return nil
 }
 
-func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams, circleCIBaseURL string) error {
+func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams, circleCIBaseURL string, insecureStorage bool) error {
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
 	if err := authprompt.ValidateCircleCIToken(ctx, token, circleCIBaseURL); err != nil {
 		return &userError{
@@ -225,12 +222,7 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 		}
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	cfg.CircleCIToken = token
-	if err := config.Save(cfg); err != nil {
+	if err := authprompt.SaveCircleCIToken(token, circleCIBaseURL, insecureStorage); err != nil {
 		return &userError{
 			msg:        "Failed to save CircleCI token.",
 			suggestion: "Check that your config file is writable.",
@@ -239,7 +231,7 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 	}
 
 	streams.ErrPrintln("")
-	printSaved(streams, "CircleCI token")
+	printSaved(streams, "CircleCI token", insecureStorage)
 	return nil
 }
 
@@ -254,7 +246,8 @@ func newAuthStatusCmd() *cobra.Command {
 			io.Println(ui.Bold("Chunk CLI - Authentication Status"))
 			io.Println("")
 
-			rc, resolveErr := config.Resolve("", "")
+			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
+			rc, resolveErr := config.Resolve("", "", insecureStorage)
 			if resolveErr != nil {
 				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", resolveErr)))
 			}
@@ -341,19 +334,20 @@ func newAuthRemoveCmd() *cobra.Command {
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"circleci", "anthropic", "github"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			rc, _ := config.Resolve("", "")
+			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
+			rc, _ := config.Resolve("", "", insecureStorage)
 			provider := args[0]
 			io := iostream.FromCmd(cmd)
 			switch provider {
 			case providerCircleCI:
 				envSet := strings.HasPrefix(rc.CircleCITokenSource, "Environment")
-				return authRemoveCircleCI(io, envSet, force)
+				return authRemoveCircleCI(io, envSet, force, insecureStorage)
 			case providerAnthropic:
 				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
-				return authRemoveAnthropic(io, envSet, force)
+				return authRemoveAnthropic(io, envSet, force, insecureStorage)
 			case providerGitHub:
 				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
-				return authRemoveGitHub(io, envSet, force)
+				return authRemoveGitHub(io, envSet, force, insecureStorage)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
@@ -367,13 +361,38 @@ func newAuthRemoveCmd() *cobra.Command {
 	return cmd
 }
 
-func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
+func hasStoredCircleCIToken(insecureStorage bool, baseURL string) bool {
+	if !insecureStorage {
+		_, err := keyring.Get(keyring.ServiceCircleCI(baseURL))
+		return err == nil
 	}
-	if cfg.CircleCIToken == "" {
-		io.Println(ui.Warning("No CircleCI token stored in config file."))
+	cfg, _ := config.Load()
+	return cfg.CircleCIToken != ""
+}
+
+func hasStoredAnthropicKey(insecureStorage bool, baseURL string) bool {
+	if !insecureStorage {
+		_, err := keyring.Get(keyring.ServiceAnthropic(baseURL))
+		return err == nil
+	}
+	cfg, _ := config.Load()
+	return cfg.AnthropicAPIKey != ""
+}
+
+func hasStoredGitHubToken(insecureStorage bool, baseURL string) bool {
+	if !insecureStorage {
+		_, err := keyring.Get(keyring.ServiceGitHub(baseURL))
+		return err == nil
+	}
+	cfg, _ := config.Load()
+	return cfg.GitHubToken != ""
+}
+
+func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool) error {
+	rc, _ := config.Resolve("", "", insecureStorage)
+	hasStored := hasStoredCircleCIToken(insecureStorage, rc.CircleCIBaseURL)
+	if !hasStored {
+		io.Println(ui.Warning("No CircleCI token stored."))
 		if envSet {
 			io.Println("Note: A CircleCI token is set in environment variables.")
 			io.Println("To remove it, unset the environment variable.")
@@ -383,11 +402,15 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
 	}
 
 	io.Println("")
-	cfgPath, err := config.Path()
-	if err != nil {
-		return &userError{msg: msgCouldNotAccessConfig, err: err}
+	if !insecureStorage {
+		io.Println("This will remove your stored CircleCI token from the system keychain.")
+	} else {
+		cfgPath, err := config.Path()
+		if err != nil {
+			return &userError{msg: msgCouldNotAccessConfig, err: err}
+		}
+		io.Printf("This will remove your stored CircleCI token from %s\n", cfgPath)
 	}
-	io.Printf("This will remove your stored CircleCI token from %s\n", cfgPath)
 	if !force {
 		if nonInteractive() {
 			return errNoForce("remove CircleCI token")
@@ -404,33 +427,35 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force bool) error {
 		}
 	}
 
-	if err := config.Clear("circleCIToken"); err != nil {
-		hint := configFilePermHint
-		if errPath, pathErr := config.Path(); pathErr == nil {
-			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
+	if !insecureStorage {
+		if err := keyring.Delete(keyring.ServiceCircleCI(rc.CircleCIBaseURL)); err != nil {
+			return &userError{msg: "Failed to remove CircleCI token from keychain.", err: err}
 		}
-		return &userError{
-			msg:        "Failed to remove CircleCI token.",
-			detail:     "An error occurred while trying to remove the token from the config file.",
-			suggestion: hint,
-			err:        err,
+	} else {
+		if err := config.Clear("circleCIToken"); err != nil {
+			return &userError{msg: "Failed to remove CircleCI token.", err: err}
 		}
 	}
 
 	io.Println(ui.Success("CircleCI token removed successfully."))
+	if !insecureStorage {
+		if cfg, err := config.Load(); err == nil && cfg.CircleCIToken != "" {
+			cfgPath, _ := config.Path()
+			io.Println(ui.Warning("A CircleCI token is still stored in the config file: " + cfgPath))
+			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage circleci` to remove it, or edit the file directly."))
+		}
+	}
 	if envSet {
 		io.Println(ui.Warning("Note: " + config.EnvCircleToken + "/" + config.EnvCircleCIToken + " is still set in your environment variables."))
 	}
 	return nil
 }
 
-func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	if cfg.AnthropicAPIKey == "" {
-		io.Println(ui.Warning("No API key stored in config file."))
+func authRemoveAnthropic(io iostream.Streams, envSet, force, insecureStorage bool) error {
+	rc, _ := config.Resolve("", "", insecureStorage)
+	hasStored := hasStoredAnthropicKey(insecureStorage, rc.AnthropicBaseURL)
+	if !hasStored {
+		io.Println(ui.Warning("No API key stored."))
 		if envSet {
 			io.Println("Note: " + config.EnvAnthropicAPIKey + " is set in your environment variables.")
 			io.Println("To remove it, unset the environment variable.")
@@ -440,11 +465,15 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
 	}
 
 	io.Println("")
-	cfgPath, err := config.Path()
-	if err != nil {
-		return &userError{msg: msgCouldNotAccessConfig, err: err}
+	if !insecureStorage {
+		io.Println("This will remove your stored Anthropic API key from the system keychain.")
+	} else {
+		cfgPath, err := config.Path()
+		if err != nil {
+			return &userError{msg: msgCouldNotAccessConfig, err: err}
+		}
+		io.Printf("This will remove your stored API key from %s\n", cfgPath)
 	}
-	io.Printf("This will remove your stored API key from %s\n", cfgPath)
 	if !force {
 		if nonInteractive() {
 			return errNoForce("remove Anthropic API key")
@@ -461,32 +490,36 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force bool) error {
 		}
 	}
 
-	if err := config.Clear("anthropicAPIKey"); err != nil {
-		hint := configFilePermHint
-		if errPath, pathErr := config.Path(); pathErr == nil {
-			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
+	if !insecureStorage {
+		if err := keyring.Delete(keyring.ServiceAnthropic(rc.AnthropicBaseURL)); err != nil {
+			return &userError{msg: "Failed to remove Anthropic API key from keychain.", err: err}
 		}
-		return &userError{
-			msg:        "Failed to remove API key.",
-			detail:     "An error occurred while trying to remove the API key from the config file.",
-			suggestion: hint,
-			err:        err,
+	} else {
+		if err := config.Clear("anthropicAPIKey"); err != nil {
+			return &userError{msg: "Failed to remove Anthropic API key.", err: err}
 		}
 	}
 
 	io.Println(ui.Success("API key removed successfully."))
+	if !insecureStorage {
+		if cfg, err := config.Load(); err == nil && cfg.AnthropicAPIKey != "" {
+			cfgPath, _ := config.Path()
+			io.Println(ui.Warning("An Anthropic API key is still stored in the config file: " + cfgPath))
+			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage anthropic` to remove it, or edit the file directly."))
+		}
+	}
 	if envSet {
 		io.Println(ui.Warning("Note: " + config.EnvAnthropicAPIKey + " is still set in your environment variables."))
 	}
 	return nil
 }
 
-func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, envSet, force bool) error {
+func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, envSet, force, insecureStorage bool) error {
 	io.Println("")
 	io.Println(ui.Bold("Chunk CLI - GitHub Token Setup"))
 	io.Println("")
 	io.Println("Create a token at https://github.com/settings/tokens")
-	printSaveHint(io, "Token")
+	printSaveHint(io, "Token", insecureStorage)
 	io.Println("")
 
 	if envSet {
@@ -546,27 +579,20 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 		}
 	}
 
-	cfg, err = config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	cfg.GitHubToken = token
-	if err := config.Save(cfg); err != nil {
+	if err := authprompt.SaveGitHubToken(token, baseURL, insecureStorage); err != nil {
 		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
 	}
 
 	io.Println("")
-	printSaved(io, "GitHub token")
+	printSaved(io, "GitHub token", insecureStorage)
 	return nil
 }
 
-func authRemoveGitHub(io iostream.Streams, envSet, force bool) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
-	}
-	if cfg.GitHubToken == "" {
-		io.Println(ui.Warning("No GitHub token stored in config file."))
+func authRemoveGitHub(io iostream.Streams, envSet, force, insecureStorage bool) error {
+	rc, _ := config.Resolve("", "", insecureStorage)
+	hasStored := hasStoredGitHubToken(insecureStorage, rc.GitHubAPIURL)
+	if !hasStored {
+		io.Println(ui.Warning("No GitHub token stored."))
 		if envSet {
 			io.Println("Note: A GitHub token is set in environment variables.")
 			io.Println("To remove it, unset the environment variable.")
@@ -576,11 +602,15 @@ func authRemoveGitHub(io iostream.Streams, envSet, force bool) error {
 	}
 
 	io.Println("")
-	cfgPath, err := config.Path()
-	if err != nil {
-		return &userError{msg: msgCouldNotAccessConfig, err: err}
+	if !insecureStorage {
+		io.Println("This will remove your stored GitHub token from the system keychain.")
+	} else {
+		cfgPath, err := config.Path()
+		if err != nil {
+			return &userError{msg: msgCouldNotAccessConfig, err: err}
+		}
+		io.Printf("This will remove your stored GitHub token from %s\n", cfgPath)
 	}
-	io.Printf("This will remove your stored GitHub token from %s\n", cfgPath)
 	if !force {
 		if nonInteractive() {
 			return errNoForce("remove GitHub token")
@@ -597,20 +627,24 @@ func authRemoveGitHub(io iostream.Streams, envSet, force bool) error {
 		}
 	}
 
-	if err := config.Clear("gitHubToken"); err != nil {
-		hint := configFilePermHint
-		if errPath, pathErr := config.Path(); pathErr == nil {
-			hint = fmt.Sprintf("Check file permissions on %s.", errPath)
+	if !insecureStorage {
+		if err := keyring.Delete(keyring.ServiceGitHub(rc.GitHubAPIURL)); err != nil {
+			return &userError{msg: "Failed to remove GitHub token from keychain.", err: err}
 		}
-		return &userError{
-			msg:        "Failed to remove GitHub token.",
-			detail:     "An error occurred while trying to remove the token from the config file.",
-			suggestion: hint,
-			err:        err,
+	} else {
+		if err := config.Clear("gitHubToken"); err != nil {
+			return &userError{msg: "Failed to remove GitHub token.", err: err}
 		}
 	}
 
 	io.Println(ui.Success("GitHub token removed successfully."))
+	if !insecureStorage {
+		if cfg, err := config.Load(); err == nil && cfg.GitHubToken != "" {
+			cfgPath, _ := config.Path()
+			io.Println(ui.Warning("A GitHub token is still stored in the config file: " + cfgPath))
+			io.Println(ui.Dim("Run `chunk auth remove --insecure-storage github` to remove it, or edit the file directly."))
+		}
+	}
 	if envSet {
 		io.Println(ui.Warning("Note: " + config.EnvGitHubToken + " is still set in your environment variables."))
 	}

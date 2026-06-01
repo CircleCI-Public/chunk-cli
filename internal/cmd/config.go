@@ -31,10 +31,17 @@ func newConfigShowCmd() *cobra.Command {
 		Short: "Display resolved configuration",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			rc, resolveErr := config.Resolve("", "")
+			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
+			rc, resolveErr := config.Resolve("", "", insecureStorage)
 			if resolveErr != nil {
 				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", resolveErr)))
 			}
+
+			workDir, wdErr := os.Getwd()
+			if wdErr != nil {
+				return wdErr
+			}
+			orgID, orgIDSource := config.ResolveOrgID(workDir)
 
 			if jsonOut {
 				type configEntry struct {
@@ -42,10 +49,12 @@ func newConfigShowCmd() *cobra.Command {
 					Source string `json:"source,omitempty"`
 				}
 				type configOutput struct {
-					Model           configEntry `json:"model"`
-					AnthropicAPIKey configEntry `json:"anthropicAPIKey"`
-					CircleCIToken   configEntry `json:"circleCIToken"`
-					GitHubToken     configEntry `json:"gitHubToken"`
+					Model              configEntry `json:"model"`
+					AnthropicAPIKey    configEntry `json:"anthropicAPIKey"`
+					CircleCIToken      configEntry `json:"circleCIToken"`
+					GitHubToken        configEntry `json:"gitHubToken"`
+					OrgID              configEntry `json:"orgID"`
+					UseSSHIdentityFile bool        `json:"useSSHIdentityFile"`
 				}
 				maskOrEmpty := func(key string) string {
 					if key == "" {
@@ -54,14 +63,16 @@ func newConfigShowCmd() *cobra.Command {
 					return config.MaskKey(key)
 				}
 				return iostream.PrintJSON(io.Out, configOutput{
-					Model:           configEntry{Value: rc.Model, Source: rc.ModelSource},
-					AnthropicAPIKey: configEntry{Value: maskOrEmpty(rc.AnthropicAPIKey), Source: rc.AnthropicAPIKeySource},
-					CircleCIToken:   configEntry{Value: maskOrEmpty(rc.CircleCIToken), Source: rc.CircleCITokenSource},
-					GitHubToken:     configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
+					Model:              configEntry{Value: rc.Model, Source: rc.ModelSource},
+					AnthropicAPIKey:    configEntry{Value: maskOrEmpty(rc.AnthropicAPIKey), Source: rc.AnthropicAPIKeySource},
+					CircleCIToken:      configEntry{Value: maskOrEmpty(rc.CircleCIToken), Source: rc.CircleCITokenSource},
+					GitHubToken:        configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
+					OrgID:              configEntry{Value: orgID, Source: orgIDSource},
+					UseSSHIdentityFile: rc.UseSSHIdentityFile,
 				})
 			}
 
-			w := 15
+			w := 20
 			io.Printf("%s %s %s\n", ui.Label("model:", w), rc.Model, ui.Dim("("+rc.ModelSource+")"))
 
 			if rc.AnthropicAPIKey != "" {
@@ -80,6 +91,12 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s %s\n", ui.Label("gitHubToken:", w), config.MaskKey(rc.GitHubToken), ui.Dim("("+rc.GitHubTokenSource+")"))
 			} else {
 				io.Printf("%s %s\n", ui.Label("gitHubToken:", w), ui.Dim("(not set)"))
+			}
+
+			if orgID != "" {
+				io.Printf("%s %s %s\n", ui.Label("orgID:", w), orgID, ui.Dim("("+orgIDSource+")"))
+			} else {
+				io.Printf("%s %s\n", ui.Label("orgID:", w), ui.Dim("(not set)"))
 			}
 
 			io.Printf("%s %v\n", ui.Label("useSSHIdentityFile:", w), rc.UseSSHIdentityFile)

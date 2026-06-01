@@ -2,6 +2,8 @@ package sidecar
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
+
+func hashFor(sessionID, branch string) string {
+	sum := sha256.Sum256([]byte(sessionID + ":" + branch))
+	return fmt.Sprintf("%x", sum[:4])
+}
 
 func TestSaveActiveWritesToXDGDataPath(t *testing.T) {
 	dataHome := t.TempDir()
@@ -203,7 +210,7 @@ func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
 
 	stateDir, err := saveDir()
 	assert.NilError(t, err)
-	data, err := os.ReadFile(filepath.Join(stateDir, sidecarFileName("")))
+	data, err := os.ReadFile(filepath.Join(stateDir, sidecarFileName("", "")))
 	assert.NilError(t, err)
 	assert.Assert(t, !strings.Contains(string(data), "workspace"), "empty workspace should be omitted from JSON")
 }
@@ -239,4 +246,27 @@ func TestResolveWorkspaceDefaultFallback(t *testing.T) {
 
 	got := ResolveWorkspace(context.Background(), "", "myrepo")
 	assert.Equal(t, got, "./workspace/myrepo")
+}
+
+func TestSidecarFileNameCases(t *testing.T) {
+	cases := []struct {
+		session string
+		branch  string
+		want    string
+	}{
+		{"", "", "sidecar.json"},
+		{"sess-1", "", "sidecar.sess-1.json"},
+		{"", "main", "sidecar.json"},
+		{"sess-1", "main", "sidecar.sess-1-" + hashFor("sess-1", "main") + ".json"},
+	}
+	for _, tc := range cases {
+		got := sidecarFileName(tc.session, tc.branch)
+		assert.Equal(t, got, tc.want, "session=%q branch=%q", tc.session, tc.branch)
+	}
+}
+
+func TestSidecarFileNameHashUniquenessAcrossBranches(t *testing.T) {
+	f1 := sidecarFileName("sess-abc", "main")
+	f2 := sidecarFileName("sess-abc", "feature/my-branch")
+	assert.Assert(t, f1 != f2, "different branches must produce different file names")
 }

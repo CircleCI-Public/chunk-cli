@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
@@ -476,9 +477,26 @@ func writeSidecarState(t *testing.T, e *testenv.TestEnv, projectRoot, sessionID,
 	sum := sha256.Sum256([]byte(filepath.Clean(realRoot)))
 	dir := filepath.Join(e.HomeDir, ".local", "share", "chunk", fmt.Sprintf("%x", sum))
 	assert.NilError(t, os.MkdirAll(dir, 0o755))
-	filename := "sidecar." + sessionID + ".json"
+	// Detect the branch so the file name matches what the subprocess will look for.
+	branch := gitCurrentBranch(t, projectRoot)
+	filename := sidecar.StateFileName(sessionID, branch)
 	data := []byte(`{"sidecar_id":"` + sidecarID + `"}`)
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, filename), data, 0o644))
+}
+
+// gitCurrentBranch returns the current branch of the git repo at dir, or ""
+// on any error.
+func gitCurrentBranch(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	b := strings.TrimSpace(string(out))
+	if b == "HEAD" {
+		return ""
+	}
+	return b
 }
 
 // TestValidateHookMode_SessionIsolation verifies that two concurrent Claude

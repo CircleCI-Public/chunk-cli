@@ -17,9 +17,10 @@ chunk-cli/
     │   ├── completion.go      # completion install/uninstall/zsh
     │   ├── config.go          # config show/set
     │   ├── init.go            # init (project setup, settings.json generation)
-    │   ├── sidecar.go         # sidecar list/create/exec/add-ssh-key/ssh/sync/env/build
+    │   ├── hook.go            # hook disable/enable/status
+    │   ├── sidecar.go         # sidecar list/create/exec/add-ssh-key/ssh/sync/env/build/setup/snapshot
     │   ├── skills.go          # skill install/list
-    │   ├── task.go            # task run
+    │   ├── task.go            # task run/config
     │   ├── upgrade.go         # upgrade
     │   └── validate.go        # validate
     ├── anthropic/             # Anthropic Messages API client
@@ -34,11 +35,13 @@ chunk-cli/
     ├── sidecar/               # CircleCI sidecar operations
     ├── skills/                # Skill definitions (go:embed) and installation
     ├── task/                  # Task run config and CircleCI trigger
+    ├── secrets/               # Secret resolution (env var value expansion)
+    ├── session/               # Session ID tracking for Stop hook context
+    ├── settings/              # .claude/settings.json build and merge
     ├── testing/recorder/      # HTTP recorder for tests
     ├── tui/                   # Terminal UI components (confirm, input, select)
     ├── ui/                    # Colors, formatting, spinner
     ├── upgrade/               # CLI self-upgrade
-    ├── usererr/               # User-facing error wrapper
     └── validate/              # Validation command logic
 ```
 
@@ -158,8 +161,17 @@ User config lives at `$XDG_CONFIG_HOME/chunk/config.json` (default: `~/.config/c
 
 ```json
 {
-  "apiKey": "sk-...",
+  "anthropicAPIKey": "sk-...",
   "model": "claude-sonnet-4-6"
+}
+```
+
+Project config lives in `.chunk/config.json` (per repository):
+
+```json
+{
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
+  "commands": []
 }
 ```
 
@@ -178,8 +190,11 @@ in `config.Resolve` and makes clients testable.
 | `GITHUB_TOKEN` | github | GitHub authentication |
 | `GITHUB_API_URL` | github | GitHub API endpoint override |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |
+| `CIRCLECI_ORG_ID` | sidecar | CircleCI organization ID (overrides `orgID` in `.chunk/config.json`) |
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
-| `CLAUDE_PROJECT_DIR` | init | IDE-provided project directory |
+| `CLAUDE_PROJECT_DIR` | settings | IDE-provided project directory used by generated `PreToolUse` hooks |
+| `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
+| `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar | Per-project state directory (default: `~/.local/share`) |
 

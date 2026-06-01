@@ -544,6 +544,93 @@ func TestInitProjectDir(t *testing.T) {
 	assert.Equal(t, vcs["repo"], "my-repo")
 }
 
+// --- CircleCI Smarter Testing test-suites.yml ---
+
+func TestInitWritesTestSuitesForGoWhenCircleDirExists(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".circleci"), 0o755))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks", "--skip-test-suites=false",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	data, err := os.ReadFile(filepath.Join(workDir, ".circleci", "test-suites.yml"))
+	assert.NilError(t, err, "expected .circleci/test-suites.yml to exist")
+	body := string(data)
+	assert.Assert(t, strings.Contains(body, "go list -f"), "got: %s", body)
+	assert.Assert(t, strings.Contains(body, "<< test.atoms >>"), "got: %s", body)
+}
+
+func TestInitCreatesCircleDirAndWritesTestSuites(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks", "--skip-test-suites=false",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	data, err := os.ReadFile(filepath.Join(workDir, ".circleci", "test-suites.yml"))
+	assert.NilError(t, err, "expected init to create .circleci/test-suites.yml even when .circleci/ was missing")
+	body := string(data)
+	assert.Assert(t, strings.Contains(body, "go list -f"), "got: %s", body)
+	assert.Assert(t, strings.Contains(body, "<< test.atoms >>"), "got: %s", body)
+}
+
+func TestInitDoesNotOverwriteExistingTestSuites(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".circleci"), 0o755))
+	existing := []byte("# user customization\nname: custom\n")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, ".circleci", "test-suites.yml"), existing, 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks", "--skip-test-suites=false",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	data, err := os.ReadFile(filepath.Join(workDir, ".circleci", "test-suites.yml"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), string(existing), "existing test-suites.yml should be preserved")
+}
+
+func TestInitSkipsTestSuitesByDefault(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "go.mod"), []byte("module example.com/m\n"), 0o644))
+	assert.NilError(t, os.MkdirAll(filepath.Join(workDir, ".circleci"), 0o755))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	_, err := os.Stat(filepath.Join(workDir, ".circleci", "test-suites.yml"))
+	assert.Assert(t, os.IsNotExist(err), "expected default to skip write, err=%v", err)
+
+	assert.Assert(t, strings.Contains(result.Stderr, "Smarter Testing"),
+		"expected hint in stderr, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "test-suites.yml"),
+		"expected hint to mention test-suites.yml, got: %s", result.Stderr)
+}
+
 func TestInitProjectDirNotGitRepo(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	notGit := t.TempDir()

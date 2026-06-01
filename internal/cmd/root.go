@@ -60,5 +60,8 @@ Configuration:
 
 	rootCmd.AddCommand(newCommandsCmd())
 
+	rootCmd.PersistentFlags().Bool("insecure-storage", false, "do not use the system's secure storage for storing tokens")
+	_ = rootCmd.PersistentFlags().MarkHidden("insecure-storage")
+
 	return rootCmd
 }

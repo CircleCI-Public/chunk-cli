@@ -77,6 +77,7 @@ type FakeCircleCI struct {
 	AddKeyStatusCode         int // override for POST /sidecar/instances/:id/ssh/add-key
 	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
 	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
+	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -100,6 +101,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.POST("/api/v2/sidecar/instances/:id/exec", f.handleExec)
 
 	// Snapshot endpoints
+	r.GET("/api/v2/sidecar/snapshots", f.handleListSnapshots)
 	r.POST("/api/v2/sidecar/snapshots", f.handleCreateSnapshot)
 	r.GET("/api/v2/sidecar/snapshots/:id", f.handleGetSnapshot)
 
@@ -326,6 +328,29 @@ func (f *FakeCircleCI) handleGetSnapshot(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusNotFound, gin.H{"message": "snapshot not found"})
+}
+
+func (f *FakeCircleCI) handleListSnapshots(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.ListSnapshotsStatusCode != 0 {
+		c.JSON(f.ListSnapshotsStatusCode, gin.H{"message": "API error"})
+		return
+	}
+	orgID := c.Query("org_id")
+	var filtered []Snapshot
+	for _, s := range f.Snapshots {
+		if s.OrgID == orgID {
+			filtered = append(filtered, s)
+		}
+	}
+	if filtered == nil {
+		filtered = []Snapshot{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": filtered})
 }
 
 func (f *FakeCircleCI) handleTriggerRun(c *gin.Context) {

@@ -148,6 +148,7 @@ func TestFetchReviewActivity(t *testing.T) {
 		}
 		if result == nil {
 			t.Fatal("expected non-nil result")
+			return
 		}
 
 		// Should have 2 reviewers: alice and bob
@@ -158,6 +159,7 @@ func TestFetchReviewActivity(t *testing.T) {
 		alice := result.Activity["reviewer-alice"]
 		if alice == nil {
 			t.Fatal("expected alice in activity")
+			return
 		}
 		if alice.Approvals != 1 {
 			t.Errorf("alice approvals: got %d, want 1", alice.Approvals)
@@ -169,6 +171,7 @@ func TestFetchReviewActivity(t *testing.T) {
 		bob := result.Activity["reviewer-bob"]
 		if bob == nil {
 			t.Fatal("expected bob in activity")
+			return
 		}
 		if bob.ChangesRequested != 1 {
 			t.Errorf("bob changes_requested: got %d, want 1", bob.ChangesRequested)
@@ -268,6 +271,7 @@ func TestFetchReviewActivity(t *testing.T) {
 		bob := result.Activity["bob"]
 		if bob == nil {
 			t.Fatal("expected bob")
+			return
 		}
 		if bob.Approvals != 1 {
 			t.Errorf("bob approvals: got %d, want 1", bob.Approvals)

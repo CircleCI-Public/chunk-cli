@@ -78,7 +78,9 @@ func RunCLIWithStdin(t *testing.T, args []string, e *env.TestEnv, workDir string
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	// Prepend --insecure-storage so acceptance tests never touch the system keychain.
+	allArgs := append([]string{"--insecure-storage"}, args...)
+	cmd := exec.CommandContext(ctx, binaryPath, allArgs...)
 	cmd.Dir = workDir
 	cmd.Env = e.Environ()
 
