@@ -13,6 +13,12 @@ type CallbackResult struct {
 	Error string
 }
 
+func writeBrowserResponse(w http.ResponseWriter, status int, state browserState) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	renderPage(w, state)
+}
+
 func ListenForCallback(ctx context.Context) (port int, result <-chan CallbackResult, cleanup func(), err error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -30,11 +36,17 @@ func ListenForCallback(ctx context.Context) (port int, result <-chan CallbackRes
 			Error: q.Get("error"),
 		}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if res.Error != "" {
-			_, _ = w.Write([]byte("<html><body><h2>Login was denied.</h2><p>You can close this tab.</p></body></html>"))
+			writeBrowserResponse(w, http.StatusBadRequest, browserState{
+				Title: "Authorization failed",
+				Body:  "Login was denied. You can close this tab.",
+			})
 		} else {
-			_, _ = w.Write([]byte("<html><body><h2>Login successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>"))
+			writeBrowserResponse(w, http.StatusOK, browserState{
+				Title:   "Authorization successful",
+				Body:    "You can close this window and return to your terminal.",
+				Success: true,
+			})
 		}
 
 		select {
