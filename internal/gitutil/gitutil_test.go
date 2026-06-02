@@ -11,6 +11,10 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+func TestDeliberateFailure(t *testing.T) {
+	t.Error("this test is supposed to fail")
+}
+
 func setupRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
