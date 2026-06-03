@@ -82,11 +82,11 @@ func TestExec(t *testing.T) {
 	reqs := cci.Recorder.AllRequests()
 	var gotExecReq bool
 	for _, r := range reqs {
-		if r.URL.Path == "/api/v2/sidecar/instances/sb-1/exec" {
+		if r.URL.Path == "/api/v3/sidecar/instances/sb-1/exec" {
 			gotExecReq = true
 		}
 	}
-	assert.Assert(t, gotExecReq, "expected exec request at /api/v2/sidecar/instances/sb-1/exec")
+	assert.Assert(t, gotExecReq, "expected exec request at /api/v3/sidecar/instances/sb-1/exec")
 }
 
 func TestAddSSHKey(t *testing.T) {

@@ -43,7 +43,7 @@ func TestSidecarsListHappyPath(t *testing.T) {
 
 	// Verify org_id query param was sent
 	reqs := cci.Recorder.AllRequests()
-	listReqs := filterByPath(reqs, "/api/v2/sidecar/instances")
+	listReqs := filterByPath(reqs, "/api/v3/sidecar/instances")
 	assert.Assert(t, len(listReqs) >= 1, "expected at least 1 list request")
 	assert.Equal(t, listReqs[0].URL.Query().Get("org_id"), "org-aaa")
 }
@@ -134,14 +134,20 @@ func TestSidecarsCreateHappyPath(t *testing.T) {
 
 	// Verify request body
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/instances")
+	createReqs := filterByMethod(reqs, "POST", "/api/v3/sidecar/instances")
 	assert.Equal(t, len(createReqs), 1, "expected 1 create request")
 
-	var body map[string]interface{}
+	var body map[string]any
 	err := json.Unmarshal(createReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["org_id"], "org-aaa")
-	assert.Equal(t, body["name"], "my-new-sidecar")
+
+	data := body["data"].(map[string]any)
+	attrs := data["attributes"].(map[string]any)
+	refs := data["references"].(map[string]any)
+	orgRef := refs["org"].(map[string]any)
+
+	assert.Equal(t, orgRef["id"], "org-aaa")
+	assert.Equal(t, attrs["name"], "my-new-sidecar")
 }
 
 func TestSidecarsCreateWithImage(t *testing.T) {
@@ -162,13 +168,16 @@ func TestSidecarsCreateWithImage(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/instances")
+	createReqs := filterByMethod(reqs, "POST", "/api/v3/sidecar/instances")
 	assert.Equal(t, len(createReqs), 1)
 
-	var body map[string]interface{}
+	var body map[string]any
 	err := json.Unmarshal(createReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["image"], "ubuntu:22.04")
+
+	data := body["data"].(map[string]any)
+	attrs := data["attributes"].(map[string]any)
+	assert.Equal(t, attrs["image"], "ubuntu:22.04")
 }
 
 func TestSidecarsExecHappyPath(t *testing.T) {
@@ -199,7 +208,7 @@ func TestSidecarsExecHappyPath(t *testing.T) {
 
 	// Verify exec request with sidecar ID in path
 	reqs := cci.Recorder.AllRequests()
-	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/exec")
+	execReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-111/exec")
 	assert.Equal(t, len(execReqs), 1, "expected 1 exec request")
 
 	var body map[string]interface{}
@@ -233,7 +242,7 @@ func TestSidecarsAddSSHKeyFromString(t *testing.T) {
 
 	// Verify add-key request with sidecar ID in path
 	reqs := cci.Recorder.AllRequests()
-	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-111/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request")
 
 	var body map[string]interface{}
@@ -266,7 +275,7 @@ func TestSidecarsAddSSHKeyFromFile(t *testing.T) {
 
 	// Verify the key was sent in the request
 	reqs := cci.Recorder.AllRequests()
-	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-111/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1)
 
 	var body map[string]interface{}
@@ -402,7 +411,7 @@ func TestSidecarsExecWithArgs(t *testing.T) {
 
 	// Verify exec request body has the command
 	reqs := cci.Recorder.AllRequests()
-	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/exec")
+	execReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-111/exec")
 	assert.Equal(t, len(execReqs), 1)
 
 	var body map[string]interface{}
@@ -612,7 +621,7 @@ func TestSidecarsExplicitIDOverridesActive(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "exec stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-explicit/exec")
+	execReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-explicit/exec")
 	assert.Assert(t, len(execReqs) >= 1, "expected exec request to use explicit sidecar ID, got requests: %v", reqs)
 }
 

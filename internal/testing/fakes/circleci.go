@@ -52,6 +52,16 @@ type ExecResponse struct {
 	ExitCode  int    `json:"exit_code"`
 }
 
+type CommandResponse struct {
+	ID        string  `json:"id"`
+	CreatedAt string  `json:"created_at"`
+	EndedAt   *string `json:"ended_at,omitempty"`
+	ExitCode  *int    `json:"exit_code,omitempty"`
+	Outcome   *string `json:"outcome,omitempty"`
+	Phase     string  `json:"phase"`
+	SidecarID string  `json:"sidecar_id"`
+}
+
 // FakeCircleCI serves canned responses for the CircleCI API.
 type FakeCircleCI struct {
 	http.Handler
@@ -66,6 +76,7 @@ type FakeCircleCI struct {
 	RunResponse     *RunResponse
 	AddKeyURL       string
 	ExecResponse    *ExecResponse
+	CommandResponse *CommandResponse
 	RunStatusCode   int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
@@ -78,6 +89,7 @@ type FakeCircleCI struct {
 	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
 	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
 	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
+	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -93,17 +105,20 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.GET("/api/v2/me/collaborations", f.handleCollaborations)
 	r.GET("/api/v1.1/projects", f.handleProjects)
 
-	// Sidecar endpoints
-	r.GET("/api/v2/sidecar/instances", f.handleListSidecars)
-	r.POST("/api/v2/sidecar/instances", f.handleCreateSidecar)
-	r.DELETE("/api/v2/sidecar/instances/:id", f.handleDeleteSidecar)
-	r.POST("/api/v2/sidecar/instances/:id/ssh/add-key", f.handleAddSSHKey)
-	r.POST("/api/v2/sidecar/instances/:id/exec", f.handleExec)
+	// Sidecar V3 endpoints
+	r.GET("/api/v3/sidecar/instances", f.handleListSidecars)
+	r.POST("/api/v3/sidecar/instances", f.handleCreateSidecar)
+	r.DELETE("/api/v3/sidecar/instances/:id", f.handleDeleteSidecar)
+	r.POST("/api/v3/sidecar/instances/:id/ssh/add-key", f.handleAddSSHKey)
+	r.POST("/api/v3/sidecar/instances/:id/exec", f.handleExec)
 
-	// Snapshot endpoints
+	// Snapshot V3 endpoints
 	r.GET("/api/v2/sidecar/snapshots", f.handleListSnapshots)
-	r.POST("/api/v2/sidecar/snapshots", f.handleCreateSnapshot)
-	r.GET("/api/v2/sidecar/snapshots/:id", f.handleGetSnapshot)
+	r.POST("/api/v3/sidecar/snapshots", f.handleCreateSnapshot)
+	r.GET("/api/v3/sidecar/snapshots/:id", f.handleGetSnapshot)
+
+	// Command V3 endpoint
+	r.GET("/api/v3/sidecar/commands/:id", f.handleGetCommand)
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
@@ -162,16 +177,23 @@ func (f *FakeCircleCI) handleListSidecars(c *gin.Context) {
 	}
 
 	orgID := c.Query("org_id")
-	var filtered []Sidecar
+	var items []gin.H
 	for _, s := range f.Sidecars {
 		if s.OrgID == orgID {
-			filtered = append(filtered, s)
+			items = append(items, gin.H{
+				"attributes": gin.H{"name": s.Name},
+				"id":         s.ID,
+				"references": gin.H{
+					"org":  gin.H{"id": s.OrgID},
+					"user": gin.H{"id": "user-123"},
+				},
+			})
 		}
 	}
-	if filtered == nil {
-		filtered = []Sidecar{}
+	if items == nil {
+		items = []gin.H{}
 	}
-	c.JSON(http.StatusOK, gin.H{"items": filtered})
+	c.JSON(http.StatusOK, gin.H{"data": items})
 }
 
 func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
@@ -188,10 +210,17 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 	}
 
 	var body struct {
-		OrgID    string `json:"org_id"`
-		Name     string `json:"name"`
-		Provider string `json:"provider,omitempty"`
-		Image    string `json:"image,omitempty"`
+		Data struct {
+			Attributes struct {
+				Name  string `json:"name"`
+				Image string `json:"image,omitempty"`
+			} `json:"attributes"`
+			References struct {
+				Org struct {
+					ID string `json:"id"`
+				} `json:"org"`
+			} `json:"references"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Bad request"})
@@ -200,16 +229,25 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 
 	sidecar := Sidecar{
 		ID:    "sidecar-new-123",
-		Name:  body.Name,
-		OrgID: body.OrgID,
-		Image: body.Image,
+		Name:  body.Data.Attributes.Name,
+		OrgID: body.Data.References.Org.ID,
+		Image: body.Data.Attributes.Image,
 	}
 
 	f.mu.Lock()
 	f.Sidecars = append(f.Sidecars, sidecar)
 	f.mu.Unlock()
 
-	c.JSON(http.StatusCreated, sidecar)
+	c.JSON(http.StatusCreated, gin.H{
+		"data": gin.H{
+			"attributes": gin.H{"name": sidecar.Name},
+			"id":         sidecar.ID,
+			"references": gin.H{
+				"org":  gin.H{"id": sidecar.OrgID},
+				"user": gin.H{"id": "user-123"},
+			},
+		},
+	})
 }
 
 func (f *FakeCircleCI) handleDeleteSidecar(c *gin.Context) {
@@ -243,7 +281,12 @@ func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {
 		c.JSON(f.AddKeyStatusCode, gin.H{"message": "API error"})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"url": f.AddKeyURL})
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"attributes": gin.H{"url": f.AddKeyURL},
+			"id":         "key-123",
+		},
+	})
 }
 
 func (f *FakeCircleCI) handleExec(c *gin.Context) {
@@ -260,18 +303,76 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 		return
 	}
 
-	if resp != nil {
-		c.JSON(http.StatusOK, resp)
+	if resp == nil {
+		resp = &ExecResponse{
+			CommandID: "cmd-123",
+			PID:       42,
+			Stdout:    "ok\n",
+			Stderr:    "",
+			ExitCode:  0,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"attributes": gin.H{
+				"exit_code": resp.ExitCode,
+				"pid":       resp.PID,
+				"stdout":    resp.Stdout,
+				"stderr":    resp.Stderr,
+			},
+			"id": resp.CommandID,
+			"references": gin.H{
+				"sidecar_instance": gin.H{"id": c.Param("id")},
+			},
+		},
+	})
+}
+
+func (f *FakeCircleCI) handleGetCommand(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	if f.GetCommandStatusCode != 0 {
+		c.JSON(f.GetCommandStatusCode, gin.H{"message": "API error"})
 		return
 	}
 
-	// Default response
-	c.JSON(http.StatusOK, ExecResponse{
-		CommandID: "cmd-123",
-		PID:       42,
-		Stdout:    "ok\n",
-		Stderr:    "",
-		ExitCode:  0,
+	resp := f.CommandResponse
+	if resp == nil {
+		resp = &CommandResponse{
+			ID:        c.Param("id"),
+			CreatedAt: "2025-01-15T10:00:00.000Z",
+			Phase:     "ended",
+			SidecarID: "sb-1",
+		}
+	}
+
+	attrs := gin.H{
+		"created_at": resp.CreatedAt,
+		"phase":      resp.Phase,
+	}
+	if resp.EndedAt != nil {
+		attrs["ended_at"] = *resp.EndedAt
+	}
+	if resp.ExitCode != nil {
+		attrs["exit_code"] = *resp.ExitCode
+	}
+	if resp.Outcome != nil {
+		attrs["outcome"] = *resp.Outcome
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"attributes": attrs,
+			"id":         resp.ID,
+			"references": gin.H{
+				"sidecar_instance": gin.H{"id": resp.SidecarID},
+			},
+		},
 	})
 }
 
@@ -288,8 +389,16 @@ func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
 	}
 
 	var body struct {
-		SidecarID string `json:"sidecar_id"`
-		Name      string `json:"name"`
+		Data struct {
+			Attributes struct {
+				Name string `json:"name"`
+			} `json:"attributes"`
+			References struct {
+				SidecarInstance struct {
+					ID string `json:"id"`
+				} `json:"sidecar_instance"`
+			} `json:"references"`
+		} `json:"data"`
 	}
 	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Bad request"})
@@ -300,12 +409,20 @@ func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
 	f.snapshotCounter++
 	snap := Snapshot{
 		ID:   fmt.Sprintf("snap-%d", f.snapshotCounter),
-		Name: body.Name,
+		Name: body.Data.Attributes.Name,
 	}
 	f.Snapshots = append(f.Snapshots, snap)
 	f.mu.Unlock()
 
-	c.JSON(http.StatusCreated, snap)
+	c.JSON(http.StatusCreated, gin.H{
+		"data": gin.H{
+			"attributes": gin.H{"name": snap.Name},
+			"id":         snap.ID,
+			"references": gin.H{
+				"org": gin.H{"id": "org-123"},
+			},
+		},
+	})
 }
 
 func (f *FakeCircleCI) handleGetSnapshot(c *gin.Context) {
@@ -322,8 +439,16 @@ func (f *FakeCircleCI) handleGetSnapshot(c *gin.Context) {
 
 	id := c.Param("id")
 	for _, s := range f.Snapshots {
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"attributes": gin.H{"name": s.Name},
+				"id":         s.ID,
+				"references": gin.H{
+					"org": gin.H{"id": s.OrgID},
+				},
+			},
+		})
 		if s.ID == id {
-			c.JSON(http.StatusOK, s)
 			return
 		}
 	}

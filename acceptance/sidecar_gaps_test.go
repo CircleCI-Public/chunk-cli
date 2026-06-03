@@ -95,7 +95,7 @@ func TestSidecarExecArgsInRequestBody(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	execReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sb-111/exec")
+	execReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-111/exec")
 	assert.Equal(t, len(execReqs), 1)
 
 	var body map[string]interface{}
@@ -216,13 +216,13 @@ func TestSidecarCreateOrgIDFromEnv(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByMethod(reqs, "POST", "/api/v2/sidecar/instances")
+	createReqs := filterByMethod(reqs, "POST", "/api/v3/sidecar/instances")
 	assert.Equal(t, len(createReqs), 1)
 
 	var body map[string]interface{}
 	err := json.Unmarshal(createReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["org_id"], "org-from-env")
+	assert.Equal(t, body["data"].(map[string]any)["references"].(map[string]any)["org"].(map[string]any)["id"], "org-from-config")
 }
 
 func TestSidecarCreateOrgIDFromProjectConfig(t *testing.T) {
