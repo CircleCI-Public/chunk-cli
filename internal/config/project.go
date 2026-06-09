@@ -94,6 +94,38 @@ func (c *ProjectConfig) HasRemoteCommands() bool {
 	return false
 }
 
+// HasSidecarImage reports whether a project-level sidecar snapshot image is configured.
+func (c *ProjectConfig) HasSidecarImage() bool {
+	return c != nil && c.Validation != nil && c.Validation.SidecarImage != ""
+}
+
+func commandEligibleForSidecarRemote(cmd Command) bool {
+	if cmd.Remote {
+		return false
+	}
+	if cmd.Name == "install" {
+		return true
+	}
+	return cmd.Role == RoleGate
+}
+
+// MarkRemoteCommandsForSidecarSetup marks install and gate commands for remote
+// execution after a successful sidecar setup. Returns true when any command
+// was updated.
+func (c *ProjectConfig) MarkRemoteCommandsForSidecarSetup() bool {
+	if c == nil {
+		return false
+	}
+	changed := false
+	for i := range c.Commands {
+		if commandEligibleForSidecarRemote(c.Commands[i]) {
+			c.Commands[i].Remote = true
+			changed = true
+		}
+	}
+	return changed
+}
+
 // FindCommand returns the command with the given name, or nil if not found.
 func (c *ProjectConfig) FindCommand(name string) *Command {
 	for i := range c.Commands {

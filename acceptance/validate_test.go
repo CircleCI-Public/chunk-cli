@@ -455,6 +455,59 @@ func TestValidateAutoCreatesSidecar(t *testing.T) {
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
 }
 
+func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
+	// Stop hook + validation.sidecarImage (no remote: true) should still resolve
+	// a sidecar from the configured snapshot and attempt remote validation.
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = "127.0.0.1"
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	cfg := map[string]interface{}{
+		"commands": []map[string]interface{}{
+			{"name": "install", "run": "echo install"},
+			{"name": "test", "run": "echo test", "role": "gate"},
+		},
+		"validation": map[string]interface{}{
+			"sidecarImage": "my-snapshot-abc123",
+		},
+	}
+	data, err := json.Marshal(cfg)
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
+
+	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	identityFile := filepath.Join(sshDir, "chunk_ai")
+	assert.NilError(t, generateTestSSHKey(t, identityFile))
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
+
+	result := binary.RunCLIWithStdin(t, []string{
+		"validate",
+		"--identity-file", identityFile,
+	}, env, workDir, hookStdin(t, "test-session-sidecar-image", false))
+
+	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
+
+	reqs := cci.Recorder.AllRequests()
+	createReqs := filterByPath(reqs, "/api/v2/sidecar/instances")
+	assert.Equal(t, len(createReqs), 1, "expected 1 create-sidecar request; got: %v", reqs)
+
+	var body map[string]interface{}
+	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
+	assert.Equal(t, body["image"], "my-snapshot-abc123")
+	assert.Equal(t, body["org_id"], "org-aaa")
+
+	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sidecar-new-123/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
+}
+
 // writeRemoteProjectConfig writes a config with a single remote command.
 func writeRemoteProjectConfig(t *testing.T, workDir string) {
 	t.Helper()

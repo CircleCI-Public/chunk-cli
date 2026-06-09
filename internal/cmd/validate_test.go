@@ -63,6 +63,32 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testin
 		"expected auth hint in stderr, got: %q", stderr)
 }
 
+func TestValidateHookExitsOneWhenCircleCITokenMissingAndSidecarImage(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	dir := t.TempDir()
+	projCfg := &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "test", Run: "npm test", Role: config.RoleGate},
+		},
+		Validation: &config.ValidationConfig{
+			SidecarImage: "my-snapshot-abc123",
+		},
+	}
+	assert.NilError(t, config.SaveProjectConfig(dir, projCfg))
+
+	_, stderr, err := runValidateHook(t, dir)
+
+	assert.Assert(t, err != nil)
+	var ec interface{ ExitCode() int }
+	assert.Assert(t, errors.As(err, &ec), "expected ExitCode error, got %T: %v", err, err)
+	assert.Equal(t, ec.ExitCode(), 1)
+	assert.Assert(t, strings.Contains(stderr, "CircleCI auth is not configured"),
+		"expected auth message in stderr, got: %q", stderr)
+}
+
 func TestValidateHookSkipsAuthCheckWhenNoRemoteCommands(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")

@@ -150,8 +150,15 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, streams io
 	return ctx, streams, false, nil
 }
 
-func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, allRemote bool, cfg *config.ProjectConfig, streams iostream.Streams) (*circleci.Client, error) {
-	if !allRemote && !cfg.HasRemoteCommands() {
+func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig, hook *hookContext) bool {
+	if explicitRemote || cfg.HasRemoteCommands() {
+		return true
+	}
+	return hook != nil && cfg.HasSidecarImage()
+}
+
+func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, needsSidecar bool, cfg *config.ProjectConfig, streams iostream.Streams) (*circleci.Client, error) {
+	if !needsSidecar {
 		return nil, nil
 	}
 	return ensureCircleCIClient(ctx, cmd, rc, streams, tui.PromptHidden)
@@ -225,7 +232,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// In non-hook context ensureCircleCIClient prompts interactively; hooks have
 	// no TTY so we surface a clear message here instead of a confusing fallback.
 	rc, _ := config.Resolve("", "", insecureStorage)
-	if hook != nil && cfg.HasRemoteCommands() && rc.CircleCIToken == "" {
+
+	explicitRemote := opts.remote || opts.sidecarID != ""
+	needsSidecar := validateNeedsSidecar(explicitRemote, cfg, hook)
+	if hook != nil && needsSidecar && rc.CircleCIToken == "" {
 		streams.ErrPrintln("CircleCI auth is not configured.")
 		streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
 		streams.ErrPrintln("Don't have an account? Sign up at https://app.circleci.com/signup")
@@ -235,11 +245,14 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// allRemote is true when the caller explicitly targets the sidecar
 	// (--remote or --sidecar-id), meaning every command runs there.
 	// Per-command routing only applies when the sidecar is resolved implicitly.
-	allRemote := opts.remote || opts.sidecarID != ""
+	allRemote := explicitRemote
+	if hook != nil && cfg.HasSidecarImage() {
+		allRemote = true
+	}
 
 	image := resolveImage(name, cfg)
 
-	circleCIClient, err := maybeEnsureCircleCIClient(cmd.Context(), cmd, rc, allRemote, cfg, streams)
+	circleCIClient, err := maybeEnsureCircleCIClient(cmd.Context(), cmd, rc, needsSidecar, cfg, streams)
 	if err != nil {
 		return err
 	}
@@ -384,7 +397,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
 // and config, then returns whether a new sidecar was provisioned.
 func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, hook *hookContext, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
-	if opts.remote || cfg.HasRemoteCommands() {
+	if validateNeedsSidecar(opts.remote || opts.sidecarID != "", cfg, hook) {
 		if opts.remote {
 			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, streams)
 			if err != nil {
