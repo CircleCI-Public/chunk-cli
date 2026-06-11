@@ -508,6 +508,76 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
 }
 
+func TestValidateHookPerCommandRoutingWithSidecarImageAndRemoteCommands(t *testing.T) {
+	// When sidecarImage is set AND some commands already have remote:true (the state
+	// produced by "chunk sidecar setup"), the hook must use per-command routing, not
+	// force allRemote=true. Without the "&& !cfg.HasRemoteCommands()" guard, autofix
+	// commands would be incorrectly sent to the sidecar.
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("ok\n", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	cciSrv := httptest.NewServer(cci)
+	defer cciSrv.Close()
+
+	// SetupGitRepo keeps origin pointing to github.com (required by
+	// gitremote.DetectOrgAndRepo in sidecar.Sync). Manually set
+	// refs/remotes/origin/HEAD to HEAD so gitutil.MergeBase resolves
+	// and the sync completes with an empty patch (clean tree vs HEAD).
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	headBytes, err := exec.Command("git", "-C", workDir, "rev-parse", "HEAD").Output()
+	assert.NilError(t, err)
+	sha := strings.TrimSpace(string(headBytes))
+	setRef := exec.Command("git", "-C", workDir, "update-ref", "refs/remotes/origin/HEAD", sha)
+	setRef.Env = append(gitrepo.GitEnv(workDir), setRef.Env...)
+	out, err := setRef.CombinedOutput()
+	assert.NilError(t, err, "set origin/HEAD: %s", out)
+
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	cfg := map[string]interface{}{
+		"commands": []map[string]interface{}{
+			{"name": "install", "run": "echo install-remote", "remote": true},
+			{"name": "format", "run": "echo format-local", "role": "autofix"},
+		},
+		"validation": map[string]interface{}{
+			"sidecarImage": "snap-abc",
+		},
+	}
+	data, err := json.Marshal(cfg)
+	assert.NilError(t, err)
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = cciSrv.URL
+	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
+
+	result := binary.RunCLIWithStdin(t, []string{
+		"validate",
+		"--identity-file", keyFile,
+	}, env, workDir, hookStdin(t, "test-session-per-cmd-routing", false))
+
+	assert.Equal(t, result.ExitCode, 0,
+		"expected success; stderr: %q stdout: %q", result.Stderr, result.Stdout)
+
+	cmds := sshSrv.Commands()
+	for _, c := range cmds {
+		assert.Assert(t, !strings.Contains(c, "echo format-local"),
+			"autofix command must not route to sidecar (allRemote must be false when HasRemoteCommands is true); SSH received: %v", cmds)
+	}
+	hasInstall := false
+	for _, c := range cmds {
+		if strings.Contains(c, "echo install-remote") {
+			hasInstall = true
+			break
+		}
+	}
+	assert.Assert(t, hasInstall,
+		"remote command (install) must have run on sidecar; SSH received: %v", cmds)
+}
+
 // writeRemoteProjectConfig writes a config with a single remote command.
 func writeRemoteProjectConfig(t *testing.T, workDir string) {
 	t.Helper()

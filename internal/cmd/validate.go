@@ -246,7 +246,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// (--remote or --sidecar-id), meaning every command runs there.
 	// Per-command routing only applies when the sidecar is resolved implicitly.
 	allRemote := explicitRemote
-	if hook != nil && cfg.HasSidecarImage() {
+	if hook != nil && cfg.HasSidecarImage() && !cfg.HasRemoteCommands() {
 		allRemote = true
 	}
 
