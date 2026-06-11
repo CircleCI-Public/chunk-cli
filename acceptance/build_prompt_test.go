@@ -48,6 +48,7 @@ func TestBuildPromptHappyPath(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--since", "2025-01-01",
 		"--top", "2",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
@@ -348,6 +349,7 @@ func TestBuildPromptBotFiltering(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--since", "2025-01-01",
 		"--top", "5",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
@@ -491,6 +493,7 @@ func TestBuildPromptTopNFiltering(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--since", "2025-01-01",
 		"--top", "2",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
@@ -575,6 +578,7 @@ func TestBuildPromptDefaultTop(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--since", "2025-01-01",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -848,6 +852,7 @@ func TestBuildPromptTopOne(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--since", "2025-01-01",
 		"--top", "1",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
@@ -902,6 +907,7 @@ func TestBuildPromptMaxCommentsEffect(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--since", "2025-01-01",
 		"--max-comments", "1",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
