@@ -41,8 +41,9 @@
     "repo": "chunk-cli"
   },
   "validation": {
-    "sidecarImage": "ac042eab-a45f-452e-a4f5-1d56e1b026bd"
+    "sidecarImage": "fb982185-d7bd-483d-a0f4-7204dbac62f3"
   },
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
   "environment": {
     "stack": "go",
     "setup": [
@@ -61,6 +62,5 @@
     ],
     "image": "cimg/go",
     "image_version": "1.26.2"
-  },
-  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c"
+  }
 }
