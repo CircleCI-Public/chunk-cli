@@ -281,7 +281,7 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", func(iostream.Level, string) {}, streams))
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "", "/workspace", func(iostream.Level, string) {}, streams))
 		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
 		assert.Equal(t, execCount, 2)
 	})
@@ -296,7 +296,7 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, _, _ := newStreams()
 
-		err := RunRemote(context.Background(), execFn, cfg, "", "/workspace", func(iostream.Level, string) {}, streams)
+		err := RunRemote(context.Background(), execFn, cfg, "", "", "/workspace", func(iostream.Level, string) {}, streams)
 		assert.ErrorContains(t, err, "remote test failed")
 	})
 
@@ -310,7 +310,7 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", func(iostream.Level, string) {}, streams))
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "", "/workspace", func(iostream.Level, string) {}, streams))
 		assert.Equal(t, out.Len(), 0)
 	})
 
@@ -327,7 +327,7 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, _, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "test", "/workspace", func(iostream.Level, string) {}, streams))
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "test", "", "/workspace", func(iostream.Level, string) {}, streams))
 		assert.Equal(t, len(capturedScripts), 1)
 		assert.Assert(t, strings.Contains(capturedScripts[0], "echo test"), "got: %s", capturedScripts[0])
 	})
@@ -342,7 +342,7 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, _, _ := newStreams()
 
-		err := RunRemote(context.Background(), execFn, cfg, "lint", "/workspace", func(iostream.Level, string) {}, streams)
+		err := RunRemote(context.Background(), execFn, cfg, "lint", "", "/workspace", func(iostream.Level, string) {}, streams)
 		assert.ErrorContains(t, err, `"lint" not configured`)
 	})
 
@@ -358,8 +358,28 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, _, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/custom/path", func(iostream.Level, string) {}, streams))
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "", "/custom/path", func(iostream.Level, string) {}, streams))
 		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/custom/path' &&"), "got: %s", capturedScript)
+	})
+
+	t.Run("expands CHANGED_PACKAGES before sending remotely", func(t *testing.T) {
+		var capturedScript string
+		execFn := func(_ context.Context, script string) (string, string, int, error) {
+			capturedScript = script
+			return "", "", 0, nil
+		}
+
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test-changed", Run: "task test -- {{CHANGED_PACKAGES}}"},
+		}}
+		streams, _, _ := newStreams()
+
+		// workDir is not a git repo, so expansion falls back to "./...".
+		// The literal template must never reach the remote shell, where
+		// tools like go-task would fail to parse it.
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", t.TempDir(), "/workspace", func(iostream.Level, string) {}, streams))
+		assert.Assert(t, strings.Contains(capturedScript, "task test -- ./..."), "got: %s", capturedScript)
+		assert.Assert(t, !strings.Contains(capturedScript, "{{CHANGED_PACKAGES}}"), "template should be expanded, got: %s", capturedScript)
 	})
 }
 
@@ -404,7 +424,7 @@ func TestRunRemoteSSH(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", func(iostream.Level, string) {}, streams))
+		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "", "", "/workspace/repo", func(iostream.Level, string) {}, streams))
 		assert.Assert(t, strings.Contains(out.String(), "hello from remote"), "got: %s", out.String())
 		assert.Equal(t, len(sshSrv.Commands()), 1)
 	})
@@ -429,7 +449,7 @@ func TestRunRemoteSSH(t *testing.T) {
 		}}
 		streams, _, _ := newStreams()
 
-		err = RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", func(iostream.Level, string) {}, streams)
+		err = RunRemote(context.Background(), execCallback(t, session), cfg, "", "", "/workspace/repo", func(iostream.Level, string) {}, streams)
 		assert.ErrorContains(t, err, "remote test failed")
 	})
 
@@ -454,7 +474,7 @@ func TestRunRemoteSSH(t *testing.T) {
 		}}
 		streams, _, _ := newStreams()
 
-		err = RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", func(iostream.Level, string) {}, streams)
+		err = RunRemote(context.Background(), execCallback(t, session), cfg, "", "", "/workspace/repo", func(iostream.Level, string) {}, streams)
 		assert.ErrorContains(t, err, "remote install failed")
 		assert.Equal(t, len(sshSrv.Commands()), 1)
 	})
