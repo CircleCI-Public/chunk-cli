@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -239,7 +240,7 @@ func TestWriteCodexHooksExistingMergeDeclined(t *testing.T) {
 	existing := []byte(`{"hooks": {}}`)
 	assert.NilError(t, os.WriteFile(filepath.Join(codexDir, "hooks.json"), existing, 0o644))
 
-	streams, _, errOut := testStreams()
+	streams, _, _ := testStreams()
 	commands := []config.Command{
 		{Name: "test", Run: "go test ./...", Timeout: 60},
 	}
@@ -252,11 +253,9 @@ func TestWriteCodexHooksExistingMergeDeclined(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), string(existing))
 
-	// Example file written.
+	// No example file written on explicit decline.
 	_, statErr := os.Stat(filepath.Join(codexDir, "hooks.example.json"))
-	assert.NilError(t, statErr)
-
-	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("hooks.example.json")))
+	assert.Assert(t, errors.Is(statErr, fs.ErrNotExist))
 }
 
 func TestWriteCodexHooksAlreadyUpToDate(t *testing.T) {

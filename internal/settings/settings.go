@@ -106,34 +106,28 @@ func Build(commands []config.Command) ([]byte, error) {
 // metadata ($schema, _comment) and without a permissions block. Commands run
 // as-is; Codex sets CWD to the project root before invoking hooks.
 func BuildCodex(commands []config.Command) ([]byte, error) {
+	const maxStopTimeout = 600
+	stopTimeout := 30
 	hooks := make([]hookEntry, 0, len(commands))
 	for _, cmd := range commands {
 		timeout := cmd.Timeout
 		if timeout == 0 {
 			timeout = 60
 		}
+		stopTimeout += timeout
 		hooks = append(hooks, hookEntry{
 			Type:    "command",
 			Command: cmd.Run,
 			Timeout: timeout,
 		})
 	}
+	if stopTimeout > maxStopTimeout {
+		stopTimeout = maxStopTimeout
+	}
 
 	s := codexHooksJSON{}
 
 	if len(hooks) > 0 {
-		const maxStopTimeout = 600
-		stopTimeout := 30
-		for _, cmd := range commands {
-			t := cmd.Timeout
-			if t == 0 {
-				t = 60
-			}
-			stopTimeout += t
-		}
-		if stopTimeout > maxStopTimeout {
-			stopTimeout = maxStopTimeout
-		}
 
 		s.Hooks = map[string][]hookGroup{
 			"PreToolUse": {
