@@ -216,12 +216,12 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		}
 	}
 
-	if opts.dryRun {
-		return runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
-	}
-
 	if err := validateEnvFlag(opts.envVarsFlag); err != nil {
 		return err
+	}
+
+	if opts.dryRun {
+		return runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
 	}
 
 	// Hook: fail early when CircleCI auth is missing and remote commands need it.
