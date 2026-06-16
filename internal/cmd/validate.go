@@ -220,6 +220,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
 	}
 
+	if err := validateEnvFlag(opts.envVarsFlag); err != nil {
+		return err
+	}
+
 	// Hook: fail early when CircleCI auth is missing and remote commands need it.
 	// In non-hook context ensureCircleCIClient prompts interactively; hooks have
 	// no TTY so we surface a clear message here instead of a confusing fallback.
@@ -278,6 +282,13 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	}
 	return execErr
+}
+
+func validateEnvFlag(envVarsFlag []string) error {
+	if _, err := sidecar.ParseEnvPairs(envVarsFlag); err != nil {
+		return &userError{msg: fmt.Sprintf("invalid --env value: %s", err), err: err}
+	}
+	return nil
 }
 
 func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc) error {
