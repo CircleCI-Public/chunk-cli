@@ -2337,8 +2337,25 @@ func detectHaskellGHCVersionFromCI(dir string) (major, minor int) {
 	return bestMajor, bestMinor
 }
 
+func detectCircleCIImageVersion(dir, image string) string {
+	data, err := os.ReadFile(filepath.Join(dir, ".circleci", "config.yml"))
+	if err != nil {
+		return ""
+	}
+	re := regexp.MustCompile(`(?m)image:\s*` + regexp.QuoteMeta(image) + `:(\S+)`)
+	m := re.FindSubmatch(data)
+	if m == nil {
+		return ""
+	}
+	return string(m[1])
+}
+
 // detectImageVersion fetches the appropriate CircleCI image version for the detected stack.
 func detectImageVersion(ctx context.Context, client *hc.Client, dir, stack, image, install string) (string, error) {
+	if v := detectCircleCIImageVersion(dir, image); v != "" {
+		return v, nil
+	}
+
 	switch stack {
 	case stackGo:
 		// Cap to the major.minor declared in go.mod. Go 1.23 is used as a floor

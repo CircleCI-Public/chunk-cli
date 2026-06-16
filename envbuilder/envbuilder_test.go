@@ -1287,6 +1287,86 @@ jobs:
 	})
 }
 
+func TestDetectCircleCIImageVersion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no config file returns empty", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, detectCircleCIImageVersion(t.TempDir(), "cimg/node"), "")
+	})
+
+	t.Run("inline docker executor in job", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".circleci/config.yml", `
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: cimg/node:22.16
+    steps:
+      - run: npm ci
+`)
+		assert.Equal(t, detectCircleCIImageVersion(dir, "cimg/node"), "22.16")
+	})
+
+	t.Run("named executor", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".circleci/config.yml", `
+version: 2.1
+executors:
+  node-executor:
+    docker:
+      - image: cimg/node:22.16
+jobs:
+  build:
+    executor: node-executor
+`)
+		assert.Equal(t, detectCircleCIImageVersion(dir, "cimg/node"), "22.16")
+	})
+
+	t.Run("image mismatch returns empty", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".circleci/config.yml", `
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: cimg/go:1.23
+`)
+		assert.Equal(t, detectCircleCIImageVersion(dir, "cimg/node"), "")
+	})
+
+	t.Run("image with variant suffix", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".circleci/config.yml", `
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: cimg/node:22.16-browsers
+`)
+		assert.Equal(t, detectCircleCIImageVersion(dir, "cimg/node"), "22.16-browsers")
+	})
+
+	t.Run("returns first match when multiple images present", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, ".circleci/config.yml", `
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: cimg/node:22.16
+      - image: cimg/node:20.0
+`)
+		assert.Equal(t, detectCircleCIImageVersion(dir, "cimg/node"), "22.16")
+	})
+}
+
 func TestDetectDartPackages(t *testing.T) {
 	t.Parallel()
 
