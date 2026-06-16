@@ -64,6 +64,7 @@ jobs:
             echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> "$BASH_ENV"
             source "$BASH_ENV"
             brew update
+            brew trust circleci-public/circleci
             brew install CircleCI-Public/circleci/chunk
       - run:
           name: Verify installation of correct version
