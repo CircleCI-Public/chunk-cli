@@ -201,6 +201,10 @@ chunk sidecar use <id>
 # Dev loop: sync then validate
 chunk sidecar sync           # push local changes to sidecar
 chunk validate --remote      # run validate commands on sidecar
+
+# Inspect or clear the active sidecar
+chunk sidecar current        # show which sidecar is active
+chunk sidecar forget         # unset the active sidecar (does not delete it)
 ```
 
 The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project>/` (default: `~/.local/share/chunk/<project>/`) — never inside the repo. The project key is derived from the git root path.
@@ -254,6 +258,30 @@ chunk sidecar create --image <snapshot-id>           # name auto-generated
 ```
 
 `snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
+
+### Lock file regeneration
+
+Lock files (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`) record platform-specific package variants. When you run `npm install` on macOS, the lock file gains macOS-specific entries (e.g. `@emnapi/*` native bindings). CI then fails with `npm ci` on Linux because those entries don't match the Linux resolver.
+
+**Fix: regenerate the lock file on the sidecar (Linux) and pull it back.**
+
+```bash
+# 1. Sync your local tree to the sidecar
+chunk sidecar sync
+
+# 2. Run the package manager install on the sidecar to regenerate the lock file
+chunk validate --remote --cmd "npm install"   # or yarn install / pnpm install
+
+# 3. Pull the updated lock file back to your local working tree
+#    Replace <repo> with your repository name (e.g. my-app)
+chunk sidecar ssh -- cat /home/user/<repo>/package-lock.json > package-lock.json
+
+# 4. Commit the Linux-generated lock file
+git add package-lock.json
+git commit -m "Regenerate lock file on Linux"
+```
+
+> **Note:** `chunk sidecar sync` is one-way (local → sidecar). Step 3 manually pulls only the lock file back; it does not affect any other files. Run this workflow whenever you add or upgrade a dependency on macOS before pushing to CI.
 
 ---
 
