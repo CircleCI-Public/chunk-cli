@@ -345,7 +345,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 		if err != nil {
 			return err
 		}
-		return validate.RunRemote(ctx, execFn, cfg, name, dest, statusFn, streams)
+		return validate.RunRemote(ctx, execFn, cfg, name, workDir, dest, statusFn, streams)
 	}
 
 	// Per-command remote routing: commands with Remote:true go to the sidecar,
@@ -358,7 +358,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 				if err != nil {
 					return err
 				}
-				return validate.RunRemote(ctx, execFn, cfg, name, dest, statusFn, streams)
+				return validate.RunRemote(ctx, execFn, cfg, name, workDir, dest, statusFn, streams)
 			}
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
 			// Named command is not marked remote; fall through to local execution.
@@ -531,7 +531,7 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 			streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
 			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
 		} else {
-			runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, statusFn, streams)
+			runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", workDir, dest, statusFn, streams)
 		}
 	}
 	if len(localCfg.Commands) > 0 {
