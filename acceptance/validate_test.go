@@ -397,17 +397,16 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	assert.Equal(t, len(execReqs), 0, "expected 0 HTTP exec requests (SSH should be used)")
 }
 
-func TestValidateAutoCreatesSidecar(t *testing.T) {
-	// Verify that chunk validate (no --remote) auto-creates a sidecar using the
-	// image stored in validation.sidecarImage when no active sidecar exists.
+func TestValidateSidecarImageNoActiveSidecarRunsLocally(t *testing.T) {
+	// Plain chunk validate with sidecarImage configured but no active sidecar must
+	// NOT auto-create a sandbox — it runs commands locally instead. Auto-create is
+	// reserved for the Stop hook path (TestValidateHookAutoCreatesSidecarFromSidecarImage).
 	cci := fakes.NewFakeCircleCI()
-	cci.AddKeyURL = "127.0.0.1" // SSH will fail — no real server at port 2222
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
-	// Write a config with a remote command and a snapshot image reference.
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 	cfg := map[string]interface{}{
@@ -422,37 +421,19 @@ func TestValidateAutoCreatesSidecar(t *testing.T) {
 	assert.NilError(t, err)
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
 
-	sshDir := filepath.Join(t.TempDir(), ".ssh")
-	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	identityFile := filepath.Join(sshDir, "chunk_ai")
-	assert.NilError(t, generateTestSSHKey(t, identityFile))
-
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
 
-	result := binary.RunCLI(t, []string{
-		"validate",
-		"--identity-file", identityFile,
-	}, env, workDir)
+	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
 
-	// SSH to 127.0.0.1:2222 fails — expected, but a sidecar must have been created first.
-	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
+	// Command runs locally (echo test-output) — must succeed.
+	assert.Equal(t, result.ExitCode, 0, "expected local fallback to succeed, stderr: %s", result.Stderr)
 
+	// No sidecar must have been created.
 	reqs := cci.Recorder.AllRequests()
-
-	// A sidecar must have been created with the configured image.
 	createReqs := filterByPath(reqs, "/api/v2/sidecar/instances")
-	assert.Equal(t, len(createReqs), 1, "expected 1 create-sidecar request; got: %v", reqs)
-
-	var body map[string]interface{}
-	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
-	assert.Equal(t, body["image"], "my-snapshot-abc123", "expected sidecar image from config")
-	assert.Equal(t, body["org_id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
-
-	// AddSSHKey must be called on the newly created sidecar — proves it was used.
-	addKeyReqs := filterByPath(reqs, "/api/v2/sidecar/instances/sidecar-new-123/ssh/add-key")
-	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
+	assert.Equal(t, len(createReqs), 0, "expected no create-sidecar request when no active sidecar exists; got: %v", reqs)
 }
 
 func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {

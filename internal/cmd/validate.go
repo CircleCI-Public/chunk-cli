@@ -150,11 +150,11 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, streams io
 	return ctx, streams, false, nil
 }
 
-func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig, hook *hookContext) bool {
+func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig, hook *hookContext, hasActiveSidecar bool) bool {
 	if explicitRemote || cfg.HasRemoteCommands() {
 		return true
 	}
-	return hook != nil && cfg.HasSidecarImage()
+	return cfg.HasSidecarImage() && (hook != nil || hasActiveSidecar)
 }
 
 func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, needsSidecar bool, streams iostream.Streams) (*circleci.Client, error) {
@@ -230,7 +230,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	rc, _ := config.Resolve("", "", insecureStorage)
 
 	explicitRemote := opts.remote || opts.sidecarID != ""
-	needsSidecar := validateNeedsSidecar(explicitRemote, cfg, hook)
+	activeSidecar, _ := sidecar.LoadActive(ctx)
+	needsSidecar := validateNeedsSidecar(explicitRemote, cfg, hook, activeSidecar != nil)
 	if hook != nil && needsSidecar && rc.CircleCIToken == "" {
 		streams.ErrPrintln("CircleCI auth is not configured.")
 		streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
@@ -242,7 +243,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// (--remote or --sidecar-id), meaning every command runs there.
 	// Per-command routing only applies when the sidecar is resolved implicitly.
 	allRemote := explicitRemote
-	if hook != nil && cfg.HasSidecarImage() {
+	if cfg.HasSidecarImage() {
 		allRemote = true
 	}
 
@@ -253,7 +254,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, hook, statusFn, workDir, streams)
+	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, hook, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
 		return err
 	}
@@ -399,8 +400,8 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
 // and config, then returns whether a new sidecar was provisioned.
-func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, hook *hookContext, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
-	if validateNeedsSidecar(opts.remote || opts.sidecarID != "", cfg, hook) {
+func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, hook *hookContext, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
+	if validateNeedsSidecar(opts.remote || opts.sidecarID != "", cfg, hook, activeSidecar != nil) {
 		if opts.remote {
 			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, streams)
 			if err != nil {
@@ -409,7 +410,7 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", opts.sidecarID))
 			return created, nil
 		}
-		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, hook, streams), nil
+		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, hook, activeSidecar, streams), nil
 	}
 	return false, nil
 }
@@ -573,19 +574,19 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 
 // resolveSidecar fills sidecarID for per-command remote routing
 // (i.e. when --remote is not set but some commands have Remote:true).
-// It uses the active sidecar when available, auto-creates one when a sidecar
-// image is configured or the caller is a Stop hook, and warns otherwise.
+// It uses the active sidecar when available, auto-creates one when the
+// caller is a Stop hook, and warns otherwise.
 // Returns true when a brand-new sidecar was provisioned in this call.
-func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, hook *hookContext, streams iostream.Streams) bool {
+func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, hook *hookContext, active *sidecar.ActiveSidecar, streams iostream.Streams) bool {
 	statusFn := newStatusFunc(streams)
-	if active, err := sidecar.LoadActive(ctx); err == nil && active != nil {
+	if active != nil {
 		*sidecarID = active.SidecarID
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
 		return false
 	}
-	if hook != nil || image != "" {
-		// In Stop hook context, or when a sidecar image is configured: auto-create
-		// from the stored snapshot so remote commands get the prepared environment.
+	if hook != nil {
+		// In Stop hook context: auto-create from the stored snapshot so remote
+		// commands get the prepared environment.
 		created, err := resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
 		if err != nil {
 			streams.ErrPrintf("warning: no sandbox available (%v); run 'chunk config set orgID <id>' to enable remote validation, running locally instead\n", err)
