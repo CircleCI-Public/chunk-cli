@@ -63,7 +63,7 @@ Check status at any time:
 chunk auth status
 ```
 
-Credentials are stored in `~/.config/chunk/config.json` (respects `XDG_CONFIG_HOME`). You can also set them as environment variables:
+Credentials are stored in your system keychain by default. Pass `--insecure-storage` to `chunk auth set` to store them in `~/.config/chunk/config.json` instead (respects `XDG_CONFIG_HOME`). You can also set them as environment variables, which take precedence over both:
 
 | Variable | Used by |
 |---|---|
