@@ -293,13 +293,7 @@ CircleCI Smarter Testing splits your test suite into independent **atoms** and d
 
 **Built-in templates (Go and pytest):**
 
-```bash
-chunk init --skip-test-suites=false
-```
-
-> `--skip-test-suites` defaults to `true`, so you must pass `=false` explicitly. The `=` is required — `--skip-test-suites false` does not work with boolean cobra flags.
-
-This detects `go.mod` or `pyproject.toml` and writes a matching template. If the file already exists it is left as-is.
+By default, `chunk init` detects `go.mod` or `pyproject.toml` and writes a matching template. If the file already exists it is left as-is. You can skip this by passing `--skip-test-suites=false` to `chunk init`.
 
 **Other stacks (Jest, RSpec, etc.):** write the file manually or ask your AI agent to `"scaffold test-suites.yml"` (the `chunk-sidecar` skill covers per-language patterns). The file schema:
 
