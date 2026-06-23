@@ -107,7 +107,7 @@ func TestWriteSettingsExistingMergeDeclined(t *testing.T) {
 	existing := []byte(`{"permissions": {"allow": ["Read"]}}`)
 	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), existing, 0o644))
 
-	streams, _, errOut := testStreams()
+	streams, _, _ := testStreams()
 	commands := []config.Command{
 		{Name: "test", Run: "go test ./...", Timeout: 60},
 	}
@@ -120,11 +120,9 @@ func TestWriteSettingsExistingMergeDeclined(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), string(existing))
 
-	// Example file written.
+	// No example file written on explicit decline.
 	_, statErr := os.Stat(filepath.Join(claudeDir, "settings.example.json"))
-	assert.NilError(t, statErr)
-
-	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("settings.example.json")))
+	assert.Assert(t, errors.Is(statErr, fs.ErrNotExist))
 }
 
 func TestWriteSettingsExistingNoTTYFallback(t *testing.T) {
