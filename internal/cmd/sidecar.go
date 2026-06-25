@@ -39,6 +39,7 @@ func newSidecarCmd() *cobra.Command {
 
 	cmd.AddCommand(newSidecarListCmd())
 	cmd.AddCommand(newSidecarCreateCmd())
+	cmd.AddCommand(newSidecarDeleteCmd())
 	cmd.AddCommand(newSidecarExecCmd())
 	cmd.AddCommand(newSidecarAddSSHKeyCmd())
 	cmd.AddCommand(newSidecarSSHCmd())
@@ -242,6 +243,51 @@ func newSidecarCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (auto-generated if not provided)")
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot ID (from 'chunk sidecar snapshot create')")
+
+	return cmd
+}
+
+func newSidecarDeleteCmd() *cobra.Command {
+	var sidecarID string
+
+	cmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Delete a sidecar",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			io := iostream.FromCmd(cmd)
+			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
+				return err
+			}
+			insecureStorage := insecureStorageFlag(cmd)
+			rc, _ := config.Resolve("", "", insecureStorage)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+			if err := client.DeleteSidecar(cmd.Context(), sidecarID); err != nil {
+				if err := notAuthorized("delete sidecars", err); err != nil {
+					return err
+				}
+				return &userError{
+					msg:        "Could not delete the sidecar.",
+					suggestion: suggestionNetworkRetry,
+					err:        err,
+				}
+			}
+			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted sidecar %s", sidecarID)))
+
+			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.SidecarID == sidecarID {
+				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
+					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
+				} else {
+					io.ErrPrintln("Active sidecar cleared")
+				}
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 
 	return cmd
 }
