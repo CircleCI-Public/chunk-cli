@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
@@ -143,6 +145,112 @@ func TestRouteParams(t *testing.T) {
 	}
 	if status != 200 {
 		t.Fatalf("expected 200, got %d", status)
+	}
+}
+
+func TestRetryOn429_RetriesWithinBudget(t *testing.T) {
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{
+		BaseURL:          srv.URL,
+		RetryOn429Budget: 10 * time.Second,
+	})
+
+	status, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("expected 200, got %d", status)
+	}
+	if n := attempts.Load(); n != 2 {
+		t.Fatalf("expected 2 attempts, got %d", n)
+	}
+}
+
+func TestRetryOn429_BailsWhenRetryAfterExceedsBudget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{
+		BaseURL:          srv.URL,
+		RetryOn429Budget: 30 * time.Second,
+	})
+
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !hc.IsRateLimitError(err) {
+		t.Fatalf("expected RateLimitError, got: %v", err)
+	}
+}
+
+func TestRetryOn429_MessageContainsBackoffHint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "45")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{
+		BaseURL:          srv.URL,
+		RetryOn429Budget: 30 * time.Second,
+	})
+
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "rate limited") {
+		t.Errorf("error message should mention rate limiting: %q", msg)
+	}
+	if !strings.Contains(msg, "try again later") {
+		t.Errorf("error message should hint to retry later: %q", msg)
+	}
+}
+
+func TestRetryOn429_DisabledByDefault(t *testing.T) {
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	// No RetryOn429Budget — falls through to DefaultRetryPolicy which
+	// retries 429 up to RetryMax times with normal backoff (not a budget error).
+	c := hc.New(hc.Config{
+		BaseURL:        srv.URL,
+		DisableRetries: true,
+	})
+
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err == nil {
+		t.Fatal("expected error for 429")
+	}
+	if hc.IsRateLimitError(err) {
+		t.Fatal("expected plain HTTPError (no budget configured), got RateLimitError")
+	}
+	if n := attempts.Load(); n != 1 {
+		t.Fatalf("expected 1 attempt with retries disabled, got %d", n)
 	}
 }
 

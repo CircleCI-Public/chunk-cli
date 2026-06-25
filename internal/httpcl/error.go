@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // HTTPError represents a non-2xx HTTP response.
@@ -44,4 +45,27 @@ func HasStatusCode(err error, codes ...int) bool {
 		}
 	}
 	return false
+}
+
+// RateLimitError is returned when the server sends a 429 with a Retry-After
+// value that, combined with elapsed retry time, exceeds the configured budget.
+type RateLimitError struct {
+	RetryAfter time.Duration
+	Budget     time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf(
+			"rate limited: server requests %s back-off, retry budget of %s exhausted — try again later",
+			e.RetryAfter.Round(time.Second), e.Budget.Round(time.Second),
+		)
+	}
+	return fmt.Sprintf("rate limited: retry budget of %s exhausted — try again later", e.Budget.Round(time.Second))
+}
+
+// IsRateLimitError reports whether err is a *RateLimitError.
+func IsRateLimitError(err error) bool {
+	var rle *RateLimitError
+	return errors.As(err, &rle)
 }
