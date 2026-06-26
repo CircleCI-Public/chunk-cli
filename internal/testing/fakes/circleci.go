@@ -181,11 +181,10 @@ func (f *FakeCircleCI) handleListSidecars(c *gin.Context) {
 	for _, s := range f.Sidecars {
 		if s.OrgID == orgID {
 			items = append(items, gin.H{
-				"attributes": gin.H{"name": s.Name, "image": s.Image},
+				"attributes": gin.H{"name": s.Name},
 				"id":         s.ID,
 				"references": gin.H{
-					"org":  gin.H{"id": s.OrgID},
-					"user": gin.H{"id": "user-123"},
+					"org": gin.H{"id": s.OrgID},
 				},
 			})
 		}
@@ -240,7 +239,7 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"data": gin.H{
-			"attributes": gin.H{"name": sidecar.Name, "image": sidecar.Image},
+			"attributes": gin.H{"name": sidecar.Name},
 			"id":         sidecar.ID,
 			"references": gin.H{
 				"org":  gin.H{"id": sidecar.OrgID},
@@ -284,7 +283,7 @@ func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
 			"attributes": gin.H{"url": f.AddKeyURL},
-			"id":         "key-123",
+			"id":         c.Param("id"),
 		},
 	})
 }
@@ -405,11 +404,20 @@ func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
 		return
 	}
 
+	sidecarID := body.Data.References.SidecarInstance.ID
+
 	f.mu.Lock()
 	f.snapshotCounter++
 	snap := Snapshot{
 		ID:   fmt.Sprintf("snap-%d", f.snapshotCounter),
 		Name: body.Data.Attributes.Name,
+	}
+	var orgID string
+	for _, s := range f.Sidecars {
+		if s.ID == sidecarID {
+			orgID = s.OrgID
+			break
+		}
 	}
 	f.Snapshots = append(f.Snapshots, snap)
 	f.mu.Unlock()
@@ -419,7 +427,7 @@ func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {
 			"attributes": gin.H{"name": snap.Name},
 			"id":         snap.ID,
 			"references": gin.H{
-				"org": gin.H{"id": "org-123"},
+				"org": gin.H{"id": orgID},
 			},
 		},
 	})
@@ -440,9 +448,13 @@ func (f *FakeCircleCI) handleGetSnapshot(c *gin.Context) {
 	id := c.Param("id")
 	for _, s := range f.Snapshots {
 		if s.ID == id {
+			attrs := gin.H{"name": s.Name}
+			if s.Tag != "" {
+				attrs["tag"] = s.Tag
+			}
 			c.JSON(http.StatusOK, gin.H{
 				"data": gin.H{
-					"attributes": gin.H{"name": s.Name, "tag": s.Tag},
+					"attributes": attrs,
 					"id":         s.ID,
 					"references": gin.H{
 						"org": gin.H{"id": s.OrgID},
@@ -469,9 +481,13 @@ func (f *FakeCircleCI) handleListSnapshots(c *gin.Context) {
 	var items []gin.H
 	for _, s := range f.Snapshots {
 		if s.OrgID == orgID {
+			attrs := gin.H{"name": s.Name, "is_system": false}
+			if s.Tag != "" {
+				attrs["tag"] = s.Tag
+			}
 			items = append(items, gin.H{
 				"id":         s.ID,
-				"attributes": gin.H{"name": s.Name, "tag": s.Tag},
+				"attributes": attrs,
 				"references": gin.H{"org": gin.H{"id": s.OrgID}},
 			})
 		}

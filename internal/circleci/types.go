@@ -48,22 +48,11 @@ type RunResponse struct {
 	PipelineID string `json:"pipelineId,omitempty"`
 }
 
-type CreateSidecarRequest struct {
-	OrgID string `json:"org_id"`
-	Name  string `json:"name"`
-	Image string `json:"image,omitempty"`
-}
-
 type Snapshot struct {
 	ID    string `json:"id"`
 	OrgID string `json:"org_id"`
 	Name  string `json:"name"`
 	Tag   string `json:"tag,omitempty"`
-}
-
-type CreateSnapshotRequest struct {
-	SidecarID string `json:"sidecar_id"`
-	Name      string `json:"name"`
 }
 
 type Command struct {
