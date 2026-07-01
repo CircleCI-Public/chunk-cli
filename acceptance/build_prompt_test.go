@@ -49,6 +49,7 @@ func TestBuildPromptHappyPath(t *testing.T) {
 		"--org", "test-org",
 		"--repos", "test-repo",
 		"--top", "2",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -138,6 +139,7 @@ func TestBuildPromptAutoDetectOrg(t *testing.T) {
 
 	result := binary.RunCLI(t, []string{
 		"build-prompt",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -349,6 +351,7 @@ func TestBuildPromptBotFiltering(t *testing.T) {
 		"--org", "test-org",
 		"--repos", "test-repo",
 		"--top", "5",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -398,6 +401,7 @@ func TestBuildPromptFooter(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -415,7 +419,7 @@ func TestBuildPromptFooter(t *testing.T) {
 	assert.Assert(t, strings.Contains(promptStr, "*Model:"),
 		"expected footer with Model, got: %s", promptStr)
 	assert.Assert(t, strings.Contains(promptStr, "*Source:"),
-		"expected footer with Source path, got: %s", promptStr)
+		"expected footer with Source path when --debug is set, got: %s", promptStr)
 }
 
 func TestBuildPromptSinceDateFormat(t *testing.T) {
@@ -443,6 +447,7 @@ func TestBuildPromptSinceDateFormat(t *testing.T) {
 		"--org", "test-org",
 		"--repos", "test-repo",
 		"--since", "2025-06-15",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -492,6 +497,7 @@ func TestBuildPromptTopNFiltering(t *testing.T) {
 		"--org", "test-org",
 		"--repos", "test-repo",
 		"--top", "2",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -575,6 +581,7 @@ func TestBuildPromptDefaultTop(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -721,6 +728,7 @@ func TestBuildPromptDefaultOutputPath(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--debug",
 	}, env, workDir)
 
 	if result.ExitCode != 0 {
@@ -761,6 +769,7 @@ func TestBuildPromptDefaultSince(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -849,6 +858,7 @@ func TestBuildPromptTopOne(t *testing.T) {
 		"--org", "test-org",
 		"--repos", "test-repo",
 		"--top", "1",
+		"--debug",
 		"--output", filepath.Join(workDir, "review-prompt.md"),
 	}, env, workDir)
 
@@ -1187,6 +1197,7 @@ func TestBuildPromptCreatesOutputDirectory(t *testing.T) {
 		"build-prompt",
 		"--org", "test-org",
 		"--repos", "test-repo",
+		"--debug",
 		"--output", outputPath,
 	}, env, workDir)
 

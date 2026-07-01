@@ -27,6 +27,7 @@ func newBuildPromptCmd() *cobra.Command {
 		analyzeModel       string
 		promptModel        string
 		includeAttribution bool
+		debugOutput        bool
 	)
 
 	cmd := &cobra.Command{
@@ -95,6 +96,7 @@ func newBuildPromptCmd() *cobra.Command {
 				AnalyzeModel:       analyzeModel,
 				PromptModel:        promptModel,
 				IncludeAttribution: includeAttribution,
+				DebugOutput:        debugOutput,
 				Status:             newStatusFunc(streams),
 			}
 
@@ -128,6 +130,7 @@ func newBuildPromptCmd() *cobra.Command {
 	cmd.Flags().StringVar(&analyzeModel, "analyze-model", "", "Model for analysis step")
 	cmd.Flags().StringVar(&promptModel, "prompt-model", "", "Model for prompt generation step")
 	cmd.Flags().BoolVar(&includeAttribution, "include-attribution", false, "Include reviewer attribution in output")
+	cmd.Flags().BoolVar(&debugOutput, "debug", false, "Write intermediate files (details JSON, analysis, PR rankings CSV) alongside the prompt for debugging")
 
 	return cmd
 }
