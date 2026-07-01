@@ -18,6 +18,7 @@ type Options struct {
 	AnalyzeModel       string
 	PromptModel        string
 	IncludeAttribution bool
+	DebugOutput        bool
 	Status             iostream.StatusFunc
 }
 

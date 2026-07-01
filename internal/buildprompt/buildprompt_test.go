@@ -69,7 +69,64 @@ func TestRunHappyPath(t *testing.T) {
 	}, ghClient, anthropicClient)
 	assert.NilError(t, err)
 
-	// All output files created
+	// Prompt file created with canned response and footer
+	paths := DeriveOutputPaths(outputPath)
+	promptBytes, err := os.ReadFile(paths.PromptPath)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(promptBytes), "Code Review Prompt"))
+	assert.Assert(t, strings.Contains(string(promptBytes), "*Generated:"))
+
+	// Intermediate files not written by default
+	for _, p := range []string{paths.DetailsPath, paths.AnalysisPath, paths.CSVPath} {
+		_, statErr := os.Stat(p)
+		assert.Assert(t, os.IsNotExist(statErr), "expected no intermediate file %s", p)
+	}
+
+	// Status callback has step progress
+	assert.Assert(t, strings.Contains(stderr.String(), "Step 1/3"))
+	assert.Assert(t, strings.Contains(stderr.String(), "Step 2/3"))
+	assert.Assert(t, strings.Contains(stderr.String(), "Step 3/3"))
+}
+
+func TestRunWithDebugOutput(t *testing.T) {
+	gh := fakes.NewFakeGitHub()
+	gh.SetOrgRepos(fixtures.OrgReposResponse("test-repo"))
+	gh.SetReviewActivity("test-repo", fixtures.ReviewActivityResponse())
+
+	fakeAnthropic := fakes.NewFakeAnthropic(
+		fixtures.AnalysisResponse,
+		fixtures.PromptResponse,
+	)
+
+	ghSrv := httptest.NewServer(gh)
+	defer ghSrv.Close()
+	anthropicSrv := httptest.NewServer(fakeAnthropic)
+	defer anthropicSrv.Close()
+
+	ghClient, err := ghpkg.New(ghpkg.Config{Token: "fake-token", BaseURL: ghSrv.URL})
+	assert.NilError(t, err)
+	anthropicClient, err := anthropic.New(anthropic.Config{APIKey: "sk-ant-fake", BaseURL: anthropicSrv.URL})
+	assert.NilError(t, err)
+
+	outDir := t.TempDir()
+	outputPath := filepath.Join(outDir, "prompt.md")
+
+	var stderr bytes.Buffer
+
+	err = Run(context.Background(), Options{
+		Org:          "test-org",
+		Repos:        []string{"test-repo"},
+		Top:          5,
+		Since:        time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		OutputPath:   outputPath,
+		AnalyzeModel: "claude-sonnet-4-6",
+		PromptModel:  "claude-sonnet-4-6",
+		DebugOutput:  true,
+		Status:       testStatus(&stderr),
+	}, ghClient, anthropicClient)
+	assert.NilError(t, err)
+
+	// All four files written when --debug is set
 	paths := DeriveOutputPaths(outputPath)
 	for _, p := range []string{paths.PromptPath, paths.DetailsPath, paths.AnalysisPath, paths.CSVPath} {
 		info, statErr := os.Stat(p)
@@ -85,21 +142,15 @@ func TestRunHappyPath(t *testing.T) {
 	assert.Equal(t, details.Metadata.Organization, "test-org")
 	assert.Assert(t, details.Metadata.TotalComments > 0)
 
-	// Prompt file contains canned response and footer
-	promptBytes, err := os.ReadFile(paths.PromptPath)
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(promptBytes), "Code Review Prompt"))
-	assert.Assert(t, strings.Contains(string(promptBytes), "*Generated:"))
-
-	// Analysis file contains canned analysis wrapped in report
+	// Analysis file contains report wrapper
 	analysisBytes, err := os.ReadFile(paths.AnalysisPath)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(analysisBytes), "Review Pattern Analysis"))
 
-	// Status callback has step progress
-	assert.Assert(t, strings.Contains(stderr.String(), "Step 1/3"))
-	assert.Assert(t, strings.Contains(stderr.String(), "Step 2/3"))
-	assert.Assert(t, strings.Contains(stderr.String(), "Step 3/3"))
+	// Prompt footer includes source path
+	promptBytes, err := os.ReadFile(paths.PromptPath)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(promptBytes), "*Source:"))
 }
 
 func TestRunNoReposFound(t *testing.T) {
@@ -251,13 +302,11 @@ func TestRunRetryOnTokenLimit(t *testing.T) {
 	// Verify retry messages appeared via status callback
 	assert.Assert(t, strings.Contains(stderr.String(), "Token limit exceeded"))
 
-	// Verify output files were created
+	// Verify prompt file was created
 	paths := DeriveOutputPaths(outputPath)
-	for _, p := range []string{paths.PromptPath, paths.DetailsPath, paths.AnalysisPath} {
-		info, statErr := os.Stat(p)
-		assert.NilError(t, statErr, "expected file %s", p)
-		assert.Assert(t, info.Size() > 0)
-	}
+	info, statErr := os.Stat(paths.PromptPath)
+	assert.NilError(t, statErr, "expected prompt file %s", paths.PromptPath)
+	assert.Assert(t, info.Size() > 0)
 }
 
 func TestRunMissingGithubToken(t *testing.T) {
