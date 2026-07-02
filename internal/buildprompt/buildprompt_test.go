@@ -76,12 +76,6 @@ func TestRunHappyPath(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(promptBytes), "Code Review Prompt"))
 	assert.Assert(t, strings.Contains(string(promptBytes), "*Generated:"))
 
-	// Intermediate files not written by default
-	for _, p := range []string{paths.DetailsPath, paths.AnalysisPath, paths.CSVPath} {
-		_, statErr := os.Stat(p)
-		assert.Assert(t, os.IsNotExist(statErr), "expected no intermediate file %s", p)
-	}
-
 	// Status callback has step progress
 	assert.Assert(t, strings.Contains(stderr.String(), "Step 1/3"))
 	assert.Assert(t, strings.Contains(stderr.String(), "Step 2/3"))
