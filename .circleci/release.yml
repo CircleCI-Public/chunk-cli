@@ -58,12 +58,16 @@ jobs:
       - attach_workspace:
           at: /tmp
       - run:
-          name: Install chunk via Homebrew
+          name: Install Homebrew
           command: |
             export NONINTERACTIVE=1
-            export HOMEBREW_NO_ASK=1
             /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
             echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> "$BASH_ENV"
+      - run:
+          name: Install chunk via Homebrew
+          command: |
+            export HOMEBREW_NO_ASK=1
+            export HOMEBREW_NO_AUTO_UPDATE=1
             source "$BASH_ENV"
             brew update
             brew trust circleci-public/circleci
