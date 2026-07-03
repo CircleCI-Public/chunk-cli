@@ -306,6 +306,7 @@ func TestTriggerRun(t *testing.T) {
 			DefinitionID:   "def-1",
 			CheckoutBranch: "main",
 			TriggerSource:  "cli",
+			TriggerType:    "api",
 			Parameters:     map[string]interface{}{"key": "val"},
 		})
 		if err != nil {

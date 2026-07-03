@@ -31,6 +31,7 @@ func TriggerRun(ctx context.Context, client *circleci.Client, cfg *RunConfig, pa
 		DefinitionID:       defID,
 		CheckoutBranch:     branch,
 		TriggerSource:      "chunk-cli",
+		TriggerType:        "api",
 		ChunkEnvironmentID: envID,
 		Parameters: map[string]interface{}{
 			"agent-type":             "prompt",
