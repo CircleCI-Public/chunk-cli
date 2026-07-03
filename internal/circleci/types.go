@@ -33,7 +33,8 @@ type TriggerRunRequest struct {
 	DefinitionID       string                 `json:"definition_id"`
 	CheckoutBranch     string                 `json:"checkout_branch"`
 	TriggerSource      string                 `json:"trigger_source"`
-	ChunkEnvironmentID *string                `json:"chunk_environment_id"`
+	TriggerType        string                 `json:"trigger_type"`
+	ChunkEnvironmentID *string                `json:"chunk_environment_id,omitempty"`
 	Parameters         map[string]interface{} `json:"parameters"`
 	Stats              *TriggerRunStats       `json:"stats,omitempty"`
 }
