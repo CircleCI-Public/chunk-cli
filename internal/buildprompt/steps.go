@@ -422,11 +422,14 @@ func formatReviewerData(groups []ReviewerGroup) string {
 
 // FormatMarkdownReport formats the analysis into a markdown report.
 func FormatMarkdownReport(analysis string, detailsPath string, totalComments int, reviewers []string) string {
+	source := ""
+	if detailsPath != "" {
+		source = fmt.Sprintf("**Source:** %s\n", detailsPath)
+	}
 	return fmt.Sprintf(`# Code Review Pattern Analysis
 
 **Generated:** %s
-**Source:** %s
-**Total Comments:** %d
+%s**Total Comments:** %d
 **Reviewers:** %s
 
 ---
@@ -436,5 +439,5 @@ func FormatMarkdownReport(analysis string, detailsPath string, totalComments int
 ---
 
 *This analysis was generated using Claude AI by analyzing code review patterns.*
-`, time.Now().Format(time.RFC3339), detailsPath, totalComments, strings.Join(reviewers, ", "), analysis)
+`, time.Now().Format(time.RFC3339), source, totalComments, strings.Join(reviewers, ", "), analysis)
 }

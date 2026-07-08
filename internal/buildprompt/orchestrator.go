@@ -125,17 +125,17 @@ func Run(ctx context.Context, opts Options, ghClient *github.Client, anthropicCl
 	aggregatedDetails := AggregateDetails(allDetails)
 	filteredDetails := FilterDetailsByReviewers(aggregatedDetails, topReviewers)
 
-	if err := WriteDetailsJSON(filteredDetails, paths.DetailsPath, opts.Org, opts.Since, len(repos)); err != nil {
-		return fmt.Errorf("write details JSON: %w", err)
+	if opts.DebugOutput {
+		if err := WriteDetailsJSON(filteredDetails, paths.DetailsPath, opts.Org, opts.Since, len(repos)); err != nil {
+			return fmt.Errorf("write details JSON: %w", err)
+		}
+		prRankings := AggregatePRRankings(filteredDetails)
+		if err := WritePRRankingsCSV(prRankings, paths.CSVPath); err != nil {
+			return fmt.Errorf("write PR rankings CSV: %w", err)
+		}
+		opts.Status(iostream.LevelDone, fmt.Sprintf("Details written to %s", paths.DetailsPath))
+		opts.Status(iostream.LevelDone, fmt.Sprintf("PR rankings written to %s", paths.CSVPath))
 	}
-
-	prRankings := AggregatePRRankings(filteredDetails)
-	if err := WritePRRankingsCSV(prRankings, paths.CSVPath); err != nil {
-		return fmt.Errorf("write PR rankings CSV: %w", err)
-	}
-
-	opts.Status(iostream.LevelDone, fmt.Sprintf("Details written to %s", paths.DetailsPath))
-	opts.Status(iostream.LevelDone, fmt.Sprintf("PR rankings written to %s", paths.CSVPath))
 
 	// --- Step 2: Analyze review patterns ---
 	opts.Status(iostream.LevelStep, "Step 2/3: Analyzing Review Patterns")
@@ -155,30 +155,34 @@ func Run(ctx context.Context, opts Options, ghClient *github.Client, anthropicCl
 		reviewerNames = append(reviewerNames, g.Reviewer)
 	}
 
-	report := FormatMarkdownReport(analysis, paths.DetailsPath, len(filteredDetails), reviewerNames)
+	detailsPath := ""
+	if opts.DebugOutput {
+		detailsPath = paths.DetailsPath
+	}
+	report := FormatMarkdownReport(analysis, detailsPath, len(filteredDetails), reviewerNames)
 
-	if err := os.MkdirAll(filepath.Dir(paths.AnalysisPath), 0o755); err != nil {
-		return err
+	if opts.DebugOutput {
+		if err := os.MkdirAll(filepath.Dir(paths.AnalysisPath), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(paths.AnalysisPath, []byte(report), 0o644); err != nil {
+			return fmt.Errorf("write analysis: %w", err)
+		}
+		opts.Status(iostream.LevelDone, fmt.Sprintf("Analysis written to %s", paths.AnalysisPath))
 	}
-	if err := os.WriteFile(paths.AnalysisPath, []byte(report), 0o644); err != nil {
-		return fmt.Errorf("write analysis: %w", err)
-	}
-	opts.Status(iostream.LevelDone, fmt.Sprintf("Analysis written to %s", paths.AnalysisPath))
 
 	// --- Step 3: Generate review prompt ---
 	opts.Status(iostream.LevelStep, "Step 3/3: Generating PR Review Prompt")
 
-	analysisContent, err := os.ReadFile(paths.AnalysisPath)
-	if err != nil {
-		return fmt.Errorf("read analysis: %w", err)
-	}
-
-	generatedPrompt, err := anthropicClient.GenerateReviewPrompt(ctx, string(analysisContent), opts.PromptModel, opts.IncludeAttribution)
+	generatedPrompt, err := anthropicClient.GenerateReviewPrompt(ctx, report, opts.PromptModel, opts.IncludeAttribution)
 	if err != nil {
 		return fmt.Errorf("generate prompt: %w", err)
 	}
 
-	footer := fmt.Sprintf("\n\n---\n\n*Generated: %s*\n*Source: %s*\n*Model: %s*", time.Now().Format(time.RFC3339), paths.DetailsPath, opts.PromptModel)
+	footer := fmt.Sprintf("\n\n---\n\n*Generated: %s*\n*Model: %s*", time.Now().Format(time.RFC3339), opts.PromptModel)
+	if opts.DebugOutput {
+		footer = fmt.Sprintf("\n\n---\n\n*Generated: %s*\n*Source: %s*\n*Model: %s*", time.Now().Format(time.RFC3339), paths.DetailsPath, opts.PromptModel)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(paths.PromptPath), 0o755); err != nil {
 		return err

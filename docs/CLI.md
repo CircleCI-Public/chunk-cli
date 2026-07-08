@@ -21,6 +21,7 @@ chunk
 │   --analyze-model <model>         # Model for analysis step
 │   --prompt-model <model>          # Model for prompt generation step
 │   --include-attribution           # Include reviewer attribution
+│   --debug                  # Write intermediate files (details JSON, analysis, PR rankings CSV) for debugging
 │
 ├── config
 │   ├── show                        # Display resolved configuration
@@ -142,6 +143,7 @@ chunk
   are omitted. If `--org` is provided explicitly, `--repos` is required.
 - `build-prompt --output` creates parent directories automatically.
 - `build-prompt --since` defaults to 3 months before the current date.
+- `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
 - `config set` user keys: `model`. Project keys (`.chunk/config.json`): `orgID`,
