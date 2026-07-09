@@ -17,6 +17,7 @@ func newPreviewCmd() *cobra.Command {
 	var envVarsFlag []string
 	var port int
 	var command string
+	var newSidecar bool
 
 	cmd := &cobra.Command{
 		Use:   "preview",
@@ -24,11 +25,16 @@ func newPreviewCmd() *cobra.Command {
 		Long: `Sync the current directory to a sidecar, start an app on it, and print a
 URL to preview it in a browser.
 
+By default, reuses the active sidecar if one is set (creating one first if
+not). Pass --new to always create a fresh sidecar instead of reusing the
+active one, e.g. to isolate this preview from other work.
+
 If no active sidecar is set, pass --org-id and --name to create one first.
 
 Example:
   chunk preview --port 3000 --command "npm run dev"
-  chunk preview --port 3000 --command "npm run dev" --name my-sidecar --org-id <org-id>`,
+  chunk preview --port 3000 --command "npm run dev" --name my-sidecar --org-id <org-id>
+  chunk preview --port 3000 --command "npm run dev" --new --org-id <org-id>`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 			status := newStatusFunc(streams)
@@ -43,9 +49,14 @@ Example:
 
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, status, streams)
+				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, newSidecar, status, streams)
 				if resolveErr != nil {
 					return resolveErr
+				}
+			} else if newSidecar {
+				return &userError{
+					msg:        "--sidecar-id and --new cannot be used together.",
+					suggestion: "Pass either --sidecar-id to target an existing sidecar or --new to create one.",
 				}
 			}
 
@@ -101,6 +112,7 @@ Example:
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to sync")
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
+	cmd.Flags().BoolVar(&newSidecar, "new", false, "Always create a new sidecar instead of reusing the active one")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")

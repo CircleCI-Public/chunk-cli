@@ -127,6 +127,7 @@ chunk
 ├── preview                         # Sync directory to a sidecar, start an app, and print a preview URL
 │   --dir <path>                    # Directory to sync (default: .)
 │   --sidecar-id <id>               # Sidecar ID (defaults to active sidecar)
+│   --new                           # Always create a new sidecar instead of reusing the active one
 │   --org-id <id>                   # Organization ID (used when creating a new sidecar)
 │   --name <name>                   # Sidecar name (used when creating a new sidecar)
 │   --identity-file <path>          # SSH identity file

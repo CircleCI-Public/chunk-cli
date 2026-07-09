@@ -28,3 +28,19 @@ func TestPreviewRequiresCommandWhenPortSet(t *testing.T) {
 	err := cmd.Execute()
 	assert.ErrorContains(t, err, `required flag(s) "command" not set`)
 }
+
+func TestPreviewSidecarIDAndNewConflict(t *testing.T) {
+	cmd := newPreviewCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"--port", "3000",
+		"--command", "npm run dev",
+		"--sidecar-id", "sb-1",
+		"--new",
+	})
+
+	err := cmd.Execute()
+	assert.ErrorContains(t, err, "--sidecar-id and --new cannot be used together")
+}

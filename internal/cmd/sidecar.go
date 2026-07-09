@@ -939,7 +939,7 @@ Example:
 			// Step 2: Resolve or create sidecar.
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, status, streams)
+				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, false, status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -1011,16 +1011,19 @@ func sidecarSetupResolveSidecar(
 	ctx context.Context,
 	client *circleci.Client,
 	orgID, name, workDir string,
+	forceNew bool,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
 ) (id string, err error) {
-	active, err := sidecar.LoadActive(ctx)
-	if err != nil {
-		return "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
-	}
-	if active != nil {
-		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
-		return active.SidecarID, nil
+	if !forceNew {
+		active, err := sidecar.LoadActive(ctx)
+		if err != nil {
+			return "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
+		}
+		if active != nil {
+			status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
+			return active.SidecarID, nil
+		}
 	}
 	if name == "" {
 		name = randomSidecarName()
