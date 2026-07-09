@@ -939,7 +939,7 @@ Example:
 			// Step 2: Resolve or create sidecar.
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, false, status, streams)
+				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, "", false, status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -1010,7 +1010,7 @@ Example:
 func sidecarSetupResolveSidecar(
 	ctx context.Context,
 	client *circleci.Client,
-	orgID, name, workDir string,
+	orgID, name, workDir, image string,
 	forceNew bool,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
@@ -1033,10 +1033,16 @@ func sidecarSetupResolveSidecar(
 		return "", err
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q...", name))
-	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, "")
+	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, image)
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
 			return "", authErr
+		}
+		var se *circleci.StatusError
+		if image != "" && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
+			return "", newUserError("Could not create the sidecar.").
+				withSuggestion("--image requires a snapshot ID. Create one with 'chunk sidecar snapshot create'.").
+				wrap(err)
 		}
 		return "", &userError{
 			msg:        "Could not create the sidecar.",

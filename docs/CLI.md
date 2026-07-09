@@ -130,6 +130,7 @@ chunk
 │   --new                           # Always create a new sidecar instead of reusing the active one
 │   --org-id <id>                   # Organization ID (used when creating a new sidecar)
 │   --name <name>                   # Sidecar name (used when creating a new sidecar)
+│   --image <snapshot-id>           # Snapshot to boot from (used when creating a new sidecar)
 │   --identity-file <path>          # SSH identity file
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)

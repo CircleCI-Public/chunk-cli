@@ -13,7 +13,7 @@ import (
 )
 
 func newPreviewCmd() *cobra.Command {
-	var dir, sidecarID, orgID, name, identityFile, envFile string
+	var dir, sidecarID, orgID, name, identityFile, envFile, image string
 	var envVarsFlag []string
 	var port int
 	var command string
@@ -30,11 +30,14 @@ not). Pass --new to always create a fresh sidecar instead of reusing the
 active one, e.g. to isolate this preview from other work.
 
 If no active sidecar is set, pass --org-id and --name to create one first.
+Pass --image to boot the new sidecar from a snapshot (see
+'chunk sidecar snapshot create') instead of a bare image, e.g. to skip
+reinstalling dependencies on every preview.
 
 Example:
   chunk preview --port 3000 --command "npm run dev"
   chunk preview --port 3000 --command "npm run dev" --name my-sidecar --org-id <org-id>
-  chunk preview --port 3000 --command "npm run dev" --new --org-id <org-id>`,
+  chunk preview --port 3000 --command "npm run dev" --new --org-id <org-id> --image <snapshot-id>`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 			status := newStatusFunc(streams)
@@ -49,7 +52,7 @@ Example:
 
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, newSidecar, status, streams)
+				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, image, newSidecar, status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -115,6 +118,7 @@ Example:
 	cmd.Flags().BoolVar(&newSidecar, "new", false, "Always create a new sidecar instead of reusing the active one")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (used when creating a new sidecar)")
+	cmd.Flags().StringVar(&image, "image", "", "Snapshot ID to boot from (used when creating a new sidecar; from 'chunk sidecar snapshot create')")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
