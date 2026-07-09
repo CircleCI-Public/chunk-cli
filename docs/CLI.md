@@ -124,6 +124,17 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
+├── preview                         # Sync directory to a sidecar, start an app, and print a preview URL
+│   --dir <path>                    # Directory to sync (default: .)
+│   --sidecar-id <id>               # Sidecar ID (defaults to active sidecar)
+│   --org-id <id>                   # Organization ID (used when creating a new sidecar)
+│   --name <name>                   # Sidecar name (used when creating a new sidecar)
+│   --identity-file <path>          # SSH identity file
+│   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
+│   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
+│   --port <n>                      # Port the app listens on (required)
+│   --command <cmd>                 # Command to start the app on the sidecar (required)
+│
 ├── hook                            # Manage chunk hook execution
 │   --project <path>                # Override project directory
 │   ├── disable                     # Disable chunk validate hooks

@@ -53,6 +53,7 @@ Configuration:
 	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newCompletionCmd())
 	rootCmd.AddCommand(newSidecarCmd())
+	rootCmd.AddCommand(newPreviewCmd())
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newHookCmd())
