@@ -360,6 +360,12 @@ func newAuthStatusCmd() *cobra.Command {
 			}
 			io.Println("")
 
+			io.Println(ui.Bold("Command requirements:"))
+			io.Println("  task run, task config, sidecar  → CircleCI token")
+			io.Println("  build-prompt                    → GitHub + Anthropic tokens")
+			io.Println("  validate --remote               → CircleCI token")
+			io.Println("")
+
 			if hasFailure {
 				return &userError{msg: "One or more credential checks failed.", errMsg: "auth status: validation failures"}
 			}
