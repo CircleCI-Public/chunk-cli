@@ -42,7 +42,7 @@ chunk
 │   │   --definition <name|uuid>    # Definition name or UUID (required)
 │   │   --prompt <text>             # Prompt text (required)
 │   │   --branch <branch>           # Branch override
-│   │   --new-branch                # Create a new branch
+│   │   --new-branch                # Create a new branch (default: true; pass =false to commit on checkout branch)
 │   │   --no-pipeline-as-tool       # Disable pipeline-as-tool mode
 │   │   --json                      # Output as JSON
 │   └── config                      # Set up .chunk/run.json for this repository
@@ -146,6 +146,8 @@ chunk
 - `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
+- `task run` creates a new branch by default (`create-new-branch: true`);
+  pass `--new-branch=false` to commit on the checkout branch instead.
 - `config set` user keys: `model`. Project keys (`.chunk/config.json`): `orgID`,
   `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
 - **Org ID resolution** for `sidecar create`, `sidecar list`, and other sidecar

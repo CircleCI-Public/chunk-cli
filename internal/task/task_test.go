@@ -276,6 +276,7 @@ func TestTriggerRunHappyPath(t *testing.T) {
 		Definition:     "dev",
 		Prompt:         "Fix tests",
 		PipelineAsTool: true,
+		NewBranch:      true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -324,9 +325,38 @@ func TestTriggerRunHappyPath(t *testing.T) {
 	if params["run-pipeline-as-a-tool"] != true {
 		t.Fatalf("run-pipeline-as-a-tool = %v, want true", params["run-pipeline-as-a-tool"])
 	}
-	if params["create-new-branch"] != false {
-		t.Fatalf("create-new-branch = %v, want false", params["create-new-branch"])
+	if params["create-new-branch"] != true {
+		t.Fatalf("create-new-branch = %v, want true", params["create-new-branch"])
 	}
+}
+
+func TestTriggerRunNoNewBranch(t *testing.T) {
+	cci, client := newFakeAndClient(t)
+	cfg := testCfg()
+
+	_, err := TriggerRun(context.Background(), client, cfg, RunParams{
+		Definition: "dev",
+		Prompt:     "Add feature",
+		NewBranch:  false,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, r := range cci.Recorder.AllRequests() {
+		if r.URL.Path == "/api/v2/agents/org/org-111/project/proj-222/runs" {
+			var body map[string]interface{}
+			if err := json.Unmarshal(r.Body, &body); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			params := body["parameters"].(map[string]interface{})
+			if params["create-new-branch"] != false {
+				t.Fatalf("create-new-branch = %v, want false", params["create-new-branch"])
+			}
+			return
+		}
+	}
+	t.Fatal("no request to trigger run endpoint")
 }
 
 func TestTriggerRunBranchOverride(t *testing.T) {
