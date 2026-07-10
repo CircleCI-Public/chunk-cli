@@ -49,6 +49,35 @@ type RunResponse struct {
 	PipelineID string `json:"pipelineId,omitempty"`
 }
 
+type Pipeline struct {
+	ID          string `json:"id"`
+	ProjectSlug string `json:"project_slug"`
+	Number      int    `json:"number"`
+	State       string `json:"state"`
+}
+
+type Workflow struct {
+	ID          string `json:"id"`
+	PipelineID  string `json:"pipeline_id"`
+	Name        string `json:"name"`
+	ProjectSlug string `json:"project_slug,omitempty"`
+	Status      string `json:"status"`
+}
+
+type WorkflowJob struct {
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+type workflowList struct {
+	Items []Workflow `json:"items"`
+}
+
+type workflowJobList struct {
+	Items []WorkflowJob `json:"items"`
+}
+
 type Snapshot struct {
 	ID    string `json:"id"`
 	OrgID string `json:"org_id"`

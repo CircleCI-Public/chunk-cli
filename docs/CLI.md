@@ -45,6 +45,12 @@ chunk
 │   │   --new-branch                # Create a new branch
 │   │   --no-pipeline-as-tool       # Disable pipeline-as-tool mode
 │   │   --json                      # Output as JSON
+│   ├── status <pipeline-id>        # Show pipeline/workflow status
+│   │   --json                      # Output as JSON
+│   ├── watch <pipeline-id>         # Poll until workflows complete
+│   │   --interval <duration>       # Polling interval (default: 5s)
+│   │   --timeout <duration>        # Max wait time (default: 30m)
+│   │   --json                      # Output final status as JSON
 │   └── config                      # Set up .chunk/run.json for this repository
 │       --force                     # Overwrite existing configuration without confirmation
 │
@@ -146,6 +152,11 @@ chunk
 - `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
+- `task status` and `task watch` take a CircleCI **pipeline ID** (printed by
+  `task run` as `Pipeline:`). They do not require a git repository or
+  `.chunk/run.json`.
+- `task watch` exits non-zero when a workflow fails, is canceled, or the
+  `--timeout` elapses.
 - `config set` user keys: `model`. Project keys (`.chunk/config.json`): `orgID`,
   `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
 - **Org ID resolution** for `sidecar create`, `sidecar list`, and other sidecar

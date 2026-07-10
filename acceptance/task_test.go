@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -774,4 +775,147 @@ func TestTaskRunCircleCIOrgType(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, body["definition_id"], "e2016e4e-0172-47b3-a4ea-a3ee1a592dba")
 	assert.Equal(t, body["checkout_branch"], "develop")
+}
+
+func TestTaskStatus(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "status", "pipeline-def-456",
+	}, env, t.TempDir())
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout, "chunk-task"),
+		"expected workflow name in output, got: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "running"),
+		"expected workflow status in output, got: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stdout, "app.circleci.com"),
+		"expected web URL in output, got: %s", result.Stdout)
+}
+
+func TestTaskWatchSuccess(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.PipelineWorkflows = []fakes.Workflow{
+		{ID: "workflow-abc-789", PipelineID: "pipeline-def-456", Name: "chunk-task", Status: "running"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cci.SetPipelineWorkflows([]fakes.Workflow{
+			{ID: "workflow-abc-789", PipelineID: "pipeline-def-456", Name: "chunk-task", Status: "success"},
+		})
+		cci.SetWorkflowJobs("workflow-abc-789", []fakes.WorkflowJob{{Name: "run-agent", Status: "success"}})
+	}()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "watch", "pipeline-def-456",
+		"--interval", "50ms",
+		"--timeout", "5s",
+	}, env, t.TempDir())
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout, "success"),
+		"expected success status in output, got: %s", result.Stdout)
+}
+
+func TestTaskStatusMissingToken(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	env.CircleToken = ""
+
+	result := binary.RunCLI(t, []string{
+		"task", "status", "pipeline-def-456",
+	}, env, t.TempDir())
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "CIRCLE_TOKEN") || strings.Contains(combined, "token"),
+		"expected token error message, got: %s", combined)
+}
+
+func TestTaskStatusJSON(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "status", "pipeline-def-456", "--json",
+	}, env, t.TempDir())
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	var body struct {
+		PipelineID string `json:"pipelineId"`
+		WebURL     string `json:"webUrl"`
+		Workflows  []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"workflows"`
+	}
+	err := json.Unmarshal([]byte(result.Stdout), &body)
+	assert.NilError(t, err)
+	assert.Equal(t, body.PipelineID, "pipeline-def-456")
+	assert.Assert(t, len(body.Workflows) > 0)
+	assert.Equal(t, body.Workflows[0].Name, "chunk-task")
+	assert.Assert(t, strings.Contains(body.WebURL, "app.circleci.com"))
+}
+
+func TestTaskWatchFailure(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.PipelineWorkflows = []fakes.Workflow{
+		{ID: "workflow-abc-789", PipelineID: "pipeline-def-456", Name: "chunk-task", Status: "failed"},
+	}
+	cci.WorkflowJobs = map[string][]fakes.WorkflowJob{
+		"workflow-abc-789": {{Name: "run-agent", Status: "failed"}},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "watch", "pipeline-def-456",
+		"--interval", "50ms",
+		"--timeout", "5s",
+	}, env, t.TempDir())
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code, stderr: %s", result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "failed") || strings.Contains(combined, "did not complete"),
+		"expected failure message, got: %s", combined)
+}
+
+func TestTaskRunIncludesURL(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeRunConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"task", "run",
+		"--definition", "dev",
+		"--prompt", "Fix the flaky test",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout, "app.circleci.com"),
+		"expected web URL in output, got: %s", result.Stdout)
 }
