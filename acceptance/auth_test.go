@@ -57,6 +57,12 @@ func TestAuthStatusNoKey(t *testing.T) {
 		"expected GitHub section, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "Not set"),
 		"expected Not set in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Command requirements"),
+		"expected command requirements section, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "task run"),
+		"expected task run in requirements, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "CircleCI token"),
+		"expected CircleCI token in requirements, got: %s", combined)
 }
 
 func TestAuthStatusInvalidKey(t *testing.T) {

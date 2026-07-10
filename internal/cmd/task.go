@@ -39,6 +39,7 @@ func newTaskRunCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Trigger a task run",
+		Long:  "Trigger a task run.\n\nRequires: CircleCI token (chunk auth set circleci)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -107,6 +108,7 @@ func newTaskConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Set up .chunk/run.json for this repository",
+		Long:  "Set up .chunk/run.json for this repository.\n\nRequires: CircleCI token (chunk auth set circleci)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			ctx := cmd.Context()
