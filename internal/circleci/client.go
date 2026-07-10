@@ -328,6 +328,42 @@ func (c *Client) TriggerRun(ctx context.Context, orgID, projectID string, body T
 	return &resp, nil
 }
 
+func (c *Client) GetPipeline(ctx context.Context, pipelineID string) (*Pipeline, error) {
+	var resp Pipeline
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/pipeline/%s",
+		hc.RouteParams(pipelineID),
+		hc.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return nil, mapErr("get pipeline", err)
+	}
+	return &resp, nil
+}
+
+func (c *Client) ListPipelineWorkflows(ctx context.Context, pipelineID string) ([]Workflow, error) {
+	var resp workflowList
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/pipeline/%s/workflow",
+		hc.RouteParams(pipelineID),
+		hc.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return nil, mapErr("list pipeline workflows", err)
+	}
+	return resp.Items, nil
+}
+
+func (c *Client) ListWorkflowJobs(ctx context.Context, workflowID string) ([]WorkflowJob, error) {
+	var resp workflowJobList
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/workflow/%s/job",
+		hc.RouteParams(workflowID),
+		hc.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return nil, mapErr("list workflow jobs", err)
+	}
+	return resp.Items, nil
+}
+
 func mapErr(op string, err error) error {
 	var he *hc.HTTPError
 	if !errors.As(err, &he) {

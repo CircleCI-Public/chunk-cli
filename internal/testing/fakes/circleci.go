@@ -44,6 +44,27 @@ type RunResponse struct {
 	PipelineID string `json:"pipelineId,omitempty"`
 }
 
+type Pipeline struct {
+	ID          string `json:"id"`
+	ProjectSlug string `json:"project_slug"`
+	Number      int    `json:"number"`
+	State       string `json:"state"`
+}
+
+type Workflow struct {
+	ID          string `json:"id"`
+	PipelineID  string `json:"pipeline_id"`
+	Name        string `json:"name"`
+	ProjectSlug string `json:"project_slug,omitempty"`
+	Status      string `json:"status"`
+}
+
+type WorkflowJob struct {
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
 type ExecResponse struct {
 	CommandID string `json:"command_id"`
 	PID       int    `json:"pid"`
@@ -67,17 +88,21 @@ type FakeCircleCI struct {
 	http.Handler
 	Recorder *recorder.RequestRecorder
 
-	mu              sync.RWMutex
-	snapshotCounter int
-	Collaborations  []Collaboration
-	Projects        []Project
-	Sidecars        []Sidecar
-	Snapshots       []Snapshot
-	RunResponse     *RunResponse
-	AddKeyURL       string
-	ExecResponse    *ExecResponse
-	CommandResponse *CommandResponse
-	RunStatusCode   int // override status code for trigger run endpoint
+	mu                 sync.RWMutex
+	snapshotCounter    int
+	Collaborations     []Collaboration
+	Projects           []Project
+	Sidecars           []Sidecar
+	Snapshots          []Snapshot
+	RunResponse        *RunResponse
+	AddKeyURL          string
+	ExecResponse       *ExecResponse
+	CommandResponse    *CommandResponse
+	RunStatusCode      int // override status code for trigger run endpoint
+	Pipeline           *Pipeline
+	PipelineWorkflows  []Workflow
+	WorkflowJobs       map[string][]WorkflowJob
+	PipelineStatusCode int
 
 	// Per-endpoint status code overrides for testing error responses.
 	CollaborationsStatusCode int // override for GET /me/collaborations
@@ -122,6 +147,11 @@ func NewFakeCircleCI() *FakeCircleCI {
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
+
+	// Pipeline / workflow endpoints
+	r.GET("/api/v2/pipeline/:pipeline_id", f.handleGetPipeline)
+	r.GET("/api/v2/pipeline/:pipeline_id/workflow", f.handleListPipelineWorkflows)
+	r.GET("/api/v2/workflow/:workflow_id/job", f.handleListWorkflowJobs)
 
 	return f
 }
@@ -521,4 +551,80 @@ func (f *FakeCircleCI) handleTriggerRun(c *gin.Context) {
 		RunID:      "run-abc-123",
 		PipelineID: "pipeline-def-456",
 	})
+}
+
+func (f *FakeCircleCI) handleGetPipeline(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	pipe := f.Pipeline
+	statusCode := f.PipelineStatusCode
+	f.mu.RUnlock()
+
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"message": "not found"})
+		return
+	}
+	if pipe == nil {
+		pipe = &Pipeline{
+			ID:          c.Param("pipeline_id"),
+			ProjectSlug: "gh/test-org/test-repo",
+			Number:      99,
+			State:       "created",
+		}
+	}
+	c.JSON(http.StatusOK, pipe)
+}
+
+func (f *FakeCircleCI) handleListPipelineWorkflows(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	wfs := f.PipelineWorkflows
+	f.mu.RUnlock()
+
+	if wfs == nil {
+		pipelineID := c.Param("pipeline_id")
+		wfs = []Workflow{
+			{
+				ID:         "workflow-abc-789",
+				PipelineID: pipelineID,
+				Name:       "chunk-task",
+				Status:     "running",
+			},
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": wfs})
+}
+
+func (f *FakeCircleCI) handleListWorkflowJobs(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	workflowID := c.Param("workflow_id")
+	f.mu.RLock()
+	jobs := f.WorkflowJobs[workflowID]
+	f.mu.RUnlock()
+
+	if jobs == nil {
+		jobs = []WorkflowJob{{Name: "run-agent", Status: "running"}}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": jobs})
+}
+
+func (f *FakeCircleCI) SetPipelineWorkflows(wfs []Workflow) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.PipelineWorkflows = wfs
+}
+
+func (f *FakeCircleCI) SetWorkflowJobs(workflowID string, jobs []WorkflowJob) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.WorkflowJobs == nil {
+		f.WorkflowJobs = make(map[string][]WorkflowJob)
+	}
+	f.WorkflowJobs[workflowID] = jobs
 }
