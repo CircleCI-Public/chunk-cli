@@ -361,6 +361,30 @@ func TestTriggerRun(t *testing.T) {
 	})
 }
 
+func TestGetProjectBySlug(t *testing.T) {
+	fake := fakes.NewFakeCircleCI()
+	fake.ProjectDetails = map[string]fakes.ProjectDetail{
+		"gh/acme/api": {ID: "proj-1", Slug: "gh/acme/api", Name: "api", OrgID: "org-1"},
+	}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		detail, err := client.GetProjectBySlug(ctx, "gh/acme/api")
+		assert.NilError(t, err)
+		assert.Equal(t, detail.ID, "proj-1")
+		assert.Equal(t, detail.OrgID, "org-1")
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		_, err := client.GetProjectBySlug(ctx, "gh/missing/repo")
+		assert.Assert(t, err != nil)
+	})
+}
+
 func TestAuthRequired(t *testing.T) {
 	// Verify that the fake returns 401 when no Circle-Token header is present.
 	fake := fakes.NewFakeCircleCI()

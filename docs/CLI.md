@@ -47,6 +47,7 @@ chunk
 │   │   --json                      # Output as JSON
 │   └── config                      # Set up .chunk/run.json for this repository
 │       --force                     # Overwrite existing configuration without confirmation
+│       --project <slug>            # Skip project picker (e.g. gh/org/repo)
 │
 ├── skill
 │   ├── install                     # Install all skills

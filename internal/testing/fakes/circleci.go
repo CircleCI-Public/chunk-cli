@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,13 @@ type Project struct {
 	VCSType  string `json:"vcs_type"`
 	Username string `json:"username"`
 	Reponame string `json:"reponame"`
+}
+
+type ProjectDetail struct {
+	ID    string `json:"id"`
+	Slug  string `json:"slug"`
+	Name  string `json:"name"`
+	OrgID string `json:"organization_id"`
 }
 
 type Sidecar struct {
@@ -71,6 +79,7 @@ type FakeCircleCI struct {
 	snapshotCounter int
 	Collaborations  []Collaboration
 	Projects        []Project
+	ProjectDetails  map[string]ProjectDetail // slug -> detail for GET /project/:slug
 	Sidecars        []Sidecar
 	Snapshots       []Snapshot
 	RunResponse     *RunResponse
@@ -90,6 +99,7 @@ type FakeCircleCI struct {
 	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
 	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
 	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
+	GetProjectStatusCode     int // override for GET /project/:slug
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -104,6 +114,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.GET("/api/v2/me", f.handleGetCurrentUser)
 	r.GET("/api/v2/me/collaborations", f.handleCollaborations)
 	r.GET("/api/v1.1/projects", f.handleProjects)
+	r.GET("/api/v2/project/*slug", f.handleGetProjectBySlug)
 
 	// Sidecar V3 endpoints
 	r.GET("/api/v3/sidecar/instances", f.handleListSidecars)
@@ -162,6 +173,25 @@ func (f *FakeCircleCI) handleProjects(c *gin.Context) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	c.JSON(http.StatusOK, f.Projects)
+}
+
+func (f *FakeCircleCI) handleGetProjectBySlug(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.GetProjectStatusCode != 0 {
+		c.JSON(f.GetProjectStatusCode, gin.H{"message": "API error"})
+		return
+	}
+	// gin wildcard includes leading slash: "/gh/org/repo"
+	slug := strings.TrimPrefix(c.Param("slug"), "/")
+	if detail, ok := f.ProjectDetails[slug]; ok {
+		c.JSON(http.StatusOK, detail)
+		return
+	}
+	c.JSON(http.StatusNotFound, gin.H{"message": "Project not found"})
 }
 
 func (f *FakeCircleCI) handleListSidecars(c *gin.Context) {

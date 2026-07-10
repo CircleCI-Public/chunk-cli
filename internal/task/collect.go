@@ -20,6 +20,12 @@ type Prompts struct {
 // ProjectDetailFunc fetches project detail by slug (e.g. "gh/org/repo").
 type ProjectDetailFunc func(ctx context.Context, slug string) (*circleci.ProjectDetail, error)
 
+// CollectOptions configures CollectRunConfig.
+type CollectOptions struct {
+	// ProjectSlug, when set (e.g. "gh/org/repo"), skips interactive project selection.
+	ProjectSlug string
+}
+
 // CollectRunConfig drives the interactive form to build a RunConfig.
 // It takes already-fetched projects and collaborations plus injected UI
 // and data-fetch dependencies so the logic is testable without a TTY.
@@ -31,8 +37,9 @@ func CollectRunConfig(
 	collabs []circleci.Collaboration,
 	fetchDetail ProjectDetailFunc,
 	envOrgID string,
+	opts CollectOptions,
 ) (*RunConfig, error) {
-	orgID, projectID, orgType, err := collectProject(ctx, prompts, projects, collabs, fetchDetail)
+	orgID, projectID, orgType, err := collectProject(ctx, prompts, projects, collabs, fetchDetail, opts.ProjectSlug)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +70,12 @@ func collectProject(
 	projects []circleci.FollowedProject,
 	collabs []circleci.Collaboration,
 	fetchDetail ProjectDetailFunc,
+	projectSlug string,
 ) (orgID, projectID, orgType string, err error) {
+	if projectSlug != "" {
+		return resolveProjectFromSlug(ctx, projectSlug, fetchDetail)
+	}
+
 	// Sort projects alphabetically
 	sort.Slice(projects, func(i, j int) bool {
 		a := fmt.Sprintf("%s/%s", projects[i].Username, projects[i].Reponame)
@@ -87,6 +99,24 @@ func collectProject(
 		return resolveProjectFromList(ctx, projects[idx], fetchDetail)
 	}
 	return collectManualProject(prompts, collabs)
+}
+
+func resolveProjectFromSlug(
+	ctx context.Context,
+	slug string,
+	fetchDetail ProjectDetailFunc,
+) (orgID, projectID, orgType string, err error) {
+	slug = strings.TrimSpace(slug)
+	parts := strings.Split(slug, "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", "", fmt.Errorf("invalid project slug %q: expected format <vcs>/<org>/<repo> (e.g. gh/circleci/chunk-cli)", slug)
+	}
+
+	detail, err := fetchDetail(ctx, slug)
+	if err != nil {
+		return "", "", "", fmt.Errorf("fetch project details for %s: %w", slug, err)
+	}
+	return detail.OrgID, detail.ID, MapVcsTypeToOrgType(parts[0]), nil
 }
 
 func resolveProjectFromList(

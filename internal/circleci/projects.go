@@ -28,7 +28,7 @@ type ProjectDetail struct {
 	ID    string `json:"id"`
 	Slug  string `json:"slug"`
 	Name  string `json:"name"`
-	OrgID string `json:"org_id"`
+	OrgID string `json:"organization_id"`
 }
 
 // ListFollowedProjects returns projects the user follows.
