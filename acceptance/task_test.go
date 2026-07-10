@@ -101,7 +101,7 @@ func TestTaskRunHappyPath(t *testing.T) {
 	params := body["parameters"].(map[string]interface{})
 	assert.Equal(t, params["custom-prompt"], "Fix the flaky test")
 	assert.Equal(t, params["run-pipeline-as-a-tool"], true)
-	assert.Equal(t, params["create-new-branch"], false)
+	assert.Equal(t, params["create-new-branch"], true)
 
 	// Verify auth header
 	assert.Assert(t, runReqs[0].Header.Get("Circle-Token") != "",
@@ -138,7 +138,7 @@ func TestTaskRunBranchOverride(t *testing.T) {
 	assert.Equal(t, body["checkout_branch"], "feature/my-branch")
 }
 
-func TestTaskRunNewBranch(t *testing.T) {
+func TestTaskRunNewBranchFalse(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -153,7 +153,7 @@ func TestTaskRunNewBranch(t *testing.T) {
 		"task", "run",
 		"--definition", "dev",
 		"--prompt", "Add types",
-		"--new-branch",
+		"--new-branch=false",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -167,7 +167,7 @@ func TestTaskRunNewBranch(t *testing.T) {
 	assert.NilError(t, err)
 
 	params := body["parameters"].(map[string]interface{})
-	assert.Equal(t, params["create-new-branch"], true)
+	assert.Equal(t, params["create-new-branch"], false)
 }
 
 func TestTaskRunPipelineAsToolDefault(t *testing.T) {

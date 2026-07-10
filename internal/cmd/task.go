@@ -92,7 +92,7 @@ func newTaskRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&definition, "definition", "", "Definition name or UUID")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text")
 	cmd.Flags().StringVar(&branch, "branch", "", "Checkout branch override")
-	cmd.Flags().BoolVar(&newBranch, "new-branch", false, "Create a new branch")
+	cmd.Flags().BoolVar(&newBranch, "new-branch", true, "Create a new branch (default true; pass =false to commit on the checkout branch)")
 	cmd.Flags().BoolVar(&noPipelineAsTool, "no-pipeline-as-tool", false, "Disable running pipeline as a tool")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
