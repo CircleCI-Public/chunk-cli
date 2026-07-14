@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"testing"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -102,7 +103,12 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	}
 
 	optedIn := config.IsTelemetryEnabled(cfg)
-	send := optedIn && writeKey != ""
+	// testing.Testing() guards against re-exec'ing os.Executable() as a
+	// "receive-telemetry" subprocess when the running binary is a `go test`
+	// binary: that binary has no such subcommand, so it silently re-runs its
+	// entire test suite instead, which can itself trigger more sends and
+	// spawn runaway recursive subprocesses.
+	send := optedIn && writeKey != "" && !testing.Testing()
 
 	var instanceID uuid.UUID
 	if optedIn {
