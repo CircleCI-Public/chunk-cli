@@ -39,7 +39,7 @@
     "repo": "chunk-cli"
   },
   "validation": {
-    "sidecarImage": "ac042eab-a45f-452e-a4f5-1d56e1b026bd"
+    "sidecarImage": "3c128769-f6a7-4219-8240-a3562d91ed17"
   },
   "environment": {
     "stack": "go",
