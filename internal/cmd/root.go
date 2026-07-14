@@ -11,12 +11,16 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 )
 
-// writeKey is the Segment write key for chunk-cli, injected at build time via
-// -ldflags in .goreleaser.yaml (see the SEGMENT_WRITE_KEY release env var).
-// It is empty in dev/local builds, which disables sending telemetry
-// regardless of the user's preference — so no events are ever sent from a
-// `task build` or `go run .` binary.
-var writeKey string
+// writeKey is the Segment write key for chunk-cli's anonymous usage
+// telemetry. Segment write keys are not secret — they only allow sending
+// events, not reading data — so checking it into git, as circleci-cli does
+// (see internal/cmd/root/root.go there), is safe.
+//
+// Empty until CircleCI's Segment workspace admin provisions a chunk-cli
+// source; telemetry.NewSender never sends with an empty key (see
+// setupTelemetry below), so this is a no-op until then. Once a key exists,
+// set it here — no other changes needed.
+const writeKey = ""
 
 func NewRootCmd(version string) *cobra.Command {
 	cobra.EnableTraverseRunHooks = true

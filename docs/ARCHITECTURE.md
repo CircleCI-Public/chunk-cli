@@ -226,12 +226,15 @@ values, file paths, or other PII.
 - `CHUNK_TELEMETRY_LOG=1` logs event payloads to stderr instead of (or
   alongside) sending them — useful for verifying what a command reports
   without touching the network.
-- The Segment write key (`cmd.writeKey`) is injected at build time via
-  `-ldflags` in `.goreleaser.yaml` from the `SEGMENT_WRITE_KEY` release env
-  var. It's empty in dev/local builds (`task build`, `go run .`), which
-  disables sending regardless of the user's preference — no `task build`
-  binary can ever send real telemetry. `CHUNK_TELEMETRY_LOG` still works
-  without a write key, since it never touches the network.
+- The Segment write key (`cmd.writeKey`) is a hardcoded constant, like
+  circleci-cli's — write keys are not secret, they can only send events, not
+  read data, so checking one into git is safe. It's currently `""` pending
+  Segment workspace access; `setupTelemetry` never sends with an empty key,
+  so telemetry stays a no-op until the real key is added. `CHUNK_TELEMETRY_LOG`
+  still works without a write key, since it never touches the network.
+- `setupTelemetry` also checks `testing.Testing()` before sending, so a real
+  write key committed to source still can't trigger sends (or the recursive
+  subprocess spawning that implies) from a `go test` binary.
 
 ## Pre-Commit Hooks
 
