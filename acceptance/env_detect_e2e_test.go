@@ -78,8 +78,9 @@ func resolveRepos(t *testing.T) []repoEntry {
 	return entries
 }
 
-// TestSidecarsBuildEndToEnd clones real open-source repos, runs
-// `chunk sidecars build` to generate a Dockerfile.test, builds the image,
+// TestEnvDetectEndToEnd clones real open-source repos, runs
+// `chunk env detect` to get the environment spec, renders a Dockerfile.test
+// with `chunk env detect --format dockerfile`, builds the image with docker,
 // and runs the tests inside the container.
 //
 // Enable with: CHUNK_ENV_BUILDER_ACCEPTANCE=1
@@ -88,7 +89,7 @@ func resolveRepos(t *testing.T) []repoEntry {
 // To run a specific subset, set CHUNK_SIDECAR_REPOS to a comma-separated list
 // of known nicknames (e.g. "flask,serde") or full Git URLs
 // (e.g. "https://github.com/owner/repo.git"), or a mix of both.
-func TestSidecarsBuildEndToEnd(t *testing.T) {
+func TestEnvDetectEndToEnd(t *testing.T) {
 	if os.Getenv("CHUNK_ENV_BUILDER_ACCEPTANCE") == "" {
 		t.Skip("set CHUNK_ENV_BUILDER_ACCEPTANCE=1 to run")
 	}
@@ -113,10 +114,10 @@ func TestSidecarsBuildEndToEnd(t *testing.T) {
 			}
 			e2eCloneRepo(t, repo.URL, repo.Ref, cloneDir)
 
-			t.Log("Running chunk sidecar env...")
+			t.Log("Running chunk env detect...")
 			envJSON, envStderr, exitCode := e2eRunEnv(t, cloneDir)
 			assert.Equal(t, exitCode, 0,
-				"chunk sidecar env failed\nstdout: %s\nstderr: %s", envJSON, envStderr)
+				"chunk env detect failed\nstdout: %s\nstderr: %s", envJSON, envStderr)
 			t.Log(envStderr)
 			t.Log(envJSON)
 
@@ -133,13 +134,18 @@ func TestSidecarsBuildEndToEnd(t *testing.T) {
 
 			tag := "chunk-sidecar-" + repo.Name + "-test"
 
-			t.Log("Building Docker image...")
-			buildOutput, buildExitCode := e2eRunBuild(t, cloneDir, tag, envJSON)
-			assert.Equal(t, buildExitCode, 0,
-				"chunk sidecar build failed\n%s", lastLines(buildOutput, 30))
+			t.Log("Rendering Dockerfile.test...")
+			renderOutput, renderExitCode := e2eRenderDockerfile(t, cloneDir)
+			assert.Equal(t, renderExitCode, 0,
+				"chunk env detect --format dockerfile failed\n%s", lastLines(renderOutput, 30))
 
 			_, err := os.Stat(cloneDir + "/Dockerfile.test")
 			assert.NilError(t, err, "Dockerfile.test not created")
+
+			t.Log("Building Docker image...")
+			buildOutput, buildExitCode := e2eDockerBuild(t, cloneDir, tag)
+			assert.Equal(t, buildExitCode, 0,
+				"docker build failed\n%s", lastLines(buildOutput, 30))
 
 			t.Log("Running tests in container...")
 			testsOK, testOutput := e2eDockerRun(t, tag)
@@ -196,7 +202,7 @@ func e2eRunEnv(t *testing.T, dir string) (stdout, stderr string, exitCode int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binary.Path(), "sidecar", "env", "--dir", dir)
+	cmd := exec.CommandContext(ctx, binary.Path(), "env", "detect", "--dir", dir)
 	cmd.Env = []string{
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
@@ -217,27 +223,55 @@ func e2eRunEnv(t *testing.T, dir string) (stdout, stderr string, exitCode int) {
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
-func e2eRunBuild(t *testing.T, dir, tag, envJSON string) (output string, exitCode int) {
+// e2eRenderDockerfile runs `chunk env detect --format dockerfile` to write
+// Dockerfile.test into dir. Detection runs separately from e2eRunEnv because
+// the two output formats (JSON for env.json, Dockerfile for docker build) are
+// distinct invocations of the same command.
+func e2eRenderDockerfile(t *testing.T, dir string) (output string, exitCode int) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binary.Path(), "sidecar", "build", "--dir", dir, "--tag", tag)
+	cmd := exec.CommandContext(ctx, binary.Path(), "env", "detect", "--format", "dockerfile", "--dir", dir)
 	cmd.Env = []string{
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
 		"NO_COLOR=1",
 	}
-	cmd.Stdin = strings.NewReader(envJSON)
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &outBuf
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return outBuf.String(), exitErr.ExitCode()
+		}
+		return outBuf.String(), 1
+	}
+	return outBuf.String(), 0
+}
 
-	err := cmd.Run()
-	if err != nil {
+func e2eDockerBuild(t *testing.T, dir, tag string) (output string, exitCode int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", "build", "-f", "Dockerfile.test", "-t", tag, ".")
+	cmd.Dir = dir
+	cmd.Env = []string{
+		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
+		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
+		"NO_COLOR=1",
+	}
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
 		}
 	}
 	return outBuf.String(), exitCode

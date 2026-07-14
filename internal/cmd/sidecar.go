@@ -2,13 +2,9 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
-	"regexp"
 
 	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/spf13/cobra"
@@ -44,8 +40,6 @@ func newSidecarCmd() *cobra.Command {
 	cmd.AddCommand(newSidecarAddSSHKeyCmd())
 	cmd.AddCommand(newSidecarSSHCmd())
 	cmd.AddCommand(newSidecarSyncCmd())
-	cmd.AddCommand(newSidecarEnvCmd())
-	cmd.AddCommand(newSidecarBuildCmd())
 	cmd.AddCommand(newSidecarUseCmd())
 	cmd.AddCommand(newSidecarCurrentCmd())
 	cmd.AddCommand(newSidecarForgetCmd())
@@ -570,153 +564,6 @@ func newSidecarForgetCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-var validDockerTag = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/\-]*(:[a-zA-Z0-9._\-]+)?$`)
-
-func newSidecarEnvCmd() *cobra.Command {
-	var dir string
-	var noSave bool
-
-	cmd := &cobra.Command{
-		Use:   "env",
-		Short: "Detect tech stack and print environment spec as JSON",
-		Long: `Analyse the repository at --dir, detect its tech stack, and print
-a JSON environment spec to stdout. Pipe this into 'chunk sidecar build' to
-generate a Dockerfile and build a test image.
-
-By default the detected environment is saved to .chunk/config.json so that
-'chunk sidecar setup' can reuse it without re-detecting. Pass --no-save to
-print only without writing.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			io := iostream.FromCmd(cmd)
-			if _, err := os.Stat(dir); err != nil {
-				return &userError{
-					msg:        fmt.Sprintf("Directory %q not found.", dir),
-					suggestion: "Check the --dir path and try again.",
-					err:        err,
-				}
-			}
-			io.ErrPrintf("Detecting environment in %s...\n", dir)
-
-			env, err := envbuilder.DetectEnvironment(cmd.Context(), dir)
-			if err != nil {
-				return &userError{
-					msg:        "Could not detect the environment.",
-					suggestion: "Check the directory contains a supported project.",
-					err:        err,
-				}
-			}
-
-			if !noSave {
-				cfg, loadErr := config.LoadProjectConfig(dir)
-				if loadErr != nil {
-					cfg = &config.ProjectConfig{}
-				}
-				cfg.Environment = env
-				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
-					io.ErrPrintf("Warning: could not save environment to config: %v\n", saveErr)
-				}
-			}
-
-			out, err := json.MarshalIndent(env, "", "  ")
-			if err != nil {
-				return &userError{msg: "Could not encode the environment spec.", err: err}
-			}
-			io.Printf("%s\n", out)
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to detect environment in")
-	cmd.Flags().BoolVar(&noSave, "no-save", false, "Print only without saving to .chunk/config.json")
-
-	return cmd
-}
-
-func newSidecarBuildCmd() *cobra.Command {
-	var dir, tag string
-
-	cmd := &cobra.Command{
-		Use:   "build",
-		Short: "Generate a Dockerfile from an environment spec and build a test image",
-		Long: `Read a JSON environment spec from stdin (produced by 'chunk sidecar env'),
-write Dockerfile.test to --dir, and build a Docker test image from it.
-
-Example:
-  chunk sidecar env --dir . | chunk sidecar build --dir .`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if tag != "" && !validDockerTag.MatchString(tag) {
-				return &userError{
-					msg:        fmt.Sprintf("Invalid image tag %q.", tag),
-					suggestion: "Use a tag like 'myapp:latest'.",
-					errMsg:     fmt.Sprintf("invalid docker tag %q", tag),
-				}
-			}
-
-			streams := iostream.FromCmd(cmd)
-
-			// Guard against interactive use: if stdin is a terminal (not a pipe),
-			// fail fast with a helpful message rather than blocking silently.
-			// Check cmd.InOrStdin() so injected readers (e.g. in tests) are not blocked.
-			if f, ok := cmd.InOrStdin().(*os.File); ok {
-				if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
-					return &userError{
-						msg:        "No input on stdin.",
-						suggestion: "Pipe a JSON env spec, for example: chunk sidecar env | chunk sidecar build",
-						errMsg:     "no input on stdin",
-					}
-				}
-			}
-
-			raw, err := io.ReadAll(cmd.InOrStdin())
-			if err != nil {
-				return &userError{msg: "Could not read the environment spec from stdin.", err: err}
-			}
-			var env envbuilder.Environment
-			if err := json.Unmarshal(raw, &env); err != nil {
-				return &userError{
-					msg:        "Invalid environment spec.",
-					suggestion: "Pipe the output of 'chunk sidecar env' into this command.",
-					err:        err,
-				}
-			}
-
-			dockerfilePath, err := envbuilder.WriteDockerfile(dir, &env)
-			if err != nil {
-				return &userError{
-					msg:        "Could not write the Dockerfile.",
-					suggestion: "Check directory permissions and try again.",
-					err:        err,
-				}
-			}
-			streams.ErrPrintf("Wrote %s\n", dockerfilePath)
-
-			streams.ErrPrintf("Building Docker image in %s...\n", dir)
-
-			args := []string{"build", "-f", "Dockerfile.test"}
-			if tag != "" {
-				args = append(args, "-t", tag)
-			}
-			args = append(args, ".")
-
-			dockerCmd := exec.CommandContext(cmd.Context(), "docker", args...)
-			dockerCmd.Dir = dir
-			dockerCmd.Stdout = streams.Out
-			dockerCmd.Stderr = streams.Err
-			if err := dockerCmd.Run(); err != nil {
-				return &userError{msg: "Docker build failed.", suggestion: "Check the build output above for details.", err: err}
-			}
-
-			streams.ErrPrintf("%s\n", ui.Success("Docker image built successfully"))
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to write Dockerfile.test and build from")
-	cmd.Flags().StringVar(&tag, "tag", "", "Image tag (e.g. myapp:latest)")
-
-	return cmd
 }
 
 func newSidecarSnapshotCmd() *cobra.Command {
