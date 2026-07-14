@@ -119,9 +119,9 @@ chunk
 │           --json                  # Output as JSON
 │
 ├── env                             # Detect and render project environments
-│   └── detect                      # Detect tech stack; output env spec (JSON) or Dockerfile
+│   └── init                        # Detect tech stack; write Dockerfile.test (default) or JSON spec
 │       --dir <path>                # Directory to analyse (default: .)
-│       --format <fmt>              # Output format: json (default) or dockerfile
+│       --format <fmt>              # Output format: dockerfile (default) or json
 │       --no-save                   # Do not save the detected spec to .chunk/config.json
 │
 ├── hook                            # Manage chunk hook execution

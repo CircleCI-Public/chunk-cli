@@ -25,44 +25,43 @@ func newEnvCmd() *cobra.Command {
 		Long: `Detect a repository's tech stack and emit a build environment.
 
 Detection produces a spec that describes the stack, image, and setup steps.
-'env detect' prints that spec as JSON by default, or writes a Dockerfile with
---format dockerfile. The spec is the source of truth — the Dockerfile is one
-rendering of it.
+'env init' writes Dockerfile.test to --dir by default, or prints the spec as
+JSON with --format json. The spec is the source of truth — the Dockerfile is
+one rendering of it.
 
 Example:
-  chunk env detect --format dockerfile --dir .`,
+  chunk env init --dir .`,
 		RunE:               groupRunE,
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 
-	cmd.AddCommand(newEnvDetectCmd())
+	cmd.AddCommand(newEnvInitCmd())
 
 	return cmd
 }
 
-func newEnvDetectCmd() *cobra.Command {
+func newEnvInitCmd() *cobra.Command {
 	var dir string
 	var noSave bool
 	var format string
 
 	cmd := &cobra.Command{
-		Use:   "detect",
-		Short: "Detect tech stack and output an environment spec or Dockerfile",
-		Long: `Analyse the repository at --dir and detect its tech stack.
+		Use:   "init",
+		Short: "Detect tech stack and write Dockerfile.test (or output a JSON env spec)",
+		Long: `Analyse the repository at --dir, detect its tech stack, and write
+Dockerfile.test to --dir. The path to the written file is printed to stdout.
 
-By default a JSON environment spec is printed to stdout. Pass
---format dockerfile to instead write Dockerfile.test to --dir; its path is
-printed to stdout.
+Pass --format json to print the environment spec to stdout instead.
 
 The detected environment is saved to .chunk/config.json so that
 'chunk sidecar setup' can reuse it without re-detecting. Pass --no-save to
 skip writing the config.
 
 Examples:
-  chunk env detect                          # print the env spec as JSON
-  chunk env detect --format dockerfile      # write Dockerfile.test to --dir
-  chunk env detect --format dockerfile --dir .
-  docker build -f Dockerfile.test -t myapp:test .`,
+  chunk env init                            # write Dockerfile.test to --dir
+  chunk env init --dir .
+  docker build -f Dockerfile.test -t myapp:test .
+  chunk env init --format json              # print the env spec as JSON`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 
@@ -127,8 +126,8 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&dir, "dir", ".", "Directory to detect environment in")
-	cmd.Flags().BoolVar(&noSave, "no-save", false, "Print only without saving to .chunk/config.json")
-	cmd.Flags().StringVar(&format, "format", envFormatJSON, "Output format: json (env spec) or dockerfile")
+	cmd.Flags().BoolVar(&noSave, "no-save", false, "Skip saving the detected environment to .chunk/config.json")
+	cmd.Flags().StringVar(&format, "format", envFormatDockerfile, "Output format: dockerfile (write Dockerfile.test) or json (env spec)")
 
 	return cmd
 }

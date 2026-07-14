@@ -127,45 +127,15 @@ func TestSidecarExecAPIError(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for 500 response")
 }
 
-// --- env detect error paths ---
+// --- env init paths ---
 
-func TestEnvDetectEmptyDir(t *testing.T) {
+func TestEnvInitDefault(t *testing.T) {
 	dir := t.TempDir()
 
 	env := testenv.NewTestEnv(t)
+	// Default output is dockerfile: writes Dockerfile.test, prints path to stdout.
 	result := binary.RunCLI(t, []string{
-		"env", "detect",
-		"--dir", dir,
-	}, env, env.HomeDir)
-
-	// Empty dir should still succeed (unknown stack) and produce JSON on stdout.
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-
-	// Verify JSON output on stdout
-	var envOutput map[string]interface{}
-	err := json.Unmarshal([]byte(result.Stdout), &envOutput)
-	assert.NilError(t, err, "expected valid JSON on stdout, got: %s", result.Stdout)
-}
-
-func TestEnvDetectNonexistentDir(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	result := binary.RunCLI(t, []string{
-		"env", "detect",
-		"--dir", "/tmp/nonexistent-dir-xyz789",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for nonexistent dir")
-}
-
-func TestEnvDetectDockerfileFormat(t *testing.T) {
-	dir := t.TempDir()
-
-	env := testenv.NewTestEnv(t)
-	// --format dockerfile detects from --dir and writes Dockerfile.test,
-	// printing its path to stdout — no stdin spec required.
-	result := binary.RunCLI(t, []string{
-		"env", "detect",
-		"--format", "dockerfile",
+		"env", "init",
 		"--dir", dir,
 		"--no-save",
 	}, env, env.HomeDir)
@@ -175,12 +145,40 @@ func TestEnvDetectDockerfileFormat(t *testing.T) {
 		"expected Dockerfile.test path on stdout, got: %s", result.Stdout)
 }
 
-func TestEnvDetectInvalidFormat(t *testing.T) {
+func TestEnvInitJSONFormat(t *testing.T) {
 	dir := t.TempDir()
 
 	env := testenv.NewTestEnv(t)
 	result := binary.RunCLI(t, []string{
-		"env", "detect",
+		"env", "init",
+		"--format", "json",
+		"--dir", dir,
+	}, env, env.HomeDir)
+
+	// Empty dir should still succeed (unknown stack) and produce JSON on stdout.
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	var envOutput map[string]interface{}
+	err := json.Unmarshal([]byte(result.Stdout), &envOutput)
+	assert.NilError(t, err, "expected valid JSON on stdout, got: %s", result.Stdout)
+}
+
+func TestEnvInitNonexistentDir(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLI(t, []string{
+		"env", "init",
+		"--dir", "/tmp/nonexistent-dir-xyz789",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for nonexistent dir")
+}
+
+func TestEnvInitInvalidFormat(t *testing.T) {
+	dir := t.TempDir()
+
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLI(t, []string{
+		"env", "init",
 		"--format", "bogus",
 		"--dir", dir,
 	}, env, env.HomeDir)

@@ -83,8 +83,8 @@ Auto-detect your tech stack, install dependencies, and snapshot the result so fu
 # Detect environment, run install steps, and create a snapshot
 chunk sidecar setup --name my-sidecar
 
-# Or render a Dockerfile from the detected environment, then build it yourself
-chunk env detect --format dockerfile --dir .
+# Or generate a Dockerfile from the detected environment, then build it yourself
+chunk env init --dir .
 docker build -f Dockerfile.test -t myapp:test .
 ```
 

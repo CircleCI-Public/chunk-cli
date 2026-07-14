@@ -78,9 +78,9 @@ func resolveRepos(t *testing.T) []repoEntry {
 	return entries
 }
 
-// TestEnvDetectEndToEnd clones real open-source repos, runs
-// `chunk env detect` to get the environment spec, renders a Dockerfile.test
-// with `chunk env detect --format dockerfile`, builds the image with docker,
+// TestEnvInitEndToEnd clones real open-source repos, runs
+// `chunk env init --format json` to get the environment spec, writes
+// Dockerfile.test with `chunk env init`, builds the image with docker,
 // and runs the tests inside the container.
 //
 // Enable with: CHUNK_ENV_BUILDER_ACCEPTANCE=1
@@ -89,7 +89,7 @@ func resolveRepos(t *testing.T) []repoEntry {
 // To run a specific subset, set CHUNK_SIDECAR_REPOS to a comma-separated list
 // of known nicknames (e.g. "flask,serde") or full Git URLs
 // (e.g. "https://github.com/owner/repo.git"), or a mix of both.
-func TestEnvDetectEndToEnd(t *testing.T) {
+func TestEnvInitEndToEnd(t *testing.T) {
 	if os.Getenv("CHUNK_ENV_BUILDER_ACCEPTANCE") == "" {
 		t.Skip("set CHUNK_ENV_BUILDER_ACCEPTANCE=1 to run")
 	}
@@ -114,10 +114,10 @@ func TestEnvDetectEndToEnd(t *testing.T) {
 			}
 			e2eCloneRepo(t, repo.URL, repo.Ref, cloneDir)
 
-			t.Log("Running chunk env detect...")
+			t.Log("Running chunk env init --format json...")
 			envJSON, envStderr, exitCode := e2eRunEnv(t, cloneDir)
 			assert.Equal(t, exitCode, 0,
-				"chunk env detect failed\nstdout: %s\nstderr: %s", envJSON, envStderr)
+				"chunk env init --format json failed\nstdout: %s\nstderr: %s", envJSON, envStderr)
 			t.Log(envStderr)
 			t.Log(envJSON)
 
@@ -134,10 +134,10 @@ func TestEnvDetectEndToEnd(t *testing.T) {
 
 			tag := "chunk-sidecar-" + repo.Name + "-test"
 
-			t.Log("Rendering Dockerfile.test...")
-			renderOutput, renderExitCode := e2eRenderDockerfile(t, cloneDir)
+			t.Log("Running chunk env init (writes Dockerfile.test)...")
+			renderOutput, renderExitCode := e2eInitDockerfile(t, cloneDir)
 			assert.Equal(t, renderExitCode, 0,
-				"chunk env detect --format dockerfile failed\n%s", lastLines(renderOutput, 30))
+				"chunk env init failed\n%s", lastLines(renderOutput, 30))
 
 			_, err := os.Stat(cloneDir + "/Dockerfile.test")
 			assert.NilError(t, err, "Dockerfile.test not created")
@@ -202,7 +202,7 @@ func e2eRunEnv(t *testing.T, dir string) (stdout, stderr string, exitCode int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binary.Path(), "env", "detect", "--dir", dir)
+	cmd := exec.CommandContext(ctx, binary.Path(), "env", "init", "--format", "json", "--dir", dir)
 	cmd.Env = []string{
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
@@ -223,16 +223,15 @@ func e2eRunEnv(t *testing.T, dir string) (stdout, stderr string, exitCode int) {
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
-// e2eRenderDockerfile runs `chunk env detect --format dockerfile` to write
-// Dockerfile.test into dir. Detection runs separately from e2eRunEnv because
-// the two output formats (JSON for env.json, Dockerfile for docker build) are
-// distinct invocations of the same command.
-func e2eRenderDockerfile(t *testing.T, dir string) (output string, exitCode int) {
+// e2eInitDockerfile runs `chunk env init` (default dockerfile output) to write
+// Dockerfile.test into dir. Runs separately from e2eRunEnv because the JSON
+// step uses --format json and the dockerfile step uses the default.
+func e2eInitDockerfile(t *testing.T, dir string) (output string, exitCode int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binary.Path(), "env", "detect", "--format", "dockerfile", "--dir", dir)
+	cmd := exec.CommandContext(ctx, binary.Path(), "env", "init", "--dir", dir)
 	cmd.Env = []string{
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),

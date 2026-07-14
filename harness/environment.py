@@ -176,7 +176,7 @@ def _run_test(repo: TargetRepo, cache_dir: Path, timeout: int, extra_env: dict |
     }
     result = subprocess.run(
         ["go", "test", "-v", "-count=1", f"-timeout={timeout}s",
-         "-run", "TestEnvDetectEndToEnd", "./acceptance/"],
+         "-run", "TestEnvInitEndToEnd", "./acceptance/"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
