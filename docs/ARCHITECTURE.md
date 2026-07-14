@@ -38,6 +38,8 @@ chunk-cli/
     ├── secrets/               # Secret resolution (env var value expansion)
     ├── session/               # Session ID tracking for Stop hook context
     ├── settings/              # .claude/settings.json build and merge
+    ├── telemetry/             # Anonymous usage telemetry (Segment)
+    │   └── receiver/          # Forwards buffered events to Segment (used by receive-telemetry)
     ├── testing/recorder/      # HTTP recorder for tests
     ├── tui/                   # Terminal UI components (confirm, input, select)
     ├── ui/                    # Colors, formatting, spinner
@@ -197,6 +199,36 @@ in `config.Resolve` and makes clients testable.
 | `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar | Per-project state directory (default: `~/.local/share`) |
+| `CHUNK_NO_TELEMETRY` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
+| `NO_ANALYTICS` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
+| `DO_NOT_TRACK` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
+| `CI` | telemetry | Also disables anonymous usage telemetry (set by most CI systems) |
+| `CHUNK_TELEMETRY_LOG` | telemetry | Log telemetry events to stderr instead of (or alongside) sending them |
+
+## Telemetry (`internal/telemetry/`)
+
+Modeled on circleci-cli's `internal/telemetry` package. Every command reports
+a single `command_invocation` event containing the command path and the
+names (never values) of flags the user set — no flag values, argument
+values, file paths, or other PII.
+
+- `internal/cmd/root.go`'s `setupTelemetry` resolves the user's preference
+  (opt-out env var → `noTelemetry` config field, first match wins) and
+  attaches a `telemetry.Sender` to the command's context;
+  `RecordForSubcommands` wraps every subcommand's `RunE` so it reports its
+  event automatically, with no per-command changes needed.
+- Events are never sent inline. `Sender.Close()` marshals buffered events to
+  JSON and hands them to a detached `chunk receive-telemetry` subprocess
+  (see `internal/telemetry/delegate.go` and the hidden command in
+  `internal/cmd/receivetelemetry.go`), so a slow or unreachable Segment
+  endpoint never delays CLI exit. The subprocess forwards them via
+  `internal/telemetry/receiver`.
+- `CHUNK_TELEMETRY_LOG=1` logs event payloads to stderr instead of (or
+  alongside) sending them — useful for verifying what a command reports
+  without touching the network.
+- The Segment write key (`telemetry.SegmentWriteKey`) is hardcoded, not
+  injected at build time: Segment write keys can only send events, never
+  read data, so they aren't secret.
 
 ## Pre-Commit Hooks
 

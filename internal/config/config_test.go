@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"gotest.tools/v3/assert"
 )
 
@@ -343,6 +344,66 @@ func TestResolve_ModelFromConfig(t *testing.T) {
 func TestValidConfigKeys(t *testing.T) {
 	assert.Assert(t, ValidConfigKeys["model"])
 	assert.Assert(t, ValidConfigKeys["useSSHIdentityFile"])
+	assert.Assert(t, ValidConfigKeys["telemetry"])
 	assert.Assert(t, !ValidConfigKeys["anthropicAPIKey"])
 	assert.Assert(t, !ValidConfigKeys["badkey"])
+}
+
+// --- IsTelemetryEnabled ---
+
+// clearTelemetryEnv clears every opt-out env var so tests aren't affected by
+// the ambient environment (e.g. CI, which is set on every CircleCI job
+// including the one running this test suite).
+func clearTelemetryEnv(t *testing.T) {
+	t.Helper()
+	for _, e := range noTelemetryEnvVars {
+		t.Setenv(e, "")
+	}
+}
+
+func TestIsTelemetryEnabled_DefaultTrue(t *testing.T) {
+	clearTelemetryEnv(t)
+	assert.Assert(t, IsTelemetryEnabled(UserConfig{}))
+}
+
+func TestIsTelemetryEnabled_ConfigPreferenceDisables(t *testing.T) {
+	clearTelemetryEnv(t)
+	assert.Assert(t, !IsTelemetryEnabled(UserConfig{NoTelemetry: true}))
+}
+
+func TestIsTelemetryEnabled_EnvVarsDisable(t *testing.T) {
+	for _, e := range noTelemetryEnvVars {
+		t.Run(e, func(t *testing.T) {
+			clearTelemetryEnv(t)
+			t.Setenv(e, "1")
+			assert.Assert(t, !IsTelemetryEnabled(UserConfig{}))
+		})
+	}
+}
+
+// --- EnsureInstanceID ---
+
+func TestEnsureInstanceID_GeneratesAndPersists(t *testing.T) {
+	setupTempConfig(t)
+
+	id1, err := EnsureInstanceID()
+	assert.NilError(t, err)
+	assert.Assert(t, id1 != uuid.Nil)
+
+	id2, err := EnsureInstanceID()
+	assert.NilError(t, err)
+	assert.Equal(t, id1, id2)
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.InstanceID, id1.String())
+}
+
+func TestEnsureInstanceID_InvalidStoredValueRegenerates(t *testing.T) {
+	setupTempConfig(t)
+	assert.NilError(t, Save(UserConfig{InstanceID: "not-a-uuid"}))
+
+	id, err := EnsureInstanceID()
+	assert.NilError(t, err)
+	assert.Assert(t, id != uuid.Nil)
 }

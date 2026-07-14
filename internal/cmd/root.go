@@ -1,7 +1,13 @@
 package cmd
 
 import (
+	"os"
+
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 )
 
 func NewRootCmd(version string) *cobra.Command {
@@ -14,7 +20,10 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			return nil
+			return setupTelemetry(cmd, version)
+		},
+		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
+			return telemetry.FromContext(cmd.Context()).Close()
 		},
 	}
 
@@ -38,7 +47,10 @@ Environment Variables:
   GITHUB_API_URL                  GitHub API URL [default: https://api.github.com]
   SSH_AUTH_SOCK                   SSH agent socket for sidecar key auth
   NO_COLOR                        Disable colored output
-  CI                              Disable interactive prompts (set by most CI systems)
+  CI                              Disable interactive prompts (set by most CI systems); also disables telemetry
+  CHUNK_NO_TELEMETRY               Disable anonymous usage telemetry (any non-empty value)
+  NO_ANALYTICS                    Disable anonymous usage telemetry (any non-empty value)
+  DO_NOT_TRACK                    Disable anonymous usage telemetry (any non-empty value)
 
 Configuration:
   ~/.config/chunk/config.json     User credentials and settings ($XDG_CONFIG_HOME/chunk/config.json)
@@ -57,11 +69,60 @@ Configuration:
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
+	rootCmd.AddCommand(newReceiveTelemetryCmd())
 
 	rootCmd.AddCommand(newCommandsCmd())
 
 	rootCmd.PersistentFlags().Bool("insecure-storage", false, "do not use the system's secure storage for storing tokens")
 	_ = rootCmd.PersistentFlags().MarkHidden("insecure-storage")
 
+	telemetry.RecordForSubcommands(rootCmd)
+
 	return rootCmd
+}
+
+// setupTelemetry resolves the user's telemetry preference and attaches a
+// telemetry.Sender to cmd's context so RecordNow can report a
+// command_invocation event once the command finishes.
+func setupTelemetry(cmd *cobra.Command, version string) error {
+	if telemetry.IsTelemetryDisabled(cmd) {
+		return nil
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	enabled := config.IsTelemetryEnabled(cfg)
+
+	var instanceID uuid.UUID
+	if enabled {
+		instanceID, err = config.EnsureInstanceID()
+		if err != nil {
+			return err
+		}
+	}
+
+	executable, err := os.Executable()
+	if err != nil {
+		executable = "chunk"
+	}
+
+	tc, err := telemetry.NewSender(telemetry.Config{
+		Send:     enabled,
+		Log:      enabled && os.Getenv("CHUNK_TELEMETRY_LOG") != "",
+		WriteKey: telemetry.SegmentWriteKey,
+		Binary:   executable,
+		Metadata: telemetry.Meta{
+			Version:    version,
+			InstanceID: instanceID,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	cmd.SetContext(telemetry.WithSender(cmd.Context(), tc))
+	return nil
 }

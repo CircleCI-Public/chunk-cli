@@ -43,6 +43,12 @@ func newConfigShowCmd() *cobra.Command {
 			}
 			orgID, orgIDSource := config.ResolveOrgID(workDir)
 
+			userCfg, userCfgErr := config.Load()
+			if userCfgErr != nil {
+				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", userCfgErr)))
+			}
+			telemetryEnabled := config.IsTelemetryEnabled(userCfg)
+
 			if jsonOut {
 				type configEntry struct {
 					Value  string `json:"value"`
@@ -55,6 +61,7 @@ func newConfigShowCmd() *cobra.Command {
 					GitHubToken        configEntry `json:"gitHubToken"`
 					OrgID              configEntry `json:"orgID"`
 					UseSSHIdentityFile bool        `json:"useSSHIdentityFile"`
+					Telemetry          bool        `json:"telemetry"`
 				}
 				maskOrEmpty := func(key string) string {
 					if key == "" {
@@ -69,6 +76,7 @@ func newConfigShowCmd() *cobra.Command {
 					GitHubToken:        configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
 					OrgID:              configEntry{Value: orgID, Source: orgIDSource},
 					UseSSHIdentityFile: rc.UseSSHIdentityFile,
+					Telemetry:          telemetryEnabled,
 				})
 			}
 
@@ -100,6 +108,7 @@ func newConfigShowCmd() *cobra.Command {
 			}
 
 			io.Printf("%s %v\n", ui.Label("useSSHIdentityFile:", w), rc.UseSSHIdentityFile)
+			io.Printf("%s %v\n", ui.Label("telemetry:", w), telemetryEnabled)
 
 			return nil
 		},
@@ -114,7 +123,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, useSSHIdentityFile\nProject keys: orgID, validation.sidecarImage",
+		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, useSSHIdentityFile, telemetry\nProject keys: orgID, validation.sidecarImage",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -150,7 +159,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, useSSHIdentityFile, orgID, validation.sidecarImage.",
+					detail: "Supported keys: model, useSSHIdentityFile, telemetry, orgID, validation.sidecarImage.",
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}
@@ -172,6 +181,19 @@ func newConfigSetCmd() *cobra.Command {
 				default:
 					return &userError{
 						msg:    fmt.Sprintf("Invalid value %q for useSSHIdentityFile.", value),
+						detail: "Accepted values: true, false.",
+						errMsg: fmt.Sprintf("invalid boolean value %q", value),
+					}
+				}
+			case "telemetry":
+				switch value {
+				case "true", "1":
+					cfg.NoTelemetry = false
+				case "false", "0":
+					cfg.NoTelemetry = true
+				default:
+					return &userError{
+						msg:    fmt.Sprintf("Invalid value %q for telemetry.", value),
 						detail: "Accepted values: true, false.",
 						errMsg: fmt.Sprintf("invalid boolean value %q", value),
 					}
