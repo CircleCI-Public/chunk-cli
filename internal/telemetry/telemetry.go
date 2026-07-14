@@ -20,11 +20,6 @@ import (
 	"github.com/segmentio/analytics-go/v3"
 )
 
-// SegmentWriteKey is the Segment write key for chunk-cli. Segment write keys
-// are not secret — they only allow sending events, not reading data — so
-// hardcoding it here (as circleci-cli does) is safe.
-const SegmentWriteKey = "REPLACE_WITH_CHUNK_CLI_SEGMENT_WRITE_KEY"
-
 // Sender tracks anonymous command-usage events. A nil *Sender is valid and
 // silently drops events, so callers never need to nil-check it.
 type Sender struct {

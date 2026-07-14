@@ -226,9 +226,12 @@ values, file paths, or other PII.
 - `CHUNK_TELEMETRY_LOG=1` logs event payloads to stderr instead of (or
   alongside) sending them — useful for verifying what a command reports
   without touching the network.
-- The Segment write key (`telemetry.SegmentWriteKey`) is hardcoded, not
-  injected at build time: Segment write keys can only send events, never
-  read data, so they aren't secret.
+- The Segment write key (`cmd.writeKey`) is injected at build time via
+  `-ldflags` in `.goreleaser.yaml` from the `SEGMENT_WRITE_KEY` release env
+  var. It's empty in dev/local builds (`task build`, `go run .`), which
+  disables sending regardless of the user's preference — no `task build`
+  binary can ever send real telemetry. `CHUNK_TELEMETRY_LOG` still works
+  without a write key, since it never touches the network.
 
 ## Pre-Commit Hooks
 

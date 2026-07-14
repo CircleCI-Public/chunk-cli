@@ -10,6 +10,13 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 )
 
+// writeKey is the Segment write key for chunk-cli, injected at build time via
+// -ldflags in .goreleaser.yaml (see the SEGMENT_WRITE_KEY release env var).
+// It is empty in dev/local builds, which disables sending telemetry
+// regardless of the user's preference — so no events are ever sent from a
+// `task build` or `go run .` binary.
+var writeKey string
+
 func NewRootCmd(version string) *cobra.Command {
 	cobra.EnableTraverseRunHooks = true
 
@@ -94,10 +101,11 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		return err
 	}
 
-	enabled := config.IsTelemetryEnabled(cfg)
+	optedIn := config.IsTelemetryEnabled(cfg)
+	send := optedIn && writeKey != ""
 
 	var instanceID uuid.UUID
-	if enabled {
+	if optedIn {
 		instanceID, err = config.EnsureInstanceID()
 		if err != nil {
 			return err
@@ -110,9 +118,9 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	}
 
 	tc, err := telemetry.NewSender(telemetry.Config{
-		Send:     enabled,
-		Log:      enabled && os.Getenv("CHUNK_TELEMETRY_LOG") != "",
-		WriteKey: telemetry.SegmentWriteKey,
+		Send:     send,
+		Log:      optedIn && os.Getenv("CHUNK_TELEMETRY_LOG") != "",
+		WriteKey: writeKey,
 		Binary:   executable,
 		Metadata: telemetry.Meta{
 			Version:    version,
