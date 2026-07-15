@@ -106,7 +106,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		return err
 	}
 
-	optedIn := config.IsTelemetryEnabled(cfg)
+	optedIn := config.IsTelemetry(cfg)
 	// testing.Testing() guards against re-exec'ing os.Executable() as a
 	// "receive-telemetry" subprocess when the running binary is a `go test`
 	// binary: that binary has no such subcommand, so it silently re-runs its

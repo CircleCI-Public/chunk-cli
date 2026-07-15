@@ -118,8 +118,12 @@ type UserConfig struct {
 	GitHubToken        string `json:"gitHubToken,omitempty"`
 	Model              string `json:"model,omitempty"`
 	UseSSHIdentityFile bool   `json:"useSSHIdentityFile,omitempty"`
-	NoTelemetry        bool   `json:"noTelemetry,omitempty"`
 	InstanceID         string `json:"instanceID,omitempty"`
+
+	// Telemetry is the persisted telemetry preference: true enables it,
+	// false disables it. nil means no preference has been set, in which
+	// case telemetry defaults to enabled (it is opt-out).
+	Telemetry *bool `json:"telemetry,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
@@ -208,16 +212,20 @@ func Clear(key string) error {
 	return Save(cfg)
 }
 
-// IsTelemetryEnabled reports whether telemetry should be collected, honoring
-// (in order) well-known opt-out environment variables and the persisted
-// noTelemetry preference.
-func IsTelemetryEnabled(cfg UserConfig) bool {
+// IsTelemetry reports whether telemetry should be collected, honoring (in
+// order) well-known opt-out environment variables and the persisted
+// telemetry preference. Telemetry is opt-out: it defaults to enabled when no
+// preference has been set.
+func IsTelemetry(cfg UserConfig) bool {
 	for _, env := range noTelemetryEnvVars {
 		if os.Getenv(env) != "" {
 			return false
 		}
 	}
-	return !cfg.NoTelemetry
+	if cfg.Telemetry == nil {
+		return true
+	}
+	return *cfg.Telemetry
 }
 
 // EnsureInstanceID returns the persisted anonymous instance ID used to

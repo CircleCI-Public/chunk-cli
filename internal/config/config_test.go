@@ -349,7 +349,7 @@ func TestValidConfigKeys(t *testing.T) {
 	assert.Assert(t, !ValidConfigKeys["badkey"])
 }
 
-// --- IsTelemetryEnabled ---
+// --- IsTelemetry ---
 
 // clearTelemetryEnv clears every opt-out env var so tests aren't affected by
 // the ambient environment (e.g. CI, which is set on every CircleCI job
@@ -361,22 +361,29 @@ func clearTelemetryEnv(t *testing.T) {
 	}
 }
 
-func TestIsTelemetryEnabled_DefaultTrue(t *testing.T) {
+func TestIsTelemetry_DefaultTrue(t *testing.T) {
 	clearTelemetryEnv(t)
-	assert.Assert(t, IsTelemetryEnabled(UserConfig{}))
+	assert.Assert(t, IsTelemetry(UserConfig{}))
 }
 
-func TestIsTelemetryEnabled_ConfigPreferenceDisables(t *testing.T) {
+func TestIsTelemetry_ConfigPreferenceDisables(t *testing.T) {
 	clearTelemetryEnv(t)
-	assert.Assert(t, !IsTelemetryEnabled(UserConfig{NoTelemetry: true}))
+	disabled := false
+	assert.Assert(t, !IsTelemetry(UserConfig{Telemetry: &disabled}))
 }
 
-func TestIsTelemetryEnabled_EnvVarsDisable(t *testing.T) {
+func TestIsTelemetry_ConfigPreferenceEnables(t *testing.T) {
+	clearTelemetryEnv(t)
+	enabled := true
+	assert.Assert(t, IsTelemetry(UserConfig{Telemetry: &enabled}))
+}
+
+func TestIsTelemetry_EnvVarsDisable(t *testing.T) {
 	for _, e := range noTelemetryEnvVars {
 		t.Run(e, func(t *testing.T) {
 			clearTelemetryEnv(t)
 			t.Setenv(e, "1")
-			assert.Assert(t, !IsTelemetryEnabled(UserConfig{}))
+			assert.Assert(t, !IsTelemetry(UserConfig{}))
 		})
 	}
 }

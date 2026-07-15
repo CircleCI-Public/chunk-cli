@@ -47,7 +47,7 @@ func newConfigShowCmd() *cobra.Command {
 			if userCfgErr != nil {
 				io.ErrPrintln(ui.Warning(fmt.Sprintf("Could not load config: %v", userCfgErr)))
 			}
-			telemetryEnabled := config.IsTelemetryEnabled(userCfg)
+			telemetryEnabled := config.IsTelemetry(userCfg)
 
 			if jsonOut {
 				type configEntry struct {
@@ -188,9 +188,11 @@ func newConfigSetCmd() *cobra.Command {
 			case "telemetry":
 				switch value {
 				case "true", "1":
-					cfg.NoTelemetry = false
+					enabled := true
+					cfg.Telemetry = &enabled
 				case "false", "0":
-					cfg.NoTelemetry = true
+					enabled := false
+					cfg.Telemetry = &enabled
 				default:
 					return &userError{
 						msg:    fmt.Sprintf("Invalid value %q for telemetry.", value),

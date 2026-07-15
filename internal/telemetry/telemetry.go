@@ -1,8 +1,8 @@
 // Package telemetry sends anonymous command-usage events to Segment.
 //
 // Telemetry is opt-out: it fires unless disabled via a well-known opt-out
-// environment variable or the persisted noTelemetry config preference (see
-// internal/config.IsTelemetryEnabled).
+// environment variable or the persisted telemetry config preference (see
+// internal/config.IsTelemetry).
 // Only the command path, the names (never values) of flags the user set,
 // and a per-install anonymous instance ID are ever collected — no flag
 // values, argument values, file paths, or other PII.

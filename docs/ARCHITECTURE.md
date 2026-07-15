@@ -217,7 +217,7 @@ key/workspace; the `chunk_` prefix keeps chunk-cli's events unambiguous in
 the event stream.
 
 - `internal/cmd/root.go`'s `setupTelemetry` resolves the user's preference
-  (opt-out env var → `noTelemetry` config field, first match wins) and
+  (opt-out env var → `telemetry` config field, first match wins) and
   attaches a `telemetry.Sender` to the command's context;
   `RecordForSubcommands` wraps every subcommand's `RunE` so it reports its
   event automatically, with no per-command changes needed.
