@@ -34,8 +34,10 @@ func TestSender_Track(t *testing.T) {
 	s, err := NewSender(Config{
 		TestDestination: fake,
 		Metadata: Meta{
-			Version:    "1.2.3",
-			InstanceID: instanceID,
+			Version:     "1.2.3",
+			InstanceID:  instanceID,
+			OS:          "linux",
+			CodingAgent: agentClaudeCode,
 		},
 	})
 	assert.NilError(t, err)
@@ -53,6 +55,17 @@ func TestSender_Track(t *testing.T) {
 	assert.Equal(t, tr.Properties["flags"], "json")
 	assert.Equal(t, tr.Context.App.Version, "1.2.3")
 	assert.Equal(t, tr.Context.Device.Id, instanceID.String())
+	assert.Equal(t, tr.Context.OS.Name, "linux")
+	assert.Equal(t, tr.Context.Extra["codingAgent"], agentClaudeCode)
+}
+
+func TestMeta_ToContext_OmitsCodingAgentWhenUndetected(t *testing.T) {
+	m := Meta{Version: "1.2.3", OS: "darwin"}
+	ctx := m.toContext()
+
+	assert.Equal(t, ctx.OS.Name, "darwin")
+	_, ok := ctx.Extra["codingAgent"]
+	assert.Assert(t, !ok)
 }
 
 func TestSender_CloseIsIdempotent(t *testing.T) {

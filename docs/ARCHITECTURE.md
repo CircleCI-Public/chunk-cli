@@ -216,6 +216,15 @@ package uses, because both tools currently share the same Segment write
 key/workspace; the `chunk_` prefix keeps chunk-cli's events unambiguous in
 the event stream.
 
+Every event's `Context` also carries the operating system (`runtime.GOOS`)
+and, if detected, the AI coding agent chunk-cli was invoked from (e.g.
+`claude-code`, `cursor`) — see `internal/telemetry/agent.go`'s
+`DetectCodingAgent`, which checks for well-known environment variables those
+agents set in the shells they spawn. The agent list is intentionally
+conservative: only signals confirmed to be set by the agent itself are
+included, to avoid misattributing invocations. Detection returns `""` when no
+known agent is found, the common case for a human running `chunk` directly.
+
 - `internal/cmd/root.go`'s `setupTelemetry` resolves the user's preference
   (opt-out env var → `telemetry` config field, first match wins) and
   attaches a `telemetry.Sender` to the command's context;
