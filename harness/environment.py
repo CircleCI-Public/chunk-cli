@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-environment: harness for `chunk env detect` + the sidecar build acceptance test.
+environment: harness for `chunk env init` + the sidecar build acceptance test.
 Runs against target repos and uses the Claude Code SDK to improve
 internal/envbuilder when tests fail.
 
@@ -277,7 +277,7 @@ After editing, run `go build -o {BINARY.relative_to(REPO_ROOT)} .` to verify it 
         else:
             prompt = f"""You are debugging an environment detection tool inside the chunk CLI.
 
-`chunk env detect` analyses a repository, detects its tech stack, and writes a
+`chunk env init` analyses a repository, detects its tech stack, and writes a
 Dockerfile.test for running that repo's tests. It was run on the
 {repo.name} repo ({repo.url}).
 
@@ -453,7 +453,7 @@ def run_repo(repo: TargetRepo, timeout: int, max_iterations: int, persistent_cac
 
     try:
         # Phase 1: env-only — clone + detect env (no docker).
-        print("Running env detection (clone + env detect)...")
+        print("Running env detection (clone + env init)...")
         current_env, env_output = run_env_only_test(repo, cache_dir, timeout)
         if current_env is None:
             print(f"  Env detection failed:\n{env_output}")
@@ -593,7 +593,7 @@ def main():
     known_names = [r["name"] for r in KNOWN_REPOS]
 
     parser = argparse.ArgumentParser(
-        description="environment: harness for chunk env detect/dockerfile. "
+        description="environment: harness for chunk env init. "
                     "Uses Claude to improve envbuilder on failure.",
     )
     parser.add_argument(
