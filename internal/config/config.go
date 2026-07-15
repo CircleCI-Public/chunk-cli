@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/sethvargo/go-envconfig"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
@@ -58,6 +59,7 @@ const (
 	EnvModel              = "CODE_REVIEW_CLI_MODEL"
 	EnvCircleCIOrgID      = "CIRCLECI_ORG_ID"
 	EnvChunkHooksDisabled = "CHUNK_HOOKS_DISABLED"
+	EnvChunkNoTelemetry   = "CHUNK_NO_TELEMETRY"
 )
 
 // System/standard environment variable names.
@@ -69,7 +71,14 @@ const (
 	EnvXDGConfigHome = "XDG_CONFIG_HOME"
 	EnvXDGStateHome  = "XDG_STATE_HOME"
 	EnvXDGDataHome   = "XDG_DATA_HOME"
+	EnvNoAnalytics   = "NO_ANALYTICS"
+	EnvDoNotTrack    = "DO_NOT_TRACK"
+	EnvCI            = "CI"
 )
+
+// noTelemetryEnvVars are well-known environment variables that disable
+// telemetry regardless of the persisted user preference.
+var noTelemetryEnvVars = []string{EnvChunkNoTelemetry, EnvNoAnalytics, EnvDoNotTrack, EnvCI}
 
 // EnvVars holds all environment variables the application reads.
 //
@@ -109,6 +118,12 @@ type UserConfig struct {
 	GitHubToken        string `json:"gitHubToken,omitempty"`
 	Model              string `json:"model,omitempty"`
 	UseSSHIdentityFile bool   `json:"useSSHIdentityFile,omitempty"`
+	InstanceID         string `json:"instanceID,omitempty"`
+
+	// Telemetry is the persisted telemetry preference: true enables it,
+	// false disables it. nil means no preference has been set, in which
+	// case telemetry defaults to enabled (it is opt-out).
+	Telemetry *bool `json:"telemetry,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
@@ -195,6 +210,44 @@ func Clear(key string) error {
 		return fmt.Errorf("unknown config key: %s", key)
 	}
 	return Save(cfg)
+}
+
+// IsTelemetry reports whether telemetry should be collected, honoring (in
+// order) well-known opt-out environment variables and the persisted
+// telemetry preference. Telemetry is opt-out: it defaults to enabled when no
+// preference has been set.
+func IsTelemetry(cfg UserConfig) bool {
+	for _, env := range noTelemetryEnvVars {
+		if os.Getenv(env) != "" {
+			return false
+		}
+	}
+	if cfg.Telemetry == nil {
+		return true
+	}
+	return *cfg.Telemetry
+}
+
+// EnsureInstanceID returns the persisted anonymous instance ID used to
+// associate telemetry events with a single install, generating and saving
+// one on first run.
+func EnsureInstanceID() (uuid.UUID, error) {
+	cfg, err := Load()
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if cfg.InstanceID != "" {
+		id, err := uuid.Parse(cfg.InstanceID)
+		if err == nil {
+			return id, nil
+		}
+	}
+	id := uuid.New()
+	cfg.InstanceID = id.String()
+	if err := Save(cfg); err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
 }
 
 // Resolve computes the final config from flags, env, and file.
@@ -322,6 +375,7 @@ func ResolveOrgID(workDir string) (value, source string) {
 var ValidConfigKeys = map[string]bool{
 	"model":              true,
 	"useSSHIdentityFile": true,
+	"telemetry":          true,
 }
 
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to
