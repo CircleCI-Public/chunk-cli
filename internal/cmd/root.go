@@ -16,11 +16,11 @@ import (
 // events, not reading data — so checking it into git, as circleci-cli does
 // (see internal/cmd/root/root.go there), is safe.
 //
-// Empty until CircleCI's Segment workspace admin provisions a chunk-cli
-// source; telemetry.NewSender never sends with an empty key (see
-// setupTelemetry below), so this is a no-op until then. Once a key exists,
-// set it here — no other changes needed.
-const writeKey = ""
+// Events sent with this key are tagged as chunk-cli invocations via
+// Meta.toContext's App.Name ("chunk-cli") in internal/telemetry/telemetry.go,
+// so they stay distinguishable from circleci-cli's own telemetry even if
+// both ever land in the same Segment workspace.
+const writeKey = "AbgkrgN4cbRhAVEwlzMkHbwvrXnxHh35"
 
 func NewRootCmd(version string) *cobra.Command {
 	cobra.EnableTraverseRunHooks = true
@@ -95,7 +95,7 @@ Configuration:
 
 // setupTelemetry resolves the user's telemetry preference and attaches a
 // telemetry.Sender to cmd's context so RecordNow can report a
-// command_invocation event once the command finishes.
+// chunk_command_invocation event once the command finishes.
 func setupTelemetry(cmd *cobra.Command, version string) error {
 	if telemetry.IsTelemetryDisabled(cmd) {
 		return nil

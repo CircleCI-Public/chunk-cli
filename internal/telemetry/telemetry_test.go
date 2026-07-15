@@ -99,7 +99,7 @@ func TestRecordForSubcommands_TracksCommandInvocation(t *testing.T) {
 	assert.NilError(t, root.Execute())
 
 	assert.Equal(t, len(fake.tracks), 1)
-	assert.Equal(t, fake.tracks[0].Event, "command_invocation")
+	assert.Equal(t, fake.tracks[0].Event, "chunk_command_invocation")
 	assert.Equal(t, fake.tracks[0].Properties["command"], "chunk show")
 	assert.Equal(t, fake.tracks[0].Properties["flags"], "json")
 }

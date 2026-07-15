@@ -208,9 +208,13 @@ in `config.Resolve` and makes clients testable.
 ## Telemetry (`internal/telemetry/`)
 
 Modeled on circleci-cli's `internal/telemetry` package. Every command reports
-a single `command_invocation` event containing the command path and the
+a single `chunk_command_invocation` event containing the command path and the
 names (never values) of flags the user set — no flag values, argument
-values, file paths, or other PII.
+values, file paths, or other PII. The event is named `chunk_command_invocation`
+rather than the generic `command_invocation` circleci-cli's own telemetry
+package uses, because both tools currently share the same Segment write
+key/workspace; the `chunk_` prefix keeps chunk-cli's events unambiguous in
+the event stream.
 
 - `internal/cmd/root.go`'s `setupTelemetry` resolves the user's preference
   (opt-out env var → `noTelemetry` config field, first match wins) and
@@ -228,10 +232,11 @@ values, file paths, or other PII.
   without touching the network.
 - The Segment write key (`cmd.writeKey`) is a hardcoded constant, like
   circleci-cli's — write keys are not secret, they can only send events, not
-  read data, so checking one into git is safe. It's currently `""` pending
-  Segment workspace access; `setupTelemetry` never sends with an empty key,
-  so telemetry stays a no-op until the real key is added. `CHUNK_TELEMETRY_LOG`
-  still works without a write key, since it never touches the network.
+  read data, so checking one into git is safe. Events sent with it are
+  tagged as chunk-cli invocations via `Context.App.Name` ("chunk-cli") in
+  `Meta.toContext` (`internal/telemetry/telemetry.go`), keeping them
+  distinguishable from circleci-cli's own telemetry. `CHUNK_TELEMETRY_LOG`
+  still works without touching the network, independent of the write key.
 - `setupTelemetry` also checks `testing.Testing()` before sending, so a real
   write key committed to source still can't trigger sends (or the recursive
   subprocess spawning that implies) from a `go test` binary.
