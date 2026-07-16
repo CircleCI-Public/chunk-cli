@@ -35,7 +35,7 @@ chunk init
 
 # Run configured validations
 chunk validate              # all commands
-chunk validate tests        # specific command
+chunk validate test         # specific command
 chunk validate --list       # list configured commands
 ```
 

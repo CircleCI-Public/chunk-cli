@@ -91,6 +91,7 @@ without prompting.
 |---|---|---|
 | **Claude Code** (CLI / terminal) | Fully supported | Canonical provider |
 | **Cursor** | Supported | Reads `.claude/settings.json` directly |
+| **Codex** | Supported | `chunk init` writes `.codex/hooks.json` when Codex is detected |
 
 ## Disabling Stop-Hook Validation
 
