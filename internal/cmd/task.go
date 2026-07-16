@@ -105,6 +105,7 @@ func newTaskRunCmd() *cobra.Command {
 
 func newTaskConfigCmd() *cobra.Command {
 	var force bool
+	var projectSlug string
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "Set up .chunk/run.json for this repository",
@@ -154,13 +155,6 @@ func newTaskConfigCmd() *cobra.Command {
 				return err
 			}
 
-			io.ErrPrintln(ui.Dim("Fetching your CircleCI projects..."))
-
-			projects, collabs, err := fetchProjectsAndCollabs(ctx, client)
-			if err != nil {
-				return err
-			}
-
 			prompts := task.Prompts{
 				Confirm:    tui.Confirm,
 				SelectFrom: tui.SelectFromList,
@@ -173,7 +167,19 @@ func newTaskConfigCmd() *cobra.Command {
 				return client.GetProjectBySlug(ctx, slug)
 			}
 
-			runCfg, err := task.CollectRunConfig(ctx, prompts, projects, collabs, fetchDetail, os.Getenv(config.EnvCircleCIOrgID))
+			opts := task.CollectOptions{ProjectSlug: projectSlug}
+
+			var projects []circleci.FollowedProject
+			var collabs []circleci.Collaboration
+			if projectSlug == "" {
+				io.ErrPrintln(ui.Dim("Fetching your CircleCI projects..."))
+				projects, collabs, err = fetchProjectsAndCollabs(ctx, client)
+				if err != nil {
+					return err
+				}
+			}
+
+			runCfg, err := task.CollectRunConfig(ctx, prompts, projects, collabs, fetchDetail, os.Getenv(config.EnvCircleCIOrgID), opts)
 			if errors.Is(err, tui.ErrCancelled) {
 				return nil
 			}
@@ -193,6 +199,7 @@ func newTaskConfigCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite existing configuration without confirmation")
+	cmd.Flags().StringVar(&projectSlug, "project", "", "Project slug to skip interactive selection (e.g. gh/org/repo)")
 	return cmd
 }
 

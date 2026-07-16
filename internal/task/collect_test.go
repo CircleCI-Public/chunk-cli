@@ -90,6 +90,7 @@ func TestCollectRunConfig_SelectFromList(t *testing.T) {
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
 		"",
+		CollectOptions{},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -148,6 +149,7 @@ func TestCollectRunConfig_ManualEntry(t *testing.T) {
 		collabs,
 		nil, // fetchDetail not needed for manual
 		"",
+		CollectOptions{},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -208,6 +210,7 @@ func TestCollectRunConfig_MultipleDefinitions(t *testing.T) {
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
 		"",
+		CollectOptions{},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -250,6 +253,7 @@ func TestCollectRunConfig_InvalidUUIDRetries(t *testing.T) {
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
 		"",
+		CollectOptions{},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -323,6 +327,7 @@ func TestCollectRunConfig_RequiredDefIDRetries(t *testing.T) {
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
 		"",
+		CollectOptions{},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -356,6 +361,7 @@ func TestCollectRunConfig_NoCollabsError(t *testing.T) {
 		nil, // no collabs
 		nil,
 		"",
+		CollectOptions{},
 	)
 	if err == nil {
 		t.Fatal("expected error for no organizations")
@@ -385,6 +391,7 @@ func TestCollectRunConfig_OrgMismatchWarning(t *testing.T) {
 		nil,
 		fakeFetchDetail("org-1", "proj-1"),
 		"different-org",
+		CollectOptions{},
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -417,11 +424,65 @@ func TestCollectRunConfig_BitbucketPrefix(t *testing.T) {
 		nil,
 	)
 
-	_, err := CollectRunConfig(context.Background(), prompts, projects, nil, fetch, "")
+	_, err := CollectRunConfig(context.Background(), prompts, projects, nil, fetch, "", CollectOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if capturedSlug != "bb/acme/api" {
 		t.Fatalf("slug = %q, want %q", capturedSlug, "bb/acme/api")
+	}
+}
+
+func TestCollectRunConfig_ProjectSlug(t *testing.T) {
+	var capturedSlug string
+	fetch := func(_ context.Context, slug string) (*circleci.ProjectDetail, error) {
+		capturedSlug = slug
+		return &circleci.ProjectDetail{ID: "proj-slug", OrgID: "org-slug", Slug: slug}, nil
+	}
+
+	// No SelectFrom for project — only definition prompts.
+	prompts := fakePrompts(
+		nil,
+		[]string{"dev", "550e8400-e29b-41d4-a716-446655440000", "", "", ""},
+		[]bool{false},
+		nil,
+	)
+
+	cfg, err := CollectRunConfig(
+		context.Background(),
+		prompts,
+		nil, // projects unused when slug set
+		nil,
+		fetch,
+		"",
+		CollectOptions{ProjectSlug: "gh/acme/api"},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedSlug != "gh/acme/api" {
+		t.Fatalf("slug = %q, want %q", capturedSlug, "gh/acme/api")
+	}
+	if cfg.OrgID != "org-slug" || cfg.ProjectID != "proj-slug" {
+		t.Fatalf("org/project = %s/%s", cfg.OrgID, cfg.ProjectID)
+	}
+	if cfg.OrgType != "github" {
+		t.Fatalf("OrgType = %q, want github", cfg.OrgType)
+	}
+}
+
+func TestCollectRunConfig_InvalidProjectSlug(t *testing.T) {
+	prompts := fakePrompts(nil, nil, nil, nil)
+	_, err := CollectRunConfig(
+		context.Background(),
+		prompts,
+		nil,
+		nil,
+		nil,
+		"",
+		CollectOptions{ProjectSlug: "not-a-slug"},
+	)
+	if err == nil {
+		t.Fatal("expected error for invalid slug")
 	}
 }
