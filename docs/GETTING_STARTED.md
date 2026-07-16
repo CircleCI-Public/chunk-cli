@@ -39,7 +39,7 @@ The `.chunk/` directory lives at the root of your project and holds configuratio
 
 A **sidecar** is an ephemeral Linux environment running on CircleCI. Instead of running tests locally, you sync your working tree to a sidecar and run checks there. This catches failures caused by local environment differences (different OS, missing dependencies, port conflicts) before they reach CI.
 
-Sidecars are in preview for CircleCI customers on Performance and Scale plans.
+Sidecars are available to all CircleCI customers, including the free plans.
 
 ### Skills
 
