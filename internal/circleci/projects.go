@@ -67,25 +67,3 @@ func (c *Client) GetProjectBySlug(ctx context.Context, slug string) (*ProjectDet
 	}
 	return &resp, nil
 }
-
-// OrgInfo is the response from POST /api/v2/organization.
-type OrgInfo struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Slug    string `json:"slug"`
-	VcsType string `json:"vcs_type"`
-}
-
-// CreateOrg creates a new CircleCI organization. vcsType must be one of
-// "circleci" (standalone), "github", or "bitbucket".
-func (c *Client) CreateOrg(ctx context.Context, name, vcsType string) (*OrgInfo, error) {
-	var org OrgInfo
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/organization",
-		hc.Body(map[string]string{"name": name, "vcs_type": vcsType}),
-		hc.JSONDecoder(&org),
-	))
-	if err != nil {
-		return nil, mapErr("create org", err)
-	}
-	return &org, nil
-}

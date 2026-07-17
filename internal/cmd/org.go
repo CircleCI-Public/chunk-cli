@@ -15,6 +15,7 @@ func newOrgCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                "org",
 		Short:              "Manage CircleCI organizations",
+		Hidden:             true,
 		RunE:               groupRunE,
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
@@ -44,7 +45,7 @@ func newOrgCreateCmd() *cobra.Command {
 			}
 
 			io.ErrPrintln(ui.Dim("Creating organization..."))
-			org, err := client.CreateOrg(cmd.Context(), name, "circleci")
+			org, err := client.CreateOrg(cmd.Context(), name)
 			if err != nil {
 				return &userError{
 					msg: fmt.Sprintf("Failed to create organization %q.", name),
