@@ -98,12 +98,6 @@ chunk
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --identity-file <path>      # SSH identity file
 │   │   --workdir <path>            # Destination path on sidecar (auto-detected when omitted)
-│   ├── env                         # Detect tech stack and print environment spec as JSON
-│   │   --dir <path>                # Directory to analyse (default: .)
-│   │   --no-save                   # Print only, do not save to .chunk/config.json
-│   ├── build                       # Generate Dockerfile and build test image from env spec
-│   │   --dir <path>                # Directory to write Dockerfile.test and build from
-│   │   --tag <tag>                 # Image tag (e.g. myapp:latest)
 │   ├── setup                       # Detect env, sync files, and run install steps
 │   │   --dir <path>                # Directory to detect environment in (default: .)
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
@@ -123,6 +117,12 @@ chunk
 │       └── list                    # List snapshots
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
+│
+├── env                             # Detect and render project environments
+│   └── init                        # Detect tech stack; write Dockerfile.test (default) or JSON spec
+│       --dir <path>                # Directory to analyse (default: .)
+│       --format <fmt>              # Output format: dockerfile (default) or json
+│       --no-save                   # Do not save the detected spec to .chunk/config.json
 │
 ├── hook                            # Manage chunk hook execution
 │   --project <path>                # Override project directory

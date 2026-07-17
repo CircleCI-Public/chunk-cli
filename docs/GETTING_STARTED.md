@@ -223,7 +223,7 @@ The skill handles the full loop: auth checks → find active sidecar → sync �
 Auto-detect your tech stack and save it to config:
 
 ```bash
-chunk sidecar env   # detect stack, save to config
+chunk env init   # detect stack, write Dockerfile.test, save to config
 ```
 
 ### Environment variables

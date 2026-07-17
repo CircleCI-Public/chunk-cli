@@ -524,11 +524,11 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 			if freshlyCreated {
 				return newUserError(fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)).
 					withCode("sidecar.workspace_missing").
-					withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+					withSuggestion("Run 'chunk sidecar sync' to prepare the workspace.").
 					withExitCode(ExitNotFound).
 					wrap(wsErr)
 			}
-			streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
+			streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar sync' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
 			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
 		} else {
 			runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)

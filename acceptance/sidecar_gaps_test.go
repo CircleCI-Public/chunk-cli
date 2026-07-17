@@ -127,71 +127,66 @@ func TestSidecarExecAPIError(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for 500 response")
 }
 
-// --- build error paths ---
+// --- env init paths ---
 
-func TestSidecarBuildMissingDockerfile(t *testing.T) {
+func TestEnvInitDefault(t *testing.T) {
 	dir := t.TempDir()
 
 	env := testenv.NewTestEnv(t)
+	// Default output is dockerfile: writes Dockerfile.test, prints path to stdout.
 	result := binary.RunCLI(t, []string{
-		"sidecar", "build",
+		"env", "init",
 		"--dir", dir,
+		"--no-save",
 	}, env, env.HomeDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when Dockerfile.test missing")
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout, "Dockerfile.test"),
+		"expected Dockerfile.test path on stdout, got: %s", result.Stdout)
 }
 
-func TestSidecarBuildInvalidTag(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	result := binary.RunCLI(t, []string{
-		"sidecar", "build",
-		"--tag", "!!!invalid",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for invalid tag")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Invalid image tag"),
-		"expected invalid tag error, got: %s", combined)
-}
-
-func TestSidecarBuildNonexistentDir(t *testing.T) {
-	env := testenv.NewTestEnv(t)
-	result := binary.RunCLI(t, []string{
-		"sidecar", "build",
-		"--dir", "/tmp/nonexistent-dir-abc123",
-	}, env, env.HomeDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for nonexistent dir")
-}
-
-// --- env error paths ---
-
-func TestSidecarEnvEmptyDir(t *testing.T) {
+func TestEnvInitJSONFormat(t *testing.T) {
 	dir := t.TempDir()
 
 	env := testenv.NewTestEnv(t)
 	result := binary.RunCLI(t, []string{
-		"sidecar", "env",
+		"env", "init",
+		"--format", "json",
 		"--dir", dir,
 	}, env, env.HomeDir)
 
 	// Empty dir should still succeed (unknown stack) and produce JSON on stdout.
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 
-	// Verify JSON output on stdout
 	var envOutput map[string]interface{}
 	err := json.Unmarshal([]byte(result.Stdout), &envOutput)
 	assert.NilError(t, err, "expected valid JSON on stdout, got: %s", result.Stdout)
 }
 
-func TestSidecarEnvNonexistentDir(t *testing.T) {
+func TestEnvInitNonexistentDir(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	result := binary.RunCLI(t, []string{
-		"sidecar", "env",
+		"env", "init",
 		"--dir", "/tmp/nonexistent-dir-xyz789",
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for nonexistent dir")
+}
+
+func TestEnvInitInvalidFormat(t *testing.T) {
+	dir := t.TempDir()
+
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLI(t, []string{
+		"env", "init",
+		"--format", "bogus",
+		"--dir", dir,
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for invalid format")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "Invalid --format"),
+		"expected invalid format error, got: %s", combined)
 }
 
 // --- create error paths ---
