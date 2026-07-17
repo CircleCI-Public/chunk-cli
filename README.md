@@ -51,6 +51,9 @@ Create and work in cloud sidecar environments. Sidecars are available to all Cir
 
 ```bash
 # Authenticate (browser OAuth — recommended)
+To create a new account:
+chunk auth signup
+or , to log in to an existing account:
 chunk auth login
 
 # Or set a token directly
