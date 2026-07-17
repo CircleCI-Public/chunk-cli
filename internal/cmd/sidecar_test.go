@@ -1,11 +1,46 @@
 package cmd
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
+
+func setupSidecarCreateFake(t *testing.T) *fakes.FakeCircleCI {
+	t.Helper()
+	isolateConfig(t)
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+	t.Setenv(config.EnvCircleToken, "test-token")
+	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
+	return cci
+}
+
+func TestSidecarCreateUsesImageFromConfig(t *testing.T) {
+	cci := setupSidecarCreateFake(t)
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		OrgID:      "org-abc",
+		Validation: &config.ValidationConfig{SidecarImage: "snap-from-config"},
+	}))
+
+	cmd := newSidecarCreateCmd()
+	cmd.Flags().Bool("insecure-storage", false, "")
+	_ = cmd.Flags().Set("insecure-storage", "true")
+	cmd.SetArgs([]string{"--org-id", "org-abc"})
+	assert.NilError(t, cmd.Execute())
+
+	assert.Equal(t, len(cci.Sidecars), 1)
+	assert.Equal(t, cci.Sidecars[0].Image, "snap-from-config")
+}
 
 func TestSnapshotCreateNameTooLong(t *testing.T) {
 	cmd := newSidecarSnapshotCreateCmd()

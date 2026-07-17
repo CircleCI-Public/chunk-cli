@@ -213,6 +213,12 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if image == "" {
+				cfg, _ := config.LoadProjectConfig(cwd)
+				if cfg.HasSidecarImage() {
+					image = cfg.Validation.SidecarImage
+				}
+			}
 			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image)
 			if err != nil {
 				if err := notAuthorized("create sidecars", err); err != nil {
