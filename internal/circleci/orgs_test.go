@@ -2,7 +2,7 @@ package circleci
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
@@ -21,21 +21,13 @@ func TestCreateOrg(t *testing.T) {
 		ctx := context.Background()
 
 		org, err := client.CreateOrg(ctx, "my-org")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if org.ID == "" {
-			t.Error("expected non-empty org ID")
-		}
-		if org.Name != "my-org" {
-			t.Errorf("expected name my-org, got %s", org.Name)
-		}
-		if org.Slug == "" {
-			t.Error("expected non-empty org slug")
-		}
+		assert.NilError(t, err)
+		assert.Assert(t, org.ID != "", "expected non-empty org ID")
+		assert.Equal(t, org.Name, "my-org")
+		assert.Assert(t, org.Slug != "", "expected non-empty org slug")
 	})
 
-	t.Run("sends POST to /api/v2/organization with auth token", func(t *testing.T) {
+	t.Run("sends POST to /api/v2/organization with auth token and body", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
 		defer srv.Close()
@@ -43,7 +35,6 @@ func TestCreateOrg(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		ctx := context.Background()
 
-		fake.Recorder.AllRequests() // baseline
 		_, err := client.CreateOrg(ctx, "test-org")
 		assert.NilError(t, err)
 
@@ -52,6 +43,11 @@ func TestCreateOrg(t *testing.T) {
 		assert.Equal(t, last.Method, "POST")
 		assert.Equal(t, last.URL.Path, "/api/v2/organization")
 		assert.Equal(t, last.Header.Get("Circle-Token"), "test-token")
+
+		var body map[string]string
+		assert.NilError(t, json.Unmarshal(last.Body, &body))
+		assert.Equal(t, body["name"], "test-org")
+		assert.Equal(t, body["vcs_type"], "circleci")
 	})
 
 	t.Run("returns error on server failure", func(t *testing.T) {
@@ -77,10 +73,7 @@ func TestCreateOrg(t *testing.T) {
 		ctx := context.Background()
 
 		_, err := client.CreateOrg(ctx, "my-org")
-		assert.Assert(t, err != nil)
-		if !errors.Is(err, ErrNotAuthorized) {
-			t.Errorf("expected ErrNotAuthorized, got %v", err)
-		}
+		assert.ErrorIs(t, err, ErrNotAuthorized)
 	})
 
 }
