@@ -50,7 +50,10 @@ Chunk init will install skills for working with Chunk sidecars. After the init, 
 Create and work in cloud sidecar environments. Sidecars are available to all CircleCI customers, including the free plans. Share feedback in the [CircleCI Discord](https://discord.gg/circleci).
 
 ```bash
-# Authenticate
+# Authenticate (browser OAuth — recommended)
+chunk auth login
+
+# Or set a token directly
 chunk auth set circleci
 
 # Create a sidecar (sets it as active automatically)
@@ -120,7 +123,8 @@ chunk skill install
 ## Commands
 
 ```
-chunk auth set|status|remove               Authentication
+chunk auth login|signup|set|status|remove  Authentication
+chunk org create                           Manage CircleCI organizations
 chunk sidecar list|create|exec|ssh         Manage cloud sidecar environments
 chunk sidecar sync|env|build               Sync files, detect env, build images
 chunk sidecar use|current|forget           Manage active sidecar

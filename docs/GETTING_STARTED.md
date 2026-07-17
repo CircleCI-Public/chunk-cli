@@ -54,7 +54,13 @@ Store credentials for the services you plan to use:
 ```bash
 chunk auth set anthropic   # required for build-prompt and init
 chunk auth set github      # required for build-prompt
-chunk auth set circleci    # required for sidecars and task runs
+
+# For CircleCI (required for sidecars and task runs), browser OAuth is recommended:
+chunk auth login           # existing CircleCI account
+chunk auth signup          # new CircleCI account
+
+# Or set a personal API token directly:
+chunk auth set circleci
 ```
 
 Check status at any time:
