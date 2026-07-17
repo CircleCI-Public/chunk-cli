@@ -22,9 +22,9 @@ func TestCreateOrg(t *testing.T) {
 
 		org, err := client.CreateOrg(ctx, "my-org")
 		assert.NilError(t, err)
-		assert.Assert(t, org.ID != "", "expected non-empty org ID")
+		assert.Equal(t, org.ID, "org-new-1")
 		assert.Equal(t, org.Name, "my-org")
-		assert.Assert(t, org.Slug != "", "expected non-empty org slug")
+		assert.Equal(t, org.Slug, "my-org")
 	})
 
 	t.Run("sends POST to /api/v2/organization with auth token and body", func(t *testing.T) {
