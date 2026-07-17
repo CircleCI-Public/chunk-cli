@@ -7,9 +7,16 @@ Complete command reference for the `chunk` CLI.
 ```
 chunk
 ├── auth
+│   ├── login                       # Log in to CircleCI via browser (recommended)
+│   │   --no-browser                # Print the login URL instead of opening a browser
+│   ├── signup                      # Sign up for a new CircleCI account via browser
+│   │   --no-browser                # Print the signup URL instead of opening a browser
 │   ├── set <provider>               # Store credential (circleci | anthropic | github)
 │   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
 │   └── remove <provider>           # Remove stored credential (circleci | anthropic | github)
+│
+├── org                             # Manage CircleCI organizations
+│   └── create <name>               # Create a new standalone CircleCI organization
 │
 ├── build-prompt                    # Mine PR comments → analyze → generate prompt
 │   --org <org>                     # GitHub org (auto-detected from git remote)
@@ -139,6 +146,9 @@ chunk
 
 ## Behavior Decisions
 
+- `auth login` and `auth signup` both use OAuth and store the resulting token in the system keychain (or `~/.config/chunk/config.json` with `--insecure-storage`). They differ only in which page the browser opens: login for existing accounts, signup for new ones. Use `--no-browser` to print the URL instead of opening it automatically.
+- `auth signup` fails with a user-friendly error if a CircleCI token is already stored; run `chunk auth remove circleci` first to clear it. Existing accounts should use `chunk auth login`.
+- `org create` is hidden from the default help output. It requires CircleCI authentication and creates a standalone org (not tied to a VCS provider), printing the org name, ID, and slug on success.
 - `build-prompt` auto-detects org and repos from the git remote when flags
   are omitted. If `--org` is provided explicitly, `--repos` is required.
 - `build-prompt --output` creates parent directories automatically.

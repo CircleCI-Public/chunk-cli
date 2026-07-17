@@ -408,4 +408,11 @@ func TestAuthRequired(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+
+	t.Run("CreateOrg", func(t *testing.T) {
+		_, err := client.CreateOrg(ctx, "my-org")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
 }

@@ -69,6 +69,7 @@ type FakeCircleCI struct {
 
 	mu              sync.RWMutex
 	snapshotCounter int
+	orgCounter      int
 	Collaborations  []Collaboration
 	Projects        []Project
 	Sidecars        []Sidecar
@@ -90,6 +91,7 @@ type FakeCircleCI struct {
 	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
 	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
 	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
+	CreateOrgStatusCode      int // override for POST /api/v2/organization
 }
 
 func NewFakeCircleCI() *FakeCircleCI {
@@ -122,6 +124,9 @@ func NewFakeCircleCI() *FakeCircleCI {
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
+
+	// Org endpoint
+	r.POST("/api/v2/organization", f.handleCreateOrg)
 
 	return f
 }
@@ -520,5 +525,41 @@ func (f *FakeCircleCI) handleTriggerRun(c *gin.Context) {
 	c.JSON(http.StatusOK, RunResponse{
 		RunID:      "run-abc-123",
 		PipelineID: "pipeline-def-456",
+	})
+}
+
+func (f *FakeCircleCI) handleCreateOrg(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+
+	f.mu.Lock()
+	statusCode := f.CreateOrgStatusCode
+	f.mu.Unlock()
+
+	if statusCode != 0 {
+		c.JSON(statusCode, gin.H{"message": "API error"})
+		return
+	}
+
+	var body struct {
+		Name    string `json:"name"`
+		VCSType string `json:"vcs_type"`
+	}
+	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Bad request"})
+		return
+	}
+
+	f.mu.Lock()
+	f.orgCounter++
+	id := fmt.Sprintf("org-new-%d", f.orgCounter)
+	f.mu.Unlock()
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":       id,
+		"name":     body.Name,
+		"slug":     body.Name,
+		"vcs_type": body.VCSType,
 	})
 }

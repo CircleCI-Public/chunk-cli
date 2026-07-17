@@ -31,6 +31,7 @@ func newAuthCmd() *cobra.Command {
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 	cmd.AddCommand(newAuthLoginCmd())
+	cmd.AddCommand(newAuthSignupCmd())
 	cmd.AddCommand(newAuthSetCmd())
 	cmd.AddCommand(newAuthStatusCmd())
 	cmd.AddCommand(newAuthRemoveCmd())
@@ -39,7 +40,6 @@ func newAuthCmd() *cobra.Command {
 
 func newAuthLoginCmd() *cobra.Command {
 	var noBrowser bool
-	var signup bool
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in to CircleCI via browser (recommended)",
@@ -48,17 +48,44 @@ func newAuthLoginCmd() *cobra.Command {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)
 			io := iostream.FromCmd(cmd)
-			return authLogin(cmd.Context(), io, rc.CircleCIBaseURL, noBrowser, signup, insecureStorage)
+			return authLogin(cmd.Context(), io, rc.CircleCIBaseURL, noBrowser, false, insecureStorage)
 		},
 	}
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the login URL instead of opening a browser")
-	cmd.Flags().BoolVar(&signup, "signup", false, "Route to the signup page instead of login")
+	return cmd
+}
+
+func newAuthSignupCmd() *cobra.Command {
+	var noBrowser bool
+	cmd := &cobra.Command{
+		Use:   "signup",
+		Short: "Sign up for a new CircleCI account via browser",
+		Long:  "Create a CircleCI account using OAuth. Opens your browser to the signup page.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
+			rc, _ := config.Resolve("", "", insecureStorage)
+			io := iostream.FromCmd(cmd)
+			if rc.CircleCIToken != "" {
+				return &userError{
+					msg:        "Already authenticated.",
+					suggestion: "Run `chunk auth remove circleci` to clear your token first, then re-run `chunk auth signup`. If you already have a CircleCI account, use `chunk auth login`.",
+					errMsg:     "auth signup: already authenticated",
+				}
+			}
+			return authLogin(cmd.Context(), io, rc.CircleCIBaseURL, noBrowser, true, insecureStorage)
+		},
+	}
+	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "Print the signup URL instead of opening a browser")
 	return cmd
 }
 
 func authLogin(ctx context.Context, streams iostream.Streams, baseURL string, noBrowser, signup, insecureStorage bool) error {
 	streams.Println("")
-	streams.Println(ui.Bold("Chunk CLI - CircleCI Login"))
+	if signup {
+		streams.Println(ui.Bold("Chunk CLI - CircleCI Sign Up"))
+	} else {
+		streams.Println(ui.Bold("Chunk CLI - CircleCI Login"))
+	}
 	streams.Println("")
 
 	token, err := oauth.Login(ctx, oauth.LoginConfig{
