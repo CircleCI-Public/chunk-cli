@@ -72,6 +72,7 @@ Configuration:
 
 	rootCmd.AddCommand(newInitCmd())
 	rootCmd.AddCommand(newAuthCmd())
+	rootCmd.AddCommand(newOrgCmd())
 	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newBuildPromptCmd())
 	rootCmd.AddCommand(newSkillCmd())
