@@ -224,6 +224,20 @@ run the tests on the sidecar
 
 The skill handles the full loop: auth checks → find active sidecar → sync → validate → interpret failures → fix locally → repeat.
 
+### Syncing
+
+`chunk sidecar sync` uses git bundle by default — the first sync sends a full bundle of HEAD, and subsequent syncs send only the new commits since the last sync (`<lastRef>..HEAD`). Uncommitted working-tree changes are applied on top as a patch. The branch does not need to be pushed to GitHub.
+
+```bash
+chunk sidecar sync
+```
+
+To fall back to the git checkout/patch approach (requires the branch to be pushed to GitHub):
+
+```bash
+chunk sidecar sync --checkout
+```
+
 ### Environment setup
 
 Auto-detect your tech stack and save it to config:

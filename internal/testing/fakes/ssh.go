@@ -133,6 +133,13 @@ func (s *SSHServer) Commands() []string {
 	return out
 }
 
+// Reset clears the recorded commands so a test can assert on a fresh sync.
+func (s *SSHServer) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commands = nil
+}
+
 // EnvVars returns a copy of all environment variables received via "env" requests.
 func (s *SSHServer) EnvVars() map[string]string {
 	s.mu.Lock()
