@@ -687,6 +687,137 @@ func TestSidecarsUseCommand(t *testing.T) {
 		"expected sb-manual in current output, got: %s", combined)
 }
 
+// TestSidecarsSyncBundleFlagRemoved verifies that --bundle is no longer a
+// valid flag. Bundle sync is now the default; --checkout opts out of it.
+func TestSidecarsSyncBundleFlagRemoved(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "sync",
+		"--sidecar-id", "sb-111",
+		"--bundle",
+	}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "unknown flag") || strings.Contains(combined, "--bundle"),
+		"expected unknown-flag error for --bundle, got: %s", combined)
+}
+
+// TestSidecarsSyncDefaultUsesBundlePath verifies that the default sync path
+// (no --checkout) reaches OpenSession — bundle sync's first step — before
+// failing. Confirmed by seeing AddSSHKey called and no HTTP exec.
+func TestSidecarsSyncDefaultUsesBundlePath(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = "127.0.0.1" // SSH dial will fail — no server at :2222
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	identityFile := filepath.Join(sshDir, "chunk_ai")
+	assert.NilError(t, generateTestSSHKey(t, identityFile))
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "sync",
+		"--sidecar-id", "sb-111",
+		"--identity-file", identityFile,
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected failure (no SSH server)")
+
+	// AddSSHKey must be called — proves OpenSession (bundle sync path) was entered.
+	reqs := cci.Recorder.AllRequests()
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-111/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 1, "expected AddSSHKey call from bundle sync OpenSession; requests: %v", reqs)
+}
+
+// TestSidecarsSyncCheckoutFallback verifies that --checkout is still accepted
+// and that it also reaches OpenSession before failing (SSH is opened first in
+// both the bundle and checkout code paths).
+func TestSidecarsSyncCheckoutFallback(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = "127.0.0.1"
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	identityFile := filepath.Join(sshDir, "chunk_ai")
+	assert.NilError(t, generateTestSSHKey(t, identityFile))
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "sync",
+		"--sidecar-id", "sb-111",
+		"--identity-file", identityFile,
+		"--checkout",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected failure (no SSH server)")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, !strings.Contains(combined, "unknown flag"),
+		"--checkout must be a recognised flag; got: %s", combined)
+
+	reqs := cci.Recorder.AllRequests()
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-111/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 1, "expected AddSSHKey call; requests: %v", reqs)
+}
+
+// TestValidateTestRemoteUsesBundleSyncPath verifies that validate --remote
+// syncs via BundleSync. Confirmed by AddSSHKey being called (OpenSession
+// entered) with no HTTP exec fallback.
+func TestValidateTestRemoteUsesBundleSyncPath(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = "127.0.0.1"
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeProjectConfig(t, workDir, "", "echo test-output")
+
+	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	identityFile := filepath.Join(sshDir, "chunk_ai")
+	assert.NilError(t, generateTestSSHKey(t, identityFile))
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"validate", "test",
+		"--remote",
+		"--sidecar-id", "sb-222",
+		"--identity-file", identityFile,
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected failure (no SSH server)")
+
+	reqs := cci.Recorder.AllRequests()
+
+	// AddSSHKey called — proves syncToSidecar entered OpenSession via BundleSync.
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-222/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs) >= 1, true, "expected AddSSHKey from bundle sync; requests: %v", reqs)
+
+	// HTTP exec must not be used — SSH path taken.
+	execReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sb-222/exec")
+	assert.Equal(t, len(execReqs), 0, "expected no HTTP exec; requests: %v", reqs)
+}
+
 // filterByMethod returns requests matching both method and path prefix.
 func filterByMethod(reqs []recorder.RecordedRequest, method, pathPrefix string) []recorder.RecordedRequest {
 	var out []recorder.RecordedRequest

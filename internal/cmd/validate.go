@@ -425,15 +425,18 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 
 func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc) error {
 	authSock := os.Getenv(config.EnvSSHAuthSock)
-	err := sidecar.Sync(ctx, client, sidecarID, identityFile, authSock, workdir, statusFn)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("sync: %w", err)
+	}
+	err = sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn)
 	if err == nil {
 		return nil
 	}
-	var baseErr *sidecar.RemoteBaseError
-	if errors.As(err, &baseErr) {
+	if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
 		return &userError{
-			msg:        "Could not sync to sidecar: your current branch has not been pushed.",
-			suggestion: "Push your branch and try again.",
+			msg:        errMsgNoOriginRemote,
+			suggestion: errSuggestionAddOrigin,
 			err:        err,
 		}
 	}

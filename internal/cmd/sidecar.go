@@ -29,6 +29,11 @@ func randomSidecarName() string {
 
 const cmdList = "list"
 
+const (
+	errMsgNoOriginRemote     = "Git remote \"origin\" is required for sidecar sync."
+	errSuggestionAddOrigin   = "Run: git remote add origin <url>"
+)
+
 func newSidecarCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                "sidecar",
@@ -481,8 +486,8 @@ func newSidecarSyncCmd() *cobra.Command {
 			if err != nil {
 				if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
 					return &userError{
-						msg:        "Git remote \"origin\" is required for sidecar sync.",
-						suggestion: "Run: git remote add origin <url>",
+						msg:        errMsgNoOriginRemote,
+						suggestion: errSuggestionAddOrigin,
 						err:        err,
 					}
 				}
