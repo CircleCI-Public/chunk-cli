@@ -147,3 +147,101 @@ func TestSync_FetchBeforeReset(t *testing.T) {
 	assert.Assert(t, fetchIdx < resetIdx,
 		"fetch (index %d) must come before reset (index %d); commands: %v", fetchIdx, resetIdx, cmds)
 }
+
+// TestBundleSync_SendsBundle verifies that BundleSync transfers the bundle via
+// tee and fetches it without using the HEAD:HEAD refspec that caused ambiguity
+// and non-fast-forward rejections on incremental syncs.
+func TestBundleSync_SendsBundle(t *testing.T) {
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+
+	repoDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	t.Chdir(repoDir)
+
+	cl := newClient(t, srv.URL)
+	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
+
+	err := sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus)
+	assert.NilError(t, err)
+
+	cmds := sshSrv.Commands()
+
+	// Bundle must be written via tee (no shell redirect needed).
+	assert.Assert(t, containsMatch(cmds, "tee"), "expected tee for bundle write; got: %v", cmds)
+
+	// Fetch must use plain HEAD (no HEAD:HEAD or --update-head-ok).
+	var fetchCmd string
+	for _, c := range cmds {
+		if strings.Contains(c, "git") && strings.Contains(c, "fetch") && strings.Contains(c, ".bundle") {
+			fetchCmd = c
+			break
+		}
+	}
+	assert.Assert(t, fetchCmd != "", "expected a bundle fetch command; got: %v", cmds)
+	assert.Assert(t, !strings.Contains(fetchCmd, "HEAD:HEAD"),
+		"fetch must not use HEAD:HEAD refspec; got: %q", fetchCmd)
+	assert.Assert(t, !strings.Contains(fetchCmd, "--update-head-ok"),
+		"fetch must not use --update-head-ok; got: %q", fetchCmd)
+
+	// After a bundle fetch, reset must target FETCH_HEAD.
+	assert.Assert(t, containsMatch(cmds, "reset --hard FETCH_HEAD"),
+		"expected reset --hard FETCH_HEAD after bundle; got: %v", cmds)
+}
+
+// TestBundleSync_NoOpSkipsBundle verifies that when HEAD has not changed since
+// the last sync, no bundle is sent and the reset target is HEAD.
+func TestBundleSync_NoOpSkipsBundle(t *testing.T) {
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+
+	repoDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	t.Chdir(repoDir)
+
+	cl := newClient(t, srv.URL)
+	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
+
+	// First sync records LastSyncedRef.
+	assert.NilError(t, sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus))
+
+	// Second sync: HEAD unchanged — no bundle should be sent.
+	sshSrv.Reset()
+	assert.NilError(t, sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus))
+
+	cmds := sshSrv.Commands()
+	for _, cmd := range cmds {
+		assert.Assert(t, !strings.Contains(cmd, "tee"),
+			"no bundle should be sent on no-op sync; got command: %q", cmd)
+	}
+	// On a no-op sync the reset target is HEAD (not FETCH_HEAD).
+	assert.Assert(t, containsMatch(cmds, "reset --hard HEAD"),
+		"expected reset --hard HEAD on no-op sync; got: %v", cmds)
+}
+
+func containsMatch(cmds []string, substr string) bool {
+	for _, c := range cmds {
+		if strings.Contains(c, substr) {
+			return true
+		}
+	}
+	return false
+}
