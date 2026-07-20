@@ -18,9 +18,10 @@ import (
 
 // ActiveSidecar holds the currently active sidecar for a project.
 type ActiveSidecar struct {
-	SidecarID string `json:"sidecar_id"`
-	Name      string `json:"name,omitempty"`
-	Workspace string `json:"workspace,omitempty"`
+	SidecarID     string `json:"sidecar_id"`
+	Name          string `json:"name,omitempty"`
+	Workspace     string `json:"workspace,omitempty"`
+	LastSyncedRef string `json:"last_synced_ref,omitempty"`
 }
 
 // CurrentBranch returns the current git branch for the repo rooted at root.
