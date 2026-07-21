@@ -280,6 +280,85 @@ func TestRetryOn429_5xxStillCapsAtThreeWithBudgetSet(t *testing.T) {
 	}
 }
 
+func TestDeprecationWarning_SunsetHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Deprecation", "true")
+		w.Header().Set("Sunset", "Sat, 01 Jan 2028 00:00:00 GMT")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var msgs []string
+	c := hc.New(hc.Config{BaseURL: srv.URL, OnWarn: func(msg string) { msgs = append(msgs, msg) }})
+
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("expected deprecation warning, got none")
+	}
+	if !strings.Contains(msgs[0], "deprecated") {
+		t.Errorf("expected deprecation warning, got %q", msgs[0])
+	}
+	if !strings.Contains(msgs[0], "days") {
+		t.Errorf("expected days-remaining in warning, got %q", msgs[0])
+	}
+}
+
+func TestDeprecationWarning_DeprecationOnly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Deprecation", "true")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var msgs []string
+	c := hc.New(hc.Config{BaseURL: srv.URL, OnWarn: func(msg string) { msgs = append(msgs, msg) }})
+
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msgs) == 0 || !strings.Contains(msgs[0], "deprecated") {
+		t.Errorf("expected deprecation warning, got %v", msgs)
+	}
+}
+
+func TestDeprecationWarning_NoCallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Deprecation", "true")
+		w.Header().Set("Sunset", "Sat, 01 Jan 2027 00:00:00 GMT")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// no OnWarn — must not panic
+	c := hc.New(hc.Config{BaseURL: srv.URL})
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDeprecationWarning_NoHeadersNoCallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	called := false
+	c := hc.New(hc.Config{BaseURL: srv.URL, OnWarn: func(msg string) { called = true }})
+
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("OnWarn should not be called without deprecation headers")
+	}
+}
+
 func TestRouteParamsMultiple(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v2/agents/org/org-1/project/proj-2/runs" {

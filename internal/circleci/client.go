@@ -2,6 +2,7 @@ package circleci
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,6 +24,9 @@ type StatusError = hc.StatusError
 type Config struct {
 	Token   string
 	BaseURL string
+	// OnWarn, when non-nil, is called with a plain-text deprecation warning.
+	// See httpcl.Config.OnWarn for details.
+	OnWarn func(msg string)
 }
 
 type Client struct {
@@ -39,6 +43,7 @@ func NewClient(cfg Config) (*Client, error) {
 		AuthHeader:       "Circle-Token",
 		UserAgent:        version.UserAgent(),
 		RetryOn429Budget: 30 * time.Second,
+		OnWarn:           cfg.OnWarn,
 	})
 	return &Client{cl: cl}, nil
 }
@@ -336,5 +341,30 @@ func mapErr(op string, err error) error {
 	if he.StatusCode == http.StatusUnauthorized || he.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("%s: %w", op, ErrNotAuthorized)
 	}
-	return &StatusError{Op: op, StatusCode: he.StatusCode}
+	se := &StatusError{Op: op, StatusCode: he.StatusCode}
+	if he.StatusCode == http.StatusGone {
+		se.ServerMessage = extractServerMessage(he.Body)
+	}
+	return se
+}
+
+// extractServerMessage tries to pull a human-readable message from a JSON
+// error body. Falls back to the raw body string if JSON parsing fails.
+func extractServerMessage(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var payload struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &payload); err == nil {
+		if payload.Error != "" {
+			return payload.Error
+		}
+		if payload.Message != "" {
+			return payload.Message
+		}
+	}
+	return string(body)
 }

@@ -92,6 +92,25 @@ type FakeCircleCI struct {
 	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
 	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
 	CreateOrgStatusCode      int // override for POST /api/v2/organization
+
+	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
+	// headers without changing individual handler logic.
+	ExtraHeaders http.Header
+}
+
+// ServeHTTP injects ExtraHeaders into every response before delegating to the
+// embedded gin handler. Headers must be set before the first Write or
+// WriteHeader call, which gin does internally — setting them here satisfies
+// that ordering.
+func (f *FakeCircleCI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.RLock()
+	for k, vals := range f.ExtraHeaders {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	f.mu.RUnlock()
+	f.Handler.ServeHTTP(w, r)
 }
 
 func NewFakeCircleCI() *FakeCircleCI {

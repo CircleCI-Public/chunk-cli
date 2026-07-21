@@ -22,15 +22,20 @@ func (e *HTTPError) Error() string {
 // StatusError is a structured HTTP error for use by API client packages. It
 // records the operation name and HTTP status code without exposing HTTPError.
 type StatusError struct {
-	Op         string
-	StatusCode int
+	Op            string
+	StatusCode    int
+	ServerMessage string // optional message from the server response body
 }
 
 func (e *StatusError) Error() string {
+	base := fmt.Sprintf("%d %s", e.StatusCode, http.StatusText(e.StatusCode))
 	if e.Op != "" {
-		return fmt.Sprintf("%s: %d %s", e.Op, e.StatusCode, http.StatusText(e.StatusCode))
+		base = e.Op + ": " + base
 	}
-	return fmt.Sprintf("%d %s", e.StatusCode, http.StatusText(e.StatusCode))
+	if e.ServerMessage != "" {
+		return base + " — " + e.ServerMessage
+	}
+	return base
 }
 
 // HasStatusCode checks if err is an *HTTPError with any of the given status codes.

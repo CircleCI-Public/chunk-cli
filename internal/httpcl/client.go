@@ -17,6 +17,31 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 )
 
+// checkDeprecation calls onWarn when the response carries Deprecation or Sunset
+// headers, signalling that the endpoint will be removed. The message passed to
+// onWarn is plain text — no prefix or newline — so the caller controls formatting.
+func checkDeprecation(onWarn func(string), h http.Header) {
+	dep := h.Get("Deprecation")
+	sunset := h.Get("Sunset")
+	if dep == "" && sunset == "" {
+		return
+	}
+	if sunset != "" {
+		if t, err := http.ParseTime(sunset); err == nil {
+			days := int(time.Until(t).Hours() / 24)
+			if days > 0 {
+				onWarn(fmt.Sprintf("this API endpoint is deprecated and will be removed in %d days — upgrade chunk CLI", days))
+			} else {
+				onWarn("this API endpoint is deprecated and removal is imminent — upgrade chunk CLI")
+			}
+		} else {
+			onWarn(fmt.Sprintf("this API endpoint is deprecated and will be removed on %s — upgrade chunk CLI", sunset))
+		}
+	} else {
+		onWarn("this API endpoint is deprecated and will be removed — upgrade chunk CLI")
+	}
+}
+
 // retryCtxKey is the context key for the per-call retry state.
 type retryCtxKey struct{}
 
@@ -52,6 +77,10 @@ type Config struct {
 	RetryOn429Budget time.Duration
 	// Transport overrides the HTTP transport (useful for testing).
 	Transport http.RoundTripper
+	// OnWarn, when non-nil, is called with a plain-text warning message when the
+	// server signals endpoint removal via Deprecation or Sunset response headers.
+	// The caller is responsible for formatting (prefix, newline, colour).
+	OnWarn func(msg string)
 }
 
 // Client is a simple HTTP client with JSON defaults and automatic retries.
@@ -62,6 +91,7 @@ type Client struct {
 	userAgent        string
 	timeout          time.Duration
 	retryOn429Budget time.Duration
+	onWarn           func(string)
 	http             *retryablehttp.Client
 }
 
@@ -126,6 +156,7 @@ func New(cfg Config) *Client {
 		userAgent:        cfg.UserAgent,
 		timeout:          timeout,
 		retryOn429Budget: cfg.RetryOn429Budget,
+		onWarn:           cfg.OnWarn,
 		http:             rc,
 	}
 }
@@ -221,6 +252,9 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 	status := resp.StatusCode
 
 	if status >= 200 && status < 300 {
+		if c.onWarn != nil {
+			checkDeprecation(c.onWarn, resp.Header)
+		}
 		if r.decoder != nil {
 			if err := r.decoder(resp.Body); err != nil {
 				return status, fmt.Errorf("httpcl: decode response: %w", err)

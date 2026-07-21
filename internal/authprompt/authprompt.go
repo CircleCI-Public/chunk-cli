@@ -79,14 +79,17 @@ func ValidateAPIKey(ctx context.Context, apiKey, baseURL string) error {
 }
 
 // ResolveCircleCIClient returns a CircleCI client if credentials are available.
-// Returns ErrNeedsAuth when the caller must prompt.
-func ResolveCircleCIClient(rc config.ResolvedConfig) (*circleci.Client, error) {
+// Returns ErrNeedsAuth when the caller must prompt. onWarn is called with a
+// plain-text deprecation message when the server signals endpoint removal; pass
+// nil to silence warnings.
+func ResolveCircleCIClient(rc config.ResolvedConfig, onWarn func(string)) (*circleci.Client, error) {
 	if rc.CircleCIToken == "" {
 		return nil, ErrNeedsAuth
 	}
 	return circleci.NewClient(circleci.Config{
 		Token:   rc.CircleCIToken,
 		BaseURL: rc.CircleCIBaseURL,
+		OnWarn:  onWarn,
 	})
 }
 

@@ -56,7 +56,9 @@ func printSaved(streams iostream.Streams, label string, insecureStorage bool) {
 
 func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, streams iostream.Streams, prompter func(string) (string, error)) (*circleci.Client, error) {
 	insecureStorage := insecureStorageFlag(cmd)
-	client, err := authprompt.ResolveCircleCIClient(rc)
+	client, err := authprompt.ResolveCircleCIClient(rc, func(msg string) {
+		streams.ErrPrintln(ui.ErrWarning(msg))
+	})
 	if err == nil {
 		return client, nil
 	}
@@ -132,6 +134,9 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 	return circleci.NewClient(circleci.Config{
 		Token:   token,
 		BaseURL: rc.CircleCIBaseURL,
+		OnWarn: func(msg string) {
+			streams.ErrPrintln(ui.ErrWarning(msg))
+		},
 	})
 }
 

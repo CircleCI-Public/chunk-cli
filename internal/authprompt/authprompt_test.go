@@ -69,7 +69,7 @@ func TestResolveCircleCIClient_TokenInEnv(t *testing.T) {
 	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
 
 	rc, _ := config.Resolve("", "", insecureStorage)
-	client, err := authprompt.ResolveCircleCIClient(rc)
+	client, err := authprompt.ResolveCircleCIClient(rc, nil)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
@@ -91,7 +91,7 @@ func TestResolveCircleCIClient_TokenInConfig(t *testing.T) {
 	assert.NilError(t, config.Save(cfg))
 
 	rc, _ := config.Resolve("", "", insecureStorage)
-	client, err := authprompt.ResolveCircleCIClient(rc)
+	client, err := authprompt.ResolveCircleCIClient(rc, nil)
 	assert.NilError(t, err)
 	assert.Assert(t, client != nil)
 }
@@ -102,7 +102,7 @@ func TestResolveCircleCIClient_NeedsAuth(t *testing.T) {
 	t.Setenv(config.EnvCircleCIToken, "")
 
 	rc, _ := config.Resolve("", "", insecureStorage)
-	_, err := authprompt.ResolveCircleCIClient(rc)
+	_, err := authprompt.ResolveCircleCIClient(rc, nil)
 	assert.Assert(t, errors.Is(err, authprompt.ErrNeedsAuth))
 }
 

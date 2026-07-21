@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -155,6 +156,27 @@ func errNoForce(action string) error {
 		withCode("interactivity.no_force").
 		withSuggestion("Pass --force to bypass this confirmation.").
 		withExitCode(ExitBadArgs)
+}
+
+// GoneError returns a formatted error when err contains a 410 Gone status,
+// which means the server no longer supports this version of the CLI. Returns
+// nil for any other error. Use at the top of main's error path to intercept
+// 410s before generic handling.
+func GoneError(err error) error {
+	var se *circleci.StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusGone {
+		return nil
+	}
+	detail := se.ServerMessage
+	if detail == "" {
+		detail = "This server no longer supports this version of chunk CLI."
+	}
+	return newUserError("chunk CLI is out of date.").
+		withCode("cli.upgrade_required").
+		withDetail(detail).
+		withSuggestion("Run `chunk upgrade` to get the latest version.").
+		withExitCode(ExitAPIError).
+		wrap(err)
 }
 
 // nonInteractive reports whether the process is running in a CI/CD environment.
