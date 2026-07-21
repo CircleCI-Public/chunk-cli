@@ -3,9 +3,10 @@
 // Telemetry is opt-out: it fires unless disabled via a well-known opt-out
 // environment variable or the persisted telemetry config preference (see
 // internal/config.IsTelemetry).
-// Only the command path, the names (never values) of flags the user set,
-// and a per-install anonymous instance ID are ever collected — no flag
-// values, argument values, file paths, or other PII.
+// Only the command path, the names (never values) of flags the user set, a
+// per-install anonymous instance ID, the operating system, and the detected
+// AI coding agent (if any) are ever collected — no flag values, argument
+// values, file paths, or other PII.
 //
 // Modeled on circleci-cli's internal/telemetry package.
 package telemetry
@@ -61,16 +62,28 @@ type Config struct {
 type Meta struct {
 	Version    string
 	InstanceID uuid.UUID
+
+	// OS is the operating system chunk-cli is running on, e.g. runtime.GOOS.
+	OS string
+	// CodingAgent is the AI coding agent chunk-cli was invoked from (e.g.
+	// "claude-code", "cursor"), or "" if none was detected. See
+	// DetectCodingAgent.
+	CodingAgent string
 }
 
 func (m *Meta) toContext() *analytics.Context {
-	return &analytics.Context{
+	ctx := &analytics.Context{
 		App: analytics.AppInfo{
 			Name:    "chunk-cli",
 			Version: m.Version,
 		},
 		Device: analytics.DeviceInfo{Id: m.InstanceID.String()},
+		OS:     analytics.OSInfo{Name: m.OS},
 	}
+	if m.CodingAgent != "" {
+		ctx.Extra = map[string]interface{}{"codingAgent": m.CodingAgent}
+	}
+	return ctx
 }
 
 // NewSender creates a new Sender per cfg.

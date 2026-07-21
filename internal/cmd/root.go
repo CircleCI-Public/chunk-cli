@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/google/uuid"
@@ -134,8 +135,10 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		WriteKey: writeKey,
 		Binary:   executable,
 		Metadata: telemetry.Meta{
-			Version:    version,
-			InstanceID: instanceID,
+			Version:     version,
+			InstanceID:  instanceID,
+			OS:          runtime.GOOS,
+			CodingAgent: telemetry.DetectCodingAgent(),
 		},
 	})
 	if err != nil {
