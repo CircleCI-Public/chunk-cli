@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -225,6 +227,133 @@ func TestRunAll(t *testing.T) {
 	})
 }
 
+// --- RunAllWithResults tests ---
+
+func TestRunAllWithResults(t *testing.T) {
+	t.Run("all pass returns results", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "fmt", Run: "true"},
+			{Name: "lint", Run: "true"},
+		}}
+		streams, _, _ := newStreams()
+
+		results, err := RunAllWithResults(context.Background(), ".", cfg, func(iostream.Level, string) {}, streams)
+		assert.NilError(t, err)
+		assert.Equal(t, len(results), 2)
+		assert.Check(t, cmp.Equal(results[0].Name, "fmt"))
+		assert.Check(t, cmp.Equal(results[0].Status, RunPassed))
+		assert.Check(t, results[0].Duration >= 0)
+		assert.Check(t, cmp.Equal(results[1].Name, "lint"))
+		assert.Check(t, cmp.Equal(results[1].Status, RunPassed))
+	})
+
+	t.Run("failure marks remaining as skipped", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "fmt", Run: "true"},
+			{Name: "lint", Run: "false"},
+			{Name: "test", Run: "true"},
+		}}
+		streams, _, _ := newStreams()
+
+		results, err := RunAllWithResults(context.Background(), ".", cfg, func(iostream.Level, string) {}, streams)
+		assert.Assert(t, err != nil)
+		assert.Equal(t, len(results), 3)
+		assert.Check(t, cmp.Equal(results[0].Status, RunPassed), "fmt should pass")
+		assert.Check(t, cmp.Equal(results[1].Status, RunFailed), "lint should fail")
+		assert.Check(t, cmp.Equal(results[1].ExitCode, 1))
+		assert.Check(t, cmp.Equal(results[2].Status, RunSkipped), "test should be skipped")
+	})
+
+	t.Run("no commands returns ErrNotConfigured", func(t *testing.T) {
+		cfg := &config.ProjectConfig{}
+		streams, _, _ := newStreams()
+
+		results, err := RunAllWithResults(context.Background(), ".", cfg, func(iostream.Level, string) {}, streams)
+		assert.Check(t, cmp.Nil(results))
+		assert.ErrorContains(t, err, "no validate commands")
+	})
+}
+
+// --- PrintSummary tests ---
+
+func TestPrintSummary(t *testing.T) {
+	t.Run("all passed", func(t *testing.T) {
+		results := []CommandResult{
+			{Name: "fmt", Duration: 300 * time.Millisecond, Status: RunPassed},
+			{Name: "lint", Duration: 2100 * time.Millisecond, Status: RunPassed},
+		}
+		var buf bytes.Buffer
+		PrintSummary(results, &buf)
+		got := buf.String()
+		assert.Assert(t, strings.Contains(got, "Validation passed"), "got: %s", got)
+		assert.Assert(t, strings.Contains(got, "✓"), "got: %s", got)
+		assert.Assert(t, strings.Contains(got, "fmt"), "got: %s", got)
+		assert.Assert(t, strings.Contains(got, "lint"), "got: %s", got)
+	})
+
+	t.Run("failure and skipped", func(t *testing.T) {
+		results := []CommandResult{
+			{Name: "fmt", Duration: 300 * time.Millisecond, Status: RunPassed},
+			{Name: "lint", Duration: 2100 * time.Millisecond, ExitCode: 1, Status: RunFailed},
+			{Name: "test", Status: RunSkipped},
+		}
+		var buf bytes.Buffer
+		PrintSummary(results, &buf)
+		got := buf.String()
+		assert.Assert(t, strings.Contains(got, "Validation failed"), "got: %s", got)
+		assert.Assert(t, strings.Contains(got, "✓"), "got: %s", got)
+		assert.Assert(t, strings.Contains(got, "✗"), "got: %s", got)
+		assert.Assert(t, strings.Contains(got, "—"), "got: %s", got)
+		assert.Assert(t, strings.Contains(got, "exit 1"), "got: %s", got)
+		assert.Assert(t, strings.Contains(got, "skipped"), "got: %s", got)
+	})
+
+	t.Run("timeout", func(t *testing.T) {
+		results := []CommandResult{
+			{Name: "test", Duration: 300 * time.Second, Status: RunFailed, Timeout: true},
+		}
+		var buf bytes.Buffer
+		PrintSummary(results, &buf)
+		got := buf.String()
+		assert.Assert(t, strings.Contains(got, "timeout"), "got: %s", got)
+		assert.Assert(t, !strings.Contains(got, "exit"), "should not show exit code for timeout, got: %s", got)
+	})
+
+	t.Run("no-op on empty", func(t *testing.T) {
+		var buf bytes.Buffer
+		PrintSummary(nil, &buf)
+		assert.Equal(t, buf.Len(), 0)
+	})
+}
+
+// --- LastFailed tests ---
+
+func TestLastFailed(t *testing.T) {
+	t.Run("returns nil for empty", func(t *testing.T) {
+		assert.Check(t, cmp.Nil(LastFailed(nil)))
+	})
+
+	t.Run("returns nil when all passed", func(t *testing.T) {
+		results := []CommandResult{
+			{Name: "fmt", Status: RunPassed},
+			{Name: "lint", Status: RunPassed},
+		}
+		assert.Check(t, cmp.Nil(LastFailed(results)))
+	})
+
+	t.Run("returns first failed result", func(t *testing.T) {
+		results := []CommandResult{
+			{Name: "fmt", Status: RunPassed},
+			{Name: "lint", ExitCode: 1, Status: RunFailed},
+			{Name: "test", Status: RunSkipped},
+		}
+		got := LastFailed(results)
+		assert.Assert(t, got != nil)
+		assert.Check(t, cmp.Equal(got.Name, "lint"))
+		assert.Check(t, cmp.Equal(got.ExitCode, 1))
+	})
+}
+
 // --- Config with FileExt / Timeout tests ---
 
 func TestCommandFileExtRoundTrip(t *testing.T) {
@@ -360,6 +489,64 @@ func TestRunRemote(t *testing.T) {
 
 		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/custom/path", t.TempDir(), func(iostream.Level, string) {}, streams))
 		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/custom/path' &&"), "got: %s", capturedScript)
+	})
+}
+
+// --- RunRemoteWithResults tests ---
+
+func TestRunRemoteWithResults(t *testing.T) {
+	t.Run("all pass returns results with timing", func(t *testing.T) {
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "ok\n", "", 0, nil
+		}
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "fmt", Run: "true"},
+			{Name: "lint", Run: "true"},
+		}}
+		streams, _, _ := newStreams()
+
+		results, err := RunRemoteWithResults(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams)
+		assert.NilError(t, err)
+		assert.Equal(t, len(results), 2)
+		assert.Check(t, cmp.Equal(results[0].Name, "fmt"))
+		assert.Check(t, cmp.Equal(results[0].Status, RunPassed))
+		assert.Check(t, results[0].Duration >= 0)
+		assert.Check(t, cmp.Equal(results[1].Name, "lint"))
+		assert.Check(t, cmp.Equal(results[1].Status, RunPassed))
+	})
+
+	t.Run("failure marks remaining as skipped", func(t *testing.T) {
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 1, nil
+		}
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "fmt", Run: "true"},
+			{Name: "lint", Run: "false"},
+			{Name: "test", Run: "true"},
+		}}
+		streams, _, _ := newStreams()
+
+		results, err := RunRemoteWithResults(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams)
+		assert.Assert(t, err != nil)
+		assert.Equal(t, len(results), 3)
+		assert.Check(t, cmp.Equal(results[0].Status, RunFailed), "fmt should fail (exitCode 1)")
+		assert.Check(t, cmp.Equal(results[0].ExitCode, 1))
+		assert.Check(t, cmp.Equal(results[1].Status, RunSkipped), "lint should be skipped")
+		assert.Check(t, cmp.Equal(results[2].Status, RunSkipped), "test should be skipped")
+	})
+
+	t.Run("unknown named command returns nil results", func(t *testing.T) {
+		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+			return "", "", 0, nil
+		}
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "echo test"},
+		}}
+		streams, _, _ := newStreams()
+
+		results, err := RunRemoteWithResults(context.Background(), execFn, cfg, "lint", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams)
+		assert.ErrorContains(t, err, `"lint" not configured`)
+		assert.Check(t, cmp.Nil(results))
 	})
 }
 

@@ -18,6 +18,25 @@ import (
 // ErrNotConfigured indicates no validate commands are configured.
 var ErrNotConfigured = errors.New("no validate commands configured")
 
+// RunStatus represents the outcome of a single command execution.
+type RunStatus int
+
+// RunPassed, RunFailed, RunSkipped are the possible outcomes of a command run.
+const (
+	RunPassed RunStatus = iota
+	RunFailed
+	RunSkipped
+)
+
+// CommandResult records the outcome of one command execution.
+type CommandResult struct {
+	Name     string
+	Duration time.Duration
+	ExitCode int
+	Status   RunStatus
+	Timeout  bool
+}
+
 // ErrWorkspaceNotFound is returned when the remote workspace directory does not exist.
 var ErrWorkspaceNotFound = errors.New("workspace directory not found on sidecar")
 
@@ -68,18 +87,91 @@ func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConf
 	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
 }
 
-// RunAll runs all configured commands, stopping at the first failure.
-func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
+// RunAllWithResults runs all configured commands and returns per-command results
+// alongside the first error encountered.
+func RunAllWithResults(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) ([]CommandResult, error) {
 	if !cfg.HasCommands() {
-		return ErrNotConfigured
+		return nil, ErrNotConfigured
 	}
-
+	results := make([]CommandResult, 0, len(cfg.Commands))
 	for i, c := range cfg.Commands {
-		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams); err != nil {
+		start := time.Now()
+		err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
+		dur := time.Since(start)
+		if err != nil {
+			var timeoutErr *commandTimeoutError
+			isTimeout := errors.As(err, &timeoutErr)
+			exitCode := 0
+			if !isTimeout {
+				exitCode = exitCodeFromErr(err)
+			}
+			results = append(results, CommandResult{Name: c.Name, Duration: dur, ExitCode: exitCode, Status: RunFailed, Timeout: isTimeout})
 			for j := i + 1; j < len(cfg.Commands); j++ {
 				status(iostream.LevelWarn, fmt.Sprintf("%s: skipped (%s failed)", cfg.Commands[j].Name, c.Name))
+				results = append(results, CommandResult{Name: cfg.Commands[j].Name, Status: RunSkipped})
 			}
-			return err
+			return results, err
+		}
+		results = append(results, CommandResult{Name: c.Name, Duration: dur, Status: RunPassed})
+	}
+	return results, nil
+}
+
+// RunAll runs all configured commands, stopping at the first failure.
+func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
+	_, err := RunAllWithResults(ctx, workDir, cfg, status, streams)
+	return err
+}
+
+// PrintSummary writes a per-command result table to w.
+func PrintSummary(results []CommandResult, w io.Writer) {
+	if len(results) == 0 {
+		return
+	}
+	anyFailed := false
+	for _, r := range results {
+		if r.Status == RunFailed {
+			anyFailed = true
+			break
+		}
+	}
+	if anyFailed {
+		_, _ = fmt.Fprintln(w, "\nValidation failed:")
+	} else {
+		_, _ = fmt.Fprintln(w, "\nValidation passed:")
+	}
+	maxName := 0
+	for _, r := range results {
+		if len(r.Name) > maxName {
+			maxName = len(r.Name)
+		}
+	}
+	for _, r := range results {
+		var symbol, detail string
+		switch r.Status {
+		case RunPassed:
+			symbol = "✓"
+			detail = fmt.Sprintf("%.1fs", r.Duration.Seconds())
+		case RunFailed:
+			symbol = "✗"
+			if r.Timeout {
+				detail = fmt.Sprintf("%.1fs   timeout", r.Duration.Seconds())
+			} else {
+				detail = fmt.Sprintf("%.1fs   exit %d", r.Duration.Seconds(), r.ExitCode)
+			}
+		case RunSkipped:
+			symbol = "—"
+			detail = "skipped"
+		}
+		_, _ = fmt.Fprintf(w, "  %-*s   %s   %s\n", maxName, r.Name, symbol, detail)
+	}
+}
+
+// LastFailed returns the first CommandResult with RunFailed status, or nil.
+func LastFailed(results []CommandResult) *CommandResult {
+	for i := range results {
+		if results[i].Status == RunFailed {
+			return &results[i]
 		}
 	}
 	return nil
@@ -106,37 +198,58 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 	return nil
 }
 
-// RunRemote runs commands on a remote sidecar via SSH.
+// RunRemoteWithResults runs commands on a remote sidecar via SSH and returns
+// per-command results alongside the first error encountered.
 // If name is non-empty, only the named command is run.
 // workDir is the local repository root used to expand {{CHANGED_PACKAGES}}.
-func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) error {
+func RunRemoteWithResults(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) ([]CommandResult, error) {
 	commands := cfg.Commands
 	if name != "" {
 		c := cfg.FindCommand(name)
 		if c == nil {
-			return fmt.Errorf("command %q not configured", name)
+			return nil, fmt.Errorf("command %q not configured", name)
 		}
 		commands = []config.Command{*c}
 	}
-	for _, c := range commands {
+	results := make([]CommandResult, 0, len(commands))
+	for i, c := range commands {
 		run := expandCommand(workDir, c.Run)
 		script := "cd " + shellEscape(dest) + " && " + run
 		status(iostream.LevelInfo, fmt.Sprintf("Running %s (remote): %s", c.Name, c.Run))
+		start := time.Now()
 		stdout, stderr, exitCode, err := execFn(ctx, script)
-		if err != nil {
-			return fmt.Errorf("remote %s: %w", c.Name, err)
-		}
+		dur := time.Since(start)
 		if stdout != "" {
 			_, _ = fmt.Fprint(streams.Out, stdout)
 		}
 		if stderr != "" {
 			_, _ = fmt.Fprint(streams.Err, stderr)
 		}
-		if exitCode != 0 {
-			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
+		if err != nil {
+			results = append(results, CommandResult{Name: c.Name, Duration: dur, ExitCode: exitCode, Status: RunFailed})
+			for j := i + 1; j < len(commands); j++ {
+				results = append(results, CommandResult{Name: commands[j].Name, Status: RunSkipped})
+			}
+			return results, fmt.Errorf("remote %s: %w", c.Name, err)
 		}
+		if exitCode != 0 {
+			results = append(results, CommandResult{Name: c.Name, Duration: dur, ExitCode: exitCode, Status: RunFailed})
+			for j := i + 1; j < len(commands); j++ {
+				results = append(results, CommandResult{Name: commands[j].Name, Status: RunSkipped})
+			}
+			return results, fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
+		}
+		results = append(results, CommandResult{Name: c.Name, Duration: dur, Status: RunPassed})
 	}
-	return nil
+	return results, nil
+}
+
+// RunRemote runs commands on a remote sidecar via SSH.
+// If name is non-empty, only the named command is run.
+// workDir is the local repository root used to expand {{CHANGED_PACKAGES}}.
+func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) error {
+	_, err := RunRemoteWithResults(ctx, execFn, cfg, name, dest, workDir, status, streams)
+	return err
 }
 
 // RunRemoteInline runs a single inline command on a remote sidecar via SSH.
@@ -193,6 +306,23 @@ func expandCommand(workDir, command string) string {
 	return strings.ReplaceAll(command, "{{CHANGED_PACKAGES}}", expanded)
 }
 
+type commandTimeoutError struct {
+	name    string
+	timeout int
+}
+
+func (e *commandTimeoutError) Error() string {
+	return fmt.Sprintf("%s command timed out after %ds", e.name, e.timeout)
+}
+
+func exitCodeFromErr(err error) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return 1
+}
+
 func runCommand(ctx context.Context, workDir, name, command string, timeoutSec int, status iostream.StatusFunc, streams iostream.Streams) error {
 	command = expandCommand(workDir, command)
 	status(iostream.LevelInfo, fmt.Sprintf("Running %s: %s", name, command))
@@ -211,11 +341,11 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec i
 	err := cmd.Run()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
+			return &commandTimeoutError{name: name, timeout: timeoutSec}
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
-			return fmt.Errorf("%s command failed with exit code %d", name, exitErr.ExitCode())
+			return fmt.Errorf("%s command failed with exit code %d: %w", name, exitErr.ExitCode(), err)
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
@@ -264,7 +394,9 @@ func HasGitChanges(workDir string) bool {
 // commands. On success it resets the attempt counter. On failure it increments
 // the counter and returns a HookExitError with code 2 to re-signal the agent,
 // or prints a give-up message and returns nil once maxAttempts is reached.
-func WrapHookResult(sessionID string, execErr error, maxAttempts int, warn io.Writer) error {
+// lastFailure is optional: when non-nil its name and exit info are included in
+// the give-up message so the agent has structured context about what failed.
+func WrapHookResult(sessionID string, execErr error, maxAttempts int, lastFailure *CommandResult, warn io.Writer) error {
 	if execErr == nil {
 		ResetAttempts(sessionID)
 		return nil
@@ -272,6 +404,13 @@ func WrapHookResult(sessionID string, execErr error, maxAttempts int, warn io.Wr
 	n := TrackFailedAttempt(sessionID, warn)
 	if n >= maxAttempts {
 		_, _ = fmt.Fprintf(warn, "chunk validate: validation has failed %d time(s) in a row.\n", n)
+		if lastFailure != nil {
+			if lastFailure.Timeout {
+				_, _ = fmt.Fprintf(warn, "Last failure: %s (timed out after %.0fs)\n", lastFailure.Name, lastFailure.Duration.Seconds())
+			} else {
+				_, _ = fmt.Fprintf(warn, "Last failure: %s (exit %d, %.1fs)\n", lastFailure.Name, lastFailure.ExitCode, lastFailure.Duration.Seconds())
+			}
+		}
 		_, _ = fmt.Fprintf(warn, "The failures above do not appear to be resolving automatically.\n")
 		_, _ = fmt.Fprintf(warn, "Stop attempting to fix this and ask the user for guidance instead.\n")
 		return nil

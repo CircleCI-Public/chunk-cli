@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -79,7 +80,7 @@ func TestResetAttempts_ClearsCounter(t *testing.T) {
 func TestWrapHookResult_NilError_ResetsAndReturnsNil(t *testing.T) {
 	sid := sessionID(t)
 	TrackFailedAttempt(sid, nil) // prime the counter
-	err := WrapHookResult(sid, nil, DefaultMaxAttempts, nil)
+	err := WrapHookResult(sid, nil, DefaultMaxAttempts, nil, nil)
 	assert.NilError(t, err)
 	// counter should be reset: next failure starts at 1
 	assert.Equal(t, TrackFailedAttempt(sid, nil), 1)
@@ -87,7 +88,7 @@ func TestWrapHookResult_NilError_ResetsAndReturnsNil(t *testing.T) {
 
 func TestWrapHookResult_Error_ReturnsExitCode2(t *testing.T) {
 	sid := sessionID(t)
-	err := WrapHookResult(sid, errors.New("failed"), DefaultMaxAttempts, nil)
+	err := WrapHookResult(sid, errors.New("failed"), DefaultMaxAttempts, nil, nil)
 	assert.Assert(t, err != nil)
 	type exitCoder interface{ ExitCode() int }
 	ec, ok := err.(exitCoder)
@@ -100,11 +101,11 @@ func TestWrapHookResult_GivesUpAfterMaxAttempts(t *testing.T) {
 	var buf bytes.Buffer
 
 	for attempt := 1; attempt < DefaultMaxAttempts; attempt++ {
-		err := WrapHookResult(sid, errors.New("failed"), DefaultMaxAttempts, &buf)
+		err := WrapHookResult(sid, errors.New("failed"), DefaultMaxAttempts, nil, &buf)
 		assert.Assert(t, err != nil, "attempt %d: expected exit 2", attempt)
 	}
 	// final attempt: should give up
-	err := WrapHookResult(sid, errors.New("failed"), DefaultMaxAttempts, &buf)
+	err := WrapHookResult(sid, errors.New("failed"), DefaultMaxAttempts, nil, &buf)
 	assert.NilError(t, err, "expected nil after max attempts")
 	assert.Assert(t, strings.Contains(buf.String(), "ask the user"), "got: %s", buf.String())
 }
@@ -112,9 +113,31 @@ func TestWrapHookResult_GivesUpAfterMaxAttempts(t *testing.T) {
 func TestWrapHookResult_CustomMaxAttempts(t *testing.T) {
 	sid := sessionID(t)
 	var buf bytes.Buffer
-	err := WrapHookResult(sid, errors.New("failed"), 1, &buf)
+	err := WrapHookResult(sid, errors.New("failed"), 1, nil, &buf)
 	assert.NilError(t, err, "expected give-up after 1 attempt")
 	assert.Assert(t, strings.Contains(buf.String(), "ask the user"), "got: %s", buf.String())
+}
+
+func TestWrapHookResult_GiveUpIncludesLastFailure(t *testing.T) {
+	sid := sessionID(t)
+	var buf bytes.Buffer
+	failure := &CommandResult{Name: "lint", ExitCode: 1, Duration: 2*time.Second + 100*time.Millisecond, Status: RunFailed}
+	err := WrapHookResult(sid, errors.New("failed"), 1, failure, &buf)
+	assert.NilError(t, err, "expected give-up after 1 attempt")
+	got := buf.String()
+	assert.Assert(t, strings.Contains(got, "lint"), "expected last failure name in output, got: %s", got)
+	assert.Assert(t, strings.Contains(got, "exit 1"), "expected exit code in output, got: %s", got)
+}
+
+func TestWrapHookResult_GiveUpIncludesTimeoutFailure(t *testing.T) {
+	sid := sessionID(t)
+	var buf bytes.Buffer
+	failure := &CommandResult{Name: "test", Duration: 300 * time.Second, Status: RunFailed, Timeout: true}
+	err := WrapHookResult(sid, errors.New("failed"), 1, failure, &buf)
+	assert.NilError(t, err, "expected give-up after 1 attempt")
+	got := buf.String()
+	assert.Assert(t, strings.Contains(got, "test"), "expected command name in output, got: %s", got)
+	assert.Assert(t, strings.Contains(got, "timed out"), "expected timeout in output, got: %s", got)
 }
 
 // --- HooksDisabled ---
