@@ -34,6 +34,10 @@ func main() {
 		if ec, ok := err.(interface{ ExitCode() int }); ok {
 			os.Exit(ec.ExitCode())
 		}
+		// 410 anywhere means the CLI needs upgrading — override before display.
+		if ge := cmd.GoneError(err); ge != nil {
+			err = ge
+		}
 		m, d, s, exitCode := errorDetails(err)
 		if jsonFlagPresent() {
 			type jsonErr struct {

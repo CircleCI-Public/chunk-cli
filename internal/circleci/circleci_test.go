@@ -3,7 +3,9 @@ package circleci
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -358,6 +360,68 @@ func TestTriggerRun(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error on 500 response")
 		}
+	})
+}
+
+func TestMapErr_410_SurfacesBody(t *testing.T) {
+	t.Run("json error field", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusGone)
+			_, _ = w.Write([]byte(`{"error":"upgrade chunk CLI to v2.x or later"}`))
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv.URL)
+		_, err := client.ListSidecars(context.Background(), "org-1", false)
+
+		assert.Assert(t, err != nil)
+		assert.Assert(t, strings.Contains(err.Error(), "upgrade chunk CLI"), "error should include server message, got: %v", err)
+	})
+
+	t.Run("json message field", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusGone)
+			_, _ = w.Write([]byte(`{"message":"please upgrade"}`))
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv.URL)
+		_, err := client.ListSidecars(context.Background(), "org-1", false)
+
+		assert.Assert(t, err != nil)
+		assert.Assert(t, strings.Contains(err.Error(), "please upgrade"), "error should include server message, got: %v", err)
+	})
+
+	t.Run("non-json body falls back to raw string", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusGone)
+			_, _ = w.Write([]byte("this endpoint has been removed"))
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv.URL)
+		_, err := client.ListSidecars(context.Background(), "org-1", false)
+
+		assert.Assert(t, err != nil)
+		assert.Assert(t, strings.Contains(err.Error(), "this endpoint has been removed"), "error should include raw body, got: %v", err)
+	})
+
+	t.Run("empty body shows plain 410", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusGone)
+		}))
+		defer srv.Close()
+
+		client := newTestClient(t, srv.URL)
+		_, err := client.ListSidecars(context.Background(), "org-1", false)
+
+		assert.Assert(t, err != nil)
+		var se *hc.StatusError
+		assert.Assert(t, errors.As(err, &se))
+		assert.Equal(t, se.StatusCode, http.StatusGone)
+		assert.Equal(t, se.ServerMessage, "")
 	})
 }
 
