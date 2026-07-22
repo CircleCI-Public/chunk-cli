@@ -84,6 +84,7 @@ Configuration:
 	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
 	rootCmd.AddCommand(newReceiveTelemetryCmd())
+	rootCmd.AddCommand(newWatchCmd())
 
 	rootCmd.AddCommand(newCommandsCmd())
 

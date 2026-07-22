@@ -19,6 +19,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -287,6 +288,15 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	statusFn(iostream.LevelStep, "chunk validate")
 
+	// Wire event log around the actual validate run (best-effort; never blocks on failure).
+	if dataDir, dirErr := sidecar.StateDir(); dirErr == nil {
+		scName := ""
+		if activeSidecar != nil && activeSidecar.SidecarID == opts.sidecarID {
+			scName = activeSidecar.Name
+		}
+		statusFn = eventlog.WrapFromDir(dataDir, statusFn, eventlog.OpValidate, opts.sidecarID, scName, sidecar.CurrentBranch(workDir))
+	}
+
 	execErr := func() error {
 		freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
 		if err != nil {
@@ -305,6 +315,14 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
 	} else if hook == nil {
 		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
+	}
+
+	if opts.sidecarID != "" {
+		if execErr != nil {
+			statusFn(iostream.LevelError, "validate failed")
+		} else {
+			statusFn(iostream.LevelDone, "validate passed")
+		}
 	}
 
 	if hook != nil {
@@ -638,6 +656,15 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	}
 	if active != nil {
 		*sidecarID = active.SidecarID
+		return false, nil
+	}
+	// Fall back to any existing sidecar for this project before creating a new one.
+	// This prevents accumulation of one sidecar per Claude Code session.
+	if existing, err := sidecar.LoadAnyActive(); err == nil && existing != nil {
+		if saveErr := sidecar.SaveActive(ctx, *existing); saveErr != nil {
+			streams.ErrPrintf("warning: could not promote active sidecar: %v\n", saveErr)
+		}
+		*sidecarID = existing.SidecarID
 		return false, nil
 	}
 	streams.ErrPrintf("No active sidecar found, creating a new sidecar...\n")
