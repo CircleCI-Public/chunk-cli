@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -206,6 +207,39 @@ func (c *Client) Exec(ctx context.Context, sidecarID, command string, args []str
 		Stderr:    attrs.Stderr,
 		ExitCode:  attrs.ExitCode,
 	}, nil
+}
+
+// ExecAsync starts a command on a sidecar asynchronously and returns its command ID.
+// The caller should use StreamCommandOutput and GetCommand to observe progress and result.
+func (c *Client) ExecAsync(ctx context.Context, sidecarID, command string, args []string, envVars map[string]string, workingDir string) (string, error) {
+	var resp v3Envelope
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances/%s/exec",
+		hc.RouteParams(sidecarID),
+		hc.Body(AsyncExecRequest{
+			Command:    command,
+			Args:       args,
+			Env:        envVars,
+			WorkingDir: workingDir,
+		}),
+		hc.JSONDecoder(&resp),
+	))
+	if err != nil {
+		return "", mapErr("exec async", err)
+	}
+	return resp.Data.ID, nil
+}
+
+// StreamCommandOutput opens the JSONL output stream for a command starting at the given line offset.
+// The caller must close the returned ReadCloser when done or on reconnect.
+func (c *Client) StreamCommandOutput(ctx context.Context, commandID string, offset int) (io.ReadCloser, error) {
+	body, err := c.cl.Stream(ctx, hc.NewRequest(http.MethodGet, "/api/v3/sidecar/commands/%s/output",
+		hc.RouteParams(commandID),
+		hc.QueryParam("offset", fmt.Sprintf("%d", offset)),
+	))
+	if err != nil {
+		return nil, mapErr("stream command output", err)
+	}
+	return body, nil
 }
 
 type commandAttrs struct {

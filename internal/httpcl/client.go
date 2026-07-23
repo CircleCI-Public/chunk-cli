@@ -181,6 +181,57 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 	return 0
 }
 
+// Stream makes a GET request and returns the response body for line-by-line reading.
+// Unlike Call, it does not drain or close the response body — the caller must close it.
+// Non-2xx responses return an *HTTPError.
+func (c *Client) Stream(ctx context.Context, r Request) (io.ReadCloser, error) {
+	u, err := url.Parse(c.baseURL + r.URL())
+	if err != nil {
+		return nil, fmt.Errorf("httpcl: bad url: %w", err)
+	}
+	if len(r.query) > 0 {
+		u.RawQuery = r.query.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, r.method, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("httpcl: new request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/json")
+	if c.authToken != "" {
+		if c.authHeader != "" {
+			req.Header.Set(c.authHeader, c.authToken)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+c.authToken)
+		}
+	}
+	if c.userAgent != "" {
+		req.Header.Set("User-Agent", c.userAgent)
+	}
+	for k, vals := range r.headers {
+		for _, v := range vals {
+			req.Header.Add(k, v)
+		}
+	}
+
+	resp, err := c.http.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return nil, &HTTPError{
+			Method:     r.method,
+			Route:      r.route,
+			StatusCode: resp.StatusCode,
+			Body:       body,
+		}
+	}
+	return resp.Body, nil
+}
+
 // Call executes the request and returns the HTTP status code.
 // Non-2xx responses return an *HTTPError. If a decoder is set and the
 // response is 2xx, the response body is decoded.

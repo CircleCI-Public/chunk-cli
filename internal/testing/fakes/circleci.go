@@ -3,13 +3,33 @@ package fakes
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
+
+// OutputLine is one JSONL record from the command output stream. A record with
+// a non-empty CommandID is the terminal event carrying the exit code.
+type OutputLine struct {
+	Index     int    `json:"index"`
+	Stream    string `json:"stream,omitempty"`
+	Line      string `json:"line,omitempty"`
+	CommandID string `json:"command_id,omitempty"`
+	ExitCode  *int   `json:"exit_code,omitempty"`
+}
+
+// WriteOutputLines encodes lines as JSONL to w. Convenience for OutputStreamFunc.
+func WriteOutputLines(w io.Writer, lines []OutputLine) {
+	enc := json.NewEncoder(w)
+	for _, l := range lines {
+		_ = enc.Encode(l)
+	}
+}
 
 type Collaboration struct {
 	ID      string `json:"id"`
@@ -80,6 +100,12 @@ type FakeCircleCI struct {
 	CommandResponse *CommandResponse
 	RunStatusCode   int // override status code for trigger run endpoint
 
+	// OutputStreamFunc handles GET /api/v3/sidecar/commands/:id/output. It
+	// receives the requested line offset and writes the JSONL response body
+	// (use WriteOutputLines). Returning without writing a terminal event
+	// simulates a clean EOF. When nil the endpoint returns an empty stream.
+	OutputStreamFunc func(offset int, w io.Writer)
+
 	// Per-endpoint status code overrides for testing error responses.
 	CollaborationsStatusCode int // override for GET /me/collaborations
 	ListStatusCode           int // override for GET /sidecar/instances
@@ -138,8 +164,9 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.POST("/api/v3/sidecar/snapshots", f.handleCreateSnapshot)
 	r.GET("/api/v3/sidecar/snapshots/:id", f.handleGetSnapshot)
 
-	// Command V3 endpoint
+	// Command V3 endpoints
 	r.GET("/api/v3/sidecar/commands/:id", f.handleGetCommand)
+	r.GET("/api/v3/sidecar/commands/:id/output", f.handleCommandOutput)
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
@@ -397,6 +424,21 @@ func (f *FakeCircleCI) handleGetCommand(c *gin.Context) {
 			},
 		},
 	})
+}
+
+func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	fn := f.OutputStreamFunc
+	f.mu.RUnlock()
+
+	offset, _ := strconv.Atoi(c.Query("offset"))
+	c.Status(http.StatusOK)
+	if fn != nil {
+		fn(offset, c.Writer)
+	}
 }
 
 func (f *FakeCircleCI) handleCreateSnapshot(c *gin.Context) {

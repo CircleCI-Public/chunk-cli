@@ -65,3 +65,21 @@ type Command struct {
 	Phase             string  `json:"phase"`
 	SidecarInstanceID string  `json:"sidecar_instance_id"`
 }
+
+type AsyncExecRequest struct {
+	Command    string            `json:"command"`
+	Args       []string          `json:"args,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	WorkingDir string            `json:"working_dir,omitempty"`
+}
+
+// CommandOutputLine is one entry from the JSONL output stream at
+// GET /api/v3/sidecar/commands/:id/output.
+// When CommandID is non-empty the entry is a terminal event carrying the exit code.
+type CommandOutputLine struct {
+	Index     int    `json:"index"`
+	Stream    string `json:"stream,omitempty"`
+	Line      string `json:"line,omitempty"`
+	CommandID string `json:"command_id,omitempty"`
+	ExitCode  *int   `json:"exit_code,omitempty"`
+}
