@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -84,6 +85,47 @@ func LoadActive(ctx context.Context) (*ActiveSidecar, error) {
 	return LoadActiveFrom(ctx, dir)
 }
 
+// LoadAnyActive returns the most recently modified sidecar state file for the
+// current project, regardless of session ID. Use this as a fallback when
+// LoadActive returns nil to avoid creating a new sidecar unnecessarily.
+func LoadAnyActive() (*ActiveSidecar, error) {
+	dir, err := saveDir()
+	if err != nil {
+		return nil, err
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "sidecar*.json"))
+	if err != nil || len(matches) == 0 {
+		return nil, nil
+	}
+	var best string
+	var bestTime time.Time
+	for _, m := range matches {
+		info, statErr := os.Stat(m)
+		if statErr != nil {
+			continue
+		}
+		if info.ModTime().After(bestTime) {
+			bestTime = info.ModTime()
+			best = m
+		}
+	}
+	if best == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(best)
+	if err != nil {
+		return nil, err
+	}
+	var a ActiveSidecar
+	if err := json.Unmarshal(data, &a); err != nil {
+		return nil, err
+	}
+	if a.SidecarID == "" {
+		return nil, nil
+	}
+	return &a, nil
+}
+
 // LoadActiveFrom reads the active sidecar from dir.
 func LoadActiveFrom(ctx context.Context, dir string) (*ActiveSidecar, error) {
 	root, _ := projectRoot()
@@ -126,7 +168,51 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	}
 	root, _ := projectRoot()
 	branch := CurrentBranch(root)
-	return os.WriteFile(filepath.Join(dir, sidecarFileName(session.IDFromCtx(ctx), branch)), data, 0o644)
+	if err := os.WriteFile(filepath.Join(dir, sidecarFileName(session.IDFromCtx(ctx), branch)), data, 0o644); err != nil {
+		return err
+	}
+	// Write a breadcrumb so chunk watch --all can discover this project.
+	_ = os.WriteFile(filepath.Join(dir, "project-root"), []byte(root), 0o644)
+	return nil
+}
+
+// AllProjectRoots returns the roots of all projects that have ever saved a
+// sidecar state, by reading the breadcrumb files written by SaveActiveTo.
+func AllProjectRoots() ([]string, error) {
+	base, err := config.AppData()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var roots []string
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		crumb := filepath.Join(base, e.Name(), "project-root")
+		data, readErr := os.ReadFile(crumb)
+		if readErr != nil {
+			continue
+		}
+		root := strings.TrimSpace(string(data))
+		if root == "" || seen[root] {
+			continue
+		}
+		// Only include projects where the root still exists.
+		if _, statErr := os.Stat(root); statErr != nil {
+			continue
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	return roots, nil
 }
 
 // saveDir returns the XDG_DATA_HOME directory for the current project.

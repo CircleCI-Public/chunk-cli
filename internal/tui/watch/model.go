@@ -31,6 +31,23 @@ const (
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+const logoBlankRow = "███                   ██████"
+
+var logoLines = []string{
+	"        █████████████████",
+	"      █████████████████████",
+	"    ███████████████████  ███",
+	"  ███                ███████",
+	logoBlankRow,
+	"███       ██ ██       ██████",
+	"███   ██         ██   ██████",
+	"███     █████████     ██████",
+	logoBlankRow,
+	"███                   ████",
+	"  ███                ██",
+	"    █████████████████",
+}
+
 // color helpers — always enabled (watch requires a TTY)
 func fg(code, s string) string { return "\x1b[" + code + "m" + s + "\x1b[0m" }
 
@@ -46,15 +63,24 @@ func red(s string) string    { return fg("38;5;167", s) }
 func muted(s string) string  { return fg("38;5;242", s) }
 func vdim(s string) string   { return fg("38;5;238", s) }
 
+// ProjectEntry holds everything the watch model needs for one project.
+type ProjectEntry struct {
+	Log         *eventlog.Log
+	DataDir     string
+	ProjectRoot string
+}
+
 // sidecarInfo holds display state for one sidecar.
 type sidecarInfo struct {
-	id            string
-	name          string
-	lastSyncedRef string
-	inSync        bool
-	running       bool
-	lastActivity  time.Time
-	lastOp        eventlog.Op
+	id              string
+	name            string
+	projectName     string
+	projectSnapshot bool // any snapshot*.json present in the project's data dir
+	lastSyncedRef   string
+	inSync          bool
+	running         bool
+	lastActivity    time.Time
+	lastOp          eventlog.Op
 }
 
 type tickMsg struct{}
@@ -63,19 +89,17 @@ type spinMsg struct{}
 type dataMsg struct {
 	sidecars []sidecarInfo
 	events   []eventlog.Event
-	offset   int64
+	offsets  []int64
 }
 
 // Model is the BubbleTea model for the watch dashboard.
 type Model struct {
-	log         *eventlog.Log
-	dataDir     string
-	projectRoot string
+	projects []ProjectEntry
+	offsets  []int64
 
 	sidecars    []sidecarInfo
 	selectedIdx int
 	events      []eventlog.Event
-	logOffset   int64
 
 	width      int
 	height     int
@@ -84,8 +108,11 @@ type Model struct {
 }
 
 // New creates a Model ready to run.
-func New(log *eventlog.Log, dataDir, projectRoot string) Model {
-	return Model{log: log, dataDir: dataDir, projectRoot: projectRoot}
+func New(projects []ProjectEntry) Model {
+	return Model{
+		projects: projects,
+		offsets:  make([]int64, len(projects)),
+	}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -103,11 +130,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Code {
 		case 'q', tea.KeyEscape:
 			return m, tea.Quit
-		case 'j', tea.KeyDown:
+		case 's', tea.KeyDown:
 			if m.selectedIdx < len(m.sidecars)-1 {
 				m.selectedIdx++
 			}
-		case 'k', tea.KeyUp:
+		case 'w', tea.KeyUp:
 			if m.selectedIdx > 0 {
 				m.selectedIdx--
 			}
@@ -121,7 +148,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataMsg:
 		m.sidecars = msg.sidecars
 		m.events = msg.events
-		m.logOffset = msg.offset
+		m.offsets = msg.offsets
 		if m.selectedIdx >= len(m.sidecars) && len(m.sidecars) > 0 {
 			m.selectedIdx = len(m.sidecars) - 1
 		}
@@ -163,14 +190,20 @@ func (m Model) renderHeader() string {
 	if len(m.sidecars) != 1 {
 		count += "s"
 	}
-	branch := sidecar.CurrentBranch(m.projectRoot)
-	head := headRef(m.projectRoot)
-	branchTag := ""
-	if branch != "" && head != "" {
-		branchTag = "  " + green(branch+"@"+head[:min(7, len(head))])
+
+	var contextTag string
+	if len(m.projects) > 1 {
+		contextTag = "  " + muted(fmt.Sprintf("%d projects", len(m.projects)))
+	} else if len(m.projects) == 1 {
+		branch := sidecar.CurrentBranch(m.projects[0].ProjectRoot)
+		head := headRef(m.projects[0].ProjectRoot)
+		if branch != "" && head != "" {
+			contextTag = "  " + green(branch+"@"+head[:min(7, len(head))])
+		}
 	}
+
 	clock := time.Now().Format("15:04:05")
-	title := bold("chunk watch") + "  " + muted(count) + branchTag
+	title := bold("chunk watch") + "  " + muted(count) + contextTag
 	right := vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
@@ -222,19 +255,34 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 		return lines
 	}
 
+	var lastProject string
+
 	for i, sc := range m.sidecars {
 		if len(lines) >= maxLines-2 {
 			break
 		}
-		selected := i == m.selectedIdx
-		name := truncate(sc.name, leftPaneWidth-3)
-		if name == "" {
-			name = truncate(sc.id, leftPaneWidth-3)
+
+		// Project separator — always shown so each sidecar has a project label.
+		if sc.projectName != lastProject {
+			if lastProject != "" {
+				add("")
+			}
+			label := truncate(sc.projectName, leftPaneWidth-4)
+			snap := ""
+			if sc.projectSnapshot {
+				snap = " " + vdim("◈")
+			}
+			add(vdim("── " + label + snap))
+			lastProject = sc.projectName
 		}
+
+		selected := i == m.selectedIdx
+		nameLine := truncate(sidecarDisplayName(sc.name, sc.id), leftPaneWidth-3)
+
 		if selected {
-			add(muted("▶ ") + bold(name))
+			add(muted("▶ ") + bold(nameLine))
 		} else {
-			add("  " + name)
+			add("  " + nameLine)
 		}
 
 		switch {
@@ -255,7 +303,8 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 			add("")
 		}
 
-		if i < len(m.sidecars)-1 {
+		// Suppress dotted divider when next sidecar starts a new project group.
+		if i < len(m.sidecars)-1 && m.sidecars[i+1].projectName == sc.projectName {
 			add(vdim(strings.Repeat("·", leftPaneWidth)))
 		}
 	}
@@ -268,11 +317,12 @@ func (m Model) renderActivityPane(maxLines int) []string {
 	title := vdim("activity")
 	if m.selectedIdx < len(m.sidecars) {
 		sc := m.sidecars[m.selectedIdx]
-		name := sc.name
-		if name == "" {
-			name = sc.id
+		displayName := sidecarDisplayName(sc.name, sc.id)
+		if sc.projectName != "" {
+			title += "  " + muted(sc.projectName+"/"+displayName)
+		} else {
+			title += "  " + muted(displayName)
 		}
-		title += "  " + muted(name)
 	}
 	lines = append(lines, title, "")
 
@@ -287,7 +337,24 @@ func (m Model) renderActivityPane(maxLines int) []string {
 	}
 
 	if len(filtered) == 0 {
-		return append(lines, vdim("no activity yet"))
+		// right pane width: total - 1 leading space - leftPaneWidth - 1 space - 1 divider - 1 space
+		rightWidth := m.width - leftPaneWidth - 4
+		logoMaxWidth := 0
+		for _, l := range logoLines {
+			if w := lipgloss.Width(l); w > logoMaxWidth {
+				logoMaxWidth = w
+			}
+		}
+		pad := (rightWidth - logoMaxWidth) / 2
+		if pad < 0 {
+			pad = 0
+		}
+		padStr := strings.Repeat(" ", pad)
+		lines = append(lines, muted("No activity yet."), "")
+		for _, l := range logoLines {
+			lines = append(lines, padStr+vdim(l))
+		}
+		return lines
 	}
 
 	return append(lines, buildActivityLines(filtered, maxLines-2)...)
@@ -373,7 +440,7 @@ func iconAndMsg(e eventlog.Event) (string, string) {
 
 func (m Model) renderFooter() string {
 	keys := []struct{ key, action string }{
-		{"j/k", "select"},
+		{"↑/↓", "select"},
 		{"q", "quit"},
 	}
 	parts := make([]string, 0, len(keys))
@@ -384,32 +451,42 @@ func (m Model) renderFooter() string {
 	return vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
 }
 
-// loadData reads sidecar state files and new event log entries.
+// loadData reads sidecar state files and new event log entries from all projects.
 func (m Model) loadData() tea.Msg {
-	sidecars := loadSidecars(m.dataDir, m.projectRoot)
+	var allSidecars []sidecarInfo
+	allEvents := m.events
+	newOffsets := make([]int64, len(m.projects))
+	copy(newOffsets, m.offsets)
 
-	events := m.events
-	offset := m.logOffset
-	if m.log != nil {
+	for i, p := range m.projects {
+		snap := hasSnapshotFile(p.DataDir)
+		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snap)
+		allSidecars = append(allSidecars, sidecars...)
+
+		if p.Log == nil {
+			continue
+		}
+		offset := m.offsets[i]
 		if offset == 0 {
-			recent, _ := m.log.Recent(recentEvents)
-			events = recent
-			_, newOffset, _ := m.log.TailFrom(0)
-			offset = newOffset
+			recent, _ := p.Log.Recent(recentEvents)
+			allEvents = append(allEvents, recent...)
+			_, newOff, _ := p.Log.TailFrom(0)
+			newOffsets[i] = newOff
 		} else {
-			newEvents, newOffset, _ := m.log.TailFrom(offset)
-			events = append(events, newEvents...)
-			offset = newOffset
-			if len(events) > recentEvents {
-				events = events[len(events)-recentEvents:]
-			}
+			newEvts, newOff, _ := p.Log.TailFrom(offset)
+			allEvents = append(allEvents, newEvts...)
+			newOffsets[i] = newOff
 		}
 	}
 
-	for i := range sidecars {
-		sc := &sidecars[i]
-		for j := len(events) - 1; j >= 0; j-- {
-			e := events[j]
+	if len(allEvents) > recentEvents {
+		allEvents = allEvents[len(allEvents)-recentEvents:]
+	}
+
+	for i := range allSidecars {
+		sc := &allSidecars[i]
+		for j := len(allEvents) - 1; j >= 0; j-- {
+			e := allEvents[j]
 			if e.SidecarID != sc.id {
 				continue
 			}
@@ -424,13 +501,14 @@ func (m Model) loadData() tea.Msg {
 		}
 	}
 
-	return dataMsg{sidecars: sidecars, events: events, offset: offset}
+	return dataMsg{sidecars: allSidecars, events: allEvents, offsets: newOffsets}
 }
 
 // loadSidecars reads all sidecar*.json files from dataDir, deduplicates by ID.
-func loadSidecars(dataDir, projectRoot string) []sidecarInfo {
+func loadSidecars(dataDir, projectRoot string, snap bool) []sidecarInfo {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	head := headRef(projectRoot)
+	projectName := filepath.Base(projectRoot)
 	seen := map[string]bool{}
 	var result []sidecarInfo
 	for _, path := range matches {
@@ -448,13 +526,21 @@ func loadSidecars(dataDir, projectRoot string) []sidecarInfo {
 		seen[as.SidecarID] = true
 		inSync := head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef
 		result = append(result, sidecarInfo{
-			id:            as.SidecarID,
-			name:          as.Name,
-			lastSyncedRef: as.LastSyncedRef,
-			inSync:        inSync,
+			id:              as.SidecarID,
+			name:            as.Name,
+			projectName:     projectName,
+			projectSnapshot: snap,
+			lastSyncedRef:   as.LastSyncedRef,
+			inSync:          inSync,
 		})
 	}
 	return result
+}
+
+// hasSnapshotFile reports whether any snapshot*.json exists in dataDir.
+func hasSnapshotFile(dataDir string) bool {
+	matches, _ := filepath.Glob(filepath.Join(dataDir, "snapshot*.json"))
+	return len(matches) > 0
 }
 
 func anyRunning(sidecars []sidecarInfo) bool {
@@ -489,6 +575,46 @@ func truncate(s string, n int) string {
 		return string(runes[:n-1]) + "…"
 	}
 	return string(runes[:n])
+}
+
+// sidecarDisplayName returns the best human-readable name for a sidecar.
+// Uses Name if set, otherwise strips a UUID suffix from the ID.
+func sidecarDisplayName(name, id string) string {
+	if name != "" {
+		return name
+	}
+	if clean := stripUUIDSuffix(id); clean != "" && clean != id {
+		return clean
+	}
+	return id
+}
+
+// stripUUIDSuffix removes a "-<8hex>-<4hex>-..." UUID portion from s.
+// "chunk-cli-2d66488f-e67f-4c3a-9abc-112233445566" → "chunk-cli"
+func stripUUIDSuffix(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '-' {
+			continue
+		}
+		rest := s[i+1:]
+		if len(rest) >= 9 && isHex8(rest[:8]) && rest[8] == '-' && i > 0 {
+			return s[:i]
+		}
+	}
+	return s
+}
+
+// isHex8 reports whether s is exactly 8 lowercase hex characters.
+func isHex8(s string) bool {
+	if len(s) != 8 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // headRef returns the full HEAD SHA for the git repo at dir.

@@ -658,6 +658,15 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		*sidecarID = active.SidecarID
 		return false, nil
 	}
+	// Fall back to any existing sidecar for this project before creating a new one.
+	// This prevents accumulation of one sidecar per Claude Code session.
+	if existing, err := sidecar.LoadAnyActive(); err == nil && existing != nil {
+		if saveErr := sidecar.SaveActive(ctx, *existing); saveErr != nil {
+			streams.ErrPrintf("warning: could not promote active sidecar: %v\n", saveErr)
+		}
+		*sidecarID = existing.SidecarID
+		return false, nil
+	}
 	streams.ErrPrintf("No active sidecar found, creating a new sidecar...\n")
 	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
