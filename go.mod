@@ -3,7 +3,7 @@ module github.com/CircleCI-Public/chunk-cli
 go 1.26
 
 require (
-	charm.land/bubbles/v2 v2.1.0
+	charm.land/bubbles/v2 v2.1.1
 	charm.land/bubbletea/v2 v2.0.7
 	github.com/BurntSushi/toml v1.6.0
 	github.com/aymanbagabas/go-udiff v0.4.1
@@ -31,7 +31,7 @@ tool (
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect
 	4d63.com/gochecknoglobals v0.2.2 // indirect
-	charm.land/lipgloss/v2 v2.0.3 // indirect
+	charm.land/lipgloss/v2 v2.0.4 // indirect
 	codeberg.org/chavacava/garif v0.2.0 // indirect
 	codeberg.org/polyfloyd/go-errorlint v1.9.0 // indirect
 	dev.gaijin.team/go/exhaustruct/v4 v4.0.0 // indirect
@@ -178,7 +178,7 @@ require (
 	github.com/matoous/godox v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.23 // indirect
+	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/mgechev/revive v1.15.0 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
