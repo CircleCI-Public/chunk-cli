@@ -937,6 +937,12 @@ func setupSidecarGroup(ctx context.Context, client *circleci.Client, opts *valid
 		}
 	}
 	if len(errs) > 0 {
+		// Save any sidecars that were created successfully so they aren't orphaned.
+		if len(ids) > 0 {
+			if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: ids}); saveErr != nil {
+				streams.ErrPrintf("warning: could not save partial sidecar group state: %v\n", saveErr)
+			}
+		}
 		combined := errors.Join(errs...)
 		if authErr := notAuthorized("create sidecars", combined); authErr != nil {
 			return false, authErr

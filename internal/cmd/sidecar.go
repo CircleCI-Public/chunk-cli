@@ -602,9 +602,12 @@ func newSidecarSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(ids) > 0 {
+			if len(ids) > 1 {
 				if checkout {
-					return &userError{msg: "--checkout is not supported with multiple sidecars."}
+					return &userError{
+						msg:        "--checkout is not supported with multiple sidecars.",
+						suggestion: "Pass --sidecar-id to target a single sidecar.",
+					}
 				}
 				err = sidecar.BundleSyncFanOut(cmd.Context(), client, ids, identityFile, authSock, workdir, cwd, newStatusFunc(io))
 				if err != nil {
