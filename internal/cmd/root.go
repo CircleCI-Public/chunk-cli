@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 )
@@ -129,16 +130,19 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		executable = "chunk"
 	}
 
+	circleCIUserID := resolveCircleCIUserID(cmd)
+
 	tc, err := telemetry.NewSender(telemetry.Config{
 		Send:     send,
 		Log:      optedIn && os.Getenv("CHUNK_TELEMETRY_LOG") != "",
 		WriteKey: writeKey,
 		Binary:   executable,
 		Metadata: telemetry.Meta{
-			Version:     version,
-			InstanceID:  instanceID,
-			OS:          runtime.GOOS,
-			CodingAgent: telemetry.DetectCodingAgent(),
+			Version:        version,
+			InstanceID:     instanceID,
+			CircleCIUserID: circleCIUserID,
+			OS:             runtime.GOOS,
+			CodingAgent:    telemetry.DetectCodingAgent(),
 		},
 	})
 	if err != nil {
@@ -147,4 +151,26 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 
 	cmd.SetContext(telemetry.WithSender(cmd.Context(), tc))
 	return nil
+}
+
+// resolveCircleCIUserID fetches the CircleCI user ID for the current token on a
+// best-effort basis. Returns "" if no token is configured or the call fails.
+func resolveCircleCIUserID(cmd *cobra.Command) string {
+	insecure, _ := cmd.Root().PersistentFlags().GetBool("insecure-storage")
+	rc, err := config.Resolve("", "", insecure)
+	if err != nil || rc.CircleCIToken == "" {
+		return ""
+	}
+	cl, err := circleci.NewClient(circleci.Config{
+		Token:   rc.CircleCIToken,
+		BaseURL: rc.CircleCIBaseURL,
+	})
+	if err != nil {
+		return ""
+	}
+	u, err := cl.GetCurrentUser(cmd.Context())
+	if err != nil {
+		return ""
+	}
+	return u.ID
 }

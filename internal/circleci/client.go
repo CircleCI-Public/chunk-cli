@@ -48,13 +48,20 @@ func NewClient(cfg Config) (*Client, error) {
 	return &Client{cl: cl}, nil
 }
 
-// GetCurrentUser calls GET /api/v2/me to validate the token.
-func (c *Client) GetCurrentUser(ctx context.Context) error {
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/me"))
+// CurrentUser holds the identity of the authenticated CircleCI user.
+type CurrentUser struct {
+	ID    string `json:"id"`
+	Login string `json:"login"`
+}
+
+// GetCurrentUser calls GET /api/v2/me and returns the authenticated user.
+func (c *Client) GetCurrentUser(ctx context.Context) (*CurrentUser, error) {
+	var u CurrentUser
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/me", hc.JSONDecoder(&u)))
 	if err != nil {
-		return mapErr("get current user", err)
+		return nil, mapErr("get current user", err)
 	}
-	return nil
+	return &u, nil
 }
 
 // V3 wire types — mirrors backplane-go DataEntity/envelope pattern.

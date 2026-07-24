@@ -41,7 +41,10 @@ func TestNewClient(t *testing.T) {
 		assert.NilError(t, err)
 
 		ctx := context.Background()
-		assert.NilError(t, c.GetCurrentUser(ctx))
+		u, err := c.GetCurrentUser(ctx)
+		assert.NilError(t, err)
+		assert.Equal(t, u.ID, "user-123")
+		assert.Equal(t, u.Login, "testuser")
 	})
 
 	t.Run("returns error when no token", func(t *testing.T) {

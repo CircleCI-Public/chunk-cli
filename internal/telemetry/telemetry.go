@@ -63,6 +63,11 @@ type Meta struct {
 	Version    string
 	InstanceID uuid.UUID
 
+	// CircleCIUserID is the authenticated user's CircleCI user ID, when a
+	// CircleCI token is available. When set it is used as the Segment UserId
+	// instead of InstanceID, matching the attribution approach in circleci-cli.
+	CircleCIUserID string
+
 	// OS is the operating system chunk-cli is running on, e.g. runtime.GOOS.
 	OS string
 	// CodingAgent is the AI coding agent chunk-cli was invoked from (e.g.
@@ -138,12 +143,17 @@ func (s *Sender) Track(eventName string, props map[string]any) error {
 		p.Set(key, val)
 	}
 
+	userID := s.meta.InstanceID.String()
+	if s.meta.CircleCIUserID != "" {
+		userID = s.meta.CircleCIUserID
+	}
+
 	return s.dest.Enqueue(analytics.Track{
 		Event:      eventName,
 		Timestamp:  time.Now(),
 		Properties: p,
 
-		UserId:  s.meta.InstanceID.String(),
+		UserId:  userID,
 		Context: s.meta.toContext(),
 	})
 }
