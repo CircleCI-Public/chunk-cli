@@ -45,6 +45,7 @@ func (e *TestEnv) Environ() []string {
 		"SHELL=/bin/zsh",
 		"NO_COLOR=1",
 		"TERM=dumb",
+		"CHUNK_NO_TELEMETRY=1",
 	}
 
 	if e.GithubToken != "" {
