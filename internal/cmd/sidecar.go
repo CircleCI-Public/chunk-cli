@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
+	"sync"
 
 	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/spf13/cobra"
@@ -27,7 +29,11 @@ func randomSidecarName() string {
 	return petname.Generate(3, "-")
 }
 
-const cmdList = "list"
+const (
+	cmdList             = "list"
+	msgNoOriginRemote   = "Could not detect repository from git remote."
+	suggestionAddOrigin = "Pass --workdir to set the destination path, or run: git remote add origin <url>"
+)
 
 func newSidecarCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -41,6 +47,7 @@ func newSidecarCmd() *cobra.Command {
 	cmd.AddCommand(newSidecarCreateCmd())
 	cmd.AddCommand(newSidecarDeleteCmd())
 	cmd.AddCommand(newSidecarExecCmd())
+	cmd.AddCommand(newSidecarRunCmd())
 	cmd.AddCommand(newSidecarAddSSHKeyCmd())
 	cmd.AddCommand(newSidecarSSHCmd())
 	cmd.AddCommand(newSidecarSyncCmd())
@@ -55,6 +62,24 @@ func newSidecarCmd() *cobra.Command {
 	return cmd
 }
 
+// resolveSidecarGroupIDs returns the sidecar IDs for fan-out commands.
+// If flagVal is set it is split and returned directly. Otherwise the active
+// sidecar state is consulted for a sidecar group (SidecarIDs). Returns nil (no
+// error) when neither source has IDs — callers that require IDs must error.
+func resolveSidecarGroupIDs(ctx context.Context, flagVal string) ([]string, error) {
+	if flagVal != "" {
+		return splitIDs(flagVal), nil
+	}
+	active, err := sidecar.LoadActive(ctx)
+	if err != nil {
+		return nil, &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
+	}
+	if active != nil && len(active.SidecarIDs) > 0 {
+		return active.SidecarIDs, nil
+	}
+	return nil, nil
+}
+
 // resolveSidecarID fills in sidecarID from the active sidecar file if it is empty.
 func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	if *sidecarID != "" {
@@ -64,14 +89,14 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	if err != nil {
 		return &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 	}
-	if active == nil {
+	if active.ID() == "" {
 		return &userError{
 			msg:        "No active sidecar is set.",
 			suggestion: "Pass --sidecar-id, or run 'chunk sidecar use <id>' or 'chunk sidecar create'.",
 			errMsg:     "no active sidecar and --sidecar-id not provided",
 		}
 	}
-	*sidecarID = active.SidecarID
+	*sidecarID = active.ID()
 	return nil
 }
 
@@ -189,21 +214,23 @@ func newSidecarListCmd() *cobra.Command {
 
 func newSidecarCreateCmd() *cobra.Command {
 	var orgID, name, image string
+	var count int
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a sidecar",
-		Long:  "Create a sidecar.",
+		Short: "Create one or more sidecars",
+		Long:  "Create one or more sidecars. Pass --count to create several in parallel and set them as the active group.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
+			if count < 1 {
+				return &userError{msg: "--count must be at least 1."}
+			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
 			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
 			if err != nil {
 				return err
-			}
-			if name == "" {
-				name = randomSidecarName()
 			}
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -219,38 +246,127 @@ func newSidecarCreateCmd() *cobra.Command {
 					image = cfg.Validation.SidecarImage
 				}
 			}
-			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image)
-			if err != nil {
-				if err := notAuthorized("create sidecars", err); err != nil {
+
+			// Create all sidecars in parallel (trivially just one when count == 1).
+			sidecars, createErr := createSidecars(cmd.Context(), client, resolvedOrgID, sidecarNames(name, count), image)
+
+			// Persist and report successes before surfacing any error, so a partial
+			// failure still leaves the created sidecars usable.
+			createdIDs := make([]string, len(sidecars))
+			for i, sb := range sidecars {
+				createdIDs[i] = sb.ID
+			}
+			if len(createdIDs) > 0 {
+				active := sidecar.ActiveSidecar{SidecarIDs: createdIDs}
+				if len(sidecars) == 1 {
+					active.Name = sidecars[0].Name
+				}
+				if saveErr := sidecar.SaveActive(cmd.Context(), active); saveErr != nil {
+					io.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
+				}
+			}
+
+			if jsonOut {
+				if err := iostream.PrintJSON(io.Out, sidecars); err != nil {
 					return err
 				}
-				var se *circleci.StatusError
-				if image != "" && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
-					return newUserError("Could not create the sidecar.").
-						withSuggestion("--image requires a snapshot ID. Create one with 'chunk sidecar snapshot create'.").
-						wrap(err)
-				}
-				return &userError{
-					msg:        "Could not create the sidecar.",
-					suggestion: suggestionNetworkRetry,
-					err:        err,
-				}
-			}
-			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sidecar %s (%s)", sb.Name, sb.ID)))
-			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarID: sb.ID, Name: sb.Name}); err != nil {
-				io.ErrPrintf("warning: could not save active sidecar: %v\n", err)
 			} else {
-				io.ErrPrintf("Set %s as active sidecar\n", sb.ID)
+				for _, sb := range sidecars {
+					io.Printf("%s\n", sb.ID)
+					io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sidecar %s (%s)", sb.Name, sb.ID)))
+				}
+				switch len(createdIDs) {
+				case 0:
+				case 1:
+					io.ErrPrintf("Set %s as active sidecar\n", createdIDs[0])
+				default:
+					io.ErrPrintf("Set %d sidecars as active\n", len(createdIDs))
+				}
 			}
-			return nil
+
+			return mapCreateSidecarError(createErr, image)
 		},
 	}
 
+	cmd.Flags().IntVar(&count, "count", 1, "Number of sidecars to create in parallel")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
-	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (auto-generated if not provided)")
+	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (auto-generated if omitted); used as a prefix when --count > 1")
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot ID (from 'chunk sidecar snapshot create')")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
+}
+
+// sidecarNames builds count sidecar names from the --name flag: the name as-is
+// for a single sidecar, "<name>-<n>" as a prefix when creating several, and a
+// random name for each slot when name is empty.
+func sidecarNames(name string, count int) []string {
+	names := make([]string, count)
+	for i := range count {
+		n := name
+		if count > 1 && name != "" {
+			n = fmt.Sprintf("%s-%d", name, i+1)
+		}
+		if n == "" {
+			n = randomSidecarName()
+		}
+		names[i] = n
+	}
+	return names
+}
+
+// createSidecars creates one sidecar per name in parallel, preserving order. It
+// returns the sidecars that were created and a joined error for any that failed.
+func createSidecars(ctx context.Context, client *circleci.Client, orgID string, names []string, image string) ([]*circleci.Sidecar, error) {
+	type result struct {
+		sb  *circleci.Sidecar
+		err error
+	}
+	results := make([]result, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			sb, err := sidecar.Create(ctx, client, orgID, name, image)
+			results[i] = result{sb, err}
+		}(i, name)
+	}
+	wg.Wait()
+
+	var sidecars []*circleci.Sidecar
+	var errs []error
+	for _, r := range results {
+		if r.err != nil {
+			errs = append(errs, r.err)
+		} else {
+			sidecars = append(sidecars, r.sb)
+		}
+	}
+	return sidecars, errors.Join(errs...)
+}
+
+// mapCreateSidecarError converts a sidecar-creation error into a user-facing
+// error, surfacing the authorization and snapshot-image hints. Returns nil when
+// err is nil.
+func mapCreateSidecarError(err error, image string) error {
+	if err == nil {
+		return nil
+	}
+	if authErr := notAuthorized("create sidecars", err); authErr != nil {
+		return authErr
+	}
+	var se *circleci.StatusError
+	if image != "" && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
+		return newUserError("Could not create the sidecar.").
+			withSuggestion("--image requires a snapshot ID. Create one with 'chunk sidecar snapshot create'.").
+			wrap(err)
+	}
+	return &userError{
+		msg:        "Could not create the sidecar.",
+		suggestion: suggestionNetworkRetry,
+		err:        err,
+	}
 }
 
 func newSidecarDeleteCmd() *cobra.Command {
@@ -282,7 +398,7 @@ func newSidecarDeleteCmd() *cobra.Command {
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted sidecar %s", sidecarID)))
 
-			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.SidecarID == sidecarID {
+			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.ID() == sidecarID {
 				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
 					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
 				} else {
@@ -456,7 +572,7 @@ func newSidecarSSHCmd() *cobra.Command {
 }
 
 func newSidecarSyncCmd() *cobra.Command {
-	var sidecarID, identityFile, workdir string
+	var sidecarID, sidecarIDs, identityFile, workdir, source string
 	var checkout bool
 
 	cmd := &cobra.Command{
@@ -464,9 +580,6 @@ func newSidecarSyncCmd() *cobra.Command {
 		Short: "Sync files to a sidecar",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
-				return err
-			}
 			authSock := os.Getenv(config.EnvSSHAuthSock)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -474,9 +587,48 @@ func newSidecarSyncCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
 			cwd, cwdErr := os.Getwd()
 			if cwdErr != nil {
 				return fmt.Errorf("sync: %w", cwdErr)
+			}
+			if source != "" {
+				cwd = source
+			}
+
+			// Fan-out path: sync one bundle to multiple sidecars in parallel.
+			// Activated by --sidecar-ids flag or when the active state is a sidecar group.
+			ids, err := resolveSidecarGroupIDs(cmd.Context(), sidecarIDs)
+			if err != nil {
+				return err
+			}
+			if len(ids) > 0 {
+				if checkout {
+					return &userError{msg: "--checkout is not supported with multiple sidecars."}
+				}
+				err = sidecar.BundleSyncFanOut(cmd.Context(), client, ids, identityFile, authSock, workdir, cwd, newStatusFunc(io))
+				if err != nil {
+					if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
+						return &userError{
+							msg:        msgNoOriginRemote,
+							suggestion: suggestionAddOrigin,
+							err:        err,
+						}
+					}
+					if err := sshSessionError(err); err != nil {
+						return err
+					}
+					if err := notAuthorized("sync files", err); err != nil {
+						return err
+					}
+					return &userError{msg: "The fan-out sync operation failed.", err: err}
+				}
+				return nil
+			}
+
+			// Single-sidecar path.
+			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
+				return err
 			}
 			useBundle := !checkout
 			if useBundle {
@@ -487,8 +639,8 @@ func newSidecarSyncCmd() *cobra.Command {
 			if err != nil {
 				if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
 					return &userError{
-						msg:        "Git remote \"origin\" is required for sidecar sync.",
-						suggestion: "Run: git remote add origin <url>",
+						msg:        msgNoOriginRemote,
+						suggestion: suggestionAddOrigin,
 						err:        err,
 					}
 				}
@@ -519,8 +671,10 @@ func newSidecarSyncCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
+	cmd.Flags().StringVar(&sidecarIDs, "sidecar-ids", "", "Comma-separated sidecar IDs for fan-out sync")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (defaults to /home/user/<repo> when omitted)")
+	cmd.Flags().StringVar(&source, "source", "", "Local directory to sync from (defaults to current directory)")
 	cmd.Flags().BoolVar(&checkout, "checkout", false, "Sync via git checkout/patch instead of bundle (requires branch pushed to GitHub)")
 
 	return cmd
@@ -533,7 +687,7 @@ func newSidecarUseCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarID: args[0]}); err != nil {
+			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarIDs: []string{args[0]}}); err != nil {
 				return &userError{msg: "Could not save the active sidecar.", suggestion: configFilePermHint, err: err}
 			}
 			io.ErrPrintf("Set %s as active sidecar\n", args[0])
@@ -565,9 +719,9 @@ func newSidecarCurrentCmd() *cobra.Command {
 				return iostream.PrintJSON(io.Out, active)
 			}
 			if active.Name != "" {
-				io.Printf("%s  %s\n", active.Name, active.SidecarID)
+				io.Printf("%s  %s\n", active.Name, sidecarIDDisplay(active))
 			} else {
-				io.Printf("%s\n", active.SidecarID)
+				io.Printf("%s\n", sidecarIDDisplay(active))
 			}
 			return nil
 		},
@@ -792,7 +946,7 @@ snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted sidecar %s", sidecarID)))
 
-			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.SidecarID == sidecarID {
+			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.ID() == sidecarID {
 				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
 					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
 				}
@@ -1040,8 +1194,8 @@ func sidecarSetupResolveSidecar(
 		return "", "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 	}
 	if active != nil {
-		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
-		return active.SidecarID, active.Name, nil
+		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.ID()))
+		return active.ID(), active.Name, nil
 	}
 	if name == "" {
 		name = randomSidecarName()
@@ -1062,7 +1216,7 @@ func sidecarSetupResolveSidecar(
 			err:        err,
 		}
 	}
-	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: []string{sc.ID}, Name: sc.Name}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))
@@ -1107,8 +1261,8 @@ func sidecarSetupSync(
 	}
 	if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
 		return &userError{
-			msg:        "Git remote \"origin\" is required for sidecar sync.",
-			suggestion: "Run: git remote add origin <url>",
+			msg:        msgNoOriginRemote,
+			suggestion: suggestionAddOrigin,
 			err:        err,
 		}
 	}
@@ -1203,4 +1357,150 @@ func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
 		opts.status(iostream.LevelDone, fmt.Sprintf("Step %q complete", step.Name))
 	}
 	return nil
+}
+
+type sidecarRunResult struct {
+	SidecarID string `json:"sidecar_id"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	ExitCode  int    `json:"exit_code"`
+	Error     string `json:"error,omitempty"`
+}
+
+func newSidecarRunCmd() *cobra.Command {
+	var sidecarIDs, identityFile string
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "run --sidecar-ids <ids> [flags] -- <command...>",
+		Short: "Run a command on multiple sidecars in parallel",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return &userError{msg: "A command is required after --.", suggestion: "Example: chunk sidecar run --sidecar-ids a,b -- make test"}
+			}
+			ids, err := resolveSidecarGroupIDs(cmd.Context(), sidecarIDs)
+			if err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				return &userError{
+					msg:        "No active sidecar group.",
+					suggestion: "Pass --sidecar-ids, or run 'chunk sidecar create --count <n>'.",
+					errMsg:     "no active sidecar group and --sidecar-ids not provided",
+				}
+			}
+
+			io := iostream.FromCmd(cmd)
+			insecureStorage := insecureStorageFlag(cmd)
+			rc, _ := config.Resolve("", "", insecureStorage)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+			authSock := os.Getenv(config.EnvSSHAuthSock)
+			command := sidecar.ShellJoin(args)
+
+			results := make([]sidecarRunResult, len(ids))
+			var wg sync.WaitGroup
+			for i, id := range ids {
+				wg.Add(1)
+				go func(i int, id string) {
+					defer wg.Done()
+					results[i].SidecarID = id
+					sess, err := sidecar.OpenSession(cmd.Context(), client, id, identityFile, authSock)
+					if err != nil {
+						results[i].Error = err.Error()
+						return
+					}
+					res, err := sidecar.ExecOverSSH(cmd.Context(), sess, command, nil, nil)
+					if err != nil {
+						results[i].Error = err.Error()
+						return
+					}
+					results[i].Stdout = res.Stdout
+					results[i].Stderr = res.Stderr
+					results[i].ExitCode = res.ExitCode
+				}(i, id)
+			}
+			wg.Wait()
+
+			if jsonOut {
+				return iostream.PrintJSON(io.Out, results)
+			}
+
+			anyFailed := false
+			for _, r := range results {
+				label := sidecarLabel(r.SidecarID)
+				if r.Error != "" {
+					io.ErrPrintf("[%s] error: %s\n", label, r.Error)
+					anyFailed = true
+					continue
+				}
+				for _, line := range splitLines(r.Stdout) {
+					io.Printf("[%s] %s\n", label, line)
+				}
+				for _, line := range splitLines(r.Stderr) {
+					io.ErrPrintf("[%s] %s\n", label, line)
+				}
+				if r.ExitCode != 0 {
+					anyFailed = true
+				}
+			}
+
+			passed := 0
+			for _, r := range results {
+				if r.Error == "" && r.ExitCode == 0 {
+					passed++
+				}
+			}
+			io.ErrPrintf("\n%d/%d passed\n", passed, len(results))
+
+			if anyFailed {
+				return fmt.Errorf("%d/%d sidecars failed", len(results)-passed, len(results))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sidecarIDs, "sidecar-ids", "", "Comma-separated sidecar IDs (defaults to the active sidecar group)")
+	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output results as JSON")
+
+	return cmd
+}
+
+// splitIDs splits a comma-separated sidecar ID string, trimming whitespace and
+// dropping empty entries.
+func splitIDs(s string) []string {
+	var ids []string
+	for _, id := range strings.Split(s, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// sidecarIDDisplay renders the active sidecar's ID(s) for human output: a single
+// ID as-is, or a comma-separated list when a sidecar group is active.
+func sidecarIDDisplay(active *sidecar.ActiveSidecar) string {
+	return strings.Join(active.SidecarIDs, ", ")
+}
+
+// sidecarLabel returns a short display label for a sidecar ID.
+func sidecarLabel(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
+}
+
+// splitLines splits s into lines, dropping a trailing empty line.
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	return lines
 }

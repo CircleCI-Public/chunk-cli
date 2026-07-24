@@ -201,6 +201,9 @@ Sidecars let you run validations in a clean cloud environment. The typical loop:
 chunk sidecar create
 chunk sidecar create --name my-sidecar
 
+# Create several at once (see "Parallel sidecars" below)
+chunk sidecar create --count 3
+
 # Set it as active
 chunk sidecar use <id>
 
@@ -237,6 +240,28 @@ To fall back to the git checkout/patch approach (requires the branch to be pushe
 ```bash
 chunk sidecar sync --checkout
 ```
+
+### Parallel sidecars
+
+A single sidecar is just a group of one — the same commands work for any number. Pass `--count` to `create` to spin several up in parallel and set them as the active group:
+
+```bash
+chunk sidecar create --count 3                 # 3 fresh sidecars, set as the active group
+chunk sidecar create --count 3 --name pr-1234  # named pr-1234-1, pr-1234-2, pr-1234-3
+```
+
+Once a group is active, `sync` and `run` fan out to all of its sidecars automatically (or target an explicit set with `--sidecar-ids`):
+
+```bash
+chunk sidecar current                          # lists every sidecar in the active group
+chunk sidecar sync                             # one bundle, delivered to all in parallel
+chunk sidecar run -- go test ./...             # run a command on each, in parallel
+chunk sidecar run --sidecar-ids a,b -- make    # target specific sidecars
+```
+
+`chunk sidecar run` prints each sidecar's output under a labelled header and reports an `N/M passed` summary, exiting non-zero if any command fails. Add `--json` for machine-readable per-sidecar results.
+
+`chunk validate` uses a group on its own: when two or more commands are marked `remote` in `.chunk/config.json` (and you're not forcing everything remote with `--remote`), it creates one sidecar per remote command and runs them in parallel, then runs any local commands. An existing active group with a matching sidecar count is reused instead of creating new ones.
 
 ### Environment setup
 

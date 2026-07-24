@@ -379,3 +379,31 @@ func TestSidecarAutoNameNoSessionLongBranch(t *testing.T) {
 	// branch truncated to 30 chars
 	assert.Equal(t, got, filepath.Base(dir)+"-"+long[:30]+"-validate")
 }
+
+func TestAssignCommandsToSidecars(t *testing.T) {
+	cmds := []config.Command{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+
+	// One sidecar: every command lands in the single group.
+	single := assignCommandsToSidecars(cmds, 1)
+	assert.Equal(t, len(single), 1)
+	assert.Equal(t, commandNames(single[0]), "a, b, c")
+
+	// One sidecar per command: each command gets its own group.
+	perCmd := assignCommandsToSidecars(cmds, 3)
+	assert.Equal(t, len(perCmd), 3)
+	assert.Equal(t, commandNames(perCmd[0]), "a")
+	assert.Equal(t, commandNames(perCmd[1]), "b")
+	assert.Equal(t, commandNames(perCmd[2]), "c")
+
+	// Fewer sidecars than commands: round-robin wraps.
+	twoBox := assignCommandsToSidecars(cmds, 2)
+	assert.Equal(t, len(twoBox), 2)
+	assert.Equal(t, commandNames(twoBox[0]), "a, c")
+	assert.Equal(t, commandNames(twoBox[1]), "b")
+
+	// More sidecars than commands: trailing groups are empty.
+	extra := assignCommandsToSidecars(cmds, 5)
+	assert.Equal(t, len(extra), 5)
+	assert.Equal(t, len(extra[3]), 0)
+	assert.Equal(t, len(extra[4]), 0)
+}
