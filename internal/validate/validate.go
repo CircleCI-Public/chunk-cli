@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -205,11 +206,16 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec i
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
-	cmd.Stdout = streams.Out
-	cmd.Stderr = streams.Err
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
 
+	start := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(start).Round(time.Millisecond)
+
 	if err != nil {
+		_, _ = io.Copy(streams.Err, &buf)
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
 		}
@@ -219,6 +225,7 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec i
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
+	status(iostream.LevelDone, fmt.Sprintf("%s passed (%s)", name, elapsed))
 	return nil
 }
 

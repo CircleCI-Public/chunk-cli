@@ -168,12 +168,12 @@ func TestRunAll(t *testing.T) {
 			{Name: "install", Run: "echo installed"},
 			{Name: "test", Run: "echo tested"},
 		}}
-		streams, out, _ := newStreams()
+		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
 		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
-		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "install passed"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "test passed"), "got: %s", statusBuf.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "Running install"), "got: %s", statusBuf.String())
 	})
 
@@ -217,11 +217,11 @@ func TestRunAll(t *testing.T) {
 		cfg := &config.ProjectConfig{Commands: []config.Command{
 			{Name: "test", Run: "echo ok"},
 		}}
-		streams, out, _ := newStreams()
+		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
 		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
-		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "test passed"), "got: %s", statusBuf.String())
 	})
 }
 
