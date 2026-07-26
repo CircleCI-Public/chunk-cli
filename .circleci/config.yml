@@ -9,6 +9,7 @@ jobs:
     docker:
       - image: cimg/go:1.26
     resource_class: medium
+    circleci_ip_ranges: true
     steps:
       - checkout
       - run: task mod-download
@@ -29,6 +30,7 @@ jobs:
     docker:
       - image: cimg/go:1.26
     resource_class: medium
+    circleci_ip_ranges: true
     steps:
       - checkout
       - run: task mod-download
@@ -45,6 +47,7 @@ jobs:
     docker:
       - image: cimg/go:1.26
     resource_class: medium
+    circleci_ip_ranges: true
     steps:
       - checkout
       - run: task mod-download
@@ -61,6 +64,7 @@ jobs:
     docker:
       - image: cimg/go:1.26
     resource_class: medium
+    circleci_ip_ranges: true
     steps:
       - checkout
       - run: task mod-download
