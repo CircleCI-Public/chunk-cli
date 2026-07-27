@@ -115,8 +115,7 @@ func TestValidateNeedsSidecarSidecarImageWithActiveSidecar(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Validation: &config.ValidationConfig{SidecarImage: "my-snapshot-abc123"},
 	}
-	// sidecarImage + active sidecar, no hook → should use sidecar
-	got := validateNeedsSidecar(false, cfg, nil, true)
+	got := validateNeedsSidecar(false, cfg, true)
 	assert.Assert(t, got, "expected validateNeedsSidecar=true with sidecarImage and active sidecar")
 }
 
@@ -124,9 +123,9 @@ func TestValidateNeedsSidecarSidecarImageNoActiveSidecar(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Validation: &config.ValidationConfig{SidecarImage: "my-snapshot-abc123"},
 	}
-	// sidecarImage but no active sidecar, no hook → must not use sidecar (avoids auto-create)
-	got := validateNeedsSidecar(false, cfg, nil, false)
-	assert.Assert(t, !got, "expected validateNeedsSidecar=false with sidecarImage but no active sidecar")
+	// sidecarImage alone → should use sidecar (auto-creates if none active)
+	got := validateNeedsSidecar(false, cfg, false)
+	assert.Assert(t, got, "expected validateNeedsSidecar=true with sidecarImage and no active sidecar")
 }
 
 func TestHostForwardEnv(t *testing.T) {

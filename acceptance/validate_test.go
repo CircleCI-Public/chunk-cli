@@ -397,11 +397,11 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	assert.Equal(t, len(execReqs), 0, "expected 0 HTTP exec requests (SSH should be used)")
 }
 
-func TestValidateSidecarImageNoActiveSidecarRunsLocally(t *testing.T) {
+func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
 	// Plain chunk validate with sidecarImage configured but no active sidecar must
-	// NOT auto-create a sandbox — it runs commands locally instead. Auto-create is
-	// reserved for the Stop hook path (TestValidateHookAutoCreatesSidecarFromSidecarImage).
+	// auto-create a sandbox — the configured image signals intent to run remotely.
 	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = "127.0.0.1"
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
@@ -421,19 +421,33 @@ func TestValidateSidecarImageNoActiveSidecarRunsLocally(t *testing.T) {
 	assert.NilError(t, err)
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
 
+	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	identityFile := filepath.Join(sshDir, "chunk_ai")
+	assert.NilError(t, generateTestSSHKey(t, identityFile))
+
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
 
-	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
+	result := binary.RunCLI(t, []string{"validate", "--identity-file", identityFile}, env, workDir)
 
-	// Command runs locally (echo test-output) — must succeed.
-	assert.Equal(t, result.ExitCode, 0, "expected local fallback to succeed, stderr: %s", result.Stderr)
+	// No real SSH server is running so sync will fail — that's expected.
+	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
 
-	// No sidecar must have been created.
 	reqs := cci.Recorder.AllRequests()
-	createReqs := filterByPath(reqs, "/api/v2/sidecar/instances")
-	assert.Equal(t, len(createReqs), 0, "expected no create-sidecar request when no active sidecar exists; got: %v", reqs)
+
+	// A sidecar must have been created with the configured image.
+	createReqs := filterByPath(reqs, "/api/v3/sidecar/instances")
+	assert.Equal(t, len(createReqs), 1, "expected 1 create-sidecar request; got: %v", reqs)
+
+	var body map[string]any
+	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
+	envelope := body["data"].(map[string]any)
+	attrs := envelope["attributes"].(map[string]any)
+	refs := envelope["references"].(map[string]any)
+	assert.Equal(t, attrs["image"], "my-snapshot-abc123", "expected sidecar image from config")
+	assert.Equal(t, refs["org"].(map[string]any)["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
 }
 
 func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
