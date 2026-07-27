@@ -91,18 +91,19 @@ type FakeCircleCI struct {
 	RunStatusCode   int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
-	CollaborationsStatusCode int // override for GET /me/collaborations
-	ListStatusCode           int // override for GET /sidecar/instances
-	CreateStatusCode         int // override for POST /sidecar/instances
-	DeleteStatusCode         int // override for DELETE /sidecar/instances/:id
-	ExecStatusCode           int // override for POST /sidecar/instances/:id/exec
-	CommandOutputStatusCode  int // override for GET /sidecar/commands/:id/output
-	AddKeyStatusCode         int // override for POST /sidecar/instances/:id/ssh/add-key
-	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
-	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
-	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
-	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
-	CreateOrgStatusCode      int // override for POST /api/v2/organization
+	CollaborationsStatusCode int    // override for GET /me/collaborations
+	ListStatusCode           int    // override for GET /sidecar/instances
+	CreateStatusCode         int    // override for POST /sidecar/instances
+	DeleteStatusCode         int    // override for DELETE /sidecar/instances/:id
+	ExecStatusCode           int    // override for POST /sidecar/instances/:id/exec
+	CommandOutputStatusCode  int    // override for GET /sidecar/commands/:id/output
+	CommandOutputMessage     string // error message body when CommandOutputStatusCode is set
+	AddKeyStatusCode         int    // override for POST /sidecar/instances/:id/ssh/add-key
+	CreateSnapshotStatusCode int    // override for POST /sidecar/snapshots
+	GetSnapshotStatusCode    int    // override for GET /sidecar/snapshots/:id
+	ListSnapshotsStatusCode  int    // override for GET /sidecar/snapshots
+	GetCommandStatusCode     int    // override for GET /sidecar/commands/:id
+	CreateOrgStatusCode      int    // override for POST /api/v2/organization
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
@@ -367,10 +368,14 @@ func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {
 	f.mu.RLock()
 	resp := f.ExecResponse
 	statusCode := f.CommandOutputStatusCode
+	msg := f.CommandOutputMessage
 	f.mu.RUnlock()
 
 	if statusCode != 0 {
-		c.JSON(statusCode, gin.H{"message": "API error"})
+		if msg == "" {
+			msg = "API error"
+		}
+		c.JSON(statusCode, gin.H{"message": msg})
 		return
 	}
 
