@@ -383,6 +383,80 @@ func writeAllHookFiles(workDir string, commands []config.Command, streams iostre
 			return err
 		}
 	}
+	if err := writeGitHook(workDir, streams); err != nil {
+		return err
+	}
+	return nil
+}
+
+const gitHookContent = "#!/bin/sh\nchunk validate\n"
+
+// writeGitHook writes a pre-commit hook to the repository's git hooks
+// directory. It uses --git-common-dir so it targets the shared hooks directory
+// even when workDir is a worktree. If a pre-commit hook already exists and
+// calls chunk validate it is left as-is; if it exists but does not call chunk
+// validate, the call is appended.
+func writeGitHook(workDir string, streams iostream.Streams) error {
+	gitCmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	gitCmd.Dir = workDir
+	out, err := gitCmd.Output()
+	if err != nil {
+		return &userError{msg: "Could not determine git directory.", err: fmt.Errorf("git rev-parse --git-common-dir: %w", err)}
+	}
+
+	gitCommonDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(gitCommonDir) {
+		gitCommonDir = filepath.Join(workDir, gitCommonDir)
+	}
+
+	hooksDir := filepath.Join(gitCommonDir, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return &userError{
+			msg:        "Could not create git hooks directory.",
+			suggestion: suggestionCheckPerms,
+			err:        fmt.Errorf("create hooks dir: %w", err),
+		}
+	}
+
+	path := filepath.Join(hooksDir, "pre-commit")
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil {
+		if !errors.Is(readErr, fs.ErrNotExist) {
+			return &userError{
+				msg:        "Could not read .git/hooks/pre-commit.",
+				suggestion: suggestionCheckPerms,
+				err:        fmt.Errorf("read pre-commit hook: %w", readErr),
+			}
+		}
+		if err := os.WriteFile(path, []byte(gitHookContent), 0o755); err != nil {
+			return &userError{
+				msg:        "Could not write .git/hooks/pre-commit.",
+				suggestion: suggestionCheckPerms,
+				err:        fmt.Errorf("write pre-commit hook: %w", err),
+			}
+		}
+		streams.ErrPrintln(ui.Success("Wrote .git/hooks/pre-commit"))
+		return nil
+	}
+
+	if strings.Contains(string(existing), "chunk validate") {
+		streams.ErrPrintln(ui.Success("Git pre-commit hook already up to date"))
+		return nil
+	}
+
+	content := string(existing)
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		content += "\n"
+	}
+	content += "chunk validate\n"
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		return &userError{
+			msg:        "Could not update .git/hooks/pre-commit.",
+			suggestion: suggestionCheckPerms,
+			err:        fmt.Errorf("write pre-commit hook: %w", err),
+		}
+	}
+	streams.ErrPrintln(ui.Success("Updated .git/hooks/pre-commit"))
 	return nil
 }
 

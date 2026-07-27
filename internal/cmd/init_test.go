@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -334,6 +335,78 @@ func TestInstallCompletionSkipsWhenAlreadyInstalled(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), existing)
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already installed")))
+}
+
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitCmds := [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+	}
+	for _, args := range gitCmds {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir
+}
+
+func TestWriteGitHookNewFile(t *testing.T) {
+	dir := initGitRepo(t)
+	streams, _, errOut := testStreams()
+
+	err := writeGitHook(dir, streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-commit"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), gitHookContent)
+
+	info, err := os.Stat(filepath.Join(dir, ".git", "hooks", "pre-commit"))
+	assert.NilError(t, err)
+	assert.Assert(t, info.Mode()&0o111 != 0, "pre-commit hook must be executable")
+
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Wrote .git/hooks/pre-commit")))
+}
+
+func TestWriteGitHookAlreadyUpToDate(t *testing.T) {
+	dir := initGitRepo(t)
+	streams, _, _ := testStreams()
+
+	assert.NilError(t, writeGitHook(dir, streams))
+
+	streams2, _, errOut := testStreams()
+	assert.NilError(t, writeGitHook(dir, streams2))
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already up to date")))
+
+	data, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-commit"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), gitHookContent)
+}
+
+func TestWriteGitHookAppendsToExisting(t *testing.T) {
+	dir := initGitRepo(t)
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	assert.NilError(t, os.MkdirAll(hooksDir, 0o755))
+
+	existing := "#!/bin/sh\nnpm test\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(existing), 0o755))
+
+	streams, _, errOut := testStreams()
+	err := writeGitHook(dir, streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(hooksDir, "pre-commit"))
+	assert.NilError(t, err)
+	content := string(data)
+	assert.Assert(t, strings.HasPrefix(content, existing))
+	assert.Assert(t, strings.Contains(content, "chunk validate"))
+
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated .git/hooks/pre-commit")))
 }
 
 func TestEnsureGitignoreEntriesCreatesNew(t *testing.T) {
