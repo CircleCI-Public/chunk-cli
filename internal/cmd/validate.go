@@ -566,7 +566,7 @@ func commandNames(cmds []config.Command) string {
 	return strings.Join(names, ", ")
 }
 
-// resolveImage returns the sidecar image to use for sandbox creation.
+// resolveImage returns the sidecar image to use for sidecar creation.
 // A per-command sidecarImage takes precedence over the project-level default.
 func resolveImage(name string, cfg *config.ProjectConfig) string {
 	if name != "" && cfg != nil {
@@ -594,13 +594,13 @@ func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *str
 	}
 	created, err := resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
 	if err != nil {
-		streams.ErrPrintf("warning: could not create sandbox (%v); running commands locally instead\n", err)
+		streams.ErrPrintf("warning: could not create sidecar (%v); running commands locally instead\n", err)
 	}
 	return created
 }
 
 // resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
-// a new sandbox when none is configured. Returns true when a new sidecar was
+// a new sidecar when none is configured. Returns true when a new sidecar was
 // provisioned (as opposed to loaded from the active state file).
 func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, streams iostream.Streams) (created bool, err error) {
 	if *sidecarID != "" {
@@ -614,7 +614,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		*sidecarID = active.SidecarID
 		return false, nil
 	}
-	streams.ErrPrintf("No active sidecar found, creating a new sandbox...\n")
+	streams.ErrPrintf("No active sidecar found, creating a new sidecar...\n")
 	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
 		return false, err
@@ -626,7 +626,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			return false, authErr
 		}
 		return false, &userError{
-			msg:        "Could not create a sandbox.",
+			msg:        "Could not create a sidecar.",
 			suggestion: "Check your network connection or run 'chunk sidecar create' manually.",
 			err:        err,
 		}
@@ -634,7 +634,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
-	// Persist the org ID so future sandbox creation skips the picker.
+	// Persist the org ID so future sidecar creation skips the picker.
 	projCfg, loadErr := config.LoadProjectConfig(workDir)
 	if loadErr != nil {
 		projCfg = &config.ProjectConfig{}
@@ -645,7 +645,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			streams.ErrPrintf("warning: could not save org ID to project config: %v\n", saveErr)
 		}
 	}
-	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sc.Name, sc.ID)))
+	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID)))
 	*sidecarID = sc.ID
 	return true, nil
 }
