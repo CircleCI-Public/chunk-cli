@@ -359,7 +359,7 @@ func TestWriteGitHookNewFile(t *testing.T) {
 	dir := initGitRepo(t)
 	streams, _, errOut := testStreams()
 
-	err := writeGitHook(dir, streams)
+	err := writeGitHook(filepath.Join(dir, ".git"), streams)
 	assert.NilError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-commit"))
@@ -377,10 +377,10 @@ func TestWriteGitHookAlreadyUpToDate(t *testing.T) {
 	dir := initGitRepo(t)
 	streams, _, _ := testStreams()
 
-	assert.NilError(t, writeGitHook(dir, streams))
+	assert.NilError(t, writeGitHook(filepath.Join(dir, ".git"), streams))
 
 	streams2, _, errOut := testStreams()
-	assert.NilError(t, writeGitHook(dir, streams2))
+	assert.NilError(t, writeGitHook(filepath.Join(dir, ".git"), streams2))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already up to date")))
 
 	data, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-commit"))
@@ -397,7 +397,7 @@ func TestWriteGitHookAppendsToExisting(t *testing.T) {
 	assert.NilError(t, os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(existing), 0o755))
 
 	streams, _, errOut := testStreams()
-	err := writeGitHook(dir, streams)
+	err := writeGitHook(filepath.Join(dir, ".git"), streams)
 	assert.NilError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(hooksDir, "pre-commit"))
@@ -405,6 +405,10 @@ func TestWriteGitHookAppendsToExisting(t *testing.T) {
 	content := string(data)
 	assert.Assert(t, strings.HasPrefix(content, existing))
 	assert.Assert(t, strings.Contains(content, "chunk validate"))
+
+	info, err := os.Stat(filepath.Join(hooksDir, "pre-commit"))
+	assert.NilError(t, err)
+	assert.Assert(t, info.Mode()&0o111 != 0, "pre-commit hook must be executable")
 
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated .git/hooks/pre-commit")))
 }

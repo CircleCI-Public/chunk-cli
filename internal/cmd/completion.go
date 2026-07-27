@@ -12,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -125,6 +126,27 @@ func installCompletion(streams iostream.Streams) (err error) {
 
 	streams.ErrPrintln(ui.Success("Completion installed."))
 	return nil
+}
+
+func maybeInstallCompletions(streams iostream.Streams) {
+	installed, err := completionInstalled()
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping shell completions: %v", err)))
+		return
+	}
+	if installed {
+		return
+	}
+	yes, confirmErr := tui.Confirm("Install shell completions?", true)
+	if confirmErr != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not confirm: %v", confirmErr)))
+		return
+	}
+	if yes {
+		if installErr := installCompletion(streams); installErr != nil {
+			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not install completions: %v", installErr)))
+		}
+	}
 }
 
 func newCompletionInstallCmd() *cobra.Command {
