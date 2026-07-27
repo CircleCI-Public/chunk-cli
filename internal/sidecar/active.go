@@ -16,12 +16,41 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
-// ActiveSidecar holds the currently active sidecar for a project.
+// ActiveSidecar holds the currently active sidecar(s) for a project. A single
+// sidecar is just a group of length one, so every consumer works with the same
+// SidecarIDs slice regardless of how many sidecars are in play.
 type ActiveSidecar struct {
-	SidecarID     string `json:"sidecar_id"`
-	Name          string `json:"name,omitempty"`
-	Workspace     string `json:"workspace,omitempty"`
-	LastSyncedRef string `json:"last_synced_ref,omitempty"`
+	SidecarIDs    []string `json:"sidecar_ids,omitempty"`
+	Name          string   `json:"name,omitempty"`
+	Workspace     string   `json:"workspace,omitempty"`
+	LastSyncedRef string   `json:"last_synced_ref,omitempty"`
+}
+
+// ID returns the primary sidecar ID (the first in the group), or "" when no
+// sidecar is set.
+func (a *ActiveSidecar) ID() string {
+	if a == nil || len(a.SidecarIDs) == 0 {
+		return ""
+	}
+	return a.SidecarIDs[0]
+}
+
+// UnmarshalJSON reads active-sidecar state, folding the legacy single-valued
+// "sidecar_id" field into SidecarIDs so state files written by older versions
+// keep working.
+func (a *ActiveSidecar) UnmarshalJSON(data []byte) error {
+	type alias ActiveSidecar
+	aux := struct {
+		LegacyID string `json:"sidecar_id"`
+		*alias
+	}{alias: (*alias)(a)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if len(a.SidecarIDs) == 0 && aux.LegacyID != "" {
+		a.SidecarIDs = []string{aux.LegacyID}
+	}
+	return nil
 }
 
 // CurrentBranch returns the current git branch for the repo rooted at root.

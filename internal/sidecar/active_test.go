@@ -27,7 +27,7 @@ func TestSaveActiveWritesToXDGDataPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarID: "sb-1"}))
+	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarIDs: []string{"sb-1"}}))
 
 	// Must not appear inside the project's .chunk directory.
 	_, err := os.Stat(filepath.Join(dir, ".chunk", "sidecar.json"))
@@ -63,15 +63,36 @@ func TestSaveAndLoadActive(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	want := ActiveSidecar{SidecarID: "sb-abc", Name: "my-box"}
+	want := ActiveSidecar{SidecarIDs: []string{"sb-abc"}, Name: "my-box"}
 	err := SaveActive(ctx, want)
 	assert.NilError(t, err)
 
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil, "expected non-nil ActiveSidecar")
-	assert.Equal(t, got.SidecarID, want.SidecarID)
+	assert.Equal(t, got.ID(), want.ID())
 	assert.Equal(t, got.Name, want.Name)
+}
+
+func TestLoadActiveReadsLegacySidecarID(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	setupXDGData(t)
+
+	// Write a state file in the legacy single-field format that older CLI
+	// versions produced, then confirm it folds into SidecarIDs on load.
+	dataDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	assert.NilError(t, os.MkdirAll(dataDir, 0o755))
+	legacy := `{"sidecar_id":"sb-legacy","name":"old-box"}`
+	assert.NilError(t, os.WriteFile(filepath.Join(dataDir, "sidecar.json"), []byte(legacy), 0o644))
+
+	got, err := LoadActive(context.Background())
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil, "expected non-nil ActiveSidecar")
+	assert.DeepEqual(t, got.SidecarIDs, []string{"sb-legacy"})
+	assert.Equal(t, got.ID(), "sb-legacy")
+	assert.Equal(t, got.Name, "old-box")
 }
 
 func TestLoadActiveReturnsNilWhenMissing(t *testing.T) {
@@ -96,20 +117,20 @@ func TestLoadActiveUsesGitRootAsKey(t *testing.T) {
 
 	// Save from child — keyed to parent (git root).
 	t.Chdir(child)
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-git-root"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-git-root"}}))
 
 	// Load from child — should find it.
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-git-root")
+	assert.Equal(t, got.ID(), "sb-git-root")
 
 	// Load from parent (the git root) — same project, same file.
 	t.Chdir(parent)
 	got, err = LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-git-root")
+	assert.Equal(t, got.ID(), "sb-git-root")
 }
 
 func TestLoadActiveUsesCwdWhenNoGitRepo(t *testing.T) {
@@ -118,12 +139,12 @@ func TestLoadActiveUsesCwdWhenNoGitRepo(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-cwd"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-cwd"}}))
 
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-cwd")
+	assert.Equal(t, got.ID(), "sb-cwd")
 }
 
 func TestClearActive(t *testing.T) {
@@ -132,7 +153,7 @@ func TestClearActive(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-xyz"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-xyz"}}))
 
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
@@ -154,7 +175,7 @@ func TestSessionKeyedSidecar(t *testing.T) {
 	sessCtx := session.WithID(ctx, "sess-abc")
 
 	// Save without a session — generic file.
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-generic"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-generic"}}))
 
 	// Session-keyed load should not see the generic file.
 	got, err := LoadActive(sessCtx)
@@ -162,18 +183,18 @@ func TestSessionKeyedSidecar(t *testing.T) {
 	assert.Assert(t, got == nil, "session-keyed load should not see generic file")
 
 	// Save under the session.
-	assert.NilError(t, SaveActive(sessCtx, ActiveSidecar{SidecarID: "sb-session"}))
+	assert.NilError(t, SaveActive(sessCtx, ActiveSidecar{SidecarIDs: []string{"sb-session"}}))
 
 	got, err = LoadActive(sessCtx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-session")
+	assert.Equal(t, got.ID(), "sb-session")
 
 	// Without the session, the original generic file is still intact.
 	got, err = LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-generic")
+	assert.Equal(t, got.ID(), "sb-generic")
 }
 
 func TestClearActiveNoopWhenMissing(t *testing.T) {
@@ -190,14 +211,14 @@ func TestWorkspaceFieldRoundTrip(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	want := ActiveSidecar{SidecarID: "sb-1", Name: "test", Workspace: "/workspace/myrepo"}
+	want := ActiveSidecar{SidecarIDs: []string{"sb-1"}, Name: "test", Workspace: "/workspace/myrepo"}
 	assert.NilError(t, SaveActive(ctx, want))
 
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
 	assert.Equal(t, got.Workspace, want.Workspace)
-	assert.Equal(t, got.SidecarID, want.SidecarID)
+	assert.Equal(t, got.ID(), want.ID())
 }
 
 func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
@@ -206,7 +227,7 @@ func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-1"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-1"}}))
 
 	stateDir, err := saveDir()
 	assert.NilError(t, err)
@@ -221,7 +242,7 @@ func TestResolveWorkspaceCLIFlagWins(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-1", Workspace: "/workspace/saved"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-1"}, Workspace: "/workspace/saved"}))
 
 	got, err := ResolveWorkspace(ctx, "/workspace/override", "myrepo")
 	assert.NilError(t, err)
@@ -234,7 +255,7 @@ func TestResolveWorkspaceSidecarFallback(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-1", Workspace: "/workspace/saved"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-1"}, Workspace: "/workspace/saved"}))
 
 	got, err := ResolveWorkspace(ctx, "", "myrepo")
 	assert.NilError(t, err)

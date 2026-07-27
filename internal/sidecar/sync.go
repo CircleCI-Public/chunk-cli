@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
@@ -131,9 +132,9 @@ func BundleSync(ctx context.Context,
 		return err
 	}
 
-	_, repo, err := gitremote.DetectOrgAndRepo(cwd)
-	if err != nil {
-		return &NoOriginRemoteError{Err: err}
+	_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+	if repoErr != nil && workdir == "" {
+		return &NoOriginRemoteError{Err: repoErr}
 	}
 
 	repoPath, err := ResolveWorkspace(ctx, workdir, repo)
@@ -149,12 +150,12 @@ func BundleSync(ctx context.Context,
 		return fmt.Errorf("bundle sync: load active sidecar: %w", err)
 	}
 	if active == nil {
-		active = &ActiveSidecar{SidecarID: sidecarID}
+		active = &ActiveSidecar{SidecarIDs: []string{sidecarID}}
 	}
 	lastRef := active.LastSyncedRef
-	if active.SidecarID != sidecarID {
+	if active.ID() != sidecarID {
 		lastRef = "" // sidecar changed; force full bundle
-		active.SidecarID = sidecarID
+		active.SidecarIDs = []string{sidecarID}
 	}
 
 	headRef, err := gitutil.HeadRef(cwd)
@@ -162,65 +163,44 @@ func BundleSync(ctx context.Context,
 		return fmt.Errorf("bundle sync: %w", err)
 	}
 
-	// Ensure the destination directory exists.
-	parentDir := filepath.Dir(repoPath)
-	if result, err := ExecOverSSH(ctx, session, "mkdir -p "+ShellEscape(parentDir), nil, nil); err != nil {
-		return fmt.Errorf("bundle sync: mkdir: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("bundle sync: mkdir -p %s: %s", parentDir, result.Stderr)
-	}
-
-	// Check whether a git repo already exists at the destination.
-	testResult, err := ExecOverSSH(ctx, session, "test -d "+ShellEscape(repoPath+"/.git"), nil, nil)
+	// Ensure the destination exists and has a git repo; a fresh repo forces a
+	// full bundle.
+	freshRepo, err := ensureRemoteRepo(ctx, session, repoPath)
 	if err != nil {
-		return fmt.Errorf("bundle sync: check repo: %w", err)
+		return fmt.Errorf("bundle sync: %w", err)
 	}
-	if testResult.ExitCode != 0 {
-		if result, err := ExecOverSSH(ctx, session, "git init "+ShellEscape(repoPath), nil, nil); err != nil {
-			return fmt.Errorf("bundle sync: git init: %w", err)
-		} else if result.ExitCode != 0 {
-			return fmt.Errorf("bundle sync: git init: %s", result.Stderr)
-		}
-		lastRef = "" // force full bundle for a fresh repo
+	if freshRepo {
+		lastRef = ""
 	}
 
 	resetRef := "HEAD"
 	if lastRef == headRef {
 		status(iostream.LevelInfo, "No new commits since last sync.")
 	} else {
-		if err := sendBundle(ctx, session, lastRef, cwd, repo, repoPath, status); err != nil {
-			return err
+		bundle, err := gitutil.CreateBundle(lastRef, cwd)
+		if err != nil {
+			return fmt.Errorf("bundle sync: %w", err)
+		}
+		label := "incremental bundle"
+		if lastRef == "" {
+			label = "full bundle"
+		}
+		status(iostream.LevelInfo, fmt.Sprintf("Sending %s (%d bytes)...", label, len(bundle)))
+		if err := sendBundle(ctx, session, repo, repoPath, bundle); err != nil {
+			return fmt.Errorf("bundle sync: %w", err)
 		}
 		resetRef = "FETCH_HEAD"
 	}
 
-	// Always reset and clean so the patch applies cleanly from a known state.
-	resetCmd := fmt.Sprintf("git -C %s reset --hard %s", ShellEscape(repoPath), resetRef)
-	cleanCmd := fmt.Sprintf("git -C %s clean -fd", ShellEscape(repoPath))
-	if result, err := ExecOverSSH(ctx, session, resetCmd, nil, nil); err != nil {
-		return fmt.Errorf("bundle sync: reset: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("bundle sync: reset: %s", result.Stderr)
-	}
-	if result, err := ExecOverSSH(ctx, session, cleanCmd, nil, nil); err != nil {
-		return fmt.Errorf("bundle sync: clean: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("bundle sync: clean: %s", result.Stderr)
-	}
-
-	// Apply any uncommitted working-tree changes as a patch on top.
 	patch, err := gitutil.GeneratePatch(headRef)
 	if err != nil {
 		return fmt.Errorf("bundle sync: %w", err)
 	}
 	if patch != "" {
 		status(iostream.LevelInfo, fmt.Sprintf("Applying working-tree changes (%d bytes)...", len(patch)))
-		applyCmd := fmt.Sprintf("git -C %s apply", ShellEscape(repoPath))
-		if result, err := ExecOverSSH(ctx, session, applyCmd, strings.NewReader(patch), nil); err != nil {
-			return fmt.Errorf("bundle sync: apply patch: %w", err)
-		} else if result.ExitCode != 0 {
-			return fmt.Errorf("bundle sync: apply patch: %s", result.Stderr)
-		}
+	}
+	if err := resetCleanApply(ctx, session, repoPath, resetRef, patch); err != nil {
+		return fmt.Errorf("bundle sync: %w", err)
 	}
 
 	// Persist the synced ref.
@@ -233,32 +213,149 @@ func BundleSync(ctx context.Context,
 	return nil
 }
 
-// sendBundle creates and transfers a git bundle (full or incremental) to the
-// sidecar, then fetches it into the remote repo.
-func sendBundle(ctx context.Context, session *Session, lastRef, cwd, repo, repoPath string, status iostream.StatusFunc) error {
-	label := "incremental bundle"
-	if lastRef == "" {
-		label = "full bundle"
+// BundleSyncFanOut synchronises a local working tree to multiple sidecars in
+// parallel. It builds one git bundle and patch, then delivers them to all
+// targets concurrently. Unlike BundleSync, it always sends a full bundle (no
+// incremental optimisation) and does not update any active-sidecar state.
+func BundleSyncFanOut(ctx context.Context, client *circleci.Client, sidecarIDs []string, identityFile, authSock, workdir, cwd string, status iostream.StatusFunc) error {
+	_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+	if repoErr != nil && workdir == "" {
+		return &NoOriginRemoteError{Err: repoErr}
 	}
 
-	bundle, err := gitutil.CreateBundle(lastRef, cwd)
+	repoPath := workdir
+	if repoPath == "" {
+		repoPath = sidecarHome() + "/" + repo
+	}
+
+	headRef, err := gitutil.HeadRef(cwd)
 	if err != nil {
-		return fmt.Errorf("bundle sync: %w", err)
+		return fmt.Errorf("fan-out sync: %w", err)
 	}
-	status(iostream.LevelInfo, fmt.Sprintf("Sending %s (%d bytes)...", label, len(bundle)))
 
-	bundlePath := fmt.Sprintf("/tmp/chunk-sync-%s.bundle", repo)
-	if result, err := ExecOverSSH(ctx, session, "tee "+ShellEscape(bundlePath), bytes.NewReader(bundle), nil); err != nil {
-		return fmt.Errorf("bundle sync: write bundle: %w", err)
+	bundle, err := gitutil.CreateBundle("", cwd)
+	if err != nil {
+		return fmt.Errorf("fan-out sync: %w", err)
+	}
+	status(iostream.LevelInfo, fmt.Sprintf("Bundle ready (%d bytes), syncing to %d sidecars...", len(bundle), len(sidecarIDs)))
+
+	patch, err := gitutil.GeneratePatch(headRef)
+	if err != nil {
+		return fmt.Errorf("fan-out sync: %w", err)
+	}
+
+	errs := make([]error, len(sidecarIDs))
+	var wg sync.WaitGroup
+	for i, id := range sidecarIDs {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			sess, err := OpenSession(ctx, client, id, identityFile, authSock)
+			if err != nil {
+				errs[i] = fmt.Errorf("sidecar %s: open session: %w", id, err)
+				return
+			}
+			if err := applyBundleToSidecar(ctx, sess, repo, repoPath, bundle, patch); err != nil {
+				errs[i] = fmt.Errorf("sidecar %s: %w", id, err)
+			}
+		}(i, id)
+	}
+	wg.Wait()
+
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	status(iostream.LevelDone, fmt.Sprintf("Synced %d sidecars", len(sidecarIDs)))
+	return nil
+}
+
+// applyBundleToSidecar delivers a pre-built full bundle and patch to a single
+// sidecar: it ensures the repo exists, fetches the bundle, then resets, cleans,
+// and applies the working-tree patch. It shares its per-step primitives with
+// BundleSync so the single- and multi-sidecar paths behave identically.
+func applyBundleToSidecar(ctx context.Context, session *Session, repo, repoPath string, bundle []byte, patch string) error {
+	if _, err := ensureRemoteRepo(ctx, session, repoPath); err != nil {
+		return err
+	}
+	if err := sendBundle(ctx, session, repo, repoPath, bundle); err != nil {
+		return err
+	}
+	return resetCleanApply(ctx, session, repoPath, "FETCH_HEAD", patch)
+}
+
+// ensureRemoteRepo makes sure repoPath's parent exists and repoPath holds a git
+// repo, running "git init" when absent. It returns true when the repo was
+// freshly initialised (so callers know to send a full bundle).
+func ensureRemoteRepo(ctx context.Context, session *Session, repoPath string) (bool, error) {
+	parentDir := filepath.Dir(repoPath)
+	if result, err := ExecOverSSH(ctx, session, "mkdir -p "+ShellEscape(parentDir), nil, nil); err != nil {
+		return false, fmt.Errorf("mkdir: %w", err)
 	} else if result.ExitCode != 0 {
-		return fmt.Errorf("bundle sync: write bundle: %s", result.Stderr)
+		return false, fmt.Errorf("mkdir -p %s: %s", parentDir, result.Stderr)
+	}
+
+	testResult, err := ExecOverSSH(ctx, session, "test -d "+ShellEscape(repoPath+"/.git"), nil, nil)
+	if err != nil {
+		return false, fmt.Errorf("check repo: %w", err)
+	}
+	if testResult.ExitCode == 0 {
+		return false, nil
+	}
+	if result, err := ExecOverSSH(ctx, session, "git init "+ShellEscape(repoPath), nil, nil); err != nil {
+		return false, fmt.Errorf("git init: %w", err)
+	} else if result.ExitCode != 0 {
+		return false, fmt.Errorf("git init: %s", result.Stderr)
+	}
+	return true, nil
+}
+
+// sendBundle transfers a pre-built git bundle to the sidecar and fetches it into
+// the remote repo (leaving the fetched tip as FETCH_HEAD).
+func sendBundle(ctx context.Context, session *Session, repo, repoPath string, bundle []byte) error {
+	bundleName := repo
+	if bundleName == "" {
+		bundleName = "chunk"
+	}
+	bundlePath := fmt.Sprintf("/tmp/chunk-sync-%s.bundle", bundleName)
+	if result, err := ExecOverSSH(ctx, session, "tee "+ShellEscape(bundlePath), bytes.NewReader(bundle), nil); err != nil {
+		return fmt.Errorf("write bundle: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("write bundle: %s", result.Stderr)
 	}
 
 	fetchCmd := fmt.Sprintf("git -C %s fetch %s HEAD", ShellEscape(repoPath), ShellEscape(bundlePath))
 	if result, err := ExecOverSSH(ctx, session, fetchCmd, nil, nil); err != nil {
-		return fmt.Errorf("bundle sync: fetch: %w", err)
+		return fmt.Errorf("fetch: %w", err)
 	} else if result.ExitCode != 0 {
-		return fmt.Errorf("bundle sync: fetch: %s", result.Stderr)
+		return fmt.Errorf("fetch: %s", result.Stderr)
+	}
+	return nil
+}
+
+// resetCleanApply resets repoPath to resetRef, cleans untracked files, then
+// applies patch (when non-empty) as working-tree changes on top.
+func resetCleanApply(ctx context.Context, session *Session, repoPath, resetRef, patch string) error {
+	resetCmd := fmt.Sprintf("git -C %s reset --hard %s", ShellEscape(repoPath), resetRef)
+	if result, err := ExecOverSSH(ctx, session, resetCmd, nil, nil); err != nil {
+		return fmt.Errorf("reset: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("reset: %s", result.Stderr)
+	}
+
+	cleanCmd := fmt.Sprintf("git -C %s clean -fd", ShellEscape(repoPath))
+	if result, err := ExecOverSSH(ctx, session, cleanCmd, nil, nil); err != nil {
+		return fmt.Errorf("clean: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("clean: %s", result.Stderr)
+	}
+
+	if patch != "" {
+		applyCmd := fmt.Sprintf("git -C %s apply", ShellEscape(repoPath))
+		if result, err := ExecOverSSH(ctx, session, applyCmd, strings.NewReader(patch), nil); err != nil {
+			return fmt.Errorf("apply patch: %w", err)
+		} else if result.ExitCode != 0 {
+			return fmt.Errorf("apply patch: %s", result.Stderr)
+		}
 	}
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -82,6 +83,7 @@ func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, sta
 
 type validateOpts struct {
 	sidecarID    string
+	sidecarIDs   []string // group mode: one sidecar per remote command
 	identityFile string
 	workdir      string
 	orgID        string
@@ -158,17 +160,33 @@ func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig, hook *
 }
 
 func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc) (map[string]string, error) {
-	if opts.sidecarID == "" {
+	if opts.sidecarID == "" && len(opts.sidecarIDs) == 0 {
 		return nil, nil
 	}
 	envVars, err := resolveEnvVars(ctx, workDir, opts.envFile, opts.envVarsFlag)
 	if err != nil {
 		return nil, err
 	}
+	if len(opts.sidecarIDs) > 0 {
+		return envVars, syncToSidecarsOpts(ctx, client, opts, workDir, statusFn)
+	}
 	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn); err != nil {
 		return nil, err
 	}
 	return envVars, nil
+}
+
+// syncToSidecarsOpts synchronises the working tree to all sidecars in the group in parallel.
+func syncToSidecarsOpts(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc) error {
+	authSock := os.Getenv(config.EnvSSHAuthSock)
+	err := sidecar.BundleSyncFanOut(ctx, client, opts.sidecarIDs, opts.identityFile, authSock, opts.workdir, workDir, statusFn)
+	if err != nil {
+		if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
+			return &userError{msg: msgNoOriginRemote, suggestion: suggestionAddOrigin, err: err}
+		}
+		return &userError{msg: "Could not sync to sidecars.", err: err}
+	}
+	return nil
 }
 
 func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, needsSidecar bool, streams iostream.Streams) (*circleci.Client, error) {
@@ -268,6 +286,22 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
+	// Sidecar-group path: create one sidecar per remote command and run them in parallel.
+	if shouldUseSidecarGroup(name, opts, cfg, allRemote) && needsSidecar {
+		created, err := setupSidecarGroup(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
+		if err != nil {
+			return err
+		}
+		if len(opts.sidecarIDs) > 0 {
+			envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
+			if err != nil {
+				return err
+			}
+			execErr := runSplitCommands(ctx, circleCIClient, opts.sidecarIDs, created, opts.identityFile, opts.workdir, workDir, envVars, rc, cfg, statusFn, streams)
+			return wrapHookExec(hook, cfg, execErr, streams.Err)
+		}
+	}
+
 	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, hook, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
 		return err
@@ -282,15 +316,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.identityFile, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
-
-	if hook != nil {
-		maxAttempts := cfg.StopHookMaxAttempts
-		if maxAttempts <= 0 {
-			maxAttempts = validate.DefaultMaxAttempts
-		}
-		return validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
-	}
-	return execErr
+	return wrapHookExec(hook, cfg, execErr, streams.Err)
 }
 
 func validateEnvFlag(envVarsFlag []string) error {
@@ -363,7 +389,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
 			// Named command is not marked remote; fall through to local execution.
 		} else {
-			return runSplitCommands(ctx, client, sidecarID, freshlyCreated, identityFile, workdir, workDir, envVars, rc, cfg, statusFn, streams)
+			return runSplitCommands(ctx, client, []string{sidecarID}, freshlyCreated, identityFile, workdir, workDir, envVars, rc, cfg, statusFn, streams)
 		}
 	}
 
@@ -495,51 +521,160 @@ func hostForwardEnv(token string) map[string]string {
 }
 
 // runSplitCommands handles per-command remote routing when no specific command
-// name is given: remote-tagged commands go to the sidecar, the rest run locally.
-// When freshlyCreated is true, SSH failures are hard errors rather than
-// silent local fallbacks (a newly provisioned sidecar that can't be reached
-// indicates a real problem, not temporary unavailability).
-func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, freshlyCreated bool, identityFile, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+// name is given: remote-tagged commands go to the sidecar(s), the rest run
+// locally. It works the same way for any number of sidecars — a single sidecar
+// is just a group of length one. Remote commands are assigned to sidecars
+// round-robin, so with one sidecar every command runs on it (sequentially, in
+// one session), and with one sidecar per command each runs on its own box.
+//
+// Groups run in parallel across sidecars; commands within a group run
+// sequentially. With a single active sidecar output streams live; with several,
+// each group's output is buffered and printed under a labelled header so the
+// parallel streams don't interleave.
+//
+// When freshlyCreated is true, SSH/workspace failures are hard errors rather
+// than silent local fallbacks (a newly provisioned sidecar that can't be
+// reached indicates a real problem, not temporary unavailability).
+func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarIDs []string, freshlyCreated bool, identityFile, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	remoteCfg, localCfg := splitByRemote(cfg)
-	if len(remoteCfg.Commands) > 0 {
-		statusFn(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, commandNames(remoteCfg.Commands)))
+
+	// Assign remote commands to sidecars round-robin; groups[k] runs on sidecarIDs[k].
+	groups := assignCommandsToSidecars(remoteCfg.Commands, len(sidecarIDs))
+	var active []int // indices of non-empty groups
+	for k, cmds := range groups {
+		if len(cmds) > 0 {
+			active = append(active, k)
+			statusFn(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarLabel(sidecarIDs[k]), commandNames(cmds)))
+		}
 	}
 	if len(localCfg.Commands) > 0 {
 		statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCfg.Commands)))
 	}
+
 	var runErr error
-	if len(remoteCfg.Commands) > 0 {
-		execFn, dest, err := openSSHSession(ctx, client, sidecarID, identityFile, workdir, envVars, rc, streams)
-		if err != nil {
-			if freshlyCreated {
-				return newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).
-					withCode("sidecar.unreachable").
-					withSuggestion("The sidecar may still be starting. Try again in a moment.").
-					withExitCode(ExitAPIError).
-					wrap(err)
+	var fellBack []config.Command // remote commands that must fall back to local execution
+
+	if len(active) <= 1 {
+		// Single active sidecar: run live so output streams as it happens.
+		for _, k := range active {
+			fb, cmdErr, setupErr := runGroupOnSidecar(ctx, client, sidecarIDs[k], freshlyCreated, identityFile, workdir, workDir, groups[k], envVars, rc, statusFn, streams)
+			if setupErr != nil {
+				return setupErr
 			}
-			streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(remoteCfg.Commands))
-			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
-		} else if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
-			if freshlyCreated {
-				return newUserError(fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)).
-					withCode("sidecar.workspace_missing").
-					withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
-					withExitCode(ExitNotFound).
-					wrap(wsErr)
+			fellBack = append(fellBack, fb...)
+			runErr = errors.Join(runErr, cmdErr)
+		}
+	} else {
+		// Multiple sidecars: run groups in parallel with buffered output.
+		type groupResult struct {
+			k        int
+			stdout   string
+			stderr   string
+			fellBack []config.Command
+			cmdErr   error
+			setupErr error
+		}
+		results := make([]groupResult, len(active))
+		var wg sync.WaitGroup
+		for idx, k := range active {
+			wg.Add(1)
+			go func(idx, k int) {
+				defer wg.Done()
+				var outBuf, errBuf strings.Builder
+				buf := iostream.Streams{Out: &outBuf, Err: &errBuf}
+				fb, cmdErr, setupErr := runGroupOnSidecar(ctx, client, sidecarIDs[k], freshlyCreated, identityFile, workdir, workDir, groups[k], envVars, rc, func(iostream.Level, string) {}, buf)
+				results[idx] = groupResult{k, outBuf.String(), errBuf.String(), fb, cmdErr, setupErr}
+			}(idx, k)
+		}
+		wg.Wait()
+
+		for _, r := range results {
+			header := commandNames(groups[r.k])
+			if r.stdout != "" || r.stderr != "" {
+				streams.ErrPrintf("%s\n", ui.ErrBold(header+":"))
 			}
-			streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
-			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
-		} else {
-			runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
+			if r.stdout != "" {
+				_, _ = fmt.Fprint(streams.Out, r.stdout)
+			}
+			if r.stderr != "" {
+				_, _ = fmt.Fprint(streams.Err, r.stderr)
+			}
+			if r.setupErr != nil {
+				runErr = errors.Join(runErr, r.setupErr)
+				continue
+			}
+			fellBack = append(fellBack, r.fellBack...)
+			if r.cmdErr != nil {
+				statusFn(iostream.LevelWarn, fmt.Sprintf("%s failed: %v", header, r.cmdErr))
+				runErr = errors.Join(runErr, r.cmdErr)
+			} else if len(r.fellBack) == 0 {
+				statusFn(iostream.LevelDone, fmt.Sprintf("%s passed", header))
+			}
+		}
+		// A freshly created sidecar that couldn't be set up is fatal; don't
+		// proceed to run commands locally.
+		if freshlyCreated && runErr != nil {
+			return runErr
 		}
 	}
-	if len(localCfg.Commands) > 0 {
+
+	// Run local commands, with any fell-back remote commands ahead of them.
+	local := make([]config.Command, 0, len(fellBack)+len(localCfg.Commands))
+	local = append(local, fellBack...)
+	local = append(local, localCfg.Commands...)
+	if len(local) > 0 {
+		localCfg := &config.ProjectConfig{Commands: local}
 		if err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams)); err != nil {
 			runErr = errors.Join(runErr, err)
 		}
 	}
 	return runErr
+}
+
+// assignCommandsToSidecars distributes cmds across n sidecars round-robin,
+// returning a slice of n command groups where groups[k] runs on sidecar k. With
+// n == 1 every command lands in the single group (all on one sidecar); with
+// n == len(cmds) each command gets its own group (one sidecar per command).
+func assignCommandsToSidecars(cmds []config.Command, n int) [][]config.Command {
+	groups := make([][]config.Command, n)
+	for i, c := range cmds {
+		k := i % n
+		groups[k] = append(groups[k], c)
+	}
+	return groups
+}
+
+// runGroupOnSidecar runs a group of remote commands sequentially on one sidecar,
+// using the provided streams and status function. It returns the commands that
+// should fall back to local execution (when the sidecar is unreachable and not
+// freshly created), the command execution error, and a fatal setup error (only
+// when freshlyCreated). Exactly one of cmdErr/setupErr may be non-nil.
+func runGroupOnSidecar(ctx context.Context, client *circleci.Client, sidecarID string, freshlyCreated bool, identityFile, workdir, workDir string, cmds []config.Command, envVars map[string]string, rc config.ResolvedConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (fellBack []config.Command, cmdErr, setupErr error) {
+	execFn, dest, err := openSSHSession(ctx, client, sidecarID, identityFile, workdir, envVars, rc, streams)
+	if err != nil {
+		if freshlyCreated {
+			return nil, nil, newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).
+				withCode("sidecar.unreachable").
+				withSuggestion("The sidecar may still be starting. Try again in a moment.").
+				withExitCode(ExitAPIError).
+				wrap(err)
+		}
+		streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(cmds))
+		return cmds, nil, nil
+	}
+	if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
+		if freshlyCreated {
+			return nil, nil, newUserError(fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)).
+				withCode("sidecar.workspace_missing").
+				withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+				withExitCode(ExitNotFound).
+				wrap(wsErr)
+		}
+		streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(cmds))
+		return cmds, nil, nil
+	}
+	groupCfg := &config.ProjectConfig{Commands: cmds}
+	return nil, validate.RunRemote(ctx, execFn, groupCfg, "", dest, workDir, statusFn, streams), nil
 }
 
 // splitByRemote partitions cfg.Commands into two configs: one containing only
@@ -588,7 +723,7 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, hook *hookContext, active *sidecar.ActiveSidecar, streams iostream.Streams) bool {
 	statusFn := newStatusFunc(streams)
 	if active != nil {
-		*sidecarID = active.SidecarID
+		*sidecarID = active.ID()
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
 		return false
 	}
@@ -617,7 +752,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		return false, &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: loadErr}
 	}
 	if active != nil {
-		*sidecarID = active.SidecarID
+		*sidecarID = active.ID()
 		return false, nil
 	}
 	streams.ErrPrintf("No active sidecar found, creating a new sandbox...\n")
@@ -637,7 +772,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			err:        err,
 		}
 	}
-	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: []string{sc.ID}, Name: sc.Name}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	// Persist the org ID so future sandbox creation skips the picker.
@@ -700,6 +835,19 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 	return base + "-validate"
 }
 
+// wrapHookExec applies Stop hook lifecycle to an execution result.
+// When hook is nil it passes execErr through unchanged.
+func wrapHookExec(hook *hookContext, cfg *config.ProjectConfig, execErr error, w io.Writer) error {
+	if hook == nil {
+		return execErr
+	}
+	maxAttempts := cfg.StopHookMaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = validate.DefaultMaxAttempts
+	}
+	return validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, w)
+}
+
 func mapValidateError(err error) error {
 	if errors.Is(err, validate.ErrNotConfigured) {
 		return &userError{
@@ -709,4 +857,109 @@ func mapValidateError(err error) error {
 		}
 	}
 	return err
+}
+
+// shouldUseSidecarGroup reports whether validate should create a sidecar per remote command
+// and run them in parallel. Group mode activates when at least 2 commands are
+// explicitly marked Remote:true, and the caller is not in allRemote mode
+// (--remote / sidecarImage), which uses a single sidecar for all commands.
+func shouldUseSidecarGroup(name string, opts *validateOpts, cfg *config.ProjectConfig, allRemote bool) bool {
+	if name != "" || opts.inlineCmd != "" || opts.sidecarID != "" || allRemote {
+		return false
+	}
+	remoteCfg, _ := splitByRemote(cfg)
+	return len(remoteCfg.Commands) >= 2
+}
+
+// sidecarAutoNameForCmd extends sidecarAutoName with a sanitised command suffix
+// so each sidecar in a sidecar group is identifiable by the command it runs.
+func sidecarAutoNameForCmd(ctx context.Context, workDir, cmdName string) string {
+	base := sidecarAutoName(ctx, workDir)
+	if cmdName == "" {
+		return base
+	}
+	safe := strings.ToLower(strings.ReplaceAll(cmdName, "/", "-"))
+	safe = branchSanitizer.ReplaceAllString(safe, "")
+	if len(safe) > 12 {
+		safe = safe[:12]
+	}
+	if safe != "" {
+		return base + "-" + safe
+	}
+	return base
+}
+
+// setupSidecarGroup creates one sidecar per remote command (or reuses an existing
+// sidecar group from active state when the count matches) and stores the IDs in
+// opts.sidecarIDs. Returns true when new sidecars were created.
+func setupSidecarGroup(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
+	remoteCfg, _ := splitByRemote(cfg)
+	remoteCmds := remoteCfg.Commands
+	n := len(remoteCmds)
+
+	// Reuse an existing sidecar group when the sidecar count matches exactly.
+	if activeSidecar != nil && len(activeSidecar.SidecarIDs) == n {
+		opts.sidecarIDs = activeSidecar.SidecarIDs
+		statusFn(iostream.LevelInfo, fmt.Sprintf("using %d sidecars for parallel execution", n))
+		return false, nil
+	}
+
+	statusFn(iostream.LevelStep, fmt.Sprintf("Creating %d sidecars for parallel execution...", n))
+	resolvedOrgID, err := resolveOrgID(opts.orgID, workDir, orgPicker(ctx, client))
+	if err != nil {
+		return false, err
+	}
+
+	type createResult struct {
+		id  string
+		err error
+	}
+	results := make([]createResult, n)
+	var wg sync.WaitGroup
+	for i, cmd := range remoteCmds {
+		wg.Add(1)
+		go func(i int, cmdName string) {
+			defer wg.Done()
+			sc, err := sidecar.Create(ctx, client, resolvedOrgID, sidecarAutoNameForCmd(ctx, workDir, cmdName), image)
+			if err != nil {
+				results[i] = createResult{err: err}
+				return
+			}
+			results[i] = createResult{id: sc.ID}
+		}(i, cmd.Name)
+	}
+	wg.Wait()
+
+	var ids []string
+	var errs []error
+	for _, r := range results {
+		if r.err != nil {
+			errs = append(errs, r.err)
+		} else {
+			ids = append(ids, r.id)
+		}
+	}
+	if len(errs) > 0 {
+		// Save any sidecars that were created successfully so they aren't orphaned.
+		if len(ids) > 0 {
+			if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: ids}); saveErr != nil {
+				streams.ErrPrintf("warning: could not save partial sidecar group state: %v\n", saveErr)
+			}
+		}
+		combined := errors.Join(errs...)
+		if authErr := notAuthorized("create sidecars", combined); authErr != nil {
+			return false, authErr
+		}
+		return false, &userError{
+			msg:        "Could not create sandboxes for parallel validation.",
+			suggestion: "Check your network connection or run 'chunk sidecar create' manually.",
+			err:        combined,
+		}
+	}
+
+	opts.sidecarIDs = ids
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: ids}); saveErr != nil {
+		streams.ErrPrintf("warning: could not save sidecar group state: %v\n", saveErr)
+	}
+	return true, nil
 }
