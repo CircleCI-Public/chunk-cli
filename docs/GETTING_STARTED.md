@@ -250,16 +250,12 @@ chunk sidecar create --count 3                 # 3 fresh sidecars, set as the ac
 chunk sidecar create --count 3 --name pr-1234  # named pr-1234-1, pr-1234-2, pr-1234-3
 ```
 
-Once a group is active, `sync` and `run` fan out to all of its sidecars automatically (or target an explicit set with `--sidecar-ids`):
+Once a group is active, `sync` fans out to all of its sidecars automatically (or target an explicit set with `--sidecar-ids`):
 
 ```bash
 chunk sidecar current                          # lists every sidecar in the active group
 chunk sidecar sync                             # one bundle, delivered to all in parallel
-chunk sidecar run -- go test ./...             # run a command on each, in parallel
-chunk sidecar run --sidecar-ids a,b -- make    # target specific sidecars
 ```
-
-`chunk sidecar run` prints each sidecar's output under a labelled header and reports an `N/M passed` summary, exiting non-zero if any command fails. Add `--json` for machine-readable per-sidecar results.
 
 `chunk validate` uses a group on its own: when two or more commands are marked `remote` in `.chunk/config.json` (and you're not forcing everything remote with `--remote`), it creates one sidecar per remote command and runs them in parallel, then runs any local commands. An existing active group with a matching sidecar count is reused instead of creating new ones.
 

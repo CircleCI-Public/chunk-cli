@@ -47,7 +47,6 @@ func newSidecarCmd() *cobra.Command {
 	cmd.AddCommand(newSidecarCreateCmd())
 	cmd.AddCommand(newSidecarDeleteCmd())
 	cmd.AddCommand(newSidecarExecCmd())
-	cmd.AddCommand(newSidecarRunCmd())
 	cmd.AddCommand(newSidecarAddSSHKeyCmd())
 	cmd.AddCommand(newSidecarSSHCmd())
 	cmd.AddCommand(newSidecarSyncCmd())
@@ -1362,117 +1361,6 @@ func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
 	return nil
 }
 
-type sidecarRunResult struct {
-	SidecarID string `json:"sidecar_id"`
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr"`
-	ExitCode  int    `json:"exit_code"`
-	Error     string `json:"error,omitempty"`
-}
-
-func newSidecarRunCmd() *cobra.Command {
-	var sidecarIDs, identityFile string
-	var jsonOut bool
-
-	cmd := &cobra.Command{
-		Use:   "run --sidecar-ids <ids> [flags] -- <command...>",
-		Short: "Run a command on multiple sidecars in parallel",
-		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				return &userError{msg: "A command is required after --.", suggestion: "Example: chunk sidecar run --sidecar-ids a,b -- make test"}
-			}
-			ids, err := resolveSidecarGroupIDs(cmd.Context(), sidecarIDs)
-			if err != nil {
-				return err
-			}
-			if len(ids) == 0 {
-				return &userError{
-					msg:        "No active sidecar group.",
-					suggestion: "Pass --sidecar-ids, or run 'chunk sidecar create --count <n>'.",
-					errMsg:     "no active sidecar group and --sidecar-ids not provided",
-				}
-			}
-
-			io := iostream.FromCmd(cmd)
-			insecureStorage := insecureStorageFlag(cmd)
-			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
-			if err != nil {
-				return err
-			}
-			authSock := os.Getenv(config.EnvSSHAuthSock)
-			command := sidecar.ShellJoin(args)
-
-			results := make([]sidecarRunResult, len(ids))
-			var wg sync.WaitGroup
-			for i, id := range ids {
-				wg.Add(1)
-				go func(i int, id string) {
-					defer wg.Done()
-					results[i].SidecarID = id
-					sess, err := sidecar.OpenSession(cmd.Context(), client, id, identityFile, authSock)
-					if err != nil {
-						results[i].Error = err.Error()
-						return
-					}
-					res, err := sidecar.ExecOverSSH(cmd.Context(), sess, command, nil, nil)
-					if err != nil {
-						results[i].Error = err.Error()
-						return
-					}
-					results[i].Stdout = res.Stdout
-					results[i].Stderr = res.Stderr
-					results[i].ExitCode = res.ExitCode
-				}(i, id)
-			}
-			wg.Wait()
-
-			if jsonOut {
-				return iostream.PrintJSON(io.Out, results)
-			}
-
-			anyFailed := false
-			for _, r := range results {
-				label := sidecarLabel(r.SidecarID)
-				if r.Error != "" {
-					io.ErrPrintf("[%s] error: %s\n", label, r.Error)
-					anyFailed = true
-					continue
-				}
-				for _, line := range splitLines(r.Stdout) {
-					io.Printf("[%s] %s\n", label, line)
-				}
-				for _, line := range splitLines(r.Stderr) {
-					io.ErrPrintf("[%s] %s\n", label, line)
-				}
-				if r.ExitCode != 0 {
-					anyFailed = true
-				}
-			}
-
-			passed := 0
-			for _, r := range results {
-				if r.Error == "" && r.ExitCode == 0 {
-					passed++
-				}
-			}
-			io.ErrPrintf("\n%d/%d passed\n", passed, len(results))
-
-			if anyFailed {
-				return fmt.Errorf("%d/%d sidecars failed", len(results)-passed, len(results))
-			}
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&sidecarIDs, "sidecar-ids", "", "Comma-separated sidecar IDs (defaults to the active sidecar group)")
-	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output results as JSON")
-
-	return cmd
-}
-
 // splitIDs splits a comma-separated sidecar ID string, trimming whitespace and
 // dropping empty entries.
 func splitIDs(s string) []string {
@@ -1497,13 +1385,4 @@ func sidecarLabel(id string) string {
 		return id
 	}
 	return id[:12]
-}
-
-// splitLines splits s into lines, dropping a trailing empty line.
-func splitLines(s string) []string {
-	if s == "" {
-		return nil
-	}
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	return lines
 }
