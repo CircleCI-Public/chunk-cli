@@ -386,8 +386,72 @@ func writeAllHookFiles(workDir string, commands []config.Command, streams iostre
 	return nil
 }
 
+const gitHookContent = "#!/bin/sh\nchunk validate\n"
+
+// writeGitHook writes a pre-commit hook to the repository's git hooks
+// directory. gitCommonDir must be the resolved path returned by
+// `git rev-parse --git-common-dir`, so the hook lands in the shared hooks
+// directory even when running from a worktree. If a pre-commit hook already
+// exists and calls chunk validate it is left as-is; if it exists but does not
+// call chunk validate, the call is appended preserving the existing permissions.
+func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
+	hooksDir := filepath.Join(gitCommonDir, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return &userError{
+			msg:        "Could not create git hooks directory.",
+			suggestion: suggestionCheckPerms,
+			err:        fmt.Errorf("create hooks dir: %w", err),
+		}
+	}
+
+	path := filepath.Join(hooksDir, "pre-commit")
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil {
+		if !errors.Is(readErr, fs.ErrNotExist) {
+			return &userError{
+				msg:        "Could not read .git/hooks/pre-commit.",
+				suggestion: suggestionCheckPerms,
+				err:        fmt.Errorf("read pre-commit hook: %w", readErr),
+			}
+		}
+		if err := os.WriteFile(path, []byte(gitHookContent), 0o755); err != nil {
+			return &userError{
+				msg:        "Could not write .git/hooks/pre-commit.",
+				suggestion: suggestionCheckPerms,
+				err:        fmt.Errorf("write pre-commit hook: %w", err),
+			}
+		}
+		streams.ErrPrintln(ui.Success("Wrote .git/hooks/pre-commit"))
+		return nil
+	}
+
+	if strings.Contains(string(existing), "chunk validate") {
+		streams.ErrPrintln(ui.Success("Git pre-commit hook already up to date"))
+		return nil
+	}
+
+	content := string(existing)
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		content += "\n"
+	}
+	content += "chunk validate\n"
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return &userError{msg: "Could not stat .git/hooks/pre-commit.", suggestion: suggestionCheckPerms, err: fmt.Errorf("stat pre-commit hook: %w", statErr)}
+	}
+	if err := os.WriteFile(path, []byte(content), info.Mode()); err != nil {
+		return &userError{
+			msg:        "Could not update .git/hooks/pre-commit.",
+			suggestion: suggestionCheckPerms,
+			err:        fmt.Errorf("write pre-commit hook: %w", err),
+		}
+	}
+	streams.ErrPrintln(ui.Success("Updated .git/hooks/pre-commit"))
+	return nil
+}
+
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipValidate, skipCompletions, skipSkills, skipTestSuites bool
+	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites bool
 	var projectDir string
 
 	cmd := &cobra.Command{
@@ -415,6 +479,17 @@ hook config files.`,
 			gitCmd.Dir = workDir
 			if err := gitCmd.Run(); err != nil {
 				return &userError{msg: "Not a git repository.", suggestion: suggestionGitRepo, err: err}
+			}
+
+			gitCommonDirCmd := exec.Command("git", "rev-parse", "--git-common-dir")
+			gitCommonDirCmd.Dir = workDir
+			commonDirOut, err := gitCommonDirCmd.Output()
+			if err != nil {
+				return &userError{msg: "Could not determine git directory.", err: fmt.Errorf("git rev-parse --git-common-dir: %w", err)}
+			}
+			gitCommonDir := strings.TrimSpace(string(commonDirOut))
+			if !filepath.IsAbs(gitCommonDir) {
+				gitCommonDir = filepath.Join(workDir, gitCommonDir)
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
@@ -484,23 +559,16 @@ hook config files.`,
 				if err := writeAllHookFiles(workDir, cfg.Commands, streams); err != nil {
 					return err
 				}
+				if !skipGitHook {
+					if err := writeGitHook(gitCommonDir, streams); err != nil {
+						return err
+					}
+				}
 			}
 
 			// Step 4: Shell completions
 			if !skipCompletions {
-				installed, err := completionInstalled()
-				if err != nil {
-					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping shell completions: %v", err)))
-				} else if !installed {
-					yes, confirmErr := tui.Confirm("Install shell completions?", true)
-					if confirmErr != nil {
-						streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not confirm: %v", confirmErr)))
-					} else if yes {
-						if installErr := installCompletion(streams); installErr != nil {
-							streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not install completions: %v", installErr)))
-						}
-					}
-				}
+				maybeInstallCompletions(streams)
 			}
 
 			// Step 5: CircleCI Smarter Testing test-suites.yml
@@ -524,6 +592,7 @@ hook config files.`,
 
 	cmd.Flags().BoolVar(&force, "force", false, "Overwrite existing config")
 	cmd.Flags().BoolVar(&skipHooks, "skip-hooks", false, "Skip hook file generation")
+	cmd.Flags().BoolVar(&skipGitHook, "skip-git-hook", false, "Skip git pre-commit hook installation")
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
