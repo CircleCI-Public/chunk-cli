@@ -443,11 +443,16 @@ func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
 
 	var body map[string]any
 	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
-	envelope := body["data"].(map[string]any)
-	attrs := envelope["attributes"].(map[string]any)
-	refs := envelope["references"].(map[string]any)
+	envelope, ok := body["data"].(map[string]any)
+	assert.Assert(t, ok, "expected data envelope in response body")
+	attrs, ok := envelope["attributes"].(map[string]any)
+	assert.Assert(t, ok, "expected attributes in data envelope")
+	refs, ok := envelope["references"].(map[string]any)
+	assert.Assert(t, ok, "expected references in data envelope")
 	assert.Equal(t, attrs["image"], "my-snapshot-abc123", "expected sidecar image from config")
-	assert.Equal(t, refs["org"].(map[string]any)["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
+	org, ok := refs["org"].(map[string]any)
+	assert.Assert(t, ok, "expected org in references")
+	assert.Equal(t, org["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
 }
 
 func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
@@ -498,11 +503,16 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 
 	var body map[string]any
 	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
-	envelope := body["data"].(map[string]any)
-	attrs := envelope["attributes"].(map[string]any)
-	refs := envelope["references"].(map[string]any)
+	envelope, ok := body["data"].(map[string]any)
+	assert.Assert(t, ok, "expected data envelope in response body")
+	attrs, ok := envelope["attributes"].(map[string]any)
+	assert.Assert(t, ok, "expected attributes in data envelope")
+	refs, ok := envelope["references"].(map[string]any)
+	assert.Assert(t, ok, "expected references in data envelope")
 	assert.Equal(t, attrs["image"], "my-snapshot-abc123", "expected sidecar image from config")
-	assert.Equal(t, refs["org"].(map[string]any)["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
+	org, ok := refs["org"].(map[string]any)
+	assert.Assert(t, ok, "expected org in references")
+	assert.Equal(t, org["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
 
 	// AddSSHKey must be called on the newly created sidecar — proves it was used.
 	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-new-123/ssh/add-key")

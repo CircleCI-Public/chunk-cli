@@ -111,21 +111,12 @@ func TestValidateHookSkipsAuthCheckWhenNoRemoteCommands(t *testing.T) {
 	_ = err
 }
 
-func TestValidateNeedsSidecarSidecarImageWithActiveSidecar(t *testing.T) {
+func TestValidateNeedsSidecarSidecarImage(t *testing.T) {
 	cfg := &config.ProjectConfig{
 		Validation: &config.ValidationConfig{SidecarImage: "my-snapshot-abc123"},
 	}
-	got := validateNeedsSidecar(false, cfg, true)
-	assert.Assert(t, got, "expected validateNeedsSidecar=true with sidecarImage and active sidecar")
-}
-
-func TestValidateNeedsSidecarSidecarImageNoActiveSidecar(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Validation: &config.ValidationConfig{SidecarImage: "my-snapshot-abc123"},
-	}
-	// sidecarImage alone → should use sidecar (auto-creates if none active)
-	got := validateNeedsSidecar(false, cfg, false)
-	assert.Assert(t, got, "expected validateNeedsSidecar=true with sidecarImage and no active sidecar")
+	got := validateNeedsSidecar(false, cfg)
+	assert.Assert(t, got, "expected validateNeedsSidecar=true with sidecarImage configured")
 }
 
 func TestHostForwardEnv(t *testing.T) {
