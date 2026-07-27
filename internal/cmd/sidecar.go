@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -397,7 +398,7 @@ func newSidecarDeleteCmd() *cobra.Command {
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted sidecar %s", sidecarID)))
 
-			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.ID() == sidecarID {
+			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && slices.Contains(active.SidecarIDs, sidecarID) {
 				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
 					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
 				} else {
@@ -629,7 +630,9 @@ func newSidecarSyncCmd() *cobra.Command {
 			}
 
 			// Single-sidecar path.
-			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
+			if len(ids) == 1 {
+				sidecarID = ids[0]
+			} else if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
 			}
 			useBundle := !checkout
@@ -948,7 +951,7 @@ snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted sidecar %s", sidecarID)))
 
-			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.ID() == sidecarID {
+			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && slices.Contains(active.SidecarIDs, sidecarID) {
 				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
 					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
 				}

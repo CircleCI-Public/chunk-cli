@@ -181,6 +181,9 @@ func syncToSidecarsOpts(ctx context.Context, client *circleci.Client, opts *vali
 	authSock := os.Getenv(config.EnvSSHAuthSock)
 	err := sidecar.BundleSyncFanOut(ctx, client, opts.sidecarIDs, opts.identityFile, authSock, opts.workdir, workDir, statusFn)
 	if err != nil {
+		if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
+			return &userError{msg: msgNoOriginRemote, suggestion: suggestionAddOrigin, err: err}
+		}
 		return &userError{msg: "Could not sync to sidecars.", err: err}
 	}
 	return nil
