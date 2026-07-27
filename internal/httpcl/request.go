@@ -11,13 +11,14 @@ import (
 // Request is an individual HTTP request to be executed by Client.Call.
 // Use NewRequest to create one.
 type Request struct {
-	method  string
-	route   string
-	url     string
-	body    any
-	decoder func(io.Reader) error
-	headers http.Header
-	query   url.Values
+	method    string
+	route     string
+	url       string
+	body      any
+	decoder   func(io.Reader) error
+	headers   http.Header
+	query     url.Values
+	noTimeout bool
 }
 
 // URL returns the resolved URL (after RouteParams) or the raw route.
@@ -71,4 +72,15 @@ func RouteParams(params ...any) func(*Request) {
 	return func(r *Request) {
 		r.url = fmt.Sprintf(r.route, params...)
 	}
+}
+
+// Decoder sets a raw response-body decoder function.
+func Decoder(fn func(io.Reader) error) func(*Request) {
+	return func(r *Request) { r.decoder = fn }
+}
+
+// NoTimeout skips the client-level timeout for this request; only the
+// caller's context deadline applies. Use for long-lived streaming responses.
+func NoTimeout() func(*Request) {
+	return func(r *Request) { r.noTimeout = true }
 }

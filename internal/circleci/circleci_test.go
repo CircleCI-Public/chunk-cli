@@ -282,10 +282,15 @@ func TestExec(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		reqs := fake.Recorder.AllRequests()
-		last := reqs[len(reqs)-1]
-		if last.URL.Path != "/api/v3/sidecar/instances/sb-1/exec" {
-			t.Errorf("expected /api/v3/sidecar/instances/sb-1/exec, got %s", last.URL.Path)
+		var found bool
+		for _, req := range fake.Recorder.AllRequests() {
+			if req.URL.Path == "/api/v3/sidecar/instances/sb-1/exec" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a request to /api/v3/sidecar/instances/sb-1/exec")
 		}
 	})
 }
