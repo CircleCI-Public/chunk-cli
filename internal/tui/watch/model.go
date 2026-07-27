@@ -20,7 +20,7 @@ import (
 const (
 	leftPaneWidth  = 28
 	divider        = " │ "
-	pollInterval   = 2 * time.Second
+	pollInterval   = 5 * time.Second
 	spinInterval   = 160 * time.Millisecond
 	runningTimeout = 5 * time.Minute
 	recentEvents   = 300
@@ -48,20 +48,32 @@ var logoLines = []string{
 	"    █████████████████",
 }
 
-// color helpers — always enabled (watch requires a TTY)
-func fg(code, s string) string { return "\x1b[" + code + "m" + s + "\x1b[0m" }
+// color/style helpers using lipgloss
+var (
+	styleDim    = lipgloss.NewStyle().Faint(true)
+	styleBold   = lipgloss.NewStyle().Bold(true)
+	styleGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))
+	styleYellow = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
+	styleBlue   = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	stylePurple = lipgloss.NewStyle().Foreground(lipgloss.Color("140"))
+	styleTeal   = lipgloss.NewStyle().Foreground(lipgloss.Color("80"))
+	styleOrange = lipgloss.NewStyle().Foreground(lipgloss.Color("173"))
+	styleRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("167"))
+	styleMuted  = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
+	styleVdim   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+)
 
-func dim(s string) string    { return fg("2", s) }
-func bold(s string) string   { return fg("1", s) }
-func green(s string) string  { return fg("38;5;78", s) }
-func yellow(s string) string { return fg("38;5;179", s) }
-func blue(s string) string   { return fg("38;5;110", s) }
-func purple(s string) string { return fg("38;5;140", s) }
-func teal(s string) string   { return fg("38;5;80", s) }
-func orange(s string) string { return fg("38;5;173", s) }
-func red(s string) string    { return fg("38;5;167", s) }
-func muted(s string) string  { return fg("38;5;242", s) }
-func vdim(s string) string   { return fg("38;5;238", s) }
+func dim(s string) string    { return styleDim.Render(s) }
+func bold(s string) string   { return styleBold.Render(s) }
+func green(s string) string  { return styleGreen.Render(s) }
+func yellow(s string) string { return styleYellow.Render(s) }
+func blue(s string) string   { return styleBlue.Render(s) }
+func purple(s string) string { return stylePurple.Render(s) }
+func teal(s string) string   { return styleTeal.Render(s) }
+func orange(s string) string { return styleOrange.Render(s) }
+func red(s string) string    { return styleRed.Render(s) }
+func muted(s string) string  { return styleMuted.Render(s) }
+func vdim(s string) string   { return styleVdim.Render(s) }
 
 // ProjectEntry holds everything the watch model needs for one project.
 type ProjectEntry struct {
@@ -90,12 +102,16 @@ type dataMsg struct {
 	sidecars []sidecarInfo
 	events   []eventlog.Event
 	offsets  []int64
+	branches []string
+	headRefs []string
 }
 
 // Model is the BubbleTea model for the watch dashboard.
 type Model struct {
 	projects []ProjectEntry
 	offsets  []int64
+	branches []string // current branch per project, refreshed each poll
+	headRefs []string // HEAD SHA per project, refreshed each poll
 
 	sidecars    []sidecarInfo
 	selectedIdx int
@@ -112,6 +128,8 @@ func New(projects []ProjectEntry) Model {
 	return Model{
 		projects: projects,
 		offsets:  make([]int64, len(projects)),
+		branches: make([]string, len(projects)),
+		headRefs: make([]string, len(projects)),
 	}
 }
 
@@ -149,6 +167,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidecars = msg.sidecars
 		m.events = msg.events
 		m.offsets = msg.offsets
+		m.branches = msg.branches
+		m.headRefs = msg.headRefs
 		if m.selectedIdx >= len(m.sidecars) && len(m.sidecars) > 0 {
 			m.selectedIdx = len(m.sidecars) - 1
 		}
@@ -195,8 +215,8 @@ func (m Model) renderHeader() string {
 	if len(m.projects) > 1 {
 		contextTag = "  " + muted(fmt.Sprintf("%d projects", len(m.projects)))
 	} else if len(m.projects) == 1 {
-		branch := sidecar.CurrentBranch(m.projects[0].ProjectRoot)
-		head := headRef(m.projects[0].ProjectRoot)
+		branch := m.branches[0]
+		head := m.headRefs[0]
 		if branch != "" && head != "" {
 			contextTag = "  " + green(branch+"@"+head[:min(7, len(head))])
 		}
@@ -457,10 +477,14 @@ func (m Model) loadData() tea.Msg {
 	allEvents := m.events
 	newOffsets := make([]int64, len(m.projects))
 	copy(newOffsets, m.offsets)
+	newBranches := make([]string, len(m.projects))
+	newHeadRefs := make([]string, len(m.projects))
 
 	for i, p := range m.projects {
+		newBranches[i] = sidecar.CurrentBranch(p.ProjectRoot)
+		newHeadRefs[i] = headRef(p.ProjectRoot)
 		snap := hasSnapshotFile(p.DataDir)
-		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snap)
+		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snap, newHeadRefs[i])
 		allSidecars = append(allSidecars, sidecars...)
 
 		if p.Log == nil {
@@ -501,13 +525,12 @@ func (m Model) loadData() tea.Msg {
 		}
 	}
 
-	return dataMsg{sidecars: allSidecars, events: allEvents, offsets: newOffsets}
+	return dataMsg{sidecars: allSidecars, events: allEvents, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
 }
 
 // loadSidecars reads all sidecar*.json files from dataDir, deduplicates by ID.
-func loadSidecars(dataDir, projectRoot string, snap bool) []sidecarInfo {
+func loadSidecars(dataDir, projectRoot string, snap bool, head string) []sidecarInfo {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
-	head := headRef(projectRoot)
 	projectName := filepath.Base(projectRoot)
 	seen := map[string]bool{}
 	var result []sidecarInfo

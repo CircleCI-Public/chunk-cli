@@ -83,6 +83,16 @@ func (l *Log) Wrap(inner iostream.StatusFunc, op Op, sidecarID, sidecarName, bra
 	}
 }
 
+// WrapFromDir wraps fn with event-log appending using the log in dataDir.
+// Errors opening the log are silently ignored (best-effort; never blocks).
+func WrapFromDir(dataDir string, fn iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string) iostream.StatusFunc {
+	el, err := Open(dataDir)
+	if err != nil {
+		return fn
+	}
+	return el.Wrap(fn, op, sidecarID, sidecarName, branch)
+}
+
 // Recent returns up to n most recent events from the log.
 func (l *Log) Recent(n int) ([]Event, error) {
 	l.mu.Lock()

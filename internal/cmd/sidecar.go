@@ -497,13 +497,11 @@ func newSidecarSyncCmd() *cobra.Command {
 			}
 			syncFn := newStatusFunc(io)
 			if dataDir, dirErr := sidecar.StateDir(); dirErr == nil {
-				if el, elErr := eventlog.Open(dataDir); elErr == nil {
-					scName := ""
-					if as, _ := sidecar.LoadActive(cmd.Context()); as != nil && as.SidecarID == sidecarID {
-						scName = as.Name
-					}
-					syncFn = el.Wrap(syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd))
+				scName := ""
+				if as, _ := sidecar.LoadActive(cmd.Context()); as != nil && as.SidecarID == sidecarID {
+					scName = as.Name
 				}
+				syncFn = eventlog.WrapFromDir(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd))
 			}
 			useBundle := !checkout
 			if useBundle {

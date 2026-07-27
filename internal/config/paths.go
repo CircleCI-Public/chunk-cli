@@ -46,14 +46,20 @@ func AppData() (string, error) {
 }
 
 // ProjectDataDir returns the per-project data directory keyed by projectRoot.
-// The directory name is the hex-encoded SHA-256 of the cleaned absolute path,
-// which is guaranteed collision-free across all valid path strings.
+// The directory name is the hex-encoded SHA-256 of the real absolute path
+// (symlinks resolved via EvalSymlinks, falling back to filepath.Clean), which
+// ensures callers that discover the root via different means — git's
+// --show-toplevel vs. a manual filesystem walk — always hash the same string.
 func ProjectDataDir(projectRoot string) (string, error) {
 	base, err := AppData()
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(filepath.Clean(projectRoot)))
+	clean := filepath.Clean(projectRoot)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		clean = resolved
+	}
+	sum := sha256.Sum256([]byte(clean))
 	return filepath.Join(base, fmt.Sprintf("%x", sum)), nil
 }
 
