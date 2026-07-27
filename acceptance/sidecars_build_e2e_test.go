@@ -201,6 +201,7 @@ func e2eRunEnv(t *testing.T, dir string) (stdout, stderr string, exitCode int) {
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
 		"NO_COLOR=1",
+		"CHUNK_NO_TELEMETRY=1",
 	}
 
 	var outBuf, errBuf bytes.Buffer
@@ -227,6 +228,7 @@ func e2eRunBuild(t *testing.T, dir, tag, envJSON string) (output string, exitCod
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		fmt.Sprintf("HOME=%s", os.Getenv("HOME")),
 		"NO_COLOR=1",
+		"CHUNK_NO_TELEMETRY=1",
 	}
 	cmd.Stdin = strings.NewReader(envJSON)
 	var outBuf bytes.Buffer
