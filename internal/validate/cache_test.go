@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -46,7 +47,7 @@ var testCommands = []config.Command{{Name: "test", Run: "go test ./..."}}
 // buildKey asserts the key could be built and returns it.
 func buildKey(t *testing.T, dir, commandName string, cmds []config.Command) string {
 	t.Helper()
-	key, ok := BuildCacheKey(dir, commandName, cmds)
+	key, ok := BuildCacheKey(CacheKeyInputs{WorkDir: dir, CommandName: commandName, Commands: cmds})
 	assert.Assert(t, ok, "expected a usable cache key")
 	return key
 }
@@ -184,7 +185,7 @@ func TestBuildCacheKey_SubDir_MatchesRepoRoot(t *testing.T) {
 func TestBuildCacheKey_NotARepo_NotOK(t *testing.T) {
 	// No git state means the key would depend only on the config, so it must be
 	// refused rather than returned as a stable key.
-	_, ok := BuildCacheKey(t.TempDir(), "", testCommands)
+	_, ok := BuildCacheKey(CacheKeyInputs{WorkDir: t.TempDir(), Commands: testCommands})
 	assert.Assert(t, !ok, "non-repo dir must not produce a cache key")
 }
 
@@ -192,8 +193,51 @@ func TestBuildCacheKey_RepoWithoutCommits_NotOK(t *testing.T) {
 	dir := t.TempDir()
 	runCmd(t, dir, "git", "init")
 
-	_, ok := BuildCacheKey(dir, "", testCommands)
+	_, ok := BuildCacheKey(CacheKeyInputs{WorkDir: dir, Commands: testCommands})
 	assert.Assert(t, !ok, "repo with no HEAD must not produce a cache key")
+}
+
+// TestBuildCacheKey_DifferentTarget_NotEqual covers switching the active
+// sidecar: the working tree is untouched, so only the target distinguishes a
+// run validated on one sidecar from one that must still be validated on another.
+func TestBuildCacheKey_DifferentTarget_NotEqual(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+
+	key := func(target string) string {
+		t.Helper()
+		k, ok := BuildCacheKey(CacheKeyInputs{WorkDir: dir, Commands: testCommands, Target: target})
+		assert.Assert(t, ok, "expected a usable cache key")
+		return k
+	}
+
+	local := key("")
+	sidecarA := key("sidecar-a\x00img")
+	sidecarB := key("sidecar-b\x00img")
+
+	assert.Assert(t, local != sidecarA, "local and sidecar runs must not share a key")
+	assert.Assert(t, sidecarA != sidecarB, "different sidecars must not share a key")
+	assert.Equal(t, sidecarA, key("sidecar-a\x00img"))
+}
+
+// TestBuildCacheKey_OversizedWorktree_NotOK guards the digest budget: hashing an
+// unbounded amount of content on every hook invocation is worse than not
+// caching, so an oversized tree fails closed like any other unusable state.
+func TestBuildCacheKey_OversizedWorktree_NotOK(t *testing.T) {
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+
+	original := maxDigestBytes
+	maxDigestBytes = 16
+	t.Cleanup(func() { maxDigestBytes = original })
+
+	writeFile(t, dir, "small.go", "package p")
+	_, ok := BuildCacheKey(CacheKeyInputs{WorkDir: dir, Commands: testCommands})
+	assert.Assert(t, ok, "a tree within budget must still produce a key")
+
+	writeFile(t, dir, "big.go", strings.Repeat("x", 64))
+	_, ok = BuildCacheKey(CacheKeyInputs{WorkDir: dir, Commands: testCommands})
+	assert.Assert(t, !ok, "a tree over the digest budget must not produce a cache key")
 }
 
 func TestBuildCacheKey_DeletedFile_NotEqual(t *testing.T) {

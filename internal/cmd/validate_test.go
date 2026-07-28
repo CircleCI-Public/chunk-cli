@@ -21,7 +21,9 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
 // hookPayload is the JSON Claude Code sends to Stop hooks via stdin.
@@ -210,6 +212,57 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 	assert.Assert(t, strings.Contains(err.Error(), "BADVALUE"), "got: %v", err)
 }
 
+// activeStopHookPayload is a re-signalled Stop hook: stop_hook_active is true,
+// so initHook leaves the failure counter alone and the counter's fate is decided
+// by how the run itself ends.
+const activeStopHookPayload = `{"session_id":"test-session-001","stop_hook_active":true}`
+
+// TestValidateHookCacheHitResetsAttempts covers a Stop hook firing again on a
+// tree that already validated. The commands are skipped, and because a cache hit
+// is a success it must clear the failure counter — otherwise a stale count
+// brings the "ask the user for guidance" bail-out forward by a turn.
+func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
+	isolateConfig(t)
+	// The attempt counter lives under os.TempDir(); isolate it from other tests
+	// sharing this session ID.
+	t.Setenv("TMPDIR", t.TempDir())
+	const sessionID = "test-session-001"
+
+	dir := t.TempDir()
+	gitSetup(t, dir, "main")
+	// Saving the config leaves .chunk/ untracked, so HasGitChanges stays true and
+	// the hook reaches the cache instead of short-circuiting on a clean tree.
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "exit 0"}},
+	}))
+
+	run := func() string {
+		t.Helper()
+		var outBuf, errBuf bytes.Buffer
+		root := NewRootCmd("test")
+		root.SetOut(&outBuf)
+		root.SetErr(&errBuf)
+		root.SetIn(strings.NewReader(activeStopHookPayload))
+		root.SetArgs([]string{"validate", "--project", dir})
+		assert.NilError(t, root.Execute())
+		return errBuf.String()
+	}
+
+	const skipMsg = "skipped (no changes since last successful run)"
+
+	first := run()
+	assert.Assert(t, !strings.Contains(first, skipMsg), "first run must execute, got: %q", first)
+
+	// A failure at some other tree state leaves a count of 1 behind.
+	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
+
+	second := run()
+	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
+
+	// The hit cleared the counter, so the next failure is attempt 1 again.
+	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
+}
+
 // --- hookResultCache ---
 
 // hookResultCache is the boundary between "these runs are cacheable" and
@@ -236,7 +289,7 @@ func TestHookResultCacheDisabledCases(t *testing.T) {
 			if tt.gitInit {
 				gitSetup(t, dir, "main")
 			}
-			cache, key := hookResultCache(tt.hook, tt.inlineCmd, dir, "", cfg)
+			cache, key := hookResultCache(tt.hook, tt.inlineCmd, dir, "", cfg, "")
 			assert.Assert(t, cache == nil, "expected no cache")
 			assert.Equal(t, key, "")
 		})
@@ -248,9 +301,79 @@ func TestHookResultCacheEnabledForNamedCommand(t *testing.T) {
 	gitSetup(t, dir, "main")
 	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
 
-	cache, key := hookResultCache(&hookContext{sessionID: "s1"}, "", dir, "test", cfg)
+	cache, key := hookResultCache(&hookContext{sessionID: "s1"}, "", dir, "test", cfg, "")
 	assert.Assert(t, cache != nil, "expected a cache for a named command in hook mode")
 	assert.Assert(t, key != "")
+}
+
+// TestHookResultCacheTargetAffectsKey pins the wiring: a different execution
+// target has to reach the key, or a run validated on one sidecar reports a hit
+// for another.
+func TestHookResultCacheTargetAffectsKey(t *testing.T) {
+	dir := t.TempDir()
+	gitSetup(t, dir, "main")
+	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
+	hook := &hookContext{sessionID: "s1"}
+
+	_, local := hookResultCache(hook, "", dir, "test", cfg, "")
+	_, remote := hookResultCache(hook, "", dir, "test", cfg, "sidecar-a\x00")
+	assert.Assert(t, local != remote, "target must participate in the cache key")
+}
+
+// --- execTarget ---
+
+func TestExecTarget(t *testing.T) {
+	withImage := &config.ProjectConfig{Validation: &config.ValidationConfig{SidecarImage: "snap-1"}}
+
+	tests := []struct {
+		name   string
+		opts   *validateOpts
+		cfg    *config.ProjectConfig
+		active *sidecar.ActiveSidecar
+		want   string
+	}{
+		{name: "local run", opts: &validateOpts{}, cfg: &config.ProjectConfig{}, want: ""},
+		{
+			name: "explicit sidecar id",
+			opts: &validateOpts{sidecarID: "sc-1"},
+			cfg:  &config.ProjectConfig{},
+			want: "sc-1\x00",
+		},
+		{
+			name:   "active sidecar",
+			opts:   &validateOpts{},
+			cfg:    &config.ProjectConfig{},
+			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			want:   "sc-2\x00",
+		},
+		{
+			name:   "explicit id wins over active",
+			opts:   &validateOpts{sidecarID: "sc-1"},
+			cfg:    &config.ProjectConfig{},
+			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			want:   "sc-1\x00",
+		},
+		{
+			name: "configured image with no sidecar yet",
+			opts: &validateOpts{},
+			cfg:  withImage,
+			want: "\x00snap-1",
+		},
+		{
+			name:   "image and active sidecar",
+			opts:   &validateOpts{},
+			cfg:    withImage,
+			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			want:   "sc-2\x00snap-1",
+		},
+		{name: "nil config", opts: &validateOpts{}, cfg: nil, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, execTarget(tt.opts, tt.cfg, tt.active), tt.want)
+		})
+	}
 }
 
 // gitSetup initialises a minimal git repo at dir on the given branch name.

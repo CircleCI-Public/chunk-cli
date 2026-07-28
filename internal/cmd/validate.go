@@ -270,10 +270,15 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return errSilentExit
 	}
 
-	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, name, cfg)
+	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, name, cfg, execTarget(opts, cfg, activeSidecar))
 	if resultCache != nil {
 		if _, ok := resultCache.Get(cacheKey); ok {
 			streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
+			// A cache hit is a success, so it clears the failure counter just as
+			// WrapHookResult does for a real one. Leaving a stale count behind
+			// would bring the "ask the user for guidance" bail-out forward by a
+			// turn. resultCache is only non-nil in hook mode, so hook is set.
+			validate.ResetAttempts(hook.sessionID)
 			return nil
 		}
 	}
@@ -794,7 +799,7 @@ func validateCacheDir(workDir string) (string, error) {
 // hookResultCache returns a ResultCache and cache key for hook-mode runs, or
 // (nil, "") when caching does not apply: non-hook runs, inline commands, or a
 // working tree whose state cannot be hashed reliably.
-func hookResultCache(hook *hookContext, inlineCmd, workDir, commandName string, cfg *config.ProjectConfig) (validate.ResultCache, string) {
+func hookResultCache(hook *hookContext, inlineCmd, workDir, commandName string, cfg *config.ProjectConfig, target string) (validate.ResultCache, string) {
 	if hook == nil || inlineCmd != "" {
 		return nil, ""
 	}
@@ -802,11 +807,40 @@ func hookResultCache(hook *hookContext, inlineCmd, workDir, commandName string, 
 	if err != nil {
 		return nil, ""
 	}
-	key, ok := validate.BuildCacheKey(workDir, commandName, cfg.Commands)
+	key, ok := validate.BuildCacheKey(validate.CacheKeyInputs{
+		WorkDir:     workDir,
+		CommandName: commandName,
+		Commands:    cfg.Commands,
+		Target:      target,
+	})
 	if !ok {
 		return nil, ""
 	}
 	return filecache.FileCache[validate.CachedResult]{Dir: cacheDir}, key
+}
+
+// execTarget describes where this run's commands will execute, for inclusion in
+// the cache key. Which sidecar is used depends on the configured snapshot image
+// and on the active sidecar — mutable state that lives outside the repo, so
+// neither shows up in the working-tree digest. Without it, switching the active
+// sidecar between runs leaves the key unchanged and the second sidecar is never
+// validated against.
+//
+// Returns "" for a purely local run. The sidecar ID is empty when one will be
+// created during this run; the image still distinguishes those from local runs.
+func execTarget(opts *validateOpts, cfg *config.ProjectConfig, active *sidecar.ActiveSidecar) string {
+	id := opts.sidecarID
+	if id == "" && active != nil {
+		id = active.SidecarID
+	}
+	var image string
+	if cfg.HasSidecarImage() {
+		image = cfg.Validation.SidecarImage
+	}
+	if id == "" && image == "" {
+		return ""
+	}
+	return id + "\x00" + image
 }
 
 func mapValidateError(err error) error {

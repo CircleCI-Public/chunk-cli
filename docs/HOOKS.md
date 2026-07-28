@@ -25,9 +25,12 @@ chunk validate: skipped (no changes since last successful run)
 Only successes are cached. A failing run is never stored, so the agent always
 gets a real re-run after a fix attempt.
 
-The cache key covers everything that can change the outcome:
+The cache key covers:
 
 - the `commands` block of `.chunk/config.json`
+- the execution target — the configured sidecar snapshot image and the active
+  sidecar's ID, so a result validated against one sidecar is never reused for
+  another
 - the HEAD commit SHA
 - the contents of every file git reports as changed — tracked, staged, and
   untracked alike
@@ -36,6 +39,17 @@ Because contents are hashed rather than just the `git status` output, editing a
 file that was already dirty invalidates the entry. Any edit that could change a
 command's result produces a new key.
 
+Two things deliberately stay out of the key:
+
+- **Gitignored files.** `git status` does not report ignored paths, so nothing
+  under `.gitignore` participates in the digest — `.env.local`, generated code,
+  vendored dependencies, local tooling config. Hashing them would mean walking
+  trees like `node_modules` on every hook invocation. A command whose result
+  depends on an ignored file can therefore report a hit after that file changes;
+  touch a tracked file, or delete the cache directory, to force a re-run.
+- **Environment variables** passed with `--env` or loaded from `.env.local`,
+  for the same reason.
+
 Caching is skipped, and commands always run, when:
 
 - the run is not a hook invocation (a manual `chunk validate` never caches)
@@ -43,9 +57,11 @@ Caching is skipped, and commands always run, when:
 - the working-tree state cannot be hashed reliably — not a git repo, a repo with
   no commits yet, or a changed path that cannot be read (an unreadable file, or a
   non-regular path such as a dirty submodule)
+- the changed files total more than 64 MiB, the point past which hashing the tree
+  costs more than re-running the commands
 
-That last case fails closed: without trustworthy git state the key would depend
-on the config alone and would stay stable across code changes, so no cache is
+Those last two fail closed: without a trustworthy digest the key would depend on
+the config alone and would stay stable across code changes, so no cache is
 consulted at all.
 
 Entries live outside the repo, under the per-project data directory:
