@@ -194,18 +194,18 @@ type execSubmitAttrs struct {
 	Phase string `json:"phase"`
 }
 
-func (c *Client) Exec(ctx context.Context, sidecarID, command string, args []string) (*ExecResponse, error) {
+func (c *Client) Exec(ctx context.Context, sidecarID, command string, args []string, env map[string]string) (*ExecResponse, error) {
 	var attrs execSubmitAttrs
-	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
+	envelope := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances/%s/exec",
 		hc.RouteParams(sidecarID),
-		hc.Body(ExecRequest{Command: command, Args: args}),
-		hc.JSONDecoder(&env),
+		hc.Body(ExecRequest{Command: command, Args: args, Env: env}),
+		hc.JSONDecoder(&envelope),
 	))
 	if err != nil {
 		return nil, mapErr("exec", err)
 	}
-	return c.streamCommandOutput(ctx, env.Data.ID)
+	return c.streamCommandOutput(ctx, envelope.Data.ID)
 }
 
 func (c *Client) streamCommandOutput(ctx context.Context, commandID string) (*ExecResponse, error) {
