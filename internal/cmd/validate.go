@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -274,23 +275,38 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
+	// In hook context, buffer all detailed output. On success we discard it
+	// and show only a brief summary; on failure we flush the full detail.
+	var hookBuf *bytes.Buffer
+	if hook != nil {
+		hookBuf = new(bytes.Buffer)
+		streams = iostream.Streams{Out: hookBuf, Err: hookBuf}
+	}
+	statusFn = newStatusFunc(streams)
+
 	statusFn(iostream.LevelStep, "chunk validate")
 
-	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
-	if err != nil {
-		return err
+	// Wrap setup + run in a closure so all error paths reach the hookBuf
+	// flush below, not just errors from runValidate itself.
+	execErr := func() error {
+		freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
+		if err != nil {
+			return err
+		}
+		// Only load env vars and resolve secrets when a sidecar is actually
+		// being used — avoids parsing .env.local or hitting secrets APIs on
+		// purely local runs.
+		envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
+		if err != nil {
+			return err
+		}
+		return runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	}()
+	if execErr != nil {
+		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", validate.FormatDuration(time.Since(start))))
+	} else {
+		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", validate.FormatDuration(time.Since(start))))
 	}
-
-	// Only load env vars and resolve secrets when a sidecar is actually
-	// being used — avoids parsing .env.local or hitting secrets APIs on
-	// purely local runs.
-	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
-	if err != nil {
-		return err
-	}
-
-	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
-	statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", validate.FormatDuration(time.Since(start))))
 
 	if hook != nil {
 		maxAttempts := cfg.StopHookMaxAttempts
@@ -299,10 +315,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		}
 		hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 		if hookErr == nil && execErr == nil {
-			// On success (exit 0) Claude Code doesn't surface stderr to the user.
-			// Write one line to stdout so the user sees validation passed.
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ chunk validate passed (%s)\n", validate.FormatDuration(time.Since(start)))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", validate.FormatDuration(time.Since(start)))))
+			return nil
 		}
+		_, _ = io.Copy(cmd.ErrOrStderr(), hookBuf)
 		return hookErr
 	}
 	return execErr

@@ -149,13 +149,17 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		}
 	}
 
-	for _, c := range commands {
+	for i, c := range commands {
 		run := expandCommand(workDir, c.Run)
 		script := "cd " + shellEscape(dest) + " && " + run
 		start := time.Now()
 		stdout, stderr, exitCode, err := execFn(ctx, script)
 		elapsed := time.Since(start)
 		if err != nil {
+			status(iostream.LevelError, fmt.Sprintf("%-*s  exec error: %v", maxWidth, c.Name, err))
+			for j := i + 1; j < len(commands); j++ {
+				status(iostream.LevelWarn, fmt.Sprintf("%-*s  skipped", maxWidth, commands[j].Name))
+			}
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}
 		if exitCode != 0 {
@@ -169,6 +173,9 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 				_, _ = fmt.Fprint(streams.Err, stderr)
 			}
 			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, FormatDuration(elapsed)))
+			for j := i + 1; j < len(commands); j++ {
+				status(iostream.LevelWarn, fmt.Sprintf("%-*s  skipped", maxWidth, commands[j].Name))
+			}
 			return fmt.Errorf("remote %s failed with exit code %d (%s)", c.Name, exitCode, FormatDuration(elapsed))
 		}
 		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, FormatDuration(elapsed)))
