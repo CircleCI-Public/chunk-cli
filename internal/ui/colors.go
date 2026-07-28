@@ -63,3 +63,6 @@ func ErrBold(text string) string { return wrapErr("1", text) }
 
 // ErrDim applies dim using stderr color detection.
 func ErrDim(text string) string { return wrapErr("2", text) }
+
+// ErrRed applies red color using stderr color detection.
+func ErrRed(text string) string { return wrapErr("31", text) }

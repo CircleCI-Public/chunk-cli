@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +42,17 @@ func shellEscape(arg string) string {
 // DefaultTimeout is the per-command execution timeout in seconds.
 const DefaultTimeout = 300
 
+// FormatDuration formats a duration for display in status messages.
+func FormatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return d.Round(time.Second).String()
+}
+
 // List prints all configured command names and their run strings.
 func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
@@ -56,7 +68,7 @@ func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 
 // RunInline runs an inline command string.
 func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) error {
-	return runCommand(ctx, workDir, name, command, 0, status, streams)
+	return runCommand(ctx, workDir, name, command, 0, len(name), status, streams)
 }
 
 // RunNamed runs a single named command from config.
@@ -65,7 +77,7 @@ func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConf
 	if c == nil {
 		return fmt.Errorf("command %q not configured", name)
 	}
-	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams)
+	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, len(c.Name), status, streams)
 }
 
 // RunAll runs all configured commands, stopping at the first failure.
@@ -74,13 +86,24 @@ func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, stat
 		return ErrNotConfigured
 	}
 
+	maxWidth := 0
+	for _, c := range cfg.Commands {
+		if len(c.Name) > maxWidth {
+			maxWidth = len(c.Name)
+		}
+	}
+
+	start := time.Now()
 	for i, c := range cfg.Commands {
-		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, status, streams); err != nil {
+		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, maxWidth, status, streams); err != nil {
 			for j := i + 1; j < len(cfg.Commands); j++ {
-				status(iostream.LevelWarn, fmt.Sprintf("%s: skipped (%s failed)", cfg.Commands[j].Name, c.Name))
+				status(iostream.LevelWarn, fmt.Sprintf("%-*s  skipped", maxWidth, cfg.Commands[j].Name))
 			}
 			return err
 		}
+	}
+	if len(cfg.Commands) > 1 {
+		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, fmt.Sprintf("%d passed", len(cfg.Commands)), FormatDuration(time.Since(start))))
 	}
 	return nil
 }
@@ -118,23 +141,37 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		}
 		commands = []config.Command{*c}
 	}
+
+	maxWidth := 0
+	for _, c := range commands {
+		if len(c.Name) > maxWidth {
+			maxWidth = len(c.Name)
+		}
+	}
+
 	for _, c := range commands {
 		run := expandCommand(workDir, c.Run)
 		script := "cd " + shellEscape(dest) + " && " + run
-		status(iostream.LevelInfo, fmt.Sprintf("Running %s (remote): %s", c.Name, c.Run))
+		start := time.Now()
 		stdout, stderr, exitCode, err := execFn(ctx, script)
+		elapsed := time.Since(start)
 		if err != nil {
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}
-		if stdout != "" {
-			_, _ = fmt.Fprint(streams.Out, stdout)
-		}
-		if stderr != "" {
-			_, _ = fmt.Fprint(streams.Err, stderr)
-		}
 		if exitCode != 0 {
-			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
+			if stdout != "" || stderr != "" {
+				status(iostream.LevelInfo, c.Name+":")
+			}
+			if stdout != "" {
+				_, _ = fmt.Fprint(streams.Err, stdout)
+			}
+			if stderr != "" {
+				_, _ = fmt.Fprint(streams.Err, stderr)
+			}
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, FormatDuration(elapsed)))
+			return fmt.Errorf("remote %s failed with exit code %d (%s)", c.Name, exitCode, FormatDuration(elapsed))
 		}
+		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, FormatDuration(elapsed)))
 	}
 	return nil
 }
@@ -142,20 +179,26 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 // RunRemoteInline runs a single inline command on a remote sidecar via SSH.
 func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, status iostream.StatusFunc, streams iostream.Streams) error {
 	script := "cd " + shellEscape(dest) + " && " + command
-	status(iostream.LevelInfo, fmt.Sprintf("Running %s (remote): %s", name, command))
+	start := time.Now()
 	stdout, stderr, exitCode, err := execFn(ctx, script)
+	elapsed := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("remote %s: %w", name, err)
 	}
-	if stdout != "" {
-		_, _ = fmt.Fprint(streams.Out, stdout)
-	}
-	if stderr != "" {
-		_, _ = fmt.Fprint(streams.Err, stderr)
-	}
 	if exitCode != 0 {
-		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
+		if stdout != "" || stderr != "" {
+			status(iostream.LevelInfo, name+":")
+		}
+		if stdout != "" {
+			_, _ = fmt.Fprint(streams.Err, stdout)
+		}
+		if stderr != "" {
+			_, _ = fmt.Fprint(streams.Err, stderr)
+		}
+		status(iostream.LevelError, fmt.Sprintf("%-*s  %s", len(name), name, FormatDuration(elapsed)))
+		return fmt.Errorf("remote %s failed with exit code %d (%s)", name, exitCode, FormatDuration(elapsed))
 	}
+	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", len(name), name, FormatDuration(elapsed)))
 	return nil
 }
 
@@ -193,9 +236,8 @@ func expandCommand(workDir, command string) string {
 	return strings.ReplaceAll(command, "{{CHANGED_PACKAGES}}", expanded)
 }
 
-func runCommand(ctx context.Context, workDir, name, command string, timeoutSec int, status iostream.StatusFunc, streams iostream.Streams) error {
+func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, nameWidth int, status iostream.StatusFunc, streams iostream.Streams) error {
 	command = expandCommand(workDir, command)
-	status(iostream.LevelInfo, fmt.Sprintf("Running %s: %s", name, command))
 
 	if timeoutSec <= 0 {
 		timeoutSec = DefaultTimeout
@@ -203,22 +245,35 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec i
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
+	// Buffer output: flushed to stderr only on failure so success runs stay quiet.
+	var buf bytes.Buffer
+
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
-	cmd.Stdout = streams.Out
-	cmd.Stderr = streams.Err
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
 
+	start := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(start)
+
 	if err != nil {
+		if buf.Len() > 0 {
+			status(iostream.LevelInfo, name+":")
+			_, _ = io.Copy(streams.Err, &buf)
+		}
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
+			status(iostream.LevelError, fmt.Sprintf("%-*s  timed out after %ds", nameWidth, name, timeoutSec))
+			return fmt.Errorf("%s command timed out after %ds (%s)", name, timeoutSec, FormatDuration(elapsed))
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
-			return fmt.Errorf("%s command failed with exit code %d", name, exitErr.ExitCode())
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", nameWidth, name, FormatDuration(elapsed)))
+			return fmt.Errorf("%s command failed with exit code %d (%s)", name, exitErr.ExitCode(), FormatDuration(elapsed))
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
+	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", nameWidth, name, FormatDuration(elapsed)))
 	return nil
 }
 

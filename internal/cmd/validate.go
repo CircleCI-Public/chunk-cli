@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -38,6 +39,8 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 			streams.ErrPrintf("  %s\n", ui.ErrWarning(msg))
 		case iostream.LevelDone:
 			streams.ErrPrintf("  %s\n", ui.ErrSuccess(msg))
+		case iostream.LevelError:
+			streams.ErrPrintf("  %s\n", ui.ErrError(msg))
 		}
 	}
 }
@@ -181,6 +184,9 @@ func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc confi
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
 	streams := iostream.FromCmd(cmd)
 
+	// Record before git-status check so total captures setup overhead too.
+	start := time.Now()
+
 	workDir := opts.projectDir
 	if workDir == "" {
 		var err error
@@ -268,6 +274,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
+	statusFn(iostream.LevelStep, "chunk validate")
+
 	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
 		return err
@@ -282,13 +290,20 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", validate.FormatDuration(time.Since(start))))
 
 	if hook != nil {
 		maxAttempts := cfg.StopHookMaxAttempts
 		if maxAttempts <= 0 {
 			maxAttempts = validate.DefaultMaxAttempts
 		}
-		return validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
+		hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
+		if hookErr == nil && execErr == nil {
+			// On success (exit 0) Claude Code doesn't surface stderr to the user.
+			// Write one line to stdout so the user sees validation passed.
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ chunk validate passed (%s)\n", validate.FormatDuration(time.Since(start)))
+		}
+		return hookErr
 	}
 	return execErr
 }

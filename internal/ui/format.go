@@ -25,6 +25,11 @@ func ErrWarning(msg string) string {
 	return ErrYellow("⚠ " + msg)
 }
 
+// ErrError formats a failure message using stderr color detection.
+func ErrError(msg string) string {
+	return ErrRed("✗ " + msg)
+}
+
 // FormatError formats a red error with optional detail and suggestion.
 func FormatError(brief string, detail string, suggestion string) string {
 	var b strings.Builder

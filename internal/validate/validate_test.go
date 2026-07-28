@@ -172,9 +172,10 @@ func TestRunAll(t *testing.T) {
 		var statusBuf bytes.Buffer
 
 		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
-		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "Running install"), "got: %s", statusBuf.String())
+		// Output is buffered and discarded on success — only status messages remain.
+		assert.Equal(t, out.Len(), 0)
+		assert.Assert(t, strings.Contains(statusBuf.String(), "install"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "test"), "got: %s", statusBuf.String())
 	})
 
 	t.Run("no commands", func(t *testing.T) {
@@ -209,8 +210,9 @@ func TestRunAll(t *testing.T) {
 		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
 		assert.Assert(t, err != nil, "expected error")
 		assert.Assert(t, !strings.Contains(out.String(), "should-not-run"), "skipped command should not produce output, got: %s", out.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "test: skipped"), "got: %s", statusBuf.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "lint: skipped"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "test"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "lint"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "skipped"), "got: %s", statusBuf.String())
 	})
 
 	t.Run("single command success", func(t *testing.T) {
@@ -221,7 +223,8 @@ func TestRunAll(t *testing.T) {
 		var statusBuf bytes.Buffer
 
 		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
-		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
+		assert.Equal(t, out.Len(), 0)
+		assert.Assert(t, strings.Contains(statusBuf.String(), "test"), "got: %s", statusBuf.String())
 	})
 }
 
@@ -280,9 +283,12 @@ func TestRunRemote(t *testing.T) {
 			{Name: "test", Run: "echo test"},
 		}}
 		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams))
-		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), testStatus(&statusBuf), streams))
+		// Output is suppressed on success — only status messages remain.
+		assert.Equal(t, out.Len(), 0)
+		assert.Assert(t, strings.Contains(statusBuf.String(), "install"), "got: %s", statusBuf.String())
 		assert.Equal(t, execCount, 2)
 	})
 
@@ -404,8 +410,11 @@ func TestRunRemoteSSH(t *testing.T) {
 		}}
 		streams, out, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", t.TempDir(), func(iostream.Level, string) {}, streams))
-		assert.Assert(t, strings.Contains(out.String(), "hello from remote"), "got: %s", out.String())
+		var statusBuf bytes.Buffer
+		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", t.TempDir(), testStatus(&statusBuf), streams))
+		// Output suppressed on success; verified via status message instead.
+		assert.Equal(t, out.Len(), 0)
+		assert.Assert(t, strings.Contains(statusBuf.String(), "test"), "got: %s", statusBuf.String())
 		assert.Equal(t, len(sshSrv.Commands()), 1)
 	})
 
@@ -468,9 +477,12 @@ func TestRunRemoteInline(t *testing.T) {
 			return "inline output\n", "", 0, nil
 		}
 		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunRemoteInline(context.Background(), execFn, "custom", "echo hello", "/workspace/repo", func(iostream.Level, string) {}, streams))
-		assert.Assert(t, strings.Contains(out.String(), "inline output"), "got: %s", out.String())
+		assert.NilError(t, RunRemoteInline(context.Background(), execFn, "custom", "echo hello", "/workspace/repo", testStatus(&statusBuf), streams))
+		// Output suppressed on success.
+		assert.Equal(t, out.Len(), 0)
+		assert.Assert(t, strings.Contains(statusBuf.String(), "custom"), "got: %s", statusBuf.String())
 		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/workspace/repo' &&"), "got: %s", capturedScript)
 	})
 

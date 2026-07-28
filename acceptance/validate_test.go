@@ -173,10 +173,10 @@ func TestValidateRunLocal(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "echo installed"),
-		"expected install command output, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "echo tested"),
-		"expected test command output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "install"),
+		"expected install status in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "test"),
+		"expected test status in output, got: %s", combined)
 }
 
 func TestValidateRunLocalFailure(t *testing.T) {
@@ -244,9 +244,9 @@ func TestValidateRunNamed(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "echo tested"),
-		"expected test command in output, got: %s", combined)
-	// Should not run install
+	assert.Assert(t, strings.Contains(combined, "test"),
+		"expected test status in output, got: %s", combined)
+	// Should not run install — its echo output would appear on failure, not on success
 	assert.Assert(t, !strings.Contains(combined, "echo installed"),
 		"should not run install when running named test command, got: %s", combined)
 }
@@ -280,8 +280,9 @@ func TestValidateInlineCmd(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "inline-output"),
-		"expected inline command output, got: %s", combined)
+	// Command output is buffered and discarded on success; check for the status line instead.
+	assert.Assert(t, strings.Contains(combined, "custom"),
+		"expected custom command status in output, got: %s", combined)
 }
 
 func TestValidateInlineCmdDryRun(t *testing.T) {
