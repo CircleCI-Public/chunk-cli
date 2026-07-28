@@ -314,11 +314,11 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			maxAttempts = validate.DefaultMaxAttempts
 		}
 		hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
+		_, _ = io.Copy(cmd.ErrOrStderr(), hookBuf)
 		if hookErr == nil && execErr == nil {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", validate.FormatDuration(time.Since(start)))))
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", ui.ErrSuccess(fmt.Sprintf("chunk validate passed (%s)", validate.FormatDuration(time.Since(start)))))
 			return nil
 		}
-		_, _ = io.Copy(cmd.ErrOrStderr(), hookBuf)
 		return hookErr
 	}
 	return execErr
