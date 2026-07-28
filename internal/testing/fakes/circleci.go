@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -393,17 +394,19 @@ func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {
 	c.Status(http.StatusOK)
 
 	idx := 0
-	writeEvent := func(stream, line string) {
-		b, _ := json.Marshal(commandOutputLine{Index: idx, Stream: stream, Line: line})
-		_, _ = fmt.Fprintf(c.Writer, "%s\n", b)
-		idx++
+	writeLines := func(stream, output string) {
+		for _, line := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
+			b, _ := json.Marshal(commandOutputLine{Index: idx, Stream: stream, Line: line})
+			_, _ = fmt.Fprintf(c.Writer, "%s\n", b)
+			idx++
+		}
 	}
 
 	if resp.Stdout != "" {
-		writeEvent("stdout", resp.Stdout)
+		writeLines("stdout", resp.Stdout)
 	}
 	if resp.Stderr != "" {
-		writeEvent("stderr", resp.Stderr)
+		writeLines("stderr", resp.Stderr)
 	}
 
 	result, _ := json.Marshal(commandOutputLine{
