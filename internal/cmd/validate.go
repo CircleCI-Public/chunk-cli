@@ -20,6 +20,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/filecache"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -269,6 +270,14 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return errSilentExit
 	}
 
+	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, name, cfg)
+	if resultCache != nil {
+		if _, ok := resultCache.Get(cacheKey); ok {
+			streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
+			return nil
+		}
+	}
+
 	// allRemote is true when the caller explicitly targets the sidecar
 	// (--remote or --sidecar-id), meaning every command runs there.
 	// Per-command routing only applies when the sidecar is resolved implicitly.
@@ -309,6 +318,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	if execErr == nil && resultCache != nil {
+		_ = resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()})
+	}
 	return finishValidate(cmd, hook, execErr, start, opts.sidecarID, cfg, statusFn, streams)
 }
 
@@ -768,6 +780,30 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 
 const suggestionValidateNotConfigured = "Run 'chunk init' to detect and configure validation commands.\n" +
 	"This also installs the /chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
+
+// validateCacheDir returns the directory used to store validate result cache
+// entries for the given project root.
+func validateCacheDir(workDir string) (string, error) {
+	projectDir, err := config.ProjectDataDir(workDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projectDir, "validate-cache"), nil
+}
+
+// hookResultCache returns a ResultCache and cache key for hook-mode runs,
+// or (nil, "") when caching does not apply (non-hook or inline cmd).
+func hookResultCache(hook *hookContext, inlineCmd, workDir, commandName string, cfg *config.ProjectConfig) (validate.ResultCache, string) {
+	if hook == nil || inlineCmd != "" {
+		return nil, ""
+	}
+	cacheDir, err := validateCacheDir(workDir)
+	if err != nil {
+		return nil, ""
+	}
+	key := validate.BuildCacheKey(workDir, commandName, cfg.Commands)
+	return filecache.FileCache[validate.CachedResult]{Dir: cacheDir}, key
+}
 
 func mapValidateError(err error) error {
 	if errors.Is(err, validate.ErrNotConfigured) {
