@@ -22,6 +22,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/filecache"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -140,9 +141,12 @@ func newValidateCmd() *cobra.Command {
 }
 
 // initHook applies hook-specific context, stream, and early-exit logic.
+// tree is the working-tree fingerprint for this run; the zero value means it
+// could not be established, and reports the tree as not clean so validation
+// still runs in ambiguous cases.
 // Returns updated ctx and streams, a skip flag (true = return nil immediately),
 // and a non-nil error when the hook should exit with a non-zero code.
-func initHook(ctx context.Context, hook *hookContext, workDir string, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
+func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitutil.Worktree, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
 	if hook == nil {
 		return ctx, streams, false, nil
 	}
@@ -157,7 +161,7 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, streams io
 		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)
 	}
-	if !validate.HasGitChanges(workDir) {
+	if tree.Clean {
 		return ctx, streams, true, nil
 	}
 	return ctx, streams, false, nil
@@ -209,9 +213,20 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	hook := detectHook(cmd.InOrStdin())
 	ctx := cmd.Context()
 
+	// The working-tree fingerprint answers both hook-only questions about the
+	// tree: whether there is anything to validate at all, and whether this exact
+	// tree already validated successfully. Computing it once keeps the two
+	// consistent and costs a single pass over the changed files. On failure it is
+	// the zero Worktree, which reads as "not clean" and is refused as a cache
+	// key, so both questions fall back to running the commands.
+	var tree gitutil.Worktree
+	if hook != nil {
+		tree, _ = gitutil.Fingerprint(workDir)
+	}
+
 	var skip bool
 	var hookErr error
-	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, streams)
+	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, tree, streams)
 	if hookErr != nil {
 		return hookErr
 	}
@@ -270,7 +285,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return errSilentExit
 	}
 
-	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, name, cfg, execTarget(opts, cfg, activeSidecar))
+	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, tree, name, cfg, execTarget(opts, cfg, activeSidecar))
 	if resultCache != nil {
 		if _, ok := resultCache.Get(cacheKey); ok {
 			streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
@@ -798,8 +813,8 @@ func validateCacheDir(workDir string) (string, error) {
 
 // hookResultCache returns a ResultCache and cache key for hook-mode runs, or
 // (nil, "") when caching does not apply: non-hook runs, inline commands, or a
-// working tree whose state cannot be hashed reliably.
-func hookResultCache(hook *hookContext, inlineCmd, workDir, commandName string, cfg *config.ProjectConfig, target string) (validate.ResultCache, string) {
+// working tree whose state could not be fingerprinted.
+func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.Worktree, commandName string, cfg *config.ProjectConfig, target string) (validate.ResultCache, string) {
 	if hook == nil || inlineCmd != "" {
 		return nil, ""
 	}
@@ -808,7 +823,7 @@ func hookResultCache(hook *hookContext, inlineCmd, workDir, commandName string, 
 		return nil, ""
 	}
 	key, ok := validate.BuildCacheKey(validate.CacheKeyInputs{
-		WorkDir:     workDir,
+		Worktree:    tree,
 		CommandName: commandName,
 		Commands:    cfg.Commands,
 		Target:      target,

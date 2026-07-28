@@ -1,15 +1,12 @@
 package validate
 
 import (
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 )
 
 // --- CacheKey ---
@@ -44,171 +41,83 @@ func TestCacheKey_EmptyName(t *testing.T) {
 
 var testCommands = []config.Command{{Name: "test", Run: "go test ./..."}}
 
+// testTree is a stand-in for a real fingerprint; gitutil owns the tests that
+// prove a digest actually tracks the working tree.
+var testTree = gitutil.Worktree{Head: "abc123", Digest: "deadbeef"}
+
 // buildKey asserts the key could be built and returns it.
-func buildKey(t *testing.T, dir, commandName string, cmds []config.Command) string {
+func buildKey(t *testing.T, in CacheKeyInputs) string {
 	t.Helper()
-	key, ok := BuildCacheKey(CacheKeyInputs{WorkDir: dir, CommandName: commandName, Commands: cmds})
+	key, ok := BuildCacheKey(in)
 	assert.Assert(t, ok, "expected a usable cache key")
 	return key
 }
 
 func TestBuildCacheKey_SameInputs_Equal(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	a := buildKey(t, dir, "", testCommands)
-	b := buildKey(t, dir, "", testCommands)
-	assert.Equal(t, a, b)
+	in := CacheKeyInputs{Worktree: testTree, Commands: testCommands}
+	assert.Equal(t, buildKey(t, in), buildKey(t, in))
 }
 
 func TestBuildCacheKey_DifferentCommandName_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	all := buildKey(t, dir, "", testCommands)
-	named := buildKey(t, dir, "test", testCommands)
+	all := buildKey(t, CacheKeyInputs{Worktree: testTree, Commands: testCommands})
+	named := buildKey(t, CacheKeyInputs{Worktree: testTree, CommandName: "test", Commands: testCommands})
 	assert.Assert(t, all != named)
 }
 
 func TestBuildCacheKey_DifferentCommands_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	a := buildKey(t, dir, "", testCommands)
-	b := buildKey(t, dir, "", []config.Command{{Name: "test", Run: "go test -race ./..."}})
+	a := buildKey(t, CacheKeyInputs{Worktree: testTree, Commands: testCommands})
+	b := buildKey(t, CacheKeyInputs{
+		Worktree: testTree,
+		Commands: []config.Command{{Name: "test", Run: "go test -race ./..."}},
+	})
 	assert.Assert(t, a != b)
 }
 
-func TestBuildCacheKey_UncommittedChange_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
+// TestBuildCacheKey_DifferentWorktree_NotEqual pins the wiring that makes the
+// cache safe: both halves of the fingerprint have to reach the key, or a tree
+// that has moved on reports a hit for the run that validated the old one.
+func TestBuildCacheKey_DifferentWorktree_NotEqual(t *testing.T) {
+	base := buildKey(t, CacheKeyInputs{Worktree: testTree, Commands: testCommands})
 
-	before := buildKey(t, dir, "", testCommands)
+	newCommit := testTree
+	newCommit.Head = "def456"
+	edited := testTree
+	edited.Digest = "cafebabe"
 
-	writeFile(t, dir, "new.go", "package p")
-
-	after := buildKey(t, dir, "", testCommands)
-	assert.Assert(t, before != after, "working tree change must invalidate key")
+	assert.Assert(t, base != buildKey(t, CacheKeyInputs{Worktree: newCommit, Commands: testCommands}),
+		"a new HEAD must invalidate the key")
+	assert.Assert(t, base != buildKey(t, CacheKeyInputs{Worktree: edited, Commands: testCommands}),
+		"a changed working tree must invalidate the key")
 }
 
-func TestBuildCacheKey_NewCommit_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
+// TestBuildCacheKey_UnusableWorktree_NotOK covers the fail-closed contract: with
+// no trustworthy git state the key would depend only on the config, so it would
+// stay stable across code changes and turn every later run into a false hit.
+func TestBuildCacheKey_UnusableWorktree_NotOK(t *testing.T) {
+	tests := []struct {
+		name string
+		tree gitutil.Worktree
+	}{
+		{name: "zero fingerprint", tree: gitutil.Worktree{}},
+		{name: "no head", tree: gitutil.Worktree{Digest: "deadbeef"}},
+		{name: "no digest", tree: gitutil.Worktree{Head: "abc123"}},
+	}
 
-	before := buildKey(t, dir, "", testCommands)
-
-	writeFile(t, dir, "x.go", "package p")
-	runCmd(t, dir, "git", "add", "x.go")
-	runCmd(t, dir, "git", "commit", "-m", "add x")
-
-	after := buildKey(t, dir, "", testCommands)
-	assert.Assert(t, before != after, "new commit must invalidate key")
-}
-
-// TestBuildCacheKey_EditAlreadyDirtyFile_NotEqual covers the agent edit loop:
-// "git status --porcelain" reports " M tracked.go" identically before and
-// after a further edit, so a status-only key would report a false cache hit and
-// skip validation of the new content.
-func TestBuildCacheKey_EditAlreadyDirtyFile_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "tracked.go", "package p\n")
-	initGitRepo(t, dir)
-
-	writeFile(t, dir, "tracked.go", "package p // first edit\n")
-	first := buildKey(t, dir, "", testCommands)
-
-	writeFile(t, dir, "tracked.go", "package p // second edit\n")
-	second := buildKey(t, dir, "", testCommands)
-
-	assert.Assert(t, first != second, "editing an already-modified file must invalidate key")
-}
-
-// TestBuildCacheKey_EditUntrackedFile_NotEqual is the untracked counterpart:
-// "?? new.go" is also stable across edits to that file.
-func TestBuildCacheKey_EditUntrackedFile_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	writeFile(t, dir, "new.go", "package p\n")
-	first := buildKey(t, dir, "", testCommands)
-
-	writeFile(t, dir, "new.go", "package p // edited\n")
-	second := buildKey(t, dir, "", testCommands)
-
-	assert.Assert(t, first != second, "editing an untracked file must invalidate key")
-}
-
-// TestBuildCacheKey_EditFileInUntrackedDir_NotEqual guards the -uall flag:
-// without it git collapses an untracked directory to a single "dir/" entry and
-// the contents of files inside it are never hashed.
-func TestBuildCacheKey_EditFileInUntrackedDir_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
-
-	writeFile(t, dir, "pkg/new.go", "package pkg\n")
-	first := buildKey(t, dir, "", testCommands)
-
-	writeFile(t, dir, "pkg/new.go", "package pkg // edited\n")
-	second := buildKey(t, dir, "", testCommands)
-
-	assert.Assert(t, first != second, "editing a file in an untracked dir must invalidate key")
-}
-
-func TestBuildCacheKey_StagedChange_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "tracked.go", "package p\n")
-	initGitRepo(t, dir)
-
-	before := buildKey(t, dir, "", testCommands)
-
-	writeFile(t, dir, "tracked.go", "package p // edited\n")
-	runCmd(t, dir, "git", "add", "tracked.go")
-
-	after := buildKey(t, dir, "", testCommands)
-	assert.Assert(t, before != after, "staged change must invalidate key")
-}
-
-func TestBuildCacheKey_SubDir_MatchesRepoRoot(t *testing.T) {
-	// Porcelain paths are repo-root-relative, so a run from a subdirectory must
-	// still hash the same working tree rather than failing to open any path.
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o755))
-	writeFile(t, dir, "dirty.go", "package p\n")
-
-	root := buildKey(t, dir, "", testCommands)
-	sub := buildKey(t, filepath.Join(dir, "sub"), "", testCommands)
-	assert.Equal(t, root, sub)
-}
-
-func TestBuildCacheKey_NotARepo_NotOK(t *testing.T) {
-	// No git state means the key would depend only on the config, so it must be
-	// refused rather than returned as a stable key.
-	_, ok := BuildCacheKey(CacheKeyInputs{WorkDir: t.TempDir(), Commands: testCommands})
-	assert.Assert(t, !ok, "non-repo dir must not produce a cache key")
-}
-
-func TestBuildCacheKey_RepoWithoutCommits_NotOK(t *testing.T) {
-	dir := t.TempDir()
-	runCmd(t, dir, "git", "init")
-
-	_, ok := BuildCacheKey(CacheKeyInputs{WorkDir: dir, Commands: testCommands})
-	assert.Assert(t, !ok, "repo with no HEAD must not produce a cache key")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := BuildCacheKey(CacheKeyInputs{Worktree: tt.tree, Commands: testCommands})
+			assert.Assert(t, !ok, "an unusable fingerprint must not produce a cache key")
+		})
+	}
 }
 
 // TestBuildCacheKey_DifferentTarget_NotEqual covers switching the active
 // sidecar: the working tree is untouched, so only the target distinguishes a
 // run validated on one sidecar from one that must still be validated on another.
 func TestBuildCacheKey_DifferentTarget_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
 	key := func(target string) string {
 		t.Helper()
-		k, ok := BuildCacheKey(CacheKeyInputs{WorkDir: dir, Commands: testCommands, Target: target})
-		assert.Assert(t, ok, "expected a usable cache key")
-		return k
+		return buildKey(t, CacheKeyInputs{Worktree: testTree, Commands: testCommands, Target: target})
 	}
 
 	local := key("")
@@ -218,71 +127,4 @@ func TestBuildCacheKey_DifferentTarget_NotEqual(t *testing.T) {
 	assert.Assert(t, local != sidecarA, "local and sidecar runs must not share a key")
 	assert.Assert(t, sidecarA != sidecarB, "different sidecars must not share a key")
 	assert.Equal(t, sidecarA, key("sidecar-a\x00img"))
-}
-
-// TestBuildCacheKey_OversizedWorktree_NotOK guards the digest budget: hashing an
-// unbounded amount of content on every hook invocation is worse than not
-// caching, so an oversized tree fails closed like any other unusable state.
-func TestBuildCacheKey_OversizedWorktree_NotOK(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	original := maxDigestBytes
-	maxDigestBytes = 16
-	t.Cleanup(func() { maxDigestBytes = original })
-
-	writeFile(t, dir, "small.go", "package p")
-	_, ok := BuildCacheKey(CacheKeyInputs{WorkDir: dir, Commands: testCommands})
-	assert.Assert(t, ok, "a tree within budget must still produce a key")
-
-	writeFile(t, dir, "big.go", strings.Repeat("x", 64))
-	_, ok = BuildCacheKey(CacheKeyInputs{WorkDir: dir, Commands: testCommands})
-	assert.Assert(t, !ok, "a tree over the digest budget must not produce a cache key")
-}
-
-func TestBuildCacheKey_DeletedFile_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "tracked.go", "package p\n")
-	initGitRepo(t, dir)
-
-	before := buildKey(t, dir, "", testCommands)
-
-	assert.NilError(t, os.Remove(filepath.Join(dir, "tracked.go")))
-
-	// A deletion is recorded by the status entry; the missing file must not be
-	// treated as an error that disables caching.
-	after := buildKey(t, dir, "", testCommands)
-	assert.Assert(t, before != after, "deletion must invalidate key")
-}
-
-func TestBuildCacheKey_RenamedFile_NotEqual(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, "old.go", "package p\n")
-	initGitRepo(t, dir)
-
-	before := buildKey(t, dir, "", testCommands)
-
-	runCmd(t, dir, "git", "mv", "old.go", "new.go")
-
-	after := buildKey(t, dir, "", testCommands)
-	assert.Assert(t, before != after, "rename must invalidate key")
-}
-
-// writeFile writes content to dir/rel, failing the test on error.
-func writeFile(t *testing.T, dir, rel, content string) {
-	t.Helper()
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644))
-}
-
-// runCmd executes a command in dir with git env set, failing the test on error.
-func runCmd(t *testing.T, dir string, name string, args ...string) {
-	t.Helper()
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
-	)
-	out, err := cmd.CombinedOutput()
-	assert.NilError(t, err, "%s %v: %s", name, args, out)
 }

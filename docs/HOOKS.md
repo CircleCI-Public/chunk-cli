@@ -25,6 +25,9 @@ chunk validate: skipped (no changes since last successful run)
 Only successes are cached. A failing run is never stored, so the agent always
 gets a real re-run after a fix attempt.
 
+The clean-tree skip above and the cache below read the same working-tree
+fingerprint, taken once per hook invocation.
+
 The cache key covers:
 
 - the `commands` block of `.chunk/config.json`

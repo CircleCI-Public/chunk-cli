@@ -19,6 +19,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -46,8 +47,9 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testin
 	t.Setenv(config.EnvCircleToken, "")
 	t.Setenv(config.EnvCircleCIToken, "")
 
-	// Set up a project dir with a remote command. HasGitChanges returns true in
-	// a non-git dir, so the hook won't short-circuit on a clean-tree check.
+	// Set up a project dir with a remote command. A non-git dir cannot be
+	// fingerprinted, and an unusable fingerprint reads as not clean, so the hook
+	// won't short-circuit on the clean-tree check.
 	dir := t.TempDir()
 	projCfg := &config.ProjectConfig{
 		Commands: []config.Command{
@@ -230,7 +232,7 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 
 	dir := t.TempDir()
 	gitSetup(t, dir, "main")
-	// Saving the config leaves .chunk/ untracked, so HasGitChanges stays true and
+	// Saving the config leaves .chunk/ untracked, so the tree is never clean and
 	// the hook reaches the cache instead of short-circuiting on a clean tree.
 	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
 		Commands: []config.Command{{Name: "test", Run: "exit 0"}},
@@ -265,6 +267,10 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 
 // --- hookResultCache ---
 
+// hookTree stands in for the fingerprint the hook computes once per run; gitutil
+// owns the tests that prove a digest tracks the working tree.
+var hookTree = gitutil.Worktree{Head: "abc123", Digest: "deadbeef"}
+
 // hookResultCache is the boundary between "these runs are cacheable" and
 // "these are not"; each guard below must return no cache so the run always
 // executes.
@@ -276,20 +282,16 @@ func TestHookResultCacheDisabledCases(t *testing.T) {
 		name      string
 		hook      *hookContext
 		inlineCmd string
-		gitInit   bool
+		tree      gitutil.Worktree
 	}{
-		{name: "not a hook run", hook: nil, gitInit: true},
-		{name: "inline command", hook: hook, inlineCmd: "go test ./foo", gitInit: true},
-		{name: "unusable git state", hook: hook, gitInit: false},
+		{name: "not a hook run", hook: nil, tree: hookTree},
+		{name: "inline command", hook: hook, inlineCmd: "go test ./foo", tree: hookTree},
+		{name: "unusable git state", hook: hook, tree: gitutil.Worktree{}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			if tt.gitInit {
-				gitSetup(t, dir, "main")
-			}
-			cache, key := hookResultCache(tt.hook, tt.inlineCmd, dir, "", cfg, "")
+			cache, key := hookResultCache(tt.hook, tt.inlineCmd, t.TempDir(), tt.tree, "", cfg, "")
 			assert.Assert(t, cache == nil, "expected no cache")
 			assert.Equal(t, key, "")
 		})
@@ -297,11 +299,9 @@ func TestHookResultCacheDisabledCases(t *testing.T) {
 }
 
 func TestHookResultCacheEnabledForNamedCommand(t *testing.T) {
-	dir := t.TempDir()
-	gitSetup(t, dir, "main")
 	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
 
-	cache, key := hookResultCache(&hookContext{sessionID: "s1"}, "", dir, "test", cfg, "")
+	cache, key := hookResultCache(&hookContext{sessionID: "s1"}, "", t.TempDir(), hookTree, "test", cfg, "")
 	assert.Assert(t, cache != nil, "expected a cache for a named command in hook mode")
 	assert.Assert(t, key != "")
 }
@@ -311,12 +311,11 @@ func TestHookResultCacheEnabledForNamedCommand(t *testing.T) {
 // for another.
 func TestHookResultCacheTargetAffectsKey(t *testing.T) {
 	dir := t.TempDir()
-	gitSetup(t, dir, "main")
 	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
 	hook := &hookContext{sessionID: "s1"}
 
-	_, local := hookResultCache(hook, "", dir, "test", cfg, "")
-	_, remote := hookResultCache(hook, "", dir, "test", cfg, "sidecar-a\x00")
+	_, local := hookResultCache(hook, "", dir, hookTree, "test", cfg, "")
+	_, remote := hookResultCache(hook, "", dir, hookTree, "test", cfg, "sidecar-a\x00")
 	assert.Assert(t, local != remote, "target must participate in the cache key")
 }
 

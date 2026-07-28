@@ -30,7 +30,7 @@ chunk-cli/
     ├── filecache/             # Generic JSON-on-disk cache (FileCache[T])
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitremote/             # Git remote URL parsing for org/repo detection
-    ├── gitutil/               # Git utility helpers
+    ├── gitutil/               # Git utility helpers, working-tree fingerprints
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
     ├── sidecar/               # CircleCI sidecar operations
@@ -258,12 +258,14 @@ runs configured validation commands before the AI agent commits code. See
 **[docs/HOOKS.md](HOOKS.md)** for details.
 
 `chunk validate` runs those same commands manually. In hook mode it additionally
-caches successful runs: `validate.BuildCacheKey` hashes the command config, the
-HEAD SHA, and the contents of every changed file into a key, and a repeat hook
-invocation that hits an entry skips execution. The unit of caching is the whole
-run, not individual files. Manual runs never cache, and the key builder refuses
-to produce a key at all when git state is untrustworthy, since a config-only key
-would stay stable across code changes. See
+caches successful runs. Both tree-dependent hook decisions read one
+`gitutil.Fingerprint` call: it returns the HEAD SHA, a digest of the contents of
+every changed file, and whether the tree is clean at all. A clean tree skips the
+run outright; otherwise `validate.BuildCacheKey` combines the fingerprint with
+the command config and execution target into a key, and a repeat hook invocation
+that hits an entry skips execution. The unit of caching is the whole run, not
+individual files. Manual runs never cache, and an unusable fingerprint is refused
+as a key, since a config-only key would stay stable across code changes. See
 **[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
 
 ## HTTP Client (`internal/httpcl/`)
