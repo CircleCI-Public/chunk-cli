@@ -150,11 +150,11 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, streams io
 	return ctx, streams, false, nil
 }
 
-func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig, hook *hookContext, hasActiveSidecar bool) bool {
+func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig) bool {
 	if explicitRemote || cfg.HasRemoteCommands() {
 		return true
 	}
-	return cfg.HasSidecarImage() && (hook != nil || hasActiveSidecar)
+	return cfg.HasSidecarImage()
 }
 
 func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc) (map[string]string, error) {
@@ -245,7 +245,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	explicitRemote := opts.remote || opts.sidecarID != ""
 	activeSidecar, _ := sidecar.LoadActive(ctx)
-	needsSidecar := validateNeedsSidecar(explicitRemote, cfg, hook, activeSidecar != nil)
+	needsSidecar := validateNeedsSidecar(explicitRemote, cfg)
 	if hook != nil && needsSidecar && rc.CircleCIToken == "" {
 		streams.ErrPrintln("CircleCI auth is not configured.")
 		streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
@@ -268,7 +268,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, hook, activeSidecar, statusFn, workDir, streams)
+	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
 		return err
 	}
@@ -408,8 +408,8 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
 // and config, then returns whether a new sidecar was provisioned.
-func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, hook *hookContext, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
-	if validateNeedsSidecar(opts.remote || opts.sidecarID != "", cfg, hook, activeSidecar != nil) {
+func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
+	if validateNeedsSidecar(opts.remote || opts.sidecarID != "", cfg) {
 		if opts.remote {
 			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, streams)
 			if err != nil {
@@ -418,7 +418,7 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", opts.sidecarID))
 			return created, nil
 		}
-		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, hook, activeSidecar, streams), nil
+		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, activeSidecar, streams), nil
 	}
 	return false, nil
 }
@@ -566,7 +566,7 @@ func commandNames(cmds []config.Command) string {
 	return strings.Join(names, ", ")
 }
 
-// resolveImage returns the sidecar image to use for sandbox creation.
+// resolveImage returns the sidecar image to use for sidecar creation.
 // A per-command sidecarImage takes precedence over the project-level default.
 func resolveImage(name string, cfg *config.ProjectConfig) string {
 	if name != "" && cfg != nil {
@@ -581,32 +581,26 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 }
 
 // resolveSidecar fills sidecarID for per-command remote routing
-// (i.e. when --remote is not set but some commands have Remote:true).
-// It uses the active sidecar when available, auto-creates one when the
-// caller is a Stop hook, and warns otherwise.
+// (i.e. when --remote is not set but some commands have Remote:true or a
+// sidecarImage is configured). It uses the active sidecar when available,
+// and auto-creates one otherwise.
 // Returns true when a brand-new sidecar was provisioned in this call.
-func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, hook *hookContext, active *sidecar.ActiveSidecar, streams iostream.Streams) bool {
+func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, active *sidecar.ActiveSidecar, streams iostream.Streams) bool {
 	statusFn := newStatusFunc(streams)
 	if active != nil {
 		*sidecarID = active.SidecarID
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
 		return false
 	}
-	if hook != nil {
-		// In Stop hook context: auto-create from the stored snapshot so remote
-		// commands get the prepared environment.
-		created, err := resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
-		if err != nil {
-			streams.ErrPrintf("warning: no sandbox available (%v); run 'chunk config set orgID <id>' to enable remote validation, running locally instead\n", err)
-		}
-		return created
+	created, err := resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
+	if err != nil {
+		streams.ErrPrintf("warning: could not create sidecar (%v); running commands locally instead\n", err)
 	}
-	statusFn(iostream.LevelWarn, "no active sidecar found — remote commands will run locally")
-	return false
+	return created
 }
 
 // resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
-// a new sandbox when none is configured. Returns true when a new sidecar was
+// a new sidecar when none is configured. Returns true when a new sidecar was
 // provisioned (as opposed to loaded from the active state file).
 func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, streams iostream.Streams) (created bool, err error) {
 	if *sidecarID != "" {
@@ -620,7 +614,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		*sidecarID = active.SidecarID
 		return false, nil
 	}
-	streams.ErrPrintf("No active sidecar found, creating a new sandbox...\n")
+	streams.ErrPrintf("No active sidecar found, creating a new sidecar...\n")
 	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
 		return false, err
@@ -632,7 +626,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			return false, authErr
 		}
 		return false, &userError{
-			msg:        "Could not create a sandbox.",
+			msg:        "Could not create a sidecar.",
 			suggestion: "Check your network connection or run 'chunk sidecar create' manually.",
 			err:        err,
 		}
@@ -640,7 +634,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
-	// Persist the org ID so future sandbox creation skips the picker.
+	// Persist the org ID so future sidecar creation skips the picker.
 	projCfg, loadErr := config.LoadProjectConfig(workDir)
 	if loadErr != nil {
 		projCfg = &config.ProjectConfig{}
@@ -651,7 +645,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			streams.ErrPrintf("warning: could not save org ID to project config: %v\n", saveErr)
 		}
 	}
-	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sandbox %s (%s)", sc.Name, sc.ID)))
+	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID)))
 	*sidecarID = sc.ID
 	return true, nil
 }
