@@ -269,6 +269,24 @@ func TestExec(t *testing.T) {
 		}
 	})
 
+	t.Run("outdated sidecar surfaces server message", func(t *testing.T) {
+		fake := fakes.NewFakeCircleCI()
+		fake.CommandOutputStatusCode = http.StatusGone
+		fake.CommandOutputMessage = "sidecar predates async exec; recreate with: chunk sidecar create"
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+
+		client := newTestClient(t, srv.URL)
+		_, err := client.Exec(context.Background(), "sb-1", "echo", nil)
+		var se *StatusError
+		if !errors.As(err, &se) || se.StatusCode != http.StatusGone {
+			t.Fatalf("expected 410 StatusError, got %v", err)
+		}
+		if se.ServerMessage != fake.CommandOutputMessage {
+			t.Errorf("expected server message %q, got %q", fake.CommandOutputMessage, se.ServerMessage)
+		}
+	})
+
 	t.Run("sends sidecar ID in path", func(t *testing.T) {
 		fake := fakes.NewFakeCircleCI()
 		srv := httptest.NewServer(fake)
@@ -282,10 +300,15 @@ func TestExec(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		reqs := fake.Recorder.AllRequests()
-		last := reqs[len(reqs)-1]
-		if last.URL.Path != "/api/v3/sidecar/instances/sb-1/exec" {
-			t.Errorf("expected /api/v3/sidecar/instances/sb-1/exec, got %s", last.URL.Path)
+		var found bool
+		for _, req := range fake.Recorder.AllRequests() {
+			if req.URL.Path == "/api/v3/sidecar/instances/sb-1/exec" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a request to /api/v3/sidecar/instances/sb-1/exec")
 		}
 	})
 }

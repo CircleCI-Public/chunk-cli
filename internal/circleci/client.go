@@ -1,10 +1,12 @@
 package circleci
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -178,34 +180,72 @@ func (c *Client) AddSSHKey(ctx context.Context, sidecarID, publicKey string) (*A
 	return &AddSSHKeyResponse{URL: attrs.URL}, nil
 }
 
-type execAttrs struct {
-	ExitCode int    `json:"exit_code"`
-	PID      int    `json:"pid"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
+// outputStreamLine is one JSONL event from GET /commands/{id}/output.
+// Lines with a non-empty CommandID are the terminal result; others carry output.
+type outputStreamLine struct {
+	CommandID string `json:"command_id"`
+	ExitCode  int    `json:"exit_code"`
+	PID       int    `json:"pid"`
+	Stream    string `json:"stream"` // "stdout" or "stderr"
+	Line      string `json:"line"`
+}
+
+type execSubmitAttrs struct {
+	Phase string `json:"phase"`
 }
 
 func (c *Client) Exec(ctx context.Context, sidecarID, command string, args []string) (*ExecResponse, error) {
-	var attrs execAttrs
+	var attrs execSubmitAttrs
 	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances/%s/exec",
 		hc.RouteParams(sidecarID),
-		hc.Body(ExecRequest{
-			Command: command,
-			Args:    args,
-		}),
+		hc.Body(ExecRequest{Command: command, Args: args}),
 		hc.JSONDecoder(&env),
 	))
 	if err != nil {
 		return nil, mapErr("exec", err)
 	}
-	return &ExecResponse{
-		CommandID: env.Data.ID,
-		PID:       attrs.PID,
-		Stdout:    attrs.Stdout,
-		Stderr:    attrs.Stderr,
-		ExitCode:  attrs.ExitCode,
-	}, nil
+	return c.streamCommandOutput(ctx, env.Data.ID)
+}
+
+func (c *Client) streamCommandOutput(ctx context.Context, commandID string) (*ExecResponse, error) {
+	var result ExecResponse
+	gotResult := false
+	decoder := func(r io.Reader) error {
+		sc := bufio.NewScanner(r)
+		for sc.Scan() {
+			var event outputStreamLine
+			if err := json.Unmarshal(sc.Bytes(), &event); err != nil {
+				continue
+			}
+			if event.CommandID != "" {
+				result.CommandID = event.CommandID
+				result.ExitCode = event.ExitCode
+				result.PID = event.PID
+				gotResult = true
+				return nil
+			}
+			switch event.Stream {
+			case "stdout":
+				result.Stdout += event.Line
+			case "stderr":
+				result.Stderr += event.Line
+			}
+		}
+		return sc.Err()
+	}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/sidecar/commands/%s/output",
+		hc.RouteParams(commandID),
+		hc.Decoder(decoder),
+		hc.NoTimeout(),
+	))
+	if err != nil {
+		return nil, mapErr("stream command output", err)
+	}
+	if !gotResult {
+		return nil, fmt.Errorf("stream command output: stream ended without result")
+	}
+	return &result, nil
 }
 
 type commandAttrs struct {

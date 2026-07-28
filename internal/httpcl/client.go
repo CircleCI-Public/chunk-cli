@@ -202,12 +202,17 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 		bodyReader = bytes.NewReader(b)
 	}
 
-	ctxTimeout := c.timeout
-	if c.retryOn429Budget > 0 {
-		ctx = context.WithValue(ctx, retryCtxKey{}, &retryState{start: time.Now()})
-		ctxTimeout = c.retryOn429Budget + c.timeout // extend deadline to cover retry waits
+	cancel := func() {}
+	if !r.noTimeout {
+		ctxTimeout := c.timeout
+		if c.retryOn429Budget > 0 {
+			ctx = context.WithValue(ctx, retryCtxKey{}, &retryState{start: time.Now()})
+			ctxTimeout = c.retryOn429Budget + c.timeout // extend deadline to cover retry waits
+		}
+		var timeoutCancel context.CancelFunc
+		ctx, timeoutCancel = context.WithTimeout(ctx, ctxTimeout)
+		cancel = timeoutCancel
 	}
-	ctx, cancel := context.WithTimeout(ctx, ctxTimeout)
 	defer cancel()
 
 	req, err := retryablehttp.NewRequestWithContext(ctx, r.method, u.String(), bodyReader)

@@ -11,6 +11,16 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
 
+// commandOutputLine mirrors the JSONL event emitted by GET /commands/:id/output.
+type commandOutputLine struct {
+	CommandID string `json:"command_id,omitempty"`
+	ExitCode  int    `json:"exit_code,omitempty"`
+	PID       int    `json:"pid,omitempty"`
+	Index     int    `json:"index,omitempty"`
+	Stream    string `json:"stream,omitempty"`
+	Line      string `json:"line,omitempty"`
+}
+
 type Collaboration struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -81,17 +91,19 @@ type FakeCircleCI struct {
 	RunStatusCode   int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
-	CollaborationsStatusCode int // override for GET /me/collaborations
-	ListStatusCode           int // override for GET /sidecar/instances
-	CreateStatusCode         int // override for POST /sidecar/instances
-	DeleteStatusCode         int // override for DELETE /sidecar/instances/:id
-	ExecStatusCode           int // override for POST /sidecar/instances/:id/exec
-	AddKeyStatusCode         int // override for POST /sidecar/instances/:id/ssh/add-key
-	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
-	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
-	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
-	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
-	CreateOrgStatusCode      int // override for POST /api/v2/organization
+	CollaborationsStatusCode int    // override for GET /me/collaborations
+	ListStatusCode           int    // override for GET /sidecar/instances
+	CreateStatusCode         int    // override for POST /sidecar/instances
+	DeleteStatusCode         int    // override for DELETE /sidecar/instances/:id
+	ExecStatusCode           int    // override for POST /sidecar/instances/:id/exec
+	CommandOutputStatusCode  int    // override for GET /sidecar/commands/:id/output
+	CommandOutputMessage     string // error message body when CommandOutputStatusCode is set
+	AddKeyStatusCode         int    // override for POST /sidecar/instances/:id/ssh/add-key
+	CreateSnapshotStatusCode int    // override for POST /sidecar/snapshots
+	GetSnapshotStatusCode    int    // override for GET /sidecar/snapshots/:id
+	ListSnapshotsStatusCode  int    // override for GET /sidecar/snapshots
+	GetCommandStatusCode     int    // override for GET /sidecar/commands/:id
+	CreateOrgStatusCode      int    // override for POST /api/v2/organization
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
@@ -138,8 +150,9 @@ func NewFakeCircleCI() *FakeCircleCI {
 	r.POST("/api/v3/sidecar/snapshots", f.handleCreateSnapshot)
 	r.GET("/api/v3/sidecar/snapshots/:id", f.handleGetSnapshot)
 
-	// Command V3 endpoint
+	// Command V3 endpoints
 	r.GET("/api/v3/sidecar/commands/:id", f.handleGetCommand)
+	r.GET("/api/v3/sidecar/commands/:id/output", f.handleCommandOutput)
 
 	// Task run endpoint
 	r.POST("/api/v2/agents/org/:org_id/project/:project_id/runs", f.handleTriggerRun)
@@ -336,20 +349,69 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	// Async: return 202 with command ID; output is streamed via GET /commands/:id/output.
+	c.JSON(http.StatusAccepted, gin.H{
 		"data": gin.H{
-			"attributes": gin.H{
-				"exit_code": resp.ExitCode,
-				"pid":       resp.PID,
-				"stdout":    resp.Stdout,
-				"stderr":    resp.Stderr,
-			},
-			"id": resp.CommandID,
+			"attributes": gin.H{"phase": "received"},
+			"id":         resp.CommandID,
 			"references": gin.H{
 				"sidecar_instance": gin.H{"id": c.Param("id")},
 			},
 		},
 	})
+}
+
+func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.RLock()
+	resp := f.ExecResponse
+	statusCode := f.CommandOutputStatusCode
+	msg := f.CommandOutputMessage
+	f.mu.RUnlock()
+
+	if statusCode != 0 {
+		if msg == "" {
+			msg = "API error"
+		}
+		c.JSON(statusCode, gin.H{"message": msg})
+		return
+	}
+
+	if resp == nil {
+		resp = &ExecResponse{
+			CommandID: "cmd-123",
+			PID:       42,
+			Stdout:    "ok\n",
+			Stderr:    "",
+			ExitCode:  0,
+		}
+	}
+
+	c.Header("Content-Type", "application/x-ndjson")
+	c.Status(http.StatusOK)
+
+	idx := 0
+	writeEvent := func(stream, line string) {
+		b, _ := json.Marshal(commandOutputLine{Index: idx, Stream: stream, Line: line})
+		_, _ = fmt.Fprintf(c.Writer, "%s\n", b)
+		idx++
+	}
+
+	if resp.Stdout != "" {
+		writeEvent("stdout", resp.Stdout)
+	}
+	if resp.Stderr != "" {
+		writeEvent("stderr", resp.Stderr)
+	}
+
+	result, _ := json.Marshal(commandOutputLine{
+		CommandID: resp.CommandID,
+		ExitCode:  resp.ExitCode,
+		PID:       resp.PID,
+	})
+	_, _ = fmt.Fprintf(c.Writer, "%s\n", result)
 }
 
 func (f *FakeCircleCI) handleGetCommand(c *gin.Context) {
