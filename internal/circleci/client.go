@@ -227,9 +227,9 @@ func (c *Client) streamCommandOutput(ctx context.Context, commandID string) (*Ex
 			}
 			switch event.Stream {
 			case "stdout":
-				result.Stdout += event.Line
+				result.Stdout += event.Line + "\n"
 			case "stderr":
-				result.Stderr += event.Line
+				result.Stderr += event.Line + "\n"
 			}
 		}
 		return sc.Err()
