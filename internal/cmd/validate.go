@@ -791,8 +791,9 @@ func validateCacheDir(workDir string) (string, error) {
 	return filepath.Join(projectDir, "validate-cache"), nil
 }
 
-// hookResultCache returns a ResultCache and cache key for hook-mode runs,
-// or (nil, "") when caching does not apply (non-hook or inline cmd).
+// hookResultCache returns a ResultCache and cache key for hook-mode runs, or
+// (nil, "") when caching does not apply: non-hook runs, inline commands, or a
+// working tree whose state cannot be hashed reliably.
 func hookResultCache(hook *hookContext, inlineCmd, workDir, commandName string, cfg *config.ProjectConfig) (validate.ResultCache, string) {
 	if hook == nil || inlineCmd != "" {
 		return nil, ""
@@ -801,7 +802,10 @@ func hookResultCache(hook *hookContext, inlineCmd, workDir, commandName string, 
 	if err != nil {
 		return nil, ""
 	}
-	key := validate.BuildCacheKey(workDir, commandName, cfg.Commands)
+	key, ok := validate.BuildCacheKey(workDir, commandName, cfg.Commands)
+	if !ok {
+		return nil, ""
+	}
 	return filecache.FileCache[validate.CachedResult]{Dir: cacheDir}, key
 }
 

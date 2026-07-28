@@ -13,6 +13,51 @@ before a commit. If any command fails, the commit is blocked.
 when the working tree is clean. When there are changes, it runs all configured
 commands so problems are surfaced before the agent stops working.
 
+## Result Caching
+
+In hook mode only, a successful `chunk validate` run is cached. If the hook
+fires again with nothing changed, the commands are skipped entirely:
+
+```
+chunk validate: skipped (no changes since last successful run)
+```
+
+Only successes are cached. A failing run is never stored, so the agent always
+gets a real re-run after a fix attempt.
+
+The cache key covers everything that can change the outcome:
+
+- the `commands` block of `.chunk/config.json`
+- the HEAD commit SHA
+- the contents of every file git reports as changed — tracked, staged, and
+  untracked alike
+
+Because contents are hashed rather than just the `git status` output, editing a
+file that was already dirty invalidates the entry. Any edit that could change a
+command's result produces a new key.
+
+Caching is skipped, and commands always run, when:
+
+- the run is not a hook invocation (a manual `chunk validate` never caches)
+- `--cmd` supplied an inline command
+- the working-tree state cannot be hashed reliably — not a git repo, a repo with
+  no commits yet, or a changed path that cannot be read (an unreadable file, or a
+  non-regular path such as a dirty submodule)
+
+That last case fails closed: without trustworthy git state the key would depend
+on the config alone and would stay stable across code changes, so no cache is
+consulted at all.
+
+Entries live outside the repo, under the per-project data directory:
+
+```
+$XDG_DATA_HOME/chunk/<sha256-of-project-path>/validate-cache/
+```
+
+Each entry is a small JSON file. Superseded entries (older commits, earlier
+working-tree states) are not pruned automatically; delete the directory to clear
+the cache.
+
 ## Worktree Support
 
 The Stop hook uses `CLAUDE_WORKING_DIR` (the actual session working directory)

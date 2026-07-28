@@ -27,6 +27,7 @@ chunk-cli/
     ├── buildprompt/           # Three-step pipeline: discover → analyze → generate
     ├── circleci/              # CircleCI REST API client
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
+    ├── filecache/             # Generic JSON-on-disk cache (FileCache[T])
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers
@@ -198,7 +199,7 @@ in `config.Resolve` and makes clients testable.
 | `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
 | `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
-| `XDG_DATA_HOME` | sidecar | Per-project state directory (default: `~/.local/share`) |
+| `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
@@ -256,8 +257,14 @@ known agent is found, the common case for a human running `chunk` directly.
 runs configured validation commands before the AI agent commits code. See
 **[docs/HOOKS.md](HOOKS.md)** for details.
 
-`chunk validate` runs those same commands manually, with SHA256-based content
-caching so unchanged files skip re-execution.
+`chunk validate` runs those same commands manually. In hook mode it additionally
+caches successful runs: `validate.BuildCacheKey` hashes the command config, the
+HEAD SHA, and the contents of every changed file into a key, and a repeat hook
+invocation that hits an entry skips execution. The unit of caching is the whole
+run, not individual files. Manual runs never cache, and the key builder refuses
+to produce a key at all when git state is untrustworthy, since a config-only key
+would stay stable across code changes. See
+**[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
 
 ## HTTP Client (`internal/httpcl/`)
 
