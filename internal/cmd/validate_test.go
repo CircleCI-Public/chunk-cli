@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -132,88 +133,35 @@ func TestHostForwardEnv(t *testing.T) {
 	})
 }
 
-// setupSSHSession starts fake CCI + SSH servers and sets env vars so
-// ensureCircleCIClient resolves to the fake. Returns the SSH server and the
-// identity key file path.
-func setupSSHSession(t *testing.T) (*fakes.SSHServer, string) {
-	t.Helper()
+func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	isolateConfig(t)
 
-	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
-	sshSrv := fakes.NewSSHServer(t, pubKey)
-	sshSrv.SetResult("hello\n", 0)
-
 	cci := fakes.NewFakeCircleCI()
-	cci.AddKeyURL = sshSrv.Addr()
-	cciSrv := httptest.NewServer(cci)
-	t.Cleanup(cciSrv.Close)
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
 
-	t.Setenv(config.EnvCircleToken, "test-token")
-	t.Setenv(config.EnvCircleCIBaseURL, cciSrv.URL)
-
-	return sshSrv, keyFile
-}
-
-func TestOpenSSHSessionPassesEnvVars(t *testing.T) {
-	sshSrv, keyFile := setupSSHSession(t)
-
-	client, err := circleci.NewClient(circleci.Config{
-		Token:   "test-token",
-		BaseURL: os.Getenv(config.EnvCircleCIBaseURL),
-	})
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	assert.NilError(t, err)
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
-	execFn, _, err := openSSHSession(context.Background(), client, "sidecar-123", keyFile, "", envVars, config.ResolvedConfig{}, discardStreams())
+	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", envVars, config.ResolvedConfig{})
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")
 	assert.NilError(t, err)
 
-	got := sshSrv.EnvVars()
-	assert.Equal(t, got["FOO"], "bar")
-	assert.Equal(t, got["BAZ"], "qux")
-}
-
-func TestOpenSSHSessionUsesIdentityFileWhenUseSSHIdentityFile(t *testing.T) {
-	sshSrv, keyFile := setupSSHSession(t)
-
-	client, err := circleci.NewClient(circleci.Config{
-		Token:   "test-token",
-		BaseURL: os.Getenv(config.EnvCircleCIBaseURL),
-	})
-	assert.NilError(t, err)
-
-	// Write the key to the path that sidecar.DefaultKeyPath() would return so
-	// we can pass it explicitly as the identity file — verifying the UseSSHIdentityFile
-	// path uses the provided key rather than SSH_AUTH_SOCK.
-	rc := config.ResolvedConfig{UseSSHIdentityFile: true}
-	execFn, _, err := openSSHSession(context.Background(), client, "sidecar-123", keyFile, "", nil, rc, discardStreams())
-	assert.NilError(t, err)
-
-	sshSrv.SetResult("ok\n", 0)
-	_, _, code, err := execFn(context.Background(), "true")
-	assert.NilError(t, err)
-	assert.Equal(t, code, 0)
-}
-
-func TestOpenSSHSessionFallsBackToAuthSockWhenNoIdentityFile(t *testing.T) {
-	_, keyFile := setupSSHSession(t)
-	t.Setenv(config.EnvSSHAuthSock, "")
-
-	client, err := circleci.NewClient(circleci.Config{
-		Token:   "test-token",
-		BaseURL: os.Getenv(config.EnvCircleCIBaseURL),
-	})
-	assert.NilError(t, err)
-
-	// No identity file provided and UseSSHIdentityFile=false: the session open
-	// attempt will use an empty authSock, which should fail gracefully.
-	rc := config.ResolvedConfig{UseSSHIdentityFile: false}
-	_, _, err = openSSHSession(context.Background(), client, "sidecar-123", keyFile, "", nil, rc, discardStreams())
-	// With a key file explicitly provided the session opens; the important thing
-	// is that UseSSHIdentityFile=false does not attempt DefaultKeyPath resolution.
-	assert.NilError(t, err)
+	// Find the exec request and verify env vars were included in the body.
+	var execReq struct {
+		Env map[string]string `json:"env"`
+	}
+	for _, req := range cci.Recorder.AllRequests() {
+		if strings.Contains(req.URL.Path, "/exec") {
+			assert.NilError(t, json.NewDecoder(bytes.NewReader(req.Body)).Decode(&execReq))
+			break
+		}
+	}
+	assert.Equal(t, execReq.Env["FOO"], "bar")
+	assert.Equal(t, execReq.Env["BAZ"], "qux")
 }
 
 func TestValidateEnvFlagBadValue(t *testing.T) {

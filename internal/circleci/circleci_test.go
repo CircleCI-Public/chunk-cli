@@ -224,7 +224,7 @@ func TestExec(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		ctx := context.Background()
 
-		resp, err := client.Exec(ctx, "sb-1", "ls", []string{"-la"})
+		resp, err := client.Exec(ctx, "sb-1", "ls", []string{"-la"}, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -254,7 +254,7 @@ func TestExec(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		ctx := context.Background()
 
-		resp, err := client.Exec(ctx, "sb-1", "echo", []string{"hello"})
+		resp, err := client.Exec(ctx, "sb-1", "echo", []string{"hello"}, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -277,7 +277,7 @@ func TestExec(t *testing.T) {
 		defer srv.Close()
 
 		client := newTestClient(t, srv.URL)
-		_, err := client.Exec(context.Background(), "sb-1", "echo", nil)
+		_, err := client.Exec(context.Background(), "sb-1", "echo", nil, nil)
 		var se *StatusError
 		if !errors.As(err, &se) || se.StatusCode != http.StatusGone {
 			t.Fatalf("expected 410 StatusError, got %v", err)
@@ -295,7 +295,7 @@ func TestExec(t *testing.T) {
 		client := newTestClient(t, srv.URL)
 		ctx := context.Background()
 
-		_, err := client.Exec(ctx, "sb-1", "pwd", nil)
+		_, err := client.Exec(ctx, "sb-1", "pwd", nil, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -476,7 +476,7 @@ func TestAuthRequired(t *testing.T) {
 	})
 
 	t.Run("Exec", func(t *testing.T) {
-		_, err := client.Exec(ctx, "sb-1", "ls", nil)
+		_, err := client.Exec(ctx, "sb-1", "ls", nil, nil)
 		if err == nil {
 			t.Fatal("expected error")
 		}

@@ -16,7 +16,7 @@ func Create(ctx context.Context, client *circleci.Client, orgID, name, image str
 }
 
 func Exec(ctx context.Context, client *circleci.Client, sidecarID, command string, args []string) (*circleci.ExecResponse, error) {
-	return client.Exec(ctx, sidecarID, command, args)
+	return client.Exec(ctx, sidecarID, command, args, nil)
 }
 
 func AddSSHKey(ctx context.Context, client *circleci.Client, sidecarID, publicKey, publicKeyFile string) (*circleci.AddSSHKeyResponse, error) {
