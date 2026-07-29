@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"context"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
@@ -40,6 +44,30 @@ func TestSidecarCreateUsesImageFromConfig(t *testing.T) {
 
 	assert.Equal(t, len(cci.Sidecars), 1)
 	assert.Equal(t, cci.Sidecars[0].Image, "snap-from-config")
+}
+
+func TestSidecarSetupPassesEnvImageToCreate(t *testing.T) {
+	isolateConfig(t)
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+
+	noop := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
+	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
+
+	id, err := sidecarSetupResolveSidecar(
+		context.Background(), client,
+		"org-abc", "my-sidecar", t.TempDir(),
+		"cimg-go:1.26.5",
+		noop, streams,
+	)
+	assert.NilError(t, err)
+	assert.Assert(t, id != "")
+	assert.Equal(t, len(cci.Sidecars), 1)
+	assert.Equal(t, cci.Sidecars[0].Image, "cimg-go:1.26.5")
 }
 
 func TestSnapshotCreateNameTooLong(t *testing.T) {

@@ -1,5 +1,7 @@
 package envspec
 
+import "strings"
+
 // Step is a single named provisioning command in the sidecar setup sequence.
 type Step struct {
 	Name    string `json:"name"`
@@ -22,6 +24,16 @@ func (e *Environment) SetupStep(name string) string {
 		}
 	}
 	return ""
+}
+
+// TemplateName returns the provisioner template name for this environment,
+// e.g. "cimg-go:1.26.5" for image "cimg/go" and version "1.26.5".
+// Returns "" when Image or ImageVersion is not set.
+func (e *Environment) TemplateName() string {
+	if e.Image == "" || e.ImageVersion == "" {
+		return ""
+	}
+	return strings.ReplaceAll(e.Image, "/", "-") + ":" + e.ImageVersion
 }
 
 // BinaryPaths returns colon-separated PATH prefixes needed for the detected stack.

@@ -960,7 +960,7 @@ Example:
 			// Step 2: Resolve or create sidecar.
 			if sidecarID == "" {
 				var resolveErr error
-				sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, status, streams)
+				sidecarID, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, env.TemplateName(), status, streams)
 				if resolveErr != nil {
 					return resolveErr
 				}
@@ -1031,32 +1031,32 @@ Example:
 func sidecarSetupResolveSidecar(
 	ctx context.Context,
 	client *circleci.Client,
-	orgID, name, workDir string,
+	orgID, name, workDir, image string,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
-) (id, displayName string, err error) {
+) (id string, err error) {
 	active, err := sidecar.LoadActive(ctx)
 	if err != nil {
-		return "", "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
+		return "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 	}
 	if active != nil {
 		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
-		return active.SidecarID, active.Name, nil
+		return active.SidecarID, nil
 	}
 	if name == "" {
 		name = randomSidecarName()
 	}
 	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q...", name))
-	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, "")
+	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, image)
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", err); authErr != nil {
-			return "", "", authErr
+			return "", authErr
 		}
-		return "", "", &userError{
+		return "", &userError{
 			msg:        "Could not create the sidecar.",
 			suggestion: suggestionNetworkRetry,
 			err:        err,
@@ -1066,7 +1066,7 @@ func sidecarSetupResolveSidecar(
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))
-	return sc.ID, sc.Name, nil
+	return sc.ID, nil
 }
 
 func sidecarSetupEnsureSSHKey(identityFile string, status iostream.StatusFunc) error {
