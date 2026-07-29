@@ -778,10 +778,10 @@ func TestInitSkipsTestSuitesByDefault(t *testing.T) {
 	_, err := os.Stat(filepath.Join(workDir, ".circleci", "test-suites.yml"))
 	assert.Assert(t, os.IsNotExist(err), "expected default to skip write, err=%v", err)
 
-	assert.Assert(t, strings.Contains(result.Stderr, "Smarter Testing"),
-		"expected hint in stderr, got: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "test-suites.yml"),
-		"expected hint to mention test-suites.yml, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk-sidecar"),
+		"expected sidecar hint in stderr, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "sidecar dev loop"),
+		"expected hint to mention sidecar dev loop, got: %s", result.Stderr)
 }
 
 func TestInitProjectDirNotGitRepo(t *testing.T) {
