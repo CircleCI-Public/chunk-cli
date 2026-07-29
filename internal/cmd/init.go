@@ -353,19 +353,16 @@ func writeTestSuites(workDir string, streams iostream.Streams) error {
 	return nil
 }
 
-// printTestSuitesHint prints onboarding guidance for scaffolding
-// .circleci/test-suites.yml. Skipped when the file already exists.
-// The schema description is intentionally agent-actionable: an AI agent
-// reading the init output has enough to draft the file for any language.
+// printTestSuitesHint prints onboarding guidance for setting up the sidecar
+// dev loop. Skipped when .circleci/test-suites.yml already exists.
 func printTestSuitesHint(workDir string, streams iostream.Streams) {
 	if _, err := os.Stat(filepath.Join(workDir, ".circleci", "test-suites.yml")); err == nil {
 		return
 	}
 	streams.ErrPrintln("")
-	streams.ErrPrintln(ui.Bold("Next step: scaffold .circleci/test-suites.yml for Smarter Testing"))
-	streams.ErrPrintln(ui.Dim("  Ask your AI coding agent to scaffold .circleci/test-suites.yml — the"))
-	streams.ErrPrintln(ui.Dim("  chunk-sidecar skill covers the file shape and per-language patterns."))
-	streams.ErrPrintln(ui.Dim("  Or rerun with --skip-test-suites=false to use built-in Go/pytest templates."))
+	streams.ErrPrintln(ui.Bold("Next step: set up the sidecar dev loop"))
+	streams.ErrPrintln(ui.Dim("  Ask your AI coding agent to run the chunk-sidecar skill to create"))
+	streams.ErrPrintln(ui.Dim("  a remote sidecar, sync your workspace, and run tests remotely."))
 }
 
 // writeAllHookFiles writes hook config files for all supported agents.
