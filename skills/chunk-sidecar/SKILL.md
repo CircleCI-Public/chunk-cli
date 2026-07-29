@@ -1,11 +1,12 @@
 ---
 name: chunk-sidecar
 description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", "scaffold test-suites.yml", "set up smarter testing", "write .circleci/test-suites.yml", "run smarter testing doctor", or "diagnose smarter testing", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, customizing the sidecar image via `chunk sidecar`, and scaffolding `.circleci/test-suites.yml` for CircleCI Smarter Testing.
-version: 1.6.0
+version: 1.7.0
 allowed-tools:
   - Bash(chunk --version)
   - Bash(chunk auth status)
   - Bash(chunk config set:*)
+  - Bash(chunk org list:*)
   - Bash(chunk sidecar:*)
   - Bash(chunk validate:*)
   - Bash(cat .chunk/config.json)
@@ -41,11 +42,10 @@ Do **not** run `echo $CIRCLE_TOKEN`, `env`, `printenv`, or any other command tha
 
    1. `cat .chunk/config.json` and confirm `orgID` is set to a non-empty value.
    2. If `orgID` is absent from the config, check whether `CIRCLECI_ORG_ID` is set **without printing its value** (e.g. `test -n "${CIRCLECI_ORG_ID:-}"`). Do not run `printenv`, `env`, or `echo` on credential variables.
-   3. If **both** are unset, **stop** — do not call `chunk sidecar create`, `chunk sidecar list`, or any other `chunk sidecar` command. Ask the user for their org ID **exactly once** using this message:
-
-      > No CircleCI orgID found in `.chunk/config.json`. Sidecar cannot select an org in a non-interactive session. Please provide your CircleCI org ID. To persist it for future sessions, I will run: `chunk config set orgID <id>`
-
-      After the user provides the ID, run `chunk config set orgID <id>`, then continue to Step 2.
+   3. If **both** are unset, run `chunk org list` to discover available orgs:
+      - **Single org returned** — use that ID automatically: `chunk config set orgID <id>`, then continue to Step 2.
+      - **Multiple orgs returned** — show the list to the user and ask which org to use **exactly once**. After they reply, run `chunk config set orgID <id>`, then continue to Step 2.
+      - **Error or empty list** — the user is not authenticated or has no orgs. Stop and ask them to run `chunk auth set circleci` first.
    4. If only `CIRCLECI_ORG_ID` is set (config still lacks `orgID`), `chunk sidecar create` will detect it automatically. Persisting with `chunk config set orgID <id>` is recommended but not required before Step 2.
 
 ## Step 2: Find or create the active sidecar
@@ -179,8 +179,7 @@ When `CLAUDE_SESSION_ID` is set, `chunk` auto-scopes the active-sidecar file to 
 
 ## Troubleshooting
 
-- **`Could not select an organization`**, **`no interactive terminal available`**, or **`Pass --org-id instead`** — orgID was missing when a sidecar command ran. Return to Step 1 orgID preflight: ask the user exactly once, then `chunk config set orgID <id>`. Do not explore peripheral commands (`chunk config show`, `chunk --help | grep -i org`, etc.).
-- **Anti-pattern: orgID absent** — if `orgID` is not in `.chunk/config.json` and `CIRCLECI_ORG_ID` is unset, do not call `chunk sidecar create` or probe the CLI for org discovery. Ask the user once and persist with `chunk config set orgID <id>`.
+- **`No interactive terminal available to select an organization`** or **`Pass --org-id instead`** — orgID was missing when a sidecar command ran. Return to Step 1 orgID preflight: run `chunk org list`, auto-select if there is one org, or show the list to the user if there are multiple, then `chunk config set orgID <id>`.
 - **Auth errors (401/403, "token invalid", "unauthorized")** — run `chunk auth status` and follow its printed remediation (`chunk auth set circleci` / `github` / `anthropic`). Never dump env vars.
 - **Sidecar 404 on `current`, `sync`, or `validate`** — the sidecar was deleted externally. Run `chunk sidecar forget`, then return to Step 2.
 - **`permission denied (publickey)` on sync, ssh, or exec** — the sidecar does not have your SSH key registered. Run `chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub` (or pass `--public-key "<ssh-ed25519 ...>"` directly). The command requires one of those flags; invoking it bare returns "A public key is required." If the issue persists, tell the user they can remove `~/.ssh/chunk_ai*` to regenerate the keypair on next use.
