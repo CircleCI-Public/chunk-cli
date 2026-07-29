@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -450,8 +452,28 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 	return nil
 }
 
+// detectOrgID attempts to resolve a CircleCI org ID without prompting for auth.
+// Auto-selects when the user belongs to exactly one org; shows a picker when
+// interactive with multiple orgs. Skipped gracefully on auth failure, no TTY,
+// or cancellation — none of these are fatal for chunk init.
+func detectOrgID(ctx context.Context, rc config.ResolvedConfig, streams iostream.Streams, cfg *config.ProjectConfig) {
+	client, err := authprompt.ResolveCircleCIClient(rc, nil)
+	if err != nil {
+		return
+	}
+	orgID, err := orgPicker(ctx, client)()
+	if err != nil {
+		if !errors.Is(err, tui.ErrNoTTY) && !errors.Is(err, tui.ErrCancelled) {
+			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect org ID: %v", err)))
+		}
+		return
+	}
+	cfg.OrgID = orgID
+	streams.ErrPrintf("Org ID: %s\n", ui.Bold(orgID))
+}
+
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites bool
+	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID bool
 	var projectDir string
 
 	cmd := &cobra.Command{
@@ -540,6 +562,16 @@ hook config files.`,
 				}
 			}
 
+			// Step 3: CircleCI org ID
+			if !skipOrgID && cfg.OrgID == "" {
+				rc, err := config.Resolve("", "", insecureStorage)
+				if err != nil {
+					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect org ID: %v", err)))
+				} else {
+					detectOrgID(ctx, rc, streams, cfg)
+				}
+			}
+
 			// Save config
 			if err := config.SaveProjectConfig(workDir, cfg); err != nil {
 				return &userError{
@@ -597,6 +629,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().BoolVar(&skipTestSuites, "skip-test-suites", true, "Skip CircleCI test-suites.yml generation (default: skip; pass =false to use built-in Go/pytest templates)")
+	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 
 	return cmd
