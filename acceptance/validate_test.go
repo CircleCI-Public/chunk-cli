@@ -173,10 +173,10 @@ func TestValidateRunLocal(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "install"),
-		"expected install status in output, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "test"),
-		"expected test status in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "installed"),
+		"expected install command output in result, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "tested"),
+		"expected test command output in result, got: %s", combined)
 }
 
 func TestValidateRunLocalFailure(t *testing.T) {
@@ -244,11 +244,10 @@ func TestValidateRunNamed(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "test"),
-		"expected test status in output, got: %s", combined)
-	// Should not run install — its echo output would appear on failure, not on success
-	assert.Assert(t, !strings.Contains(combined, "echo installed"),
-		"should not run install when running named test command, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "tested"),
+		"expected test command output in result, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "installed"),
+		"install command must not run when only 'test' is requested, got: %s", combined)
 }
 
 func TestValidateRunNamedNotConfiguredNonTTY(t *testing.T) {
@@ -280,9 +279,8 @@ func TestValidateInlineCmd(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	// Command output is buffered and discarded on success; check for the status line instead.
-	assert.Assert(t, strings.Contains(combined, "custom"),
-		"expected custom command status in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "inline-output"),
+		"expected command output in result, got: %s", combined)
 }
 
 func TestValidateInlineCmdDryRun(t *testing.T) {
@@ -547,6 +545,59 @@ func writeSidecarState(t *testing.T, e *testenv.TestEnv, projectRoot, sessionID,
 	filename := sidecar.StateFileName(sessionID, branch)
 	data := []byte(`{"sidecar_id":"` + sidecarID + `"}`)
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, filename), data, 0o644))
+}
+
+// TestValidateHookMode_SuccessLine verifies that the "chunk validate passed"
+// success line is written to stderr after a clean hook run.
+func TestValidateHookMode_SuccessLine(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	// writeProjectConfig leaves an untracked file → dirty tree → hook runs.
+	writeProjectConfig(t, workDir, "", "true")
+
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
+		hookStdin(t, "test-session-success-line", false))
+
+	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for passing hook; stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk validate passed"),
+		"expected 'chunk validate passed' in stderr; got: %s", result.Stderr)
+}
+
+// TestValidateHookMode_SetupErrorFlushedToStderr verifies that when setup fails
+// in hook mode (e.g. SSH unreachable), the error output is flushed to stderr
+// rather than silently discarded by hookBuf.
+func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = "127.0.0.1" // no real SSH server — sync will fail
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	cfg := `{"commands":[{"name":"test","run":"true","remote":true}]}`
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
+	// Dirty tree ensures the hook actually runs.
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("x"), 0o644))
+
+	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	identityFile := filepath.Join(sshDir, "chunk_ai")
+	assert.NilError(t, generateTestSSHKey(t, identityFile))
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
+
+	result := binary.RunCLIWithStdin(t, []string{
+		"validate", "--identity-file", identityFile,
+	}, env, workDir, hookStdin(t, "test-session-setup-err", false))
+
+	assert.Assert(t, result.ExitCode != 0, "expected failure; stderr: %s", result.Stderr)
+	// The hook output (including the setup error) must be flushed to stderr,
+	// not silently swallowed when hookBuf is non-empty on error exit.
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk validate"),
+		"expected hook output in stderr; got: %s", result.Stderr)
 }
 
 // gitCurrentBranch returns the current branch of the git repo at dir, or ""

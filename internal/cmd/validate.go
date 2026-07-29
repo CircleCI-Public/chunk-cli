@@ -302,10 +302,12 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		}
 		return runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
 	}()
-	if execErr != nil {
-		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", validate.FormatDuration(time.Since(start))))
-	} else {
-		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", validate.FormatDuration(time.Since(start))))
+	if hook == nil {
+		if execErr != nil {
+			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", validate.FormatDuration(time.Since(start))))
+		} else {
+			statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", validate.FormatDuration(time.Since(start))))
+		}
 	}
 
 	if hook != nil {

@@ -1,7 +1,6 @@
 package validate
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -162,21 +161,21 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 			}
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}
+		if stdout != "" {
+			_, _ = fmt.Fprint(streams.Out, stdout)
+		}
+		if stderr != "" {
+			_, _ = fmt.Fprint(streams.Err, stderr)
+		}
 		if exitCode != 0 {
 			if stdout != "" || stderr != "" {
 				status(iostream.LevelInfo, c.Name+":")
-			}
-			if stdout != "" {
-				_, _ = fmt.Fprint(streams.Err, stdout)
-			}
-			if stderr != "" {
-				_, _ = fmt.Fprint(streams.Err, stderr)
 			}
 			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, FormatDuration(elapsed)))
 			for j := i + 1; j < len(commands); j++ {
 				status(iostream.LevelWarn, fmt.Sprintf("%-*s  skipped", maxWidth, commands[j].Name))
 			}
-			return fmt.Errorf("remote %s failed with exit code %d (%s)", c.Name, exitCode, FormatDuration(elapsed))
+			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
 		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, FormatDuration(elapsed)))
 	}
@@ -192,18 +191,18 @@ func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 	if err != nil {
 		return fmt.Errorf("remote %s: %w", name, err)
 	}
+	if stdout != "" {
+		_, _ = fmt.Fprint(streams.Out, stdout)
+	}
+	if stderr != "" {
+		_, _ = fmt.Fprint(streams.Err, stderr)
+	}
 	if exitCode != 0 {
 		if stdout != "" || stderr != "" {
 			status(iostream.LevelInfo, name+":")
 		}
-		if stdout != "" {
-			_, _ = fmt.Fprint(streams.Err, stdout)
-		}
-		if stderr != "" {
-			_, _ = fmt.Fprint(streams.Err, stderr)
-		}
 		status(iostream.LevelError, fmt.Sprintf("%-*s  %s", len(name), name, FormatDuration(elapsed)))
-		return fmt.Errorf("remote %s failed with exit code %d (%s)", name, exitCode, FormatDuration(elapsed))
+		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", len(name), name, FormatDuration(elapsed)))
 	return nil
@@ -252,31 +251,24 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
 
-	// Buffer output: flushed to stderr only on failure so success runs stay quiet.
-	var buf bytes.Buffer
-
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	cmd.Stdout = streams.Out
+	cmd.Stderr = streams.Err
 
 	start := time.Now()
 	err := cmd.Run()
 	elapsed := time.Since(start)
 
 	if err != nil {
-		if buf.Len() > 0 {
-			status(iostream.LevelInfo, name+":")
-			_, _ = io.Copy(streams.Err, &buf)
-		}
 		if ctx.Err() == context.DeadlineExceeded {
 			status(iostream.LevelError, fmt.Sprintf("%-*s  timed out after %ds", nameWidth, name, timeoutSec))
-			return fmt.Errorf("%s command timed out after %ds (%s)", name, timeoutSec, FormatDuration(elapsed))
+			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
 			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", nameWidth, name, FormatDuration(elapsed)))
-			return fmt.Errorf("%s command failed with exit code %d (%s)", name, exitErr.ExitCode(), FormatDuration(elapsed))
+			return fmt.Errorf("%s command failed with exit code %d", name, exitErr.ExitCode())
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
