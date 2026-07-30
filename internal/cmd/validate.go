@@ -293,9 +293,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
 	}()
 	if execErr != nil {
-		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", validate.FormatDuration(time.Since(start))))
+		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
 	} else if hook == nil {
-		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", validate.FormatDuration(time.Since(start))))
+		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
 	}
 
 	if hook != nil {
@@ -305,7 +305,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		}
 		hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 		if hookErr == nil && execErr == nil {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", validate.FormatDuration(time.Since(start)))))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", ui.FormatDuration(time.Since(start)))))
 			return nil
 		}
 		return hookErr

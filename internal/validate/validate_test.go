@@ -19,6 +19,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func TestShellEscape(t *testing.T) {
@@ -186,7 +187,7 @@ func TestFormatDuration(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
-			assert.Equal(t, FormatDuration(tt.d), tt.want)
+			assert.Equal(t, ui.FormatDuration(tt.d), tt.want)
 		})
 	}
 }

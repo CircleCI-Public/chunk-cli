@@ -13,6 +13,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // ErrNotConfigured indicates no validate commands are configured.
@@ -40,17 +41,6 @@ func shellEscape(arg string) string {
 
 // DefaultTimeout is the per-command execution timeout in seconds.
 const DefaultTimeout = 300
-
-// FormatDuration formats a duration for display in status messages.
-func FormatDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	if d < time.Minute {
-		return fmt.Sprintf("%.1fs", d.Seconds())
-	}
-	return d.Round(time.Second).String()
-}
 
 // List prints all configured command names and their run strings.
 func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
@@ -102,15 +92,11 @@ func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, stat
 	}
 
 	maxWidth := nameWidth(cfg.Commands)
-	start := time.Now()
 	for i, c := range cfg.Commands {
 		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, maxWidth, status, streams); err != nil {
 			skipRemaining(status, cfg.Commands[i+1:], maxWidth)
 			return err
 		}
-	}
-	if len(cfg.Commands) > 1 {
-		status(iostream.LevelDone, fmt.Sprintf("%d passed  %s", len(cfg.Commands), FormatDuration(time.Since(start))))
 	}
 	return nil
 }
@@ -150,7 +136,6 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 	}
 
 	maxWidth := nameWidth(commands)
-	overallStart := time.Now()
 	for i, c := range commands {
 		run := expandCommand(workDir, c.Run)
 		script := "cd " + shellEscape(dest) + " && " + run
@@ -172,14 +157,11 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 			_, _ = fmt.Fprint(streams.Err, stderr)
 		}
 		if exitCode != 0 {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, FormatDuration(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, ui.FormatDuration(elapsed)))
 			skipRemaining(status, commands[i+1:], maxWidth)
 			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
-		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, FormatDuration(elapsed)))
-	}
-	if len(commands) > 1 {
-		status(iostream.LevelDone, fmt.Sprintf("%d passed  %s", len(commands), FormatDuration(time.Since(overallStart))))
+		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, ui.FormatDuration(elapsed)))
 	}
 	return nil
 }
@@ -203,10 +185,10 @@ func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 		_, _ = fmt.Fprint(streams.Err, stderr)
 	}
 	if exitCode != 0 {
-		status(iostream.LevelError, fmt.Sprintf("%s  %s", name, FormatDuration(elapsed)))
+		status(iostream.LevelError, fmt.Sprintf("%s  %s", name, ui.FormatDuration(elapsed)))
 		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
 	}
-	status(iostream.LevelDone, fmt.Sprintf("%s  %s", name, FormatDuration(elapsed)))
+	status(iostream.LevelDone, fmt.Sprintf("%s  %s", name, ui.FormatDuration(elapsed)))
 	return nil
 }
 
@@ -264,17 +246,17 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  timed out after %ds  %s", nameWidth, name, timeoutSec, FormatDuration(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  timed out after %ds  %s", nameWidth, name, timeoutSec, ui.FormatDuration(elapsed)))
 			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", nameWidth, name, FormatDuration(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", nameWidth, name, ui.FormatDuration(elapsed)))
 			return fmt.Errorf("%s command failed with exit code %d", name, exitErr.ExitCode())
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
-	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", nameWidth, name, FormatDuration(elapsed)))
+	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", nameWidth, name, ui.FormatDuration(elapsed)))
 	return nil
 }
 

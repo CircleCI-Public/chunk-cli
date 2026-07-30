@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Success formats a green checkmark success message.
@@ -28,6 +29,17 @@ func ErrWarning(msg string) string {
 // ErrError formats a failure message using stderr color detection.
 func ErrError(msg string) string {
 	return ErrRed("✗ " + msg)
+}
+
+// FormatDuration formats a duration for display in status messages.
+func FormatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return d.Round(time.Second).String()
 }
 
 // FormatError formats a red error with optional detail and suggestion.
