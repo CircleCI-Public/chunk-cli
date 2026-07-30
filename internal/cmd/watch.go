@@ -3,17 +3,16 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	internaltui "github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui/watch"
 )
 
@@ -26,11 +25,14 @@ func newWatchCmd() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !term.IsTerminal(int(os.Stdout.Fd())) {
+			if err := internaltui.RequireStdoutTTY(); err != nil {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			cwd, _ := os.Getwd()
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("watch: could not determine working directory: %w", err)
+			}
 			roots := []string{cwd}
 			if all {
 				known, err := sidecar.AllProjectRoots()
@@ -48,8 +50,11 @@ func newWatchCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("watch: invalid path %q: %w", root, err)
 				}
-				if gitRoot := gitTopLevel(abs); gitRoot != "" {
+				if gitRoot := gitutil.TopLevelCtx(cmd.Context(), abs); gitRoot != "" {
 					abs = gitRoot
+				} else {
+					// Skip non-git paths: nothing to watch and no sidecar to find.
+					continue
 				}
 				if seen[abs] {
 					continue
@@ -79,21 +84,12 @@ func newWatchCmd() *cobra.Command {
 			}
 
 			m := watch.New(entries)
-			p := tea.NewProgram(m)
-			_, err := p.Run()
+			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
+			_, err = p.Run()
 			return err
 		},
 	}
 
 	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects, not just the current directory")
 	return cmd
-}
-
-// gitTopLevel returns the git repository root for dir, or "" if not in a git repo.
-func gitTopLevel(dir string) string {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }

@@ -50,17 +50,35 @@ func AppData() (string, error) {
 // (symlinks resolved via EvalSymlinks, falling back to filepath.Clean), which
 // ensures callers that discover the root via different means — git's
 // --show-toplevel vs. a manual filesystem walk — always hash the same string.
+//
+// One-time migration: if the resolved path yields an empty directory but the
+// old unresolved path has existing data, the old directory is renamed to the
+// new location so users with symlinked project roots don't silently lose their
+// sidecar/snapshot/event-log state.
 func ProjectDataDir(projectRoot string) (string, error) {
 	base, err := AppData()
 	if err != nil {
 		return "", err
 	}
 	clean := filepath.Clean(projectRoot)
-	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		clean = resolved
+	resolved := clean
+	if r, err := filepath.EvalSymlinks(clean); err == nil {
+		resolved = r
 	}
-	sum := sha256.Sum256([]byte(clean))
-	return filepath.Join(base, fmt.Sprintf("%x", sum)), nil
+	newDir := filepath.Join(base, fmt.Sprintf("%x", sha256.Sum256([]byte(resolved))))
+
+	// Only attempt migration when the symlink actually changed the path.
+	if resolved != clean {
+		oldDir := filepath.Join(base, fmt.Sprintf("%x", sha256.Sum256([]byte(clean))))
+		if _, statErr := os.Stat(oldDir); statErr == nil {
+			if entries, readErr := os.ReadDir(newDir); readErr == nil && len(entries) == 0 {
+				// Best-effort rename; ignore errors so callers always get a usable path.
+				_ = os.Rename(oldDir, newDir)
+			}
+		}
+	}
+
+	return newDir, nil
 }
 
 func configHome() (string, error) {

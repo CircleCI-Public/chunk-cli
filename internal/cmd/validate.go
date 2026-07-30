@@ -288,56 +288,75 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	statusFn(iostream.LevelStep, "chunk validate")
 
-	// Wire event log around the actual validate run (best-effort; never blocks on failure).
-	if dataDir, dirErr := sidecar.StateDir(); dirErr == nil {
-		scName := ""
-		if activeSidecar != nil && activeSidecar.SidecarID == opts.sidecarID {
-			scName = activeSidecar.Name
-		}
-		statusFn = eventlog.WrapFromDir(dataDir, statusFn, eventlog.OpValidate, opts.sidecarID, scName, sidecar.CurrentBranch(workDir))
+	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
+	if err != nil {
+		return err
 	}
 
-	execErr := func() error {
-		freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
-		if err != nil {
-			return err
-		}
-		// Only load env vars and resolve secrets when a sidecar is actually
-		// being used — avoids parsing .env.local or hitting secrets APIs on
-		// purely local runs.
-		envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
-		if err != nil {
-			return err
-		}
-		return runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
-	}()
+	// Wire event log only when a sidecar is involved. The wrap goes here — after
+	// setupRemote fills opts.sidecarID but before loadSidecarEnvVars — so that
+	// sync and env-resolve status events are captured. Skipping when there is no
+	// sidecar avoids writing events with an empty sidecar_id that the TUI would
+	// filter out and never display.
+	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir)
+
+	// Only load env vars and resolve secrets when a sidecar is actually
+	// being used — avoids parsing .env.local or hitting secrets APIs on
+	// purely local runs.
+	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
+	if err != nil {
+		return err
+	}
+
+	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	return finishValidate(cmd, hook, execErr, start, opts.sidecarID, cfg, statusFn, streams)
+}
+
+// wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
+// is active. Returns statusFn unchanged when no sidecar is involved, so callers
+// with empty sidecar IDs never write events with a blank sidecar_id.
+func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string) iostream.StatusFunc {
+	if sidecarID == "" {
+		return statusFn
+	}
+	dataDir, err := sidecar.StateDir()
+	if err != nil {
+		return statusFn
+	}
+	scName := ""
+	if activeSidecar != nil && activeSidecar.SidecarID == sidecarID {
+		scName = activeSidecar.Name
+	}
+	return eventlog.WrapFromDir(dataDir, statusFn, eventlog.OpValidate, sidecarID, scName, sidecar.CurrentBranch(workDir))
+}
+
+// finishValidate reports the validate outcome and handles hook exit codes.
+func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, sidecarID string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	if execErr != nil {
 		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
 	} else if hook == nil {
 		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
 	}
-
-	if opts.sidecarID != "" {
+	if sidecarID != "" {
 		if execErr != nil {
 			statusFn(iostream.LevelError, "validate failed")
 		} else {
 			statusFn(iostream.LevelDone, "validate passed")
 		}
 	}
-
-	if hook != nil {
-		maxAttempts := cfg.StopHookMaxAttempts
-		if maxAttempts <= 0 {
-			maxAttempts = validate.DefaultMaxAttempts
-		}
-		hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
-		if hookErr == nil && execErr == nil {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", ui.FormatDuration(time.Since(start)))))
-			return nil
-		}
-		return hookErr
+	if hook == nil {
+		return execErr
 	}
-	return execErr
+	maxAttempts := cfg.StopHookMaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = validate.DefaultMaxAttempts
+	}
+	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
+	if hookErr == nil && execErr == nil {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", ui.FormatDuration(time.Since(start)))))
+		return nil
+	}
+	return hookErr
 }
 
 func validateEnvFlag(envVarsFlag []string) error {
@@ -660,7 +679,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	}
 	// Fall back to any existing sidecar for this project before creating a new one.
 	// This prevents accumulation of one sidecar per Claude Code session.
-	if existing, err := sidecar.LoadAnyActive(); err == nil && existing != nil {
+	if existing, err := sidecar.LoadAnyActive(ctx); err == nil && existing != nil {
 		if saveErr := sidecar.SaveActive(ctx, *existing); saveErr != nil {
 			streams.ErrPrintf("warning: could not promote active sidecar: %v\n", saveErr)
 		}

@@ -86,9 +86,12 @@ func LoadActive(ctx context.Context) (*ActiveSidecar, error) {
 }
 
 // LoadAnyActive returns the most recently modified sidecar state file for the
-// current project, regardless of session ID. Use this as a fallback when
-// LoadActive returns nil to avoid creating a new sidecar unnecessarily.
-func LoadAnyActive() (*ActiveSidecar, error) {
+// current project, regardless of session ID or branch. Cross-branch reuse is
+// intentional: the caller's next SaveActive re-keys the result under the
+// current session+branch, so only one sidecar accumulates per project even
+// when switching branches. ctx is accepted for signature consistency with
+// the other loaders, but is not used.
+func LoadAnyActive(_ context.Context) (*ActiveSidecar, error) {
 	dir, err := saveDir()
 	if err != nil {
 		return nil, err

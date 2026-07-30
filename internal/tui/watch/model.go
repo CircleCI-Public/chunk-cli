@@ -2,10 +2,10 @@
 package watch
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -148,11 +149,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Code {
 		case 'q', tea.KeyEscape:
 			return m, tea.Quit
-		case 's', tea.KeyDown:
+		case 'j', tea.KeyDown:
 			if m.selectedIdx < len(m.sidecars)-1 {
 				m.selectedIdx++
 			}
-		case 'w', tea.KeyUp:
+		case 'k', tea.KeyUp:
 			if m.selectedIdx > 0 {
 				m.selectedIdx--
 			}
@@ -409,7 +410,7 @@ func groupEvents(events []eventlog.Event) []eventGroup {
 	for _, e := range events {
 		if len(cur) > 0 && e.Op != cur[0].Op {
 			groups = append(groups, cur)
-			cur = make(eventGroup, 0, len(events)-len(groups))
+			cur = make(eventGroup, 0)
 		}
 		cur = append(cur, e)
 		if e.Level == levelDone || e.Level == levelError {
@@ -460,7 +461,7 @@ func iconAndMsg(e eventlog.Event) (string, string) {
 
 func (m Model) renderFooter() string {
 	keys := []struct{ key, action string }{
-		{"↑/↓", "select"},
+		{"↑/↓ j/k", "select"},
 		{"q", "quit"},
 	}
 	parts := make([]string, 0, len(keys))
@@ -492,9 +493,11 @@ func (m Model) loadData() tea.Msg {
 		}
 		offset := m.offsets[i]
 		if offset == 0 {
-			recent, _ := p.Log.Recent(recentEvents)
-			allEvents = append(allEvents, recent...)
-			_, newOff, _ := p.Log.TailFrom(0)
+			all, newOff, _ := p.Log.TailFrom(0)
+			if len(all) > recentEvents {
+				all = all[len(all)-recentEvents:]
+			}
+			allEvents = append(allEvents, all...)
 			newOffsets[i] = newOff
 		} else {
 			newEvts, newOff, _ := p.Log.TailFrom(offset)
@@ -645,11 +648,10 @@ func headRef(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sha, _ := gitutil.HeadRefCtx(ctx, dir)
+	return sha
 }
 
 // ago returns a human-readable duration since t.
