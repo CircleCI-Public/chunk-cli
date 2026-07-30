@@ -38,6 +38,14 @@ type Event struct {
 
 const logFile = "events.jsonl"
 
+const (
+	levelStep  = "step"
+	levelInfo  = "info"
+	levelWarn  = "warn"
+	levelDone  = "done"
+	levelError = "error"
+)
+
 // Log appends events to a JSONL file in a project data directory.
 type Log struct {
 	mu   sync.Mutex
@@ -163,16 +171,16 @@ func (l *Log) TailFrom(offset int64) ([]Event, int64, error) {
 func levelStr(l iostream.Level) string {
 	switch l {
 	case iostream.LevelStep:
-		return "step"
+		return levelStep
 	case iostream.LevelInfo:
-		return "info"
+		return levelInfo
 	case iostream.LevelWarn:
-		return "warn"
+		return levelWarn
 	case iostream.LevelDone:
-		return "done"
+		return levelDone
 	case iostream.LevelError:
-		return "error"
+		return levelError
 	default:
-		return "info"
+		return levelInfo
 	}
 }

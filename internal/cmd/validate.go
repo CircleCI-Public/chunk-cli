@@ -288,29 +288,35 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	statusFn(iostream.LevelStep, "chunk validate")
 
-	// Wire event log around the actual validate run (best-effort; never blocks on failure).
-	if dataDir, dirErr := sidecar.StateDir(); dirErr == nil {
-		scName := ""
-		if activeSidecar != nil && activeSidecar.SidecarID == opts.sidecarID {
-			scName = activeSidecar.Name
-		}
-		statusFn = eventlog.WrapFromDir(dataDir, statusFn, eventlog.OpValidate, opts.sidecarID, scName, sidecar.CurrentBranch(workDir))
+	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
+	if err != nil {
+		return err
 	}
 
-	execErr := func() error {
-		freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
-		if err != nil {
-			return err
+	// Wire event log only when a sidecar is involved. The wrap goes here — after
+	// setupRemote fills opts.sidecarID but before loadSidecarEnvVars — so that
+	// sync and env-resolve status events are captured. Skipping when there is no
+	// sidecar avoids writing events with an empty sidecar_id that the TUI would
+	// filter out and never display.
+	if opts.sidecarID != "" {
+		if dataDir, dirErr := sidecar.StateDir(); dirErr == nil {
+			scName := ""
+			if activeSidecar != nil && activeSidecar.SidecarID == opts.sidecarID {
+				scName = activeSidecar.Name
+			}
+			statusFn = eventlog.WrapFromDir(dataDir, statusFn, eventlog.OpValidate, opts.sidecarID, scName, sidecar.CurrentBranch(workDir))
 		}
-		// Only load env vars and resolve secrets when a sidecar is actually
-		// being used — avoids parsing .env.local or hitting secrets APIs on
-		// purely local runs.
-		envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
-		if err != nil {
-			return err
-		}
-		return runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
-	}()
+	}
+
+	// Only load env vars and resolve secrets when a sidecar is actually
+	// being used — avoids parsing .env.local or hitting secrets APIs on
+	// purely local runs.
+	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
+	if err != nil {
+		return err
+	}
+
+	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
 	if execErr != nil {
 		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
 	} else if hook == nil {
@@ -660,7 +666,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	}
 	// Fall back to any existing sidecar for this project before creating a new one.
 	// This prevents accumulation of one sidecar per Claude Code session.
-	if existing, err := sidecar.LoadAnyActive(); err == nil && existing != nil {
+	if existing, err := sidecar.LoadAnyActive(ctx); err == nil && existing != nil {
 		if saveErr := sidecar.SaveActive(ctx, *existing); saveErr != nil {
 			streams.ErrPrintf("warning: could not promote active sidecar: %v\n", saveErr)
 		}
