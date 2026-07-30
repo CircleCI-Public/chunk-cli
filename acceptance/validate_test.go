@@ -559,8 +559,8 @@ func TestValidateHookMode_SuccessLine(t *testing.T) {
 		hookStdin(t, "test-session-success-line", false))
 
 	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for passing hook; stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk validate passed"),
-		"expected 'chunk validate passed' in stderr; got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stdout, "chunk validate passed"),
+		"expected 'chunk validate passed' in stdout; got stdout: %s stderr: %s", result.Stdout, result.Stderr)
 }
 
 // TestValidateHookMode_SetupErrorFlushedToStderr verifies that when setup fails
