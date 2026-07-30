@@ -433,19 +433,14 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 
 func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc) error {
 	authSock := os.Getenv(config.EnvSSHAuthSock)
-	err := sidecar.Sync(ctx, client, sidecarID, identityFile, authSock, workdir, statusFn)
-	if err == nil {
-		return nil
+	cwd, err := os.Getwd()
+	if err != nil {
+		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
-	var baseErr *sidecar.RemoteBaseError
-	if errors.As(err, &baseErr) {
-		return &userError{
-			msg:        "Could not sync to sidecar: your current branch has not been pushed.",
-			suggestion: "Push your branch and try again.",
-			err:        err,
-		}
+	if err := sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
+		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
-	return &userError{msg: "Could not sync to sidecar.", err: err}
+	return nil
 }
 
 // newExecFn builds a function that runs shell scripts on a remote sidecar via
