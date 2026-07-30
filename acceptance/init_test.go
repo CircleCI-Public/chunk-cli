@@ -780,8 +780,8 @@ func TestInitSkipsTestSuitesByDefault(t *testing.T) {
 
 	assert.Assert(t, strings.Contains(result.Stderr, "chunk-sidecar"),
 		"expected sidecar hint in stderr, got: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "sidecar dev loop"),
-		"expected hint to mention sidecar dev loop, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "set up a sidecar"),
+		"expected hint to mention setting up a sidecar, got: %s", result.Stderr)
 }
 
 func TestInitProjectDirNotGitRepo(t *testing.T) {
