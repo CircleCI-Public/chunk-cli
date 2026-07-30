@@ -105,7 +105,15 @@ func newValidateCmd() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidateCmdE(cmd, args, &opts)
+			// Mapped here rather than at the exec call: the remote runners wrap
+			// errors with %w, and the top-level error reporter type-asserts on the
+			// error itself rather than unwrapping, so a userError buried under a
+			// wrapper would lose its message and suggestion.
+			err := runValidateCmdE(cmd, args, &opts)
+			if mapped := outdatedSidecarAPI(err); mapped != nil {
+				return mapped
+			}
+			return err
 		},
 	}
 
@@ -330,7 +338,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 		}
 		if sidecarID != "" && allRemote {
-			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc)
+			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 			if err != nil {
 				return err
 			}
@@ -341,7 +349,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 
 	// All-remote execution (--remote flag): send everything to the sidecar.
 	if sidecarID != "" && allRemote {
-		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc)
+		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 		if err != nil {
 			return err
 		}
@@ -354,7 +362,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 		if name != "" {
 			if cmd := cfg.FindCommand(name); cmd != nil && cmd.Remote {
 				statusFn(iostream.LevelInfo, fmt.Sprintf("running %s on sidecar %s", name, sidecarID))
-				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc)
+				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 				if err != nil {
 					return err
 				}
@@ -442,7 +450,15 @@ func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, iden
 
 // newExecFn builds a function that runs shell scripts on a remote sidecar via
 // the async HTTP exec API, along with the resolved remote working directory.
-func newExecFn(ctx context.Context, client *circleci.Client, sidecarID, workdir string, envVars map[string]string, rc config.ResolvedConfig) (func(context.Context, string) (string, string, int, error), string, error) {
+//
+// Output is written to streams as it arrives rather than buffered, so a long
+// command shows progress instead of going silent for minutes. The returned
+// stdout and stderr are therefore always empty — callers print output only when
+// it was not already streamed, so there is nothing left for them to do.
+func newExecFn(
+	ctx context.Context, client *circleci.Client, sidecarID, workdir string,
+	envVars map[string]string, rc config.ResolvedConfig, streams iostream.Streams,
+) (func(context.Context, string) (string, string, int, error), string, error) {
 	cwd, _ := os.Getwd()
 	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
 	dest, err := sidecar.ResolveWorkspace(ctx, workdir, repo)
@@ -456,12 +472,21 @@ func newExecFn(ctx context.Context, client *circleci.Client, sidecarID, workdir 
 	for k, v := range envVars {
 		merged[k] = v
 	}
+	// Raw bytes straight through, so carriage-return redraws and ANSI colour
+	// render as the remote command intended.
+	onOutput := func(stream string, data []byte) {
+		w := streams.Out
+		if stream == circleci.StreamStderr {
+			w = streams.Err
+		}
+		_, _ = w.Write(data)
+	}
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
-		result, err := client.Exec(ctx, sidecarID, "sh", []string{"-c", script}, merged)
+		result, err := client.Exec(ctx, sidecarID, "sh", []string{"-c", script}, merged, onOutput)
 		if err != nil {
 			return "", "", 0, err
 		}
-		return result.Stdout, result.Stderr, result.ExitCode, nil
+		return "", "", result.ExitCode, nil
 	}
 	return execFn, dest, nil
 }
@@ -494,7 +519,7 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 	}
 	var runErr error
 	if len(remoteCfg.Commands) > 0 {
-		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc)
+		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 		if err != nil {
 			if freshlyCreated {
 				return newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).

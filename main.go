@@ -71,6 +71,12 @@ func errorDetails(err error) (msg, detail, suggestion string, exitCode int) {
 	if d, ok := err.(interface{ Detail() string }); ok && d.Detail() != "" {
 		detail = d.Detail()
 	}
+	// An error that says it needs no detail gets none: the fallback to
+	// err.Error() above would otherwise show raw Go wrapping, and repeat itself
+	// when the message was translated from that same error.
+	if h, ok := err.(interface{ HideDetail() bool }); ok && h.HideDetail() {
+		detail = ""
+	}
 	if s, ok := err.(interface{ Suggestion() string }); ok && s.Suggestion() != "" {
 		suggestion = s.Suggestion()
 	}

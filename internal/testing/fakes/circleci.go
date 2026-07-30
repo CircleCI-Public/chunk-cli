@@ -1,9 +1,11 @@
 package fakes
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -11,16 +13,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 )
-
-// commandOutputLine mirrors the JSONL event emitted by GET /commands/:id/output.
-type commandOutputLine struct {
-	CommandID string `json:"command_id,omitempty"`
-	ExitCode  int    `json:"exit_code,omitempty"`
-	PID       int    `json:"pid,omitempty"`
-	Index     int    `json:"index,omitempty"`
-	Stream    string `json:"stream,omitempty"`
-	Line      string `json:"line,omitempty"`
-}
 
 type Collaboration struct {
 	ID      string `json:"id"`
@@ -61,6 +53,7 @@ type ExecResponse struct {
 	Stdout    string `json:"stdout"`
 	Stderr    string `json:"stderr"`
 	ExitCode  int    `json:"exit_code"`
+	Signal    string `json:"signal,omitempty"`
 }
 
 type CommandResponse struct {
@@ -99,12 +92,15 @@ type FakeCircleCI struct {
 	ExecStatusCode           int    // override for POST /sidecar/instances/:id/exec
 	CommandOutputStatusCode  int    // override for GET /sidecar/commands/:id/output
 	CommandOutputMessage     string // error message body when CommandOutputStatusCode is set
-	AddKeyStatusCode         int    // override for POST /sidecar/instances/:id/ssh/add-key
-	CreateSnapshotStatusCode int    // override for POST /sidecar/snapshots
-	GetSnapshotStatusCode    int    // override for GET /sidecar/snapshots/:id
-	ListSnapshotsStatusCode  int    // override for GET /sidecar/snapshots
-	GetCommandStatusCode     int    // override for GET /sidecar/commands/:id
-	CreateOrgStatusCode      int    // override for POST /api/v2/organization
+	// DropStreamsBeforeExit ends this many output streams after delivering their
+	// output but before the terminal event, so client resume can be exercised.
+	DropStreamsBeforeExit    int
+	AddKeyStatusCode         int // override for POST /sidecar/instances/:id/ssh/add-key
+	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
+	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
+	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
+	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
+	CreateOrgStatusCode      int // override for POST /api/v2/organization
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
@@ -390,31 +386,97 @@ func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {
 		}
 	}
 
-	c.Header("Content-Type", "application/x-ndjson")
+	// Mirror the real API: SSE frames with base64 payloads and an opaque cursor.
+	stdout := []byte(resp.Stdout)
+	stderr := []byte(resp.Stderr)
+	outOff := clampOffset(cursorPart(c, 0), len(stdout))
+	errOff := clampOffset(cursorPart(c, 1), len(stderr))
+
+	c.Header("Content-Type", "text/event-stream; charset=utf-8")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
 
-	idx := 0
-	writeLines := func(stream, output string) {
-		for _, line := range strings.Split(strings.TrimRight(output, "\n"), "\n") {
-			b, _ := json.Marshal(commandOutputLine{Index: idx, Stream: stream, Line: line})
-			_, _ = fmt.Fprintf(c.Writer, "%s\n", b)
-			idx++
+	// Flushing per frame is what makes this a stream rather than one lump at the
+	// end — without it nothing here proves incremental delivery.
+	writeFrame := func(event, id string, data []byte) {
+		_, _ = fmt.Fprintf(c.Writer, "event: %s\nid: %s\ndata: %s\n\n", event, id, data)
+		c.Writer.Flush()
+	}
+
+	cursor := func() string { return fmt.Sprintf("%d,%d", outOff, errOff) }
+
+	start, _ := json.Marshal(map[string]any{
+		"command_id": resp.CommandID,
+		"status":     "running",
+		"stdout":     outOff,
+		"stderr":     errOff,
+	})
+	writeFrame("start", cursor(), start)
+
+	if rest := stdout[outOff:]; len(rest) > 0 {
+		outOff = int64(len(stdout))
+		writeFrame("stdout", cursor(), []byte(base64.StdEncoding.EncodeToString(rest)))
+	}
+	if rest := stderr[errOff:]; len(rest) > 0 {
+		errOff = int64(len(stderr))
+		writeFrame("stderr", cursor(), []byte(base64.StdEncoding.EncodeToString(rest)))
+	}
+
+	if f.dropBeforeExit() {
+		// End the response with no terminal event, which is how the API signals
+		// "interrupted, resume from your cursor".
+		return
+	}
+
+	exit, _ := json.Marshal(map[string]any{
+		"exit_code": resp.ExitCode,
+		"pid":       resp.PID,
+		"signal":    resp.Signal,
+	})
+	writeFrame("exit", cursor(), exit)
+}
+
+// dropBeforeExit reports whether this stream should end without a terminal
+// event, consuming one from the configured budget.
+func (f *FakeCircleCI) dropBeforeExit() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.DropStreamsBeforeExit <= 0 {
+		return false
+	}
+	f.DropStreamsBeforeExit--
+	return true
+}
+
+// cursorPart resolves one stream's resume offset from Last-Event-ID, falling
+// back to the per-stream query parameters, mirroring the real API.
+func cursorPart(c *gin.Context, part int) int64 {
+	if raw := c.GetHeader("Last-Event-ID"); raw != "" {
+		out, errOff, found := strings.Cut(raw, ",")
+		if found {
+			if part == 0 {
+				return parseInt64(out)
+			}
+			return parseInt64(errOff)
 		}
 	}
-
-	if resp.Stdout != "" {
-		writeLines("stdout", resp.Stdout)
+	if part == 0 {
+		return parseInt64(c.Query("stdout_offset"))
 	}
-	if resp.Stderr != "" {
-		writeLines("stderr", resp.Stderr)
-	}
+	return parseInt64(c.Query("stderr_offset"))
+}
 
-	result, _ := json.Marshal(commandOutputLine{
-		CommandID: resp.CommandID,
-		ExitCode:  resp.ExitCode,
-		PID:       resp.PID,
-	})
-	_, _ = fmt.Fprintf(c.Writer, "%s\n", result)
+func parseInt64(s string) int64 {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+func clampOffset(off int64, size int) int64 {
+	return min(max(off, 0), int64(size))
 }
 
 func (f *FakeCircleCI) handleGetCommand(c *gin.Context) {

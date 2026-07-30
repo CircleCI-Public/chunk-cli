@@ -237,7 +237,10 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
 
+	// Per-request headers override the defaults set above rather than appending
+	// to them, so a caller can replace Accept (e.g. to request a stream).
 	for k, vals := range r.headers {
+		req.Header.Del(k)
 		for _, v := range vals {
 			req.Header.Add(k, v)
 		}

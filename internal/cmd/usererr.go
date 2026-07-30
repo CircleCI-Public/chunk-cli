@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -44,6 +45,22 @@ func notAuthorized(action string, err error) error {
 		withCode("auth.not_authorized").
 		withSuggestion(suggestionReauth).
 		withExitCode(ExitAuthError).
+		wrap(err)
+}
+
+// outdatedSidecarAPI maps an unsupported output format to guidance that points
+// the right way. The API is behind this binary, not ahead of it, so telling
+// someone to upgrade chunk would send them in exactly the wrong direction —
+// there is nothing newer to install, and installing it again would not help.
+func outdatedSidecarAPI(err error) error {
+	if !errors.Is(err, circleci.ErrOutputFormatUnsupported) {
+		return nil
+	}
+	return newUserError("This build of chunk needs a newer CircleCI sidecar API.").
+		withCode("sidecar.output_format_unsupported").
+		withDetail("The API streamed command output in a format this build no longer reads.").
+		withSuggestion("The API has not been updated yet. Install the latest release with 'chunk upgrade', " +
+			"or if you built this from source, switch back to a released build until the API catches up.").
 		wrap(err)
 }
 
@@ -91,6 +108,7 @@ type userError struct {
 	exitCode   int    // 0 means ExitGeneral
 	errMsg     string // used only when err == nil
 	err        error  // when set, Error() delegates to err.Error()
+	hideDetail bool   // suppress the detail line entirely, see withoutDetail
 }
 
 // newUserError creates a userError with the given user-facing message.
@@ -106,6 +124,12 @@ func (e *userError) withExitCode(code int) *userError    { e.exitCode = code; re
 func (e *userError) wrap(err error) *userError           { e.err = err; return e }
 func (e *userError) wrapMsg(msg string) *userError       { e.errMsg = msg; return e }
 
+// withoutDetail states that the message and suggestion say everything, so no
+// detail line should be shown. Without it an empty detail falls back to the
+// wrapped error, which leaks Go-level wrapping like "exec: 410 Gone — ..." and,
+// when the message was translated from that same error, repeats itself.
+func (e *userError) withoutDetail() *userError { e.hideDetail = true; return e }
+
 func (e *userError) Error() string {
 	if e.err != nil {
 		return e.err.Error()
@@ -120,6 +144,10 @@ func (e *userError) UserMessage() string { return e.msg }
 func (e *userError) Detail() string      { return e.detail }
 func (e *userError) Suggestion() string  { return e.suggestion }
 func (e *userError) Unwrap() error       { return e.err }
+
+// HideDetail reports that this error is fully described by its message and
+// suggestion, so the display must not fall back to the wrapped error.
+func (e *userError) HideDetail() bool { return e.hideDetail }
 
 // ErrorCode returns the namespaced error code, e.g. "auth.token_missing".
 // Empty string means no code was set.
@@ -158,15 +186,37 @@ func errNoForce(action string) error {
 		withExitCode(ExitBadArgs)
 }
 
-// GoneError returns a formatted error when err contains a 410 Gone status,
-// which means the server no longer supports this version of the CLI. Returns
-// nil for any other error. Use at the top of main's error path to intercept
-// 410s before generic handling.
+// GoneError returns a formatted error when err contains a 410 Gone status, which
+// the API uses for two distinct conditions: this CLI being too old for the API,
+// and a sidecar being too old for the API. Returns nil for any other error. Use
+// at the top of main's error path to intercept 410s before generic handling.
 func GoneError(err error) error {
 	var se *circleci.StatusError
 	if !errors.As(err, &se) || se.StatusCode != http.StatusGone {
 		return nil
 	}
+
+	// A 410 covers two unrelated conditions with opposite remedies: the CLI
+	// being too old for the API, and a sidecar being too old for the API. Telling
+	// someone to upgrade the CLI when their sidecar is the stale one sends them
+	// to a version that will fail identically, so the two must be told apart.
+	//
+	// Matching on the server's own wording is a compromise: the V3 error envelope
+	// carries no machine-readable code, so there is nothing better to key off
+	// until the API supplies one. The server's message already names the remedy,
+	// so it is shown rather than replaced with a guess.
+	if strings.Contains(strings.ToLower(se.ServerMessage), "sidecar is out of date") {
+		// Deliberately no detail. The server's message states the condition and
+		// the remedy, both of which are already the message and the suggestion
+		// here, so including it says the same thing three times over.
+		return newUserError("This sidecar is out of date.").
+			withCode("sidecar.out_of_date").
+			withSuggestion("Recreate it with: chunk sidecar create").
+			withExitCode(ExitAPIError).
+			withoutDetail().
+			wrap(err)
+	}
+
 	detail := se.ServerMessage
 	if detail == "" {
 		detail = "This server no longer supports this version of chunk CLI."

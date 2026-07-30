@@ -1,8 +1,8 @@
 package circleci
 
 import (
-	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
+	"github.com/CircleCI-Public/chunk-cli/internal/sse"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
@@ -19,6 +20,16 @@ var ErrTokenNotFound = errors.New("api token not found")
 
 // ErrNotAuthorized indicates the request was rejected (401/403).
 var ErrNotAuthorized = errors.New("not authorized")
+
+// ErrOutputFormatUnsupported indicates the output stream contained no events this
+// build understands.
+//
+// It means the API is *older* than this binary, not newer: the frame vocabulary
+// is designed so a newer API only ever adds event types while still emitting
+// stdout, stderr and exit. Receiving none of those therefore places the API
+// behind the client, which is the opposite of what a naive "upgrade" hint would
+// imply.
+var ErrOutputFormatUnsupported = errors.New("sidecar output format not supported")
 
 // StatusError is an alias for the shared httpcl.StatusError type.
 type StatusError = hc.StatusError
@@ -180,21 +191,50 @@ func (c *Client) AddSSHKey(ctx context.Context, sidecarID, publicKey string) (*A
 	return &AddSSHKeyResponse{URL: attrs.URL}, nil
 }
 
-// outputStreamLine is one JSONL event from GET /commands/{id}/output.
-// Lines with a non-empty CommandID are the terminal result; others carry output.
-type outputStreamLine struct {
-	CommandID string `json:"command_id"`
-	ExitCode  int    `json:"exit_code"`
-	PID       int    `json:"pid"`
-	Stream    string `json:"stream"` // "stdout" or "stderr"
-	Line      string `json:"line"`
-}
+// Stream names, matching the wire event names.
+const (
+	StreamStdout = "stdout"
+	StreamStderr = "stderr"
+)
+
+// OutputFn receives a run of raw output bytes from one stream, exactly as the
+// remote command wrote them. data is only valid for the duration of the call.
+type OutputFn func(stream string, data []byte)
+
+// maxOutputFrame caps a single SSE frame. The API batches output at 64KiB, which
+// base64-encodes to ~87KiB, so this is generous.
+const maxOutputFrame = 1 << 20
+
+// maxStreamStalls bounds consecutive attempts that deliver nothing at all —
+// connection refused, a 5xx, an instant close. Those are the only attempts worth
+// counting: reconnecting is the normal way this API serves a long command, since
+// the server caps each connection by design.
+const maxStreamStalls = 5
+
+// maxStreamAttempts is a runaway guard, not a real limit. With connections capped
+// at around fifteen seconds a legitimate stream reconnects roughly four times a
+// minute, so this allows many hours of output while still bounding a server that
+// talks but never terminates the stream.
+// A var only so tests can shrink it.
+var maxStreamAttempts = 2000
+
+// streamRetryBase is the first delay after a stalled attempt, scaled up per
+// consecutive stall. A healthy reconnect does not wait at all.
+// A var only so tests can shrink it; not intended to vary in normal use.
+var streamRetryBase = 500 * time.Millisecond
 
 type execSubmitAttrs struct {
 	Phase string `json:"phase"`
 }
 
-func (c *Client) Exec(ctx context.Context, sidecarID, command string, args []string, env map[string]string) (*ExecResponse, error) {
+// Exec submits a command and collects its output.
+//
+// When onOutput is non-nil it receives each run of output bytes as it arrives
+// and Stdout/Stderr are left empty — accumulating is then the caller's choice,
+// which matters because output can be arbitrarily large.
+func (c *Client) Exec(
+	ctx context.Context, sidecarID, command string, args []string, env map[string]string, onOutput OutputFn,
+) (*ExecResponse, error) {
 	var attrs execSubmitAttrs
 	envelope := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances/%s/exec",
@@ -205,47 +245,207 @@ func (c *Client) Exec(ctx context.Context, sidecarID, command string, args []str
 	if err != nil {
 		return nil, mapErr("exec", err)
 	}
-	return c.streamCommandOutput(ctx, envelope.Data.ID)
+	return c.streamCommandOutput(ctx, envelope.Data.ID, onOutput)
 }
 
-func (c *Client) streamCommandOutput(ctx context.Context, commandID string) (*ExecResponse, error) {
-	var result ExecResponse
-	gotResult := false
-	decoder := func(r io.Reader) error {
-		sc := bufio.NewScanner(r)
-		for sc.Scan() {
-			var event outputStreamLine
-			if err := json.Unmarshal(sc.Bytes(), &event); err != nil {
-				continue
+// exitEvent is the payload of a terminal `exit` frame.
+type exitEvent struct {
+	ExitCode int    `json:"exit_code"`
+	Signal   string `json:"signal"`
+	PID      int    `json:"pid"`
+}
+
+// errorEvent is the payload of a terminal `error` frame.
+type errorEvent struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+}
+
+// streamCommandOutput reads a command's output stream to its end, reconnecting
+// from the last cursor whenever the connection drops before a terminal event.
+//
+// The API ends a stream with exactly one exit or error event, or with nothing at
+// all; nothing at all means the connection was interrupted, which is precisely
+// what makes resuming safe rather than a guess.
+func (c *Client) streamCommandOutput(ctx context.Context, commandID string, onOutput OutputFn) (*ExecResponse, error) {
+	result := &ExecResponse{CommandID: commandID}
+
+	var (
+		cursor   string
+		attempts int
+		stalls   int
+	)
+
+	for {
+		outcome, err := c.streamOnce(ctx, commandID, cursor, onOutput, result)
+		attempts++
+
+		// Frames arrived but none were intelligible. Retrying cannot help, and
+		// reporting it as a stalled stream would send someone hunting a network
+		// fault that does not exist.
+		if err == nil && outcome.frames > 0 && outcome.known == 0 {
+			return nil, ErrOutputFormatUnsupported
+		}
+
+		if outcome.cursor != "" {
+			cursor = outcome.cursor
+		}
+
+		switch {
+		case outcome.exited:
+			return result, nil
+		case outcome.failed != nil:
+			if !outcome.failed.Retryable {
+				return nil, fmt.Errorf("remote command: %s", outcome.failed.Message)
 			}
-			if event.CommandID != "" {
-				result.CommandID = event.CommandID
-				result.ExitCode = event.ExitCode
-				result.PID = event.PID
-				gotResult = true
-				return nil
+		case err != nil:
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
-			switch event.Stream {
-			case "stdout":
-				result.Stdout += event.Line + "\n"
-			case "stderr":
-				result.Stderr += event.Line + "\n"
+			if !isRetryable(err) {
+				return nil, mapErr("stream command output", err)
 			}
 		}
-		return sc.Err()
+
+		// A connection that delivered any frame proves the far end is alive and
+		// talking, so it resets the stall count even when the command produced no
+		// new output — a command can legitimately be silent for minutes while it
+		// compiles, and the server closes each connection on a timer regardless.
+		// Counting those as failures would abandon a healthy but quiet command.
+		if outcome.frames > 0 {
+			stalls = 0
+		} else {
+			stalls++
+			if stalls > maxStreamStalls {
+				return nil, fmt.Errorf(
+					"stream command output: gave up after %d attempts that returned nothing", stalls-1)
+			}
+		}
+
+		if attempts >= maxStreamAttempts {
+			return nil, fmt.Errorf(
+				"stream command output: gave up after %d reconnects without the command finishing", attempts)
+		}
+
+		// A stream cut short by the server's timeout is routine, so resume at
+		// once — inserting a delay every few seconds would make output stutter
+		// for no reason. Only back off when an attempt yielded nothing.
+		if stalls == 0 {
+			continue
+		}
+		delay := min(time.Duration(stalls)*streamRetryBase, 10*streamRetryBase)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
 	}
-	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/sidecar/commands/%s/output",
+}
+
+// streamOutcome is how a single connection to the output stream ended.
+type streamOutcome struct {
+	// cursor is the last event id seen, for resuming.
+	cursor string
+	// exited is true if a terminal exit event arrived.
+	exited bool
+	// failed is set if a terminal error event arrived.
+	failed *errorEvent
+	// frames counts every frame received, recognised or not.
+	frames int
+	// known counts frames this client understood. Frames without known means the
+	// server is speaking a format this version does not, which is worth saying
+	// plainly rather than reporting as a stalled stream.
+	known int
+}
+
+// streamOnce consumes one connection's worth of the output stream.
+func (c *Client) streamOnce(
+	ctx context.Context, commandID, cursor string, onOutput OutputFn, result *ExecResponse,
+) (streamOutcome, error) {
+	var outcome streamOutcome
+
+	decoder := func(r io.Reader) error {
+		last, err := sse.Scan(r, maxOutputFrame, func(f sse.Frame) error {
+			if !f.Comment {
+				outcome.frames++
+			}
+			switch f.Event {
+			case StreamStdout, StreamStderr:
+				outcome.known++
+				raw, decErr := base64.StdEncoding.DecodeString(string(f.Data))
+				if decErr != nil {
+					return fmt.Errorf("decoding %s payload: %w", f.Event, decErr)
+				}
+				if onOutput != nil {
+					onOutput(f.Event, raw)
+					return nil
+				}
+				if f.Event == StreamStdout {
+					result.Stdout += string(raw)
+				} else {
+					result.Stderr += string(raw)
+				}
+			case "exit":
+				outcome.known++
+				var e exitEvent
+				if jsonErr := json.Unmarshal(f.Data, &e); jsonErr != nil {
+					return fmt.Errorf("decoding exit event: %w", jsonErr)
+				}
+				result.ExitCode = e.ExitCode
+				result.PID = e.PID
+				result.Signal = e.Signal
+				outcome.exited = true
+			case "error":
+				outcome.known++
+				var e errorEvent
+				if jsonErr := json.Unmarshal(f.Data, &e); jsonErr != nil {
+					return fmt.Errorf("decoding error event: %w", jsonErr)
+				}
+				outcome.failed = &e
+			case "start":
+				outcome.known++
+			default:
+				// A future event type: ignored, which is what keeps the wire
+				// format extensible.
+			}
+			return nil
+		})
+		if last != "" {
+			outcome.cursor = last
+		}
+		return err
+	}
+
+	opts := []func(*hc.Request){
 		hc.RouteParams(commandID),
+		hc.Header("Accept", "text/event-stream"),
 		hc.Decoder(decoder),
 		hc.NoTimeout(),
-	))
-	if err != nil {
-		return nil, mapErr("stream command output", err)
 	}
-	if !gotResult {
-		return nil, fmt.Errorf("stream command output: stream ended without result")
+	if cursor != "" {
+		opts = append(opts, hc.Header("Last-Event-ID", cursor))
 	}
-	return &result, nil
+
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v3/sidecar/commands/%s/output", opts...))
+	return outcome, err
+}
+
+// isRetryable reports whether a failed stream attempt is worth resuming. A
+// transport error is; a definitive rejection from the API is not, since
+// reconnecting would only repeat it.
+func isRetryable(err error) bool {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.StatusCode >= 500 && se.StatusCode != http.StatusNotImplemented
+	}
+	var he *hc.HTTPError
+	if errors.As(err, &he) {
+		return he.StatusCode >= 500
+	}
+	// Anything that is not an HTTP status is a transport or decode failure, which
+	// resuming from the last cursor is exactly the remedy for.
+	return true
 }
 
 type commandAttrs struct {
@@ -388,23 +588,39 @@ func mapErr(op string, err error) error {
 	return se
 }
 
-// extractServerMessage tries to pull a human-readable message from a JSON
-// error body. Falls back to the raw body string if JSON parsing fails.
+// extractServerMessage pulls the human-readable message out of a JSON error
+// body, falling back to the raw body only when there is nothing better.
+//
+// Three shapes are in play. V3 nests the text in an object,
+// {"error":{"title":"..."}}, while older endpoints return a bare string as
+// either "error" or "message". Decoding "error" as a string — as this used to —
+// fails outright on the V3 shape, so every V3 error surfaced to users as a raw
+// JSON envelope complete with trace id.
 func extractServerMessage(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
 	var payload struct {
-		Error   string `json:"error"`
-		Message string `json:"message"`
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
 	}
-	if err := json.Unmarshal(body, &payload); err == nil {
-		if payload.Error != "" {
-			return payload.Error
-		}
-		if payload.Message != "" {
-			return payload.Message
-		}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return string(body)
+	}
+
+	var v3 struct {
+		Title string `json:"title"`
+	}
+	if json.Unmarshal(payload.Error, &v3) == nil && v3.Title != "" {
+		return v3.Title
+	}
+
+	var bare string
+	if json.Unmarshal(payload.Error, &bare) == nil && bare != "" {
+		return bare
+	}
+	if payload.Message != "" {
+		return payload.Message
 	}
 	return string(body)
 }

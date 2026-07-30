@@ -73,7 +73,7 @@ func TestExec(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	resp, err := sidecar.Exec(ctx, cl, "sb-1", "echo", []string{"hello"})
+	resp, err := sidecar.Exec(ctx, cl, "sb-1", "echo", []string{"hello"}, nil)
 	assert.NilError(t, err)
 	assert.Equal(t, resp.Stdout, "output\n")
 	assert.Equal(t, resp.ExitCode, 0)
