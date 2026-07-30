@@ -360,9 +360,9 @@ func printTestSuitesHint(workDir string, streams iostream.Streams) {
 		return
 	}
 	streams.ErrPrintln("")
-	streams.ErrPrintln(ui.Bold("Next step: set up the sidecar dev loop"))
-	streams.ErrPrintln(ui.Dim("  Ask your AI coding agent to run the chunk-sidecar skill to create"))
-	streams.ErrPrintln(ui.Dim("  a remote sidecar, sync your workspace, and run tests remotely."))
+	streams.ErrPrintln(ui.Bold("Next step: set up a sidecar"))
+	streams.ErrPrintln(ui.Dim("  Ask your AI coding agent to run the chunk-sidecar skill to spin up"))
+	streams.ErrPrintln(ui.Dim("  a microVM, sync your repo, and run tests remotely."))
 }
 
 // writeAllHookFiles writes hook config files for all supported agents.
