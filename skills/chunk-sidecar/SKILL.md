@@ -42,10 +42,10 @@ Do **not** run `echo $CIRCLE_TOKEN`, `env`, `printenv`, or any other command tha
 
    1. `cat .chunk/config.json` and confirm `orgID` is set to a non-empty value.
    2. If `orgID` is absent from the config, check whether `CIRCLECI_ORG_ID` is set **without printing its value** (e.g. `test -n "${CIRCLECI_ORG_ID:-}"`). Do not run `printenv`, `env`, or `echo` on credential variables.
-   3. If **both** are unset, run `chunk org list` to discover available orgs:
+   3. If **both** are unset, run `chunk org list --json` to discover available orgs:
       - **Single org returned** — use that ID automatically: `chunk config set orgID <id>`, then continue to Step 2.
       - **Multiple orgs returned** — show the list to the user and ask which org to use **exactly once**. After they reply, run `chunk config set orgID <id>`, then continue to Step 2.
-      - **Error or empty list** — the user is not authenticated or has no orgs. Stop and ask them to run `chunk auth set circleci` first.
+      - **Error, non-zero exit, or empty array** — the user is not authenticated or has no orgs. Stop and ask them to run `chunk auth set circleci` first.
    4. If only `CIRCLECI_ORG_ID` is set (config still lacks `orgID`), `chunk sidecar create` will detect it automatically. Persisting with `chunk config set orgID <id>` is recommended but not required before Step 2.
 
 ## Step 2: Find or create the active sidecar

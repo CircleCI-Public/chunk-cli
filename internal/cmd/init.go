@@ -459,6 +459,9 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 func detectOrgID(ctx context.Context, rc config.ResolvedConfig, streams iostream.Streams, cfg *config.ProjectConfig) {
 	client, err := authprompt.ResolveCircleCIClient(rc, nil)
 	if err != nil {
+		if !errors.Is(err, authprompt.ErrNeedsAuth) {
+			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect org ID: %v", err)))
+		}
 		return
 	}
 	orgID, err := orgPicker(ctx, client)()
@@ -540,9 +543,13 @@ hook config files.`,
 				streams.ErrPrintf("Detected repository: %s\n", ui.Bold(fmt.Sprintf("%s/%s", org, repo)))
 			}
 
+			rc, rcErr := config.Resolve("", "", insecureStorage)
+			if rcErr != nil {
+				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not load config: %v", rcErr)))
+			}
+
 			// Step 2: Validate command detection
 			if !skipValidate {
-				rc, _ := config.Resolve("", "", insecureStorage)
 				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
 				commands, detectErr := validate.DetectCommands(ctx, claude, workDir)
 				if detectErr != nil {
@@ -564,12 +571,7 @@ hook config files.`,
 
 			// Step 3: CircleCI org ID
 			if !skipOrgID && cfg.OrgID == "" {
-				rc, err := config.Resolve("", "", insecureStorage)
-				if err != nil {
-					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect org ID: %v", err)))
-				} else {
-					detectOrgID(ctx, rc, streams, cfg)
-				}
+				detectOrgID(ctx, rc, streams, cfg)
 			}
 
 			// Save config
@@ -586,7 +588,7 @@ hook config files.`,
 				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
 			}
 
-			// Step 3: Write hook config files for supported agents.
+			// Step 4: Write hook config files for supported agents.
 			if !skipHooks {
 				if err := writeAllHookFiles(workDir, cfg.Commands, streams); err != nil {
 					return err

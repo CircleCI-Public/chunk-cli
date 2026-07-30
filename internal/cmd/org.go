@@ -1,11 +1,11 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
@@ -38,11 +38,7 @@ func newOrgListCmd() *cobra.Command {
 
 			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
 			if err != nil {
-				return &userError{
-					msg:        "CircleCI authentication required.",
-					suggestion: suggestionCircleCIAuth,
-					err:        fmt.Errorf("resolve circleci client: %w", err),
-				}
+				return err
 			}
 
 			collabs, err := client.ListCollaborations(cmd.Context())
@@ -55,9 +51,10 @@ func newOrgListCmd() *cobra.Command {
 			}
 
 			if jsonOut {
-				enc := json.NewEncoder(io.Out)
-				enc.SetIndent("", "  ")
-				return enc.Encode(collabs)
+				if collabs == nil {
+					collabs = []circleci.Collaboration{}
+				}
+				return iostream.PrintJSON(io.Out, collabs)
 			}
 
 			if len(collabs) == 0 {

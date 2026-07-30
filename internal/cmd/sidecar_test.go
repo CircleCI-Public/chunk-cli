@@ -70,7 +70,7 @@ func TestResolveOrgID_FlagTakesPrecedence(t *testing.T) {
 	assert.Assert(t, !called, "pickOrg should not be called when flag is set")
 }
 
-func TestResolveOrgID_ConfigOrgID(t *testing.T) {
+func TestResolveOrgID_EnvVar(t *testing.T) {
 	t.Setenv(config.EnvCircleCIOrgID, "env-org")
 	called := false
 	got, err := resolveOrgID("", t.TempDir(), func() (string, error) {
@@ -79,7 +79,21 @@ func TestResolveOrgID_ConfigOrgID(t *testing.T) {
 	})
 	assert.NilError(t, err)
 	assert.Equal(t, got, "env-org")
-	assert.Assert(t, !called, "pickOrg should not be called when config has org ID")
+	assert.Assert(t, !called, "pickOrg should not be called when env var is set")
+}
+
+func TestResolveOrgID_ProjectConfig(t *testing.T) {
+	t.Setenv(config.EnvCircleCIOrgID, "")
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{OrgID: "config-org"}))
+	called := false
+	got, err := resolveOrgID("", dir, func() (string, error) {
+		called = true
+		return "picker-org", nil
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, got, "config-org")
+	assert.Assert(t, !called, "pickOrg should not be called when project config has org ID")
 }
 
 func TestResolveOrgID_FallsBackToPickOrg(t *testing.T) {
