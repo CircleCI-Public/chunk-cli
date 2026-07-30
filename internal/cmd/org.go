@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
@@ -15,11 +16,61 @@ func newOrgCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                "org",
 		Short:              "Manage CircleCI organizations",
-		Hidden:             true,
 		RunE:               groupRunE,
 		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	}
 	cmd.AddCommand(newOrgCreateCmd())
+	cmd.AddCommand(newOrgListCmd())
+	return cmd
+}
+
+func newOrgListCmd() *cobra.Command {
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List CircleCI organizations",
+		Long:  "List CircleCI organizations the authenticated user belongs to.\n\nUseful for finding your org ID to pass as --org-id or store with 'chunk config set orgID <id>'.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
+			rc, _ := config.Resolve("", "", insecureStorage)
+			io := iostream.FromCmd(cmd)
+
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			if err != nil {
+				return err
+			}
+
+			collabs, err := client.ListCollaborations(cmd.Context())
+			if err != nil {
+				return &userError{
+					msg:        "Could not list organizations.",
+					suggestion: "Check your network connection.",
+					err:        fmt.Errorf("list collaborations: %w", err),
+				}
+			}
+
+			if jsonOut {
+				if collabs == nil {
+					collabs = []circleci.Collaboration{}
+				}
+				return iostream.PrintJSON(io.Out, collabs)
+			}
+
+			if len(collabs) == 0 {
+				io.ErrPrintln(ui.Warning("No organizations found."))
+				return nil
+			}
+
+			io.Printf("%-40s  %s\n", "ID", "NAME")
+			for _, c := range collabs {
+				io.Printf("%-40s  %s/%s\n", c.ID, c.VcsType, c.Name)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 

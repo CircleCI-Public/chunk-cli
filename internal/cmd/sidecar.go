@@ -108,12 +108,22 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 				err:        fmt.Errorf("no organizations found for current user"),
 			}
 		}
+		if len(collabs) == 1 {
+			return collabs[0].ID, nil
+		}
 		labels := make([]string, len(collabs))
 		for i, c := range collabs {
 			labels[i] = fmt.Sprintf("%s/%s", c.VcsType, c.Name)
 		}
 		idx, err := tui.SelectFromList("Select an organization:", labels)
 		if err != nil {
+			if errors.Is(err, tui.ErrNoTTY) {
+				return "", &userError{
+					msg:        "No interactive terminal available to select an organization.",
+					suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
+					err:        err,
+				}
+			}
 			return "", &userError{msg: "Could not select an organization.", suggestion: "Pass --org-id instead.", err: err}
 		}
 		return collabs[idx].ID, nil
