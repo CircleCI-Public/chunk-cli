@@ -319,7 +319,8 @@ func TestRunRemote(t *testing.T) {
 
 		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "install"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] install"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] test"), "got: %s", statusBuf.String())
 		assert.Equal(t, execCount, 2)
 	})
 
@@ -444,7 +445,7 @@ func TestRunRemoteSSH(t *testing.T) {
 		var statusBuf bytes.Buffer
 		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", t.TempDir(), testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "hello from remote"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "test"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] test"), "got: %s", statusBuf.String())
 		assert.Equal(t, len(sshSrv.Commands()), 1)
 	})
 
@@ -511,7 +512,7 @@ func TestRunRemoteInline(t *testing.T) {
 
 		assert.NilError(t, RunRemoteInline(context.Background(), execFn, "custom", "echo hello", "/workspace/repo", testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "inline output"), "got: %s", out.String())
-		assert.Assert(t, strings.Contains(statusBuf.String(), "custom"), "got: %s", statusBuf.String())
+		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] custom"), "got: %s", statusBuf.String())
 		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/workspace/repo' &&"), "got: %s", capturedScript)
 	})
 

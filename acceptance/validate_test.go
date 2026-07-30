@@ -594,10 +594,9 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 	}, env, workDir, hookStdin(t, "test-session-setup-err", false))
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure; stderr: %s", result.Stderr)
-	// The hook output (including the setup error) must be flushed to stderr,
-	// not silently swallowed when hookBuf is non-empty on error exit.
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk validate"),
-		"expected hook output in stderr; got: %s", result.Stderr)
+	// Sync status messages must reach stderr — proves setup output is not silently dropped.
+	assert.Assert(t, strings.Contains(result.Stderr, "Assessing"),
+		"expected sync attempt in stderr; got: %s", result.Stderr)
 }
 
 // gitCurrentBranch returns the current branch of the git repo at dir, or ""

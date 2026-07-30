@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -275,19 +274,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// In hook context, buffer all detailed output. On success we discard it
-	// and show only a brief summary; on failure we flush the full detail.
-	var hookBuf *bytes.Buffer
-	if hook != nil {
-		hookBuf = new(bytes.Buffer)
-		streams = iostream.Streams{Out: hookBuf, Err: hookBuf}
-	}
 	statusFn = newStatusFunc(streams)
 
 	statusFn(iostream.LevelStep, "chunk validate")
 
-	// Wrap setup + run in a closure so all error paths reach the hookBuf
-	// flush below, not just errors from runValidate itself.
 	execErr := func() error {
 		freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
 		if err != nil {
@@ -302,12 +292,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		}
 		return runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
 	}()
-	if hook == nil {
-		if execErr != nil {
-			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", validate.FormatDuration(time.Since(start))))
-		} else {
-			statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", validate.FormatDuration(time.Since(start))))
-		}
+	if execErr != nil {
+		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", validate.FormatDuration(time.Since(start))))
+	} else if hook == nil {
+		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", validate.FormatDuration(time.Since(start))))
 	}
 
 	if hook != nil {
@@ -316,9 +304,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			maxAttempts = validate.DefaultMaxAttempts
 		}
 		hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
-		_, _ = io.Copy(cmd.ErrOrStderr(), hookBuf)
 		if hookErr == nil && execErr == nil {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", ui.ErrSuccess(fmt.Sprintf("chunk validate passed (%s)", validate.FormatDuration(time.Since(start)))))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", validate.FormatDuration(time.Since(start)))))
 			return nil
 		}
 		return hookErr
