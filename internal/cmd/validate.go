@@ -339,7 +339,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
 	if execErr == nil && resultCache != nil {
-		_ = resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()})
+		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
+			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
+		}
 	}
 	return finishValidate(cmd, hook, execErr, start, opts.sidecarID, cfg, statusFn, streams)
 }
@@ -811,10 +813,10 @@ func validateCacheDir(workDir string) (string, error) {
 	return filepath.Join(projectDir, "validate-cache"), nil
 }
 
-// hookResultCache returns a ResultCache and cache key for hook-mode runs, or
+// hookResultCache returns a cache and cache key for hook-mode runs, or
 // (nil, "") when caching does not apply: non-hook runs, inline commands, or a
 // working tree whose state could not be fingerprinted.
-func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.Worktree, commandName string, cfg *config.ProjectConfig, target string) (validate.ResultCache, string) {
+func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.Worktree, commandName string, cfg *config.ProjectConfig, target string) (*filecache.FileCache[validate.CachedResult], string) {
 	if hook == nil || inlineCmd != "" {
 		return nil, ""
 	}
@@ -831,7 +833,7 @@ func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.
 	if !ok {
 		return nil, ""
 	}
-	return filecache.FileCache[validate.CachedResult]{Dir: cacheDir}, key
+	return &filecache.FileCache[validate.CachedResult]{Dir: cacheDir}, key
 }
 
 // execTarget describes where this run's commands will execute, for inclusion in

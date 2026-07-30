@@ -12,12 +12,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 )
 
-// ResultCache is a read/write store for validate run outcomes.
-type ResultCache interface {
-	Get(key string) (CachedResult, bool)
-	Put(key string, r CachedResult) error
-}
-
 // CachedResult records the timestamp of a successful validate run. Only
 // successful runs are cached; failures are never stored so the agent always
 // retries after a fix, even when the working tree has not changed.
