@@ -321,18 +321,34 @@ func newSidecarExecCmd() *cobra.Command {
 			allArgs := make([]string, 0, len(execArgs)+len(args))
 			allArgs = append(allArgs, execArgs...)
 			allArgs = append(allArgs, args...)
-			resp, err := sidecar.Exec(cmd.Context(), client, sidecarID, command, allArgs)
+			// Raw bytes, not lines: writing the command's own bytes through
+			// unchanged is what lets carriage-return redraws and ANSI colour
+			// render as the remote terminal intended.
+			onOutput := func(stream string, data []byte) {
+				w := io.Out
+				if stream == circleci.StreamStderr {
+					w = io.Err
+				}
+				_, _ = w.Write(data)
+			}
+			resp, err := sidecar.Exec(cmd.Context(), client, sidecarID, command, allArgs, onOutput)
 			if err != nil {
 				if err := notAuthorized("execute commands", err); err != nil {
 					return err
 				}
+				if err := outdatedSidecarAPI(err); err != nil {
+					return err
+				}
 				return err
 			}
-			if resp.Stdout != "" {
-				_, _ = fmt.Fprint(io.Out, resp.Stdout)
-			}
-			if resp.Stderr != "" {
-				_, _ = fmt.Fprint(io.Err, resp.Stderr)
+			// A remote command that failed must fail locally too, otherwise
+			// scripts and CI cannot tell success from failure. The command's own
+			// output has already been written, so exit silently with its code.
+			if resp.ExitCode != 0 {
+				if resp.Signal != "" {
+					io.ErrPrintf("Command killed by signal: %s\n", resp.Signal)
+				}
+				return &silentExitError{code: resp.ExitCode}
 			}
 			return nil
 		},

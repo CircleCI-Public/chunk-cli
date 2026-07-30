@@ -19,6 +19,9 @@ type ExecResponse struct {
 	Stdout    string `json:"stdout"`
 	Stderr    string `json:"stderr"`
 	ExitCode  int    `json:"exit_code"`
+	// Signal is the symbolic name of the signal that killed the command, empty
+	// if it exited normally. When set, ExitCode is 128+signum.
+	Signal string `json:"signal,omitempty"`
 }
 
 type AddSSHKeyRequest struct {

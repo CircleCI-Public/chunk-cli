@@ -125,6 +125,30 @@ func TestCallCustomAuthHeader(t *testing.T) {
 	}
 }
 
+func TestHeaderOverridesDefault(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Client defaults to "application/json"; a per-request Header must
+		// replace it, not append, or Header.Get on the server still sees JSON.
+		if got := r.Header.Values("Accept"); len(got) != 1 || got[0] != "text/event-stream" {
+			t.Errorf("expected exactly one Accept of text/event-stream, got %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{BaseURL: srv.URL})
+
+	status, err := c.Call(context.Background(), hc.NewRequest("GET", "/",
+		hc.Header("Accept", "text/event-stream"),
+	))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("expected 200, got %d", status)
+	}
+}
+
 func TestRouteParams(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v2/sidecar/instances/sb-42/exec" {
