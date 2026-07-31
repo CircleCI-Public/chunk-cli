@@ -32,7 +32,7 @@ type Event struct {
 	SidecarName string    `json:"sidecar_name,omitempty"`
 	Branch      string    `json:"branch,omitempty"`
 	Op          Op        `json:"op"`
-	Level       string    `json:"level"` // "step", "info", "warn", "done"
+	Level       string    `json:"level"` // "step", "info", "warn", "done", "error"
 	Msg         string    `json:"msg"`
 }
 
@@ -46,18 +46,58 @@ const (
 	levelError = "error"
 )
 
+// maxLogLines triggers a rotation; trimToLines is how many are kept.
+const (
+	maxLogLines = 2000
+	trimToLines = 500
+)
+
 // Log appends events to a JSONL file in a project data directory.
 type Log struct {
 	mu   sync.Mutex
 	path string
 }
 
-// Open opens (or creates) the event log in dataDir.
+// Open opens (or creates) the event log in dataDir, trimming if too large.
 func Open(dataDir string) (*Log, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
-	return &Log{path: filepath.Join(dataDir, logFile)}, nil
+	l := &Log{path: filepath.Join(dataDir, logFile)}
+	trimIfNeeded(l.path)
+	return l, nil
+}
+
+// trimIfNeeded rewrites the log to its last trimToLines lines when it exceeds
+// maxLogLines. Atomic write-then-rename; errors are silently ignored.
+func trimIfNeeded(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	var lines [][]byte
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		b := sc.Bytes()
+		cp := make([]byte, len(b))
+		copy(cp, b)
+		lines = append(lines, cp)
+	}
+	_ = f.Close()
+	if len(lines) <= maxLogLines {
+		return
+	}
+	lines = lines[len(lines)-trimToLines:]
+	var buf bytes.Buffer
+	for _, l := range lines {
+		buf.Write(l)
+		buf.WriteByte('\n')
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, path)
 }
 
 // Append writes a single event to the log.
