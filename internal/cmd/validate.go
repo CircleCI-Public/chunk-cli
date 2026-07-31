@@ -235,6 +235,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			msg:        "No validate commands configured.",
 			suggestion: suggestionValidateNotConfigured,
 			errMsg:     "no validate commands configured",
+			hideDetail: true,
 		}
 	}
 
@@ -700,13 +701,14 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 }
 
 const suggestionValidateNotConfigured = "Run 'chunk init' to detect and configure validation commands.\n" +
-	"This also installs the chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar'."
+	"This also installs the chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
 
 func mapValidateError(err error) error {
 	if errors.Is(err, validate.ErrNotConfigured) {
 		return &userError{
 			msg:        "No validate commands configured.",
 			suggestion: suggestionValidateNotConfigured,
+			hideDetail: true,
 			err:        err,
 		}
 	}
