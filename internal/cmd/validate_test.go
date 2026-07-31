@@ -167,6 +167,26 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	assert.Equal(t, execReq.Env["BAZ"], "qux")
 }
 
+func TestValidateNoConfigShowsSkillHint(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--project", dir})
+	err := root.Execute()
+
+	assert.Assert(t, err != nil, "expected error when no validate commands configured")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T: %v", err, err)
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk init"),
+		"expected suggestion to mention 'chunk init', got: %q", ue.Suggestion())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk-sidecar"),
+		"expected suggestion to mention chunk-sidecar skill, got: %q", ue.Suggestion())
+}
+
 func TestValidateEnvFlagBadValue(t *testing.T) {
 	isolateConfig(t)
 	dir := t.TempDir()
