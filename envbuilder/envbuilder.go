@@ -748,6 +748,13 @@ func detectStack(dir string) (string, error) {
 		}
 	}
 
+	// tsconfig.json is a definitive TypeScript indicator: any project that has
+	// one is TypeScript, even if .js config files outnumber .ts source files.
+	// Add a bonus so it outweighs package.json alone in the indicator phase.
+	if fileExists(dir, "tsconfig.json") {
+		scores[stackTypeScript] += 10
+	}
+
 	// .NET solution and project files have project-specific names so they cannot
 	// appear in the fixed indicatorFiles map.  Use glob matching in the root
 	// directory and give them the same weight as other indicator files.

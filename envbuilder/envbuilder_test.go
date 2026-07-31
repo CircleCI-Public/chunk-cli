@@ -139,11 +139,25 @@ func TestDetectStack(t *testing.T) {
 			want:  stackPython,
 		},
 		{
-			// tsconfig.json scores 10 for typescript; .ts source files add 1 each
-			// package.json scores 10 for javascript — adding a .ts file breaks the tie
-			name:  "typescript beats javascript with source file tiebreak",
-			files: map[string]string{"tsconfig.json": "{}", "package.json": "{}", "index.ts": ""},
+			// tsconfig.json scores 20 (10 indicator + 10 bonus), package.json scores 10
+			name:  "typescript beats javascript when tsconfig.json present",
+			files: map[string]string{"tsconfig.json": "{}", "package.json": "{}"},
 			want:  stackTypeScript,
+		},
+		{
+			// Simulates a pnpm workspace (e.g. compass) with more .js config files
+			// than .ts source files — tsconfig.json bonus ensures TypeScript wins.
+			name: "typescript wins even when js config files outnumber ts source files",
+			files: map[string]string{
+				"tsconfig.json":         "{}",
+				"package.json":          "{}",
+				"scripts/build.js":      "",
+				"scripts/deploy.js":     "",
+				".storybook/main.js":    "",
+				".storybook/preview.js": "",
+				"src/index.ts":          "",
+			},
+			want: stackTypeScript,
 		},
 		{
 			name: "source extensions tiebreak",
