@@ -139,11 +139,25 @@ func TestDetectStack(t *testing.T) {
 			want:  stackPython,
 		},
 		{
-			// tsconfig.json scores 10 for typescript; .ts source files add 1 each
-			// package.json scores 10 for javascript — adding a .ts file breaks the tie
-			name:  "typescript beats javascript with source file tiebreak",
-			files: map[string]string{"tsconfig.json": "{}", "package.json": "{}", "index.ts": ""},
+			// tsconfig.json scores 20 (10 indicator + 10 bonus), package.json scores 10
+			name:  "typescript beats javascript when tsconfig.json present",
+			files: map[string]string{"tsconfig.json": "{}", "package.json": "{}"},
 			want:  stackTypeScript,
+		},
+		{
+			// Simulates a pnpm workspace (e.g. compass) with more .js config files
+			// than .ts source files — tsconfig.json bonus ensures TypeScript wins.
+			name: "typescript wins even when js config files outnumber ts source files",
+			files: map[string]string{
+				"tsconfig.json":         "{}",
+				"package.json":          "{}",
+				"scripts/build.js":      "",
+				"scripts/deploy.js":     "",
+				".storybook/main.js":    "",
+				".storybook/preview.js": "",
+				"src/index.ts":          "",
+			},
+			want: stackTypeScript,
 		},
 		{
 			name: "source extensions tiebreak",
@@ -499,6 +513,47 @@ func TestDetectNodeTestCommand(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		assert.Equal(t, detectNodeTestCommand(dir, "yarn"), "yarn test")
+	})
+}
+
+func TestDetectPlaywrightInstallCmd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("@playwright/test in devDependencies uses pnpm", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"devDependencies":{"@playwright/test":"1.56.0"}}`)
+		writeFile(t, dir, "pnpm-lock.yaml", "")
+		assert.Equal(t, "pnpm exec playwright install --with-deps", detectPlaywrightInstallCmd(dir))
+	})
+
+	t.Run("playwright in devDependencies uses yarn", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"devDependencies":{"playwright":"1.56.0"}}`)
+		writeFile(t, dir, "yarn.lock", "")
+		assert.Equal(t, "yarn exec playwright install --with-deps", detectPlaywrightInstallCmd(dir))
+	})
+
+	t.Run("playwright.config.ts without package.json dep uses npx", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"devDependencies":{}}`)
+		writeFile(t, dir, "playwright.config.ts", "")
+		assert.Equal(t, "npx playwright install --with-deps", detectPlaywrightInstallCmd(dir))
+	})
+
+	t.Run("no playwright returns empty string", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"devDependencies":{"vitest":"2.0.0"}}`)
+		assert.Equal(t, "", detectPlaywrightInstallCmd(dir))
+	})
+
+	t.Run("no package.json returns empty string", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		assert.Equal(t, "", detectPlaywrightInstallCmd(dir))
 	})
 }
 

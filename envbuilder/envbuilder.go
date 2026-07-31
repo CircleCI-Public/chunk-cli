@@ -748,6 +748,13 @@ func detectStack(dir string) (string, error) {
 		}
 	}
 
+	// tsconfig.json is a definitive TypeScript indicator: any project that has
+	// one is TypeScript, even if .js config files outnumber .ts source files.
+	// Add a bonus so it outweighs package.json alone in the indicator phase.
+	if fileExists(dir, "tsconfig.json") {
+		scores[stackTypeScript] += 10
+	}
+
 	// .NET solution and project files have project-specific names so they cannot
 	// appear in the fixed indicatorFiles map.  Use glob matching in the root
 	// directory and give them the same weight as other indicator files.
@@ -1696,6 +1703,70 @@ func findWorkspaceWithTest(dir, rootName string, patterns []string) string {
 	return ""
 }
 
+// detectPlaywrightInstallCmd returns the command to download Playwright browsers
+// and their OS-level dependencies if the project uses Playwright. Returns ""
+// when Playwright is not detected.
+func detectPlaywrightInstallCmd(dir string) string {
+	pkgPath := filepath.Join(dir, "package.json")
+	data, err := os.ReadFile(pkgPath)
+	if err != nil {
+		return ""
+	}
+	var pkg struct {
+		DevDeps      map[string]string `json:"devDependencies"`
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	if json.Unmarshal(data, &pkg) != nil {
+		return ""
+	}
+	hasPlaywright := false
+	for _, p := range []string{"@playwright/test", "playwright"} {
+		if _, ok := pkg.DevDeps[p]; ok {
+			hasPlaywright = true
+			break
+		}
+		if _, ok := pkg.Dependencies[p]; ok {
+			hasPlaywright = true
+			break
+		}
+	}
+	if !hasPlaywright {
+		if !fileExists(dir, "playwright.config.ts") && !fileExists(dir, "playwright.config.js") {
+			return ""
+		}
+	}
+	switch {
+	case fileExists(dir, "pnpm-lock.yaml"):
+		return "pnpm exec playwright install --with-deps"
+	case fileExists(dir, "yarn.lock"):
+		return "yarn exec playwright install --with-deps"
+	default:
+		return "npx playwright install --with-deps"
+	}
+}
+
+// pnpmInstallCmd returns the shell command to install pnpm, pinning to the
+// version declared in package.json's "packageManager" field when present.
+func pnpmInstallCmd(dir string) string {
+	pkgPath := filepath.Join(dir, "package.json")
+	data, err := os.ReadFile(pkgPath)
+	if err == nil {
+		var pkg struct {
+			PackageManager string `json:"packageManager"`
+		}
+		if jsonErr := json.Unmarshal(data, &pkg); jsonErr == nil {
+			// "packageManager" is e.g. "pnpm@9.15.0" or "pnpm@9.15.0+sha512.abc"
+			if after, ok := strings.CutPrefix(pkg.PackageManager, "pnpm@"); ok {
+				version, _, _ := strings.Cut(after, "+")
+				if v := strings.TrimSpace(version); v != "" {
+					return "sudo npm install -g pnpm@" + v
+				}
+			}
+		}
+	}
+	return "sudo npm install -g pnpm"
+}
+
 // detectNodeMaxVersion reads package.json and returns the maximum Node.js major
 // version allowed by the "engines.node" field. Returns -1 if absent or unparseable.
 func detectNodeMaxVersion(dir string) int {
@@ -1943,6 +2014,8 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 		if dep == "node" {
 			major := strings.SplitN(imageVersion, ".", 2)[0]
 			cmd = nodeInstallCmd(major)
+		} else if dep == "pnpm" {
+			cmd = pnpmInstallCmd(dir)
 		} else if c, ok := extraDepInstalls[dep]; ok {
 			cmd = c
 			if strings.HasPrefix(image, cimgPrefix) {
@@ -1961,6 +2034,9 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 	}
 	if install != "" && install != stackUnknown {
 		setup = append(setup, Step{Name: "install", Command: install})
+	}
+	if pwCmd := detectPlaywrightInstallCmd(dir); pwCmd != "" {
+		setup = append(setup, Step{Name: "playwright-install", Command: pwCmd})
 	}
 	if test != "" && test != stackUnknown {
 		setup = append(setup, Step{Name: "test", Command: test})
