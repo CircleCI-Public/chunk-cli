@@ -460,6 +460,45 @@ func TestEnsureGitignoreEntriesIdempotent(t *testing.T) {
 	assert.Equal(t, string(first), string(second))
 }
 
+func TestPrintInitSummaryWithCommands(t *testing.T) {
+	ui.SetColorEnabled(false)
+	defer ui.SetColorEnabled(true)
+
+	commands := []config.Command{
+		{Name: "test", Run: "task test"},
+		{Name: "lint", Run: "task lint"},
+	}
+	streams, _, errOut := testStreams()
+	printInitSummary(commands, streams)
+
+	out := errOut.String()
+	assert.Assert(t, strings.Contains(out, "Validation commands:"), "missing section header")
+	assert.Assert(t, strings.Contains(out, "test"), "missing test command name")
+	assert.Assert(t, strings.Contains(out, "task test"), "missing test command run")
+	assert.Assert(t, strings.Contains(out, "lint"), "missing lint command name")
+	assert.Assert(t, strings.Contains(out, "task lint"), "missing lint command run")
+	assert.Assert(t, strings.Contains(out, ".chunk/config.json"), "missing config path")
+	assert.Assert(t, strings.Contains(out, "chunk validate"), "missing validate hint")
+	assert.Assert(t, strings.Contains(out, "chunk validate --remote"), "missing remote hint")
+	assert.Assert(t, !strings.Contains(out, "CircleCI"), "should not mention CircleCI in init output")
+	assert.Assert(t, strings.Contains(out, "chunk validate --remote test"), "missing per-command remote hint")
+	assert.Assert(t, strings.Contains(out, "chunk validate --remote lint"), "missing per-command remote hint")
+	assert.Assert(t, !strings.Contains(out, "<name>"), "should not show placeholder when commands are known")
+}
+
+func TestPrintInitSummaryNoCommands(t *testing.T) {
+	ui.SetColorEnabled(false)
+	defer ui.SetColorEnabled(true)
+
+	streams, _, errOut := testStreams()
+	printInitSummary(nil, streams)
+
+	out := errOut.String()
+	assert.Assert(t, !strings.Contains(out, "Validation commands:"), "should not show command table when none configured")
+	assert.Assert(t, strings.Contains(out, ".chunk/config.json"), "missing config path")
+	assert.Assert(t, strings.Contains(out, "chunk validate"), "missing validate hint")
+}
+
 func TestInstallCompletionBashWritesRCFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)

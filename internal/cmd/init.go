@@ -447,6 +447,32 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 	return nil
 }
 
+// printInitSummary prints the discovered validation commands and next-step hints.
+func printInitSummary(commands []config.Command, streams iostream.Streams) {
+	if len(commands) > 0 {
+		entries := make([]ui.CommandEntry, len(commands))
+		for i, c := range commands {
+			entries[i] = ui.CommandEntry{Name: c.Name, Run: c.Run}
+		}
+		streams.ErrPrintln("")
+		streams.ErrPrintln(ui.Bold("Validation commands:"))
+		streams.ErrPrintln(ui.CommandList(entries))
+	}
+	streams.ErrPrintln("")
+	streams.ErrPrintf("Config: %s\n", ui.Bold(".chunk/config.json"))
+	streams.ErrPrintf("  Edit to add, remove, or adjust commands.\n")
+	streams.ErrPrintln("")
+	streams.ErrPrintln(ui.Bold("Run validation:"))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("run all commands locally"))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate --remote"), ui.Dim("run all commands on a remote sidecar"))
+	for _, c := range commands {
+		if c.Name == "install" {
+			continue
+		}
+		streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate --remote "+c.Name), ui.Dim("run "+c.Name+" remotely"))
+	}
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites bool
 	var projectDir string
@@ -583,6 +609,7 @@ hook config files.`,
 			}
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
+			printInitSummary(cfg.Commands, streams)
 			return nil
 		},
 	}
