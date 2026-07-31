@@ -502,6 +502,47 @@ func TestDetectNodeTestCommand(t *testing.T) {
 	})
 }
 
+func TestDetectPlaywrightInstallCmd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("@playwright/test in devDependencies uses pnpm", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"devDependencies":{"@playwright/test":"1.56.0"}}`)
+		writeFile(t, dir, "pnpm-lock.yaml", "")
+		assert.Equal(t, "pnpm exec playwright install --with-deps", detectPlaywrightInstallCmd(dir))
+	})
+
+	t.Run("playwright in devDependencies uses yarn", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"devDependencies":{"playwright":"1.56.0"}}`)
+		writeFile(t, dir, "yarn.lock", "")
+		assert.Equal(t, "yarn exec playwright install --with-deps", detectPlaywrightInstallCmd(dir))
+	})
+
+	t.Run("playwright.config.ts without package.json dep uses npx", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"devDependencies":{}}`)
+		writeFile(t, dir, "playwright.config.ts", "")
+		assert.Equal(t, "npx playwright install --with-deps", detectPlaywrightInstallCmd(dir))
+	})
+
+	t.Run("no playwright returns empty string", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"devDependencies":{"vitest":"2.0.0"}}`)
+		assert.Equal(t, "", detectPlaywrightInstallCmd(dir))
+	})
+
+	t.Run("no package.json returns empty string", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		assert.Equal(t, "", detectPlaywrightInstallCmd(dir))
+	})
+}
+
 func TestDetectNodeMaxVersion(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
