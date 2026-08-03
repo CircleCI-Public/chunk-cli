@@ -19,6 +19,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -952,8 +953,9 @@ Example:
 			}
 
 			// Step 1: Detect environment (skip when cached and --force not set).
+			envCached := cfg.Environment != nil && !force
 			var env *envbuilder.Environment
-			if cfg.Environment != nil && !force {
+			if envCached {
 				streams.ErrPrintln("Using environment from .chunk/config.json")
 				env = cfg.Environment
 			} else {
@@ -973,61 +975,83 @@ Example:
 			}
 			status(iostream.LevelInfo, fmt.Sprintf("stack: %s", env.Stack))
 
-			// Step 2: Resolve or create sidecar.
-			if sidecarID == "" {
-				var resolveErr error
-				sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, status, streams)
-				if resolveErr != nil {
-					return resolveErr
+			// Steps 2-6: run in a closure so outcome can be captured for telemetry.
+			runErr := func() error {
+				// Step 2: Resolve or create sidecar.
+				if sidecarID == "" {
+					var resolveErr error
+					sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, status, streams)
+					if resolveErr != nil {
+						return resolveErr
+					}
 				}
-			}
 
-			// Step 3: Ensure SSH key exists (generate if missing and no explicit key given).
-			if err := sidecarSetupEnsureSSHKey(identityFile, status); err != nil {
-				return err
-			}
-
-			// Step 4: Sync files to sidecar.
-			if !skipSync {
-				if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, true, dir, status); err != nil {
+				// Step 3: Ensure SSH key exists (generate if missing and no explicit key given).
+				if err := sidecarSetupEnsureSSHKey(identityFile, status); err != nil {
 					return err
 				}
-			}
 
-			// Step 5: Resolve env vars for SSH execution.
-			envVars, err := resolveEnvVars(cmd.Context(), dir, envFile, envVarsFlag)
-			if err != nil {
-				return err
-			}
+				// Step 4: Sync files to sidecar.
+				if !skipSync {
+					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, true, dir, status); err != nil {
+						return err
+					}
+				}
 
-			// Step 6: Run setup steps over SSH.
-			opts := sidecarRunSetupOpts{
-				client:       client,
-				sidecarID:    sidecarID,
-				identityFile: identityFile,
-				authSock:     authSock,
-				env:          env,
-				envVars:      envVars,
-				streams:      streams,
-				status:       status,
-			}
-			if err := sidecarSetupRunSetup(cmd.Context(), opts); err != nil {
-				return err
-			}
+				// Step 5: Resolve env vars for SSH execution.
+				envVars, err := resolveEnvVars(cmd.Context(), dir, envFile, envVarsFlag)
+				if err != nil {
+					return err
+				}
 
-			if cfg.MarkRemoteCommandsForSidecarSetup() {
-				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
-					streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
-				} else {
-					streams.ErrPrintf("Marked install and gate commands as remote in .chunk/config.json\n")
+				// Step 6: Run setup steps over SSH.
+				opts := sidecarRunSetupOpts{
+					client:       client,
+					sidecarID:    sidecarID,
+					identityFile: identityFile,
+					authSock:     authSock,
+					env:          env,
+					envVars:      envVars,
+					streams:      streams,
+					status:       status,
+				}
+				if err := sidecarSetupRunSetup(cmd.Context(), opts); err != nil {
+					return err
+				}
+
+				if cfg.MarkRemoteCommandsForSidecarSetup() {
+					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
+						streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
+					} else {
+						streams.ErrPrintf("Marked install and gate commands as remote in .chunk/config.json\n")
+					}
+				}
+
+				streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it:\n")
+				streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n")
+				streams.ErrPrintf("  chunk sidecar snapshot list              # list snapshot IDs for your org\n\n")
+
+				return nil
+			}()
+
+			outcome := "success"
+			if runErr != nil {
+				outcome = "failure"
+			}
+			setupStepCount := 0
+			for _, s := range env.Setup {
+				if s.Name != "test" {
+					setupStepCount++
 				}
 			}
+			_ = telemetry.FromContext(cmd.Context()).Track("chunk_sidecar_setup", map[string]any{
+				"stack":       env.Stack,
+				"setup_steps": setupStepCount,
+				"env_cached":  envCached,
+				"outcome":     outcome,
+			})
 
-			streams.ErrPrintf("\nSetup complete. Verify the sidecar is working correctly, then snapshot it:\n")
-			streams.ErrPrintf("  chunk sidecar snapshot create --name <snapshot-name>\n")
-			streams.ErrPrintf("  chunk sidecar snapshot list              # list snapshot IDs for your org\n\n")
-
-			return nil
+			return runErr
 		},
 	}
 
