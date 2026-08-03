@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -115,6 +116,35 @@ func TestRecordForSubcommands_TracksCommandInvocation(t *testing.T) {
 	assert.Equal(t, fake.tracks[0].Event, "chunk_command_invocation")
 	assert.Equal(t, fake.tracks[0].Properties["command"], "chunk show")
 	assert.Equal(t, fake.tracks[0].Properties["flags"], "json")
+	assert.Equal(t, fake.tracks[0].Properties["success"], true)
+	_, hasErrType := fake.tracks[0].Properties["error_type"]
+	assert.Assert(t, !hasErrType)
+}
+
+func TestRecordForSubcommands_TracksErrorOnFailure(t *testing.T) {
+	fake := &fakeDestination{}
+	s, err := NewSender(Config{TestDestination: fake})
+	assert.NilError(t, err)
+
+	root := &cobra.Command{Use: "chunk"}
+	child := &cobra.Command{
+		Use: "fail",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return errors.New("something went wrong")
+		},
+		SilenceErrors: true,
+		SilenceUsage:  true,
+	}
+	root.AddCommand(child)
+	RecordForSubcommands(root)
+
+	root.SetContext(WithSender(context.Background(), s))
+	root.SetArgs([]string{"fail"})
+	_ = root.Execute()
+
+	assert.Equal(t, len(fake.tracks), 1)
+	assert.Equal(t, fake.tracks[0].Properties["success"], false)
+	assert.Equal(t, fake.tracks[0].Properties["error_type"], "*errors.errorString")
 }
 
 func TestRecordForSubcommands_SkipsDisabledCommand(t *testing.T) {
