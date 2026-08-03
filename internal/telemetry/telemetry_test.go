@@ -145,6 +145,7 @@ func TestRecordForSubcommands_TracksErrorOnFailure(t *testing.T) {
 	assert.Equal(t, len(fake.tracks), 1)
 	assert.Equal(t, fake.tracks[0].Properties["success"], false)
 	assert.Equal(t, fake.tracks[0].Properties["error_type"], "*errors.errorString")
+	assert.Equal(t, fake.tracks[0].Properties["error_message"], "something went wrong")
 }
 
 func TestRecordForSubcommands_SkipsDisabledCommand(t *testing.T) {

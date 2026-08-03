@@ -68,8 +68,7 @@ func record(cmd *cobra.Command) {
 // RecordNow reports a chunk_command_invocation event immediately: the full
 // command path, the sorted comma-joined names (never values) of flags the
 // user set, whether the command succeeded, and — on failure — the Go type
-// of the error (e.g. "*exec.ExitError") so failures can be grouped without
-// exposing any flag values, argument values, file paths, or other PII.
+// and message of the error.
 //
 // The event name is prefixed with "chunk_" (rather than the more generic
 // "command_invocation" that circleci-cli's own telemetry package uses)
@@ -95,6 +94,7 @@ func RecordNow(cmd *cobra.Command, err error) {
 	}
 	if err != nil {
 		props["error_type"] = fmt.Sprintf("%T", err)
+		props["error_message"] = err.Error()
 	}
 
 	_ = tc.Track("chunk_command_invocation", props)
