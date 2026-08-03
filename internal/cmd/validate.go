@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -38,6 +39,8 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 			streams.ErrPrintf("  %s\n", ui.ErrWarning(msg))
 		case iostream.LevelDone:
 			streams.ErrPrintf("  %s\n", ui.ErrSuccess(msg))
+		case iostream.LevelError:
+			streams.ErrPrintf("  %s\n", ui.ErrError(msg))
 		}
 	}
 }
@@ -189,6 +192,9 @@ func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc confi
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
 	streams := iostream.FromCmd(cmd)
 
+	// Record before git-status check so total captures setup overhead too.
+	start := time.Now()
+
 	workDir := opts.projectDir
 	if workDir == "" {
 		var err error
@@ -276,27 +282,41 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
-	if err != nil {
-		return err
-	}
+	statusFn = newStatusFunc(streams)
 
-	// Only load env vars and resolve secrets when a sidecar is actually
-	// being used — avoids parsing .env.local or hitting secrets APIs on
-	// purely local runs.
-	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
-	if err != nil {
-		return err
-	}
+	statusFn(iostream.LevelStep, "chunk validate")
 
-	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	execErr := func() error {
+		freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
+		if err != nil {
+			return err
+		}
+		// Only load env vars and resolve secrets when a sidecar is actually
+		// being used — avoids parsing .env.local or hitting secrets APIs on
+		// purely local runs.
+		envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
+		if err != nil {
+			return err
+		}
+		return runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	}()
+	if execErr != nil {
+		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
+	} else if hook == nil {
+		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
+	}
 
 	if hook != nil {
 		maxAttempts := cfg.StopHookMaxAttempts
 		if maxAttempts <= 0 {
 			maxAttempts = validate.DefaultMaxAttempts
 		}
-		return validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
+		hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
+		if hookErr == nil && execErr == nil {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", ui.FormatDuration(time.Since(start)))))
+			return nil
+		}
+		return hookErr
 	}
 	return execErr
 }

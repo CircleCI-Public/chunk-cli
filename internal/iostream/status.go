@@ -5,10 +5,11 @@ type Level int
 
 // Status levels for progress reporting.
 const (
-	LevelStep Level = iota // numbered step heading (e.g. "Step 1/3: Discovering...")
-	LevelInfo              // dim informational detail
-	LevelWarn              // yellow warning
-	LevelDone              // green success/completion
+	LevelStep  Level = iota // numbered step heading (e.g. "Step 1/3: Discovering...")
+	LevelInfo               // dim informational detail
+	LevelWarn               // yellow warning
+	LevelDone               // green success/completion
+	LevelError              // red ✗ failure
 )
 
 // StatusFunc is a callback for reporting progress from business logic.
