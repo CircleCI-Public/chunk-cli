@@ -13,8 +13,17 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
+
+func formatElapsed(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return d.Round(time.Second).String()
+}
 
 // ErrNotConfigured indicates no validate commands are configured.
 var ErrNotConfigured = errors.New("no validate commands configured")
@@ -157,11 +166,11 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 			_, _ = fmt.Fprint(streams.Err, stderr)
 		}
 		if exitCode != 0 {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, ui.FormatDuration(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, formatElapsed(elapsed)))
 			skipRemaining(status, commands[i+1:], maxWidth)
 			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
-		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, ui.FormatDuration(elapsed)))
+		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, formatElapsed(elapsed)))
 	}
 	return nil
 }
@@ -185,10 +194,10 @@ func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 		_, _ = fmt.Fprint(streams.Err, stderr)
 	}
 	if exitCode != 0 {
-		status(iostream.LevelError, fmt.Sprintf("%s  %s", name, ui.FormatDuration(elapsed)))
+		status(iostream.LevelError, fmt.Sprintf("%s  %s", name, formatElapsed(elapsed)))
 		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
 	}
-	status(iostream.LevelDone, fmt.Sprintf("%s  %s", name, ui.FormatDuration(elapsed)))
+	status(iostream.LevelDone, fmt.Sprintf("%s  %s", name, formatElapsed(elapsed)))
 	return nil
 }
 
@@ -246,17 +255,17 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  timed out after %ds  %s", nameWidth, name, timeoutSec, ui.FormatDuration(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  timed out after %ds  %s", nameWidth, name, timeoutSec, formatElapsed(elapsed)))
 			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", nameWidth, name, ui.FormatDuration(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", nameWidth, name, formatElapsed(elapsed)))
 			return fmt.Errorf("%s command failed with exit code %d", name, exitErr.ExitCode())
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
-	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", nameWidth, name, ui.FormatDuration(elapsed)))
+	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", nameWidth, name, formatElapsed(elapsed)))
 	return nil
 }
 
