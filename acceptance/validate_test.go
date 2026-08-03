@@ -595,7 +595,7 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure; stderr: %s", result.Stderr)
 	// Sync status messages must reach stderr — proves setup output is not silently dropped.
-	assert.Assert(t, strings.Contains(result.Stderr, "Assessing"),
+	assert.Assert(t, strings.Contains(result.Stderr, "Syncing workspace"),
 		"expected sync attempt in stderr; got: %s", result.Stderr)
 }
 

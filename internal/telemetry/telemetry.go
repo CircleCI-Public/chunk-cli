@@ -3,10 +3,11 @@
 // Telemetry is opt-out: it fires unless disabled via a well-known opt-out
 // environment variable or the persisted telemetry config preference (see
 // internal/config.IsTelemetry).
-// Only the command path, the names (never values) of flags the user set, a
-// per-install anonymous instance ID, the operating system, and the detected
-// AI coding agent (if any) are ever collected — no flag values, argument
-// values, file paths, or other PII.
+// Only the command path, the names (never values) of flags the user set,
+// the outcome ("success"/"failure"), the wall-clock duration, the Go type and
+// message of any error, a per-install anonymous instance ID, the operating
+// system, and the detected AI coding agent (if any) are ever collected — no
+// flag values, argument values, or other PII.
 //
 // Modeled on circleci-cli's internal/telemetry package.
 package telemetry

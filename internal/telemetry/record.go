@@ -2,8 +2,10 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -58,22 +60,24 @@ func record(cmd *cobra.Command) {
 
 	next := cmd.RunE
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		start := time.Now()
 		runErr := next(cmd, args)
-		RecordNow(cmd)
+		RecordNow(cmd, runErr, time.Since(start))
 		return runErr
 	}
 }
 
 // RecordNow reports a chunk_command_invocation event immediately: the full
-// command path and the sorted, comma-joined names (never values) of flags
-// the user explicitly set.
+// command path, the sorted comma-joined names (never values) of flags the
+// user set, the outcome ("success" or "failure"), the wall-clock duration in
+// milliseconds, and — on failure — the Go type and message of the error.
 //
 // The event name is prefixed with "chunk_" (rather than the more generic
 // "command_invocation" that circleci-cli's own telemetry package uses)
 // because both tools currently send to the same Segment write key/workspace;
 // the prefix keeps chunk-cli's events unambiguous in the event stream
 // without requiring anyone to inspect the nested Context.App.Name field.
-func RecordNow(cmd *cobra.Command) {
+func RecordNow(cmd *cobra.Command, err error, duration time.Duration) {
 	tc := FromContext(cmd.Context())
 	if tc == nil {
 		return
@@ -85,8 +89,21 @@ func RecordNow(cmd *cobra.Command) {
 	})
 	slices.Sort(flags)
 
-	_ = tc.Track("chunk_command_invocation", map[string]any{
-		"command": cmd.CommandPath(),
-		"flags":   strings.Join(flags, ","),
-	})
+	outcome := "success"
+	if err != nil {
+		outcome = "failure"
+	}
+
+	props := map[string]any{
+		"command":     cmd.CommandPath(),
+		"flags":       strings.Join(flags, ","),
+		"outcome":     outcome,
+		"duration_ms": duration.Milliseconds(),
+	}
+	if err != nil {
+		props["error_type"] = fmt.Sprintf("%T", err)
+		props["error_message"] = err.Error()
+	}
+
+	_ = tc.Track("chunk_command_invocation", props)
 }

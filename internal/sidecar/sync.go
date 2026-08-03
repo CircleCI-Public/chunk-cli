@@ -162,6 +162,8 @@ func BundleSync(ctx context.Context,
 		return fmt.Errorf("bundle sync: %w", err)
 	}
 
+	status(iostream.LevelInfo, fmt.Sprintf("Syncing workspace %s...", repoPath))
+
 	// Ensure the destination directory exists.
 	parentDir := filepath.Dir(repoPath)
 	if result, err := ExecOverSSH(ctx, session, "mkdir -p "+ShellEscape(parentDir), nil, nil); err != nil {
