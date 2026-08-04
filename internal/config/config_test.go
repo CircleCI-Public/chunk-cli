@@ -8,13 +8,21 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 )
 
 func setupTempConfig(t *testing.T) string {
 	t.Helper()
+	gokeyring.MockInit()
 	dir := t.TempDir()
 	t.Setenv(EnvXDGConfigHome, dir)
+	t.Setenv(EnvCircleToken, "")
+	t.Setenv(EnvCircleCIToken, "")
+	t.Setenv(EnvAnthropicAPIKey, "")
+	t.Setenv(EnvGitHubToken, "")
 	return dir
 }
 
@@ -337,6 +345,44 @@ func TestResolve_ModelFromConfig(t *testing.T) {
 	rc, _ := Resolve("", "", false)
 	assert.Equal(t, rc.Model, "config-model")
 	assert.Equal(t, rc.ModelSource, SourceConfigFile)
+}
+
+func TestResolve_CircleCITokenFromConfigFile(t *testing.T) {
+	dir := setupTempConfig(t)
+	assert.NilError(t, Save(UserConfig{CircleCIToken: "cci-from-file"}))
+	p, err := Path()
+	assert.NilError(t, err)
+	assert.Assert(t, strings.HasPrefix(p, filepath.Join(dir, "chunk")), "expected config path under temp XDG config dir")
+
+	rc, err := Resolve("", "", false)
+	assert.NilError(t, err)
+	assert.Assert(t, rc.CircleCIToken == "cci-from-file", "expected CircleCI token from test config file")
+	assert.Equal(t, rc.CircleCITokenSource, SourceConfigFile)
+}
+
+func TestResolveCircleCI_ConfigFile(t *testing.T) {
+	dir := setupTempConfig(t)
+	assert.NilError(t, Save(UserConfig{CircleCIToken: "cci-from-file"}))
+	p, err := Path()
+	assert.NilError(t, err)
+	assert.Assert(t, strings.HasPrefix(p, filepath.Join(dir, "chunk")), "expected config path under temp XDG config dir")
+
+	rc, err := ResolveCircleCI(false)
+	assert.NilError(t, err)
+	assert.Assert(t, rc.CircleCIToken == "cci-from-file", "expected CircleCI token from test config file")
+	assert.Equal(t, rc.CircleCITokenSource, SourceConfigFile)
+	assert.Equal(t, rc.AnthropicAPIKey, "")
+	assert.Equal(t, rc.GitHubToken, "")
+}
+
+func TestResolve_ReadsKeychainWhenInsecureStorageTrue(t *testing.T) {
+	setupTempConfig(t)
+	assert.NilError(t, keyring.Set(keyring.ServiceCircleCI("https://circleci.com"), "cci-from-keychain"))
+
+	rc, err := ResolveCircleCI(true)
+	assert.NilError(t, err)
+	assert.Equal(t, rc.CircleCIToken, "cci-from-keychain")
+	assert.Equal(t, rc.CircleCITokenSource, keyring.SourceKeychain)
 }
 
 // --- ValidConfigKeys ---
