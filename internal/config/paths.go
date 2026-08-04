@@ -71,7 +71,7 @@ func ProjectDataDir(projectRoot string) (string, error) {
 	if resolved != clean {
 		oldDir := filepath.Join(base, fmt.Sprintf("%x", sha256.Sum256([]byte(clean))))
 		if _, statErr := os.Stat(oldDir); statErr == nil {
-			if entries, readErr := os.ReadDir(newDir); readErr != nil || len(entries) == 0 {
+			if entries, readErr := os.ReadDir(newDir); readErr == nil && len(entries) == 0 {
 				// Best-effort rename; ignore errors so callers always get a usable path.
 				_ = os.Rename(oldDir, newDir)
 			}
