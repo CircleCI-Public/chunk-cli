@@ -955,28 +955,31 @@ Example:
 			// Step 1: Detect environment (skip when cached and --force not set).
 			envCached := cfg.Environment != nil && !force
 			var env *envbuilder.Environment
+			var detectionErr error
 			if envCached {
 				streams.ErrPrintln("Using environment from .chunk/config.json")
 				env = cfg.Environment
 			} else {
 				status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
-				env, err = envbuilder.DetectEnvironment(cmd.Context(), dir)
-				if err != nil {
-					return &userError{
-						msg:        "Could not detect the environment.",
-						suggestion: "Check the directory contains a supported project.",
-						err:        err,
+				env, detectionErr = envbuilder.DetectEnvironment(cmd.Context(), dir)
+				if detectionErr == nil {
+					cfg.Environment = env
+					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
+						streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
 					}
-				}
-				cfg.Environment = env
-				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
-					streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
+					status(iostream.LevelInfo, fmt.Sprintf("stack: %s", env.Stack))
 				}
 			}
-			status(iostream.LevelInfo, fmt.Sprintf("stack: %s", env.Stack))
 
 			// Steps 2-6: run in a closure so outcome can be captured for telemetry.
 			runErr := func() error {
+				if detectionErr != nil {
+					return &userError{
+						msg:        "Could not detect the environment.",
+						suggestion: "Check the directory contains a supported project.",
+						err:        detectionErr,
+					}
+				}
 				// Step 2: Resolve or create sidecar.
 				if sidecarID == "" {
 					var resolveErr error
@@ -1038,17 +1041,22 @@ Example:
 			if runErr != nil {
 				outcome = "failure"
 			}
-			setupStepCount := 0
-			for _, s := range env.Setup {
-				if s.Name != "test" {
-					setupStepCount++
+			setupStepTotal := 0
+			var stack string
+			if env != nil {
+				stack = env.Stack
+				for _, s := range env.Setup {
+					// test step runs in CI, not on the sidecar
+					if s.Name != "test" {
+						setupStepTotal++
+					}
 				}
 			}
 			_ = telemetry.FromContext(cmd.Context()).Track("chunk_sidecar_setup", map[string]any{
-				"stack":       env.Stack,
-				"setup_steps": setupStepCount,
-				"env_cached":  envCached,
-				"outcome":     outcome,
+				"stack":            stack,
+				"setup_step_total": setupStepTotal,
+				"env_cached":       envCached,
+				"outcome":          outcome,
 			})
 
 			return runErr
