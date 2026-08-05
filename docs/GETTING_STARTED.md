@@ -266,6 +266,39 @@ chunk validate --remote --env MY_VAR=value
 
 Variables from `--env` flags take precedence over those in `--env-file`. `.env.local` is gitignored by convention, so it's a safe place to store project-specific secrets.
 
+### Monitoring sidecars with chunk watch
+
+`chunk watch` opens a live TUI dashboard that shows all your sidecars and their activity in real time. Run it in any project directory while a sync or validation is in progress:
+
+```bash
+chunk watch
+```
+
+The dashboard refreshes every 5 seconds. The left pane lists your sidecars grouped by project, showing sync state and last activity time. The right pane shows the activity log — sync, validate, exec, and setup events — for the selected sidecar.
+
+```
+chunk watch  1 sidecar  main@a3f9e12                      15:04:32
+──────────────────────────────────────────────────────────────────
+ sidecars              │ activity  chunk-cli/my-sidecar
+                       │
+── chunk-cli           │ 14:58:01  sync      ✓  done
+▶ my-sidecar           │ 14:55:12  validate  ✓  done
+  ✓ in sync            │ 14:52:44  sync      ✓  done
+  6m ago               │
+──────────────────────────────────────────────────────────────────
+  ↑/↓ j/k  select  ·  q  quit
+```
+
+To watch multiple projects at once:
+
+```bash
+chunk watch                   # current directory only
+chunk watch /path/to/other    # add another project
+chunk watch --all             # all projects you've watched before
+```
+
+`watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).
+
 ### Snapshots
 
 Capture a configured environment so future sidecars boot fast:
@@ -409,6 +442,7 @@ Start coding session
 
 Make changes
     └─ chunk sidecar sync + chunk validate --remote   (or locally: chunk validate)
+    └─ chunk watch   (optional: live dashboard to see sync/validate progress)
 
 Before committing
     └─ Hook runs chunk validate automatically
