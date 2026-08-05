@@ -586,7 +586,7 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		sdkRe := regexp.MustCompile(`^(\d+)\.`)
 		tfmRe := regexp.MustCompile(`--framework net(\d+)\.0`)
 		if sdkM := sdkRe.FindStringSubmatch(env.ImageVersion); len(sdkM) == 2 {
-			if tfmM := tfmRe.FindStringSubmatch(env.SetupStep("test")); len(tfmM) == 2 {
+			if tfmM := tfmRe.FindStringSubmatch(env.SetupStep(envspec.StepTest)); len(tfmM) == 2 {
 				sdkMajor, sdkErr := strconv.Atoi(sdkM[1])
 				tfmMajor, tfmErr := strconv.Atoi(tfmM[1])
 				if sdkErr == nil && tfmErr == nil && sdkMajor > tfmMajor && tfmMajor >= 6 {
@@ -704,7 +704,7 @@ func dockerfileContent(dir string, env *Environment) string { //nolint:gocyclo
 		// test them one at a time.  $$ is the shell PID, used to give the
 		// temp file a unique name so concurrent runs don't collide.
 		sb.WriteString("\nCMD go list ./... > /tmp/mod-pkgs-$$ && go list -deps ./... | grep -Fxf /tmp/mod-pkgs-$$ | while IFS= read -r pkg; do go test \"$pkg\" || exit 1; done\n")
-	} else if testCmd := env.SetupStep("test"); testCmd != "" {
+	} else if testCmd := env.SetupStep(envspec.StepTest); testCmd != "" {
 		sb.WriteString("\nCMD " + testCmd + "\n")
 	}
 
@@ -2039,7 +2039,7 @@ func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 		setup = append(setup, Step{Name: "playwright-install", Command: pwCmd})
 	}
 	if test != "" && test != stackUnknown {
-		setup = append(setup, Step{Name: "test", Command: test})
+		setup = append(setup, Step{Name: envspec.StepTest, Command: test})
 	}
 
 	return &Environment{

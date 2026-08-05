@@ -42,6 +42,21 @@ func (e *Environment) ForConfig() *Environment {
 	return &out
 }
 
+// ProvisioningSteps returns the number of steps that really run during setup,
+// i.e. Setup without StepTest. Zero for a nil receiver.
+func (e *Environment) ProvisioningSteps() int {
+	if e == nil {
+		return 0
+	}
+	n := 0
+	for _, s := range e.Setup {
+		if s.Name != StepTest {
+			n++
+		}
+	}
+	return n
+}
+
 // SetupStep returns the command for the named setup step, or "" if absent.
 func (e *Environment) SetupStep(name string) string {
 	for _, s := range e.Setup {

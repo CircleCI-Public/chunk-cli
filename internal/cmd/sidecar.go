@@ -1055,7 +1055,7 @@ Example:
 				stack = env.Stack
 				// Count only the steps that actually ran on the sidecar; the test
 				// step is skipped (see sidecarSetupRunSetup).
-				setupStepTotal = len(env.ForConfig().Setup)
+				setupStepTotal = env.ProvisioningSteps()
 			}
 			_ = telemetry.FromContext(cmd.Context()).Track("chunk_sidecar_setup", map[string]any{
 				"stack":            stack,
