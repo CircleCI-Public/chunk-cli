@@ -17,3 +17,12 @@ func requireTTY() error {
 	}
 	return nil
 }
+
+// RequireStdoutTTY returns ErrNoTTY if stdout is not an interactive terminal.
+// Use this for full-screen TUI programs that write to stdout.
+func RequireStdoutTTY() error {
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return ErrNoTTY
+	}
+	return nil
+}
