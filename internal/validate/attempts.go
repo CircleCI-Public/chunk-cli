@@ -40,6 +40,16 @@ func ResetAttempts(sessionID string) {
 	_ = os.Remove(sessionPath(sessionID))
 }
 
+// ReadAttempts returns the current failure count for the given session
+// without modifying it. Returns 0 when no state file exists.
+func ReadAttempts(sessionID string) int {
+	var state attemptsState
+	if data, err := os.ReadFile(sessionPath(sessionID)); err == nil {
+		_ = json.Unmarshal(data, &state)
+	}
+	return state.Count
+}
+
 func writeAttemptsState(sessionID string, state attemptsState) error {
 	p := sessionPath(sessionID)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

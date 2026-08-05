@@ -298,7 +298,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// sync and env-resolve status events are captured. Skipping when there is no
 	// sidecar avoids writing events with an empty sidecar_id that the TUI would
 	// filter out and never display.
-	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir)
+	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 
 	// Only load env vars and resolve secrets when a sidecar is actually
 	// being used — avoids parsing .env.local or hitting secrets APIs on
@@ -315,7 +315,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 // wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
 // is active. Returns statusFn unchanged when no sidecar is involved, so callers
 // with empty sidecar IDs never write events with a blank sidecar_id.
-func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string) iostream.StatusFunc {
+// When hook is non-nil, events are tagged OpHook instead of OpValidate so the
+// TUI can distinguish Claude-triggered runs from manual ones.
+func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) iostream.StatusFunc {
 	if sidecarID == "" {
 		return statusFn
 	}
@@ -327,7 +329,11 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	if activeSidecar != nil && activeSidecar.SidecarID == sidecarID {
 		scName = activeSidecar.Name
 	}
-	return eventlog.WrapFromDir(dataDir, statusFn, eventlog.OpValidate, sidecarID, scName, sidecar.CurrentBranch(workDir))
+	op := eventlog.OpValidate
+	if hook != nil {
+		op = eventlog.OpHook
+	}
+	return eventlog.WrapFromDir(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
 }
 
 // finishValidate reports the validate outcome and handles hook exit codes.
@@ -337,19 +343,24 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	} else if hook == nil {
 		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
 	}
+	maxAttempts := validate.DefaultMaxAttempts
+	if cfg != nil && cfg.StopHookMaxAttempts > 0 {
+		maxAttempts = cfg.StopHookMaxAttempts
+	}
 	if sidecarID != "" {
 		if execErr != nil {
-			statusFn(iostream.LevelError, "validate failed")
+			if hook != nil {
+				next := validate.ReadAttempts(hook.sessionID) + 1
+				statusFn(iostream.LevelError, fmt.Sprintf("validate failed (attempt %d/%d)", next, maxAttempts))
+			} else {
+				statusFn(iostream.LevelError, "validate failed")
+			}
 		} else {
 			statusFn(iostream.LevelDone, "validate passed")
 		}
 	}
 	if hook == nil {
 		return execErr
-	}
-	maxAttempts := cfg.StopHookMaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = validate.DefaultMaxAttempts
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {

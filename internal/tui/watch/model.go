@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,12 +20,14 @@ import (
 )
 
 const (
-	leftPaneWidth  = 28
-	divider        = " │ "
-	pollInterval   = 5 * time.Second
-	spinInterval   = 160 * time.Millisecond
-	runningTimeout = 5 * time.Minute
-	recentEvents   = 300
+	leftPaneWidth         = 28
+	divider               = " │ "
+	pollInterval          = 5 * time.Second
+	spinInterval          = 160 * time.Millisecond
+	runningTimeout        = 5 * time.Minute
+	recentEvents          = 300
+	staleThreshold        = 24 * time.Hour
+	maxSidecarsPerProject = 3
 
 	levelDone  = "done"
 	levelError = "error"
@@ -62,6 +65,7 @@ var (
 	styleRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("167"))
 	styleMuted  = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
 	styleVdim   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	styleAmber  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
 
 func dim(s string) string    { return styleDim.Render(s) }
@@ -75,6 +79,7 @@ func orange(s string) string { return styleOrange.Render(s) }
 func red(s string) string    { return styleRed.Render(s) }
 func muted(s string) string  { return styleMuted.Render(s) }
 func vdim(s string) string   { return styleVdim.Render(s) }
+func amber(s string) string  { return styleAmber.Render(s) }
 
 // ProjectEntry holds everything the watch model needs for one project.
 type ProjectEntry struct {
@@ -85,15 +90,17 @@ type ProjectEntry struct {
 
 // sidecarInfo holds display state for one sidecar.
 type sidecarInfo struct {
-	id              string
-	name            string
-	projectName     string
-	projectSnapshot bool // any snapshot*.json present in the project's data dir
-	lastSyncedRef   string
-	inSync          bool
-	running         bool
-	lastActivity    time.Time
-	lastOp          eventlog.Op
+	id            string
+	name          string
+	projectName   string
+	snapshotName  string // name from snapshot*.json, empty if none
+	lastSyncedRef string
+	inSync        bool
+	running       bool
+	lastActivity  time.Time
+	lastOp        eventlog.Op
+	branch        string    // branch derived from the most recent event
+	fileTime      time.Time // mtime of sidecar*.json, used when lastActivity is zero
 }
 
 type tickMsg struct{}
@@ -289,11 +296,14 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 				add("")
 			}
 			label := truncate(sc.projectName, leftPaneWidth-4)
-			snap := ""
-			if sc.projectSnapshot {
-				snap = " " + vdim("◈")
+			marker := ""
+			if sc.snapshotName != "" {
+				marker = " " + vdim("◈")
 			}
-			add(vdim("── " + label + snap))
+			add(vdim("── " + label + marker))
+			if sc.snapshotName != "" {
+				add("  " + vdim(truncate(sc.snapshotName, leftPaneWidth-3)))
+			}
 			lastProject = sc.projectName
 		}
 
@@ -309,7 +319,11 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 		switch {
 		case sc.running:
 			frame := spinFrames[m.spinIdx%len(spinFrames)]
-			add("  " + blue(frame+" "+string(sc.lastOp)+"..."))
+			if sc.lastOp == eventlog.OpHook {
+				add("  " + amber(frame+" hook..."))
+			} else {
+				add("  " + blue(frame+" "+string(sc.lastOp)+"..."))
+			}
 		case sc.inSync:
 			add("  " + green("✓ in sync"))
 		case sc.lastSyncedRef == "":
@@ -318,9 +332,15 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 			add("  " + yellow("↑ needs sync"))
 		}
 
-		if !sc.lastActivity.IsZero() {
+		if sc.branch != "" {
+			add("  " + vdim(truncate(sc.branch, leftPaneWidth-3)))
+		}
+		switch {
+		case !sc.lastActivity.IsZero():
 			add("  " + vdim(ago(sc.lastActivity)))
-		} else {
+		case !sc.fileTime.IsZero():
+			add("  " + vdim("created "+ago(sc.fileTime)))
+		default:
 			add("")
 		}
 
@@ -441,6 +461,8 @@ func opTag(op eventlog.Op) string {
 		return teal("exec    ")
 	case eventlog.OpSetup:
 		return orange("setup   ")
+	case eventlog.OpHook:
+		return amber("hook    ")
 	default:
 		return muted(fmt.Sprintf("%-8s", string(op)))
 	}
@@ -484,8 +506,8 @@ func (m Model) loadData() tea.Msg {
 	for i, p := range m.projects {
 		newBranches[i] = sidecar.CurrentBranch(p.ProjectRoot)
 		newHeadRefs[i] = headRef(p.ProjectRoot)
-		snap := hasSnapshotFile(p.DataDir)
-		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snap, newHeadRefs[i])
+		snapshotName := loadSnapshotName(p.DataDir)
+		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snapshotName, newHeadRefs[i])
 		allSidecars = append(allSidecars, sidecars...)
 
 		if p.Log == nil {
@@ -520,6 +542,7 @@ func (m Model) loadData() tea.Msg {
 			if sc.lastActivity.IsZero() {
 				sc.lastActivity = e.Ts
 				sc.lastOp = e.Op
+				sc.branch = e.Branch
 			}
 			if e.Level != levelDone && e.Level != levelError && time.Since(e.Ts) < runningTimeout {
 				sc.running = true
@@ -528,11 +551,42 @@ func (m Model) loadData() tea.Msg {
 		}
 	}
 
-	return dataMsg{sidecars: allSidecars, events: allEvents, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
+	// Sort by effective recency so the cap always keeps the freshest sidecars.
+	// effectiveTime returns lastActivity when available, falling back to the
+	// file's mtime so newly created sidecars (no events yet) sort ahead of
+	// old zero-activity ones whose files are stale.
+	effectiveTime := func(sc sidecarInfo) time.Time {
+		if !sc.lastActivity.IsZero() {
+			return sc.lastActivity
+		}
+		return sc.fileTime
+	}
+	sort.Slice(allSidecars, func(i, j int) bool {
+		return effectiveTime(allSidecars[i]).After(effectiveTime(allSidecars[j]))
+	})
+
+	// Drop sidecars whose effective recency is older than staleThreshold, then
+	// cap to maxSidecarsPerProject per project. Because the list is already
+	// sorted newest-first, the cap always retains the most recently active ones.
+	projectCount := map[string]int{}
+	var liveSidecars []sidecarInfo
+	for _, sc := range allSidecars {
+		et := effectiveTime(sc)
+		if !et.IsZero() && time.Since(et) > staleThreshold {
+			continue
+		}
+		if projectCount[sc.projectName] >= maxSidecarsPerProject {
+			continue
+		}
+		projectCount[sc.projectName]++
+		liveSidecars = append(liveSidecars, sc)
+	}
+
+	return dataMsg{sidecars: liveSidecars, events: allEvents, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
 }
 
 // loadSidecars reads all sidecar*.json files from dataDir, deduplicates by ID.
-func loadSidecars(dataDir, projectRoot string, snap bool, head string) []sidecarInfo {
+func loadSidecars(dataDir, projectRoot string, snapshotName string, head string) []sidecarInfo {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	projectName := filepath.Base(projectRoot)
 	seen := map[string]bool{}
@@ -551,22 +605,38 @@ func loadSidecars(dataDir, projectRoot string, snap bool, head string) []sidecar
 		}
 		seen[as.SidecarID] = true
 		inSync := head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef
+		var fileTime time.Time
+		if info, sterr := os.Stat(path); sterr == nil {
+			fileTime = info.ModTime()
+		}
 		result = append(result, sidecarInfo{
-			id:              as.SidecarID,
-			name:            as.Name,
-			projectName:     projectName,
-			projectSnapshot: snap,
-			lastSyncedRef:   as.LastSyncedRef,
-			inSync:          inSync,
+			id:            as.SidecarID,
+			name:          as.Name,
+			projectName:   projectName,
+			snapshotName:  snapshotName,
+			lastSyncedRef: as.LastSyncedRef,
+			inSync:        inSync,
+			fileTime:      fileTime,
 		})
 	}
 	return result
 }
 
-// hasSnapshotFile reports whether any snapshot*.json exists in dataDir.
-func hasSnapshotFile(dataDir string) bool {
+// loadSnapshotName reads the name from the first snapshot*.json found in dataDir.
+// Returns "" when no snapshot state file exists or the file has no name.
+func loadSnapshotName(dataDir string) string {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "snapshot*.json"))
-	return len(matches) > 0
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var a sidecar.ActiveSnapshot
+		if json.Unmarshal(data, &a) == nil && a.Name != "" {
+			return a.Name
+		}
+	}
+	return ""
 }
 
 func anyRunning(sidecars []sidecarInfo) bool {
