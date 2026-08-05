@@ -41,52 +41,52 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 	case has["Taskfile.yml"] || has["Taskfile.yaml"]:
 		if isGo {
 			return []config.Command{
-				{Name: "test", Run: "task test", Role: config.RoleGate, FileExt: ".go", Timeout: 300, Limit: 3},
-				{Name: "lint", Run: "task lint", Role: config.RoleGate, FileExt: ".go", Timeout: 60, Limit: 3},
-				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Always: true, Timeout: 30, Limit: 3},
+				{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
+				{Name: "lint", Run: "task lint", Role: config.RoleGate, Timeout: 60},
+				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Timeout: 30},
 			}, nil
 		}
 		return []config.Command{
-			{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
 		}, nil
 
 	case has["Makefile"]:
 		if isGo {
 			return []config.Command{
-				{Name: "test", Run: "make test", Role: config.RoleGate, FileExt: ".go", Timeout: 300, Limit: 3},
-				{Name: "lint", Run: "make lint", Role: config.RoleGate, FileExt: ".go", Timeout: 60, Limit: 3},
+				{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
+				{Name: "lint", Run: "make lint", Role: config.RoleGate, Timeout: 60},
 			}, nil
 		}
 		return []config.Command{
-			{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
 		}, nil
 
 	case isGo:
 		return []config.Command{
-			{Name: "test", Run: "go test ./...", Role: config.RoleGate, FileExt: ".go", Timeout: 300, Limit: 3},
-			{Name: "lint", Run: "golangci-lint run ./...", Role: config.RoleGate, FileExt: ".go", Timeout: 60, Limit: 3},
-			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Always: true, Timeout: 30, Limit: 3},
+			{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: 300},
+			{Name: "lint", Run: "golangci-lint run ./...", Role: config.RoleGate, Timeout: 60},
+			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Timeout: 30},
 		}, nil
 
 	case has["Cargo.toml"]:
 		return []config.Command{
-			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: 300},
 		}, nil
 
 	case has["pyproject.toml"], has["requirements.txt"], has["setup.py"], has["Pipfile"]:
 		return []config.Command{
-			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: 300},
 		}, nil
 
 	case has["Gemfile"]:
 		// Assumes Rake-based test task (Rails default). RSpec/Minitest-only stacks may need manual adjustment.
 		return []config.Command{
-			{Name: "test", Run: "bundle exec rake test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: "bundle exec rake test", Role: config.RoleGate, Timeout: 300},
 		}, nil
 
 	case has["pom.xml"]:
 		return []config.Command{
-			{Name: "test", Run: "mvn test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: "mvn test", Role: config.RoleGate, Timeout: 300},
 		}, nil
 
 	case has["build.gradle"], has["build.gradle.kts"]:
@@ -95,7 +95,7 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 			gradleCmd = "./gradlew test"
 		}
 		return []config.Command{
-			{Name: "test", Run: gradleCmd, Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: gradleCmd, Role: config.RoleGate, Timeout: 300},
 		}, nil
 
 	case has["package.json"]:
@@ -105,14 +105,14 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 			testCmd = pm.Name + " test"
 		}
 		return []config.Command{
-			{Name: "test", Run: testCmd, Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: testCmd, Role: config.RoleGate, Timeout: 300},
 		}, nil
 	}
 
 	// Monorepo with no root package.json but a detectable package manager in subdirs.
 	if pm := DetectPackageManager(workDir); pm != nil {
 		return []config.Command{
-			{Name: "test", Run: pm.Name + " test", Role: config.RoleGate, Timeout: 300, Limit: 3},
+			{Name: "test", Run: pm.Name + " test", Role: config.RoleGate, Timeout: 300},
 		}, nil
 	}
 

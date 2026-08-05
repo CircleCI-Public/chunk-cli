@@ -25,7 +25,7 @@ func TestMarkRemoteCommandsForSidecarSetup(t *testing.T) {
 			{Name: "install", Run: "npm ci"},
 			{Name: "test", Run: "npm test", Role: RoleGate},
 			{Name: "format", Run: "npm run format", Role: RoleAutofix},
-			{Name: "lint", Run: "npm run lint", Role: RolePrecheck},
+			{Name: "lint", Run: "npm run lint"},
 			{Name: "test-changed", Run: "npm test --changed", Role: RoleGate, Remote: true},
 		},
 	}

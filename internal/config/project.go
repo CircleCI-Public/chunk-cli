@@ -9,11 +9,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 )
 
-// Command roles determine hook placement in settings.json.
+// Command roles describe what a command does. Only RoleGate is acted on:
+// sidecar setup marks gate commands for remote execution.
 const (
-	RoleGate     = "gate"     // enforce at Stop, run-and-record at PreToolUse
-	RolePrecheck = "precheck" // check at PreToolUse, enforce at Stop (changed-file variants)
-	RoleAutofix  = "autofix"  // run at PreToolUse, enforce at Stop (formatters)
+	RoleGate    = "gate"    // pass/fail check
+	RoleAutofix = "autofix" // rewrites files (formatters)
 )
 
 // Command is a single validation command.
@@ -21,11 +21,7 @@ type Command struct {
 	Name         string `json:"name"`
 	Run          string `json:"run"`
 	Role         string `json:"role,omitempty"`
-	FileExt      string `json:"fileExt,omitempty"`
 	Timeout      int    `json:"timeout,omitempty"`
-	Limit        int    `json:"limit,omitempty"`
-	Always       bool   `json:"always,omitempty"`
-	Staged       bool   `json:"staged,omitempty"`
 	Remote       bool   `json:"remote,omitempty"`
 	SidecarImage string `json:"sidecarImage,omitempty"`
 }
@@ -53,7 +49,6 @@ type ValidationConfig struct {
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
 	Commands            []Command             `json:"commands,omitempty"`
-	Triggers            map[string][]string   `json:"triggers,omitempty"`
 	Tasks               map[string]TaskConfig `json:"tasks,omitempty"`
 	VCS                 *VCSConfig            `json:"vcs,omitempty"`
 	Validation          *ValidationConfig     `json:"validation,omitempty"`
