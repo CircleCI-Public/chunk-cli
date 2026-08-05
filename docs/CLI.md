@@ -132,6 +132,9 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
+├── watch [dir...]                  # Live TUI dashboard for active sidecars and recent activity
+│   --all                           # Watch all known projects, not just the current directory
+│
 ├── hook                            # Manage chunk hook execution
 │   --project <path>                # Override project directory
 │   ├── disable                     # Disable chunk validate hooks
@@ -167,6 +170,7 @@ chunk
   env var → `orgID` in `.chunk/config.json` → interactive org picker (TTY only).
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
+- `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. Running `watch` in a project also registers that project so `--all` finds it in future runs.
 - `chunk init` uses Claude to auto-detect the test command for the project.
   It generates `.claude/settings.json` with pre-commit hooks. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.

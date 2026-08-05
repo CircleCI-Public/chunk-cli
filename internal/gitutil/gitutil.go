@@ -1,6 +1,7 @@
 package gitutil
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -114,7 +115,13 @@ func GeneratePatch(base string) (string, error) {
 
 // HeadRef returns the SHA of the current HEAD commit in the repo at cwd.
 func HeadRef(cwd string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", gitHEAD)
+	return HeadRefCtx(context.Background(), cwd)
+}
+
+// HeadRefCtx returns the SHA of the current HEAD commit in the repo at cwd,
+// honouring ctx for cancellation/timeout.
+func HeadRefCtx(ctx context.Context, cwd string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", gitHEAD)
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
@@ -125,6 +132,17 @@ func HeadRef(cwd string) (string, error) {
 		return "", fmt.Errorf("resolve HEAD: empty output")
 	}
 	return sha, nil
+}
+
+// TopLevelCtx returns the git repository root for dir, or "" if not in a git
+// repo, honouring ctx for cancellation/timeout.
+func TopLevelCtx(ctx context.Context, dir string) string {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // CreateBundle creates a git bundle from base..HEAD in the repo at cwd and returns the raw bytes.

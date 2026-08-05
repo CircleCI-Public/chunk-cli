@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
+	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -496,11 +497,19 @@ func newSidecarSyncCmd() *cobra.Command {
 			if cwdErr != nil {
 				return fmt.Errorf("sync: %w", cwdErr)
 			}
+			syncFn := newStatusFunc(io)
+			if dataDir, dirErr := sidecar.StateDir(); dirErr == nil {
+				scName := ""
+				if as, _ := sidecar.LoadActive(cmd.Context()); as != nil && as.SidecarID == sidecarID {
+					scName = as.Name
+				}
+				syncFn = eventlog.WrapFromDir(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd))
+			}
 			useBundle := !checkout
 			if useBundle {
-				err = sidecar.BundleSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, newStatusFunc(io))
+				err = sidecar.BundleSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, syncFn)
 			} else {
-				err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, newStatusFunc(io))
+				err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, syncFn)
 			}
 			if err != nil {
 				if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
