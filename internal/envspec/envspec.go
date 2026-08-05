@@ -14,6 +14,34 @@ type Environment struct {
 	ImageVersion string `json:"image_version"`
 }
 
+// StepTest is the detected test command. It is not a provisioning step: it
+// exists only as the input to the Dockerfile CMD that `chunk sidecar build`
+// generates from a piped env spec, and is never run as part of the sidecar
+// setup sequence. How a project's tests are actually invoked is user-owned
+// config — see config.ProjectConfig.Commands.
+const StepTest = "test"
+
+// ForConfig returns a copy of e suitable for persisting to .chunk/config.json,
+// with the StepTest step removed so that Setup contains only steps that are
+// really run during setup.
+//
+// Callers that generate a Dockerfile must use the full env spec, not this
+// copy: dropping StepTest drops the image's CMD.
+func (e *Environment) ForConfig() *Environment {
+	if e == nil {
+		return nil
+	}
+	out := *e
+	out.Setup = make([]Step, 0, len(e.Setup))
+	for _, s := range e.Setup {
+		if s.Name == StepTest {
+			continue
+		}
+		out.Setup = append(out.Setup, s)
+	}
+	return &out
+}
+
 // SetupStep returns the command for the named setup step, or "" if absent.
 func (e *Environment) SetupStep(name string) string {
 	for _, s := range e.Setup {

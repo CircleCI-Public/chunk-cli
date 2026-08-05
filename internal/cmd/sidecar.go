@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -625,7 +626,11 @@ generate a Dockerfile and build a test image.
 
 By default the detected environment is saved to .chunk/config.json so that
 'chunk sidecar setup' can reuse it without re-detecting. Pass --no-save to
-print only without writing.`,
+print only without writing.
+
+The saved copy omits the detected test command: it is an input to the test
+image's CMD, not a step that runs during setup. Pipe stdout into
+'chunk sidecar build' rather than reusing the saved spec.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			if _, err := os.Stat(dir); err != nil {
@@ -651,7 +656,10 @@ print only without writing.`,
 				if loadErr != nil {
 					cfg = &config.ProjectConfig{}
 				}
-				cfg.Environment = env
+				// Save without the test step: it is only an input to the
+				// Dockerfile CMD, which is generated from the spec printed to
+				// stdout below, not from the saved copy.
+				cfg.Environment = env.ForConfig()
 				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
 					io.ErrPrintf("Warning: could not save environment to config: %v\n", saveErr)
 				}
@@ -963,7 +971,7 @@ Example:
 				status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
 				env, detectionErr = envbuilder.DetectEnvironment(cmd.Context(), dir)
 				if detectionErr == nil {
-					cfg.Environment = env
+					cfg.Environment = env.ForConfig()
 					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
 						streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
 					}
@@ -1045,12 +1053,9 @@ Example:
 			var stack string
 			if env != nil {
 				stack = env.Stack
-				for _, s := range env.Setup {
-					// test step runs in CI, not on the sidecar
-					if s.Name != "test" {
-						setupStepTotal++
-					}
-				}
+				// Count only the steps that actually ran on the sidecar; the test
+				// step is skipped (see sidecarSetupRunSetup).
+				setupStepTotal = len(env.ForConfig().Setup)
 			}
 			_ = telemetry.FromContext(cmd.Context()).Track("chunk_sidecar_setup", map[string]any{
 				"stack":            stack,
@@ -1205,8 +1210,11 @@ func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
 	}
 
 	for _, step := range opts.env.Setup {
-		if step.Name == "test" {
-			continue // test step is for Dockerfile CMD only, not for SSH execution
+		// A freshly detected env still carries the test step (it feeds the
+		// Dockerfile CMD); only the saved copy has it stripped. Skip it here so
+		// setup never runs the project's test suite as a provisioning step.
+		if step.Name == envspec.StepTest {
+			continue
 		}
 		opts.status(iostream.LevelStep, fmt.Sprintf("Running setup step %q: %s", step.Name, step.Command))
 		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, opts.identityFile, opts.authSock)
