@@ -591,7 +591,7 @@ hook config files.`,
 
 			// Step 4: Shell completions
 			if !skipCompletions {
-				maybeInstallCompletions(streams)
+				maybeInstallCompletions(cmd, streams)
 			}
 
 			// Step 5: CircleCI Smarter Testing test-suites.yml

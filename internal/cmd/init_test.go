@@ -310,13 +310,13 @@ func TestInstallCompletionWritesRCFile(t *testing.T) {
 	rcFile := filepath.Join(home, ".zshrc")
 	streams, _, errOut := testStreams()
 
-	err := installCompletion(streams)
+	err := installCompletion(NewRootCmd(""), streams)
 	assert.NilError(t, err)
 
 	data, err := os.ReadFile(rcFile)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(data), completionTag))
-	assert.Assert(t, strings.Contains(string(data), "source <(chunk completion zsh)"))
+	assert.Assert(t, strings.Contains(string(data), "completion.zsh"), "expected static file source line, got: %s", string(data))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
 }
 
@@ -327,7 +327,7 @@ func TestInstallCompletionSkipsWhenAlreadyInstalled(t *testing.T) {
 	assert.NilError(t, os.WriteFile(rcFile, []byte(existing), 0o644))
 
 	streams, _, errOut := testStreams()
-	err := installCompletion(streams)
+	err := installCompletion(NewRootCmd(""), streams)
 	assert.NilError(t, err)
 
 	// File unchanged.
@@ -509,12 +509,12 @@ func TestInstallCompletionBashWritesRCFile(t *testing.T) {
 	assert.NilError(t, os.WriteFile(rcFile, []byte("# existing config\n"), 0o644))
 
 	streams, _, errOut := testStreams()
-	err := installCompletion(streams)
+	err := installCompletion(NewRootCmd(""), streams)
 	assert.NilError(t, err)
 
 	data, err := os.ReadFile(rcFile)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(data), completionTag))
-	assert.Assert(t, strings.Contains(string(data), "source <(chunk completion bash)"))
+	assert.Assert(t, strings.Contains(string(data), "completion.bash"), "expected static file source line, got: %s", string(data))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
 }

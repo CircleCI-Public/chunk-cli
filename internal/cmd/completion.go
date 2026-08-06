@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,7 +17,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
-const completionTag = "# chunk shell completion"
+const (
+	completionTag = "# chunk shell completion"
+	shellZsh      = "zsh"
+	shellBash     = "bash"
+)
 
 func newCompletionCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -32,29 +37,41 @@ func newCompletionCmd() *cobra.Command {
 }
 
 type shellConfig struct {
-	name   string
-	rcFile string
-	source string
+	name          string
+	rcFile        string
+	completionExt string
+}
+
+// generate writes a shell completion script for sh to w.
+func (sh shellConfig) generate(rootCmd *cobra.Command, w *bytes.Buffer) error {
+	switch sh.name {
+	case shellZsh:
+		return rootCmd.GenZshCompletion(w)
+	case shellBash:
+		return rootCmd.GenBashCompletion(w)
+	default:
+		return fmt.Errorf("unsupported shell: %s", sh.name)
+	}
 }
 
 func detectShell(home string) (shellConfig, error) {
 	shell := os.Getenv(config.EnvShell)
 	switch {
-	case strings.HasSuffix(shell, "zsh"):
+	case strings.HasSuffix(shell, shellZsh):
 		return shellConfig{
-			name:   "zsh",
-			rcFile: filepath.Join(home, ".zshrc"),
-			source: "source <(chunk completion zsh)",
+			name:          shellZsh,
+			rcFile:        filepath.Join(home, ".zshrc"),
+			completionExt: ".zsh",
 		}, nil
-	case strings.HasSuffix(shell, "bash"):
+	case strings.HasSuffix(shell, shellBash):
 		rcFile := filepath.Join(home, ".bash_profile")
 		if _, err := os.Stat(filepath.Join(home, ".bashrc")); err == nil {
 			rcFile = filepath.Join(home, ".bashrc")
 		}
 		return shellConfig{
-			name:   "bash",
-			rcFile: rcFile,
-			source: "source <(chunk completion bash)",
+			name:          shellBash,
+			rcFile:        rcFile,
+			completionExt: ".bash",
 		}, nil
 	default:
 		return shellConfig{}, &userError{
@@ -85,8 +102,43 @@ func completionInstalled() (bool, error) {
 	return strings.Contains(string(data), completionTag), nil
 }
 
-// installCompletion appends the completion source line to the user's shell rc file.
-func installCompletion(streams iostream.Streams) (err error) {
+// completionFilePath returns the path to the static completion script for sh,
+// stored under the chunk config directory.
+func completionFilePath(sh shellConfig) (string, error) {
+	dir, err := config.Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "completion"+sh.completionExt), nil
+}
+
+// writeCompletionFile generates the completion script for sh and writes it to
+// the chunk config directory. Returns the path to the written file.
+func writeCompletionFile(cmd *cobra.Command, sh shellConfig) (string, error) {
+	filePath, err := completionFilePath(sh)
+	if err != nil {
+		return "", fmt.Errorf("resolve completion file path: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		return "", fmt.Errorf("create completion dir: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := sh.generate(cmd.Root(), &buf); err != nil {
+		return "", fmt.Errorf("generate completion script: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, buf.Bytes(), 0o644); err != nil {
+		return "", fmt.Errorf("write completion file: %w", err)
+	}
+
+	return filePath, nil
+}
+
+// installCompletion writes the static completion script and appends a source
+// line for it to the user's shell rc file.
+func installCompletion(cmd *cobra.Command, streams iostream.Streams) (err error) {
 	home := os.Getenv(config.EnvHome)
 	if home == "" {
 		return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
@@ -97,14 +149,19 @@ func installCompletion(streams iostream.Streams) (err error) {
 		return err
 	}
 
-	line := completionTag + "\n" + sh.source + "\n"
-
 	// Check if already installed.
 	data, readErr := os.ReadFile(sh.rcFile)
 	if readErr == nil && strings.Contains(string(data), completionTag) {
 		streams.ErrPrintln(ui.Warning("Completion already installed."))
 		return nil
 	}
+
+	filePath, err := writeCompletionFile(cmd, sh)
+	if err != nil {
+		return err
+	}
+
+	line := completionTag + "\n" + "source " + filePath + "\n"
 
 	f, err := os.OpenFile(sh.rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -128,7 +185,7 @@ func installCompletion(streams iostream.Streams) (err error) {
 	return nil
 }
 
-func maybeInstallCompletions(streams iostream.Streams) {
+func maybeInstallCompletions(cmd *cobra.Command, streams iostream.Streams) {
 	installed, err := completionInstalled()
 	if err != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Skipping shell completions: %v", err)))
@@ -143,10 +200,36 @@ func maybeInstallCompletions(streams iostream.Streams) {
 		return
 	}
 	if yes {
-		if installErr := installCompletion(streams); installErr != nil {
+		if installErr := installCompletion(cmd, streams); installErr != nil {
 			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not install completions: %v", installErr)))
 		}
 	}
+}
+
+// RegenerateCompletionIfInstalled rewrites the static completion script after
+// an upgrade. It is a no-op if completions are not installed.
+func RegenerateCompletionIfInstalled(cmd *cobra.Command, streams iostream.Streams) {
+	installed, err := completionInstalled()
+	if err != nil || !installed {
+		return
+	}
+
+	home := os.Getenv(config.EnvHome)
+	if home == "" {
+		return
+	}
+
+	sh, err := detectShell(home)
+	if err != nil {
+		return
+	}
+
+	if _, err := writeCompletionFile(cmd, sh); err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not regenerate completions: %v", err)))
+		return
+	}
+
+	streams.ErrPrintln(ui.Success("Completions regenerated."))
 }
 
 func newCompletionInstallCmd() *cobra.Command {
@@ -154,7 +237,7 @@ func newCompletionInstallCmd() *cobra.Command {
 		Use:   "install",
 		Short: "Install shell completion",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return installCompletion(iostream.FromCmd(cmd))
+			return installCompletion(cmd, iostream.FromCmd(cmd))
 		},
 	}
 }
@@ -213,11 +296,13 @@ func newCompletionUninstallCmd() *cobra.Command {
 					skip = true
 					continue
 				}
-				if skip && strings.Contains(line, "source <(chunk completion") {
+				if skip {
+					// Remove the source line immediately following the tag,
+					// handling both the old "source <(chunk completion ...)"
+					// and the new "source /path/to/completion.*" formats.
 					skip = false
 					continue
 				}
-				skip = false
 				lines = append(lines, line)
 			}
 
@@ -227,6 +312,11 @@ func newCompletionUninstallCmd() *cobra.Command {
 					suggestion: suggestionCheckPerms,
 					err:        err,
 				}
+			}
+
+			// Best-effort removal of the static completion file.
+			if filePath, err := completionFilePath(sh); err == nil {
+				_ = os.Remove(filePath)
 			}
 
 			io.ErrPrintln(ui.Success("Completion uninstalled."))

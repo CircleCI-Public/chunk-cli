@@ -37,7 +37,11 @@ func newUpgradeCmd() *cobra.Command {
 				installPath = execPath
 			}
 
-			return upgrade.Run(streams.Out, http.DefaultClient, apiBase, installPath)
+			if err := upgrade.Run(streams.Out, http.DefaultClient, apiBase, installPath); err != nil {
+				return err
+			}
+			RegenerateCompletionIfInstalled(cmd, streams)
+			return nil
 		},
 	}
 }

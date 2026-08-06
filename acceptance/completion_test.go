@@ -28,8 +28,15 @@ func TestCompletionInstallZsh(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(data), "# chunk shell completion"),
 		"expected completion tag in .zshrc, got: %s", string(data))
-	assert.Assert(t, strings.Contains(string(data), "chunk completion zsh"),
-		"expected zsh source line in .zshrc, got: %s", string(data))
+	assert.Assert(t, strings.Contains(string(data), "completion.zsh"),
+		"expected static file source line in .zshrc, got: %s", string(data))
+
+	// Static completion file must exist and contain zsh completion content.
+	completionFile := filepath.Join(env.HomeDir, ".config", "chunk", "completion.zsh")
+	content, err := os.ReadFile(completionFile)
+	assert.NilError(t, err, "expected static completion file at %s", completionFile)
+	assert.Assert(t, strings.Contains(string(content), "compdef") || strings.Contains(string(content), "#compdef"),
+		"expected zsh completion content in static file, got: %s", string(content)[:min(200, len(content))])
 }
 
 func TestCompletionInstallBash(t *testing.T) {
@@ -46,9 +53,15 @@ func TestCompletionInstallBash(t *testing.T) {
 
 	data, err := os.ReadFile(bashrc)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "chunk completion bash"), "expected completion in .bashrc")
 	assert.Assert(t, strings.Contains(string(data), "# chunk shell completion"),
 		"expected completion tag in .bashrc, got: %s", string(data))
+	assert.Assert(t, strings.Contains(string(data), "completion.bash"),
+		"expected static file source line in .bashrc, got: %s", string(data))
+
+	// Static completion file must exist.
+	completionFile := filepath.Join(env.HomeDir, ".config", "chunk", "completion.bash")
+	_, err = os.Stat(completionFile)
+	assert.NilError(t, err, "expected static completion file at %s", completionFile)
 }
 
 func TestCompletionInstallBashProfile(t *testing.T) {
@@ -66,7 +79,8 @@ func TestCompletionInstallBashProfile(t *testing.T) {
 
 	data, err := os.ReadFile(bashProfile)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "chunk completion bash"), "expected completion in .bash_profile")
+	assert.Assert(t, strings.Contains(string(data), "completion.bash"),
+		"expected static file source line in .bash_profile, got: %s", string(data))
 }
 
 func TestCompletionInstallIdempotent(t *testing.T) {
@@ -134,8 +148,8 @@ func TestCompletionInstallBashCreatesRCFile(t *testing.T) {
 
 	data, err := os.ReadFile(bashProfile)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "chunk completion bash"),
-		"expected completion line in created file, got: %s", string(data))
+	assert.Assert(t, strings.Contains(string(data), "completion.bash"),
+		"expected static file source line in created file, got: %s", string(data))
 }
 
 func TestCompletionUninstallZsh(t *testing.T) {
@@ -175,17 +189,23 @@ func TestCompletionInstallUninstallRoundTrip(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(data), "# chunk shell completion"),
 		"expected tag after install")
 
+	completionFile := filepath.Join(env.HomeDir, ".config", "chunk", "completion.zsh")
+	_, err = os.Stat(completionFile)
+	assert.NilError(t, err, "expected static completion file to exist after install")
+
 	// Uninstall
 	result = binary.RunCLI(t, []string{"completion", "uninstall"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "uninstall failed")
 
-	// Verify completion block is removed
+	// Verify rc file is clean
 	data, err = os.ReadFile(zshrc)
 	assert.NilError(t, err)
 	assert.Assert(t, !strings.Contains(string(data), "# chunk shell completion"),
 		"completion tag should be removed, got: %s", string(data))
-	assert.Assert(t, !strings.Contains(string(data), "chunk completion zsh"),
-		"source line should be removed, got: %s", string(data))
+
+	// Verify static file is removed
+	_, err = os.Stat(completionFile)
+	assert.Assert(t, os.IsNotExist(err), "expected static completion file to be removed after uninstall")
 }
 
 func TestCompletionUninstallPreservesOtherContent(t *testing.T) {
