@@ -73,6 +73,10 @@ func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config.json: %w", err)
 	}
+	// Configs written by earlier versions may carry a "test" step in the saved
+	// environment. Drop it on load so it is neither run as a setup step nor
+	// written back out on the next save.
+	cfg.Environment = cfg.Environment.ForConfig()
 	return &cfg, nil
 }
 
