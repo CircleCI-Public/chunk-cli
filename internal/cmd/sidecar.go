@@ -306,9 +306,19 @@ func newSidecarExecCmd() *cobra.Command {
 	var execArgs []string
 
 	cmd := &cobra.Command{
-		Use:   "exec",
+		Use:   "exec [-- args...]",
 		Short: "Execute a command in a sidecar",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Execute a command in a sidecar.
+
+Arguments to the remote command can be passed as positional arguments (after --)
+or via the repeatable --args flag. Positional arguments are appended after any
+--args values.`,
+		Example: `  # Pass arguments after --
+  chunk sidecar exec --command sh -- -c "echo hello"
+
+  # Pass arguments with the repeatable --args flag
+  chunk sidecar exec --command sh --args="-c" --args="echo hello"`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
@@ -359,7 +369,7 @@ func newSidecarExecCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&command, "command", "", "Command to execute")
-	cmd.Flags().StringArrayVar(&execArgs, "args", nil, "Command arguments")
+	cmd.Flags().StringArrayVar(&execArgs, "args", nil, "Command argument (repeatable; comma-separated values are NOT split)")
 	_ = cmd.MarkFlagRequired("command")
 
 	return cmd
