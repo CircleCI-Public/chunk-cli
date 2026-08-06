@@ -312,7 +312,7 @@ func installSkillsStep(streams iostream.Streams) {
 	if homeDir == "" {
 		return
 	}
-	for _, r := range skills.InstallByName(homeDir, "chunk-sidecar") {
+	for _, r := range skills.InstallByName(skills.ScopeUser, homeDir, "chunk-sidecar") {
 		if r.Skipped {
 			continue
 		}

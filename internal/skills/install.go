@@ -7,6 +7,18 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/skills"
 )
 
+// Scope determines where skills are installed.
+type Scope string
+
+const (
+	// ScopeUser installs into the user's agent config directories (~/.claude, ~/.agents).
+	// Agents whose config directories do not exist are skipped.
+	ScopeUser Scope = "user"
+	// ScopeProject installs into the project's agent config directories (.claude, .agents).
+	// Directories are created as needed; no pre-existing config dir is required.
+	ScopeProject Scope = "project"
+)
+
 // State describes the installation state of a skill for a specific agent.
 type State string
 
@@ -45,23 +57,29 @@ var All = []Skill{
 
 // Agent represents a target agent with its config directories.
 type Agent struct {
-	Name      string
-	ConfigDir string // parent config dir (must exist for install)
-	SkillsDir string // where skill subdirectories live
+	Name         string
+	ConfigDir    string // parent config dir
+	SkillsDir    string // where skill subdirectories live
+	SkipIfAbsent bool   // when true, skip install if ConfigDir does not exist
 }
 
-// Agents returns the list of supported agents for the given home directory.
-func Agents(homeDir string) []Agent {
+// agents returns the list of supported agents for the given scope and base directory.
+// For ScopeUser, baseDir is the user's home directory.
+// For ScopeProject, baseDir is the project root directory.
+func agents(scope Scope, baseDir string) []Agent {
+	skipIfAbsent := scope == ScopeUser
 	return []Agent{
 		{
-			Name:      "claude",
-			ConfigDir: filepath.Join(homeDir, ".claude"),
-			SkillsDir: filepath.Join(homeDir, ".claude", "skills"),
+			Name:         "claude",
+			ConfigDir:    filepath.Join(baseDir, ".claude"),
+			SkillsDir:    filepath.Join(baseDir, ".claude", "skills"),
+			SkipIfAbsent: skipIfAbsent,
 		},
 		{
-			Name:      "codex",
-			ConfigDir: filepath.Join(homeDir, ".agents"),
-			SkillsDir: filepath.Join(homeDir, ".agents", "skills"),
+			Name:         "codex",
+			ConfigDir:    filepath.Join(baseDir, ".agents"),
+			SkillsDir:    filepath.Join(baseDir, ".agents", "skills"),
+			SkipIfAbsent: skipIfAbsent,
 		},
 	}
 }
@@ -91,20 +109,21 @@ type AgentInstallResult struct {
 	Updated   []string `json:"updated"`
 }
 
-// Install installs all embedded skills for agents whose config dirs exist.
-// Agents with missing config dirs are skipped.
-func Install(homeDir string) []AgentInstallResult {
-	agents := Agents(homeDir)
-	results := make([]AgentInstallResult, 0, len(agents))
-	for _, agent := range agents {
+// Install installs all embedded skills for the given scope and base directory.
+// For ScopeUser, agents whose config dirs do not exist are skipped.
+// For ScopeProject, dirs are created as needed.
+func Install(scope Scope, baseDir string) []AgentInstallResult {
+	all := agents(scope, baseDir)
+	results := make([]AgentInstallResult, 0, len(all))
+	for _, agent := range all {
 		results = append(results, installForAgent(agent, All))
 	}
 	return results
 }
 
-// InstallByName installs a single skill by name for agents whose config dirs exist.
+// InstallByName installs a single skill by name.
 // Returns nil if the skill name is not found.
-func InstallByName(homeDir, name string) []AgentInstallResult {
+func InstallByName(scope Scope, baseDir, name string) []AgentInstallResult {
 	var s *Skill
 	for i := range All {
 		if All[i].Name == name {
@@ -115,17 +134,19 @@ func InstallByName(homeDir, name string) []AgentInstallResult {
 	if s == nil {
 		return nil
 	}
-	agents := Agents(homeDir)
-	results := make([]AgentInstallResult, 0, len(agents))
-	for _, agent := range agents {
+	all := agents(scope, baseDir)
+	results := make([]AgentInstallResult, 0, len(all))
+	for _, agent := range all {
 		results = append(results, installForAgent(agent, []Skill{*s}))
 	}
 	return results
 }
 
 func installForAgent(agent Agent, subset []Skill) AgentInstallResult {
-	if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
-		return AgentInstallResult{Agent: agent.Name, Skipped: true, Installed: make([]string, 0), Updated: make([]string, 0)}
+	if agent.SkipIfAbsent {
+		if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
+			return AgentInstallResult{Agent: agent.Name, Skipped: true, Installed: make([]string, 0), Updated: make([]string, 0)}
+		}
 	}
 
 	result := AgentInstallResult{Agent: agent.Name, Installed: make([]string, 0), Updated: make([]string, 0)}
@@ -174,14 +195,18 @@ type AgentStatus struct {
 }
 
 // Status returns per-agent, per-skill installation state without modifying anything.
-func Status(homeDir string) []AgentStatus {
-	agents := Agents(homeDir)
-	results := make([]AgentStatus, 0, len(agents))
+// For ScopeUser, an agent is available only when its config dir exists.
+// For ScopeProject, agents are always considered available.
+func Status(scope Scope, baseDir string) []AgentStatus {
+	all := agents(scope, baseDir)
+	results := make([]AgentStatus, 0, len(all))
 
-	for _, agent := range agents {
+	for _, agent := range all {
 		available := true
-		if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
-			available = false
+		if agent.SkipIfAbsent {
+			if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
+				available = false
+			}
 		}
 
 		ss := make([]AgentSkillStatus, 0, len(All))

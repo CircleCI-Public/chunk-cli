@@ -286,3 +286,106 @@ func TestSkillsListMixedStates(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "missing"),
 		"expected 'missing' for deleted skill, got: %s", combined)
 }
+
+func TestSkillsInstallProjectScope(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// Project scope requires no pre-existing agent dirs.
+	result := binary.RunCLI(t, []string{"skill", "install", "--scope", "project"}, env, projectDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "claude:"),
+		"expected per-agent output for claude, got: %s", combined)
+
+	// Skills should be installed into the project dir, not the home dir.
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+		skillFile := filepath.Join(projectDir, ".claude", "skills", name, "SKILL.md")
+		info, err := os.Stat(skillFile)
+		assert.NilError(t, err, "expected project-scope skill %s to exist at %s", name, skillFile)
+		assert.Assert(t, info.Size() > 0, "expected project-scope skill %s to be non-empty", name)
+	}
+
+	// Nothing should be installed in the user's home dir.
+	_, err := os.Stat(filepath.Join(env.HomeDir, ".claude", "skills"))
+	assert.Assert(t, os.IsNotExist(err), "project-scope install should not touch user home skills dir")
+}
+
+func TestSkillsInstallProjectScopeUpToDate(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// First install.
+	binary.RunCLI(t, []string{"skill", "install", "--scope", "project"}, env, projectDir)
+
+	// Second install should show "up to date".
+	result := binary.RunCLI(t, []string{"skill", "install", "--scope", "project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "up to date"),
+		"expected up-to-date message on second project-scope install, got: %s", combined)
+}
+
+func TestSkillsInstallProjectScopeNotIsolatedFromUserScope(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// Install user-scope into home dir.
+	claudeDir := filepath.Join(env.HomeDir, ".claude")
+	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
+	binary.RunCLI(t, []string{"skill", "install", "--scope", "user"}, env, env.HomeDir)
+
+	// Install project-scope from a different dir.
+	result := binary.RunCLI(t, []string{"skill", "install", "--scope", "project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0, "project-scope install failed: %s", result.Stderr)
+
+	// Both locations should have skills.
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps"} {
+		userFile := filepath.Join(claudeDir, "skills", name, "SKILL.md")
+		projectFile := filepath.Join(projectDir, ".claude", "skills", name, "SKILL.md")
+		_, err := os.Stat(userFile)
+		assert.NilError(t, err, "expected user-scope skill %s to still exist", name)
+		_, err = os.Stat(projectFile)
+		assert.NilError(t, err, "expected project-scope skill %s to exist", name)
+	}
+}
+
+func TestSkillsListProjectScope(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// Before install: project scope agents are always shown as available.
+	result := binary.RunCLI(t, []string{"skill", "list", "--scope", "project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "claude:"),
+		"expected per-agent status for claude, got: %s", combined)
+	// Skills not yet installed should be missing.
+	assert.Assert(t, strings.Contains(combined, "missing"),
+		"expected 'missing' state before project-scope install, got: %s", combined)
+
+	// Install and re-list.
+	binary.RunCLI(t, []string{"skill", "install", "--scope", "project"}, env, projectDir)
+
+	result = binary.RunCLI(t, []string{"skill", "list", "--scope", "project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0)
+	combined = result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "current"),
+		"expected 'current' state after project-scope install, got: %s", combined)
+}
+
+func TestSkillsInstallInvalidScope(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"skill", "install", "--scope", "global"}, env, env.HomeDir)
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for invalid scope, got: %d", result.ExitCode)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "invalid scope"),
+		"expected 'invalid scope' error, got: %s", combined)
+}

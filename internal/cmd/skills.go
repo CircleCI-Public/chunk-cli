@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -26,17 +27,18 @@ func newSkillCmd() *cobra.Command {
 
 func newSkillInstallCmd() *cobra.Command {
 	var jsonOut bool
+	var scopeFlag string
 
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install or update all skills into agent config directories",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := os.Getenv(config.EnvHome)
-			if home == "" {
-				return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
+			scope, baseDir, err := resolveScope(scopeFlag)
+			if err != nil {
+				return err
 			}
 			io := iostream.FromCmd(cmd)
-			results := skills.Install(home)
+			results := skills.Install(scope, baseDir)
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, results)
 			}
@@ -61,20 +63,25 @@ func newSkillInstallCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().StringVar(&scopeFlag, "scope", "user", "Installation scope: user or project")
 
 	return cmd
 }
 
 func newSkillListCmd() *cobra.Command {
 	var jsonOut bool
+	var scopeFlag string
 
 	cmd := &cobra.Command{
 		Use:   cmdList,
 		Short: "List bundled skills and their per-agent installation status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := os.Getenv(config.EnvHome)
+			scope, baseDir, err := resolveScope(scopeFlag)
+			if err != nil {
+				return err
+			}
 			io := iostream.FromCmd(cmd)
-			statuses := skills.Status(home)
+			statuses := skills.Status(scope, baseDir)
 
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, statuses)
@@ -103,18 +110,39 @@ func newSkillListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().StringVar(&scopeFlag, "scope", "user", "Installation scope: user or project")
 
 	return cmd
+}
+
+// resolveScope translates the --scope flag value into a Scope and the appropriate base directory.
+func resolveScope(scopeFlag string) (skills.Scope, string, error) {
+	switch skills.Scope(scopeFlag) {
+	case skills.ScopeUser:
+		home := os.Getenv(config.EnvHome)
+		if home == "" {
+			return "", "", &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
+		}
+		return skills.ScopeUser, home, nil
+	case skills.ScopeProject:
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", "", fmt.Errorf("get working directory: %w", err)
+		}
+		return skills.ScopeProject, cwd, nil
+	default:
+		return "", "", &userError{msg: "invalid scope: must be 'user' or 'project'", errMsg: "invalid scope"}
+	}
 }
 
 func stateDisplay(state skills.State) (icon, label string) {
 	switch state {
 	case skills.StateCurrent:
-		return ui.Green("\u2713"), ui.Green("current")
+		return ui.Green("✓"), ui.Green("current")
 	case skills.StateOutdated:
-		return ui.Yellow("\u26a0"), ui.Yellow("outdated")
+		return ui.Yellow("⚠"), ui.Yellow("outdated")
 	case skills.StateMissing:
-		return ui.Dim("\u2717"), ui.Dim("missing")
+		return ui.Dim("✗"), ui.Dim("missing")
 	}
 	return ui.Dim("?"), ui.Dim("unknown")
 }
