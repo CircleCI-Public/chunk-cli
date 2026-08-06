@@ -33,7 +33,7 @@ func TestInstallInDir(t *testing.T) {
 	dir := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
 
-	results := skills.InstallInDir(dir)
+	results := skills.InstallAgents(skills.ProjectAgents(dir))
 	assert.Equal(t, len(results), 1)
 	assert.Equal(t, results[0].Agent, "claude")
 	assert.Assert(t, !results[0].Skipped)
@@ -49,7 +49,7 @@ func TestInstallInDir(t *testing.T) {
 
 func TestInstallInDirNoDirs(t *testing.T) {
 	dir := t.TempDir()
-	assert.Equal(t, len(skills.InstallInDir(dir)), 0)
+	assert.Equal(t, len(skills.InstallAgents(skills.ProjectAgents(dir))), 0)
 }
 
 func TestInstallInDirBothAgents(t *testing.T) {
@@ -57,7 +57,7 @@ func TestInstallInDirBothAgents(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".codex"), 0o755))
 
-	results := skills.InstallInDir(dir)
+	results := skills.InstallAgents(skills.ProjectAgents(dir))
 	assert.Equal(t, len(results), 2)
 	for _, r := range results {
 		assert.Equal(t, len(r.Installed), len(skillNames))
@@ -68,7 +68,7 @@ func TestInstallByNameInDir(t *testing.T) {
 	dir := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
 
-	results := skills.InstallByNameInDir(dir, "chunk-review")
+	results := skills.InstallByNameAgents(skills.ProjectAgents(dir), "chunk-review")
 	assert.Equal(t, len(results), 1)
 	assert.Equal(t, len(results[0].Installed), 1)
 	assert.Equal(t, results[0].Installed[0], "chunk-review")
@@ -80,18 +80,18 @@ func TestInstallByNameInDir(t *testing.T) {
 func TestInstallByNameInDirUnknownSkill(t *testing.T) {
 	dir := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
-	assert.Assert(t, skills.InstallByNameInDir(dir, "does-not-exist") == nil)
+	assert.Assert(t, skills.InstallByNameAgents(skills.ProjectAgents(dir), "does-not-exist") == nil)
 }
 
 func TestStatusInDir(t *testing.T) {
 	dir := t.TempDir()
 
-	assert.Equal(t, len(skills.StatusInDir(dir)), 0)
+	assert.Equal(t, len(skills.StatusAgents(skills.ProjectAgents(dir))), 0)
 
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
-	skills.InstallInDir(dir)
+	skills.InstallAgents(skills.ProjectAgents(dir))
 
-	statuses := skills.StatusInDir(dir)
+	statuses := skills.StatusAgents(skills.ProjectAgents(dir))
 	assert.Equal(t, len(statuses), 1)
 	assert.Equal(t, statuses[0].Agent, "claude")
 	assert.Assert(t, statuses[0].Available)
@@ -118,7 +118,7 @@ func TestInstallBothAgents(t *testing.T) {
 		assert.NilError(t, os.MkdirAll(filepath.Join(home, dir), 0o755))
 	}
 
-	results := skills.Install(home)
+	results := skills.InstallAgents(skills.Agents(home))
 	assert.Equal(t, len(results), 2)
 
 	for _, r := range results {
@@ -145,7 +145,7 @@ func TestInstallSkipsAgentWithoutConfigDir(t *testing.T) {
 	// Only create .claude, not .agents.
 	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
-	results := skills.Install(home)
+	results := skills.InstallAgents(skills.Agents(home))
 	assert.Equal(t, len(results), 2)
 
 	var claude, codex skills.AgentInstallResult
@@ -172,11 +172,11 @@ func TestInstallIdempotent(t *testing.T) {
 	home := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
-	results1 := skills.Install(home)
+	results1 := skills.InstallAgents(skills.Agents(home))
 	assert.Equal(t, len(results1[0].Installed), len(skillNames))
 
 	// Second install should report all up to date.
-	results2 := skills.Install(home)
+	results2 := skills.InstallAgents(skills.Agents(home))
 	assert.Equal(t, len(results2[0].Installed), 0, "should have no new installs")
 	assert.Equal(t, len(results2[0].Updated), 0, "should have no updates")
 }
@@ -186,13 +186,13 @@ func TestInstallDetectsOutdated(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
 	// First install.
-	skills.Install(home)
+	skills.InstallAgents(skills.Agents(home))
 
 	// Tamper with one skill file to make it outdated.
 	path := filepath.Join(home, ".claude", "skills", "chunk-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(path, []byte("old content"), 0o644))
 
-	results := skills.Install(home)
+	results := skills.InstallAgents(skills.Agents(home))
 	claude := results[0]
 	assert.Equal(t, len(claude.Installed), 0)
 	assert.Equal(t, len(claude.Updated), 1)
@@ -205,7 +205,7 @@ func TestInstallContentMatchesEmbedded(t *testing.T) {
 		assert.NilError(t, os.MkdirAll(filepath.Join(home, dir), 0o755))
 	}
 
-	skills.Install(home)
+	skills.InstallAgents(skills.Agents(home))
 
 	for _, name := range skillNames {
 		claudePath := filepath.Join(home, ".claude", "skills", name, "SKILL.md")
@@ -224,7 +224,7 @@ func TestInstallContentMatchesEmbedded(t *testing.T) {
 func TestStatusNotInstalled(t *testing.T) {
 	home := t.TempDir()
 
-	statuses := skills.Status(home)
+	statuses := skills.StatusAgents(skills.Agents(home))
 	assert.Equal(t, len(statuses), 2)
 
 	for _, agent := range statuses {
@@ -240,9 +240,9 @@ func TestStatusCurrent(t *testing.T) {
 	home := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
-	skills.Install(home)
+	skills.InstallAgents(skills.Agents(home))
 
-	statuses := skills.Status(home)
+	statuses := skills.StatusAgents(skills.Agents(home))
 	var claude skills.AgentStatus
 	for _, s := range statuses {
 		if s.Agent == "claude" {
@@ -261,13 +261,13 @@ func TestStatusOutdated(t *testing.T) {
 	home := t.TempDir()
 	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
-	skills.Install(home)
+	skills.InstallAgents(skills.Agents(home))
 
 	// Tamper with a skill.
 	path := filepath.Join(home, ".claude", "skills", "chunk-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(path, []byte("tampered"), 0o644))
 
-	statuses := skills.Status(home)
+	statuses := skills.StatusAgents(skills.Agents(home))
 	var claude skills.AgentStatus
 	for _, s := range statuses {
 		if s.Agent == "claude" {
@@ -287,7 +287,7 @@ func TestStatusOutdated(t *testing.T) {
 func TestStatusIncludesDescriptions(t *testing.T) {
 	home := t.TempDir()
 
-	statuses := skills.Status(home)
+	statuses := skills.StatusAgents(skills.Agents(home))
 	for _, agent := range statuses {
 		for _, s := range agent.Skills {
 			assert.Assert(t, s.Description != "",
@@ -301,7 +301,7 @@ func TestStatusAgentNotAvailable(t *testing.T) {
 	// Only create .claude.
 	assert.NilError(t, os.MkdirAll(filepath.Join(home, ".claude"), 0o755))
 
-	statuses := skills.Status(home)
+	statuses := skills.StatusAgents(skills.Agents(home))
 	for _, agent := range statuses {
 		if agent.Agent == "claude" {
 			assert.Assert(t, agent.Available)

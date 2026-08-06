@@ -307,23 +307,8 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 	return nil
 }
 
-func installSkillsStep(dir string, streams iostream.Streams) {
-	for _, r := range skills.InstallByNameInDir(dir, "chunk-sidecar") {
-		for _, name := range r.Installed {
-			streams.ErrPrintln(ui.Success(fmt.Sprintf("Installed %s skill for %s", name, r.Agent)))
-		}
-		for _, name := range r.Updated {
-			streams.ErrPrintln(ui.Success(fmt.Sprintf("Updated %s skill for %s", name, r.Agent)))
-		}
-	}
-}
-
-func installSkillsStepUser(streams iostream.Streams) {
-	homeDir := os.Getenv(config.EnvHome)
-	if homeDir == "" {
-		return
-	}
-	for _, r := range skills.InstallByName(homeDir, "chunk-sidecar") {
+func installSkillsStep(agents []skills.Agent, streams iostream.Streams) {
+	for _, r := range skills.InstallByNameAgents(agents, "chunk-sidecar") {
 		if r.Skipped {
 			continue
 		}
@@ -590,11 +575,15 @@ hook config files.`,
 
 			// Step 6: Agent skills
 			if !skipSkills {
+				var skillAgents []skills.Agent
 				if userSkills {
-					installSkillsStepUser(streams)
+					if homeDir := os.Getenv(config.EnvHome); homeDir != "" {
+						skillAgents = skills.Agents(homeDir)
+					}
 				} else {
-					installSkillsStep(workDir, streams)
+					skillAgents = skills.ProjectAgents(workDir)
 				}
+				installSkillsStep(skillAgents, streams)
 			}
 
 			streams.ErrPrintln(ui.Success("Project initialized"))

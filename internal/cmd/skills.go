@@ -25,6 +25,24 @@ func newSkillCmd() *cobra.Command {
 	return cmd
 }
 
+// resolveAgents returns agents to operate on based on the --user flag.
+// User-level returns all defined agents (absent ones are marked skipped on install).
+// Project-level returns only agents with existing dot directories in the cwd.
+func resolveAgents(userLevel bool) ([]skills.Agent, error) {
+	if userLevel {
+		home := os.Getenv(config.EnvHome)
+		if home == "" {
+			return nil, &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
+		}
+		return skills.Agents(home), nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, &userError{msg: "Could not determine current directory.", err: err}
+	}
+	return skills.ProjectAgents(cwd), nil
+}
+
 func newSkillInstallCmd() *cobra.Command {
 	var jsonOut, userLevel bool
 
@@ -34,23 +52,15 @@ func newSkillInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
-			var results []skills.AgentInstallResult
-			if userLevel {
-				home := os.Getenv(config.EnvHome)
-				if home == "" {
-					return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
-				}
-				results = skills.Install(home)
-			} else {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return &userError{msg: "Could not determine current directory.", err: err}
-				}
-				results = skills.InstallInDir(cwd)
-				if len(results) == 0 {
-					io.Println(ui.Dim("no supported agent config directories found (" + strings.Join(skills.SupportedProjectDotDirs(), ", ") + ")"))
-					return nil
-				}
+			agents, err := resolveAgents(userLevel)
+			if err != nil {
+				return err
+			}
+
+			results := skills.InstallAgents(agents)
+			if len(results) == 0 {
+				io.Println(ui.Dim("no supported agent config directories found (" + strings.Join(skills.SupportedProjectDotDirs(), ", ") + ")"))
+				return nil
 			}
 
 			if jsonOut {
@@ -91,49 +101,34 @@ func newSkillListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
-			var statuses []skills.AgentStatus
-			if userLevel {
-				home := os.Getenv(config.EnvHome)
-				statuses = skills.Status(home)
-			} else {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return &userError{msg: "Could not determine current directory.", err: err}
-				}
-				statuses = skills.StatusInDir(cwd)
+			agents, err := resolveAgents(userLevel)
+			if err != nil {
+				return err
 			}
+
+			statuses := skills.StatusAgents(agents)
 
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, statuses)
 			}
 
-			skillDefs := skills.All
-			io.Printf("\nBundled skills (%d):\n\n", len(skillDefs))
+			io.Printf("\nBundled skills (%d):\n\n", len(skills.All))
 
-			for i, s := range skillDefs {
+			for i, s := range skills.All {
 				io.Printf("  %s\n", ui.Green(s.Name))
 				io.Printf("    %s\n", ui.Dim(s.Description))
 
-				if userLevel {
-					for _, agent := range statuses {
-						skill := agent.Skills[i]
-						if !agent.Available {
-							io.Printf("      %s: %s\n", ui.Dim(agent.Agent), ui.Dim("n/a (agent not installed)"))
-							continue
-						}
-						icon, label := stateDisplay(skill.State)
-						io.Printf("      %s: %s %s\n", agent.Agent, icon, label)
+				if len(statuses) == 0 {
+					io.Printf("      %s\n", ui.Dim("no supported agent config directories found ("+strings.Join(skills.SupportedProjectDotDirs(), ", ")+")"))
+				}
+				for _, agent := range statuses {
+					skill := agent.Skills[i]
+					if !agent.Available {
+						io.Printf("      %s: %s\n", ui.Dim(agent.Agent), ui.Dim("n/a (agent not installed)"))
+						continue
 					}
-				} else {
-					if len(statuses) == 0 {
-						io.Printf("      %s\n", ui.Dim("no supported agent config directories found ("+strings.Join(skills.SupportedProjectDotDirs(), ", ")+")"))
-					} else {
-						for _, agent := range statuses {
-							skill := agent.Skills[i]
-							icon, label := stateDisplay(skill.State)
-							io.Printf("      %s: %s %s\n", agent.Agent, icon, label)
-						}
-					}
+					icon, label := stateDisplay(skill.State)
+					io.Printf("      %s: %s %s\n", agent.Agent, icon, label)
 				}
 				io.Println()
 			}

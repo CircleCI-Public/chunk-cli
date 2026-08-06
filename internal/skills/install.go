@@ -101,59 +101,6 @@ func SupportedProjectDotDirs() []string {
 	return names
 }
 
-// InstallInDir installs all skills into supported dot directories found in dir.
-func InstallInDir(dir string) []AgentInstallResult {
-	agents := ProjectAgents(dir)
-	results := make([]AgentInstallResult, 0, len(agents))
-	for _, agent := range agents {
-		results = append(results, installForAgent(agent, All))
-	}
-	return results
-}
-
-// InstallByNameInDir installs a single skill by name into supported dot directories found in dir.
-// Returns nil if the skill name is not found.
-func InstallByNameInDir(dir, name string) []AgentInstallResult {
-	var s *Skill
-	for i := range All {
-		if All[i].Name == name {
-			s = &All[i]
-			break
-		}
-	}
-	if s == nil {
-		return nil
-	}
-	agents := ProjectAgents(dir)
-	results := make([]AgentInstallResult, 0, len(agents))
-	for _, agent := range agents {
-		results = append(results, installForAgent(agent, []Skill{*s}))
-	}
-	return results
-}
-
-// StatusInDir returns per-agent, per-skill state for supported dot directories found in dir.
-func StatusInDir(dir string) []AgentStatus {
-	agents := ProjectAgents(dir)
-	results := make([]AgentStatus, 0, len(agents))
-	for _, agent := range agents {
-		ss := make([]AgentSkillStatus, 0, len(All))
-		for _, s := range All {
-			ss = append(ss, AgentSkillStatus{
-				Name:        s.Name,
-				Description: s.Description,
-				State:       SkillState(agent.SkillsDir, s),
-			})
-		}
-		results = append(results, AgentStatus{
-			Agent:     agent.Name,
-			Available: true,
-			Skills:    ss,
-		})
-	}
-	return results
-}
-
 // SkillState checks the installation state of a skill for an agent.
 func SkillState(skillsDir string, s Skill) State {
 	path := filepath.Join(skillsDir, s.Name, "SKILL.md")
@@ -179,10 +126,8 @@ type AgentInstallResult struct {
 	Updated   []string `json:"updated"`
 }
 
-// Install installs all embedded skills for agents whose config dirs exist.
-// Agents with missing config dirs are skipped.
-func Install(homeDir string) []AgentInstallResult {
-	agents := Agents(homeDir)
+// InstallAgents installs all embedded skills for the given agents.
+func InstallAgents(agents []Agent) []AgentInstallResult {
 	results := make([]AgentInstallResult, 0, len(agents))
 	for _, agent := range agents {
 		results = append(results, installForAgent(agent, All))
@@ -190,9 +135,9 @@ func Install(homeDir string) []AgentInstallResult {
 	return results
 }
 
-// InstallByName installs a single skill by name for agents whose config dirs exist.
+// InstallByNameAgents installs a single skill by name for the given agents.
 // Returns nil if the skill name is not found.
-func InstallByName(homeDir, name string) []AgentInstallResult {
+func InstallByNameAgents(agents []Agent, name string) []AgentInstallResult {
 	var s *Skill
 	for i := range All {
 		if All[i].Name == name {
@@ -203,7 +148,6 @@ func InstallByName(homeDir, name string) []AgentInstallResult {
 	if s == nil {
 		return nil
 	}
-	agents := Agents(homeDir)
 	results := make([]AgentInstallResult, 0, len(agents))
 	for _, agent := range agents {
 		results = append(results, installForAgent(agent, []Skill{*s}))
@@ -261,17 +205,14 @@ type AgentStatus struct {
 	Skills    []AgentSkillStatus `json:"skills"`
 }
 
-// Status returns per-agent, per-skill installation state without modifying anything.
-func Status(homeDir string) []AgentStatus {
-	agents := Agents(homeDir)
+// StatusAgents returns per-agent, per-skill installation state for the given agents.
+func StatusAgents(agents []Agent) []AgentStatus {
 	results := make([]AgentStatus, 0, len(agents))
-
 	for _, agent := range agents {
 		available := true
 		if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
 			available = false
 		}
-
 		ss := make([]AgentSkillStatus, 0, len(All))
 		for _, s := range All {
 			state := StateMissing
