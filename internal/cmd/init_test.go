@@ -499,22 +499,27 @@ func TestPrintInitSummaryNoCommands(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "chunk validate"), "missing validate hint")
 }
 
-func TestInstallCompletionBashWritesRCFile(t *testing.T) {
+func TestInstallCompletionBashWritesXDGFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	t.Setenv(config.EnvShell, "/bin/bash")
-
-	// Create .bashrc so detectShell prefers it over .bash_profile.
-	rcFile := filepath.Join(home, ".bashrc")
-	assert.NilError(t, os.WriteFile(rcFile, []byte("# existing config\n"), 0o644))
+	t.Setenv(config.EnvXDGDataHome, filepath.Join(home, ".local", "share"))
 
 	streams, _, errOut := testStreams()
 	err := installCompletion(NewRootCmd(""), streams)
 	assert.NilError(t, err)
 
-	data, err := os.ReadFile(rcFile)
+	// Script must be at the XDG auto-discovery location.
+	scriptPath := filepath.Join(home, ".local", "share", "bash-completion", "completions", "chunk")
+	data, err := os.ReadFile(scriptPath)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), completionTag))
-	assert.Assert(t, strings.Contains(string(data), "completion.bash"), "expected static file source line, got: %s", string(data))
+	assert.Assert(t, len(data) > 0, "expected non-empty completion script at %s", scriptPath)
+
+	// No rc file modification for bash.
+	for _, rc := range []string{".bashrc", ".bash_profile"} {
+		_, statErr := os.Stat(filepath.Join(home, rc))
+		assert.Assert(t, os.IsNotExist(statErr), "expected no rc file modification for bash, but %s exists", rc)
+	}
+
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
 }

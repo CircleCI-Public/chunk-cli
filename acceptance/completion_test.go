@@ -43,44 +43,34 @@ func TestCompletionInstallBash(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.Extra["SHELL"] = "/bin/bash"
 
-	bashrc := filepath.Join(env.HomeDir, ".bashrc")
-	err := os.WriteFile(bashrc, []byte("# bashrc\n"), 0o644)
-	assert.NilError(t, err)
-
 	result := binary.RunCLI(t, []string{"completion", "install"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	data, err := os.ReadFile(bashrc)
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "# chunk shell completion"),
-		"expected completion tag in .bashrc, got: %s", string(data))
-	assert.Assert(t, strings.Contains(string(data), "completion.bash"),
-		"expected static file source line in .bashrc, got: %s", string(data))
+	// Script must be at the XDG auto-discovery location.
+	completionFile := filepath.Join(env.HomeDir, ".local", "share", "bash-completion", "completions", "chunk")
+	content, err := os.ReadFile(completionFile)
+	assert.NilError(t, err, "expected completion script at %s", completionFile)
+	assert.Assert(t, len(content) > 0, "expected non-empty completion script")
 
-	// Static completion file must exist.
-	completionFile := filepath.Join(env.HomeDir, ".config", "chunk", "completion.bash")
-	_, err = os.Stat(completionFile)
-	assert.NilError(t, err, "expected static completion file at %s", completionFile)
+	// No rc file modification for bash.
+	for _, rc := range []string{".bashrc", ".bash_profile"} {
+		_, statErr := os.Stat(filepath.Join(env.HomeDir, rc))
+		assert.Assert(t, os.IsNotExist(statErr), "expected no rc file for bash, but %s exists", rc)
+	}
 }
 
-func TestCompletionInstallBashProfile(t *testing.T) {
+func TestCompletionInstallBashIdempotent(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.Extra["SHELL"] = "/bin/bash"
 
-	// Simulate macOS where .bash_profile exists instead of .bashrc
-	bashProfile := filepath.Join(env.HomeDir, ".bash_profile")
-	err := os.WriteFile(bashProfile, []byte("# bash_profile\n"), 0o644)
-	assert.NilError(t, err)
-
 	result := binary.RunCLI(t, []string{"completion", "install"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "first install failed")
 
-	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
-
-	data, err := os.ReadFile(bashProfile)
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "completion.bash"),
-		"expected static file source line in .bash_profile, got: %s", string(data))
+	result = binary.RunCLI(t, []string{"completion", "install"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "second install failed")
+	assert.Assert(t, strings.Contains(result.Stderr, "already installed"),
+		"expected 'already installed' warning, got stderr: %s", result.Stderr)
 }
 
 func TestCompletionInstallIdempotent(t *testing.T) {
@@ -130,26 +120,18 @@ func TestCompletionInstallEmptyShell(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for empty SHELL")
 }
 
-func TestCompletionInstallBashCreatesRCFile(t *testing.T) {
+func TestCompletionInstallBashNoRCModification(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.Extra["SHELL"] = "/bin/bash"
 
-	// Neither .bashrc nor .bash_profile exists, so install should create .bash_profile
 	result := binary.RunCLI(t, []string{"completion", "install"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
-	// When neither exists, detectShell defaults to .bash_profile
-	bashProfile := filepath.Join(env.HomeDir, ".bash_profile")
-	info, err := os.Stat(bashProfile)
-	assert.NilError(t, err, "expected .bash_profile to be created")
-
-	perm := info.Mode().Perm()
-	assert.Equal(t, perm, os.FileMode(0o644), "expected RC file perm 0644, got %04o", perm)
-
-	data, err := os.ReadFile(bashProfile)
-	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "completion.bash"),
-		"expected static file source line in created file, got: %s", string(data))
+	// bash uses XDG auto-discovery — no rc file should be created or modified.
+	for _, rc := range []string{".bashrc", ".bash_profile"} {
+		_, err := os.Stat(filepath.Join(env.HomeDir, rc))
+		assert.Assert(t, os.IsNotExist(err), "expected no rc file modification for bash, but %s was created", rc)
+	}
 }
 
 func TestCompletionUninstallZsh(t *testing.T) {
@@ -208,28 +190,22 @@ func TestCompletionInstallUninstallRoundTrip(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err), "expected static completion file to be removed after uninstall")
 }
 
-func TestCompletionUninstallPreservesOtherContent(t *testing.T) {
+func TestCompletionUninstallBashRemovesScript(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.Extra["SHELL"] = "/bin/bash"
 
-	bashrc := filepath.Join(env.HomeDir, ".bashrc")
-	original := "# my config\nexport PATH=/usr/local/bin:$PATH\nalias ll='ls -la'\n"
-	err := os.WriteFile(bashrc, []byte(original), 0o644)
-	assert.NilError(t, err)
-
-	// Install then uninstall
 	result := binary.RunCLI(t, []string{"completion", "install"}, env, env.HomeDir)
-	assert.Equal(t, result.ExitCode, 0)
-	result = binary.RunCLI(t, []string{"completion", "uninstall"}, env, env.HomeDir)
-	assert.Equal(t, result.ExitCode, 0)
+	assert.Equal(t, result.ExitCode, 0, "install failed")
 
-	data, err := os.ReadFile(bashrc)
-	assert.NilError(t, err)
-	content := string(data)
-	assert.Assert(t, strings.Contains(content, "export PATH=/usr/local/bin:$PATH"),
-		"existing content should be preserved, got: %s", content)
-	assert.Assert(t, strings.Contains(content, "alias ll='ls -la'"),
-		"existing content should be preserved, got: %s", content)
+	scriptPath := filepath.Join(env.HomeDir, ".local", "share", "bash-completion", "completions", "chunk")
+	_, err := os.Stat(scriptPath)
+	assert.NilError(t, err, "expected script file after install")
+
+	result = binary.RunCLI(t, []string{"completion", "uninstall"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "uninstall failed")
+
+	_, err = os.Stat(scriptPath)
+	assert.Assert(t, os.IsNotExist(err), "expected script file to be removed after uninstall")
 }
 
 func TestCompletionUninstallNoBlockPresent(t *testing.T) {

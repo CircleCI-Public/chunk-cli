@@ -36,10 +36,16 @@ func newCompletionCmd() *cobra.Command {
 	return cmd
 }
 
+// shellConfig holds shell-specific paths resolved at detection time.
+//
+// For bash, rcFile is empty: bash-completion v2 auto-discovers scripts placed
+// in $XDG_DATA_HOME/bash-completion/completions/, so no rc file modification
+// is needed. completionInstalled / installCompletion / uninstall use file
+// presence instead of the rc tag when rcFile == "".
 type shellConfig struct {
-	name          string
-	rcFile        string
-	completionExt string
+	name       string
+	rcFile     string // empty for shells that use XDG auto-discovery (bash)
+	scriptPath string // absolute path to write the completion script
 }
 
 // generate writes a shell completion script for sh to w.
@@ -58,20 +64,25 @@ func detectShell(home string) (shellConfig, error) {
 	shell := os.Getenv(config.EnvShell)
 	switch {
 	case strings.HasSuffix(shell, shellZsh):
-		return shellConfig{
-			name:          shellZsh,
-			rcFile:        filepath.Join(home, ".zshrc"),
-			completionExt: ".zsh",
-		}, nil
-	case strings.HasSuffix(shell, shellBash):
-		rcFile := filepath.Join(home, ".bash_profile")
-		if _, err := os.Stat(filepath.Join(home, ".bashrc")); err == nil {
-			rcFile = filepath.Join(home, ".bashrc")
+		configDir, err := config.Dir()
+		if err != nil {
+			return shellConfig{}, fmt.Errorf("resolve config dir: %w", err)
 		}
 		return shellConfig{
-			name:          shellBash,
-			rcFile:        rcFile,
-			completionExt: ".bash",
+			name:       shellZsh,
+			rcFile:     filepath.Join(home, ".zshrc"),
+			scriptPath: filepath.Join(configDir, "completion.zsh"),
+		}, nil
+	case strings.HasSuffix(shell, shellBash):
+		// bash-completion v2 auto-discovers completions from
+		// $XDG_DATA_HOME/bash-completion/completions/ — no rc file needed.
+		dataHome := os.Getenv(config.EnvXDGDataHome)
+		if dataHome == "" {
+			dataHome = filepath.Join(home, ".local", "share")
+		}
+		return shellConfig{
+			name:       shellBash,
+			scriptPath: filepath.Join(dataHome, "bash-completion", "completions", "chunk"),
 		}, nil
 	default:
 		return shellConfig{}, &userError{
@@ -82,8 +93,9 @@ func detectShell(home string) (shellConfig, error) {
 	}
 }
 
-// completionInstalled reports whether the completion tag is already in the
-// user's shell rc file. Returns error if shell is unsupported or HOME unset.
+// completionInstalled reports whether completions are installed.
+// For zsh, checks for the tag in the rc file.
+// For bash, checks whether the script file exists.
 func completionInstalled() (bool, error) {
 	home := os.Getenv(config.EnvHome)
 	if home == "" {
@@ -95,6 +107,14 @@ func completionInstalled() (bool, error) {
 		return false, err
 	}
 
+	if sh.rcFile == "" {
+		_, err := os.Stat(sh.scriptPath)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return err == nil, err
+	}
+
 	data, err := os.ReadFile(sh.rcFile)
 	if err != nil {
 		return false, nil // rc file doesn't exist — not installed
@@ -102,42 +122,26 @@ func completionInstalled() (bool, error) {
 	return strings.Contains(string(data), completionTag), nil
 }
 
-// completionFilePath returns the path to the static completion script for sh,
-// stored under the chunk config directory.
-func completionFilePath(sh shellConfig) (string, error) {
-	dir, err := config.Dir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "completion"+sh.completionExt), nil
-}
-
-// writeCompletionFile generates the completion script for sh and writes it to
-// the chunk config directory. Returns the path to the written file.
-func writeCompletionFile(cmd *cobra.Command, sh shellConfig) (string, error) {
-	filePath, err := completionFilePath(sh)
-	if err != nil {
-		return "", fmt.Errorf("resolve completion file path: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return "", fmt.Errorf("create completion dir: %w", err)
+// writeCompletionFile generates and writes the completion script to sh.scriptPath.
+func writeCompletionFile(cmd *cobra.Command, sh shellConfig) error {
+	if err := os.MkdirAll(filepath.Dir(sh.scriptPath), 0o755); err != nil {
+		return fmt.Errorf("create completion dir: %w", err)
 	}
 
 	var buf bytes.Buffer
 	if err := sh.generate(cmd.Root(), &buf); err != nil {
-		return "", fmt.Errorf("generate completion script: %w", err)
+		return fmt.Errorf("generate completion script: %w", err)
 	}
 
-	if err := os.WriteFile(filePath, buf.Bytes(), 0o644); err != nil {
-		return "", fmt.Errorf("write completion file: %w", err)
+	if err := os.WriteFile(sh.scriptPath, buf.Bytes(), 0o644); err != nil {
+		return fmt.Errorf("write completion file: %w", err)
 	}
 
-	return filePath, nil
+	return nil
 }
 
-// installCompletion writes the static completion script and appends a source
-// line for it to the user's shell rc file.
+// installCompletion writes the completion script and, for zsh, appends a
+// source line to the rc file. For bash, only the script file is written.
 func installCompletion(cmd *cobra.Command, streams iostream.Streams) (err error) {
 	home := os.Getenv(config.EnvHome)
 	if home == "" {
@@ -150,18 +154,27 @@ func installCompletion(cmd *cobra.Command, streams iostream.Streams) (err error)
 	}
 
 	// Check if already installed.
-	data, readErr := os.ReadFile(sh.rcFile)
-	if readErr == nil && strings.Contains(string(data), completionTag) {
+	installed, err := completionInstalled()
+	if err != nil {
+		return err
+	}
+	if installed {
 		streams.ErrPrintln(ui.Warning("Completion already installed."))
 		return nil
 	}
 
-	filePath, err := writeCompletionFile(cmd, sh)
-	if err != nil {
+	if err := writeCompletionFile(cmd, sh); err != nil {
 		return err
 	}
 
-	line := completionTag + "\n" + "source " + filePath + "\n"
+	// Bash: auto-discovered — no rc modification needed.
+	if sh.rcFile == "" {
+		streams.ErrPrintln(ui.Success("Completion installed."))
+		return nil
+	}
+
+	// Zsh: append source line to rc file.
+	line := completionTag + "\n" + "source " + sh.scriptPath + "\n"
 
 	f, err := os.OpenFile(sh.rcFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -224,7 +237,7 @@ func RegenerateCompletionIfInstalled(cmd *cobra.Command, streams iostream.Stream
 		return
 	}
 
-	if _, err := writeCompletionFile(cmd, sh); err != nil {
+	if err := writeCompletionFile(cmd, sh); err != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not regenerate completions: %v", err)))
 		return
 	}
@@ -280,9 +293,19 @@ func newCompletionUninstallCmd() *cobra.Command {
 				return err
 			}
 
+			// Remove the script file (best-effort).
+			_ = os.Remove(sh.scriptPath)
+
+			// Bash: no rc file to clean up.
+			if sh.rcFile == "" {
+				io.ErrPrintln(ui.Success("Completion uninstalled."))
+				return nil
+			}
+
+			// Zsh: strip the tag and source line from the rc file.
 			data, err := os.ReadFile(sh.rcFile)
 			if err != nil {
-				// Nothing to uninstall
+				// Nothing to clean up in the rc file.
 				io.ErrPrintln(ui.Success("Completion uninstalled."))
 				return nil
 			}
@@ -299,7 +322,7 @@ func newCompletionUninstallCmd() *cobra.Command {
 				if skip {
 					// Remove the source line immediately following the tag,
 					// handling both the old "source <(chunk completion ...)"
-					// and the new "source /path/to/completion.*" formats.
+					// and the new "source /path/to/completion.zsh" formats.
 					skip = false
 					continue
 				}
@@ -312,11 +335,6 @@ func newCompletionUninstallCmd() *cobra.Command {
 					suggestion: suggestionCheckPerms,
 					err:        err,
 				}
-			}
-
-			// Best-effort removal of the static completion file.
-			if filePath, err := completionFilePath(sh); err == nil {
-				_ = os.Remove(filePath)
 			}
 
 			io.ErrPrintln(ui.Success("Completion uninstalled."))
