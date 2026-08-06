@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
-
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // sessionID returns a unique session ID for each test to prevent state leakage.
@@ -21,27 +18,6 @@ func sessionID(t *testing.T) string {
 	id := fmt.Sprintf("test-%s", t.Name())
 	t.Cleanup(func() { ResetAttempts(id) })
 	return id
-}
-
-// initGitRepo creates a git repo in dir, stages any existing files, and
-// creates an initial commit so that git status works correctly and the
-// working tree starts clean.
-func initGitRepo(t *testing.T, dir string) {
-	t.Helper()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
-		out, err := cmd.CombinedOutput()
-		assert.NilError(t, err, "git %v: %s", args, out)
-	}
-	run("init")
-	run("add", "-A")
-	run("commit", "--allow-empty", "-m", "init")
 }
 
 // --- TrackFailedAttempt / ResetAttempts ---
@@ -132,25 +108,4 @@ func TestHooksDisabled_SentinelFile(t *testing.T) {
 
 func TestHooksDisabled_Neither(t *testing.T) {
 	assert.Equal(t, HooksDisabled(t.TempDir(), false), false)
-}
-
-// --- HasGitChanges ---
-
-func TestHasGitChanges_CleanRepo_ReturnsFalse(t *testing.T) {
-	dir := t.TempDir()
-	writeConfig(t, dir, []config.Command{{Name: "test", Run: "true"}})
-	initGitRepo(t, dir)
-	assert.Equal(t, HasGitChanges(dir), false)
-}
-
-func TestHasGitChanges_UntrackedFile_ReturnsTrue(t *testing.T) {
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-	assert.NilError(t, os.WriteFile(dir+"/dirty.txt", []byte("change"), 0o644))
-	assert.Equal(t, HasGitChanges(dir), true)
-}
-
-func TestHasGitChanges_NotARepo_ReturnsTrue(t *testing.T) {
-	// Non-repo dir: git fails, should fail open
-	assert.Equal(t, HasGitChanges(t.TempDir()), true)
 }

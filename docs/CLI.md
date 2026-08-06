@@ -186,6 +186,12 @@ chunk
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
 - `chunk hook disable` creates a `.chunk/hooks-disabled` sentinel file inspected by the `chunk validate` Stop hook; `hook enable` removes it. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
+- `chunk validate` caches successful runs in hook mode only, keyed by
+  `.chunk/config.json`, the execution target, the HEAD SHA, and the contents of
+  all changed files; a repeat hook invocation with nothing changed prints
+  `skipped` instead of re-running. Manual runs, `--cmd` inline commands, and
+  repos whose state cannot be hashed never cache. Entries expire after 7 days.
+  See [HOOKS.md](HOOKS.md#result-caching).
 
 ## Config keys
 
