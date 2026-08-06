@@ -141,12 +141,12 @@ func newValidateCmd() *cobra.Command {
 }
 
 // initHook applies hook-specific context, stream, and early-exit logic.
-// tree is the working-tree fingerprint for this run; the zero value means it
-// could not be established, and reports the tree as not clean so validation
-// still runs in ambiguous cases.
+// tree is the working-tree fingerprint for this run, and treeErr the reason it
+// could not be taken. A zero tree reports as not clean, so validation still runs
+// in ambiguous cases.
 // Returns updated ctx and streams, a skip flag (true = return nil immediately),
 // and a non-nil error when the hook should exit with a non-zero code.
-func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitutil.Worktree, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
+func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitutil.Worktree, treeErr error, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
 	if hook == nil {
 		return ctx, streams, false, nil
 	}
@@ -160,6 +160,14 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	if validate.HooksDisabled(workDir, os.Getenv(config.EnvChunkHooksDisabled) != "") {
 		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)
+	}
+	// Say so when the tree could not be fingerprinted. Everything below degrades
+	// silently on a zero tree — the clean-tree skip and the result cache both just
+	// run the commands — so a repo that never once prints "skipped" (one with a
+	// dirty submodule, say) is otherwise indistinguishable from one where the
+	// cache is working and nothing is ever unchanged.
+	if treeErr != nil {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: working tree state unavailable (%v); running everything, caching nothing", treeErr)))
 	}
 	if tree.Clean {
 		return ctx, streams, true, nil
@@ -220,13 +228,14 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// the zero Worktree, which reads as "not clean" and is refused as a cache
 	// key, so both questions fall back to running the commands.
 	var tree gitutil.Worktree
+	var treeErr error
 	if hook != nil {
-		tree, _ = gitutil.Fingerprint(workDir)
+		tree, treeErr = gitutil.Fingerprint(workDir)
 	}
 
 	var skip bool
 	var hookErr error
-	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, tree, streams)
+	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, tree, treeErr, streams)
 	if hookErr != nil {
 		return hookErr
 	}
@@ -289,12 +298,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if resultCache != nil {
 		if _, ok := resultCache.Get(cacheKey); ok {
 			streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
-			// A cache hit is a success, so it clears the failure counter just as
-			// WrapHookResult does for a real one. Leaving a stale count behind
-			// would bring the "ask the user for guidance" bail-out forward by a
-			// turn. resultCache is only non-nil in hook mode, so hook is set.
-			validate.ResetAttempts(hook.sessionID)
-			return nil
+			// A hit is a success, so it finishes the same way a real successful run
+			// does rather than repeating that bookkeeping here: clearing the failure
+			// counter, and whatever else the success branch grows later.
+			return finishValidate(cmd, hook, nil, start, opts.sidecarID, cfg, statusFn, streams)
 		}
 	}
 
@@ -816,6 +823,9 @@ func validateCacheDir(workDir string) (string, error) {
 // hookResultCache returns a cache and cache key for hook-mode runs, or
 // (nil, "") when caching does not apply: non-hook runs, inline commands, or a
 // working tree whose state could not be fingerprinted.
+//
+// The cache keeps itself to a bounded size as it is written to; entries live for
+// filecache.DefaultMaxAge.
 func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.Worktree, commandName string, cfg *config.ProjectConfig, target string) (*filecache.FileCache[validate.CachedResult], string) {
 	if hook == nil || inlineCmd != "" {
 		return nil, ""
@@ -827,7 +837,7 @@ func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.
 	key, ok := validate.BuildCacheKey(validate.CacheKeyInputs{
 		Worktree:    tree,
 		CommandName: commandName,
-		Commands:    cfg.Commands,
+		Config:      cfg,
 		Target:      target,
 	})
 	if !ok {

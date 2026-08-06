@@ -30,7 +30,9 @@ fingerprint, taken once per hook invocation.
 
 The cache key covers:
 
-- the `commands` block of `.chunk/config.json`
+- all of `.chunk/config.json` — the `commands` block, and the `environment` block
+  that decides what those commands run against. A project that gitignores
+  `.chunk/` still gets a re-run when either changes
 - the execution target — the configured sidecar snapshot image and the active
   sidecar's ID, so a result validated against one sidecar is never reused for
   another
@@ -65,7 +67,15 @@ Caching is skipped, and commands always run, when:
 
 Those last two fail closed: without a trustworthy digest the key would depend on
 the config alone and would stay stable across code changes, so no cache is
-consulted at all.
+consulted at all. When the working tree cannot be hashed, the hook says so:
+
+```
+chunk validate: working tree state unavailable (hash sub: changed path is not a
+regular file); running everything, caching nothing
+```
+
+That line is the only signal that a repo is getting no benefit from the cache, so
+a repo that never prints `skipped` is not left unexplained.
 
 Entries live outside the repo, under the per-project data directory:
 
@@ -73,9 +83,11 @@ Entries live outside the repo, under the per-project data directory:
 $XDG_DATA_HOME/chunk/<sha256-of-project-path>/validate-cache/
 ```
 
-Each entry is a small JSON file. Superseded entries (older commits, earlier
-working-tree states) are not pruned automatically; delete the directory to clear
-the cache.
+Each entry is a small JSON file. Keys are content-addressed, so a superseded
+entry (an older commit, an earlier working-tree state) is never read again; each
+write sweeps entries older than 7 days, along with any partial file left behind by
+an interrupted run. Nothing needs cleaning by hand, though deleting the directory
+is always safe and forces a re-run.
 
 ## Worktree Support
 

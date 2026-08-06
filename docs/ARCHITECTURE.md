@@ -31,6 +31,7 @@ chunk-cli/
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers, working-tree fingerprints
+    ├── hashutil/              # Collision-free digests of string parts (cache keys)
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
     ├── sidecar/               # CircleCI sidecar operations
@@ -61,6 +62,8 @@ main.go → internal/cmd/ → internal/{business packages} → internal/httpcl/
 - Business packages (`buildprompt/`, `task/`, etc.) contain the logic
 - `internal/httpcl/` is an independent library — no imports are allowed to other `internal/` packages
 - `config/` is a leaf — no imports from other `internal/` packages
+- `hashutil/` is a leaf too: stdlib only, so any package can share its digest
+  primitive rather than re-deriving one
 
 No upward or lateral imports between business packages, except where a
 package naturally composes another (e.g. `task/` uses `circleci/`).
@@ -261,11 +264,14 @@ runs configured validation commands before the AI agent commits code. See
 caches successful runs. Both tree-dependent hook decisions read one
 `gitutil.Fingerprint` call: it returns the HEAD SHA, a digest of the contents of
 every changed file, and whether the tree is clean at all. A clean tree skips the
-run outright; otherwise `validate.BuildCacheKey` combines the fingerprint with
-the command config and execution target into a key, and a repeat hook invocation
-that hits an entry skips execution. The unit of caching is the whole run, not
-individual files. Manual runs never cache, and an unusable fingerprint is refused
-as a key, since a config-only key would stay stable across code changes. See
+run outright; otherwise `validate.BuildCacheKey` combines the fingerprint with the
+project config and execution target into a key, and a repeat hook invocation that
+hits an entry skips execution — going through the same `finishValidate` path as a
+real success, so hook bookkeeping has one home. The unit of caching is the whole
+run, not individual files. Manual runs never cache, and an unusable fingerprint is
+refused as a key, since a config-only key would stay stable across code changes;
+`Fingerprint` returns an error saying which condition it hit, and hook mode prints
+it, because a repo that never caches is otherwise silent about why. See
 **[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
 
 ## HTTP Client (`internal/httpcl/`)

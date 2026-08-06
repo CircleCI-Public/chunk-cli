@@ -219,38 +219,74 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 // by how the run itself ends.
 const activeStopHookPayload = `{"session_id":"test-session-001","stop_hook_active":true}`
 
+// skipMsg is the one line that tells the agent no commands ran.
+const skipMsg = "skipped (no changes since last successful run)"
+
+// runActiveStopHook fires a re-signalled Stop hook against dir and returns what
+// the agent would see, along with the exit error. Unlike runValidateHook it does
+// not assert on the error, so failing runs can be exercised too.
+func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
+	t.Helper()
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetIn(strings.NewReader(activeStopHookPayload))
+	root.SetArgs([]string{"validate", "--project", dir})
+	err = root.Execute()
+	return errBuf.String(), err
+}
+
+// countingCommand returns a command that appends a line to a marker file each
+// time it runs and then exits with code, plus a func reporting how many times it
+// has run. The marker lives outside the repo on purpose: written inside it, every
+// run would change the working-tree digest and a re-run would prove nothing about
+// the cache.
+func countingCommand(t *testing.T, code int) (run string, runs func() int) {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), "runs")
+	return fmt.Sprintf("echo x >> %s; exit %d", marker, code), func() int {
+		t.Helper()
+		data, err := os.ReadFile(marker)
+		if errors.Is(err, os.ErrNotExist) {
+			return 0
+		}
+		assert.NilError(t, err)
+		return len(strings.Fields(string(data)))
+	}
+}
+
+// hookProject sets up a git repo with one configured command. Saving the config
+// leaves .chunk/ untracked, so the tree is never clean and the hook reaches the
+// cache instead of short-circuiting on the clean-tree check.
+func hookProject(t *testing.T, run string) string {
+	t.Helper()
+	// The attempt counter lives under os.TempDir(); isolate it from other tests
+	// sharing this session ID.
+	t.Setenv("TMPDIR", t.TempDir())
+	dir := t.TempDir()
+	gitSetup(t, dir, "main")
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: run}},
+	}))
+	return dir
+}
+
 // TestValidateHookCacheHitResetsAttempts covers a Stop hook firing again on a
 // tree that already validated. The commands are skipped, and because a cache hit
 // is a success it must clear the failure counter — otherwise a stale count
 // brings the "ask the user for guidance" bail-out forward by a turn.
 func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 	isolateConfig(t)
-	// The attempt counter lives under os.TempDir(); isolate it from other tests
-	// sharing this session ID.
-	t.Setenv("TMPDIR", t.TempDir())
 	const sessionID = "test-session-001"
-
-	dir := t.TempDir()
-	gitSetup(t, dir, "main")
-	// Saving the config leaves .chunk/ untracked, so the tree is never clean and
-	// the hook reaches the cache instead of short-circuiting on a clean tree.
-	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
-		Commands: []config.Command{{Name: "test", Run: "exit 0"}},
-	}))
+	dir := hookProject(t, "exit 0")
 
 	run := func() string {
 		t.Helper()
-		var outBuf, errBuf bytes.Buffer
-		root := NewRootCmd("test")
-		root.SetOut(&outBuf)
-		root.SetErr(&errBuf)
-		root.SetIn(strings.NewReader(activeStopHookPayload))
-		root.SetArgs([]string{"validate", "--project", dir})
-		assert.NilError(t, root.Execute())
-		return errBuf.String()
+		stderr, err := runActiveStopHook(t, dir)
+		assert.NilError(t, err)
+		return stderr
 	}
-
-	const skipMsg = "skipped (no changes since last successful run)"
 
 	first := run()
 	assert.Assert(t, !strings.Contains(first, skipMsg), "first run must execute, got: %q", first)
@@ -263,6 +299,52 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 
 	// The hit cleared the counter, so the next failure is attempt 1 again.
 	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
+}
+
+// TestValidateHookFailureIsNotCached is the guarantee the whole cache rests on.
+// If a failing run were ever stored, every later hook invocation on the same tree
+// would print "skipped" and return nil, so the agent would stop with the build
+// broken — and nothing else in the suite would notice.
+func TestValidateHookFailureIsNotCached(t *testing.T) {
+	isolateConfig(t)
+	run, runs := countingCommand(t, 1)
+	dir := hookProject(t, run)
+
+	_, err := runActiveStopHook(t, dir)
+	assert.Assert(t, err != nil, "a failing command must fail the hook")
+	assert.Equal(t, runs(), 1)
+
+	second, err := runActiveStopHook(t, dir)
+	assert.Assert(t, err != nil, "the second run must fail too, not report a hit")
+	assert.Assert(t, !strings.Contains(second, skipMsg),
+		"a failed run must not be cached, got: %q", second)
+	assert.Equal(t, runs(), 2, "the commands must run again after a failure")
+}
+
+// TestValidateHookCacheMissAfterEdit is the other half of the contract: a hit is
+// only correct while the tree is untouched, so an edit between runs has to reach
+// the key and put the commands back on.
+func TestValidateHookCacheMissAfterEdit(t *testing.T) {
+	isolateConfig(t)
+	run, runs := countingCommand(t, 0)
+	dir := hookProject(t, run)
+
+	_, err := runActiveStopHook(t, dir)
+	assert.NilError(t, err)
+	assert.Equal(t, runs(), 1)
+
+	second, err := runActiveStopHook(t, dir)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(second, skipMsg), "unchanged tree must hit, got: %q", second)
+	assert.Equal(t, runs(), 1, "a cache hit must not execute the commands")
+
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644))
+
+	third, err := runActiveStopHook(t, dir)
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(third, skipMsg),
+		"an edited tree must miss the cache, got: %q", third)
+	assert.Equal(t, runs(), 2, "the commands must run again after an edit")
 }
 
 // --- hookResultCache ---
