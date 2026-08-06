@@ -43,53 +43,58 @@ var All = []Skill{
 	},
 }
 
-// Agent represents a target agent with its config directories.
-type Agent struct {
-	Name      string
-	ConfigDir string // parent config dir (must exist for install)
-	SkillsDir string // where skill subdirectories live
+// agent represents a target agent with its config directories.
+type agent struct {
+	name      string
+	configDir string // parent config dir (must exist for install)
+	skillsDir string // where skill subdirectories live
 }
 
-// Agents returns the list of supported agents for the given home directory.
-func Agents(homeDir string) []Agent {
-	return []Agent{
+// Scope determines which agent directories to target for skill operations.
+type Scope struct {
+	agents []agent
+}
+
+// UserScope returns a Scope targeting user-level agent directories ($HOME/.claude, $HOME/.agents).
+func UserScope(homeDir string) Scope {
+	return Scope{agents: []agent{
 		{
-			Name:      "claude",
-			ConfigDir: filepath.Join(homeDir, ".claude"),
-			SkillsDir: filepath.Join(homeDir, ".claude", "skills"),
+			name:      "claude",
+			configDir: filepath.Join(homeDir, ".claude"),
+			skillsDir: filepath.Join(homeDir, ".claude", "skills"),
 		},
 		{
-			Name:      "codex",
-			ConfigDir: filepath.Join(homeDir, ".agents"),
-			SkillsDir: filepath.Join(homeDir, ".agents", "skills"),
+			name:      "codex",
+			configDir: filepath.Join(homeDir, ".agents"),
+			skillsDir: filepath.Join(homeDir, ".agents", "skills"),
 		},
-	}
+	}}
 }
 
 // supportedProjectDirs maps dot directory names to agent names for project-level detection.
 var supportedProjectDirs = []struct {
 	dotDir string
-	agent  string
+	name   string
 }{
 	{".claude", "claude"},
 	{".codex", "codex"},
 }
 
-// ProjectAgents returns agents found in dir by inspecting for supported dot directories.
-// Only agents with existing dot directories are returned.
-func ProjectAgents(dir string) []Agent {
-	var agents []Agent
+// ProjectScope returns a Scope targeting agent directories found in dir (.claude, .codex).
+// Only directories that already exist are included.
+func ProjectScope(dir string) Scope {
+	var agents []agent
 	for _, d := range supportedProjectDirs {
 		configDir := filepath.Join(dir, d.dotDir)
 		if _, err := os.Stat(configDir); err == nil {
-			agents = append(agents, Agent{
-				Name:      d.agent,
-				ConfigDir: configDir,
-				SkillsDir: filepath.Join(configDir, "skills"),
+			agents = append(agents, agent{
+				name:      d.name,
+				configDir: configDir,
+				skillsDir: filepath.Join(configDir, "skills"),
 			})
 		}
 	}
-	return agents
+	return Scope{agents: agents}
 }
 
 // SupportedProjectDotDirs returns the dot directory names checked for project-level installs.
@@ -126,18 +131,18 @@ type AgentInstallResult struct {
 	Updated   []string `json:"updated"`
 }
 
-// InstallAgents installs all embedded skills for the given agents.
-func InstallAgents(agents []Agent) []AgentInstallResult {
-	results := make([]AgentInstallResult, 0, len(agents))
-	for _, agent := range agents {
-		results = append(results, installForAgent(agent, All))
+// Install installs all embedded skills for the agents in scope.
+func Install(scope Scope) []AgentInstallResult {
+	results := make([]AgentInstallResult, 0, len(scope.agents))
+	for _, a := range scope.agents {
+		results = append(results, installForAgent(a, All))
 	}
 	return results
 }
 
-// InstallByNameAgents installs a single skill by name for the given agents.
+// InstallByName installs a single skill by name for the agents in scope.
 // Returns nil if the skill name is not found.
-func InstallByNameAgents(agents []Agent, name string) []AgentInstallResult {
+func InstallByName(scope Scope, name string) []AgentInstallResult {
 	var s *Skill
 	for i := range All {
 		if All[i].Name == name {
@@ -148,22 +153,22 @@ func InstallByNameAgents(agents []Agent, name string) []AgentInstallResult {
 	if s == nil {
 		return nil
 	}
-	results := make([]AgentInstallResult, 0, len(agents))
-	for _, agent := range agents {
-		results = append(results, installForAgent(agent, []Skill{*s}))
+	results := make([]AgentInstallResult, 0, len(scope.agents))
+	for _, a := range scope.agents {
+		results = append(results, installForAgent(a, []Skill{*s}))
 	}
 	return results
 }
 
-func installForAgent(agent Agent, subset []Skill) AgentInstallResult {
-	if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
-		return AgentInstallResult{Agent: agent.Name, Skipped: true, Installed: make([]string, 0), Updated: make([]string, 0)}
+func installForAgent(a agent, subset []Skill) AgentInstallResult {
+	if _, err := os.Stat(a.configDir); os.IsNotExist(err) {
+		return AgentInstallResult{Agent: a.name, Skipped: true, Installed: make([]string, 0), Updated: make([]string, 0)}
 	}
 
-	result := AgentInstallResult{Agent: agent.Name, Installed: make([]string, 0), Updated: make([]string, 0)}
+	result := AgentInstallResult{Agent: a.name, Installed: make([]string, 0), Updated: make([]string, 0)}
 
 	for _, s := range subset {
-		state := SkillState(agent.SkillsDir, s)
+		state := SkillState(a.skillsDir, s)
 		if state == StateCurrent {
 			continue
 		}
@@ -173,7 +178,7 @@ func installForAgent(agent Agent, subset []Skill) AgentInstallResult {
 			continue
 		}
 
-		dir := filepath.Join(agent.SkillsDir, s.Name)
+		dir := filepath.Join(a.skillsDir, s.Name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			continue
 		}
@@ -205,19 +210,19 @@ type AgentStatus struct {
 	Skills    []AgentSkillStatus `json:"skills"`
 }
 
-// StatusAgents returns per-agent, per-skill installation state for the given agents.
-func StatusAgents(agents []Agent) []AgentStatus {
-	results := make([]AgentStatus, 0, len(agents))
-	for _, agent := range agents {
+// Status returns per-agent, per-skill installation state for the agents in scope.
+func Status(scope Scope) []AgentStatus {
+	results := make([]AgentStatus, 0, len(scope.agents))
+	for _, a := range scope.agents {
 		available := true
-		if _, err := os.Stat(agent.ConfigDir); os.IsNotExist(err) {
+		if _, err := os.Stat(a.configDir); os.IsNotExist(err) {
 			available = false
 		}
 		ss := make([]AgentSkillStatus, 0, len(All))
 		for _, s := range All {
 			state := StateMissing
 			if available {
-				state = SkillState(agent.SkillsDir, s)
+				state = SkillState(a.skillsDir, s)
 			}
 			ss = append(ss, AgentSkillStatus{
 				Name:        s.Name,
@@ -226,7 +231,7 @@ func StatusAgents(agents []Agent) []AgentStatus {
 			})
 		}
 		results = append(results, AgentStatus{
-			Agent:     agent.Name,
+			Agent:     a.name,
 			Available: available,
 			Skills:    ss,
 		})

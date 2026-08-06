@@ -25,22 +25,21 @@ func newSkillCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveAgents returns agents to operate on based on the --user flag.
-// User-level returns all defined agents (absent ones are marked skipped on install).
-// Project-level returns only agents with existing dot directories in the cwd.
-func resolveAgents(userLevel bool) ([]skills.Agent, error) {
+// resolveScope returns the skill installation scope based on the --user flag.
+// User-level targets $HOME agent directories; project-level targets dot dirs in the cwd.
+func resolveScope(userLevel bool) (skills.Scope, error) {
 	if userLevel {
 		home := os.Getenv(config.EnvHome)
 		if home == "" {
-			return nil, &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
+			return skills.Scope{}, &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
 		}
-		return skills.Agents(home), nil
+		return skills.UserScope(home), nil
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return nil, &userError{msg: "Could not determine current directory.", err: err}
+		return skills.Scope{}, &userError{msg: "Could not determine current directory.", err: err}
 	}
-	return skills.ProjectAgents(cwd), nil
+	return skills.ProjectScope(cwd), nil
 }
 
 func newSkillInstallCmd() *cobra.Command {
@@ -52,12 +51,12 @@ func newSkillInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
-			agents, err := resolveAgents(userLevel)
+			scope, err := resolveScope(userLevel)
 			if err != nil {
 				return err
 			}
 
-			results := skills.InstallAgents(agents)
+			results := skills.Install(scope)
 			if len(results) == 0 {
 				io.Println(ui.Dim("no supported agent config directories found (" + strings.Join(skills.SupportedProjectDotDirs(), ", ") + ")"))
 				return nil
@@ -101,12 +100,12 @@ func newSkillListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
-			agents, err := resolveAgents(userLevel)
+			scope, err := resolveScope(userLevel)
 			if err != nil {
 				return err
 			}
 
-			statuses := skills.StatusAgents(agents)
+			statuses := skills.Status(scope)
 
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, statuses)
