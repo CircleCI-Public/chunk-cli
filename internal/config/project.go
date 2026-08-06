@@ -26,15 +26,6 @@ type Command struct {
 	SidecarImage string `json:"sidecarImage,omitempty"`
 }
 
-// TaskConfig holds task delegation configuration.
-type TaskConfig struct {
-	Instructions string `json:"instructions,omitempty"`
-	Schema       string `json:"schema,omitempty"`
-	Limit        int    `json:"limit,omitempty"`
-	Always       bool   `json:"always,omitempty"`
-	Timeout      int    `json:"timeout,omitempty"`
-}
-
 // VCSConfig holds VCS configuration for the project.
 type VCSConfig struct {
 	Org  string `json:"org,omitempty"`
@@ -48,13 +39,12 @@ type ValidationConfig struct {
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
 type ProjectConfig struct {
-	Commands            []Command             `json:"commands,omitempty"`
-	Tasks               map[string]TaskConfig `json:"tasks,omitempty"`
-	VCS                 *VCSConfig            `json:"vcs,omitempty"`
-	Validation          *ValidationConfig     `json:"validation,omitempty"`
-	OrgID               string                `json:"orgID,omitempty"`
-	StopHookMaxAttempts int                   `json:"stopHookMaxAttempts,omitempty"`
-	Environment         *envspec.Environment  `json:"environment,omitempty"`
+	Commands            []Command            `json:"commands,omitempty"`
+	VCS                 *VCSConfig           `json:"vcs,omitempty"`
+	Validation          *ValidationConfig    `json:"validation,omitempty"`
+	OrgID               string               `json:"orgID,omitempty"`
+	StopHookMaxAttempts int                  `json:"stopHookMaxAttempts,omitempty"`
+	Environment         *envspec.Environment `json:"environment,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.
