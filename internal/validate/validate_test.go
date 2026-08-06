@@ -260,32 +260,29 @@ func TestRunAll(t *testing.T) {
 	})
 }
 
-// --- Config with FileExt / Timeout tests ---
+// --- Config timeout tests ---
 
-func TestCommandFileExtRoundTrip(t *testing.T) {
+func TestCommandTimeoutRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	chunkDir := filepath.Join(dir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 
-	raw := `{"commands":[{"name":"lint","run":"eslint .","fileExt":".ts","timeout":60}]}`
+	raw := `{"commands":[{"name":"lint","run":"eslint .","timeout":60}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(raw), 0o644))
 
 	cfg, err := config.LoadProjectConfig(dir)
 	assert.NilError(t, err)
 	assert.Equal(t, len(cfg.Commands), 1)
-
-	c := cfg.Commands[0]
-	assert.Equal(t, c.FileExt, ".ts")
-	assert.Equal(t, c.Timeout, 60)
+	assert.Equal(t, cfg.Commands[0].Timeout, 60)
 
 	// Save and reload to verify round-trip
 	assert.NilError(t, config.SaveProjectConfig(dir, cfg))
 	cfg2, err := config.LoadProjectConfig(dir)
 	assert.NilError(t, err)
-	assert.Equal(t, cfg2.Commands[0].FileExt, ".ts")
+	assert.Equal(t, cfg2.Commands[0].Timeout, 60)
 }
 
-func TestCommandFileExtOmitted(t *testing.T) {
+func TestCommandTimeoutOmitted(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -295,8 +292,7 @@ func TestCommandFileExtOmitted(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(dir, ".chunk", "config.json"))
 	assert.NilError(t, err)
-	// fileExt and timeout should not appear when empty/zero
-	assert.Assert(t, !strings.Contains(string(data), "fileExt"), "expected fileExt to be omitted, got: %s", data)
+	// timeout should not appear when zero
 	assert.Assert(t, !strings.Contains(string(data), "timeout"), "expected timeout to be omitted, got: %s", data)
 }
 
