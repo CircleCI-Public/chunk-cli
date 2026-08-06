@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -25,18 +26,33 @@ func newSkillCmd() *cobra.Command {
 }
 
 func newSkillInstallCmd() *cobra.Command {
-	var jsonOut bool
+	var jsonOut, userLevel bool
 
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install or update all skills into agent config directories",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := os.Getenv(config.EnvHome)
-			if home == "" {
-				return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
-			}
 			io := iostream.FromCmd(cmd)
-			results := skills.Install(home)
+
+			var results []skills.AgentInstallResult
+			if userLevel {
+				home := os.Getenv(config.EnvHome)
+				if home == "" {
+					return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
+				}
+				results = skills.Install(home)
+			} else {
+				cwd, err := os.Getwd()
+				if err != nil {
+					return &userError{msg: "Could not determine current directory.", err: err}
+				}
+				results = skills.InstallInDir(cwd)
+				if len(results) == 0 {
+					io.Println(ui.Dim("no supported agent config directories found (" + strings.Join(skills.SupportedProjectDotDirs(), ", ") + ")"))
+					return nil
+				}
+			}
+
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, results)
 			}
@@ -61,20 +77,31 @@ func newSkillInstallCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&userLevel, "user", false, "Install into user-level agent directories (~/.claude, ~/.agents) instead of the current directory")
 
 	return cmd
 }
 
 func newSkillListCmd() *cobra.Command {
-	var jsonOut bool
+	var jsonOut, userLevel bool
 
 	cmd := &cobra.Command{
 		Use:   cmdList,
 		Short: "List bundled skills and their per-agent installation status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := os.Getenv(config.EnvHome)
 			io := iostream.FromCmd(cmd)
-			statuses := skills.Status(home)
+
+			var statuses []skills.AgentStatus
+			if userLevel {
+				home := os.Getenv(config.EnvHome)
+				statuses = skills.Status(home)
+			} else {
+				cwd, err := os.Getwd()
+				if err != nil {
+					return &userError{msg: "Could not determine current directory.", err: err}
+				}
+				statuses = skills.StatusInDir(cwd)
+			}
 
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, statuses)
@@ -87,14 +114,26 @@ func newSkillListCmd() *cobra.Command {
 				io.Printf("  %s\n", ui.Green(s.Name))
 				io.Printf("    %s\n", ui.Dim(s.Description))
 
-				for _, agent := range statuses {
-					skill := agent.Skills[i]
-					if !agent.Available {
-						io.Printf("      %s: %s\n", ui.Dim(agent.Agent), ui.Dim("n/a (agent not installed)"))
-						continue
+				if userLevel {
+					for _, agent := range statuses {
+						skill := agent.Skills[i]
+						if !agent.Available {
+							io.Printf("      %s: %s\n", ui.Dim(agent.Agent), ui.Dim("n/a (agent not installed)"))
+							continue
+						}
+						icon, label := stateDisplay(skill.State)
+						io.Printf("      %s: %s %s\n", agent.Agent, icon, label)
 					}
-					icon, label := stateDisplay(skill.State)
-					io.Printf("      %s: %s %s\n", agent.Agent, icon, label)
+				} else {
+					if len(statuses) == 0 {
+						io.Printf("      %s\n", ui.Dim("no supported agent config directories found ("+strings.Join(skills.SupportedProjectDotDirs(), ", ")+")"))
+					} else {
+						for _, agent := range statuses {
+							skill := agent.Skills[i]
+							icon, label := stateDisplay(skill.State)
+							io.Printf("      %s: %s %s\n", agent.Agent, icon, label)
+						}
+					}
 				}
 				io.Println()
 			}
@@ -103,6 +142,7 @@ func newSkillListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&userLevel, "user", false, "Show status for user-level agent directories instead of the current directory")
 
 	return cmd
 }
@@ -110,11 +150,11 @@ func newSkillListCmd() *cobra.Command {
 func stateDisplay(state skills.State) (icon, label string) {
 	switch state {
 	case skills.StateCurrent:
-		return ui.Green("\u2713"), ui.Green("current")
+		return ui.Green("✓"), ui.Green("current")
 	case skills.StateOutdated:
-		return ui.Yellow("\u26a0"), ui.Yellow("outdated")
+		return ui.Yellow("⚠"), ui.Yellow("outdated")
 	case skills.StateMissing:
-		return ui.Dim("\u2717"), ui.Dim("missing")
+		return ui.Dim("✗"), ui.Dim("missing")
 	}
 	return ui.Dim("?"), ui.Dim("unknown")
 }

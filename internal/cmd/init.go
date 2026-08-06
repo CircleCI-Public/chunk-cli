@@ -307,7 +307,18 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 	return nil
 }
 
-func installSkillsStep(streams iostream.Streams) {
+func installSkillsStep(dir string, streams iostream.Streams) {
+	for _, r := range skills.InstallByNameInDir(dir, "chunk-sidecar") {
+		for _, name := range r.Installed {
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Installed %s skill for %s", name, r.Agent)))
+		}
+		for _, name := range r.Updated {
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Updated %s skill for %s", name, r.Agent)))
+		}
+	}
+}
+
+func installSkillsStepUser(streams iostream.Streams) {
 	homeDir := os.Getenv(config.EnvHome)
 	if homeDir == "" {
 		return
@@ -448,7 +459,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 }
 
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites bool
+	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, userSkills bool
 	var projectDir string
 
 	cmd := &cobra.Command{
@@ -579,7 +590,11 @@ hook config files.`,
 
 			// Step 6: Agent skills
 			if !skipSkills {
-				installSkillsStep(streams)
+				if userSkills {
+					installSkillsStepUser(streams)
+				} else {
+					installSkillsStep(workDir, streams)
+				}
 			}
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
@@ -593,6 +608,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipValidate, "skip-validate", false, "Skip validate command detection")
 	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
+	cmd.Flags().BoolVar(&userSkills, "user", false, "Install skills into user-level agent directories (~/.claude, ~/.agents) instead of the project directory")
 	cmd.Flags().BoolVar(&skipTestSuites, "skip-test-suites", true, "Skip CircleCI test-suites.yml generation (default: skip; pass =false to use built-in Go/pytest templates)")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 

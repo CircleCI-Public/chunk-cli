@@ -13,6 +13,103 @@ import (
 
 var skillNames = []string{"chunk-testing-gaps", "chunk-review", "debug-ci-failures", "chunk-sidecar"}
 
+func TestProjectAgentsFindsExistingDotDirs(t *testing.T) {
+	dir := t.TempDir()
+
+	assert.Equal(t, len(skills.ProjectAgents(dir)), 0)
+
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
+	agents := skills.ProjectAgents(dir)
+	assert.Equal(t, len(agents), 1)
+	assert.Equal(t, agents[0].Name, "claude")
+	assert.Equal(t, agents[0].ConfigDir, filepath.Join(dir, ".claude"))
+	assert.Equal(t, agents[0].SkillsDir, filepath.Join(dir, ".claude", "skills"))
+
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".codex"), 0o755))
+	assert.Equal(t, len(skills.ProjectAgents(dir)), 2)
+}
+
+func TestInstallInDir(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
+
+	results := skills.InstallInDir(dir)
+	assert.Equal(t, len(results), 1)
+	assert.Equal(t, results[0].Agent, "claude")
+	assert.Assert(t, !results[0].Skipped)
+	assert.Equal(t, len(results[0].Installed), len(skillNames))
+
+	for _, name := range skillNames {
+		path := filepath.Join(dir, ".claude", "skills", name, "SKILL.md")
+		info, err := os.Stat(path)
+		assert.NilError(t, err, "expected %s to exist", path)
+		assert.Assert(t, info.Size() > 0)
+	}
+}
+
+func TestInstallInDirNoDirs(t *testing.T) {
+	dir := t.TempDir()
+	assert.Equal(t, len(skills.InstallInDir(dir)), 0)
+}
+
+func TestInstallInDirBothAgents(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".codex"), 0o755))
+
+	results := skills.InstallInDir(dir)
+	assert.Equal(t, len(results), 2)
+	for _, r := range results {
+		assert.Equal(t, len(r.Installed), len(skillNames))
+	}
+}
+
+func TestInstallByNameInDir(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
+
+	results := skills.InstallByNameInDir(dir, "chunk-review")
+	assert.Equal(t, len(results), 1)
+	assert.Equal(t, len(results[0].Installed), 1)
+	assert.Equal(t, results[0].Installed[0], "chunk-review")
+
+	_, err := os.Stat(filepath.Join(dir, ".claude", "skills", "chunk-sidecar", "SKILL.md"))
+	assert.Assert(t, os.IsNotExist(err), "only the named skill should be installed")
+}
+
+func TestInstallByNameInDirUnknownSkill(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
+	assert.Assert(t, skills.InstallByNameInDir(dir, "does-not-exist") == nil)
+}
+
+func TestStatusInDir(t *testing.T) {
+	dir := t.TempDir()
+
+	assert.Equal(t, len(skills.StatusInDir(dir)), 0)
+
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".claude"), 0o755))
+	skills.InstallInDir(dir)
+
+	statuses := skills.StatusInDir(dir)
+	assert.Equal(t, len(statuses), 1)
+	assert.Equal(t, statuses[0].Agent, "claude")
+	assert.Assert(t, statuses[0].Available)
+	for _, s := range statuses[0].Skills {
+		assert.Equal(t, s.State, skills.StateCurrent, "skill %s should be current", s.Name)
+	}
+}
+
+func TestSupportedProjectDotDirs(t *testing.T) {
+	dirs := skills.SupportedProjectDotDirs()
+	found := map[string]bool{}
+	for _, d := range dirs {
+		found[d] = true
+	}
+	assert.Assert(t, found[".claude"], "expected .claude in supported dirs")
+	assert.Assert(t, found[".codex"], "expected .codex in supported dirs")
+}
+
 func TestInstallBothAgents(t *testing.T) {
 	home := t.TempDir()
 

@@ -66,6 +66,94 @@ func Agents(homeDir string) []Agent {
 	}
 }
 
+// supportedProjectDirs maps dot directory names to agent names for project-level detection.
+var supportedProjectDirs = []struct {
+	dotDir string
+	agent  string
+}{
+	{".claude", "claude"},
+	{".codex", "codex"},
+}
+
+// ProjectAgents returns agents found in dir by inspecting for supported dot directories.
+// Only agents with existing dot directories are returned.
+func ProjectAgents(dir string) []Agent {
+	var agents []Agent
+	for _, d := range supportedProjectDirs {
+		configDir := filepath.Join(dir, d.dotDir)
+		if _, err := os.Stat(configDir); err == nil {
+			agents = append(agents, Agent{
+				Name:      d.agent,
+				ConfigDir: configDir,
+				SkillsDir: filepath.Join(configDir, "skills"),
+			})
+		}
+	}
+	return agents
+}
+
+// SupportedProjectDotDirs returns the dot directory names checked for project-level installs.
+func SupportedProjectDotDirs() []string {
+	names := make([]string, len(supportedProjectDirs))
+	for i, d := range supportedProjectDirs {
+		names[i] = d.dotDir
+	}
+	return names
+}
+
+// InstallInDir installs all skills into supported dot directories found in dir.
+func InstallInDir(dir string) []AgentInstallResult {
+	agents := ProjectAgents(dir)
+	results := make([]AgentInstallResult, 0, len(agents))
+	for _, agent := range agents {
+		results = append(results, installForAgent(agent, All))
+	}
+	return results
+}
+
+// InstallByNameInDir installs a single skill by name into supported dot directories found in dir.
+// Returns nil if the skill name is not found.
+func InstallByNameInDir(dir, name string) []AgentInstallResult {
+	var s *Skill
+	for i := range All {
+		if All[i].Name == name {
+			s = &All[i]
+			break
+		}
+	}
+	if s == nil {
+		return nil
+	}
+	agents := ProjectAgents(dir)
+	results := make([]AgentInstallResult, 0, len(agents))
+	for _, agent := range agents {
+		results = append(results, installForAgent(agent, []Skill{*s}))
+	}
+	return results
+}
+
+// StatusInDir returns per-agent, per-skill state for supported dot directories found in dir.
+func StatusInDir(dir string) []AgentStatus {
+	agents := ProjectAgents(dir)
+	results := make([]AgentStatus, 0, len(agents))
+	for _, agent := range agents {
+		ss := make([]AgentSkillStatus, 0, len(All))
+		for _, s := range All {
+			ss = append(ss, AgentSkillStatus{
+				Name:        s.Name,
+				Description: s.Description,
+				State:       SkillState(agent.SkillsDir, s),
+			})
+		}
+		results = append(results, AgentStatus{
+			Agent:     agent.Name,
+			Available: true,
+			Skills:    ss,
+		})
+	}
+	return results
+}
+
 // SkillState checks the installation state of a skill for an agent.
 func SkillState(skillsDir string, s Skill) State {
 	path := filepath.Join(skillsDir, s.Name, "SKILL.md")
