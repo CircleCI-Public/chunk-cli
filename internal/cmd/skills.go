@@ -1,12 +1,10 @@
 package cmd
 
 import (
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -25,23 +23,6 @@ func newSkillCmd() *cobra.Command {
 	return cmd
 }
 
-// resolveScope returns the skill installation scope based on the --user flag.
-// User-level targets $HOME agent directories; project-level targets dot dirs in the cwd.
-func resolveScope(userLevel bool) (skills.Scope, error) {
-	if userLevel {
-		home := os.Getenv(config.EnvHome)
-		if home == "" {
-			return skills.Scope{}, &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
-		}
-		return skills.UserScope(home), nil
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return skills.Scope{}, &userError{msg: "Could not determine current directory.", err: err}
-	}
-	return skills.ProjectScope(cwd), nil
-}
-
 func newSkillInstallCmd() *cobra.Command {
 	var jsonOut, userLevel bool
 
@@ -51,12 +32,15 @@ func newSkillInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
-			scope, err := resolveScope(userLevel)
-			if err != nil {
-				return err
+			scope := skills.ProjectScope
+			if userLevel {
+				scope = skills.UserScope
 			}
 
-			results := skills.Install(scope)
+			results, err := skills.Install(scope)
+			if err != nil {
+				return &userError{msg: "Could not install skills.", err: err}
+			}
 			if len(results) == 0 {
 				io.Println(ui.Dim("no supported agent config directories found (" + strings.Join(skills.SupportedProjectDotDirs(), ", ") + ")"))
 				return nil
@@ -100,12 +84,15 @@ func newSkillListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 
-			scope, err := resolveScope(userLevel)
-			if err != nil {
-				return err
+			scope := skills.ProjectScope
+			if userLevel {
+				scope = skills.UserScope
 			}
 
-			statuses := skills.Status(scope)
+			statuses, err := skills.Status(scope)
+			if err != nil {
+				return &userError{msg: "Could not list skills.", err: err}
+			}
 
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, statuses)

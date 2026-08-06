@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -43,32 +44,21 @@ var All = []Skill{
 	},
 }
 
+// Scope determines where skills are installed.
+type Scope int
+
+const (
+	// ProjectScope targets agent config directories found in the current directory (.claude, .codex).
+	ProjectScope Scope = iota
+	// UserScope targets user-level agent directories ($HOME/.claude, $HOME/.agents).
+	UserScope
+)
+
 // agent represents a target agent with its config directories.
 type agent struct {
 	name      string
-	configDir string // parent config dir (must exist for install)
-	skillsDir string // where skill subdirectories live
-}
-
-// Scope determines which agent directories to target for skill operations.
-type Scope struct {
-	agents []agent
-}
-
-// UserScope returns a Scope targeting user-level agent directories ($HOME/.claude, $HOME/.agents).
-func UserScope(homeDir string) Scope {
-	return Scope{agents: []agent{
-		{
-			name:      "claude",
-			configDir: filepath.Join(homeDir, ".claude"),
-			skillsDir: filepath.Join(homeDir, ".claude", "skills"),
-		},
-		{
-			name:      "codex",
-			configDir: filepath.Join(homeDir, ".agents"),
-			skillsDir: filepath.Join(homeDir, ".agents", "skills"),
-		},
-	}}
+	configDir string
+	skillsDir string
 }
 
 // supportedProjectDirs maps dot directory names to agent names for project-level detection.
@@ -80,23 +70,6 @@ var supportedProjectDirs = []struct {
 	{".codex", "codex"},
 }
 
-// ProjectScope returns a Scope targeting agent directories found in dir (.claude, .codex).
-// Only directories that already exist are included.
-func ProjectScope(dir string) Scope {
-	var agents []agent
-	for _, d := range supportedProjectDirs {
-		configDir := filepath.Join(dir, d.dotDir)
-		if _, err := os.Stat(configDir); err == nil {
-			agents = append(agents, agent{
-				name:      d.name,
-				configDir: configDir,
-				skillsDir: filepath.Join(configDir, "skills"),
-			})
-		}
-	}
-	return Scope{agents: agents}
-}
-
 // SupportedProjectDotDirs returns the dot directory names checked for project-level installs.
 func SupportedProjectDotDirs() []string {
 	names := make([]string, len(supportedProjectDirs))
@@ -104,6 +77,39 @@ func SupportedProjectDotDirs() []string {
 		names[i] = d.dotDir
 	}
 	return names
+}
+
+func resolveAgents(scope Scope) ([]agent, error) {
+	switch scope {
+	case UserScope:
+		home := os.Getenv("HOME")
+		if home == "" {
+			return nil, fmt.Errorf("HOME environment variable is not set")
+		}
+		return []agent{
+			{name: "claude", configDir: filepath.Join(home, ".claude"), skillsDir: filepath.Join(home, ".claude", "skills")},
+			{name: "codex", configDir: filepath.Join(home, ".agents"), skillsDir: filepath.Join(home, ".agents", "skills")},
+		}, nil
+	case ProjectScope:
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("could not determine current directory: %w", err)
+		}
+		var agents []agent
+		for _, d := range supportedProjectDirs {
+			configDir := filepath.Join(cwd, d.dotDir)
+			if _, err := os.Stat(configDir); err == nil {
+				agents = append(agents, agent{
+					name:      d.name,
+					configDir: configDir,
+					skillsDir: filepath.Join(configDir, "skills"),
+				})
+			}
+		}
+		return agents, nil
+	default:
+		return nil, fmt.Errorf("unknown scope %d", scope)
+	}
 }
 
 // SkillState checks the installation state of a skill for an agent.
@@ -131,18 +137,22 @@ type AgentInstallResult struct {
 	Updated   []string `json:"updated"`
 }
 
-// Install installs all embedded skills for the agents in scope.
-func Install(scope Scope) []AgentInstallResult {
-	results := make([]AgentInstallResult, 0, len(scope.agents))
-	for _, a := range scope.agents {
+// Install installs all embedded skills for the given scope.
+func Install(scope Scope) ([]AgentInstallResult, error) {
+	agents, err := resolveAgents(scope)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AgentInstallResult, 0, len(agents))
+	for _, a := range agents {
 		results = append(results, installForAgent(a, All))
 	}
-	return results
+	return results, nil
 }
 
-// InstallByName installs a single skill by name for the agents in scope.
+// InstallByName installs a single skill by name for the given scope.
 // Returns nil if the skill name is not found.
-func InstallByName(scope Scope, name string) []AgentInstallResult {
+func InstallByName(scope Scope, name string) ([]AgentInstallResult, error) {
 	var s *Skill
 	for i := range All {
 		if All[i].Name == name {
@@ -151,13 +161,17 @@ func InstallByName(scope Scope, name string) []AgentInstallResult {
 		}
 	}
 	if s == nil {
-		return nil
+		return nil, nil
 	}
-	results := make([]AgentInstallResult, 0, len(scope.agents))
-	for _, a := range scope.agents {
+	agents, err := resolveAgents(scope)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AgentInstallResult, 0, len(agents))
+	for _, a := range agents {
 		results = append(results, installForAgent(a, []Skill{*s}))
 	}
-	return results
+	return results, nil
 }
 
 func installForAgent(a agent, subset []Skill) AgentInstallResult {
@@ -210,10 +224,14 @@ type AgentStatus struct {
 	Skills    []AgentSkillStatus `json:"skills"`
 }
 
-// Status returns per-agent, per-skill installation state for the agents in scope.
-func Status(scope Scope) []AgentStatus {
-	results := make([]AgentStatus, 0, len(scope.agents))
-	for _, a := range scope.agents {
+// Status returns per-agent, per-skill installation state for the given scope.
+func Status(scope Scope) ([]AgentStatus, error) {
+	agents, err := resolveAgents(scope)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AgentStatus, 0, len(agents))
+	for _, a := range agents {
 		available := true
 		if _, err := os.Stat(a.configDir); os.IsNotExist(err) {
 			available = false
@@ -236,5 +254,5 @@ func Status(scope Scope) []AgentStatus {
 			Skills:    ss,
 		})
 	}
-	return results
+	return results, nil
 }

@@ -308,7 +308,12 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 }
 
 func installSkillsStep(scope skills.Scope, streams iostream.Streams) {
-	for _, r := range skills.InstallByName(scope, "chunk-sidecar") {
+	results, err := skills.InstallByName(scope, "chunk-sidecar")
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not install skills: %v", err)))
+		return
+	}
+	for _, r := range results {
 		if r.Skipped {
 			continue
 		}
@@ -575,13 +580,9 @@ hook config files.`,
 
 			// Step 6: Agent skills
 			if !skipSkills {
-				var scope skills.Scope
+				scope := skills.ProjectScope
 				if userSkills {
-					if homeDir := os.Getenv(config.EnvHome); homeDir != "" {
-						scope = skills.UserScope(homeDir)
-					}
-				} else {
-					scope = skills.ProjectScope(workDir)
+					scope = skills.UserScope
 				}
 				installSkillsStep(scope, streams)
 			}
