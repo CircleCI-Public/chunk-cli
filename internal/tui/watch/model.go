@@ -59,6 +59,7 @@ var (
 	stylePurple = lipgloss.NewStyle().Foreground(lipgloss.Color("140"))
 	styleTeal   = lipgloss.NewStyle().Foreground(lipgloss.Color("80"))
 	styleOrange = lipgloss.NewStyle().Foreground(lipgloss.Color("173"))
+	styleAmber  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	styleRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("167"))
 	styleMuted  = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
 	styleVdim   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
@@ -72,6 +73,7 @@ func blue(s string) string   { return styleBlue.Render(s) }
 func purple(s string) string { return stylePurple.Render(s) }
 func teal(s string) string   { return styleTeal.Render(s) }
 func orange(s string) string { return styleOrange.Render(s) }
+func amber(s string) string  { return styleAmber.Render(s) }
 func red(s string) string    { return styleRed.Render(s) }
 func muted(s string) string  { return styleMuted.Render(s) }
 func vdim(s string) string   { return styleVdim.Render(s) }
@@ -85,15 +87,16 @@ type ProjectEntry struct {
 
 // sidecarInfo holds display state for one sidecar.
 type sidecarInfo struct {
-	id              string
-	name            string
-	projectName     string
-	projectSnapshot bool // any snapshot*.json present in the project's data dir
-	lastSyncedRef   string
-	inSync          bool
-	running         bool
-	lastActivity    time.Time
-	lastOp          eventlog.Op
+	id            string
+	name          string
+	projectName   string
+	snapshotName  string    // name of the active snapshot for this project, if any
+	fileMtime     time.Time // mtime of the sidecar state file (fallback when no events yet)
+	lastSyncedRef string
+	inSync        bool
+	running       bool
+	lastActivity  time.Time
+	lastOp        eventlog.Op
 }
 
 type tickMsg struct{}
@@ -289,11 +292,10 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 				add("")
 			}
 			label := truncate(sc.projectName, leftPaneWidth-4)
-			snap := ""
-			if sc.projectSnapshot {
-				snap = " " + vdim("◈")
+			add(vdim("── " + label))
+			if sc.snapshotName != "" {
+				add("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
 			}
-			add(vdim("── " + label + snap))
 			lastProject = sc.projectName
 		}
 
@@ -441,6 +443,8 @@ func opTag(op eventlog.Op) string {
 		return teal("exec    ")
 	case eventlog.OpSetup:
 		return orange("setup   ")
+	case eventlog.OpHook:
+		return amber("hook    ")
 	default:
 		return muted(fmt.Sprintf("%-8s", string(op)))
 	}
@@ -484,8 +488,8 @@ func (m Model) loadData() tea.Msg {
 	for i, p := range m.projects {
 		newBranches[i] = sidecar.CurrentBranch(p.ProjectRoot)
 		newHeadRefs[i] = headRef(p.ProjectRoot)
-		snap := hasSnapshotFile(p.DataDir)
-		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snap, newHeadRefs[i])
+		snapName := loadSnapshotName(p.DataDir)
+		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snapName, newHeadRefs[i])
 		allSidecars = append(allSidecars, sidecars...)
 
 		if p.Log == nil {
@@ -528,11 +532,13 @@ func (m Model) loadData() tea.Msg {
 		}
 	}
 
+	allSidecars = filterSidecars(allSidecars)
+
 	return dataMsg{sidecars: allSidecars, events: allEvents, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
 }
 
 // loadSidecars reads all sidecar*.json files from dataDir, deduplicates by ID.
-func loadSidecars(dataDir, projectRoot string, snap bool, head string) []sidecarInfo {
+func loadSidecars(dataDir, projectRoot string, snapshotName string, head string) []sidecarInfo {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	projectName := filepath.Base(projectRoot)
 	seen := map[string]bool{}
@@ -551,22 +557,68 @@ func loadSidecars(dataDir, projectRoot string, snap bool, head string) []sidecar
 		}
 		seen[as.SidecarID] = true
 		inSync := head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef
+		var mtime time.Time
+		if fi, err := os.Stat(path); err == nil {
+			mtime = fi.ModTime()
+		}
 		result = append(result, sidecarInfo{
-			id:              as.SidecarID,
-			name:            as.Name,
-			projectName:     projectName,
-			projectSnapshot: snap,
-			lastSyncedRef:   as.LastSyncedRef,
-			inSync:          inSync,
+			id:            as.SidecarID,
+			name:          as.Name,
+			projectName:   projectName,
+			snapshotName:  snapshotName,
+			fileMtime:     mtime,
+			lastSyncedRef: as.LastSyncedRef,
+			inSync:        inSync,
 		})
 	}
 	return result
 }
 
-// hasSnapshotFile reports whether any snapshot*.json exists in dataDir.
-func hasSnapshotFile(dataDir string) bool {
+const (
+	staleAge              = 24 * time.Hour
+	maxSidecarsPerProject = 3
+)
+
+// loadSnapshotName returns the Name field from any snapshot*.json in dataDir,
+// or "" if none is found or the name is not set.
+func loadSnapshotName(dataDir string) string {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "snapshot*.json"))
-	return len(matches) > 0
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var snap struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(data, &snap) == nil && snap.Name != "" {
+			return snap.Name
+		}
+	}
+	return ""
+}
+
+// filterSidecars drops sidecars that haven't been active within staleAge and
+// caps the remaining sidecars to maxSidecarsPerProject per project.
+func filterSidecars(sidecars []sidecarInfo) []sidecarInfo {
+	now := time.Now()
+	counts := map[string]int{}
+	result := sidecars[:0]
+	for _, sc := range sidecars {
+		eff := sc.lastActivity
+		if eff.IsZero() {
+			eff = sc.fileMtime
+		}
+		if !eff.IsZero() && now.Sub(eff) > staleAge {
+			continue
+		}
+		if counts[sc.projectName] >= maxSidecarsPerProject {
+			continue
+		}
+		counts[sc.projectName]++
+		result = append(result, sc)
+	}
+	return result
 }
 
 func anyRunning(sidecars []sidecarInfo) bool {
