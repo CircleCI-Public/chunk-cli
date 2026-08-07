@@ -73,9 +73,14 @@ jobs:
                 name: Verify skill content is embedded
                 command: |
                   mkdir -p ~/.claude
-                  ./dist/chunk skill install
-                  echo "OK: skill content embedded correctly"
+                  ./dist/chunk skill install --user
+                  echo "OK: user-scope skill content embedded correctly"
                   head -5 ~/.claude/skills/chunk-review/SKILL.md
+                  tmpdir=$(mktemp -d)
+                  cd "$tmpdir"
+                  ~/project/dist/chunk skill install
+                  echo "OK: project-scope skill content embedded correctly"
+                  head -5 .claude/skills/chunk-review/SKILL.md
 
 workflows:
   ci:

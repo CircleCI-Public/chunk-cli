@@ -460,6 +460,28 @@ func TestEnsureGitignoreEntriesIdempotent(t *testing.T) {
 	assert.Equal(t, string(first), string(second))
 }
 
+// TestInstallSkillsStepUsesProjectScope verifies that installSkillsStep writes
+// skills into the project's .claude/skills/ directory, not into the user's
+// home directory. Previously it called InstallByName(ScopeUser, homeDir, ...)
+// which diverged from the ScopeProject default used by the skills subcommand.
+func TestInstallSkillsStepUsesProjectScope(t *testing.T) {
+	workDir := t.TempDir()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	streams, _, _ := testStreams()
+	installSkillsStep(workDir, streams)
+
+	// Skills must appear in the project dir, not in $HOME.
+	skillPath := filepath.Join(workDir, ".claude", "skills", "chunk-sidecar", "SKILL.md")
+	_, err := os.Stat(skillPath)
+	assert.NilError(t, err, "expected skill installed at %s", skillPath)
+
+	homePath := filepath.Join(home, ".claude", "skills", "chunk-sidecar", "SKILL.md")
+	_, err = os.Stat(homePath)
+	assert.Assert(t, os.IsNotExist(err), "skill must not be installed under $HOME")
+}
+
 func TestPrintInitSummaryWithCommands(t *testing.T) {
 	ui.SetColorEnabled(false)
 	defer ui.SetColorEnabled(true)
