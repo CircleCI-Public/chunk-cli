@@ -9,7 +9,6 @@ allowed-tools:
   - Bash(chunk sidecar:*)
   - Bash(chunk validate:*)
   - Bash(cat .chunk/config.json)
-  - Bash(cat .chunk/sidecar.json)
   - Bash(test -n*)
   - Read
   - Write
@@ -96,7 +95,7 @@ For each round of edits:
 When validate returns non-zero:
 
 - Parse stderr — `chunk validate` prints per-command headers and propagates the first non-zero exit.
-- Map error paths back to local files: the sidecar mirrors your tree at `~/workspace/<repo>` (or the workspace configured in `.chunk/sidecar.json`). Run `chunk sidecar current --json` to see the resolved absolute path.
+- Map error paths back to local files: the sidecar mirrors your tree at `~/workspace/<repo>`. Run `chunk sidecar current --json` to see the resolved absolute workspace path.
 - Fix locally, then repeat Step 4. Do **not** edit files over SSH — changes will be overwritten on the next sync.
 - If the error looks environmental (missing binary, wrong language version, unreachable service), go to Troubleshooting.
 
@@ -175,7 +174,7 @@ This skill covers writing `test-suites.yml` and validating it with doctor on the
 
 ## Parallel sessions
 
-When `CLAUDE_SESSION_ID` is set, `chunk` auto-scopes the active-sidecar file to `.chunk/sidecar.<session-id>.json`. Two concurrent sessions in the same repo target different sidecars without conflict. Do not override this behavior or hand-edit those files.
+When `CLAUDE_SESSION_ID` is set, `chunk` auto-scopes the active-sidecar state to that session. Two concurrent sessions in the same repo target different sidecars without conflict.
 
 ## Troubleshooting
 
