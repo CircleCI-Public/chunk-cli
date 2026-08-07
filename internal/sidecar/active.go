@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -19,8 +18,12 @@ import (
 
 // ActiveSidecar holds the currently active sidecar for a project.
 type ActiveSidecar struct {
-	SidecarID     string `json:"sidecar_id"`
-	Name          string `json:"name,omitempty"`
+	SidecarID string `json:"sidecar_id"`
+	Name      string `json:"name,omitempty"`
+	// OrgID records which org the sidecar belongs to, so Reap can tell a sidecar
+	// that has been deleted from one that simply lives in an org it is not
+	// listing. Empty on state written before this field existed.
+	OrgID         string `json:"org_id,omitempty"`
 	Workspace     string `json:"workspace,omitempty"`
 	LastSyncedRef string `json:"last_synced_ref,omitempty"`
 }
@@ -96,37 +99,24 @@ func LoadAnyActive(_ context.Context) (*ActiveSidecar, error) {
 	if err != nil {
 		return nil, err
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "sidecar*.json"))
-	if err != nil || len(matches) == 0 {
-		return nil, nil
+	entries, err := loadStateEntries(dir)
+	if err != nil || len(entries) == 0 {
+		return nil, err
 	}
-	var best string
-	var bestTime time.Time
-	for _, m := range matches {
-		info, statErr := os.Stat(m)
-		if statErr != nil {
+	var best *stateEntry
+	for i, e := range entries {
+		if e.active.SidecarID == "" {
 			continue
 		}
-		if info.ModTime().After(bestTime) {
-			bestTime = info.ModTime()
-			best = m
+		if best == nil || e.modTime.After(best.modTime) {
+			best = &entries[i]
 		}
 	}
-	if best == "" {
+	if best == nil {
 		return nil, nil
 	}
-	data, err := os.ReadFile(best)
-	if err != nil {
-		return nil, err
-	}
-	var a ActiveSidecar
-	if err := json.Unmarshal(data, &a); err != nil {
-		return nil, err
-	}
-	if a.SidecarID == "" {
-		return nil, nil
-	}
-	return &a, nil
+	active := best.active
+	return &active, nil
 }
 
 // LoadActiveFrom reads the active sidecar from dir.

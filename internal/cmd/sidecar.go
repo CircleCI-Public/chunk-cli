@@ -240,7 +240,7 @@ func newSidecarCreateCmd() *cobra.Command {
 				}
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sidecar %s (%s)", sb.Name, sb.ID)))
-			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarID: sb.ID, Name: sb.Name}); err != nil {
+			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarID: sb.ID, Name: sb.Name, OrgID: resolvedOrgID}); err != nil {
 				io.ErrPrintf("warning: could not save active sidecar: %v\n", err)
 			} else {
 				io.ErrPrintf("Set %s as active sidecar\n", sb.ID)
@@ -1137,7 +1137,7 @@ func sidecarSetupResolveSidecar(
 			err:        err,
 		}
 	}
-	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))
