@@ -26,11 +26,36 @@ func TestBuildHookTimeoutDefaultsToSixty(t *testing.T) {
 	hooks := s["hooks"].(map[string]interface{})
 	preToolUse := hooks["PreToolUse"].([]interface{})
 	group := preToolUse[0].(map[string]interface{})
+	assert.Equal(t, group["matcher"], "Bash", "group matcher must be tool name only")
 	entries := group["hooks"].([]interface{})
 	entry := entries[0].(map[string]interface{})
+	assert.Equal(t, entry["if"], CommitIfFilter, "entry must carry if filter for git commit")
 
 	timeout, _ := entry["timeout"].(float64)
 	assert.Assert(t, timeout == 60, "expected default hook timeout of 60 for command with Timeout: 0, got: %v", timeout)
+}
+
+func TestBuildHookMatcherIsToolName(t *testing.T) {
+	// The group matcher must be the bare tool name "Bash" so Claude Code's
+	// hook dispatcher matches it as an exact string. "Bash(git commit*)" was
+	// previously used but is treated as a JS regex and never fires.
+	cmds := []config.Command{
+		{Name: "test", Run: "task test", Timeout: 60},
+	}
+	data, err := Build(cmds)
+	assert.NilError(t, err)
+
+	var s map[string]interface{}
+	assert.NilError(t, json.Unmarshal(data, &s))
+
+	hooks := s["hooks"].(map[string]interface{})
+	preToolUse := hooks["PreToolUse"].([]interface{})
+	group := preToolUse[0].(map[string]interface{})
+	assert.Equal(t, group["matcher"], CommitMatcher)
+
+	entries := group["hooks"].([]interface{})
+	entry := entries[0].(map[string]interface{})
+	assert.Equal(t, entry["if"], CommitIfFilter)
 }
 
 func TestBuildHookTimeoutRespectsExplicitValue(t *testing.T) {

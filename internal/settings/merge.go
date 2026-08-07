@@ -9,8 +9,21 @@ import (
 	udiff "github.com/aymanbagabas/go-udiff"
 )
 
-// CommitMatcher is the hook matcher string that chunk manages.
-const CommitMatcher = "Bash(git commit*)"
+// CommitMatcher is the PreToolUse hook group matcher that chunk manages.
+// It targets the Bash tool by name; per Claude Code's hook spec, matcher
+// filters only on tool name. Command-content filtering is done via CommitIfFilter
+// on individual hook entries.
+const CommitMatcher = "Bash"
+
+// CommitIfFilter is the per-entry "if" condition that restricts hook entries
+// to git commit commands. The Bash(pattern) syntax is evaluated as a glob
+// against the bash command string, not the tool name.
+const CommitIfFilter = "Bash(git commit*)"
+
+// legacyCommitMatcher is the old group matcher value written by earlier versions
+// of chunk init. Recognised during merge so existing settings can be migrated
+// to the current format without leaving a stale duplicate group behind.
+const legacyCommitMatcher = "Bash(git commit*)"
 
 // MergeResult holds the computed merge without performing any I/O.
 type MergeResult struct {
@@ -160,14 +173,15 @@ func mergeHooks(merged, generated map[string]interface{}) {
 		mergedPreToolUse = []interface{}{}
 	}
 
-	// Replace existing group with same matcher, or append.
+	// Replace existing group with same matcher (or legacy matcher), or append.
 	replaced := false
 	for i, g := range mergedPreToolUse {
 		group, isMap := g.(map[string]interface{})
 		if !isMap {
 			continue
 		}
-		if matcher, _ := group["matcher"].(string); matcher == CommitMatcher {
+		matcher, _ := group["matcher"].(string)
+		if matcher == CommitMatcher || matcher == legacyCommitMatcher {
 			mergedPreToolUse[i] = chunkGroup
 			replaced = true
 			break
