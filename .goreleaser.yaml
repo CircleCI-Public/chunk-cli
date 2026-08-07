@@ -3,6 +3,11 @@
 
 version: 2
 
+before:
+  hooks:
+    - go run . completion bash --output share/bash-completion/completions/chunk
+    - go run . completion zsh --output share/zsh/site-functions/_chunk
+
 builds:
   - id: chunk
     binary: chunk
@@ -40,6 +45,10 @@ archives:
     files:
       - LICENSE
       - README.md
+      - src: ./share/bash-completion/completions/chunk
+        dst: share/bash-completion/completions/chunk
+      - src: ./share/zsh/site-functions/_chunk
+        dst: share/zsh/site-functions/_chunk
 
 checksum:
   name_template: 'checksums.txt'
@@ -71,6 +80,8 @@ brews:
       system "#{bin}/chunk"
     install: |
       bin.install "chunk"
+      bash_completion.install "share/bash-completion/completions/chunk"
+      zsh_completion.install "share/zsh/site-functions/_chunk"
 
 # Nix package (for NUR - Nix User Repository)
 nix:
