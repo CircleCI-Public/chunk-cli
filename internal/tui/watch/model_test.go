@@ -196,7 +196,7 @@ func TestLoadSidecars_deduplicatesIDs(t *testing.T) {
 	// Duplicate id1 — should be deduplicated.
 	writeSidecarJSON(t, dir, "sidecar.sess2.json", `{"sidecar_id":"id1","name":"sc1"}`)
 
-	result := loadSidecars(dir, root, false, "abc123")
+	result := loadSidecars(dir, root, "", "abc123")
 	if len(result) != 2 {
 		t.Fatalf("want 2 unique sidecars, got %d", len(result))
 	}
@@ -208,7 +208,7 @@ func TestLoadSidecars_inSyncWhenHeadMatches(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
 
-	result := loadSidecars(dir, root, false, "abc123")
+	result := loadSidecars(dir, root, "", "abc123")
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}
@@ -223,7 +223,7 @@ func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","last_synced_ref":"oldref"}`)
 
-	result := loadSidecars(dir, root, false, "newref")
+	result := loadSidecars(dir, root, "", "newref")
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}
@@ -235,7 +235,7 @@ func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
 func TestLoadSidecars_emptyDir(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()
-	if result := loadSidecars(dir, root, false, ""); len(result) != 0 {
+	if result := loadSidecars(dir, root, "", ""); len(result) != 0 {
 		t.Errorf("want 0, got %d", len(result))
 	}
 }
@@ -246,22 +246,22 @@ func TestLoadSidecars_skipsEmptySidecarID(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"","name":"empty"}`)
 
-	if result := loadSidecars(dir, root, false, ""); len(result) != 0 {
+	if result := loadSidecars(dir, root, "", ""); len(result) != 0 {
 		t.Errorf("want 0 (skipped empty ID), got %d", len(result))
 	}
 }
 
-func TestLoadSidecars_snapshotFlag(t *testing.T) {
+func TestLoadSidecars_snapshotName(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1"}`)
 
-	result := loadSidecars(dir, root, true, "")
+	result := loadSidecars(dir, root, "my-snap", "")
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}
-	if !result[0].projectSnapshot {
-		t.Error("projectSnapshot should be true when snap=true")
+	if result[0].snapshotName != "my-snap" {
+		t.Errorf("snapshotName should be 'my-snap', got %q", result[0].snapshotName)
 	}
 }

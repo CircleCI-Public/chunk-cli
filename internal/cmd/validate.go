@@ -298,7 +298,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// sync and env-resolve status events are captured. Skipping when there is no
 	// sidecar avoids writing events with an empty sidecar_id that the TUI would
 	// filter out and never display.
-	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir)
+	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 
 	// Only load env vars and resolve secrets when a sidecar is actually
 	// being used — avoids parsing .env.local or hitting secrets APIs on
@@ -315,7 +315,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 // wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
 // is active. Returns statusFn unchanged when no sidecar is involved, so callers
 // with empty sidecar IDs never write events with a blank sidecar_id.
-func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string) iostream.StatusFunc {
+func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) iostream.StatusFunc {
 	if sidecarID == "" {
 		return statusFn
 	}
@@ -327,13 +327,28 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	if activeSidecar != nil && activeSidecar.SidecarID == sidecarID {
 		scName = activeSidecar.Name
 	}
-	return eventlog.WrapFromDir(dataDir, statusFn, eventlog.OpValidate, sidecarID, scName, sidecar.CurrentBranch(workDir))
+	op := eventlog.OpValidate
+	if hook != nil && hook.stopHookActive {
+		op = eventlog.OpHook
+	}
+	return eventlog.WrapFromDir(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
 }
 
 // finishValidate reports the validate outcome and handles hook exit codes.
 func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, sidecarID string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+	maxAttempts := validate.DefaultMaxAttempts
+	if hook != nil {
+		if ma := cfg.StopHookMaxAttempts; ma > 0 {
+			maxAttempts = ma
+		}
+	}
 	if execErr != nil {
-		statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
+		if hook != nil {
+			attempt := validate.ReadAttempts(hook.sessionID) + 1
+			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed, attempt %d/%d)", ui.FormatDuration(time.Since(start)), attempt, maxAttempts))
+		} else {
+			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
+		}
 	} else if hook == nil {
 		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
 	}
@@ -346,10 +361,6 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	}
 	if hook == nil {
 		return execErr
-	}
-	maxAttempts := cfg.StopHookMaxAttempts
-	if maxAttempts <= 0 {
-		maxAttempts = validate.DefaultMaxAttempts
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
