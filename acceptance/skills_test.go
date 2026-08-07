@@ -19,7 +19,7 @@ func TestSkillsInstall(t *testing.T) {
 	err := os.MkdirAll(claudeDir, 0o755)
 	assert.NilError(t, err)
 
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
@@ -43,7 +43,7 @@ func TestSkillsInstallSkipsUnavailableAgent(t *testing.T) {
 	claudeDir := filepath.Join(env.HomeDir, ".claude")
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -61,10 +61,10 @@ func TestSkillsInstallUpToDate(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// First install.
-	binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 
 	// Second install should show "up to date".
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -75,7 +75,7 @@ func TestSkillsInstallUpToDate(t *testing.T) {
 func TestSkillsList(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	result := binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "list", "--user"}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
@@ -96,7 +96,7 @@ func TestSkillsList(t *testing.T) {
 func TestSkillsListShowsDescriptions(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	result := binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "list", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -112,7 +112,7 @@ func TestSkillsInstallCodexPath(t *testing.T) {
 	codexDir := filepath.Join(env.HomeDir, ".agents")
 	assert.NilError(t, os.MkdirAll(codexDir, 0o755))
 
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -137,7 +137,7 @@ func TestSkillsInstallBothAgents(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 	assert.NilError(t, os.MkdirAll(codexDir, 0o755))
 
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
@@ -165,7 +165,7 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// First install.
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "first install failed: %s", result.Stderr)
 
 	// Tamper with one skill file to make it outdated.
@@ -173,7 +173,7 @@ func TestSkillsInstallOutdatedUpdate(t *testing.T) {
 	assert.NilError(t, os.WriteFile(tampered, []byte("tampered content"), 0o644))
 
 	// Re-run install: should detect outdated and update.
-	result = binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -195,7 +195,7 @@ func TestSkillsInstallNoAgentDirs(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	// Don't create .claude or .agents.
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 
 	combined := result.Stdout + result.Stderr
@@ -209,7 +209,7 @@ func TestSkillsInstallHomeNotSet(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.HomeDir = ""
 
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, os.TempDir())
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, os.TempDir())
 	assert.Assert(t, result.ExitCode != 0,
 		"expected non-zero exit code when HOME is not set, got exit %d", result.ExitCode)
 
@@ -224,7 +224,7 @@ func TestSkillsListStateLabels(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// Before install: .claude exists so skills should show "missing".
-	result := binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "list", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "missing"),
@@ -237,11 +237,11 @@ func TestSkillsListStateLabels(t *testing.T) {
 		"expected codex agent in list output, got: %s", combined)
 
 	// Install skills.
-	result = binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "install failed: %s", result.Stderr)
 
 	// After install: skills should show "current".
-	result = binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "list", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined = result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "current"),
@@ -251,7 +251,7 @@ func TestSkillsListStateLabels(t *testing.T) {
 	tampered := filepath.Join(claudeDir, "skills", "chunk-review", "SKILL.md")
 	assert.NilError(t, os.WriteFile(tampered, []byte("tampered"), 0o644))
 
-	result = binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "list", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined = result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "outdated"),
@@ -264,7 +264,7 @@ func TestSkillsListMixedStates(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
 	// Install all skills first.
-	result := binary.RunCLI(t, []string{"skill", "install"}, env, env.HomeDir)
+	result := binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0, "install failed: %s", result.Stderr)
 
 	// Tamper one skill to make it outdated.
@@ -275,7 +275,7 @@ func TestSkillsListMixedStates(t *testing.T) {
 	assert.NilError(t, os.RemoveAll(filepath.Join(claudeDir, "skills", "debug-ci-failures")))
 
 	// List should show current, outdated, and missing.
-	result = binary.RunCLI(t, []string{"skill", "list"}, env, env.HomeDir)
+	result = binary.RunCLI(t, []string{"skill", "list", "--user"}, env, env.HomeDir)
 	assert.Equal(t, result.ExitCode, 0)
 	combined := result.Stdout + result.Stderr
 
@@ -285,4 +285,175 @@ func TestSkillsListMixedStates(t *testing.T) {
 		"expected 'outdated' for tampered skill, got: %s", combined)
 	assert.Assert(t, strings.Contains(combined, "missing"),
 		"expected 'missing' for deleted skill, got: %s", combined)
+}
+
+func TestSkillsInstallDefaultScopeIsProject(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// No --scope flag: should behave identically to --scope project.
+	result := binary.RunCLI(t, []string{"skill", "install"}, env, projectDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+		skillFile := filepath.Join(projectDir, ".claude", "skills", name, "SKILL.md")
+		info, err := os.Stat(skillFile)
+		assert.NilError(t, err, "expected default-scope skill %s to exist at %s", name, skillFile)
+		assert.Assert(t, info.Size() > 0, "expected default-scope skill %s to be non-empty", name)
+	}
+
+	// Nothing should land in the user's home dir.
+	_, err := os.Stat(filepath.Join(env.HomeDir, ".claude", "skills"))
+	assert.Assert(t, os.IsNotExist(err), "default install should not touch user home skills dir")
+}
+
+func TestSkillsInstallProjectScope(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// Project scope requires no pre-existing agent dirs.
+	result := binary.RunCLI(t, []string{"skill", "install", "--project"}, env, projectDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "claude:"),
+		"expected per-agent output for claude, got: %s", combined)
+
+	// Skills should be installed into the project dir, not the home dir.
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps", "chunk-sidecar", "debug-ci-failures"} {
+		skillFile := filepath.Join(projectDir, ".claude", "skills", name, "SKILL.md")
+		info, err := os.Stat(skillFile)
+		assert.NilError(t, err, "expected project-scope skill %s to exist at %s", name, skillFile)
+		assert.Assert(t, info.Size() > 0, "expected project-scope skill %s to be non-empty", name)
+	}
+
+	// Nothing should be installed in the user's home dir.
+	_, err := os.Stat(filepath.Join(env.HomeDir, ".claude", "skills"))
+	assert.Assert(t, os.IsNotExist(err), "project-scope install should not touch user home skills dir")
+}
+
+func TestSkillsInstallProjectScopeUpToDate(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// First install.
+	binary.RunCLI(t, []string{"skill", "install", "--project"}, env, projectDir)
+
+	// Second install should show "up to date".
+	result := binary.RunCLI(t, []string{"skill", "install", "--project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "up to date"),
+		"expected up-to-date message on second project-scope install, got: %s", combined)
+}
+
+func TestSkillsInstallProjectScopeNotIsolatedFromUserScope(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// Install user-scope into home dir.
+	claudeDir := filepath.Join(env.HomeDir, ".claude")
+	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
+	binary.RunCLI(t, []string{"skill", "install", "--user"}, env, env.HomeDir)
+
+	// Install project-scope from a different dir.
+	result := binary.RunCLI(t, []string{"skill", "install", "--project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0, "project-scope install failed: %s", result.Stderr)
+
+	// Both locations should have skills.
+	for _, name := range []string{"chunk-review", "chunk-testing-gaps"} {
+		userFile := filepath.Join(claudeDir, "skills", name, "SKILL.md")
+		projectFile := filepath.Join(projectDir, ".claude", "skills", name, "SKILL.md")
+		_, err := os.Stat(userFile)
+		assert.NilError(t, err, "expected user-scope skill %s to still exist", name)
+		_, err = os.Stat(projectFile)
+		assert.NilError(t, err, "expected project-scope skill %s to exist", name)
+	}
+}
+
+func TestSkillsListProjectScope(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// Before install: project scope agents are always shown as available.
+	result := binary.RunCLI(t, []string{"skill", "list", "--project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "claude:"),
+		"expected per-agent status for claude, got: %s", combined)
+	// Skills not yet installed should be missing.
+	assert.Assert(t, strings.Contains(combined, "missing"),
+		"expected 'missing' state before project-scope install, got: %s", combined)
+
+	// Install and re-list.
+	binary.RunCLI(t, []string{"skill", "install", "--project"}, env, projectDir)
+
+	result = binary.RunCLI(t, []string{"skill", "list", "--project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0)
+	combined = result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "current"),
+		"expected 'current' state after project-scope install, got: %s", combined)
+}
+
+func TestSkillsInstallMutuallyExclusiveFlags(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"skill", "install", "--user", "--project"}, env, env.HomeDir)
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit when --user and --project both set, got: %d", result.ExitCode)
+
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "mutually exclusive"),
+		"expected 'mutually exclusive' error, got: %s", combined)
+}
+
+// TestSkillsListNoFlagsDefaultsToProjectScope verifies that "chunk skill list" with no
+// flags resolves to project scope (i.e. uses the working directory, not the user home).
+// A regression in resolveScope for the list subcommand would cause it to use user scope,
+// which would show "n/a" for agents whose config dirs do not exist in the home dir,
+// rather than "missing" (agents are always available in project scope).
+func TestSkillsListNoFlagsDefaultsToProjectScope(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	projectDir := t.TempDir()
+
+	// No agent dirs exist in either the project dir or the user home dir.
+	// In project scope: agents are always available, so skills should show "missing".
+	// In user scope:    agents would show "n/a" because ~/.claude and ~/.agents do not exist.
+	result := binary.RunCLI(t, []string{"skill", "list"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+
+	// Project scope always treats agents as available — "n/a" would indicate user scope.
+	assert.Assert(t, !strings.Contains(combined, "n/a"),
+		"expected no 'n/a' entries — project scope always shows agents as available, got: %s", combined)
+
+	// Skills not yet installed should appear as missing.
+	assert.Assert(t, strings.Contains(combined, "missing"),
+		"expected 'missing' state for uninstalled skills under project scope, got: %s", combined)
+
+	// The claude agent entry must be present.
+	assert.Assert(t, strings.Contains(combined, "claude:"),
+		"expected claude agent in list output, got: %s", combined)
+
+	// Install skills into the project dir using --project, then re-list with no flags.
+	result = binary.RunCLI(t, []string{"skill", "install", "--project"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0, "project install failed: %s", result.Stderr)
+
+	result = binary.RunCLI(t, []string{"skill", "list"}, env, projectDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined = result.Stdout + result.Stderr
+
+	// After installing into the project dir, the no-flag list should see those skills as "current".
+	assert.Assert(t, strings.Contains(combined, "current"),
+		"expected 'current' state after project-scope install when listing with no flags, got: %s", combined)
+
+	// Nothing should have been installed in the user home dir.
+	_, err := os.Stat(filepath.Join(env.HomeDir, ".claude", "skills"))
+	assert.Assert(t, os.IsNotExist(err),
+		"default list should not have touched user home skills dir")
 }
