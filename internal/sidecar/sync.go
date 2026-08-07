@@ -217,7 +217,7 @@ func BundleSync(ctx context.Context,
 	}
 	if patch != "" {
 		status(iostream.LevelInfo, fmt.Sprintf("Applying working-tree changes (%d bytes)...", len(patch)))
-		applyCmd := fmt.Sprintf("git -C %s apply", ShellEscape(repoPath))
+		applyCmd := fmt.Sprintf("git -C %s apply --whitespace=nowarn", ShellEscape(repoPath))
 		if result, err := ExecOverSSH(ctx, session, applyCmd, strings.NewReader(patch), nil); err != nil {
 			return fmt.Errorf("bundle sync: apply patch: %w", err)
 		} else if result.ExitCode != 0 {
@@ -359,7 +359,7 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 		return fmt.Errorf("git reset failed (exit code: %d): %s", resetResult.ExitCode, detail)
 	}
 
-	applyCmd := fmt.Sprintf("git -C %s apply", ShellEscape(repoPath))
+	applyCmd := fmt.Sprintf("git -C %s apply --whitespace=nowarn", ShellEscape(repoPath))
 	applyResult, err := ExecOverSSH(ctx, session, applyCmd, strings.NewReader(patch), nil)
 	if err != nil {
 		return err
