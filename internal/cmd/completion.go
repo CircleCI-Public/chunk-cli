@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,25 +161,59 @@ func newCompletionInstallCmd() *cobra.Command {
 }
 
 func newCompletionZshCmd() *cobra.Command {
-	return &cobra.Command{
+	var outputPath string
+	cmd := &cobra.Command{
 		Use:    "zsh",
 		Short:  "Generate zsh completion script",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmd.Root().GenZshCompletion(iostream.FromCmd(cmd).Out)
+			w, closeOut, err := openCompletionOutput(outputPath, iostream.FromCmd(cmd).Out)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = closeOut() }()
+			return cmd.Root().GenZshCompletion(w)
 		},
 	}
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Write completion script to this file instead of stdout")
+	return cmd
 }
 
 func newCompletionBashCmd() *cobra.Command {
-	return &cobra.Command{
+	var outputPath string
+	cmd := &cobra.Command{
 		Use:    "bash",
 		Short:  "Generate bash completion script",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmd.Root().GenBashCompletion(iostream.FromCmd(cmd).Out)
+			w, closeOut, err := openCompletionOutput(outputPath, iostream.FromCmd(cmd).Out)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = closeOut() }()
+			return cmd.Root().GenBashCompletion(w)
 		},
 	}
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Write completion script to this file instead of stdout")
+	return cmd
+}
+
+// openCompletionOutput resolves the output destination for a completion
+// command. When path is empty it returns w (the command's stdout) with a
+// no-op closer; otherwise it creates the file and any missing parent
+// directories and returns it with its Close method.
+func openCompletionOutput(path string, w io.Writer) (io.Writer, func() error, error) {
+	if path == "" {
+		return w, func() error { return nil }, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, nil, fmt.Errorf("create output directory: %w", err)
+	}
+	f, err := os.Create(path) //#nosec:G304 // path is user-supplied
+	if err != nil {
+		return nil, nil, fmt.Errorf("create output file: %w", err)
+	}
+	return f, f.Close, nil
 }
 
 func newCompletionUninstallCmd() *cobra.Command {

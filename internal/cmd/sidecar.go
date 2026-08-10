@@ -828,6 +828,9 @@ snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 				return err
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created snapshot %s", snap.ID)))
+			if err := sidecar.SaveActiveSnapshot(cmd.Context(), sidecar.ActiveSnapshot{ID: snap.ID, Name: name}); err != nil {
+				io.ErrPrintf("Warning: could not save active snapshot: %v\n", err)
+			}
 
 			if err := client.DeleteSidecar(cmd.Context(), sidecarID); err != nil {
 				io.ErrPrintf("Warning: could not delete sidecar %s: %v\n", sidecarID, err)

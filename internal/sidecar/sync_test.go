@@ -237,6 +237,85 @@ func TestBundleSync_NoOpSkipsBundle(t *testing.T) {
 		"expected reset --hard HEAD on no-op sync; got: %v", cmds)
 }
 
+// TestBundleSync_ApplyWhitespaceNowarn verifies that BundleSync passes
+// --whitespace=nowarn to git apply so that working-tree files with trailing
+// whitespace do not cause the sync to fail.
+func TestBundleSync_ApplyWhitespaceNowarn(t *testing.T) {
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+
+	repoDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	// Write an untracked file with trailing whitespace to force a non-empty patch.
+	assert.NilError(t, os.WriteFile(filepath.Join(repoDir, "trailing.txt"), []byte("hello   \n"), 0o644))
+	t.Chdir(repoDir)
+
+	cl := newClient(t, srv.URL)
+	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
+
+	err := sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus)
+	assert.NilError(t, err)
+
+	var applyCmd string
+	for _, c := range sshSrv.Commands() {
+		if strings.Contains(c, "git") && strings.Contains(c, "apply") {
+			applyCmd = c
+			break
+		}
+	}
+	assert.Assert(t, applyCmd != "", "expected a git apply command; got: %v", sshSrv.Commands())
+	assert.Assert(t, strings.Contains(applyCmd, "--whitespace=nowarn"),
+		"git apply must use --whitespace=nowarn; got: %q", applyCmd)
+}
+
+// TestSync_ApplyWhitespaceNowarn verifies that the legacy Sync path also passes
+// --whitespace=nowarn to git apply.
+func TestSync_ApplyWhitespaceNowarn(t *testing.T) {
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+
+	repoDir := setupRepoWithOriginHEAD(t, "my-org", "my-repo")
+	// Write an untracked file with trailing whitespace to force a non-empty patch.
+	assert.NilError(t, os.WriteFile(filepath.Join(repoDir, "trailing.txt"), []byte("hello   \n"), 0o644))
+	t.Chdir(repoDir)
+
+	cl := newClient(t, srv.URL)
+	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
+
+	err := sidecar.Sync(context.Background(), cl, "sb-1", keyFile, "", "", noopStatus)
+	assert.NilError(t, err)
+
+	var applyCmd string
+	for _, c := range sshSrv.Commands() {
+		if strings.Contains(c, "git") && strings.Contains(c, "apply") {
+			applyCmd = c
+			break
+		}
+	}
+	assert.Assert(t, applyCmd != "", "expected a git apply command; got: %v", sshSrv.Commands())
+	assert.Assert(t, strings.Contains(applyCmd, "--whitespace=nowarn"),
+		"git apply must use --whitespace=nowarn; got: %q", applyCmd)
+}
+
 func containsMatch(cmds []string, substr string) bool {
 	for _, c := range cmds {
 		if strings.Contains(c, substr) {

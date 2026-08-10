@@ -4,6 +4,7 @@
 # Build output
 bin/
 dist/
+share/
 /chunk
 /chunk-*
 

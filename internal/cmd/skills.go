@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -26,26 +27,41 @@ func newSkillCmd() *cobra.Command {
 
 func newSkillInstallCmd() *cobra.Command {
 	var jsonOut bool
+	var userScope bool
+	var projectScope bool
 
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install or update all skills into agent config directories",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := os.Getenv(config.EnvHome)
-			if home == "" {
-				return &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
+			scope, baseDir, err := resolveScope(userScope, projectScope)
+			if err != nil {
+				return err
 			}
 			io := iostream.FromCmd(cmd)
-			results := skills.Install(home)
+			results := skills.Install(scope, baseDir)
 			if jsonOut {
-				return iostream.PrintJSON(io.Out, results)
+				if err := iostream.PrintJSON(io.Out, results); err != nil {
+					return err
+				}
+				for _, r := range results {
+					if len(r.Errors) > 0 {
+						return fmt.Errorf("one or more skills failed to install")
+					}
+				}
+				return nil
 			}
+			var installErr error
 			for _, r := range results {
 				if r.Skipped {
 					io.Println(ui.Dim(r.Agent + ": skipped (not installed)"))
 					continue
 				}
-				if len(r.Installed) == 0 && len(r.Updated) == 0 {
+				for _, msg := range r.Errors {
+					io.ErrPrintln(ui.Warning(r.Agent + ": error: " + msg))
+					installErr = fmt.Errorf("one or more skills failed to install")
+				}
+				if len(r.Installed) == 0 && len(r.Updated) == 0 && len(r.Errors) == 0 {
 					io.Println(r.Agent + ": " + ui.Green("all skills up to date"))
 					continue
 				}
@@ -56,25 +72,32 @@ func newSkillInstallCmd() *cobra.Command {
 					io.Println(r.Agent + ": " + ui.Yellow("updated "+name))
 				}
 			}
-			return nil
+			return installErr
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&userScope, "user", false, "Install into user-level agent config directories (~/.claude/skills, ~/.agents/skills)")
+	cmd.Flags().BoolVar(&projectScope, "project", false, "Install into project-level agent config directories (.claude/skills, .agents/skills) [default]")
 
 	return cmd
 }
 
 func newSkillListCmd() *cobra.Command {
 	var jsonOut bool
+	var userScope bool
+	var projectScope bool
 
 	cmd := &cobra.Command{
 		Use:   cmdList,
 		Short: "List bundled skills and their per-agent installation status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			home := os.Getenv(config.EnvHome)
+			scope, baseDir, err := resolveScope(userScope, projectScope)
+			if err != nil {
+				return err
+			}
 			io := iostream.FromCmd(cmd)
-			statuses := skills.Status(home)
+			statuses := skills.Status(scope, baseDir)
 
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, statuses)
@@ -103,18 +126,40 @@ func newSkillListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&userScope, "user", false, "List user-level skill installation status (~/.claude/skills, ~/.agents/skills)")
+	cmd.Flags().BoolVar(&projectScope, "project", false, "List project-level skill installation status (.claude/skills, .agents/skills) [default]")
 
 	return cmd
+}
+
+// resolveScope picks a Scope and base directory from the --user / --project flags.
+// Project scope is the default when neither flag is set.
+func resolveScope(userFlag, projectFlag bool) (skills.Scope, string, error) {
+	if userFlag && projectFlag {
+		return "", "", &userError{msg: "--user and --project are mutually exclusive", errMsg: "mutually exclusive flags"}
+	}
+	if userFlag {
+		home := os.Getenv(config.EnvHome)
+		if home == "" {
+			return "", "", &userError{msg: msgHomeNotSet, errMsg: errMsgHomeNotSet}
+		}
+		return skills.ScopeUser, home, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("get working directory: %w", err)
+	}
+	return skills.ScopeProject, cwd, nil
 }
 
 func stateDisplay(state skills.State) (icon, label string) {
 	switch state {
 	case skills.StateCurrent:
-		return ui.Green("\u2713"), ui.Green("current")
+		return ui.Green("✓"), ui.Green("current")
 	case skills.StateOutdated:
-		return ui.Yellow("\u26a0"), ui.Yellow("outdated")
+		return ui.Yellow("⚠"), ui.Yellow("outdated")
 	case skills.StateMissing:
-		return ui.Dim("\u2717"), ui.Dim("missing")
+		return ui.Dim("✗"), ui.Dim("missing")
 	}
 	return ui.Dim("?"), ui.Dim("unknown")
 }
