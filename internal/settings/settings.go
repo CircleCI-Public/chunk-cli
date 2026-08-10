@@ -10,6 +10,7 @@ import (
 // hookEntry is one hook command within a hook group.
 type hookEntry struct {
 	Type    string `json:"type"`
+	If      string `json:"if,omitempty"`
 	Command string `json:"command"`
 	Timeout int    `json:"timeout"`
 }
@@ -47,6 +48,7 @@ func Build(commands []config.Command) ([]byte, error) {
 		}
 		hooks = append(hooks, hookEntry{
 			Type:    "command",
+			If:      CommitIfFilter,
 			Command: fmt.Sprintf("cd ${CLAUDE_PROJECT_DIR:-.} && %s", cmd.Run),
 			Timeout: timeout,
 		})
@@ -117,6 +119,7 @@ func BuildCodex(commands []config.Command) ([]byte, error) {
 		stopTimeout += timeout
 		hooks = append(hooks, hookEntry{
 			Type:    "command",
+			If:      CommitIfFilter,
 			Command: cmd.Run,
 			Timeout: timeout,
 		})
