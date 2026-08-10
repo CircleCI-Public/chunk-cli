@@ -13,6 +13,8 @@ Chunk sidecars fix this by running lightweight microbuilds to validate inside th
 
 The build-prompt command complements this by capturing your team's real review patterns and turning them into agent context, so the code agents write reflects your standards from the start.
 
+For workflow validation, this repository can be used as a simple smoke test for GitHub fork and pull request operations.
+
 ## Requirements
 
 - **macOS** (arm64 or x86_64) or **Linux** (arm64 or x86_64)
