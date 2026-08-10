@@ -23,6 +23,7 @@ const (
 	OpValidate Op = "validate"
 	OpExec     Op = "exec"
 	OpSetup    Op = "setup"
+	OpHook     Op = "hook"
 )
 
 // Event is a single status event written to the log.
