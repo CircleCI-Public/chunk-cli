@@ -405,3 +405,66 @@ func TestRouteParamsMultiple(t *testing.T) {
 		t.Fatalf("expected 200, got %d", status)
 	}
 }
+
+// TestRetries504ThenSucceeds pins that a Gateway Timeout is retried and recovered
+// from without the caller seeing it.
+//
+// The sidecar API answers 504 when a sidecar agent does not reply inside the API's
+// own per-call budget. That is a transient stall — measured in production, one
+// sidecar produced four in a single minute while serving eighteen commands either
+// side of them — so a client that surfaced it as a failure would turn a momentary
+// hiccup into a failed command. Previously the API reported these as 500, which
+// this policy also retries; the point of the test is that the more accurate status
+// did not quietly opt out of retrying.
+func TestRetries504ThenSucceeds(t *testing.T) {
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusGatewayTimeout)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{BaseURL: srv.URL, RetryOn429Budget: 30 * time.Second})
+
+	var body struct {
+		OK bool `json:"ok"`
+	}
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/", hc.JSONDecoder(&body)))
+	if err != nil {
+		t.Fatalf("a retried 504 must not reach the caller: %v", err)
+	}
+	if !body.OK {
+		t.Fatal("expected the second attempt's body to be decoded")
+	}
+	if n := attempts.Load(); n != 2 {
+		t.Fatalf("expected 2 attempts (1 + 1 retry), got %d", n)
+	}
+}
+
+// TestRetries504Exhausted pins the attempt count when every attempt times out, so
+// a 504 costs the same bounded number of tries as any other 5xx rather than
+// hanging or retrying forever.
+func TestRetries504Exhausted(t *testing.T) {
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	defer srv.Close()
+
+	c := hc.New(hc.Config{BaseURL: srv.URL, RetryOn429Budget: 30 * time.Second})
+
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	if err == nil {
+		t.Fatal("expected an error once the retries are spent")
+	}
+	if n := attempts.Load(); n != 4 {
+		t.Fatalf("expected 4 attempts (1 + 3 retries), got %d", n)
+	}
+}
