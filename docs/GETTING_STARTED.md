@@ -153,7 +153,7 @@ After installing, your agent gains these skills:
 |---|---|---|
 | `chunk-review` | "review my changes" / "chunk review" | Applies your team's review standards to the current diff |
 | `chunk-sidecar` | "validate on the sidecar" / "sidecar dev loop" | Syncs and validates changes on a remote CircleCI environment |
-| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing to find undertested code |
+| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing on parallel sidecars to find undertested code |
 | `debug-ci-failures` | "debug CI" / "why is CI failing" | Analyzes CircleCI build failures and flaky tests |
 
 See [docs/SKILLS.md](SKILLS.md) for full details on each skill.

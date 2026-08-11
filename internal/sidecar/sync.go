@@ -63,6 +63,33 @@ func persistWorkspace(ctx context.Context, workspace string) error {
 func Sync(ctx context.Context,
 	client *circleci.Client, sidecarID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
 
+	return syncTo(ctx, client, sidecarID, identityFile, authSock, workdir, true, status)
+}
+
+// SyncEphemeral synchronises like Sync but neither reads nor writes the active
+// sidecar file. Callers that drive several sidecars concurrently — mutation
+// variants, one sidecar per variant — would otherwise race on that shared file
+// and leave it naming whichever worker happened to finish last, silently
+// repointing the user's own session at a sidecar that is about to be deleted.
+// workdir is required for the same reason: there is no shared state to fall
+// back on, so each caller must name its own destination.
+func SyncEphemeral(ctx context.Context,
+	client *circleci.Client, sidecarID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
+
+	if workdir == "" {
+		return fmt.Errorf("sync: workdir is required for an ephemeral sync")
+	}
+	return syncTo(ctx, client, sidecarID, identityFile, authSock, workdir, false, status)
+}
+
+// syncTo backs Sync and SyncEphemeral. persist controls whether the resolved
+// workspace is read from and written back to the active-sidecar file; it must
+// be false for concurrent callers. Deliberately not named sync: an identifier
+// in the package block collides with a file-block import of the same name, so
+// that would break the first file in this package to import stdlib sync.
+func syncTo(ctx context.Context, client *circleci.Client,
+	sidecarID, identityFile, authSock, workdir string, persist bool, status iostream.StatusFunc) error {
+
 	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
 	if err != nil {
 		return err
@@ -78,13 +105,15 @@ func Sync(ctx context.Context,
 		return &NoOriginRemoteError{Err: err}
 	}
 
-	repoPath, err := ResolveWorkspace(ctx, workdir, repo)
-	if err != nil {
-		return err
-	}
-
-	if err := persistWorkspace(ctx, repoPath); err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
+	repoPath := workdir
+	if persist {
+		repoPath, err = ResolveWorkspace(ctx, workdir, repo)
+		if err != nil {
+			return err
+		}
+		if err := persistWorkspace(ctx, repoPath); err != nil {
+			status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
+		}
 	}
 
 	// Try once and exit here if it worked

@@ -137,6 +137,8 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&opts.envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
 
+	cmd.AddCommand(newValidateVariantsCmd())
+
 	return cmd
 }
 

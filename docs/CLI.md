@@ -74,6 +74,14 @@ chunk
 │   --project <path>                # Override project directory
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
+│   │
+│   └── variants <variants-file>    # Run code variants on parallel throwaway sidecars
+│       --name <command>            # Validate command to run (default: all remote commands)
+│       --parallel <n>              # Max concurrent sidecars (default 5)
+│       --org-id <id>               # Organization ID
+│       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
+│       --identity-file <path>      # SSH identity file
+│       --workdir <path>            # Remote working directory
 │
 ├── sidecar
 │   ├── list                        # List sidecars
@@ -191,6 +199,16 @@ chunk
   without one, and deletes nothing if the listing fails, since an empty listing is
   not proof of absence. A sidecar the API rejects as out of date (410) is deleted
   when a sync hits it, because no listing reveals that state.
+- **`validate variants` sidecars are outside that scheme.** Each variant gets its
+  own sidecar, and none of them are written to the active-sidecar file — parallel
+  workers would race on it and leave the user's own session pointing at a sidecar
+  about to be deleted. That also makes them invisible to the reaper above, so the
+  command cleans up after itself instead: it deletes each sidecar as its variant
+  finishes, catches SIGINT/SIGTERM so an interrupt still unwinds through those
+  deletes, and sweeps any sidecar named `variant-*` left over by an earlier
+  crashed run before starting a new one. For the same reason `validate variants`
+  syncs without persisting a workspace and therefore requires a resolvable
+  workdir.
 - Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,
   `validate --sidecar-id`) prompt for it inline at the point of need rather than
   failing with an error.

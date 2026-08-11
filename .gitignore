@@ -38,6 +38,9 @@ PLANS.md
 .chunk/sidecar.json
 .chunk/sidecar.*.json
 
+# mutation variants scratch file
+.chunk/variants.json
+
 # hook disable sentinel
 .chunk/hooks-disabled
 
