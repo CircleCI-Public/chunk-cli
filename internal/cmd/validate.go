@@ -293,6 +293,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return errSilentExit
 	}
 
+	activeSidecar, _ := sidecar.LoadActive(ctx)
 	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, tree, name, cfg, execTarget(opts, cfg, activeSidecar))
 	if resultCache != nil {
 		if _, ok := resultCache.Get(cacheKey); ok {
@@ -329,7 +330,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if needsSidecar {
 		reapAbandonedSidecars(ctx, circleCIClient, workDir, statusFn, streams)
 	}
-	activeSidecar, _ := sidecar.LoadActive(ctx)
+	activeSidecar, _ = sidecar.LoadActive(ctx)
 
 	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
@@ -349,32 +350,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// Only load env vars and resolve secrets when a sidecar is actually
 	// being used — avoids parsing .env.local or hitting secrets APIs on
 	// purely local runs.
-	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
-	if errors.Is(err, errSidecarUnusable) {
-		// The sidecar could not be used and its state has been dropped, so replace
-		// it here rather than failing and asking for the same command again. The
-		// reap cannot prevent this on its own: a sidecar can go away between the
-		// listing and the sync, and one the API rejects as out of date is listed
-		// like any other.
-		statusFn(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
-		opts.sidecarID = ""
-		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, streams); createErr != nil {
-			return createErr
-		}
-		// A replacement has none of the setup the old one had, so exec failures on
-		// it are real failures rather than grounds for falling back to local.
-		freshlyCreated = true
-		statusFn = wrapEventLogStatusFn(baseStatusFn, opts.sidecarID, nil, workDir, hook)
-		envVars, err = loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
-	}
+	envVars, statusFn, freshlyCreated, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
 	if err != nil {
-		if errors.Is(err, errSidecarUnusable) {
-			// Twice in one run is not a stale sidecar, so stop rather than churn.
-			return newUserError("Could not get a usable sidecar.").
-				withCode("sidecar.unusable").
-				withSuggestion("Create one explicitly with: chunk sidecar create").
-				wrap(err)
-		}
 		return err
 	}
 
@@ -385,6 +362,50 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		}
 	}
 	return finishValidate(cmd, hook, execErr, start, opts.sidecarID, cfg, statusFn, streams)
+}
+
+// loadEnvVarsWithRetry loads sidecar env vars, and if the sidecar is unusable
+// provisions a replacement and retries once.
+func loadEnvVarsWithRetry(
+	ctx context.Context,
+	circleCIClient *circleci.Client,
+	opts *validateOpts,
+	image string,
+	freshlyCreated bool,
+	baseStatusFn, statusFn iostream.StatusFunc,
+	workDir string,
+	hook *hookContext,
+	streams iostream.Streams,
+) (map[string]string, iostream.StatusFunc, bool, error) {
+	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+	if errors.Is(err, errSidecarUnusable) {
+		// The sidecar could not be used and its state has been dropped, so replace
+		// it here rather than failing and asking for the same command again. The
+		// reap cannot prevent this on its own: a sidecar can go away between the
+		// listing and the sync, and one the API rejects as out of date is listed
+		// like any other.
+		statusFn(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
+		opts.sidecarID = ""
+		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, streams); createErr != nil {
+			return nil, statusFn, freshlyCreated, createErr
+		}
+		// A replacement has none of the setup the old one had, so exec failures on
+		// it are real failures rather than grounds for falling back to local.
+		freshlyCreated = true
+		statusFn = wrapEventLogStatusFn(baseStatusFn, opts.sidecarID, nil, workDir, hook)
+		envVars, err = loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+	}
+	if err != nil {
+		if errors.Is(err, errSidecarUnusable) {
+			// Twice in one run is not a stale sidecar, so stop rather than churn.
+			return nil, statusFn, freshlyCreated, newUserError("Could not get a usable sidecar.").
+				withCode("sidecar.unusable").
+				withSuggestion("Create one explicitly with: chunk sidecar create").
+				wrap(err)
+		}
+		return nil, statusFn, freshlyCreated, err
+	}
+	return envVars, statusFn, freshlyCreated, nil
 }
 
 // wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
