@@ -69,6 +69,45 @@ func prePushHookPath(projectDir string) (string, error) {
 	return filepath.Join(gitDir, "hooks", "pre-push"), nil
 }
 
+// installPrePushHook writes or updates the pre-push hook at hookPath to include
+// chunk validate. Used by both chunk hook enable and chunk init.
+func installPrePushHook(hookPath string, streams iostream.Streams) error {
+	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+		return fmt.Errorf("create hooks directory: %w", err)
+	}
+
+	existing, readErr := os.ReadFile(hookPath)
+	if readErr == nil {
+		if strings.Contains(string(existing), "chunk validate") {
+			streams.ErrPrintln("Pre-push hook already installed.")
+			return nil
+		}
+		content := string(existing)
+		if len(content) > 0 && content[len(content)-1] != '\n' {
+			content += "\n"
+		}
+		content += "chunk validate\n"
+		info, err := os.Stat(hookPath)
+		if err != nil {
+			return fmt.Errorf("stat pre-push hook: %w", err)
+		}
+		if err := os.WriteFile(hookPath, []byte(content), info.Mode()); err != nil {
+			return fmt.Errorf("update pre-push hook: %w", err)
+		}
+		streams.ErrPrintln("Updated .git/hooks/pre-push to include chunk validate.")
+		return nil
+	}
+	if !errors.Is(readErr, fs.ErrNotExist) {
+		return fmt.Errorf("read pre-push hook: %w", readErr)
+	}
+
+	if err := os.WriteFile(hookPath, []byte(prePushHookScript), 0o755); err != nil {
+		return fmt.Errorf("write pre-push hook: %w", err)
+	}
+	streams.ErrPrintln("Installed .git/hooks/pre-push.")
+	return nil
+}
+
 func newHookEnableCmd(projectDir *string) *cobra.Command {
 	return &cobra.Command{
 		Use:          "enable",
@@ -80,42 +119,7 @@ func newHookEnableCmd(projectDir *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("locate git hooks directory: %w", err)
 			}
-
-			if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
-				return fmt.Errorf("create hooks directory: %w", err)
-			}
-
-			existing, readErr := os.ReadFile(hookPath)
-			if readErr == nil {
-				if strings.Contains(string(existing), "chunk validate") {
-					streams.ErrPrintln("Pre-push hook already installed.")
-					return nil
-				}
-				// Append to existing hook rather than overwriting.
-				content := string(existing)
-				if len(content) > 0 && content[len(content)-1] != '\n' {
-					content += "\n"
-				}
-				content += "chunk validate\n"
-				info, err := os.Stat(hookPath)
-				if err != nil {
-					return fmt.Errorf("stat pre-push hook: %w", err)
-				}
-				if err := os.WriteFile(hookPath, []byte(content), info.Mode()); err != nil {
-					return fmt.Errorf("update pre-push hook: %w", err)
-				}
-				streams.ErrPrintln("Updated .git/hooks/pre-push to include chunk validate.")
-				return nil
-			}
-			if !errors.Is(readErr, fs.ErrNotExist) {
-				return fmt.Errorf("read pre-push hook: %w", readErr)
-			}
-
-			if err := os.WriteFile(hookPath, []byte(prePushHookScript), 0o755); err != nil {
-				return fmt.Errorf("write pre-push hook: %w", err)
-			}
-			streams.ErrPrintln("Installed .git/hooks/pre-push.")
-			return nil
+			return installPrePushHook(hookPath, streams)
 		},
 	}
 }

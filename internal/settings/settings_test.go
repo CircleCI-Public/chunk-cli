@@ -10,55 +10,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
-func TestBuildValidateTimeoutDefaultsToSixty(t *testing.T) {
-	// A command with Timeout: 0 must produce a non-zero timeout in the generated
-	// hook entry — the default of 60s must be applied.
-	validate := []config.ValidateCommand{
-		{Name: "test", Run: "go test ./...", Timeout: 0},
-	}
-	data, err := Build(nil, validate)
-	assert.NilError(t, err)
-
-	var s map[string]interface{}
-	assert.NilError(t, json.Unmarshal(data, &s))
-
-	hooks := s["hooks"].(map[string]interface{})
-	preToolUse := hooks["PreToolUse"].([]interface{})
-	group := preToolUse[0].(map[string]interface{})
-	entries := group["hooks"].([]interface{})
-	entry := entries[0].(map[string]interface{})
-
-	// The PreToolUse hook runs chunk validate; base buffer is 30, plus one
-	// defaulted command at 300s = 330s.
-	timeout, _ := entry["timeout"].(float64)
-	assert.Assert(t, timeout > 0, "expected non-zero timeout, got: %v", timeout)
-}
-
-func TestBuildValidateTimeoutRespectsExplicitValue(t *testing.T) {
-	validate := []config.ValidateCommand{
-		{Name: "lint", Run: "golangci-lint run", Timeout: 120},
-	}
-	data, err := Build(nil, validate)
-	assert.NilError(t, err)
-
-	var s map[string]interface{}
-	assert.NilError(t, json.Unmarshal(data, &s))
-
-	hooks := s["hooks"].(map[string]interface{})
-	preToolUse := hooks["PreToolUse"].([]interface{})
-	group := preToolUse[0].(map[string]interface{})
-	entries := group["hooks"].([]interface{})
-	entry := entries[0].(map[string]interface{})
-
-	timeout, _ := entry["timeout"].(float64)
-	assert.Assert(t, timeout == 150, "expected 30 buffer + 120 cmd = 150, got: %v", timeout)
-}
-
 func TestBuildIncludesPostToolUseForFix(t *testing.T) {
 	fix := []config.FixCommand{
 		{Name: "format", Run: "gofmt -w .", Timeout: 30},
 	}
-	data, err := Build(fix, nil)
+	data, err := Build(fix)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
@@ -75,42 +31,37 @@ func TestBuildIncludesPostToolUseForFix(t *testing.T) {
 	assert.Assert(t, entry["command"] != nil)
 }
 
-func TestBuildNoFixCommandsOmitsPostToolUse(t *testing.T) {
-	validate := []config.ValidateCommand{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
+func TestBuildNoFixCommandsProducesNoHooks(t *testing.T) {
+	data, err := Build(nil)
+	assert.NilError(t, err)
+
+	var s map[string]interface{}
+	assert.NilError(t, json.Unmarshal(data, &s))
+
+	_, hasHooks := s["hooks"]
+	assert.Assert(t, !hasHooks, "Build with no fix commands must produce no hooks")
+}
+
+func TestBuildNoPreToolUseHook(t *testing.T) {
+	fix := []config.FixCommand{
+		{Name: "format", Run: "gofmt -w .", Timeout: 30},
 	}
-	data, err := Build(nil, validate)
+	data, err := Build(fix)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &s))
 
 	hooks := s["hooks"].(map[string]interface{})
-	_, hasPostToolUse := hooks["PostToolUse"]
-	assert.Assert(t, !hasPostToolUse, "expected no PostToolUse hook when no fix commands")
-}
-
-func TestBuildNoStopHook(t *testing.T) {
-	validate := []config.ValidateCommand{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
-	data, err := Build(nil, validate)
-	assert.NilError(t, err)
-
-	var s map[string]interface{}
-	assert.NilError(t, json.Unmarshal(data, &s))
-
-	hooks, ok := s["hooks"].(map[string]interface{})
-	assert.Assert(t, ok)
-	_, hasStop := hooks["Stop"]
-	assert.Assert(t, !hasStop, "Build must not include a Stop hook")
+	_, hasPreToolUse := hooks["PreToolUse"]
+	assert.Assert(t, !hasPreToolUse, "Build must not include a PreToolUse hook")
 }
 
 func TestBuildCodexNoMetadata(t *testing.T) {
-	validate := []config.ValidateCommand{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
+	fix := []config.FixCommand{
+		{Name: "format", Run: "gofmt -w .", Timeout: 30},
 	}
-	data, err := BuildCodex(nil, validate)
+	data, err := BuildCodex(fix)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
@@ -124,28 +75,28 @@ func TestBuildCodexNoMetadata(t *testing.T) {
 	assert.Assert(t, !hasPerms, "BuildCodex must not include permissions")
 }
 
-func TestBuildCodexCommandNotWrappedWithCd(t *testing.T) {
-	validate := []config.ValidateCommand{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
+func TestBuildCodexFixCommandNotWrappedWithCd(t *testing.T) {
+	fix := []config.FixCommand{
+		{Name: "format", Run: "gofmt -w .", Timeout: 30},
 	}
-	data, err := BuildCodex(nil, validate)
+	data, err := BuildCodex(fix)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &s))
 
 	hooks := s["hooks"].(map[string]interface{})
-	preToolUse := hooks["PreToolUse"].([]interface{})
-	group := preToolUse[0].(map[string]interface{})
+	postToolUse := hooks["PostToolUse"].([]interface{})
+	group := postToolUse[0].(map[string]interface{})
 	entries := group["hooks"].([]interface{})
 	entry := entries[0].(map[string]interface{})
 
 	cmd, _ := entry["command"].(string)
-	assert.Equal(t, cmd, "chunk validate", "Codex PreToolUse hook must run chunk validate directly")
+	assert.Equal(t, cmd, "chunk fix", "Codex PostToolUse hook must run chunk fix directly")
 }
 
 func TestBuildCodexNoCommandsProducesEmptyHooks(t *testing.T) {
-	data, err := BuildCodex(nil, nil)
+	data, err := BuildCodex(nil)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
@@ -156,10 +107,10 @@ func TestBuildCodexNoCommandsProducesEmptyHooks(t *testing.T) {
 }
 
 func TestBuildIncludesSessionStartHook(t *testing.T) {
-	validate := []config.ValidateCommand{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
+	fix := []config.FixCommand{
+		{Name: "format", Run: "gofmt -w .", Timeout: 30},
 	}
-	data, err := Build(nil, validate)
+	data, err := Build(fix)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
@@ -180,7 +131,7 @@ func TestBuildIncludesSessionStartHook(t *testing.T) {
 }
 
 func TestBuildNoCommandsOmitsSessionStartHook(t *testing.T) {
-	data, err := Build(nil, nil)
+	data, err := Build(nil)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
@@ -190,17 +141,17 @@ func TestBuildNoCommandsOmitsSessionStartHook(t *testing.T) {
 	assert.Assert(t, !hasHooks, "Build with no commands must produce no hooks at all")
 }
 
-func TestBuildCodexNoStopHook(t *testing.T) {
-	validate := []config.ValidateCommand{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
+func TestBuildCodexNoPreToolUseHook(t *testing.T) {
+	fix := []config.FixCommand{
+		{Name: "format", Run: "gofmt -w .", Timeout: 30},
 	}
-	data, err := BuildCodex(nil, validate)
+	data, err := BuildCodex(fix)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &s))
 
 	hooks := s["hooks"].(map[string]interface{})
-	_, hasStop := hooks["Stop"]
-	assert.Assert(t, !hasStop, "BuildCodex must not include a Stop hook")
+	_, hasPreToolUse := hooks["PreToolUse"]
+	assert.Assert(t, !hasPreToolUse, "BuildCodex must not include a PreToolUse hook")
 }

@@ -51,7 +51,7 @@ func LoadSessionID(workDir string) string {
 // root from workDir (or using workDir itself when not inside a git repo).
 func projectDataDirFor(workDir string) (string, error) {
 	root := workDir
-	if r, err := findGitRootFrom(workDir); err == nil && r != "" {
+	if r := findGitRootFrom(workDir); r != "" {
 		root = r
 	}
 	return config.ProjectDataDir(root)
@@ -59,15 +59,15 @@ func projectDataDirFor(workDir string) (string, error) {
 
 // findGitRootFrom walks up from start and returns the first directory
 // containing .git, or "" if none is found.
-func findGitRootFrom(start string) (string, error) {
+func findGitRootFrom(start string) string {
 	dir := filepath.Clean(start)
 	for {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return dir, nil
+			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", nil
+			return ""
 		}
 		dir = parent
 	}

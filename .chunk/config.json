@@ -1,9 +1,15 @@
 {
-  "commands": [
+  "fix": [
+    {
+      "name": "format",
+      "run": "task fmt",
+      "timeout": 30
+    }
+  ],
+  "validate": [
     {
       "name": "test",
       "run": "task test",
-      "role": "gate",
       "timeout": 300,
       "remote": true
     },
@@ -15,14 +21,7 @@
     {
       "name": "lint",
       "run": "task lint",
-      "role": "gate",
       "timeout": 60
-    },
-    {
-      "name": "format",
-      "run": "task fmt",
-      "role": "autofix",
-      "timeout": 30
     }
   ],
   "vcs": {
@@ -32,6 +31,7 @@
   "validation": {
     "sidecarImage": "3c128769-f6a7-4219-8240-a3562d91ed17"
   },
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
   "environment": {
     "stack": "go",
     "setup": [
@@ -50,6 +50,5 @@
     ],
     "image": "cimg/go",
     "image_version": "1.26.2"
-  },
-  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c"
+  }
 }

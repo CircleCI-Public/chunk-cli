@@ -9,9 +9,14 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
+const (
+	cmdSession = "session"
+	cmdStart   = "start"
+)
+
 func newSessionCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:    "session",
+		Use:    cmdSession,
 		Short:  "Manage Claude Code session state",
 		Hidden: true,
 	}
@@ -23,7 +28,7 @@ func newSessionStartCmd() *cobra.Command {
 	var projectDir string
 
 	c := &cobra.Command{
-		Use:          "start",
+		Use:          cmdStart,
 		Short:        "Record the current Claude Code session ID (called by the SessionStart hook)",
 		SilenceUsage: true,
 		Hidden:       true,
