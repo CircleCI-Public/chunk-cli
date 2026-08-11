@@ -47,3 +47,7 @@ PLANS.md
 # unikraft
 .unikraft/
 test-fetch-on-stale-sidecar.log
+
+# toolchain installers downloaded into the repo root
+*.pkg
+*.tar.gz
