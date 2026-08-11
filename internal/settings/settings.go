@@ -73,10 +73,8 @@ func Build(fix []config.FixCommand) ([]byte, error) {
 		},
 	}
 
-	if len(fix) > 0 {
-		hooks := map[string][]hookGroup{}
-
-		hooks["SessionStart"] = []hookGroup{
+	hooks := map[string][]hookGroup{
+		"SessionStart": {
 			{
 				Hooks: []hookEntry{
 					{
@@ -86,8 +84,10 @@ func Build(fix []config.FixCommand) ([]byte, error) {
 					},
 				},
 			},
-		}
+		},
+	}
 
+	if len(fix) > 0 {
 		hooks["PostToolUse"] = []hookGroup{
 			{
 				Matcher: FixMatcher,
@@ -100,9 +100,9 @@ func Build(fix []config.FixCommand) ([]byte, error) {
 				},
 			},
 		}
-
-		s.Hooks = hooks
 	}
+
+	s.Hooks = hooks
 
 	return json.MarshalIndent(s, "", "  ")
 }

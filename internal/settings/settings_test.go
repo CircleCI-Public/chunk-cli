@@ -31,15 +31,17 @@ func TestBuildIncludesPostToolUseForFix(t *testing.T) {
 	assert.Assert(t, entry["command"] != nil)
 }
 
-func TestBuildNoFixCommandsProducesNoHooks(t *testing.T) {
+func TestBuildNoFixCommandsOmitsPostToolUse(t *testing.T) {
 	data, err := Build(nil)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &s))
 
-	_, hasHooks := s["hooks"]
-	assert.Assert(t, !hasHooks, "Build with no fix commands must produce no hooks")
+	hooks, hasHooks := s["hooks"].(map[string]interface{})
+	assert.Assert(t, hasHooks, "Build with no fix commands must still produce a hooks block for SessionStart")
+	_, hasPostToolUse := hooks["PostToolUse"]
+	assert.Assert(t, !hasPostToolUse, "Build with no fix commands must not include PostToolUse")
 }
 
 func TestBuildNoPreToolUseHook(t *testing.T) {
@@ -130,15 +132,17 @@ func TestBuildIncludesSessionStartHook(t *testing.T) {
 	assert.Assert(t, strings.Contains(cmd, "chunk session start"), "SessionStart hook must invoke chunk session start, got: %s", cmd)
 }
 
-func TestBuildNoCommandsOmitsSessionStartHook(t *testing.T) {
+func TestBuildAlwaysIncludesSessionStart(t *testing.T) {
 	data, err := Build(nil)
 	assert.NilError(t, err)
 
 	var s map[string]interface{}
 	assert.NilError(t, json.Unmarshal(data, &s))
 
-	_, hasHooks := s["hooks"]
-	assert.Assert(t, !hasHooks, "Build with no commands must produce no hooks at all")
+	hooks, hasHooks := s["hooks"].(map[string]interface{})
+	assert.Assert(t, hasHooks, "Build must always produce a hooks block")
+	sessionStart, ok := hooks["SessionStart"].([]interface{})
+	assert.Assert(t, ok && len(sessionStart) > 0, "Build must always include a SessionStart hook even with no fix commands")
 }
 
 func TestBuildCodexNoPreToolUseHook(t *testing.T) {

@@ -99,7 +99,7 @@ func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 
 // RunInline runs an inline command string locally.
 func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) error {
-	return runCommand(ctx, workDir, name, command, 0, 0, status, streams)
+	return runCommand(ctx, workDir, name, expandCommand(workDir, command), 0, 0, status, streams)
 }
 
 // RunFix runs all fix commands (or a single named one) locally.
