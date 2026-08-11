@@ -9,6 +9,7 @@ import (
 // hookEntry is one hook command within a hook group.
 type hookEntry struct {
 	Type    string `json:"type"`
+	If      string `json:"if,omitempty"`
 	Command string `json:"command"`
 	Timeout int    `json:"timeout"`
 }

@@ -116,7 +116,7 @@ func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig) bool {
 	return cfg.HasSidecarImage()
 }
 
-func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc) (map[string]string, error) {
+func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc, streams iostream.Streams) (map[string]string, error) {
 	if opts.sidecarID == "" {
 		return nil, nil
 	}
@@ -124,7 +124,7 @@ func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *vali
 	if err != nil {
 		return nil, err
 	}
-	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn); err != nil {
+	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn, streams); err != nil {
 		return nil, err
 	}
 	return envVars, nil
@@ -192,7 +192,6 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	rc, _ := config.ResolveCircleCI(insecureStorage)
 
 	explicitRemote := opts.remote || opts.sidecarID != ""
-	activeSidecar, _ := sidecar.LoadActive(ctx)
 	needsSidecar := validateNeedsSidecar(explicitRemote, cfg)
 
 	allRemote := explicitRemote
@@ -210,15 +209,44 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	statusFn = newStatusFunc(streams)
 	statusFn(iostream.LevelStep, "chunk validate")
 
+	// Reap before reading state, so a file naming a sidecar that no longer exists
+	// is gone before it can be promoted and reused. Loading first would hand
+	// setupRemote the very dead ID the reap just cleaned up.
+	if needsSidecar {
+		reapAbandonedSidecars(ctx, circleCIClient, workDir, statusFn, streams)
+	}
+	activeSidecar, _ := sidecar.LoadActive(ctx)
+
 	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
 		return err
 	}
 
+	// Wire event log after setupRemote fills opts.sidecarID but before
+	// loadSidecarEnvVars so sync/env-resolve events are captured.
+	// Kept unwrapped so a replacement sidecar can be rewrapped against its own ID.
+	baseStatusFn := statusFn
 	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir)
 
-	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
+	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+	if errors.Is(err, errSidecarUnusable) {
+		statusFn(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
+		opts.sidecarID = ""
+		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, streams); createErr != nil {
+			return createErr
+		}
+		freshlyCreated = true
+		statusFn = wrapEventLogStatusFn(baseStatusFn, opts.sidecarID, nil, workDir)
+		envVars, err = loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+	}
 	if err != nil {
+		if errors.Is(err, errSidecarUnusable) {
+			// Twice in one run is not a stale sidecar, so stop rather than churn.
+			return newUserError("Could not get a usable sidecar.").
+				withCode("sidecar.unusable").
+				withSuggestion("Create one explicitly with: chunk sidecar create").
+				wrap(err)
+		}
 		return err
 	}
 
@@ -227,7 +255,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 }
 
 // wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
-// is active.
+// is active. Returns statusFn unchanged when no sidecar is involved, so callers
+// with empty sidecar IDs never write events with a blank sidecar_id.
 func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string) iostream.StatusFunc {
 	if sidecarID == "" {
 		return statusFn
@@ -383,16 +412,72 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 	return false, nil
 }
 
-func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc) error {
+func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	authSock := os.Getenv(config.EnvSSHAuthSock)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
 	if err := sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
-		return &userError{msg: "Could not sync to sidecar.", err: err}
+		return sidecarSyncError(ctx, client, sidecarID, err, streams)
 	}
 	return nil
+}
+
+// sidecarSyncError reports a failed sync, first dropping local state when the
+// failure means this sidecar can never be used again.
+//
+// Reap already removes deleted sidecars before anything syncs to them, so this
+// covers what a listing cannot show: a sidecar deleted since the list was
+// fetched, and one the API rejects as out of date. Without the prune an
+// out-of-date sidecar fails forever: it is still listed, and still recently
+// used, so the age sweep never touches it.
+func sidecarSyncError(ctx context.Context, client *circleci.Client, sidecarID string, err error, streams iostream.Streams) error {
+	switch {
+	case circleci.SidecarOutOfDate(err):
+		// Still running and still billable, so delete it rather than orphan it.
+		pruneSidecarState(ctx, client, sidecarID, true, streams)
+	case circleci.SidecarGone(err):
+		pruneSidecarState(ctx, client, sidecarID, false, streams)
+	default:
+		return &userError{msg: "Could not sync to sidecar.", err: err}
+	}
+	// Both wrapped, not replaced: the caller replaces the sidecar and retries, and
+	// only if that fails does the original surface. GoneError in main's error path
+	// still finds the 410 through the wrapping and phrases it.
+	return fmt.Errorf("%w: %w", errSidecarUnusable, err)
+}
+
+// errSidecarUnusable marks a sync failure that a fresh sidecar would fix: the
+// sidecar is gone, or permanently out of date, and its local state has already
+// been dropped, so provisioning a replacement is safe.
+var errSidecarUnusable = errors.New("sidecar unusable")
+
+// pruneSidecarState drops local state for an unusable sidecar, warning on
+// failure. A prune that fails must not mask the error that triggered it.
+func pruneSidecarState(ctx context.Context, client *circleci.Client, sidecarID string, deleteRemote bool, streams iostream.Streams) {
+	if err := sidecar.PruneID(ctx, client, sidecarID, deleteRemote); err != nil {
+		streams.ErrPrintf("warning: could not clear state for unusable sidecar %s: %v\n", sidecarID, err)
+	}
+}
+
+// reapAbandonedSidecars deletes sidecars this project has abandoned and drops
+// their local state. Errors are reported and then ignored: a cleanup sweep must
+// never fail a validate run.
+func reapAbandonedSidecars(ctx context.Context, client *circleci.Client, workDir string, statusFn iostream.StatusFunc, streams iostream.Streams) {
+	orgID, _ := config.ResolveOrgID(workDir)
+	if orgID == "" {
+		// The only remaining way to get an org is the interactive picker, and a
+		// background sweep must never prompt.
+		return
+	}
+	res, err := sidecar.Reap(ctx, client, orgID)
+	if err != nil {
+		streams.ErrPrintf("warning: could not reap abandoned sidecars: %v\n", err)
+	}
+	if summary := res.Summary(); summary != "" {
+		statusFn(iostream.LevelInfo, summary)
+	}
 }
 
 // newExecFn builds a function that runs shell scripts on a remote sidecar via
@@ -571,7 +656,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			err:        err,
 		}
 	}
-	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	projCfg, loadErr := config.LoadProjectConfig(workDir)

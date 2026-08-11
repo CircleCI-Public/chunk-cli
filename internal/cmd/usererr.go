@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -194,16 +193,10 @@ func GoneError(err error) error {
 		return nil
 	}
 
-	// A 410 covers two unrelated conditions with opposite remedies: the CLI
-	// being too old for the API, and a sidecar being too old for the API. Telling
-	// someone to upgrade the CLI when their sidecar is the stale one sends them
-	// to a version that will fail identically, so the two must be told apart.
-	//
-	// Matching on the server's own wording is a compromise: the V3 error envelope
-	// carries no machine-readable code, so there is nothing better to key off
-	// until the API supplies one. The server's message already names the remedy,
-	// so it is shown rather than replaced with a guess.
-	if strings.Contains(strings.ToLower(se.ServerMessage), "sidecar is out of date") {
+	// A 410 covers two unrelated conditions with opposite remedies, told apart by
+	// the server's wording; see circleci.SidecarOutOfDate. The server's message
+	// already names the remedy, so it is shown rather than replaced with a guess.
+	if circleci.SidecarOutOfDate(err) {
 		// Deliberately no detail. The server's message states the condition and
 		// the remedy, both of which are already the message and the suggestion
 		// here, so including it says the same thing three times over.

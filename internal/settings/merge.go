@@ -10,8 +10,19 @@ import (
 	udiff "github.com/aymanbagabas/go-udiff"
 )
 
-// CommitMatcher is the PreToolUse hook matcher chunk manages for pre-commit validation.
-const CommitMatcher = "Bash(git commit*)"
+// CommitMatcher is the PreToolUse hook group matcher that chunk manages.
+// Targets the Bash tool by name; per Claude Code's hook spec, matcher
+// filters only on tool name.
+const CommitMatcher = "Bash"
+
+// CommitIfFilter is the per-entry "if" condition that restricts hook entries
+// to git commit commands.
+const CommitIfFilter = "Bash(git commit*)"
+
+// legacyCommitMatcher is the old group matcher written by earlier versions of
+// chunk init. Recognised during merge so existing settings can be migrated
+// without leaving a stale duplicate group behind.
+const legacyCommitMatcher = "Bash(git commit*)"
 
 // FixMatcher is the PostToolUse hook matcher chunk manages for running fix commands.
 const FixMatcher = "Edit|Write"
@@ -139,6 +150,7 @@ func mergeHooks(merged, generated map[string]interface{}) {
 	}
 
 	mergeHookType(mergedHooks, genHooks, "PreToolUse", CommitMatcher)
+	mergeHookType(mergedHooks, genHooks, "PreToolUse", legacyCommitMatcher)
 	mergeHookType(mergedHooks, genHooks, "PostToolUse", FixMatcher)
 	mergeSessionStartHooks(mergedHooks, genHooks)
 }
