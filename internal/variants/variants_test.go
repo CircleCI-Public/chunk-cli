@@ -153,13 +153,18 @@ func TestRunDeletesEverySidecarOnCancel(t *testing.T) {
 
 	var once sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		isCreate := r.Method == http.MethodPost && r.URL.Path == sidecarInstancesPath
-		cci.ServeHTTP(w, r)
-		if isCreate {
-			// Cancel only once the response is written, so the first variant owns a
-			// real sidecar that now has to be cleaned up on the way out.
+		// Cancel on the first request after the create, rather than on the create
+		// itself. Cancelling during the create races the client's read of its own
+		// response: the sidecar exists server-side, but CreateSidecar returns an
+		// error, so runVariant returns before the deferred delete is registered and
+		// there is no ID to delete by — only SweepOrphans can collect that one. The
+		// add-key request happens only once create has returned, so by then the
+		// sidecar is known and the defer is armed, which is the leak this test is
+		// about.
+		if strings.HasSuffix(r.URL.Path, "/ssh/add-key") {
 			once.Do(cancel)
 		}
+		cci.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
 

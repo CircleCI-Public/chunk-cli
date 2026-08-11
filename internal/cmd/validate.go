@@ -266,7 +266,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			return nil // no config in hook context: skip silently
 		}
 		return &userError{
-			msg:        "No validate commands configured.",
+			msg:        msgValidateNotConfigured,
 			suggestion: suggestionValidateNotConfigured,
 			errMsg:     "no validate commands configured",
 			hideDetail: true,
@@ -997,7 +997,7 @@ func execTarget(opts *validateOpts, cfg *config.ProjectConfig, active *sidecar.A
 func mapValidateError(err error) error {
 	if errors.Is(err, validate.ErrNotConfigured) {
 		return &userError{
-			msg:        "No validate commands configured.",
+			msg:        msgValidateNotConfigured,
 			suggestion: suggestionValidateNotConfigured,
 			hideDetail: true,
 			err:        err,

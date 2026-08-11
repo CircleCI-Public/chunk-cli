@@ -154,6 +154,11 @@ func runVariant(ctx context.Context, client *circleci.Client, v Variant, opts Op
 	// look old enough for another run's sweep to delete.
 	sc, err := sidecar.Create(ctx, client, opts.OrgID, sidecarName(time.Now(), v.ID), opts.Image)
 	if err != nil {
+		// A failure here can still have created a sidecar: the request may have
+		// landed and only the response been lost, to cancellation or a dropped
+		// connection. There is no ID to delete by in that case, so SweepOrphans is
+		// the only thing that can collect it, and the name's timestamp is what lets
+		// it. That is the case the sweep exists for.
 		base.Error = fmt.Sprintf("create sidecar: %v", err)
 		return base
 	}

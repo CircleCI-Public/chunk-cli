@@ -8,6 +8,7 @@ const (
 	msgCouldNotLoadSidecar      = "Could not load the active sidecar."
 	msgHomeNotSet               = "HOME environment variable is not set."
 	errMsgHomeNotSet            = "HOME not set"
+	msgValidateNotConfigured    = "No validate commands configured."
 
 	suggestionCheckPerms   = "Check file permissions."
 	suggestionNetworkRetry = "Check your network connection and try again."

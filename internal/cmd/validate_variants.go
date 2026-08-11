@@ -57,7 +57,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			cfg, err := config.LoadProjectConfig(workDir)
 			if err != nil {
 				return &userError{
-					msg:        "No validate commands configured.",
+					msg:        msgValidateNotConfigured,
 					suggestion: "Run 'chunk init' first.",
 					err:        err,
 				}
