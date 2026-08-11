@@ -49,12 +49,32 @@ func TestLoadProjectConfigDropsTestStep(t *testing.T) {
 
 func TestLoadProjectConfigWithoutEnvironment(t *testing.T) {
 	dir := t.TempDir()
-	writeProjectConfig(t, dir, `{"commands":[{"name":"test","run":"task test"}]}`)
+	// New format.
+	writeProjectConfig(t, dir, `{"validate":[{"name":"test","run":"task test"}]}`)
 
 	cfg, err := LoadProjectConfig(dir)
 	assert.NilError(t, err)
 	assert.Assert(t, cfg.Environment == nil)
-	assert.Equal(t, len(cfg.Commands), 1)
+	assert.Equal(t, len(cfg.Validate), 1)
+}
+
+func TestLoadProjectConfigMigratesLegacyCommands(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{
+	  "commands": [
+	    {"name": "fmt",  "run": "gofmt -w .", "role": "autofix"},
+	    {"name": "test", "run": "go test ./..."},
+	    {"name": "lint", "run": "golangci-lint run"}
+	  ]
+	}`)
+
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(cfg.Fix), 1)
+	assert.Equal(t, cfg.Fix[0].Name, "fmt")
+	assert.Equal(t, len(cfg.Validate), 2)
+	assert.Equal(t, cfg.Validate[0].Name, "test")
+	assert.Equal(t, cfg.Validate[1].Name, "lint")
 }
 
 func TestHasSidecarImage(t *testing.T) {
@@ -72,22 +92,26 @@ func TestHasSidecarImage(t *testing.T) {
 
 func TestMarkRemoteCommandsForSidecarSetup(t *testing.T) {
 	cfg := &ProjectConfig{
-		Commands: []Command{
+		Validate: []ValidateCommand{
 			{Name: "install", Run: "npm ci"},
-			{Name: "test", Run: "npm test", Role: RoleGate},
-			{Name: "format", Run: "npm run format", Role: RoleAutofix},
+			{Name: "test", Run: "npm test"},
 			{Name: "lint", Run: "npm run lint"},
-			{Name: "test-changed", Run: "npm test --changed", Role: RoleGate, Remote: true},
+			{Name: "test-changed", Run: "npm test --changed", Remote: true},
+		},
+		Fix: []FixCommand{
+			{Name: "format", Run: "npm run format"},
 		},
 	}
 
 	changed := cfg.MarkRemoteCommandsForSidecarSetup()
 	assert.Assert(t, changed)
-	assert.Assert(t, cfg.FindCommand("install").Remote)
-	assert.Assert(t, cfg.FindCommand("test").Remote)
-	assert.Assert(t, !cfg.FindCommand("format").Remote)
-	assert.Assert(t, !cfg.FindCommand("lint").Remote)
-	assert.Assert(t, cfg.FindCommand("test-changed").Remote)
+	assert.Assert(t, cfg.FindValidateCommand("install").Remote)
+	assert.Assert(t, cfg.FindValidateCommand("test").Remote)
+	assert.Assert(t, cfg.FindValidateCommand("lint").Remote)
+	assert.Assert(t, cfg.FindValidateCommand("test-changed").Remote)
+
+	// Fix commands are never marked remote.
+	assert.Equal(t, len(cfg.Fix), 1)
 
 	assert.Assert(t, !cfg.MarkRemoteCommandsForSidecarSetup())
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -51,109 +49,155 @@ func shellEscape(arg string) string {
 // DefaultTimeout is the per-command execution timeout in seconds.
 const DefaultTimeout = 300
 
-// List prints all configured command names and their run strings.
+func maxNameWidth(names []string) int {
+	w := 0
+	for _, n := range names {
+		if len(n) > w {
+			w = len(n)
+		}
+	}
+	return w
+}
+
+func validateCommandNames(cmds []config.ValidateCommand) []string {
+	names := make([]string, len(cmds))
+	for i, c := range cmds {
+		names[i] = c.Name
+	}
+	return names
+}
+
+func fixCommandNames(cmds []config.FixCommand) []string {
+	names := make([]string, len(cmds))
+	for i, c := range cmds {
+		names[i] = c.Name
+	}
+	return names
+}
+
+func skipRemainingValidate(status iostream.StatusFunc, remaining []config.ValidateCommand, width int) {
+	for _, c := range remaining {
+		status(iostream.LevelWarn, fmt.Sprintf("%-*s  skipped", width, c.Name))
+	}
+}
+
+// List prints all configured fix and validate command names and their run strings.
 func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
 		status(iostream.LevelInfo, "No commands configured.")
 		status(iostream.LevelInfo, "Add commands with: chunk validate <name> --cmd \"your command\" --save")
 		return nil
 	}
-	for _, c := range cfg.Commands {
+	for _, c := range cfg.Fix {
+		status(iostream.LevelInfo, fmt.Sprintf("%s (fix): %s", c.Name, c.Run))
+	}
+	for _, c := range cfg.Validate {
 		status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
 	}
 	return nil
 }
 
-// RunInline runs an inline command string.
+// RunInline runs an inline command string locally.
 func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) error {
 	return runCommand(ctx, workDir, name, command, 0, 0, status, streams)
 }
 
-// RunNamed runs a single named command from config.
-func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
-	c := cfg.FindCommand(name)
-	if c == nil {
-		return fmt.Errorf("command %q not configured", name)
+// RunFix runs all fix commands (or a single named one) locally.
+// Fix commands never run on a remote sidecar.
+func RunFix(ctx context.Context, workDir, name string, cmds []config.FixCommand, status iostream.StatusFunc, streams iostream.Streams) error {
+	if len(cmds) == 0 {
+		return nil
 	}
-	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, 0, status, streams)
-}
-
-func skipRemaining(status iostream.StatusFunc, remaining []config.Command, width int) {
-	for _, c := range remaining {
-		status(iostream.LevelWarn, fmt.Sprintf("%-*s  skipped", width, c.Name))
-	}
-}
-
-func nameWidth(commands []config.Command) int {
-	w := 0
-	for _, c := range commands {
-		if len(c.Name) > w {
-			w = len(c.Name)
+	width := maxNameWidth(fixCommandNames(cmds))
+	if name != "" {
+		for _, c := range cmds {
+			if c.Name == name {
+				return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, 0, status, streams)
+			}
 		}
+		return fmt.Errorf("fix command %q not configured", name)
 	}
-	return w
-}
-
-// RunAll runs all configured commands, stopping at the first failure.
-func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
-	if !cfg.HasCommands() {
-		return ErrNotConfigured
-	}
-
-	maxWidth := nameWidth(cfg.Commands)
-	for i, c := range cfg.Commands {
-		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, maxWidth, status, streams); err != nil {
-			skipRemaining(status, cfg.Commands[i+1:], maxWidth)
+	for _, c := range cmds {
+		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, width, status, streams); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// RunDryRun prints commands without executing them.
-func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFunc) error {
-	if !cfg.HasCommands() {
+// RunAll runs all configured validate commands, stopping at the first failure.
+func RunAll(ctx context.Context, workDir string, cmds []config.ValidateCommand, status iostream.StatusFunc, streams iostream.Streams) error {
+	if len(cmds) == 0 {
 		return ErrNotConfigured
 	}
-
-	commands := cfg.Commands
-	if name != "" {
-		c := cfg.FindCommand(name)
-		if c == nil {
-			return fmt.Errorf("command %q not configured", name)
+	width := maxNameWidth(validateCommandNames(cmds))
+	for i, c := range cmds {
+		if err := runCommand(ctx, workDir, c.Name, expandCommand(workDir, c.Run), c.Timeout, width, status, streams); err != nil {
+			skipRemainingValidate(status, cmds[i+1:], width)
+			return err
 		}
-		commands = []config.Command{*c}
 	}
+	return nil
+}
 
-	for _, c := range commands {
+// RunNamed runs a single named validate command.
+func RunNamed(ctx context.Context, workDir, name string, cmds []config.ValidateCommand, status iostream.StatusFunc, streams iostream.Streams) error {
+	for _, c := range cmds {
+		if c.Name == name {
+			return runCommand(ctx, workDir, c.Name, expandCommand(workDir, c.Run), c.Timeout, 0, status, streams)
+		}
+	}
+	return fmt.Errorf("command %q not configured", name)
+}
+
+// RunDryRun prints validate commands without executing them.
+func RunDryRun(cmds []config.ValidateCommand, name string, status iostream.StatusFunc) error {
+	if len(cmds) == 0 {
+		return ErrNotConfigured
+	}
+	if name != "" {
+		for _, c := range cmds {
+			if c.Name == name {
+				status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
+				return nil
+			}
+		}
+		return fmt.Errorf("command %q not configured", name)
+	}
+	for _, c := range cmds {
 		status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
 	}
 	return nil
 }
 
-// RunRemote runs commands on a remote sidecar via SSH.
+// RunRemote runs validate commands on a remote sidecar via SSH.
 // If name is non-empty, only the named command is run.
 // workDir is the local repository root used to expand {{CHANGED_PACKAGES}}.
-func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) error {
-	commands := cfg.Commands
+func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cmds []config.ValidateCommand, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) error {
 	if name != "" {
-		c := cfg.FindCommand(name)
-		if c == nil {
+		var target *config.ValidateCommand
+		for i := range cmds {
+			if cmds[i].Name == name {
+				target = &cmds[i]
+				break
+			}
+		}
+		if target == nil {
 			return fmt.Errorf("command %q not configured", name)
 		}
-		commands = []config.Command{*c}
+		cmds = []config.ValidateCommand{*target}
 	}
 
-	maxWidth := nameWidth(commands)
-	for i, c := range commands {
+	width := maxNameWidth(validateCommandNames(cmds))
+	for i, c := range cmds {
 		run := expandCommand(workDir, c.Run)
 		script := "cd " + shellEscape(dest) + " && " + run
 		start := time.Now()
 		stdout, stderr, exitCode, err := execFn(ctx, script)
 		elapsed := time.Since(start)
 		if err != nil {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  exec error", maxWidth, c.Name))
-			skipRemaining(status, commands[i+1:], maxWidth)
+			status(iostream.LevelError, fmt.Sprintf("%-*s  exec error", width, c.Name))
+			skipRemainingValidate(status, cmds[i+1:], width)
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}
 		if exitCode != 0 && (stdout != "" || stderr != "") {
@@ -166,11 +210,11 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 			_, _ = fmt.Fprint(streams.Err, stderr)
 		}
 		if exitCode != 0 {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, formatElapsed(elapsed)))
-			skipRemaining(status, commands[i+1:], maxWidth)
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", width, c.Name, formatElapsed(elapsed)))
+			skipRemainingValidate(status, cmds[i+1:], width)
 			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
-		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, formatElapsed(elapsed)))
+		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", width, c.Name, formatElapsed(elapsed)))
 	}
 	return nil
 }
@@ -236,8 +280,6 @@ func expandCommand(workDir, command string) string {
 }
 
 func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, nameWidth int, status iostream.StatusFunc, streams iostream.Streams) error {
-	command = expandCommand(workDir, command)
-
 	if timeoutSec <= 0 {
 		timeoutSec = DefaultTimeout
 	}
@@ -267,61 +309,4 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 	}
 	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", nameWidth, name, formatElapsed(elapsed)))
 	return nil
-}
-
-// HookExitError signals a specific process exit code without printing
-// additional error output. All output must be written before this error
-// is returned.
-type HookExitError struct {
-	code int
-}
-
-func (e *HookExitError) Error() string { return fmt.Sprintf("exit %d", e.code) }
-func (e *HookExitError) ExitCode() int { return e.code }
-
-// NewHookExitError returns a HookExitError with the given exit code.
-func NewHookExitError(code int) error { return &HookExitError{code: code} }
-
-// HooksDisabled reports whether chunk validate hooks are currently suppressed.
-// envDisabled should be set by the caller from CHUNK_HOOKS_DISABLED; it returns
-// true when that flag is set or the sentinel file .chunk/hooks-disabled exists
-// under workDir. On any error other than ErrNotExist the function fails open
-// (returns false) so hooks continue to run when the check is uncertain.
-func HooksDisabled(workDir string, envDisabled bool) bool {
-	if envDisabled {
-		return true
-	}
-	_, err := os.Stat(filepath.Join(workDir, ".chunk", "hooks-disabled"))
-	return err == nil
-}
-
-// HasGitChanges reports whether the working tree at workDir has any
-// uncommitted modifications (staged or unstaged). Returns true when git
-// is unavailable or the directory is not a repository so that validation
-// still runs in ambiguous cases.
-func HasGitChanges(workDir string) bool {
-	out, err := exec.Command("git", "-C", workDir, "status", "--porcelain").Output()
-	if err != nil {
-		return true // fail open: run validation when git is unavailable
-	}
-	return strings.TrimSpace(string(out)) != ""
-}
-
-// WrapHookResult applies Stop hook lifecycle to the result of running validate
-// commands. On success it resets the attempt counter. On failure it increments
-// the counter and returns a HookExitError with code 2 to re-signal the agent,
-// or prints a give-up message and returns nil once maxAttempts is reached.
-func WrapHookResult(sessionID string, execErr error, maxAttempts int, warn io.Writer) error {
-	if execErr == nil {
-		ResetAttempts(sessionID)
-		return nil
-	}
-	n := TrackFailedAttempt(sessionID, warn)
-	if n >= maxAttempts {
-		_, _ = fmt.Fprintf(warn, "chunk validate: validation has failed %d time(s) in a row.\n", n)
-		_, _ = fmt.Fprintf(warn, "The failures above do not appear to be resolving automatically.\n")
-		_, _ = fmt.Fprintf(warn, "Stop attempting to fix this and ask the user for guidance instead.\n")
-		return nil
-	}
-	return &HookExitError{code: 2}
 }

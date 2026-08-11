@@ -3,13 +3,10 @@ package acceptance
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +14,6 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
@@ -60,52 +56,6 @@ func hookStdin(t *testing.T, sessionID string, stopHookActive bool) []byte {
 	data, err := json.Marshal(hookPayload{SessionID: sessionID, StopHookActive: stopHookActive})
 	assert.NilError(t, err)
 	return data
-}
-
-// commitAll stages and commits all files in dir.
-func commitAll(t *testing.T, dir, message string) {
-	t.Helper()
-	for _, args := range [][]string{
-		{"git", "add", "-A"},
-		{"git", "commit", "-m", message},
-	} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		cmd.Env = gitrepo.GitEnv(dir)
-		out, err := cmd.CombinedOutput()
-		assert.NilError(t, err, "%v: %s", args, out)
-	}
-}
-
-// TestValidateHookMode_DirtyTree verifies that piping a hook payload triggers
-// hook mode and re-signals the agent (exit 2) when commands fail.
-func TestValidateHookMode_DirtyTree(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// writeProjectConfig creates an untracked file → dirty working tree.
-	writeProjectConfig(t, workDir, "", "false")
-
-	env := testenv.NewTestEnv(t)
-	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
-		hookStdin(t, "test-session-dirty", false))
-
-	assert.Equal(t, result.ExitCode, 2,
-		"expected exit 2 (hook re-signal) for dirty tree with failing command; stderr: %s", result.Stderr)
-}
-
-// TestValidateHookMode_CleanTree verifies that piping a hook payload exits 0
-// without running any commands when the working tree is clean.
-func TestValidateHookMode_CleanTree(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// Write config then commit it so the tree is clean.
-	writeProjectConfig(t, workDir, "", "false") // deliberately failing command
-	commitAll(t, workDir, "add config")
-
-	env := testenv.NewTestEnv(t)
-	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
-		hookStdin(t, "test-session-clean", false))
-
-	assert.Equal(t, result.ExitCode, 0,
-		"expected exit 0 (skipped) for clean tree; stderr: %s", result.Stderr)
 }
 
 func TestValidateRunDryRun(t *testing.T) {
@@ -518,35 +468,6 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
 }
 
-// writeRemoteProjectConfig writes a config with a single remote command.
-func writeRemoteProjectConfig(t *testing.T, workDir string) {
-	t.Helper()
-	chunkDir := filepath.Join(workDir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	cfg := `{"commands":[{"name":"test","run":"true","remote":true}]}`
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
-}
-
-// writeSidecarState writes a session-keyed sidecar state file into the test
-// environment's XDG data directory for the given project root.
-func writeSidecarState(t *testing.T, e *testenv.TestEnv, projectRoot, sessionID, sidecarID string) {
-	t.Helper()
-	// Resolve symlinks so the hash matches what os.Getwd() returns in the subprocess.
-	// On macOS, t.TempDir() returns /var/folders/... but os.Getwd() resolves to /private/var/...
-	realRoot, err := filepath.EvalSymlinks(projectRoot)
-	assert.NilError(t, err)
-	// Compute the data dir directly from e.HomeDir so we don't touch the parent process env.
-	// This mirrors config.ProjectDataDir: <XDG_DATA_HOME>/chunk/<sha256(root)>
-	sum := sha256.Sum256([]byte(filepath.Clean(realRoot)))
-	dir := filepath.Join(e.HomeDir, ".local", "share", "chunk", fmt.Sprintf("%x", sum))
-	assert.NilError(t, os.MkdirAll(dir, 0o755))
-	// Detect the branch so the file name matches what the subprocess will look for.
-	branch := gitCurrentBranch(t, projectRoot)
-	filename := sidecar.StateFileName(sessionID, branch)
-	data := []byte(`{"sidecar_id":"` + sidecarID + `"}`)
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, filename), data, 0o644))
-}
-
 // TestValidateHookMode_SuccessLine verifies that the "chunk validate passed"
 // success line is written to stderr after a clean hook run.
 func TestValidateHookMode_SuccessLine(t *testing.T) {
@@ -597,49 +518,4 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 	// Sync status messages must reach stderr — proves setup output is not silently dropped.
 	assert.Assert(t, strings.Contains(result.Stderr, "Syncing workspace"),
 		"expected sync attempt in stderr; got: %s", result.Stderr)
-}
-
-// gitCurrentBranch returns the current branch of the git repo at dir, or ""
-// on any error.
-func gitCurrentBranch(t *testing.T, dir string) string {
-	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return ""
-	}
-	b := strings.TrimSpace(string(out))
-	if b == "HEAD" {
-		return ""
-	}
-	return b
-}
-
-// TestValidateHookMode_SessionIsolation verifies that two concurrent Claude
-// sessions each see their own sidecar state rather than sharing one file.
-func TestValidateHookMode_SessionIsolation(t *testing.T) {
-	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeRemoteProjectConfig(t, workDir)
-	// Add an untracked file so the working tree is dirty and validate runs.
-	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("x"), 0o644))
-
-	envA := testenv.NewTestEnv(t)
-	envB := testenv.NewTestEnv(t)
-
-	writeSidecarState(t, envA, workDir, "sess-a", "sidecar-aaa")
-	writeSidecarState(t, envB, workDir, "sess-b", "sidecar-bbb")
-
-	resultA := binary.RunCLIWithStdin(t, []string{"validate"}, envA, workDir,
-		hookStdin(t, "sess-a", true))
-	resultB := binary.RunCLIWithStdin(t, []string{"validate"}, envB, workDir,
-		hookStdin(t, "sess-b", true))
-
-	assert.Assert(t, strings.Contains(resultA.Stderr, "sidecar-aaa"),
-		"session A should load sidecar-aaa; stderr: %s", resultA.Stderr)
-	assert.Assert(t, !strings.Contains(resultA.Stderr, "sidecar-bbb"),
-		"session A should not see sidecar-bbb; stderr: %s", resultA.Stderr)
-
-	assert.Assert(t, strings.Contains(resultB.Stderr, "sidecar-bbb"),
-		"session B should load sidecar-bbb; stderr: %s", resultB.Stderr)
-	assert.Assert(t, !strings.Contains(resultB.Stderr, "sidecar-aaa"),
-		"session B should not see sidecar-aaa; stderr: %s", resultB.Stderr)
 }

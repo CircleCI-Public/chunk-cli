@@ -35,8 +35,6 @@ type silentExitError struct{ code int }
 func (e *silentExitError) Error() string { return "" }
 func (e *silentExitError) ExitCode() int { return e.code }
 
-var errSilentExit error = &silentExitError{code: 1}
-
 func notAuthorized(action string, err error) error {
 	if !errors.Is(err, circleci.ErrNotAuthorized) {
 		return nil

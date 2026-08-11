@@ -20,10 +20,16 @@ type PackageManager struct {
 	InstallCommand string
 }
 
-// DetectCommands returns the full set of validate commands for the repo with metadata.
-// For known toolchains it returns richer commands without calling Claude. Claude is
+// DetectedCommands holds the results of auto-detection, split by command type.
+type DetectedCommands struct {
+	Fix      []config.FixCommand
+	Validate []config.ValidateCommand
+}
+
+// DetectCommands returns the detected fix and validate commands for the repo.
+// For known toolchains it returns commands without calling Claude. Claude is
 // only used as a fallback for unknown toolchains, and only when a client is provided.
-func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir string) ([]config.Command, error) {
+func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir string) (*DetectedCommands, error) {
 	entries, _ := os.ReadDir(workDir)
 	files := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -40,53 +46,74 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 	switch {
 	case has["Taskfile.yml"] || has["Taskfile.yaml"]:
 		if isGo {
-			return []config.Command{
-				{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
-				{Name: "lint", Run: "task lint", Role: config.RoleGate, Timeout: 60},
-				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Timeout: 30},
+			return &DetectedCommands{
+				Fix: []config.FixCommand{
+					{Name: "format", Run: "task fmt", Timeout: 30},
+				},
+				Validate: []config.ValidateCommand{
+					{Name: "test", Run: "task test", Timeout: 300},
+					{Name: "lint", Run: "task lint", Timeout: 60},
+				},
 			}, nil
 		}
-		return []config.Command{
-			{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: "task test", Timeout: 300},
+			},
 		}, nil
 
 	case has["Makefile"]:
 		if isGo {
-			return []config.Command{
-				{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
-				{Name: "lint", Run: "make lint", Role: config.RoleGate, Timeout: 60},
+			return &DetectedCommands{
+				Validate: []config.ValidateCommand{
+					{Name: "test", Run: "make test", Timeout: 300},
+					{Name: "lint", Run: "make lint", Timeout: 60},
+				},
 			}, nil
 		}
-		return []config.Command{
-			{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: "make test", Timeout: 300},
+			},
 		}, nil
 
 	case isGo:
-		return []config.Command{
-			{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: 300},
-			{Name: "lint", Run: "golangci-lint run ./...", Role: config.RoleGate, Timeout: 60},
-			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Timeout: 30},
+		return &DetectedCommands{
+			Fix: []config.FixCommand{
+				{Name: "format", Run: "gofmt -w .", Timeout: 30},
+			},
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: "go test ./...", Timeout: 300},
+				{Name: "lint", Run: "golangci-lint run ./...", Timeout: 60},
+			},
 		}, nil
 
 	case has["Cargo.toml"]:
-		return []config.Command{
-			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: "cargo test", Timeout: 300},
+			},
 		}, nil
 
 	case has["pyproject.toml"], has["requirements.txt"], has["setup.py"], has["Pipfile"]:
-		return []config.Command{
-			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: "pytest", Timeout: 300},
+			},
 		}, nil
 
 	case has["Gemfile"]:
-		// Assumes Rake-based test task (Rails default). RSpec/Minitest-only stacks may need manual adjustment.
-		return []config.Command{
-			{Name: "test", Run: "bundle exec rake test", Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: "bundle exec rake test", Timeout: 300},
+			},
 		}, nil
 
 	case has["pom.xml"]:
-		return []config.Command{
-			{Name: "test", Run: "mvn test", Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: "mvn test", Timeout: 300},
+			},
 		}, nil
 
 	case has["build.gradle"], has["build.gradle.kts"]:
@@ -94,8 +121,10 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 		if has["gradlew"] {
 			gradleCmd = "./gradlew test"
 		}
-		return []config.Command{
-			{Name: "test", Run: gradleCmd, Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: gradleCmd, Timeout: 300},
+			},
 		}, nil
 
 	case has["package.json"]:
@@ -104,15 +133,19 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 		if pm != nil {
 			testCmd = pm.Name + " test"
 		}
-		return []config.Command{
-			{Name: "test", Run: testCmd, Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: testCmd, Timeout: 300},
+			},
 		}, nil
 	}
 
 	// Monorepo with no root package.json but a detectable package manager in subdirs.
 	if pm := DetectPackageManager(workDir); pm != nil {
-		return []config.Command{
-			{Name: "test", Run: pm.Name + " test", Role: config.RoleGate, Timeout: 300},
+		return &DetectedCommands{
+			Validate: []config.ValidateCommand{
+				{Name: "test", Run: pm.Name + " test", Timeout: 300},
+			},
 		}, nil
 	}
 
@@ -145,7 +178,9 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 	if result == "" {
 		return nil, nil
 	}
-	return []config.Command{{Name: "test", Run: result, Role: config.RoleGate}}, nil
+	return &DetectedCommands{
+		Validate: []config.ValidateCommand{{Name: "test", Run: result}},
+	}, nil
 }
 
 // DetectPackageManager returns the detected package manager and its CI-safe install command, or nil.

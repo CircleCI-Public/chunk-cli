@@ -38,8 +38,8 @@ func withTrailingNewline(data []byte) []byte {
 // When settings.json already exists, it computes a merge, shows the user
 // a before/after comparison, and prompts for confirmation. On decline or
 // non-TTY, falls back to writing settings.example.json.
-func writeSettings(workDir string, commands []config.Command, streams iostream.Streams, confirm confirmFunc) error {
-	generated, err := settings.Build(commands)
+func writeSettings(workDir string, cfg *config.ProjectConfig, streams iostream.Streams, confirm confirmFunc) error {
+	generated, err := settings.Build(cfg.Fix, cfg.Validate)
 	if err != nil {
 		return &userError{msg: "Could not build .claude/settings.json.", err: fmt.Errorf("build settings: %w", err)}
 	}
@@ -144,8 +144,8 @@ func codexInstalled(homeDir string) bool {
 
 // writeCodexHooks writes .codex/hooks.json for the project.
 // Uses the same merge/confirm/fallback pattern as writeSettings.
-func writeCodexHooks(workDir string, commands []config.Command, streams iostream.Streams, confirm confirmFunc) error {
-	generated, err := settings.BuildCodex(commands)
+func writeCodexHooks(workDir string, cfg *config.ProjectConfig, streams iostream.Streams, confirm confirmFunc) error {
+	generated, err := settings.BuildCodex(cfg.Fix, cfg.Validate)
 	if err != nil {
 		return &userError{msg: "Could not build .codex/hooks.json.", err: fmt.Errorf("build codex hooks: %w", err)}
 	}
@@ -368,14 +368,14 @@ func printTestSuitesHint(workDir string, streams iostream.Streams) {
 // Cursor reads .claude/settings.json natively so no extra file is needed for it.
 // Codex hooks are only written when Codex is installed or the project already
 // has a .codex directory.
-func writeAllHookFiles(workDir string, commands []config.Command, streams iostream.Streams) error {
-	if err := writeSettings(workDir, commands, streams, tui.Confirm); err != nil {
+func writeAllHookFiles(workDir string, cfg *config.ProjectConfig, streams iostream.Streams) error {
+	if err := writeSettings(workDir, cfg, streams, tui.Confirm); err != nil {
 		return err
 	}
 	homeDir := os.Getenv(config.EnvHome)
 	_, codexDirErr := os.Stat(filepath.Join(workDir, ".codex"))
 	if codexInstalled(homeDir) || codexDirErr == nil {
-		if err := writeCodexHooks(workDir, commands, streams, tui.Confirm); err != nil {
+		if err := writeCodexHooks(workDir, cfg, streams, tui.Confirm); err != nil {
 			return err
 		}
 	}
@@ -446,25 +446,35 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 	return nil
 }
 
-// printInitSummary prints the discovered validation commands and next-step hints.
-func printInitSummary(commands []config.Command, streams iostream.Streams) {
-	if len(commands) > 0 {
-		entries := make([]ui.CommandEntry, len(commands))
-		for i, c := range commands {
+// printInitSummary prints the discovered commands and next-step hints.
+func printInitSummary(cfg *config.ProjectConfig, streams iostream.Streams) {
+	if len(cfg.Validate) > 0 {
+		entries := make([]ui.CommandEntry, len(cfg.Validate))
+		for i, c := range cfg.Validate {
 			entries[i] = ui.CommandEntry{Name: c.Name, Run: c.Run}
 		}
 		streams.ErrPrintln("")
-		streams.ErrPrintln(ui.Bold("Validation commands:"))
+		streams.ErrPrintln(ui.Bold("Validate commands:"))
+		streams.ErrPrintln(ui.CommandList(entries))
+	}
+	if len(cfg.Fix) > 0 {
+		entries := make([]ui.CommandEntry, len(cfg.Fix))
+		for i, c := range cfg.Fix {
+			entries[i] = ui.CommandEntry{Name: c.Name, Run: c.Run}
+		}
+		streams.ErrPrintln("")
+		streams.ErrPrintln(ui.Bold("Fix commands (run after every file edit):"))
 		streams.ErrPrintln(ui.CommandList(entries))
 	}
 	streams.ErrPrintln("")
 	streams.ErrPrintf("Config: %s\n", ui.Bold(".chunk/config.json"))
 	streams.ErrPrintf("  Edit to add, remove, or adjust commands.\n")
 	streams.ErrPrintln("")
-	streams.ErrPrintln(ui.Bold("Run validation:"))
-	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("run all commands locally"))
-	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate --remote"), ui.Dim("run all commands on a remote sidecar"))
-	for _, c := range commands {
+	streams.ErrPrintln(ui.Bold("Run commands:"))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("run all validate commands locally"))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk fix"), ui.Dim("run all fix commands locally"))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate --remote"), ui.Dim("run all validate commands on a remote sidecar"))
+	for _, c := range cfg.Validate {
 		if c.Name == "install" {
 			continue
 		}
@@ -517,7 +527,7 @@ hook config files.`,
 			// Guard: exit cleanly if config exists and --force not set
 			existingCfg, loadErr := config.LoadProjectConfig(workDir)
 			if loadErr == nil && !force {
-				hasData := existingCfg.HasCommands() || existingCfg.VCS != nil
+				hasData := existingCfg.HasCommands() || existingCfg.VCS != nil // HasCommands checks both fix and validate
 				if hasData {
 					streams.ErrPrintln("Config already exists at .chunk/config.json")
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
@@ -544,20 +554,23 @@ hook config files.`,
 			if !skipValidate {
 				rc, _ := config.Resolve("", "", insecureStorage)
 				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
-				commands, detectErr := validate.DetectCommands(ctx, claude, workDir)
+				detected, detectErr := validate.DetectCommands(ctx, claude, workDir)
 				if detectErr != nil {
 					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", detectErr)))
-				} else {
-					allCommands := []config.Command{}
+				} else if detected != nil {
 					pm := validate.DetectPackageManager(workDir)
 					if pm != nil {
 						streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
-						allCommands = append(allCommands, config.Command{Name: "install", Run: pm.InstallCommand})
+						cfg.Validate = append([]config.ValidateCommand{{Name: "install", Run: pm.InstallCommand}}, detected.Validate...)
+					} else {
+						cfg.Validate = detected.Validate
 					}
-					allCommands = append(allCommands, commands...)
-					cfg.Commands = allCommands
-					for _, c := range commands {
+					cfg.Fix = detected.Fix
+					for _, c := range detected.Validate {
 						streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
+					}
+					for _, c := range detected.Fix {
+						streams.ErrPrintf("Detected fix command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
 					}
 				}
 			}
@@ -578,7 +591,7 @@ hook config files.`,
 
 			// Step 3: Write hook config files for supported agents.
 			if !skipHooks {
-				if err := writeAllHookFiles(workDir, cfg.Commands, streams); err != nil {
+				if err := writeAllHookFiles(workDir, cfg, streams); err != nil {
 					return err
 				}
 				if !skipGitHook {
@@ -608,7 +621,7 @@ hook config files.`,
 			}
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
-			printInitSummary(cfg.Commands, streams)
+			printInitSummary(cfg, streams)
 			return nil
 		},
 	}

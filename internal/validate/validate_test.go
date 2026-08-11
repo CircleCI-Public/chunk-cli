@@ -46,11 +46,11 @@ func TestShellEscape(t *testing.T) {
 	}
 }
 
-func writeConfig(t *testing.T, dir string, commands []config.Command) string {
+func writeConfig(t *testing.T, dir string, cmds []config.ValidateCommand) string {
 	t.Helper()
 	chunkDir := filepath.Join(dir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	cfg := config.ProjectConfig{Commands: commands}
+	cfg := config.ProjectConfig{Validate: cmds}
 	data, err := json.Marshal(cfg)
 	assert.NilError(t, err)
 	path := filepath.Join(chunkDir, "config.json")
@@ -82,27 +82,27 @@ func testStatus(buf *bytes.Buffer) iostream.StatusFunc {
 func TestLoadProjectConfig(t *testing.T) {
 	t.Run("valid config", func(t *testing.T) {
 		dir := t.TempDir()
-		writeConfig(t, dir, []config.Command{
+		writeConfig(t, dir, []config.ValidateCommand{
 			{Name: "install", Run: "npm install"},
 			{Name: "test", Run: "npm test"},
 		})
 
 		cfg, err := config.LoadProjectConfig(dir)
 		assert.NilError(t, err)
-		assert.Equal(t, len(cfg.Commands), 2)
-		assert.Equal(t, cfg.Commands[0].Name, "install")
-		assert.Equal(t, cfg.Commands[0].Run, "npm install")
-		assert.Equal(t, cfg.Commands[1].Name, "test")
-		assert.Equal(t, cfg.Commands[1].Run, "npm test")
+		assert.Equal(t, len(cfg.Validate), 2)
+		assert.Equal(t, cfg.Validate[0].Name, "install")
+		assert.Equal(t, cfg.Validate[0].Run, "npm install")
+		assert.Equal(t, cfg.Validate[1].Name, "test")
+		assert.Equal(t, cfg.Validate[1].Run, "npm test")
 	})
 
 	t.Run("empty commands", func(t *testing.T) {
 		dir := t.TempDir()
-		writeConfig(t, dir, []config.Command{})
+		writeConfig(t, dir, []config.ValidateCommand{})
 
 		cfg, err := config.LoadProjectConfig(dir)
 		assert.NilError(t, err)
-		assert.Equal(t, len(cfg.Commands), 0)
+		assert.Equal(t, len(cfg.Validate), 0)
 	})
 
 	t.Run("missing file", func(t *testing.T) {
@@ -128,33 +128,33 @@ func TestHasCommands(t *testing.T) {
 	empty := &config.ProjectConfig{}
 	assert.Assert(t, !empty.HasCommands())
 
-	withCmd := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test"}}}
+	withCmd := &config.ProjectConfig{Validate: []config.ValidateCommand{{Name: "test", Run: "go test"}}}
 	assert.Assert(t, withCmd.HasCommands())
 }
 
 func TestFindCommand(t *testing.T) {
-	cfg := &config.ProjectConfig{Commands: []config.Command{
+	cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 		{Name: "install", Run: "npm install"},
 		{Name: "test", Run: "npm test"},
 	}}
 
-	found := cfg.FindCommand("test")
+	found := cfg.FindValidateCommand("test")
 	assert.Assert(t, found != nil, "expected to find 'test' command")
 	assert.Equal(t, found.Run, "npm test")
-	assert.Assert(t, cfg.FindCommand("nonexistent") == nil)
+	assert.Assert(t, cfg.FindValidateCommand("nonexistent") == nil)
 }
 
 // --- RunDryRun tests ---
 
 func TestRunDryRun(t *testing.T) {
 	t.Run("prints commands", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "install", Run: "npm install"},
 			{Name: "test", Run: "npm test"},
 		}}
 		var out bytes.Buffer
 
-		assert.NilError(t, RunDryRun(cfg, "", testStatus(&out)))
+		assert.NilError(t, RunDryRun(cfg.Validate, "", testStatus(&out)))
 
 		assert.Assert(t, strings.Contains(out.String(), "install: npm install"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(out.String(), "test: npm test"), "got: %s", out.String())
@@ -164,7 +164,7 @@ func TestRunDryRun(t *testing.T) {
 		cfg := &config.ProjectConfig{}
 		var out bytes.Buffer
 
-		err := RunDryRun(cfg, "", testStatus(&out))
+		err := RunDryRun(cfg.Validate, "", testStatus(&out))
 		assert.ErrorContains(t, err, "no validate commands")
 	})
 }
@@ -195,14 +195,14 @@ func TestFormatDuration(t *testing.T) {
 
 func TestRunAll(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "install", Run: "echo installed"},
 			{Name: "test", Run: "echo tested"},
 		}}
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
+		assert.NilError(t, RunAll(context.Background(), ".", cfg.Validate, testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] install"), "got: %s", statusBuf.String())
@@ -214,23 +214,23 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		err := RunAll(context.Background(), ".", cfg.Validate, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "no validate commands")
 	})
 
 	t.Run("command failure", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "test", Run: "false"},
 		}}
 		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		err := RunAll(context.Background(), ".", cfg.Validate, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "test command failed")
 	})
 
 	t.Run("skips remaining after failure", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "install", Run: "false"},
 			{Name: "test", Run: "echo should-not-run"},
 			{Name: "lint", Run: "echo should-not-run-either"},
@@ -238,7 +238,7 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		err := RunAll(context.Background(), ".", cfg.Validate, testStatus(&statusBuf), streams)
 		assert.Assert(t, err != nil, "expected error")
 		assert.Assert(t, !strings.Contains(out.String(), "should-not-run"), "skipped command should not produce output, got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[error] install"), "got: %s", statusBuf.String())
@@ -248,13 +248,13 @@ func TestRunAll(t *testing.T) {
 	})
 
 	t.Run("single command success", func(t *testing.T) {
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "test", Run: "echo ok"},
 		}}
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams))
+		assert.NilError(t, RunAll(context.Background(), ".", cfg.Validate, testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] test"), "got: %s", statusBuf.String())
 	})
@@ -267,25 +267,26 @@ func TestCommandTimeoutRoundTrip(t *testing.T) {
 	chunkDir := filepath.Join(dir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
 
+	// Old "commands" format migrates to validate on load.
 	raw := `{"commands":[{"name":"lint","run":"eslint .","timeout":60}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(raw), 0o644))
 
 	cfg, err := config.LoadProjectConfig(dir)
 	assert.NilError(t, err)
-	assert.Equal(t, len(cfg.Commands), 1)
-	assert.Equal(t, cfg.Commands[0].Timeout, 60)
+	assert.Equal(t, len(cfg.Validate), 1)
+	assert.Equal(t, cfg.Validate[0].Timeout, 60)
 
-	// Save and reload to verify round-trip
+	// Save writes new format; reload reads it back correctly.
 	assert.NilError(t, config.SaveProjectConfig(dir, cfg))
 	cfg2, err := config.LoadProjectConfig(dir)
 	assert.NilError(t, err)
-	assert.Equal(t, cfg2.Commands[0].Timeout, 60)
+	assert.Equal(t, cfg2.Validate[0].Timeout, 60)
 }
 
 func TestCommandTimeoutOmitted(t *testing.T) {
 	dir := t.TempDir()
 
-	cfg := &config.ProjectConfig{Commands: []config.Command{
+	cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 		{Name: "test", Run: "go test ./..."},
 	}}
 	assert.NilError(t, config.SaveProjectConfig(dir, cfg))
@@ -306,14 +307,14 @@ func TestRunRemote(t *testing.T) {
 			return "remote output\n", "", 0, nil
 		}
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "install", Run: "echo install"},
 			{Name: "test", Run: "echo test"},
 		}}
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), testStatus(&statusBuf), streams))
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg.Validate, "", "/workspace", t.TempDir(), testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "remote output"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] install"), "got: %s", statusBuf.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] test"), "got: %s", statusBuf.String())
@@ -325,12 +326,12 @@ func TestRunRemote(t *testing.T) {
 			return "", "", 1, nil
 		}
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "test", Run: "failing"},
 		}}
 		streams, _, _ := newStreams()
 
-		err := RunRemote(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams)
+		err := RunRemote(context.Background(), execFn, cfg.Validate, "", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams)
 		assert.ErrorContains(t, err, "remote test failed")
 	})
 
@@ -339,12 +340,12 @@ func TestRunRemote(t *testing.T) {
 			return "", "", 0, nil
 		}
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "test", Run: "silent"},
 		}}
 		streams, out, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams))
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg.Validate, "", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams))
 		assert.Equal(t, out.Len(), 0)
 	})
 
@@ -355,13 +356,13 @@ func TestRunRemote(t *testing.T) {
 			return "", "", 0, nil
 		}
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "install", Run: "echo install"},
 			{Name: "test", Run: "echo test"},
 		}}
 		streams, _, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "test", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams))
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg.Validate, "test", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams))
 		assert.Equal(t, len(capturedScripts), 1)
 		assert.Assert(t, strings.Contains(capturedScripts[0], "echo test"), "got: %s", capturedScripts[0])
 	})
@@ -371,12 +372,12 @@ func TestRunRemote(t *testing.T) {
 			return "", "", 0, nil
 		}
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "test", Run: "echo test"},
 		}}
 		streams, _, _ := newStreams()
 
-		err := RunRemote(context.Background(), execFn, cfg, "lint", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams)
+		err := RunRemote(context.Background(), execFn, cfg.Validate, "lint", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams)
 		assert.ErrorContains(t, err, `"lint" not configured`)
 	})
 
@@ -387,12 +388,12 @@ func TestRunRemote(t *testing.T) {
 			return "", "", 0, nil
 		}
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "test", Run: "go test ./..."},
 		}}
 		streams, _, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/custom/path", t.TempDir(), func(iostream.Level, string) {}, streams))
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg.Validate, "", "/custom/path", t.TempDir(), func(iostream.Level, string) {}, streams))
 		assert.Assert(t, strings.HasPrefix(capturedScript, "cd '/custom/path' &&"), "got: %s", capturedScript)
 	})
 }
@@ -433,13 +434,13 @@ func TestRunRemoteSSH(t *testing.T) {
 		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
 		assert.NilError(t, err)
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "test", Run: "echo hello"},
 		}}
 		streams, out, _ := newStreams()
 
 		var statusBuf bytes.Buffer
-		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", t.TempDir(), testStatus(&statusBuf), streams))
+		assert.NilError(t, RunRemote(context.Background(), execCallback(t, session), cfg.Validate, "", "/workspace/repo", t.TempDir(), testStatus(&statusBuf), streams))
 		assert.Assert(t, strings.Contains(out.String(), "hello from remote"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] test"), "got: %s", statusBuf.String())
 		assert.Equal(t, len(sshSrv.Commands()), 1)
@@ -460,12 +461,12 @@ func TestRunRemoteSSH(t *testing.T) {
 		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
 		assert.NilError(t, err)
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "test", Run: "false"},
 		}}
 		streams, _, _ := newStreams()
 
-		err = RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", t.TempDir(), func(iostream.Level, string) {}, streams)
+		err = RunRemote(context.Background(), execCallback(t, session), cfg.Validate, "", "/workspace/repo", t.TempDir(), func(iostream.Level, string) {}, streams)
 		assert.ErrorContains(t, err, "remote test failed")
 	})
 
@@ -484,13 +485,13 @@ func TestRunRemoteSSH(t *testing.T) {
 		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
 		assert.NilError(t, err)
 
-		cfg := &config.ProjectConfig{Commands: []config.Command{
+		cfg := &config.ProjectConfig{Validate: []config.ValidateCommand{
 			{Name: "install", Run: "npm install"},
 			{Name: "test", Run: "npm test"},
 		}}
 		streams, _, _ := newStreams()
 
-		err = RunRemote(context.Background(), execCallback(t, session), cfg, "", "/workspace/repo", t.TempDir(), func(iostream.Level, string) {}, streams)
+		err = RunRemote(context.Background(), execCallback(t, session), cfg.Validate, "", "/workspace/repo", t.TempDir(), func(iostream.Level, string) {}, streams)
 		assert.ErrorContains(t, err, "remote install failed")
 		assert.Equal(t, len(sshSrv.Commands()), 1)
 	})
