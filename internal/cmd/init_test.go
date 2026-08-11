@@ -30,15 +30,17 @@ func testStreams() (iostream.Streams, *bytes.Buffer, *bytes.Buffer) {
 	return iostream.Streams{Out: &out, Err: &errOut}, &out, &errOut
 }
 
+func testCfg(validateCmds ...config.ValidateCommand) *config.ProjectConfig {
+	return &config.ProjectConfig{Validate: validateCmds}
+}
+
 func TestWriteSettingsNewFile(t *testing.T) {
 	dir := t.TempDir()
 	streams, _, errOut := testStreams()
 
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := testCfg(config.ValidateCommand{Name: "test", Run: "go test ./...", Timeout: 60})
 
-	err := writeSettings(dir, commands, streams, fakeConfirmYes)
+	err := writeSettings(dir, cfg, streams, fakeConfirmYes)
 	assert.NilError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
@@ -62,11 +64,9 @@ func TestWriteSettingsExistingMergeApplied(t *testing.T) {
 	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), existing, 0o644))
 
 	streams, _, errOut := testStreams()
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := &config.ProjectConfig{Fix: []config.FixCommand{{Name: "format", Run: "gofmt -w .", Timeout: 30}}}
 
-	err := writeSettings(dir, commands, streams, fakeConfirmYes)
+	err := writeSettings(dir, cfg, streams, fakeConfirmYes)
 	assert.NilError(t, err)
 
 	// settings.json should be updated with merged content.
@@ -109,11 +109,9 @@ func TestWriteSettingsExistingMergeDeclined(t *testing.T) {
 	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), existing, 0o644))
 
 	streams, _, _ := testStreams()
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := testCfg(config.ValidateCommand{Name: "test", Run: "go test ./...", Timeout: 60})
 
-	err := writeSettings(dir, commands, streams, fakeConfirmNo)
+	err := writeSettings(dir, cfg, streams, fakeConfirmNo)
 	assert.NilError(t, err)
 
 	// Original settings.json untouched.
@@ -135,12 +133,10 @@ func TestWriteSettingsExistingNoTTYFallback(t *testing.T) {
 	assert.NilError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), existing, 0o644))
 
 	streams, _, _ := testStreams()
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := testCfg(config.ValidateCommand{Name: "test", Run: "go test ./...", Timeout: 60})
 
 	// Simulates tui.ErrNoTTY — confirm returns an error.
-	err := writeSettings(dir, commands, streams, fakeConfirmErr)
+	err := writeSettings(dir, cfg, streams, fakeConfirmErr)
 	assert.NilError(t, err)
 
 	// Original untouched, example written.
@@ -157,17 +153,15 @@ func TestWriteSettingsAlreadyUpToDate(t *testing.T) {
 	claudeDir := filepath.Join(dir, ".claude")
 	assert.NilError(t, os.MkdirAll(claudeDir, 0o755))
 
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := testCfg(config.ValidateCommand{Name: "test", Run: "go test ./...", Timeout: 60})
 
 	// First write — creates settings.json.
 	streams1, _, _ := testStreams()
-	assert.NilError(t, writeSettings(dir, commands, streams1, fakeConfirmYes))
+	assert.NilError(t, writeSettings(dir, cfg, streams1, fakeConfirmYes))
 
 	// Second write with same commands — should be up to date.
 	streams2, _, errOut := testStreams()
-	assert.NilError(t, writeSettings(dir, commands, streams2, fakeConfirmYes))
+	assert.NilError(t, writeSettings(dir, cfg, streams2, fakeConfirmYes))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already up to date")))
 }
 
@@ -175,11 +169,9 @@ func TestWriteCodexHooksNewFile(t *testing.T) {
 	dir := t.TempDir()
 	streams, _, errOut := testStreams()
 
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := &config.ProjectConfig{Fix: []config.FixCommand{{Name: "format", Run: "gofmt -w .", Timeout: 30}}}
 
-	err := writeCodexHooks(dir, commands, streams, fakeConfirmYes)
+	err := writeCodexHooks(dir, cfg, streams, fakeConfirmYes)
 	assert.NilError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(dir, ".codex", "hooks.json"))
@@ -201,17 +193,15 @@ func TestWriteCodexHooksExistingMergeApplied(t *testing.T) {
 
 	existing := []byte(`{
   "hooks": {
-    "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "audit", "timeout": 10}]}]
+    "Stop": [{"hooks": [{"type": "command", "command": "user-stop-hook", "timeout": 10}]}]
   }
 }`)
 	assert.NilError(t, os.WriteFile(filepath.Join(codexDir, "hooks.json"), existing, 0o644))
 
 	streams, _, errOut := testStreams()
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := &config.ProjectConfig{Fix: []config.FixCommand{{Name: "format", Run: "gofmt -w .", Timeout: 30}}}
 
-	err := writeCodexHooks(dir, commands, streams, fakeConfirmYes)
+	err := writeCodexHooks(dir, cfg, streams, fakeConfirmYes)
 	assert.NilError(t, err)
 
 	data, err := os.ReadFile(filepath.Join(codexDir, "hooks.json"))
@@ -222,11 +212,10 @@ func TestWriteCodexHooksExistingMergeApplied(t *testing.T) {
 
 	hooks, ok := merged["hooks"].(map[string]interface{})
 	assert.Assert(t, ok, "expected hooks to be a map")
-	// Existing PostToolUse preserved.
-	assert.Assert(t, hooks["PostToolUse"] != nil)
-	// New PreToolUse and Stop hooks added.
-	assert.Assert(t, hooks["PreToolUse"] != nil)
+	// Existing user Stop hook preserved.
 	assert.Assert(t, hooks["Stop"] != nil)
+	// New PostToolUse hook added.
+	assert.Assert(t, hooks["PostToolUse"] != nil)
 
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated")))
 }
@@ -240,11 +229,9 @@ func TestWriteCodexHooksExistingMergeDeclined(t *testing.T) {
 	assert.NilError(t, os.WriteFile(filepath.Join(codexDir, "hooks.json"), existing, 0o644))
 
 	streams, _, _ := testStreams()
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := testCfg(config.ValidateCommand{Name: "test", Run: "go test ./...", Timeout: 60})
 
-	err := writeCodexHooks(dir, commands, streams, fakeConfirmNo)
+	err := writeCodexHooks(dir, cfg, streams, fakeConfirmNo)
 	assert.NilError(t, err)
 
 	// Original hooks.json untouched.
@@ -259,15 +246,13 @@ func TestWriteCodexHooksExistingMergeDeclined(t *testing.T) {
 
 func TestWriteCodexHooksAlreadyUpToDate(t *testing.T) {
 	dir := t.TempDir()
-	commands := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
-	}
+	cfg := testCfg(config.ValidateCommand{Name: "test", Run: "go test ./...", Timeout: 60})
 
 	streams1, _, _ := testStreams()
-	assert.NilError(t, writeCodexHooks(dir, commands, streams1, fakeConfirmYes))
+	assert.NilError(t, writeCodexHooks(dir, cfg, streams1, fakeConfirmYes))
 
 	streams2, _, errOut := testStreams()
-	assert.NilError(t, writeCodexHooks(dir, commands, streams2, fakeConfirmYes))
+	assert.NilError(t, writeCodexHooks(dir, cfg, streams2, fakeConfirmYes))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already up to date")))
 }
 
@@ -355,68 +340,38 @@ func initGitRepo(t *testing.T) string {
 	return dir
 }
 
-func TestWriteGitHookNewFile(t *testing.T) {
+func TestWritePrePushHookNewFile(t *testing.T) {
 	dir := initGitRepo(t)
 	streams, _, errOut := testStreams()
 
-	err := writeGitHook(filepath.Join(dir, ".git"), streams)
+	err := writePrePushHook(dir, streams)
 	assert.NilError(t, err)
 
-	data, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-commit"))
+	data, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-push"))
 	assert.NilError(t, err)
-	assert.Equal(t, string(data), gitHookContent)
+	assert.Assert(t, strings.Contains(string(data), "chunk validate"))
 
-	info, err := os.Stat(filepath.Join(dir, ".git", "hooks", "pre-commit"))
+	info, err := os.Stat(filepath.Join(dir, ".git", "hooks", "pre-push"))
 	assert.NilError(t, err)
-	assert.Assert(t, info.Mode()&0o111 != 0, "pre-commit hook must be executable")
+	assert.Assert(t, info.Mode()&0o111 != 0, "pre-push hook must be executable")
 
-	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Wrote .git/hooks/pre-commit")))
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("pre-push")))
 }
 
-func TestWriteGitHookAlreadyUpToDate(t *testing.T) {
+func TestWritePrePushHookAlreadyInstalled(t *testing.T) {
 	dir := initGitRepo(t)
 	streams, _, _ := testStreams()
 
-	assert.NilError(t, writeGitHook(filepath.Join(dir, ".git"), streams))
+	assert.NilError(t, writePrePushHook(dir, streams))
 
 	streams2, _, errOut := testStreams()
-	assert.NilError(t, writeGitHook(filepath.Join(dir, ".git"), streams2))
-	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already up to date")))
-
-	data, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-commit"))
-	assert.NilError(t, err)
-	assert.Equal(t, string(data), gitHookContent)
-}
-
-func TestWriteGitHookAppendsToExisting(t *testing.T) {
-	dir := initGitRepo(t)
-	hooksDir := filepath.Join(dir, ".git", "hooks")
-	assert.NilError(t, os.MkdirAll(hooksDir, 0o755))
-
-	existing := "#!/bin/sh\nnpm test\n"
-	assert.NilError(t, os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(existing), 0o755))
-
-	streams, _, errOut := testStreams()
-	err := writeGitHook(filepath.Join(dir, ".git"), streams)
-	assert.NilError(t, err)
-
-	data, err := os.ReadFile(filepath.Join(hooksDir, "pre-commit"))
-	assert.NilError(t, err)
-	content := string(data)
-	assert.Assert(t, strings.HasPrefix(content, existing))
-	assert.Assert(t, strings.Contains(content, "chunk validate"))
-
-	info, err := os.Stat(filepath.Join(hooksDir, "pre-commit"))
-	assert.NilError(t, err)
-	assert.Assert(t, info.Mode()&0o111 != 0, "pre-commit hook must be executable")
-
-	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated .git/hooks/pre-commit")))
+	assert.NilError(t, writePrePushHook(dir, streams2))
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("already installed")))
 }
 
 // TestInstallSkillsStepUsesProjectScope verifies that installSkillsStep writes
 // skills into the project's .claude/skills/ directory, not into the user's
-// home directory. Previously it called InstallByName(ScopeUser, homeDir, ...)
-// which diverged from the ScopeProject default used by the skills subcommand.
+// home directory.
 func TestInstallSkillsStepUsesProjectScope(t *testing.T) {
 	workDir := t.TempDir()
 	home := t.TempDir()
@@ -439,15 +394,17 @@ func TestPrintInitSummaryWithCommands(t *testing.T) {
 	ui.SetColorEnabled(false)
 	defer ui.SetColorEnabled(true)
 
-	commands := []config.Command{
-		{Name: "test", Run: "task test"},
-		{Name: "lint", Run: "task lint"},
+	cfg := &config.ProjectConfig{
+		Validate: []config.ValidateCommand{
+			{Name: "test", Run: "task test"},
+			{Name: "lint", Run: "task lint"},
+		},
 	}
 	streams, _, errOut := testStreams()
-	printInitSummary(commands, streams)
+	printInitSummary(cfg, streams)
 
 	out := errOut.String()
-	assert.Assert(t, strings.Contains(out, "Validation commands:"), "missing section header")
+	assert.Assert(t, strings.Contains(out, "Validate commands:"), "missing section header")
 	assert.Assert(t, strings.Contains(out, "test"), "missing test command name")
 	assert.Assert(t, strings.Contains(out, "task test"), "missing test command run")
 	assert.Assert(t, strings.Contains(out, "lint"), "missing lint command name")
@@ -466,10 +423,10 @@ func TestPrintInitSummaryNoCommands(t *testing.T) {
 	defer ui.SetColorEnabled(true)
 
 	streams, _, errOut := testStreams()
-	printInitSummary(nil, streams)
+	printInitSummary(&config.ProjectConfig{}, streams)
 
 	out := errOut.String()
-	assert.Assert(t, !strings.Contains(out, "Validation commands:"), "should not show command table when none configured")
+	assert.Assert(t, !strings.Contains(out, "Validate commands:"), "should not show command table when none configured")
 	assert.Assert(t, strings.Contains(out, ".chunk/config.json"), "missing config path")
 	assert.Assert(t, strings.Contains(out, "chunk validate"), "missing validate hint")
 }

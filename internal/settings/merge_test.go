@@ -325,8 +325,7 @@ func TestMergeCodexMinimalExisting(t *testing.T) {
 	existing := []byte(`{}`)
 	generated := []byte(`{
 		"hooks": {
-			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "go test ./...", "timeout": 60}]}],
-			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 90}]}]
+			"PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "chunk fix", "timeout": 60}]}]
 		}
 	}`)
 
@@ -338,20 +337,18 @@ func TestMergeCodexMinimalExisting(t *testing.T) {
 	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
 
 	hooks := merged["hooks"].(map[string]interface{})
-	assert.Assert(t, hooks["PreToolUse"] != nil)
-	assert.Assert(t, hooks["Stop"] != nil)
+	assert.Assert(t, hooks["PostToolUse"] != nil)
 }
 
 func TestMergeCodexPreservesOtherHookTypes(t *testing.T) {
 	existing := []byte(`{
 		"hooks": {
-			"PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "audit", "timeout": 10}]}]
+			"Stop": [{"hooks": [{"type": "command", "command": "user-stop-hook", "timeout": 10}]}]
 		}
 	}`)
 	generated := []byte(`{
 		"hooks": {
-			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "test", "timeout": 60}]}],
-			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 90}]}]
+			"PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "chunk fix", "timeout": 60}]}]
 		}
 	}`)
 
@@ -362,9 +359,8 @@ func TestMergeCodexPreservesOtherHookTypes(t *testing.T) {
 	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
 
 	hooks := merged["hooks"].(map[string]interface{})
-	assert.Assert(t, hooks["PostToolUse"] != nil, "PostToolUse must be preserved")
-	assert.Assert(t, hooks["PreToolUse"] != nil)
-	assert.Assert(t, hooks["Stop"] != nil)
+	assert.Assert(t, hooks["Stop"] != nil, "user Stop hook must be preserved")
+	assert.Assert(t, hooks["PostToolUse"] != nil)
 }
 
 func TestMergeCodexReplacesPreToolUseByMatcher(t *testing.T) {
@@ -396,15 +392,15 @@ func TestMergeCodexReplacesPreToolUseByMatcher(t *testing.T) {
 	assert.Equal(t, entry["command"], "new-cmd")
 }
 
-func TestMergeCodexReplacesStopHook(t *testing.T) {
+func TestMergeCodexReplacesPostToolUseByMatcher(t *testing.T) {
 	existing := []byte(`{
 		"hooks": {
-			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 30}]}]
+			"PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "chunk fix", "timeout": 30}]}]
 		}
 	}`)
 	generated := []byte(`{
 		"hooks": {
-			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 600}]}]
+			"PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "chunk fix", "timeout": 60}]}]
 		}
 	}`)
 
@@ -416,26 +412,27 @@ func TestMergeCodexReplacesStopHook(t *testing.T) {
 	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
 
 	hooks := merged["hooks"].(map[string]interface{})
-	stop := hooks["Stop"].([]interface{})
-	group := stop[0].(map[string]interface{})
+	postToolUse := hooks["PostToolUse"].([]interface{})
+	assert.Equal(t, len(postToolUse), 1)
+	group := postToolUse[0].(map[string]interface{})
 	entries := group["hooks"].([]interface{})
 	entry := entries[0].(map[string]interface{})
 	timeout, _ := entry["timeout"].(float64)
-	assert.Assert(t, timeout == 600, "expected updated stop timeout of 600, got: %v", timeout)
+	assert.Assert(t, timeout == 60, "expected updated fix timeout of 60, got: %v", timeout)
 }
 
-func TestMergeCodexPreservesUserStopHooks(t *testing.T) {
+func TestMergeCodexPreservesUserPostToolUseHooks(t *testing.T) {
 	existing := []byte(`{
 		"hooks": {
-			"Stop": [
-				{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 30}]},
-				{"hooks": [{"type": "command", "command": "notify-team", "timeout": 10}]}
+			"PostToolUse": [
+				{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "chunk fix", "timeout": 30}]},
+				{"matcher": "Bash(*)", "hooks": [{"type": "command", "command": "user-audit", "timeout": 10}]}
 			]
 		}
 	}`)
 	generated := []byte(`{
 		"hooks": {
-			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 600}]}]
+			"PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "chunk fix", "timeout": 60}]}]
 		}
 	}`)
 
@@ -447,29 +444,24 @@ func TestMergeCodexPreservesUserStopHooks(t *testing.T) {
 	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
 
 	hooks := merged["hooks"].(map[string]interface{})
-	stop, ok := hooks["Stop"].([]interface{})
-	assert.Assert(t, ok && len(stop) == 2, "expected both Stop groups to be present, got: %v", len(stop))
+	postToolUse, ok := hooks["PostToolUse"].([]interface{})
+	assert.Assert(t, ok && len(postToolUse) == 2, "expected both PostToolUse groups to be present, got: %v", len(postToolUse))
 
-	// Find the chunk-managed group and verify it was updated.
-	for _, g := range stop {
-		group, ok := g.(map[string]interface{})
-		assert.Assert(t, ok, "expected stop group to be a map")
-		entries, ok := group["hooks"].([]interface{})
-		assert.Assert(t, ok && len(entries) > 0, "expected stop hook entries")
-		entry, ok := entries[0].(map[string]interface{})
-		assert.Assert(t, ok, "expected stop hook entry to be a map")
-		if entry["command"] == "chunk validate" {
-			timeout, _ := entry["timeout"].(float64)
-			assert.Assert(t, timeout == 600, "expected updated chunk validate timeout, got: %v", timeout)
+	// The user group with a different matcher must be preserved unchanged.
+	found := false
+	for _, g := range postToolUse {
+		group := g.(map[string]interface{})
+		if group["matcher"] == "Bash(*)" {
+			found = true
 		}
 	}
+	assert.Assert(t, found, "user PostToolUse group with Bash(*) matcher must be preserved")
 }
 
 func TestMergeCodexNoChangeWhenAlreadyMerged(t *testing.T) {
 	data := []byte(`{
 		"hooks": {
-			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "go test ./...", "timeout": 60}]}],
-			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 90}]}]
+			"PostToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "chunk fix", "timeout": 60}]}]
 		}
 	}`)
 

@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
-
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 func runHooksCmd(t *testing.T, dir string, args ...string) (string, string, error) {
@@ -25,69 +23,106 @@ func runHooksCmd(t *testing.T, dir string, args ...string) (string, string, erro
 	return out.String(), errOut.String(), err
 }
 
-func TestHooksDisable_CreatesSentinel(t *testing.T) {
-	dir := t.TempDir()
-	_, _, err := runHooksCmd(t, dir, "disable")
+func TestHooksEnable_CreatesPrePushHook(t *testing.T) {
+	dir := initGitRepo(t)
+	_, errOut, err := runHooksCmd(t, dir, "enable")
 	assert.NilError(t, err)
-	_, statErr := os.Stat(filepath.Join(dir, ".chunk", "hooks-disabled"))
-	assert.NilError(t, statErr, "expected sentinel file to exist")
-}
 
-func TestHooksEnable_RemovesSentinel(t *testing.T) {
-	dir := t.TempDir()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "hooks-disabled"), []byte{}, 0o644))
+	data, statErr := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-push"))
+	assert.NilError(t, statErr, "expected pre-push hook to be created")
+	assert.Assert(t, strings.Contains(string(data), "chunk validate"))
 
-	_, _, err := runHooksCmd(t, dir, "enable")
-	assert.NilError(t, err)
-	_, statErr := os.Stat(filepath.Join(chunkDir, "hooks-disabled"))
-	assert.Assert(t, os.IsNotExist(statErr), "expected sentinel file to be removed")
+	assert.Assert(t, strings.Contains(errOut, "Installed"), "got: %s", errOut)
 }
 
 func TestHooksEnable_NoopWhenAlreadyEnabled(t *testing.T) {
-	dir := t.TempDir()
+	dir := initGitRepo(t)
+
 	_, _, err := runHooksCmd(t, dir, "enable")
 	assert.NilError(t, err)
+
+	_, errOut, err := runHooksCmd(t, dir, "enable")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(errOut, "already"), "got: %s", errOut)
 }
 
-func TestHooksStatus_Disabled(t *testing.T) {
-	dir := t.TempDir()
-	chunkDir := filepath.Join(dir, ".chunk")
-	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "hooks-disabled"), []byte{}, 0o644))
+func TestHooksEnable_AppendsToExistingHook(t *testing.T) {
+	dir := initGitRepo(t)
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	assert.NilError(t, os.MkdirAll(hooksDir, 0o755))
 
-	out, _, err := runHooksCmd(t, dir, "status")
+	existing := "#!/bin/sh\necho pre-push\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(hooksDir, "pre-push"), []byte(existing), 0o755))
+
+	_, errOut, err := runHooksCmd(t, dir, "enable")
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(out, "disabled"), "got: %s", out)
+
+	data, _ := os.ReadFile(filepath.Join(hooksDir, "pre-push"))
+	content := string(data)
+	assert.Assert(t, strings.HasPrefix(content, existing), "existing content must be preserved")
+	assert.Assert(t, strings.Contains(content, "chunk validate"))
+	assert.Assert(t, strings.Contains(errOut, "Updated"), "got: %s", errOut)
+}
+
+func TestHooksDisable_RemovesChunkManagedHook(t *testing.T) {
+	dir := initGitRepo(t)
+
+	_, _, err := runHooksCmd(t, dir, "enable")
+	assert.NilError(t, err)
+
+	_, errOut, err := runHooksCmd(t, dir, "disable")
+	assert.NilError(t, err)
+
+	_, statErr := os.Stat(filepath.Join(dir, ".git", "hooks", "pre-push"))
+	assert.Assert(t, os.IsNotExist(statErr), "expected pre-push hook to be removed")
+	assert.Assert(t, strings.Contains(errOut, "Removed"), "got: %s", errOut)
+}
+
+func TestHooksDisable_RemovesOnlyChunkLineFromMixedHook(t *testing.T) {
+	dir := initGitRepo(t)
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	assert.NilError(t, os.MkdirAll(hooksDir, 0o755))
+
+	content := "#!/bin/sh\necho pre-push\nchunk validate\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(hooksDir, "pre-push"), []byte(content), 0o755))
+
+	_, _, err := runHooksCmd(t, dir, "disable")
+	assert.NilError(t, err)
+
+	data, readErr := os.ReadFile(filepath.Join(hooksDir, "pre-push"))
+	assert.NilError(t, readErr, "mixed hook file should remain (not deleted)")
+	assert.Assert(t, !strings.Contains(string(data), "chunk validate"), "chunk validate must be removed")
+	assert.Assert(t, strings.Contains(string(data), "echo pre-push"), "other content must be preserved")
+}
+
+func TestHooksDisable_NoopWhenNotInstalled(t *testing.T) {
+	dir := initGitRepo(t)
+	_, errOut, err := runHooksCmd(t, dir, "disable")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(errOut, "No pre-push hook"), "got: %s", errOut)
 }
 
 func TestHooksStatus_Enabled(t *testing.T) {
-	dir := t.TempDir()
+	dir := initGitRepo(t)
+
+	_, _, err := runHooksCmd(t, dir, "enable")
+	assert.NilError(t, err)
+
 	out, _, err := runHooksCmd(t, dir, "status")
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(out, "enabled"), "got: %s", out)
 }
 
-// TestValidateHookPath_HooksDisabled verifies that when CHUNK_HOOKS_DISABLED is
-// set the validate hook path exits 1 and prints a clear message to stderr.
-func TestValidateHookPath_HooksDisabled(t *testing.T) {
-	t.Setenv(config.EnvChunkHooksDisabled, "1")
+func TestHooksStatus_DisabledWhenNoHook(t *testing.T) {
+	dir := initGitRepo(t)
+	out, _, err := runHooksCmd(t, dir, "status")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out, "disabled"), "got: %s", out)
+}
 
+func TestHooksStatus_DisabledWhenNoGitRepo(t *testing.T) {
 	dir := t.TempDir()
-	root := NewRootCmd("test")
-	var errOut bytes.Buffer
-	root.SetErr(&errOut)
-	root.SetArgs([]string{"validate", "--project", dir})
-
-	// Provide a valid Stop hook JSON payload so detectHook returns non-nil.
-	hookPayload := `{"session_id":"test-hooks-disabled","stop_hook_active":false}`
-	root.SetIn(strings.NewReader(hookPayload))
-
-	err := root.Execute()
-	type exitCoder interface{ ExitCode() int }
-	ec, ok := err.(exitCoder)
-	assert.Assert(t, ok, "expected ExitCode() method on error, got: %v", err)
-	assert.Equal(t, ec.ExitCode(), 1)
-	assert.Assert(t, strings.Contains(errOut.String(), "hooks are disabled"), "got: %s", errOut.String())
+	out, _, err := runHooksCmd(t, dir, "status")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(out, "disabled"), "got: %s", out)
 }

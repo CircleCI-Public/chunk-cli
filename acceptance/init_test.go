@@ -24,16 +24,19 @@ func readInitConfig(t *testing.T, workDir string) map[string]interface{} {
 	return cfg
 }
 
-// configCommands extracts the commands array from a parsed config.
+// configCommands extracts all commands from a parsed config, combining both
+// validate and fix lists.
 func configCommands(cfg map[string]interface{}) []map[string]interface{} {
-	raw, ok := cfg["commands"].([]interface{})
-	if !ok {
-		return nil
-	}
 	var cmds []map[string]interface{}
-	for _, r := range raw {
-		if m, ok := r.(map[string]interface{}); ok {
-			cmds = append(cmds, m)
+	for _, key := range []string{"validate", "fix"} {
+		raw, ok := cfg[key].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, r := range raw {
+			if m, ok := r.(map[string]interface{}); ok {
+				cmds = append(cmds, m)
+			}
 		}
 	}
 	return cmds
@@ -110,9 +113,7 @@ func TestInitSkipAllWritesOnlyVCS(t *testing.T) {
 	assert.Equal(t, vcs["org"], "test-org")
 	assert.Equal(t, vcs["repo"], "test-repo")
 
-	_, hasCommands := cfg["commands"]
-	assert.Assert(t, !hasCommands || cfg["commands"] == nil ||
-		len(cfg["commands"].([]interface{})) == 0,
+	assert.Assert(t, len(configCommands(cfg)) == 0,
 		"expected no commands with --skip-validate, got: %s", string(data))
 }
 
@@ -178,11 +179,11 @@ func TestInitForcePreservesSkippedSections(t *testing.T) {
 	assert.Equal(t, vcs["repo"], "new-repo")
 
 	// Commands should be preserved (--skip-validate).
-	cmds, ok := cfg["commands"].([]interface{})
-	assert.Assert(t, ok && len(cmds) > 0, "expected commands preserved, got: %s", string(data))
-	cmd0 := cmds[0].(map[string]interface{})
-	assert.Equal(t, cmd0["name"], "test")
-	assert.Equal(t, cmd0["run"], "echo test")
+	cmds := configCommands(cfg)
+	assert.Assert(t, len(cmds) > 0, "expected commands preserved, got: %s", string(data))
+	testCmd := commandByName(cfg, "test")
+	assert.Assert(t, testCmd != nil, "expected test command preserved, got: %s", string(data))
+	assert.Equal(t, testCmd["run"], "echo test")
 }
 
 func TestInitNotGitRepo(t *testing.T) {

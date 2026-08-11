@@ -7,35 +7,25 @@
     ]
   },
   "hooks": {
-    "PreToolUse": [
+    "PostToolUse": [
       {
-        "matcher": "Bash(git commit*)",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && task fmt",
+            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk fix",
             "timeout": 30
-          },
-          {
-            "type": "command",
-            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint",
-            "timeout": 60
-          },
-          {
-            "type": "command",
-            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test",
-            "timeout": 300
           }
         ]
       }
     ],
-    "Stop": [
+    "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "chunk validate",
-            "timeout": 420
+            "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk session start",
+            "timeout": 5
           }
         ]
       }

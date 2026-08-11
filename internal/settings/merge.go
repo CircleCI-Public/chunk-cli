@@ -5,25 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	udiff "github.com/aymanbagabas/go-udiff"
 )
 
 // CommitMatcher is the PreToolUse hook group matcher that chunk manages.
-// It targets the Bash tool by name; per Claude Code's hook spec, matcher
-// filters only on tool name. Command-content filtering is done via CommitIfFilter
-// on individual hook entries.
+// Targets the Bash tool by name; per Claude Code's hook spec, matcher
+// filters only on tool name.
 const CommitMatcher = "Bash"
 
 // CommitIfFilter is the per-entry "if" condition that restricts hook entries
-// to git commit commands. The Bash(pattern) syntax is evaluated as a glob
-// against the bash command string, not the tool name.
+// to git commit commands.
 const CommitIfFilter = "Bash(git commit*)"
 
-// legacyCommitMatcher is the old group matcher value written by earlier versions
-// of chunk init. Recognised during merge so existing settings can be migrated
-// to the current format without leaving a stale duplicate group behind.
+// legacyCommitMatcher is the old group matcher written by earlier versions of
+// chunk init. Recognised during merge so existing settings can be migrated
+// without leaving a stale duplicate group behind.
 const legacyCommitMatcher = "Bash(git commit*)"
+
+// FixMatcher is the PostToolUse hook matcher chunk manages for running fix commands.
+const FixMatcher = "Edit|Write"
 
 // MergeResult holds the computed merge without performing any I/O.
 type MergeResult struct {
@@ -133,145 +135,125 @@ func mergePermissionsAllow(merged, generated map[string]interface{}) {
 	mergedPerms["allow"] = result
 }
 
-// mergeHooks replaces the chunk-managed hook group (matched by CommitMatcher)
-// within PreToolUse, preserving all other hook types and groups.
+// mergeHooks replaces chunk-managed hook groups within PreToolUse and
+// PostToolUse, preserving all other hook types and groups.
 func mergeHooks(merged, generated map[string]interface{}) {
 	genHooks, ok := generated["hooks"].(map[string]interface{})
 	if !ok {
 		return
 	}
-	genPreToolUse, ok := genHooks["PreToolUse"].([]interface{})
-	if !ok || len(genPreToolUse) == 0 {
-		return
-	}
 
-	// Find the chunk-managed group in generated hooks.
-	var chunkGroup interface{}
-	for _, g := range genPreToolUse {
-		group, isMap := g.(map[string]interface{})
-		if !isMap {
-			continue
-		}
-		if matcher, _ := group["matcher"].(string); matcher == CommitMatcher {
-			chunkGroup = g
-			break
-		}
-	}
-	if chunkGroup == nil {
-		return
-	}
-
-	// Ensure merged has hooks.PreToolUse.
 	mergedHooks, ok := merged["hooks"].(map[string]interface{})
 	if !ok {
 		mergedHooks = map[string]interface{}{}
 		merged["hooks"] = mergedHooks
 	}
 
-	mergedPreToolUse, ok := mergedHooks["PreToolUse"].([]interface{})
-	if !ok {
-		mergedPreToolUse = []interface{}{}
-	}
-
-	// Replace existing group with same matcher (or legacy matcher), or append.
-	replaced := false
-	for i, g := range mergedPreToolUse {
-		group, isMap := g.(map[string]interface{})
-		if !isMap {
-			continue
-		}
-		matcher, _ := group["matcher"].(string)
-		if matcher == CommitMatcher || matcher == legacyCommitMatcher {
-			mergedPreToolUse[i] = chunkGroup
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		mergedPreToolUse = append(mergedPreToolUse, chunkGroup)
-	}
-
-	mergedHooks["PreToolUse"] = mergedPreToolUse
+	mergeHookType(mergedHooks, genHooks, "PreToolUse", CommitMatcher)
+	mergeHookType(mergedHooks, genHooks, "PreToolUse", legacyCommitMatcher)
+	mergeHookType(mergedHooks, genHooks, "PostToolUse", FixMatcher)
+	mergeSessionStartHooks(mergedHooks, genHooks)
 }
 
-// mergeStopHooks replaces the chunk-managed Stop hook group (identified by the
-// "chunk validate" command) within Stop, preserving all other Stop groups.
-func mergeStopHooks(merged, generated map[string]interface{}) {
-	genHooks, ok := generated["hooks"].(map[string]interface{})
-	if !ok {
-		return
-	}
-	genStop, ok := genHooks["Stop"].([]interface{})
-	if !ok || len(genStop) == 0 {
-		return
-	}
+// mergeSessionStartHooks replaces the chunk-managed SessionStart hook group
+// (identified by the "chunk session start" command) within SessionStart,
+// preserving all other SessionStart groups.
+func mergeSessionStartHooks(mergedHooks, genHooks map[string]interface{}) {
+	genGroups, _ := genHooks["SessionStart"].([]interface{})
 
-	// Find the chunk-managed group in generated Stop hooks.
 	var chunkGroup interface{}
-	for _, g := range genStop {
-		if isChunkStopGroup(g) {
+	for _, g := range genGroups {
+		if isChunkSessionStartGroup(g) {
 			chunkGroup = g
 			break
 		}
 	}
-	if chunkGroup == nil {
-		return
-	}
 
-	// Ensure merged has hooks.Stop.
-	mergedHooks, ok := merged["hooks"].(map[string]interface{})
-	if !ok {
-		mergedHooks = map[string]interface{}{}
-		merged["hooks"] = mergedHooks
-	}
+	mergedGroups, _ := mergedHooks["SessionStart"].([]interface{})
 
-	mergedStop, ok := mergedHooks["Stop"].([]interface{})
-	if !ok {
-		mergedStop = []interface{}{}
-	}
-
-	// Replace existing chunk-managed group, or append.
-	replaced := false
-	for i, g := range mergedStop {
-		if isChunkStopGroup(g) {
-			mergedStop[i] = chunkGroup
-			replaced = true
-			break
+	var filtered []interface{}
+	for _, g := range mergedGroups {
+		if !isChunkSessionStartGroup(g) {
+			filtered = append(filtered, g)
 		}
 	}
-	if !replaced {
-		mergedStop = append(mergedStop, chunkGroup)
+	if chunkGroup != nil {
+		filtered = append(filtered, chunkGroup)
 	}
 
-	mergedHooks["Stop"] = mergedStop
+	if len(filtered) > 0 {
+		mergedHooks["SessionStart"] = filtered
+	} else {
+		delete(mergedHooks, "SessionStart")
+	}
 }
 
-// isChunkStopGroup reports whether a Stop hook group is chunk-managed,
-// identified by containing a hook with command "chunk validate".
-func isChunkStopGroup(g interface{}) bool {
+// isChunkSessionStartGroup reports whether a hook group is chunk's managed
+// SessionStart group, identified by containing a "chunk session start" command.
+func isChunkSessionStartGroup(g interface{}) bool {
 	group, ok := g.(map[string]interface{})
 	if !ok {
 		return false
 	}
-	hooks, ok := group["hooks"].([]interface{})
-	if !ok {
-		return false
-	}
+	hooks, _ := group["hooks"].([]interface{})
 	for _, h := range hooks {
-		entry, ok := h.(map[string]interface{})
+		hook, ok := h.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if cmd, _ := entry["command"].(string); cmd == "chunk validate" {
+		if cmd, _ := hook["command"].(string); strings.Contains(cmd, "chunk session start") {
 			return true
 		}
 	}
 	return false
 }
 
+// mergeHookType replaces the chunk-managed group (identified by matcher) within
+// hookType, preserving all other groups. When the generated config has no group
+// for the matcher, any existing chunk-managed group in the merged config is removed.
+func mergeHookType(mergedHooks, genHooks map[string]interface{}, hookType, matcher string) {
+	genGroups, _ := genHooks[hookType].([]interface{})
+
+	// Find the chunk-managed group in generated hooks for this type.
+	var chunkGroup interface{}
+	for _, g := range genGroups {
+		group, isMap := g.(map[string]interface{})
+		if !isMap {
+			continue
+		}
+		if m, _ := group["matcher"].(string); m == matcher {
+			chunkGroup = g
+			break
+		}
+	}
+
+	mergedGroups, _ := mergedHooks[hookType].([]interface{})
+
+	// Remove any existing chunk-managed group from merged.
+	filtered := mergedGroups[:0]
+	for _, g := range mergedGroups {
+		group, isMap := g.(map[string]interface{})
+		if isMap {
+			if m, _ := group["matcher"].(string); m == matcher {
+				continue
+			}
+		}
+		filtered = append(filtered, g)
+	}
+
+	if chunkGroup != nil {
+		filtered = append(filtered, chunkGroup)
+	}
+
+	if len(filtered) > 0 {
+		mergedHooks[hookType] = filtered
+	} else {
+		delete(mergedHooks, hookType)
+	}
+}
+
 // MergeCodex computes the merged .codex/hooks.json from existing and generated bytes.
-// It preserves all unknown keys and hook types, replaces the chunk-managed PreToolUse
-// group by matcher, and replaces the chunk-managed Stop hook group by command.
+// It preserves all unknown keys and hook types, and replaces chunk-managed hook groups by matcher.
 func MergeCodex(existing, generated []byte) (*MergeResult, error) {
 	var existingMap map[string]interface{}
 	if err := json.Unmarshal(existing, &existingMap); err != nil {
@@ -289,7 +271,6 @@ func MergeCodex(existing, generated []byte) (*MergeResult, error) {
 	}
 
 	mergeHooks(existingMap, generatedMap)
-	mergeStopHooks(existingMap, generatedMap)
 
 	mergedBytes, err := json.MarshalIndent(existingMap, "", "  ")
 	if err != nil {
