@@ -78,6 +78,7 @@ chunk
 │   └── variants <variants-file>    # Run code variants on parallel throwaway sidecars
 │       --name <command>            # Validate command to run (default: all remote commands)
 │       --parallel <n>              # Max concurrent sidecars (default 5)
+│       --timeout <seconds>         # Per-command timeout when the command sets none (0 for no limit)
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
 │       --identity-file <path>      # SSH identity file
@@ -205,10 +206,26 @@ chunk
   about to be deleted. That also makes them invisible to the reaper above, so the
   command cleans up after itself instead: it deletes each sidecar as its variant
   finishes, catches SIGINT/SIGTERM so an interrupt still unwinds through those
-  deletes, and sweeps any sidecar named `variant-*` left over by an earlier
-  crashed run before starting a new one. For the same reason `validate variants`
-  syncs without persisting a workspace and therefore requires a resolvable
-  workdir.
+  deletes, and sweeps stranded `variant-*` sidecars from an earlier crashed run
+  before starting a new one. Variant sidecar names carry the run's start time
+  (`variant-<base36 seconds>-<id>`), which is what lets the sweep spare a
+  concurrent run's in-flight sidecars — two runs at once, in two worktrees or two
+  repos, is a normal shape for the mutation-testing skill — and only collect ones
+  too old for any live run to own. For the same reason `validate variants` syncs
+  without persisting a workspace and therefore requires a resolvable workdir; it
+  resolves one through `sidecar.ResolveWorkspace`, the same
+  `--workdir` → active sidecar → `<sidecarHome>/<repo>` order as every other
+  sidecar command, and fails before booting anything when none of the three
+  applies.
+- **`validate variants` never reports an environmental failure as a caught
+  mutant.** A killed variant means the validate command ran and exited non-zero
+  on its own terms. Exit codes 126 and 127 are the shell failing to run the
+  command at all, and a command that outruns its timeout never returned a verdict;
+  both are recorded as errors instead, and errors are neither kills nor survivors.
+  Commands are template-expanded locally before being shipped, since a literal
+  `{{CHANGED_PACKAGES}}` reaching the remote shell would otherwise fail every
+  variant the same way. The command warns when every variant was killed, because
+  that pattern is more often one broken command than a fully covered codebase.
 - Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,
   `validate --sidecar-id`) prompt for it inline at the point of need rather than
   failing with an error.

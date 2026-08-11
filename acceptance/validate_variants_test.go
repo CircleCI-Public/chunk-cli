@@ -13,6 +13,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/recorder"
 	"github.com/CircleCI-Public/chunk-cli/internal/variants"
 )
@@ -158,7 +159,9 @@ func TestValidateVariantsNamedCommand(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	workDir := env.HomeDir
+	// A git repo with an origin remote, so the remote workspace resolves to the
+	// same <sidecarHome>/<repo> the rest of the CLI syncs into.
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	writeChunkConfig(t, workDir, nil)
 	path := writeVariantsFile(t, workDir, []variants.Variant{
 		{ID: "MUT-001"},
@@ -207,7 +210,7 @@ func TestValidateVariantsCreatesAndDeletesSidecars(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	workDir := env.HomeDir
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	writeChunkConfig(t, workDir, nil)
 	path := writeVariantsFile(t, workDir, []variants.Variant{
 		{ID: "MUT-001"},
@@ -244,7 +247,7 @@ func TestValidateVariantsImageFromConfig(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	workDir := env.HomeDir
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	writeChunkConfig(t, workDir, map[string]interface{}{
 		"validation": map[string]interface{}{
 			"sidecarImage": "snap-from-config",
@@ -264,8 +267,79 @@ func TestValidateVariantsImageFromConfig(t *testing.T) {
 	creates := filterVariantRequests(reqs, "POST", "/api/v3/sidecar/instances")
 	assert.Assert(t, len(creates) >= 1, "expected at least 1 create request")
 
-	var body map[string]interface{}
+	// CreateSidecar sends the V3 envelope, so the image lives under
+	// data.attributes rather than at the top level. Asserting on the request body
+	// rather than cci.Sidecars because the run deletes its sidecar on the way out,
+	// leaving nothing in the fake's list to inspect.
+	var body struct {
+		Data struct {
+			Attributes struct {
+				Name  string `json:"name"`
+				Image string `json:"image"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
 	assert.NilError(t, json.Unmarshal(creates[0].Body, &body))
-	assert.Equal(t, body["image"], "snap-from-config",
-		"expected image from config, got: %v", body["image"])
+	assert.Equal(t, body.Data.Attributes.Image, "snap-from-config")
+	assert.Assert(t, strings.HasPrefix(body.Data.Attributes.Name, "variant-"),
+		"expected a variant-prefixed sidecar name, got %q", body.Data.Attributes.Name)
+}
+
+// TestValidateVariantsUnresolvableWorkspace pins the pre-flight failure. With no
+// origin remote and no active sidecar there is no way to know where the snapshot
+// prepared its dependencies, and guessing a path means every command fails for
+// environmental reasons and every mutant reads as caught. Failing before any
+// sidecar is booted is the only safe answer.
+func TestValidateVariantsUnresolvableWorkspace(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	// Not a git repo, so no org/repo can be detected.
+	workDir := t.TempDir()
+	writeChunkConfig(t, workDir, nil)
+	path := writeVariantsFile(t, workDir, []variants.Variant{
+		{ID: "MUT-001"},
+	})
+
+	result := binary.RunCLI(t, []string{
+		"validate", "variants", path,
+		"--org-id", "org-aaa",
+		"--image", "snap-abc",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	creates := filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")
+	assert.Equal(t, len(creates), 0, "no sidecar may be booted when the workspace is unknown")
+}
+
+// TestValidateVariantsWorkdirFlagOverridesDetection confirms --workdir still
+// works without a git remote, which is the escape hatch the error above suggests.
+func TestValidateVariantsWorkdirFlagOverridesDetection(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	workDir := t.TempDir()
+	writeChunkConfig(t, workDir, nil)
+	path := writeVariantsFile(t, workDir, []variants.Variant{
+		{ID: "MUT-001"},
+	})
+
+	result := binary.RunCLI(t, []string{
+		"validate", "variants", path,
+		"--org-id", "org-aaa",
+		"--image", "snap-abc",
+		"--workdir", "/home/user/my-repo",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s\nstdout: %s", result.Stderr, result.Stdout)
+	creates := filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")
+	assert.Assert(t, len(creates) >= 1, "expected a sidecar to be created")
 }

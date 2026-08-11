@@ -13,12 +13,13 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 	"github.com/CircleCI-Public/chunk-cli/internal/variants"
 )
 
 func newValidateVariantsCmd() *cobra.Command {
 	var name, orgID, image, identityFile, workdir string
-	var parallel int
+	var parallel, timeout int
 
 	cmd := &cobra.Command{
 		Use:          "variants <variants-file>",
@@ -105,7 +106,14 @@ func newValidateVariantsCmd() *cobra.Command {
 				image = cfg.Validation.SidecarImage
 			}
 
-			workspace := resolveVariantsWorkspace(ctx, workdir, workDir)
+			workspace, err := resolveVariantsWorkspace(ctx, workdir, workDir)
+			if err != nil {
+				return &userError{
+					msg:        "Could not determine the remote workspace to sync into.",
+					suggestion: "Run from a clone with an 'origin' remote, or pass --workdir.",
+					err:        err,
+				}
+			}
 
 			// Sweep before booting anything: a crashed earlier run can leave
 			// sidecars the reaper will never collect, because variant sidecars
@@ -113,11 +121,6 @@ func newValidateVariantsCmd() *cobra.Command {
 			statusFn := newStatusFunc(streams)
 			if swept := variants.SweepOrphans(ctx, client, resolvedOrgID, statusFn); swept > 0 {
 				statusFn(iostream.LevelInfo, fmt.Sprintf("swept %d orphaned variant sidecar(s) from a previous run", swept))
-			}
-
-			cmdStrings := make([]string, len(cmds))
-			for i, c := range cmds {
-				cmdStrings[i] = c.Run
 			}
 
 			authSock := os.Getenv(config.EnvSSHAuthSock)
@@ -128,20 +131,13 @@ func newValidateVariantsCmd() *cobra.Command {
 				AuthSock:     authSock,
 				Workspace:    workspace,
 				Parallel:     parallel,
-				Commands:     cmdStrings,
+				Commands:     variantCommands(cmds, workDir, timeout),
 				StatusFn:     statusFn,
 			})
 			if err != nil {
 				return &userError{msg: "Variants run failed.", err: err}
 			}
-
-			killed := 0
-			for _, r := range results {
-				if r.Killed {
-					killed++
-				}
-			}
-			statusFn(iostream.LevelDone, fmt.Sprintf("%d/%d variants killed", killed, len(results)))
+			reportVariantSummary(results, statusFn)
 
 			out, err := json.MarshalIndent(results, "", "  ")
 			if err != nil {
@@ -154,6 +150,8 @@ func newValidateVariantsCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Validate command name to run (default: all remote commands)")
 	cmd.Flags().IntVar(&parallel, "parallel", 5, "Max concurrent sidecars")
+	cmd.Flags().IntVar(&timeout, "timeout", validate.DefaultTimeout,
+		"Per-command timeout in seconds, used when the command sets none (0 for no limit)")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
@@ -162,21 +160,89 @@ func newValidateVariantsCmd() *cobra.Command {
 	return cmd
 }
 
+// variantCommands prepares the configured commands for remote execution.
+//
+// Templates are expanded here, exactly as the ordinary remote path does in
+// validate.RunRemote. Shipping a command unexpanded does not fail loudly: the
+// literal {{CHANGED_PACKAGES}} reaches the sidecar's shell, which exits non-zero
+// for a reason that has nothing to do with the code under test, and every variant
+// in the run would be recorded as a caught mutant.
+func variantCommands(cmds []config.Command, workDir string, defaultTimeout int) []variants.Command {
+	out := make([]variants.Command, len(cmds))
+	for i, c := range cmds {
+		out[i] = variants.Command{
+			Name:    c.Name,
+			Run:     validate.ExpandCommand(workDir, c.Run),
+			Timeout: commandTimeout(c.Timeout, defaultTimeout),
+		}
+	}
+	return out
+}
+
+// commandTimeout picks the timeout for one command in seconds: the command's own
+// setting when it has one, otherwise the run-wide default. A run-wide default of
+// 0 means no limit, which is why this cannot simply take the larger of the two.
+func commandTimeout(configured, fallback int) int {
+	if configured > 0 {
+		return configured
+	}
+	return fallback
+}
+
+// reportVariantSummary prints the run tally to stderr, alongside the JSON results
+// on stdout.
+//
+// It calls out anything that makes a clean-looking result untrustworthy.
+// Unassessed variants are gaps in the report rather than passes, and a run where
+// nothing survived at all is more often one validate command failing the same way
+// on every sidecar than a perfectly covered codebase — the two are
+// indistinguishable in the per-variant JSON, so the difference has to be said out
+// loud.
+func reportVariantSummary(results []variants.Result, statusFn iostream.StatusFunc) {
+	killed, unassessed := 0, 0
+	for _, r := range results {
+		switch {
+		case r.Killed:
+			killed++
+		case r.Error != "":
+			unassessed++
+		}
+	}
+
+	statusFn(iostream.LevelDone, fmt.Sprintf("%d/%d variants killed", killed, len(results)))
+	if unassessed > 0 {
+		statusFn(iostream.LevelWarn, fmt.Sprintf(
+			"%d variant(s) were not assessed and are neither killed nor survivors — see the 'error' field", unassessed))
+	}
+	if len(results) > 1 && killed == len(results) {
+		statusFn(iostream.LevelWarn,
+			"every variant was killed — check the failures look like test failures rather than a command that could not run on the snapshot")
+	}
+}
+
 // resolveVariantsWorkspace derives the remote workspace path for variant workers.
 // Every worker gets the same path, which is safe because each one drives its own
 // sidecar: the path collides only within a machine, and no two variants share a
-// machine. Priority: --workdir flag, active sidecar, git remote default. The
-// result is always non-empty, which SyncEphemeral requires.
-func resolveVariantsWorkspace(ctx context.Context, workdirFlag, projectDir string) string {
+// machine.
+//
+// It defers to sidecar.ResolveWorkspace rather than reimplementing the priority
+// order, so variants land where the rest of the CLI puts a workspace:
+// <sidecarHome>/<repo>. That is not a cosmetic detail. `chunk sidecar env build`
+// provisions dependencies in that directory before the snapshot is taken, so a
+// sync into any other path gets a tree the snapshot never prepared, every
+// command fails for environmental reasons, and every mutant reads as caught.
+//
+// The error is deliberate: SyncEphemeral has no shared state to fall back on, so
+// an unresolvable workspace has to stop the run rather than pick a guess.
+func resolveVariantsWorkspace(ctx context.Context, workdirFlag, projectDir string) (string, error) {
 	if workdirFlag != "" {
-		return workdirFlag
+		return workdirFlag, nil
 	}
-	if active, err := sidecar.LoadActive(ctx); err == nil && active != nil && active.Workspace != "" {
-		return active.Workspace
-	}
+	// A missing origin remote is not fatal on its own — an active sidecar may
+	// still name a workspace — so let ResolveWorkspace decide.
 	_, repo, err := gitremote.DetectOrgAndRepo(projectDir)
-	if err == nil && repo != "" {
-		return "./workspace/" + repo
+	if err != nil {
+		repo = ""
 	}
-	return "./workspace"
+	return sidecar.ResolveWorkspace(ctx, "", repo)
 }

@@ -122,13 +122,27 @@ This boots one throwaway sidecar per variant (5 at a time), applies that variant
 
 It prints a JSON array, one entry per variant:
 
-- `killed: true` → the test suite caught the bug. Mark as **killed**.
+- `killed: true` → the test suite ran and failed. Mark as **killed**. `command` names the validate command that caught it.
 - `killed: false` with no `error` → the tests passed on broken code. Mark as **survivor** — this is a real coverage gap.
-- `error` non-empty → the variant never ran (patch did not apply, sidecar failed to boot). Mark as **inconclusive** and either fix the patch and re-run just that variant, or report it as not assessed. Do not record an inconclusive variant as a survivor.
+- `error` non-empty → the mutant was never assessed. Mark as **inconclusive**. Causes include: the patch did not apply, the sidecar failed to boot, the sync failed, the validate command was not present on the snapshot, or the command timed out. Either fix the cause and re-run just that variant, or report it as not assessed.
 
-Raise `--parallel` for a faster run at higher concurrent cost; lower it if the org hits sidecar limits. Use `--name <command>` to run a single validate command instead of every remote one.
+`killed` and `error` are mutually exclusive, and an inconclusive variant is neither a kill nor a survivor. **Never record an inconclusive variant as either.** Counting one as killed is the worst outcome available here: it converts a broken run into a clean bill of health.
 
-**Cleanup**: the command deletes its own sidecars, including on Ctrl-C, and sweeps any orphans from a previous crashed run before it starts. You do not need to clean up sidecars by hand. Do delete `.chunk/variants.json` when the run is done.
+Raise `--parallel` for a faster run at higher concurrent cost; lower it if the org hits sidecar limits. Use `--name <command>` to run a single validate command instead of every remote one. `--timeout <seconds>` bounds each command for variants whose mutation makes the suite hang; a command's own `timeout` in `.chunk/config.json` takes precedence.
+
+Prefer a command that runs the whole suite. Template variables like `{{CHANGED_PACKAGES}}` expand against your *local* working tree before the command is sent, and the mutation exists only on the sidecar — so a changed-packages command can skip the very package it is meant to be testing and report a false survivor.
+
+#### Sanity-check the run before believing it
+
+A high kill rate is the result an environmental failure produces, because a snapshot missing the project's tooling fails the same way for every variant. Before reporting results:
+
+- **If every variant was killed, treat the run as suspect until proven otherwise.** The command warns when this happens. Open the `stdout`/`stderr` of two or three results and confirm the failures are test assertions failing, not a missing binary, a dependency that was never installed, or a shell error.
+- **If every variant was killed by the same command with the same exit code**, that is the signature of a broken environment rather than a well-tested codebase.
+- **Check the inconclusive count.** Variants that were not assessed are gaps in the report, not passes.
+
+If the environment is at fault, fix it — usually by rebuilding the snapshot via the `chunk-sidecar` skill — and re-run. Do not report a coverage verdict from a run you could not sanity-check.
+
+**Cleanup**: the command deletes its own sidecars, including on Ctrl-C, and sweeps orphans from a previous crashed run before it starts. The sweep only takes sidecars old enough that no live run could still own them, so a second `validate variants` in another worktree or repo is safe to run alongside the first. You do not need to clean up sidecars by hand. Do delete `.chunk/variants.json` when the run is done.
 
 #### Stage 2 Summary
 
@@ -139,6 +153,7 @@ Once the variants run has completed, produce a summary table:
 | MUT-001 | Inverted auth check | `pkg/auth/verify.go` | 42 | Survivor |
 | MUT-002 | Removed nil guard | `pkg/api/handler.go` | 118 | Killed (sidecar) |
 | MUT-003 | Weakened length check | `pkg/api/parse.go` | 55 | Killed (local) |
+| MUT-004 | Removed retry | `pkg/api/client.go` | 73 | Not assessed (timed out) |
 
 Report any inconclusive variants separately, with the reason they did not run, so the user can see what was left unassessed rather than reading their absence as a pass.
 

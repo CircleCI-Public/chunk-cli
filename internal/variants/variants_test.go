@@ -5,8 +5,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
@@ -32,11 +35,17 @@ func defaultOpts() variants.Options {
 	return variants.Options{
 		OrgID:     "org-aaa",
 		Image:     "snap-abc",
-		Workspace: "./workspace/repo",
-		Commands:  []string{"go test ./..."},
+		Workspace: "/home/user/repo",
+		Commands:  []variants.Command{{Name: "test", Run: "go test ./..."}},
 		Parallel:  5,
 		StatusFn:  nopStatus,
 	}
+}
+
+// variantName builds the sidecar name a run started at ts would produce for a
+// variant ID, mirroring the run-token scheme SweepOrphans dates names by.
+func variantName(ts time.Time, id string) string {
+	return "variant-" + strconv.FormatInt(ts.Unix(), 36) + "-" + id
 }
 
 func TestRunEmpty(t *testing.T) {
@@ -128,14 +137,30 @@ func TestRunDeleteCalledOnCreateSuccess(t *testing.T) {
 // every in-flight sidecar kept billing. Cancellation is what the SIGINT handler
 // installed by Run reduces to, so asserting on a cancelled context covers it
 // without having to signal the test binary itself.
+//
+// The cancel has to land after a sidecar exists, which is why it fires from
+// inside the create handler rather than before Run. Cancelling up front makes
+// sidecar.Create fail on the dead context before any request is sent, leaving
+// creates and deletes both at zero — an assertion that passes with the deferred
+// delete removed entirely, and so guards nothing.
 func TestRunDeletesEverySidecarOnCancel(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyStatusCode = 500
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
+
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isCreate := r.Method == http.MethodPost && r.URL.Path == sidecarInstancesPath
+		cci.ServeHTTP(w, r)
+		if isCreate {
+			// Cancel only once the response is written, so the first variant owns a
+			// real sidecar that now has to be cleaned up on the way out.
+			once.Do(cancel)
+		}
+	}))
+	defer srv.Close()
 
 	vs := []variants.Variant{{ID: "MUT-001"}, {ID: "MUT-002"}, {ID: "MUT-003"}}
 	opts := defaultOpts()
@@ -145,23 +170,25 @@ func TestRunDeletesEverySidecarOnCancel(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Len(results, 3))
 
-	// Whichever variants won the race to start, none may outlive the run: a
-	// created sidecar without a matching delete is a leaked instance.
 	creates, deletes := countSidecarCalls(cci)
+	assert.Assert(t, creates >= 1, "expected the first variant to create a sidecar before the cancel landed")
 	assert.Equal(t, creates, deletes, "every created sidecar must be deleted")
 
 	for _, r := range results {
 		assert.Check(t, !r.Killed, "cancelled variant must not be reported as killed")
+		assert.Check(t, r.Error != "", "cancelled variant must carry an error, not a silent pass")
 	}
 }
 
-func TestSweepOrphansDeletesOnlyVariantSidecars(t *testing.T) {
+func TestSweepOrphansDeletesOnlyStaleVariantSidecars(t *testing.T) {
+	old := time.Now().Add(-24 * time.Hour)
+
 	cci := fakes.NewFakeCircleCI()
 	cci.Sidecars = []fakes.Sidecar{
-		{ID: "sc-1", Name: "variant-mut-001", OrgID: "org-aaa"},
+		{ID: "sc-1", Name: variantName(old, "mut-001"), OrgID: "org-aaa"},
 		{ID: "sc-2", Name: "happy-quickly-tesla", OrgID: "org-aaa"},
-		{ID: "sc-3", Name: "variant-mut-002", OrgID: "org-aaa"},
-		{ID: "sc-4", Name: "variant-mut-003", OrgID: "org-other"},
+		{ID: "sc-3", Name: variantName(old, "mut-002"), OrgID: "org-aaa"},
+		{ID: "sc-4", Name: variantName(old, "mut-003"), OrgID: "org-other"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -179,6 +206,48 @@ func TestSweepOrphansDeletesOnlyVariantSidecars(t *testing.T) {
 	assert.Check(t, cmp.Contains(remaining, "sc-4"))
 	assert.Check(t, !slices.Contains(remaining, "sc-1"))
 	assert.Check(t, !slices.Contains(remaining, "sc-3"))
+}
+
+// TestSweepOrphansSparesConcurrentRun pins the hazard that two runs at once —
+// two worktrees, two repos, an agent and a human — are a normal shape for this
+// command. A sweep that deleted every variant sidecar it could see would kill the
+// other run's in-flight work, and those variants would come back as errors: not a
+// false pass, but a run silently destroyed by an unrelated one.
+func TestSweepOrphansSparesConcurrentRun(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sc-live", Name: variantName(time.Now().Add(-30*time.Second), "mut-001"), OrgID: "org-aaa"},
+		{ID: "sc-stale", Name: variantName(time.Now().Add(-48*time.Hour), "mut-002"), OrgID: "org-aaa"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	swept := variants.SweepOrphans(context.Background(), newTestClient(t, srv), "org-aaa", nopStatus)
+	assert.Equal(t, swept, 1)
+
+	var remaining []string
+	for _, s := range cci.Sidecars {
+		remaining = append(remaining, s.ID)
+	}
+	assert.Check(t, cmp.Contains(remaining, "sc-live"))
+	assert.Check(t, !slices.Contains(remaining, "sc-stale"))
+}
+
+// TestSweepOrphansSparesUndatableNames covers a variant sidecar whose name has no
+// parseable run token. The sweep cannot show it is abandoned, so it must leave it
+// alone rather than guess.
+func TestSweepOrphansSparesUndatableNames(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sc-1", Name: "variant-mut-001", OrgID: "org-aaa"},
+		{ID: "sc-2", Name: "variant-", OrgID: "org-aaa"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	swept := variants.SweepOrphans(context.Background(), newTestClient(t, srv), "org-aaa", nopStatus)
+	assert.Equal(t, swept, 0)
+	assert.Equal(t, len(cci.Sidecars), 2)
 }
 
 func TestSweepOrphansToleratesListFailure(t *testing.T) {
