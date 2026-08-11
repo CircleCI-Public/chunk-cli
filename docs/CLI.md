@@ -180,12 +180,29 @@ chunk
   (requires the branch to be pushed).
 - `sidecar ssh -- <cmd>` forwards stdin when the process stdin is a pipe, enabling
   patterns like `cat bundle | chunk sidecar ssh -- git fetch ...`.
+- **Abandoned sidecars are reaped automatically.** Local sidecar state is one file
+  per session and branch, and `validate` sweeps them before resolving a sidecar:
+  state naming a sidecar absent from the org listing is deleted, and a sidecar
+  still running whose state has not been touched for 5 days is deleted through the
+  API and its state dropped. The sidecar the current run is about to use is never
+  deleted by age, and one that is alive with recently touched state is left alone
+  so a concurrent session on another branch keeps its own. The sweep needs an org
+  ID that resolves without prompting (see **Org ID resolution**), skips silently
+  without one, and deletes nothing if the listing fails, since an empty listing is
+  not proof of absence. A sidecar the API rejects as out of date (410) is deleted
+  when a sync hits it, because no listing reveals that state.
 - Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,
   `validate --sidecar-id`) prompt for it inline at the point of need rather than
   failing with an error.
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
 - `chunk hook disable` creates a `.chunk/hooks-disabled` sentinel file inspected by the `chunk validate` Stop hook; `hook enable` removes it. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
+- `chunk validate` caches successful runs in hook mode only, keyed by
+  `.chunk/config.json`, the execution target, the HEAD SHA, and the contents of
+  all changed files; a repeat hook invocation with nothing changed prints
+  `skipped` instead of re-running. Manual runs, `--cmd` inline commands, and
+  repos whose state cannot be hashed never cache. Entries expire after 7 days.
+  See [HOOKS.md](HOOKS.md#result-caching).
 
 ## Config keys
 

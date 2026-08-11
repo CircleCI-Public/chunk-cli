@@ -27,9 +27,11 @@ chunk-cli/
     ├── buildprompt/           # Three-step pipeline: discover → analyze → generate
     ├── circleci/              # CircleCI REST API client
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
+    ├── filecache/             # Generic JSON-on-disk cache (FileCache[T])
     ├── github/                # GitHub GraphQL client (reviews, repos)
     ├── gitremote/             # Git remote URL parsing for org/repo detection
-    ├── gitutil/               # Git utility helpers
+    ├── gitutil/               # Git utility helpers, working-tree fingerprints
+    ├── hashutil/              # Collision-free digests of string parts (cache keys)
     ├── httpcl/                # HTTP client library (JSON + retries)
     ├── iostream/              # I/O stream abstraction
     ├── sidecar/               # CircleCI sidecar operations
@@ -60,6 +62,8 @@ main.go → internal/cmd/ → internal/{business packages} → internal/httpcl/
 - Business packages (`buildprompt/`, `task/`, etc.) contain the logic
 - `internal/httpcl/` is an independent library — no imports are allowed to other `internal/` packages
 - `config/` is a leaf — no imports from other `internal/` packages
+- `hashutil/` is a leaf too: stdlib only, so any package can share its digest
+  primitive rather than re-deriving one
 
 No upward or lateral imports between business packages, except where a
 package naturally composes another (e.g. `task/` uses `circleci/`).
@@ -198,7 +202,7 @@ in `config.Resolve` and makes clients testable.
 | `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
 | `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
-| `XDG_DATA_HOME` | sidecar | Per-project state directory (default: `~/.local/share`) |
+| `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
@@ -256,8 +260,19 @@ known agent is found, the common case for a human running `chunk` directly.
 runs configured validation commands before the AI agent commits code. See
 **[docs/HOOKS.md](HOOKS.md)** for details.
 
-`chunk validate` runs those same commands manually, with SHA256-based content
-caching so unchanged files skip re-execution.
+`chunk validate` runs those same commands manually. In hook mode it additionally
+caches successful runs. Both tree-dependent hook decisions read one
+`gitutil.Fingerprint` call: it returns the HEAD SHA, a digest of the contents of
+every changed file, and whether the tree is clean at all. A clean tree skips the
+run outright; otherwise `validate.BuildCacheKey` combines the fingerprint with the
+project config and execution target into a key, and a repeat hook invocation that
+hits an entry skips execution — going through the same `finishValidate` path as a
+real success, so hook bookkeeping has one home. The unit of caching is the whole
+run, not individual files. Manual runs never cache, and an unusable fingerprint is
+refused as a key, since a config-only key would stay stable across code changes;
+`Fingerprint` returns an error saying which condition it hit, and hook mode prints
+it, because a repo that never caches is otherwise silent about why. See
+**[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
 
 ## HTTP Client (`internal/httpcl/`)
 

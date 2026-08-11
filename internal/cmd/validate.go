@@ -20,7 +20,9 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/filecache"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -139,9 +141,12 @@ func newValidateCmd() *cobra.Command {
 }
 
 // initHook applies hook-specific context, stream, and early-exit logic.
+// tree is the working-tree fingerprint for this run, and treeErr the reason it
+// could not be taken. A zero tree reports as not clean, so validation still runs
+// in ambiguous cases.
 // Returns updated ctx and streams, a skip flag (true = return nil immediately),
 // and a non-nil error when the hook should exit with a non-zero code.
-func initHook(ctx context.Context, hook *hookContext, workDir string, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
+func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitutil.Worktree, treeErr error, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
 	if hook == nil {
 		return ctx, streams, false, nil
 	}
@@ -156,7 +161,15 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, streams io
 		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)
 	}
-	if !validate.HasGitChanges(workDir) {
+	// Say so when the tree could not be fingerprinted. Everything below degrades
+	// silently on a zero tree — the clean-tree skip and the result cache both just
+	// run the commands — so a repo that never once prints "skipped" (one with a
+	// dirty submodule, say) is otherwise indistinguishable from one where the
+	// cache is working and nothing is ever unchanged.
+	if treeErr != nil {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: working tree state unavailable (%v); running everything, caching nothing", treeErr)))
+	}
+	if tree.Clean {
 		return ctx, streams, true, nil
 	}
 	return ctx, streams, false, nil
@@ -169,7 +182,7 @@ func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig) bool {
 	return cfg.HasSidecarImage()
 }
 
-func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc) (map[string]string, error) {
+func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc, streams iostream.Streams) (map[string]string, error) {
 	if opts.sidecarID == "" {
 		return nil, nil
 	}
@@ -177,7 +190,7 @@ func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *vali
 	if err != nil {
 		return nil, err
 	}
-	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn); err != nil {
+	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn, streams); err != nil {
 		return nil, err
 	}
 	return envVars, nil
@@ -208,9 +221,21 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	hook := detectHook(cmd.InOrStdin())
 	ctx := cmd.Context()
 
+	// The working-tree fingerprint answers both hook-only questions about the
+	// tree: whether there is anything to validate at all, and whether this exact
+	// tree already validated successfully. Computing it once keeps the two
+	// consistent and costs a single pass over the changed files. On failure it is
+	// the zero Worktree, which reads as "not clean" and is refused as a cache
+	// key, so both questions fall back to running the commands.
+	var tree gitutil.Worktree
+	var treeErr error
+	if hook != nil {
+		tree, treeErr = gitutil.Fingerprint(workDir)
+	}
+
 	var skip bool
 	var hookErr error
-	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, streams)
+	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, tree, treeErr, streams)
 	if hookErr != nil {
 		return hookErr
 	}
@@ -260,13 +285,24 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	rc, _ := config.ResolveCircleCI(insecureStorage)
 
 	explicitRemote := opts.remote || opts.sidecarID != ""
-	activeSidecar, _ := sidecar.LoadActive(ctx)
 	needsSidecar := validateNeedsSidecar(explicitRemote, cfg)
 	if hook != nil && needsSidecar && rc.CircleCIToken == "" {
 		streams.ErrPrintln("CircleCI auth is not configured.")
 		streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
 		streams.ErrPrintln("Don't have an account? Sign up at https://app.circleci.com/signup")
 		return errSilentExit
+	}
+
+	activeSidecar, _ := sidecar.LoadActive(ctx)
+	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, tree, name, cfg, execTarget(opts, cfg, activeSidecar))
+	if resultCache != nil {
+		if _, ok := resultCache.Get(cacheKey); ok {
+			streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
+			// A hit is a success, so it finishes the same way a real successful run
+			// does rather than repeating that bookkeeping here: clearing the failure
+			// counter, and whatever else the success branch grows later.
+			return finishValidate(cmd, hook, nil, start, opts.sidecarID, cfg, statusFn, streams)
+		}
 	}
 
 	// allRemote is true when the caller explicitly targets the sidecar
@@ -288,6 +324,14 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	statusFn(iostream.LevelStep, "chunk validate")
 
+	// Reap before reading state, so a file naming a sidecar that no longer exists
+	// is gone before it can be promoted and reused. Loading first would hand
+	// setupRemote the very dead ID the reap just cleaned up.
+	if needsSidecar {
+		reapAbandonedSidecars(ctx, circleCIClient, workDir, statusFn, streams)
+	}
+	activeSidecar, _ = sidecar.LoadActive(ctx)
+
 	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
 		return err
@@ -298,18 +342,70 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// sync and env-resolve status events are captured. Skipping when there is no
 	// sidecar avoids writing events with an empty sidecar_id that the TUI would
 	// filter out and never display.
+	// Kept unwrapped so a replacement sidecar can be rewrapped against its own ID
+	// rather than logging its events under the sidecar it replaced.
+	baseStatusFn := statusFn
 	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 
 	// Only load env vars and resolve secrets when a sidecar is actually
 	// being used — avoids parsing .env.local or hitting secrets APIs on
 	// purely local runs.
-	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn)
+	envVars, statusFn, freshlyCreated, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
 	if err != nil {
 		return err
 	}
 
 	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	if execErr == nil && resultCache != nil {
+		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
+			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
+		}
+	}
 	return finishValidate(cmd, hook, execErr, start, opts.sidecarID, cfg, statusFn, streams)
+}
+
+// loadEnvVarsWithRetry loads sidecar env vars, and if the sidecar is unusable
+// provisions a replacement and retries once.
+func loadEnvVarsWithRetry(
+	ctx context.Context,
+	circleCIClient *circleci.Client,
+	opts *validateOpts,
+	image string,
+	freshlyCreated bool,
+	baseStatusFn, statusFn iostream.StatusFunc,
+	workDir string,
+	hook *hookContext,
+	streams iostream.Streams,
+) (map[string]string, iostream.StatusFunc, bool, error) {
+	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+	if errors.Is(err, errSidecarUnusable) {
+		// The sidecar could not be used and its state has been dropped, so replace
+		// it here rather than failing and asking for the same command again. The
+		// reap cannot prevent this on its own: a sidecar can go away between the
+		// listing and the sync, and one the API rejects as out of date is listed
+		// like any other.
+		statusFn(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
+		opts.sidecarID = ""
+		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, streams); createErr != nil {
+			return nil, statusFn, freshlyCreated, createErr
+		}
+		// A replacement has none of the setup the old one had, so exec failures on
+		// it are real failures rather than grounds for falling back to local.
+		freshlyCreated = true
+		statusFn = wrapEventLogStatusFn(baseStatusFn, opts.sidecarID, nil, workDir, hook)
+		envVars, err = loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+	}
+	if err != nil {
+		if errors.Is(err, errSidecarUnusable) {
+			// Twice in one run is not a stale sidecar, so stop rather than churn.
+			return nil, statusFn, freshlyCreated, newUserError("Could not get a usable sidecar.").
+				withCode("sidecar.unusable").
+				withSuggestion("Create one explicitly with: chunk sidecar create").
+				wrap(err)
+		}
+		return nil, statusFn, freshlyCreated, err
+	}
+	return envVars, statusFn, freshlyCreated, nil
 }
 
 // wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
@@ -500,16 +596,72 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 	return false, nil
 }
 
-func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc) error {
+func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	authSock := os.Getenv(config.EnvSSHAuthSock)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
 	if err := sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
-		return &userError{msg: "Could not sync to sidecar.", err: err}
+		return sidecarSyncError(ctx, client, sidecarID, err, streams)
 	}
 	return nil
+}
+
+// sidecarSyncError reports a failed sync, first dropping local state when the
+// failure means this sidecar can never be used again.
+//
+// Reap already removes deleted sidecars before anything syncs to them, so this
+// covers what a listing cannot show: a sidecar deleted since the list was
+// fetched, and one the API rejects as out of date. Without the prune an
+// out-of-date sidecar fails forever: it is still listed, and still recently
+// used, so the age sweep never touches it.
+func sidecarSyncError(ctx context.Context, client *circleci.Client, sidecarID string, err error, streams iostream.Streams) error {
+	switch {
+	case circleci.SidecarOutOfDate(err):
+		// Still running and still billable, so delete it rather than orphan it.
+		pruneSidecarState(ctx, client, sidecarID, true, streams)
+	case circleci.SidecarGone(err):
+		pruneSidecarState(ctx, client, sidecarID, false, streams)
+	default:
+		return &userError{msg: "Could not sync to sidecar.", err: err}
+	}
+	// Both wrapped, not replaced: the caller replaces the sidecar and retries, and
+	// only if that fails does the original surface. GoneError in main's error path
+	// still finds the 410 through the wrapping and phrases it.
+	return fmt.Errorf("%w: %w", errSidecarUnusable, err)
+}
+
+// errSidecarUnusable marks a sync failure that a fresh sidecar would fix: the
+// sidecar is gone, or permanently out of date, and its local state has already
+// been dropped, so provisioning a replacement is safe.
+var errSidecarUnusable = errors.New("sidecar unusable")
+
+// pruneSidecarState drops local state for an unusable sidecar, warning on
+// failure. A prune that fails must not mask the error that triggered it.
+func pruneSidecarState(ctx context.Context, client *circleci.Client, sidecarID string, deleteRemote bool, streams iostream.Streams) {
+	if err := sidecar.PruneID(ctx, client, sidecarID, deleteRemote); err != nil {
+		streams.ErrPrintf("warning: could not clear state for unusable sidecar %s: %v\n", sidecarID, err)
+	}
+}
+
+// reapAbandonedSidecars deletes sidecars this project has abandoned and drops
+// their local state. Errors are reported and then ignored: a cleanup sweep must
+// never fail a validate run.
+func reapAbandonedSidecars(ctx context.Context, client *circleci.Client, workDir string, statusFn iostream.StatusFunc, streams iostream.Streams) {
+	orgID, _ := config.ResolveOrgID(workDir)
+	if orgID == "" {
+		// The only remaining way to get an org is the interactive picker, and a
+		// background sweep must never prompt.
+		return
+	}
+	res, err := sidecar.Reap(ctx, client, orgID)
+	if err != nil {
+		streams.ErrPrintf("warning: could not reap abandoned sidecars: %v\n", err)
+	}
+	if summary := res.Summary(); summary != "" {
+		statusFn(iostream.LevelInfo, summary)
+	}
 }
 
 // newExecFn builds a function that runs shell scripts on a remote sidecar via
@@ -714,7 +866,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			err:        err,
 		}
 	}
-	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name}); saveErr != nil {
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	// Persist the org ID so future sidecar creation skips the picker.
@@ -779,6 +931,66 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 
 const suggestionValidateNotConfigured = "Run 'chunk init' to detect and configure validation commands.\n" +
 	"This also installs the /chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
+
+// validateCacheDir returns the directory used to store validate result cache
+// entries for the given project root.
+func validateCacheDir(workDir string) (string, error) {
+	projectDir, err := config.ProjectDataDir(workDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projectDir, "validate-cache"), nil
+}
+
+// hookResultCache returns a cache and cache key for hook-mode runs, or
+// (nil, "") when caching does not apply: non-hook runs, inline commands, or a
+// working tree whose state could not be fingerprinted.
+//
+// The cache keeps itself to a bounded size as it is written to; entries live for
+// filecache.DefaultMaxAge.
+func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.Worktree, commandName string, cfg *config.ProjectConfig, target string) (*filecache.FileCache[validate.CachedResult], string) {
+	if hook == nil || inlineCmd != "" {
+		return nil, ""
+	}
+	cacheDir, err := validateCacheDir(workDir)
+	if err != nil {
+		return nil, ""
+	}
+	key, ok := validate.BuildCacheKey(validate.CacheKeyInputs{
+		Worktree:    tree,
+		CommandName: commandName,
+		Config:      cfg,
+		Target:      target,
+	})
+	if !ok {
+		return nil, ""
+	}
+	return &filecache.FileCache[validate.CachedResult]{Dir: cacheDir}, key
+}
+
+// execTarget describes where this run's commands will execute, for inclusion in
+// the cache key. Which sidecar is used depends on the configured snapshot image
+// and on the active sidecar — mutable state that lives outside the repo, so
+// neither shows up in the working-tree digest. Without it, switching the active
+// sidecar between runs leaves the key unchanged and the second sidecar is never
+// validated against.
+//
+// Returns "" for a purely local run. The sidecar ID is empty when one will be
+// created during this run; the image still distinguishes those from local runs.
+func execTarget(opts *validateOpts, cfg *config.ProjectConfig, active *sidecar.ActiveSidecar) string {
+	id := opts.sidecarID
+	if id == "" && active != nil {
+		id = active.SidecarID
+	}
+	var image string
+	if cfg.HasSidecarImage() {
+		image = cfg.Validation.SidecarImage
+	}
+	if id == "" && image == "" {
+		return ""
+	}
+	return id + "\x00" + image
+}
 
 func mapValidateError(err error) error {
 	if errors.Is(err, validate.ErrNotConfigured) {

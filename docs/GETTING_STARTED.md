@@ -430,7 +430,9 @@ After `chunk init`, two hooks run automatically in Claude Code and Cursor:
 
 The Stop hook retries up to `stopHookMaxAttempts` times (default: 3) before giving up and letting the session end.
 
-See [docs/HOOKS.md](HOOKS.md) for configuration details.
+A successful Stop-hook run is cached, so if the hook fires again with nothing changed it prints `skipped (no changes since last successful run)` rather than re-running your commands. Failures are never cached. Running `chunk validate` yourself always executes the commands.
+
+See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOOKS.md#result-caching) for what invalidates the cache.
 
 ---
 

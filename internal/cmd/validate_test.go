@@ -19,9 +19,12 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
 // hookPayload is the JSON Claude Code sends to Stop hooks via stdin.
@@ -44,8 +47,9 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testin
 	t.Setenv(config.EnvCircleToken, "")
 	t.Setenv(config.EnvCircleCIToken, "")
 
-	// Set up a project dir with a remote command. HasGitChanges returns true in
-	// a non-git dir, so the hook won't short-circuit on a clean-tree check.
+	// Set up a project dir with a remote command. A non-git dir cannot be
+	// fingerprinted, and an unusable fingerprint reads as not clean, so the hook
+	// won't short-circuit on the clean-tree check.
 	dir := t.TempDir()
 	projCfg := &config.ProjectConfig{
 		Commands: []config.Command{
@@ -208,6 +212,249 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 	err := cmd.Execute()
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(err.Error(), "BADVALUE"), "got: %v", err)
+}
+
+// activeStopHookPayload is a re-signalled Stop hook: stop_hook_active is true,
+// so initHook leaves the failure counter alone and the counter's fate is decided
+// by how the run itself ends.
+const activeStopHookPayload = `{"session_id":"test-session-001","stop_hook_active":true}`
+
+// skipMsg is the one line that tells the agent no commands ran.
+const skipMsg = "skipped (no changes since last successful run)"
+
+// runActiveStopHook fires a re-signalled Stop hook against dir and returns what
+// the agent would see, along with the exit error. Unlike runValidateHook it does
+// not assert on the error, so failing runs can be exercised too.
+func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
+	t.Helper()
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetIn(strings.NewReader(activeStopHookPayload))
+	root.SetArgs([]string{"validate", "--project", dir})
+	err = root.Execute()
+	return errBuf.String(), err
+}
+
+// countingCommand returns a command that appends a line to a marker file each
+// time it runs and then exits with code, plus a func reporting how many times it
+// has run. The marker lives outside the repo on purpose: written inside it, every
+// run would change the working-tree digest and a re-run would prove nothing about
+// the cache.
+func countingCommand(t *testing.T, code int) (run string, runs func() int) {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), "runs")
+	return fmt.Sprintf("echo x >> %s; exit %d", marker, code), func() int {
+		t.Helper()
+		data, err := os.ReadFile(marker)
+		if errors.Is(err, os.ErrNotExist) {
+			return 0
+		}
+		assert.NilError(t, err)
+		return len(strings.Fields(string(data)))
+	}
+}
+
+// hookProject sets up a git repo with one configured command. Saving the config
+// leaves .chunk/ untracked, so the tree is never clean and the hook reaches the
+// cache instead of short-circuiting on the clean-tree check.
+func hookProject(t *testing.T, run string) string {
+	t.Helper()
+	// The attempt counter lives under os.TempDir(); isolate it from other tests
+	// sharing this session ID.
+	t.Setenv("TMPDIR", t.TempDir())
+	dir := t.TempDir()
+	gitSetup(t, dir, "main")
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: run}},
+	}))
+	return dir
+}
+
+// TestValidateHookCacheHitResetsAttempts covers a Stop hook firing again on a
+// tree that already validated. The commands are skipped, and because a cache hit
+// is a success it must clear the failure counter — otherwise a stale count
+// brings the "ask the user for guidance" bail-out forward by a turn.
+func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
+	isolateConfig(t)
+	const sessionID = "test-session-001"
+	dir := hookProject(t, "exit 0")
+
+	run := func() string {
+		t.Helper()
+		stderr, err := runActiveStopHook(t, dir)
+		assert.NilError(t, err)
+		return stderr
+	}
+
+	first := run()
+	assert.Assert(t, !strings.Contains(first, skipMsg), "first run must execute, got: %q", first)
+
+	// A failure at some other tree state leaves a count of 1 behind.
+	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
+
+	second := run()
+	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
+
+	// The hit cleared the counter, so the next failure is attempt 1 again.
+	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
+}
+
+// TestValidateHookFailureIsNotCached is the guarantee the whole cache rests on.
+// If a failing run were ever stored, every later hook invocation on the same tree
+// would print "skipped" and return nil, so the agent would stop with the build
+// broken — and nothing else in the suite would notice.
+func TestValidateHookFailureIsNotCached(t *testing.T) {
+	isolateConfig(t)
+	run, runs := countingCommand(t, 1)
+	dir := hookProject(t, run)
+
+	_, err := runActiveStopHook(t, dir)
+	assert.Assert(t, err != nil, "a failing command must fail the hook")
+	assert.Equal(t, runs(), 1)
+
+	second, err := runActiveStopHook(t, dir)
+	assert.Assert(t, err != nil, "the second run must fail too, not report a hit")
+	assert.Assert(t, !strings.Contains(second, skipMsg),
+		"a failed run must not be cached, got: %q", second)
+	assert.Equal(t, runs(), 2, "the commands must run again after a failure")
+}
+
+// TestValidateHookCacheMissAfterEdit is the other half of the contract: a hit is
+// only correct while the tree is untouched, so an edit between runs has to reach
+// the key and put the commands back on.
+func TestValidateHookCacheMissAfterEdit(t *testing.T) {
+	isolateConfig(t)
+	run, runs := countingCommand(t, 0)
+	dir := hookProject(t, run)
+
+	_, err := runActiveStopHook(t, dir)
+	assert.NilError(t, err)
+	assert.Equal(t, runs(), 1)
+
+	second, err := runActiveStopHook(t, dir)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(second, skipMsg), "unchanged tree must hit, got: %q", second)
+	assert.Equal(t, runs(), 1, "a cache hit must not execute the commands")
+
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644))
+
+	third, err := runActiveStopHook(t, dir)
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(third, skipMsg),
+		"an edited tree must miss the cache, got: %q", third)
+	assert.Equal(t, runs(), 2, "the commands must run again after an edit")
+}
+
+// --- hookResultCache ---
+
+// hookTree stands in for the fingerprint the hook computes once per run; gitutil
+// owns the tests that prove a digest tracks the working tree.
+var hookTree = gitutil.Worktree{Head: "abc123", Digest: "deadbeef"}
+
+// hookResultCache is the boundary between "these runs are cacheable" and
+// "these are not"; each guard below must return no cache so the run always
+// executes.
+func TestHookResultCacheDisabledCases(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
+	hook := &hookContext{sessionID: "s1"}
+
+	tests := []struct {
+		name      string
+		hook      *hookContext
+		inlineCmd string
+		tree      gitutil.Worktree
+	}{
+		{name: "not a hook run", hook: nil, tree: hookTree},
+		{name: "inline command", hook: hook, inlineCmd: "go test ./foo", tree: hookTree},
+		{name: "unusable git state", hook: hook, tree: gitutil.Worktree{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cache, key := hookResultCache(tt.hook, tt.inlineCmd, t.TempDir(), tt.tree, "", cfg, "")
+			assert.Assert(t, cache == nil, "expected no cache")
+			assert.Equal(t, key, "")
+		})
+	}
+}
+
+func TestHookResultCacheEnabledForNamedCommand(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
+
+	cache, key := hookResultCache(&hookContext{sessionID: "s1"}, "", t.TempDir(), hookTree, "test", cfg, "")
+	assert.Assert(t, cache != nil, "expected a cache for a named command in hook mode")
+	assert.Assert(t, key != "")
+}
+
+// TestHookResultCacheTargetAffectsKey pins the wiring: a different execution
+// target has to reach the key, or a run validated on one sidecar reports a hit
+// for another.
+func TestHookResultCacheTargetAffectsKey(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./..."}}}
+	hook := &hookContext{sessionID: "s1"}
+
+	_, local := hookResultCache(hook, "", dir, hookTree, "test", cfg, "")
+	_, remote := hookResultCache(hook, "", dir, hookTree, "test", cfg, "sidecar-a\x00")
+	assert.Assert(t, local != remote, "target must participate in the cache key")
+}
+
+// --- execTarget ---
+
+func TestExecTarget(t *testing.T) {
+	withImage := &config.ProjectConfig{Validation: &config.ValidationConfig{SidecarImage: "snap-1"}}
+
+	tests := []struct {
+		name   string
+		opts   *validateOpts
+		cfg    *config.ProjectConfig
+		active *sidecar.ActiveSidecar
+		want   string
+	}{
+		{name: "local run", opts: &validateOpts{}, cfg: &config.ProjectConfig{}, want: ""},
+		{
+			name: "explicit sidecar id",
+			opts: &validateOpts{sidecarID: "sc-1"},
+			cfg:  &config.ProjectConfig{},
+			want: "sc-1\x00",
+		},
+		{
+			name:   "active sidecar",
+			opts:   &validateOpts{},
+			cfg:    &config.ProjectConfig{},
+			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			want:   "sc-2\x00",
+		},
+		{
+			name:   "explicit id wins over active",
+			opts:   &validateOpts{sidecarID: "sc-1"},
+			cfg:    &config.ProjectConfig{},
+			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			want:   "sc-1\x00",
+		},
+		{
+			name: "configured image with no sidecar yet",
+			opts: &validateOpts{},
+			cfg:  withImage,
+			want: "\x00snap-1",
+		},
+		{
+			name:   "image and active sidecar",
+			opts:   &validateOpts{},
+			cfg:    withImage,
+			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			want:   "sc-2\x00snap-1",
+		},
+		{name: "nil config", opts: &validateOpts{}, cfg: nil, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, execTarget(tt.opts, tt.cfg, tt.active), tt.want)
+		})
+	}
 }
 
 // gitSetup initialises a minimal git repo at dir on the given branch name.
