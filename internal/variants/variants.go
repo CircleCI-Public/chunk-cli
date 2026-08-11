@@ -22,6 +22,14 @@ import (
 // SweepOrphans instead.
 const namePrefix = "variant-"
 
+// nameSep separates the timestamp in a sidecar name from the variant ID.
+//
+// It is two dashes because sanitizeID collapses runs of dashes to one, so a
+// sanitized ID can never contain nameSep. That makes the split unambiguous by
+// construction: no plausibility check on the decoded time is needed to tell a
+// timestamp from an ID that merely happens to parse as one.
+const nameSep = "--"
+
 // orphanAfter is how long a variant sidecar must have existed before a later
 // run's pre-flight sweep may delete it.
 //
@@ -32,6 +40,9 @@ const namePrefix = "variant-"
 // run could still be waiting on it is collected. The cost of waiting is some
 // billed time on a genuinely stranded sidecar; the cost of not waiting is
 // destroying someone else's in-flight run.
+//
+// Two hours is far above any single variant's lifetime, because each command is
+// bounded by its own timeout, so a sidecar this old is stranded rather than busy.
 const orphanAfter = 2 * time.Hour
 
 // Variant is one entry from the input JSON file.
@@ -107,10 +118,6 @@ func Run(ctx context.Context, client *circleci.Client, variants []Variant, opts 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Stamped once for the whole run so every sidecar this run creates carries
-	// the same start time, and a later run's sweep can date it.
-	token := runToken(time.Now())
-
 	results := make([]Result, len(variants))
 	sem := make(chan struct{}, opts.Parallel)
 
@@ -129,7 +136,7 @@ func Run(ctx context.Context, client *circleci.Client, variants []Variant, opts 
 				return nil
 			}
 			defer func() { <-sem }()
-			results[i] = runVariant(gctx, client, v, sidecarName(token, v.ID), opts)
+			results[i] = runVariant(gctx, client, v, opts)
 			return nil
 		})
 	}
@@ -137,11 +144,15 @@ func Run(ctx context.Context, client *circleci.Client, variants []Variant, opts 
 	return results, nil
 }
 
-func runVariant(ctx context.Context, client *circleci.Client, v Variant, name string, opts Options) Result {
+func runVariant(ctx context.Context, client *circleci.Client, v Variant, opts Options) Result {
 	base := Result{ID: v.ID, Description: v.Description}
 
 	opts.StatusFn(iostream.LevelInfo, fmt.Sprintf("[%s] creating sidecar", v.ID))
-	sc, err := sidecar.Create(ctx, client, opts.OrgID, name, opts.Image)
+	// Stamped here rather than once per run: the name has to date this sidecar,
+	// not the run that owns it. A run of a hundred variants can take hours, and a
+	// name carrying the run's start time would make a sidecar booted seconds ago
+	// look old enough for another run's sweep to delete.
+	sc, err := sidecar.Create(ctx, client, opts.OrgID, sidecarName(time.Now(), v.ID), opts.Image)
 	if err != nil {
 		base.Error = fmt.Sprintf("create sidecar: %v", err)
 		return base
@@ -294,67 +305,54 @@ func shellFailure(code int) string {
 	return ""
 }
 
-// runToken encodes a run's start time as the per-run segment of its sidecar
-// names. Base 36 keeps it short and inside the [a-z0-9-] set names allow.
-func runToken(start time.Time) string {
-	return strconv.FormatInt(start.Unix(), 36)
+// sidecarName produces a sidecar-safe name carrying the moment the sidecar was
+// created, so SweepOrphans can tell one that has been stranded from one a live
+// run is still using. Base 36 keeps the timestamp short and inside the
+// [a-z0-9-] set names allow.
+func sidecarName(born time.Time, id string) string {
+	return namePrefix + strconv.FormatInt(born.Unix(), 36) + nameSep + sanitizeID(id)
 }
 
-// sidecarName produces a sidecar-safe name from a run token and a variant ID.
-// The token makes the name unique per run, so two concurrent runs over the same
-// variant IDs do not collide, and datable, so SweepOrphans can tell an
-// abandoned sidecar from one a live run still owns.
-func sidecarName(token, id string) string {
+// sanitizeID reduces a variant ID to the characters a sidecar name allows, and
+// collapses runs of dashes to one so the result can never contain nameSep. That
+// collapse is what lets createdAt be recovered by a plain split, with no need to
+// guess whether a segment is a timestamp or an ID that happens to look like one.
+func sanitizeID(id string) string {
 	var b strings.Builder
-	b.WriteString(namePrefix)
-	b.WriteString(token)
-	b.WriteByte('-')
+	lastDash := false
 	for _, r := range strings.ToLower(id) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
 			b.WriteRune(r)
-		} else {
-			b.WriteRune('-')
+			lastDash = false
+		case !lastDash:
+			b.WriteByte('-')
+			lastDash = true
 		}
 	}
-	return b.String()
+	return strings.Trim(b.String(), "-")
 }
 
-// tokenEpoch is the earliest time a run token may decode to, and tokenSkew is
-// how far past now it may decode and still be believed.
+// createdAt recovers the creation time encoded in a variant sidecar name.
 //
-// The bounds are what make a token distinguishable from anything else in its
-// position. Base 36 accepts every lowercase letter as a digit, so the sanitized
-// variant ID in a name this package did not write parses to a number too:
-// "variant-mut-001" reads as 1970 and "variant-timeout-fix" as the year 3970.
-// Neither is a plausible run, and only a plausible one is datable. The skew
-// covers ordinary clock differences between the machine that named a sidecar and
-// the machine sweeping it.
-var tokenEpoch = time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
-
-const tokenSkew = 24 * time.Hour
-
-// startedAt recovers the run start time encoded in a variant sidecar name.
-// ok is false for any name this package did not write, or whose token does not
-// decode to a plausible time. Such a name is never swept: a sweep that cannot
-// prove a sidecar is abandoned must leave it alone.
-func startedAt(name string, now time.Time) (time.Time, bool) {
+// ok is false for any name this package did not write, or whose timestamp does
+// not parse. Such a name is never swept: a sweep that cannot prove a sidecar is
+// abandoned must leave it alone. A name from before this scheme existed has no
+// nameSep in it, so it fails here and is spared rather than guessed at.
+func createdAt(name string) (time.Time, bool) {
 	rest, ok := strings.CutPrefix(name, namePrefix)
 	if !ok {
 		return time.Time{}, false
 	}
-	token, _, ok := strings.Cut(rest, "-")
-	if !ok || token == "" {
+	stamp, _, ok := strings.Cut(rest, nameSep)
+	if !ok || stamp == "" {
 		return time.Time{}, false
 	}
-	secs, err := strconv.ParseInt(token, 36, 64)
-	if err != nil {
+	secs, err := strconv.ParseInt(stamp, 36, 64)
+	if err != nil || secs <= 0 {
 		return time.Time{}, false
 	}
-	started := time.Unix(secs, 0)
-	if started.Before(tokenEpoch) || started.After(now.Add(tokenSkew)) {
-		return time.Time{}, false
-	}
-	return started, true
+	return time.Unix(secs, 0), true
 }
 
 // SweepOrphans deletes sidecars in the org left behind by an earlier variants
@@ -373,20 +371,19 @@ func SweepOrphans(ctx context.Context, client *circleci.Client, orgID string, st
 		return 0
 	}
 
-	now := time.Now()
-	cutoff := now.Add(-orphanAfter)
+	cutoff := time.Now().Add(-orphanAfter)
 	swept := 0
 	for _, sc := range existing {
 		if !strings.HasPrefix(sc.Name, namePrefix) {
 			continue
 		}
-		started, ok := startedAt(sc.Name, now)
+		born, ok := createdAt(sc.Name)
 		if !ok {
 			status(iostream.LevelWarn, fmt.Sprintf(
-				"leaving variant sidecar %s in place: its name carries no run timestamp, so it cannot be shown to be abandoned", sc.Name))
+				"leaving variant sidecar %s in place: its name carries no timestamp, so it cannot be shown to be abandoned", sc.Name))
 			continue
 		}
-		if started.After(cutoff) {
+		if born.After(cutoff) {
 			// Young enough that a concurrent run may still be using it.
 			continue
 		}

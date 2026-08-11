@@ -150,34 +150,43 @@ func TestRunCommandsStopsAtFirstFailure(t *testing.T) {
 	assert.Assert(t, strings.Contains(seen[0], "task lint"))
 }
 
-func TestStartedAtRejectsNamesItCannotDate(t *testing.T) {
-	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
-
+// TestCreatedAtRejectsNamesItCannotDate covers everything the sweep must refuse
+// to date, and therefore must leave alone.
+func TestCreatedAtRejectsNamesItCannotDate(t *testing.T) {
 	for _, name := range []string{
-		"happy-quickly-tesla", // not ours
-		"variant-",            // no token
-		"variant-mut-001",     // pre-token name: decodes to 1970
-		"variant-timeout-fix", // decodes far into the future
-		"variant-!!!-mut-001", // not base 36
+		"happy-quickly-tesla",  // not ours
+		"variant-",             // nothing after the prefix
+		"variant-mut-001",      // pre-timestamp name: single dashes, no nameSep
+		"variant-timeout-fix",  // ditto, and would have parsed as base 36
+		"variant---mut-001",    // empty timestamp
+		"variant-!!!--mut-001", // timestamp is not base 36
 	} {
-		_, ok := startedAt(name, now)
+		_, ok := createdAt(name)
 		assert.Check(t, !ok, "expected %q to be undatable", name)
 	}
 }
 
-func TestStartedAtRoundTripsSidecarName(t *testing.T) {
-	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
-	start := now.Add(-3 * time.Hour)
+func TestCreatedAtRoundTripsSidecarName(t *testing.T) {
+	born := time.Date(2026, time.August, 11, 9, 0, 0, 0, time.UTC)
 
-	name := sidecarName(runToken(start), "MUT-001")
-	got, ok := startedAt(name, now)
+	name := sidecarName(born, "MUT-001")
+	got, ok := createdAt(name)
 	assert.Assert(t, ok, "expected %q to be datable", name)
-	assert.Equal(t, got.Unix(), start.Unix())
+	assert.Equal(t, got.Unix(), born.Unix())
 }
 
-// TestSidecarNameSanitisesID keeps names inside the charset the API accepts while
-// staying unique per run.
-func TestSidecarNameSanitisesID(t *testing.T) {
-	name := sidecarName("abc123", "MUT_001/x")
-	assert.Equal(t, name, "variant-abc123-mut-001-x")
+// TestSidecarNameCollapsesDashesInID is what keeps nameSep unambiguous: if a
+// variant ID could produce two dashes in a row, the split that recovers the
+// timestamp would land in the middle of the ID instead.
+func TestSidecarNameCollapsesDashesInID(t *testing.T) {
+	born := time.Date(2026, time.August, 11, 9, 0, 0, 0, time.UTC)
+
+	name := sidecarName(born, "MUT_001//x--y")
+	assert.Assert(t, strings.HasSuffix(name, nameSep+"mut-001-x-y"), "got %q", name)
+
+	// Still datable, and the timestamp is recovered intact despite the ID's own
+	// separators.
+	got, ok := createdAt(name)
+	assert.Assert(t, ok, "got %q", name)
+	assert.Equal(t, got.Unix(), born.Unix())
 }

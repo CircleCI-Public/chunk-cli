@@ -207,11 +207,16 @@ chunk
   command cleans up after itself instead: it deletes each sidecar as its variant
   finishes, catches SIGINT/SIGTERM so an interrupt still unwinds through those
   deletes, and sweeps stranded `variant-*` sidecars from an earlier crashed run
-  before starting a new one. Variant sidecar names carry the run's start time
-  (`variant-<base36 seconds>-<id>`), which is what lets the sweep spare a
+  before starting a new one. Each name carries that sidecar's own creation time
+  (`variant-<base36 seconds>--<id>`), which is what lets the sweep spare a
   concurrent run's in-flight sidecars — two runs at once, in two worktrees or two
   repos, is a normal shape for the mutation-testing skill — and only collect ones
-  too old for any live run to own. For the same reason `validate variants` syncs
+  too old for any live run to own. Per-sidecar rather than per-run, because a run
+  of a hundred variants takes hours and its newest sidecar must not inherit the
+  age of the run that booted it. The delimiter is two dashes and variant IDs are
+  sanitised to collapse dash runs, so the timestamp is recoverable by a plain
+  split rather than by guessing which segment is a date. A name without one is
+  reported and left alone. For the same reason `validate variants` syncs
   without persisting a workspace and therefore requires a resolvable workdir; it
   resolves one through `sidecar.ResolveWorkspace`, the same
   `--workdir` → active sidecar → `<sidecarHome>/<repo>` order as every other

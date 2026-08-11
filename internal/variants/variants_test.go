@@ -42,10 +42,11 @@ func defaultOpts() variants.Options {
 	}
 }
 
-// variantName builds the sidecar name a run started at ts would produce for a
-// variant ID, mirroring the run-token scheme SweepOrphans dates names by.
+// variantName builds the sidecar name a variant created at ts would get,
+// mirroring the timestamp scheme SweepOrphans dates names by. The double dash is
+// the delimiter, which is why a sanitized ID can never contain one.
 func variantName(ts time.Time, id string) string {
-	return "variant-" + strconv.FormatInt(ts.Unix(), 36) + "-" + id
+	return "variant-" + strconv.FormatInt(ts.Unix(), 36) + "--" + id
 }
 
 func TestRunEmpty(t *testing.T) {
@@ -213,11 +214,18 @@ func TestSweepOrphansDeletesOnlyStaleVariantSidecars(t *testing.T) {
 // command. A sweep that deleted every variant sidecar it could see would kill the
 // other run's in-flight work, and those variants would come back as errors: not a
 // false pass, but a run silently destroyed by an unrelated one.
+//
+// The two sidecars here are what a long concurrent run looks like: it started
+// hours ago and is still going, so one of its sidecars is long finished and
+// stranded while the one it is working on right now was booted seconds ago. Only
+// the stranded one may be taken. This is why the name carries each sidecar's own
+// creation time rather than the run's start time — under a per-run stamp, every
+// sidecar in a run this old would look collectable, including the live one.
 func TestSweepOrphansSparesConcurrentRun(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sidecars = []fakes.Sidecar{
-		{ID: "sc-live", Name: variantName(time.Now().Add(-30*time.Second), "mut-001"), OrgID: "org-aaa"},
-		{ID: "sc-stale", Name: variantName(time.Now().Add(-48*time.Hour), "mut-002"), OrgID: "org-aaa"},
+		{ID: "sc-live", Name: variantName(time.Now().Add(-30*time.Second), "mut-099"), OrgID: "org-aaa"},
+		{ID: "sc-stale", Name: variantName(time.Now().Add(-48*time.Hour), "mut-001"), OrgID: "org-aaa"},
 	}
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -234,8 +242,9 @@ func TestSweepOrphansSparesConcurrentRun(t *testing.T) {
 }
 
 // TestSweepOrphansSparesUndatableNames covers a variant sidecar whose name has no
-// parseable run token. The sweep cannot show it is abandoned, so it must leave it
-// alone rather than guess.
+// parseable timestamp — including one written before this naming scheme existed.
+// The sweep cannot show it is abandoned, so it must leave it alone rather than
+// guess.
 func TestSweepOrphansSparesUndatableNames(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.Sidecars = []fakes.Sidecar{
