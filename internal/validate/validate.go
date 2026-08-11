@@ -295,18 +295,6 @@ func HooksDisabled(workDir string, envDisabled bool) bool {
 	return err == nil
 }
 
-// HasGitChanges reports whether the working tree at workDir has any
-// uncommitted modifications (staged or unstaged). Returns true when git
-// is unavailable or the directory is not a repository so that validation
-// still runs in ambiguous cases.
-func HasGitChanges(workDir string) bool {
-	out, err := exec.Command("git", "-C", workDir, "status", "--porcelain").Output()
-	if err != nil {
-		return true // fail open: run validation when git is unavailable
-	}
-	return strings.TrimSpace(string(out)) != ""
-}
-
 // WrapHookResult applies Stop hook lifecycle to the result of running validate
 // commands. On success it resets the attempt counter. On failure it increments
 // the counter and returns a HookExitError with code 2 to re-signal the agent,

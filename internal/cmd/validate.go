@@ -20,7 +20,9 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/filecache"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -139,9 +141,12 @@ func newValidateCmd() *cobra.Command {
 }
 
 // initHook applies hook-specific context, stream, and early-exit logic.
+// tree is the working-tree fingerprint for this run, and treeErr the reason it
+// could not be taken. A zero tree reports as not clean, so validation still runs
+// in ambiguous cases.
 // Returns updated ctx and streams, a skip flag (true = return nil immediately),
 // and a non-nil error when the hook should exit with a non-zero code.
-func initHook(ctx context.Context, hook *hookContext, workDir string, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
+func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitutil.Worktree, treeErr error, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
 	if hook == nil {
 		return ctx, streams, false, nil
 	}
@@ -156,7 +161,15 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, streams io
 		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)
 	}
-	if !validate.HasGitChanges(workDir) {
+	// Say so when the tree could not be fingerprinted. Everything below degrades
+	// silently on a zero tree — the clean-tree skip and the result cache both just
+	// run the commands — so a repo that never once prints "skipped" (one with a
+	// dirty submodule, say) is otherwise indistinguishable from one where the
+	// cache is working and nothing is ever unchanged.
+	if treeErr != nil {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: working tree state unavailable (%v); running everything, caching nothing", treeErr)))
+	}
+	if tree.Clean {
 		return ctx, streams, true, nil
 	}
 	return ctx, streams, false, nil
@@ -208,9 +221,21 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	hook := detectHook(cmd.InOrStdin())
 	ctx := cmd.Context()
 
+	// The working-tree fingerprint answers both hook-only questions about the
+	// tree: whether there is anything to validate at all, and whether this exact
+	// tree already validated successfully. Computing it once keeps the two
+	// consistent and costs a single pass over the changed files. On failure it is
+	// the zero Worktree, which reads as "not clean" and is refused as a cache
+	// key, so both questions fall back to running the commands.
+	var tree gitutil.Worktree
+	var treeErr error
+	if hook != nil {
+		tree, treeErr = gitutil.Fingerprint(workDir)
+	}
+
 	var skip bool
 	var hookErr error
-	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, streams)
+	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, tree, treeErr, streams)
 	if hookErr != nil {
 		return hookErr
 	}
@@ -266,6 +291,17 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
 		streams.ErrPrintln("Don't have an account? Sign up at https://app.circleci.com/signup")
 		return errSilentExit
+	}
+
+	resultCache, cacheKey := hookResultCache(hook, opts.inlineCmd, workDir, tree, name, cfg, execTarget(opts, cfg, activeSidecar))
+	if resultCache != nil {
+		if _, ok := resultCache.Get(cacheKey); ok {
+			streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
+			// A hit is a success, so it finishes the same way a real successful run
+			// does rather than repeating that bookkeeping here: clearing the failure
+			// counter, and whatever else the success branch grows later.
+			return finishValidate(cmd, hook, nil, start, opts.sidecarID, cfg, statusFn, streams)
+		}
 	}
 
 	// allRemote is true when the caller explicitly targets the sidecar
@@ -343,6 +379,11 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	if execErr == nil && resultCache != nil {
+		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
+			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
+		}
+	}
 	return finishValidate(cmd, hook, execErr, start, opts.sidecarID, cfg, statusFn, streams)
 }
 
@@ -869,6 +910,66 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 
 const suggestionValidateNotConfigured = "Run 'chunk init' to detect and configure validation commands.\n" +
 	"This also installs the /chunk-sidecar skill so your AI coding agent can help you set up remote validation on a sidecar."
+
+// validateCacheDir returns the directory used to store validate result cache
+// entries for the given project root.
+func validateCacheDir(workDir string) (string, error) {
+	projectDir, err := config.ProjectDataDir(workDir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projectDir, "validate-cache"), nil
+}
+
+// hookResultCache returns a cache and cache key for hook-mode runs, or
+// (nil, "") when caching does not apply: non-hook runs, inline commands, or a
+// working tree whose state could not be fingerprinted.
+//
+// The cache keeps itself to a bounded size as it is written to; entries live for
+// filecache.DefaultMaxAge.
+func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.Worktree, commandName string, cfg *config.ProjectConfig, target string) (*filecache.FileCache[validate.CachedResult], string) {
+	if hook == nil || inlineCmd != "" {
+		return nil, ""
+	}
+	cacheDir, err := validateCacheDir(workDir)
+	if err != nil {
+		return nil, ""
+	}
+	key, ok := validate.BuildCacheKey(validate.CacheKeyInputs{
+		Worktree:    tree,
+		CommandName: commandName,
+		Config:      cfg,
+		Target:      target,
+	})
+	if !ok {
+		return nil, ""
+	}
+	return &filecache.FileCache[validate.CachedResult]{Dir: cacheDir}, key
+}
+
+// execTarget describes where this run's commands will execute, for inclusion in
+// the cache key. Which sidecar is used depends on the configured snapshot image
+// and on the active sidecar — mutable state that lives outside the repo, so
+// neither shows up in the working-tree digest. Without it, switching the active
+// sidecar between runs leaves the key unchanged and the second sidecar is never
+// validated against.
+//
+// Returns "" for a purely local run. The sidecar ID is empty when one will be
+// created during this run; the image still distinguishes those from local runs.
+func execTarget(opts *validateOpts, cfg *config.ProjectConfig, active *sidecar.ActiveSidecar) string {
+	id := opts.sidecarID
+	if id == "" && active != nil {
+		id = active.SidecarID
+	}
+	var image string
+	if cfg.HasSidecarImage() {
+		image = cfg.Validation.SidecarImage
+	}
+	if id == "" && image == "" {
+		return ""
+	}
+	return id + "\x00" + image
+}
 
 func mapValidateError(err error) error {
 	if errors.Is(err, validate.ErrNotConfigured) {

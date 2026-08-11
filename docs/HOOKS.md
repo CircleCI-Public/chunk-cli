@@ -12,6 +12,82 @@ Quality checks that run automatically as Claude Code works.
 when the working tree is clean. When there are changes, it runs all configured
 commands so problems are surfaced before the agent stops working.
 
+## Result Caching
+
+In hook mode only, a successful `chunk validate` run is cached. If the hook
+fires again with nothing changed, the commands are skipped entirely:
+
+```
+chunk validate: skipped (no changes since last successful run)
+```
+
+Only successes are cached. A failing run is never stored, so the agent always
+gets a real re-run after a fix attempt.
+
+The clean-tree skip above and the cache below read the same working-tree
+fingerprint, taken once per hook invocation.
+
+The cache key covers:
+
+- all of `.chunk/config.json` — the `commands` block, and the `environment` block
+  that decides what those commands run against. A project that gitignores
+  `.chunk/` still gets a re-run when either changes
+- the execution target — the configured sidecar snapshot image and the active
+  sidecar's ID, so a result validated against one sidecar is never reused for
+  another
+- the HEAD commit SHA
+- the contents of every file git reports as changed — tracked, staged, and
+  untracked alike
+
+Because contents are hashed rather than just the `git status` output, editing a
+file that was already dirty invalidates the entry. Any edit that could change a
+command's result produces a new key.
+
+Two things deliberately stay out of the key:
+
+- **Gitignored files.** `git status` does not report ignored paths, so nothing
+  under `.gitignore` participates in the digest — `.env.local`, generated code,
+  vendored dependencies, local tooling config. Hashing them would mean walking
+  trees like `node_modules` on every hook invocation. A command whose result
+  depends on an ignored file can therefore report a hit after that file changes;
+  touch a tracked file, or delete the cache directory, to force a re-run.
+- **Environment variables** passed with `--env` or loaded from `.env.local`,
+  for the same reason.
+
+Caching is skipped, and commands always run, when:
+
+- the run is not a hook invocation (a manual `chunk validate` never caches)
+- `--cmd` supplied an inline command
+- the working-tree state cannot be hashed reliably — not a git repo, a repo with
+  no commits yet, or a changed path that cannot be read (an unreadable file, or a
+  non-regular path such as a dirty submodule)
+- the changed files total more than 64 MiB, the point past which hashing the tree
+  costs more than re-running the commands
+
+Those last two fail closed: without a trustworthy digest the key would depend on
+the config alone and would stay stable across code changes, so no cache is
+consulted at all. When the working tree cannot be hashed, the hook says so:
+
+```
+chunk validate: working tree state unavailable (hash sub: changed path is not a
+regular file); running everything, caching nothing
+```
+
+That line is the only signal that a repo is getting no benefit from the cache, so
+a repo that never prints `skipped` is not left unexplained.
+
+Entries live outside the repo, under the per-project data directory:
+
+```
+$XDG_DATA_HOME/chunk/<sha256-of-project-path>/validate-cache/
+```
+
+Each entry is a small JSON file. Keys are content-addressed, so a superseded
+entry (an older commit, an earlier working-tree state) is never read again; each
+write sweeps entries older than 7 days, along with any partial file left behind by
+an interrupted run. Nothing needs cleaning by hand, though deleting the directory
+is always safe and forces a re-run.
+
 ## Worktree Support
 
 The Stop hook uses `CLAUDE_WORKING_DIR` (the actual session working directory)
