@@ -57,9 +57,11 @@ func marshalIndent(v any) ([]byte, error) {
 // cfg stays the source of truth for every key it does model: a modeled key it
 // omits is removed from the file, which is how clearing a value persists.
 // Callers must therefore load before saving, or they will drop keys the file
-// already had. A missing or unparseable file falls back to a plain marshal; a
-// caller that must not overwrite an unparseable config checks for that first,
-// via LoadProjectConfigForUpdate.
+// already had. A missing or unparseable file falls back to a plain marshal, so
+// a caller that must not overwrite an unparseable config checks for that before
+// it gets here: LoadProjectConfigForUpdate for the project config, Load for the
+// user config — Load rejects a file that does not parse, and json.Unmarshal
+// rejects everything the merge would flag as invalid JSON and then some.
 func marshalPreserving(path string, cfg any) ([]byte, error) {
 	data, err := marshalCompact(cfg)
 	if err != nil {

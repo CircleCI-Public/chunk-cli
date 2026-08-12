@@ -279,6 +279,23 @@ func TestSave_PreservesUnknownKeys(t *testing.T) {
 	assert.Equal(t, info.Mode().Perm(), os.FileMode(filePermission))
 }
 
+// Preservation cannot rescue keys from a file the merge refuses to parse, so
+// what keeps a corrupt config from being flattened to its modeled keys is Load
+// failing first. Every write path loads before it saves; this pins the guard.
+func TestClear_RefusesToOverwriteUnparseableConfig(t *testing.T) {
+	dir := setupTempConfig(t)
+	p := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	original := `{"circleCIToken":"tok","myTool":{"x":1}` // truncated: no closing brace
+	assert.NilError(t, os.WriteFile(p, []byte(original), 0o600))
+
+	assert.Assert(t, Clear("circleCIToken") != nil, "expected Clear to refuse an unparseable config")
+
+	data, err := os.ReadFile(p)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), original, "the file must be left untouched")
+}
+
 // Clearing a credential works by omitting the field, so preservation must not
 // resurrect it: a revoked token left in the file would be reported as removed.
 func TestClear_RemovesCredentialWithUnknownKeysPresent(t *testing.T) {
