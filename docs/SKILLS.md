@@ -75,36 +75,59 @@ If no issues survive filtering, the skill reports "No significant issues identif
 
 **Trigger phrases**: "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "validate remotely", "run smarter testing doctor", "diagnose smarter testing"
 
-Runs the sync → validate loop on a remote CircleCI sidecar. Also handles one-time sidecar creation, environment setup, and snapshotting.
-
-**Prerequisites**:
-- CircleCI token configured (`chunk auth set circleci`)
-- An active sidecar (`chunk sidecar use <id>`)
+Smart entry point for all sidecar workflows. Probes your current state (CLI installed, auth configured, active sidecar, snapshot configured) and uses interactive questions to route you to the right flow: first-time setup, dev loop, debugging, test-suite scaffolding, or snapshot management.
 
 **What it does**:
 
-1. Checks auth status (`chunk auth status`)
-2. Finds the active sidecar (`chunk sidecar current`)
-3. Syncs local changes to the sidecar (`chunk sidecar sync`)
-4. Runs validation commands remotely (`chunk validate --remote`)
-5. Reports results; maps error paths back to local files
-
-If there is no active sidecar, the skill prompts you to select or create one before proceeding.
+1. Runs read-only state probes (`chunk --version`, `chunk auth status`, config, `chunk sidecar current`)
+2. Asks what you want to do, with options tailored to your current state
+3. Routes to the matching flow:
+   - No sidecar, no snapshot → delegates to `chunk-sidecar-setup` for first-time onboarding
+   - Snapshot configured, no active sidecar → launches from snapshot, then starts the dev loop
+   - Active sidecar → sync → validate loop, with options for debug, scaffolding, or snapshot management
 
 **The dev loop in practice**:
 
 ```
 You: validate on the sidecar
-Agent: syncing local changes...
-       running chunk validate --remote...
+Agent: [probes state — active sidecar found]
+       What would you like to do?
+       > Sync and validate (dev loop) ← chosen
+       syncing local changes...
+       running chunk validate...
        ✗ test failed: internal/store_test.go:88: assertion failed
        Fixing the issue...
        syncing again...
-       running chunk validate --remote...
+       running chunk validate...
        ✓ all validations passed
 ```
 
 **Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar. State is keyed by `CLAUDE_SESSION_ID` and stored in `XDG_DATA_HOME` (see Architecture docs). No manual configuration is needed.
+
+---
+
+### chunk-sidecar-setup
+
+**Trigger phrases**: "set up chunk sidecar", "onboard to chunk", "first time sidecar", "configure sidecar from scratch", "walk me through sidecar setup", "I've never used a chunk sidecar before"
+
+Interactive onboarding wizard for setting up a sidecar from scratch. Also invoked automatically by `chunk-sidecar` when no sidecar or snapshot is configured.
+
+**Prerequisites**:
+- `chunk` CLI installed
+- CircleCI token available to configure (`chunk auth set circleci`)
+
+**What it does** (8 guided stages):
+
+1. **Prerequisites** — checks `chunk --version` and `chunk auth status`; explains each credential and what it's needed for
+2. **OrgID** — confirms your CircleCI org ID is set; explains how to find it in the dashboard if needed
+3. **Sidecar name** — asks whether to auto-generate a name or choose one
+4. **Create + sync** — runs `chunk sidecar create` and `chunk sidecar sync`; explains what sync does
+5. **Install dependencies** — auto-detect with `chunk sidecar setup`, custom commands, or skip
+6. **Smarter Testing** — asks whether to install `circleci-testsuite` on the sidecar
+7. **Validate** — runs `chunk validate` and loops on failures until it passes
+8. **Snapshot** — creates a reusable snapshot, persists the image ID in config, launches a clean sidecar from it, and re-verifies
+
+Ends with a summary of what was configured and instructions for using `/chunk-sidecar` for the dev loop going forward.
 
 ---
 
