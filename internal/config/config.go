@@ -57,22 +57,40 @@ func marshalIndent(v any) ([]byte, error) {
 // cfg stays the source of truth for every key it does model: a modeled key it
 // omits is removed from the file, which is how clearing a value persists.
 // Callers must therefore load before saving, or they will drop keys the file
-// already had. A missing or unparseable file falls back to a plain marshal, so
-// a caller that must not overwrite an unparseable config checks for that before
-// it gets here: LoadProjectConfigForUpdate for the project config, Load for the
-// user config — Load rejects a file that does not parse, and json.Unmarshal
-// rejects everything the merge would flag as invalid JSON and then some.
+// already had.
+//
+// A file that does not parse is refused with jsonmerge.ErrInvalidJSON rather
+// than flattened to the modeled keys: the unknown keys cannot be recovered from
+// it, so writing anyway would destroy them. A missing file — or one that cannot
+// be read at all — has nothing to preserve and falls back to a plain marshal.
+// Use marshalOverwriting for the one caller that means to replace a broken file.
 func marshalPreserving(path string, cfg any) ([]byte, error) {
 	data, err := marshalCompact(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if existing, readErr := os.ReadFile(path); readErr == nil {
-		if merged, mergeErr := jsonmerge.Merge(data, existing, cfg); mergeErr == nil {
-			data = merged
-		}
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil {
+		return indentJSON(data)
 	}
-	return indentJSON(data)
+	merged, mergeErr := jsonmerge.Merge(data, existing, cfg)
+	if mergeErr != nil {
+		return nil, fmt.Errorf("merge %s: %w", path, mergeErr)
+	}
+	return indentJSON(merged)
+}
+
+// marshalOverwriting is marshalPreserving for a caller whose job is to replace
+// the file: an unparseable config yields a plain marshal of cfg instead of an
+// error. Only the project config takes this path, because `chunk init --force`
+// exists to overwrite a config the user cannot fix by hand; every other write
+// refuses, and init without --force refuses before it gets here.
+func marshalOverwriting(path string, cfg any) ([]byte, error) {
+	data, err := marshalPreserving(path, cfg)
+	if errors.Is(err, jsonmerge.ErrInvalidJSON) {
+		return marshalIndent(cfg)
+	}
+	return data, err
 }
 
 // Model constants define the Claude models used for different operations.
@@ -268,6 +286,11 @@ func Load() (UserConfig, error) {
 // Save writes the config file, creating the directory with 0o700 and file with
 // 0o600. Keys the UserConfig type does not model are preserved from the existing
 // file; see marshalPreserving for what that does and does not cover.
+//
+// An existing config that does not parse is an error and the file is left alone:
+// the keys chunk does not model could not be read out of it, so writing would
+// drop them. Callers reach this having loaded the config, and Load rejects the
+// same file, so in practice this catches a file that broke in between.
 func Save(cfg UserConfig) error {
 	dir, err := Dir()
 	if err != nil {

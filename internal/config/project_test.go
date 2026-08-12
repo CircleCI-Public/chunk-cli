@@ -169,8 +169,9 @@ func TestSaveProjectConfigUnparseableExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	writeProjectConfig(t, dir, `{"orgID": `)
 
-	// SaveProjectConfig itself falls back to a plain marshal; refusing to
-	// overwrite is the caller's job, via LoadProjectConfigForUpdate.
+	// SaveProjectConfig itself falls back to a plain marshal, which is what lets
+	// `chunk init --force` replace a config nobody can fix by hand. Refusing is
+	// the caller's job, via LoadProjectConfigForUpdate.
 	assert.NilError(t, SaveProjectConfig(dir, &ProjectConfig{OrgID: "org-1"}))
 	assert.Equal(t, readProjectConfig(t, dir), "{\n  \"orgID\": \"org-1\"\n}\n")
 }

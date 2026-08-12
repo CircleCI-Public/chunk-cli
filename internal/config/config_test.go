@@ -11,6 +11,7 @@ import (
 	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/jsonmerge"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 )
 
@@ -280,8 +281,25 @@ func TestSave_PreservesUnknownKeys(t *testing.T) {
 }
 
 // Preservation cannot rescue keys from a file the merge refuses to parse, so
-// what keeps a corrupt config from being flattened to its modeled keys is Load
-// failing first. Every write path loads before it saves; this pins the guard.
+// rather than flatten a corrupt config to its modeled keys, Save refuses. Load
+// rejects the same file, so reaching this means it broke mid-update.
+func TestSave_RefusesToOverwriteUnparseableConfig(t *testing.T) {
+	dir := setupTempConfig(t)
+	p := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	original := `{"model":"claude-test","myTool":{"x":1}` // truncated: no closing brace
+	assert.NilError(t, os.WriteFile(p, []byte(original), 0o600))
+
+	err := Save(UserConfig{Model: "claude-other"})
+	assert.ErrorIs(t, err, jsonmerge.ErrInvalidJSON)
+
+	data, readErr := os.ReadFile(p)
+	assert.NilError(t, readErr)
+	assert.Equal(t, string(data), original, "the file must be left untouched")
+}
+
+// The guard belongs to the write, but the load rejects the same file first, so
+// the two together are what a real update path relies on.
 func TestClear_RefusesToOverwriteUnparseableConfig(t *testing.T) {
 	dir := setupTempConfig(t)
 	p := filepath.Join(dir, "chunk", "config.json")

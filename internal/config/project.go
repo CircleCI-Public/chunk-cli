@@ -170,13 +170,17 @@ func (c *ProjectConfig) FindCommand(name string) *Command {
 // SaveProjectConfig writes the config back to .chunk/config.json, preserving any
 // keys in the existing file that ProjectConfig does not model. Every key it does
 // model comes from cfg, so callers must load before saving.
+//
+// A file that does not parse is replaced, because `chunk init --force` has to be
+// able to overwrite one. Callers that must not do that use
+// LoadProjectConfigForUpdate, which refuses before the write.
 func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
 	dir := filepath.Join(workDir, ".chunk")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	path := projectConfigPath(workDir)
-	data, err := marshalPreserving(path, cfg)
+	data, err := marshalOverwriting(path, cfg)
 	if err != nil {
 		return err
 	}

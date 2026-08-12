@@ -199,12 +199,19 @@ overwriting it, via `internal/jsonmerge`:
   dropped is not resurrected, while extra keys on the entries that remain are
   kept.
 
-Two consequences worth knowing when adding a writer: the in-memory struct owns
-every key it models, so a caller must load before saving — use
+A file that does not parse cannot be merged onto, and its unknown keys cannot be
+read out of it, so the write refuses rather than flattening the file to the keys
+chunk models. `config.Save` returns `jsonmerge.ErrInvalidJSON` and leaves the file
+alone. `config.SaveProjectConfig` is the one exception — it replaces an
+unparseable file, because `chunk init --force` exists to overwrite a config nobody
+can fix by hand — so its other callers check first with
 `config.LoadProjectConfigForUpdate`, which yields an empty config for a missing
-file but refuses one that does not parse, rather than replacing a config it could
-not read. And config writes must go through these functions, never a direct
-marshal of a config struct to the file.
+file but refuses one that does not parse.
+
+Two consequences worth knowing when adding a writer: the in-memory struct owns
+every key it models, so a caller must load before saving. And config writes must
+go through these functions, never a direct marshal of a config struct to the
+file.
 
 ### Client constructors accept config, not env
 
