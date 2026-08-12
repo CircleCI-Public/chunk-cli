@@ -147,6 +147,7 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 	maxWidth := nameWidth(commands)
 	for i, c := range commands {
 		run := expandCommand(workDir, c.Run)
+		status(iostream.LevelInfo, "$ "+run)
 		script := "cd " + shellEscape(dest) + " && " + run
 		start := time.Now()
 		stdout, stderr, exitCode, err := execFn(ctx, script)
@@ -237,6 +238,7 @@ func expandCommand(workDir, command string) string {
 
 func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, nameWidth int, status iostream.StatusFunc, streams iostream.Streams) error {
 	command = expandCommand(workDir, command)
+	status(iostream.LevelInfo, "$ "+command)
 
 	if timeoutSec <= 0 {
 		timeoutSec = DefaultTimeout

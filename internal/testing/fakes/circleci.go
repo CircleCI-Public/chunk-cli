@@ -94,7 +94,12 @@ type FakeCircleCI struct {
 	CommandOutputMessage     string // error message body when CommandOutputStatusCode is set
 	// DropStreamsBeforeExit ends this many output streams after delivering their
 	// output but before the terminal event, so client resume can be exercised.
-	DropStreamsBeforeExit    int
+	DropStreamsBeforeExit int
+	// EmptyStreamsBeforeExit returns this many completely empty output responses
+	// (status 200, no body) before serving the real stream. This simulates an
+	// interrupted connection where no SSE frames arrive at all, which the client
+	// must treat as a resume trigger rather than a failure.
+	EmptyStreamsBeforeExit   int
 	AddKeyStatusCode         int // override for POST /sidecar/instances/:id/ssh/add-key
 	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
 	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
@@ -376,6 +381,13 @@ func (f *FakeCircleCI) handleCommandOutput(c *gin.Context) {
 		return
 	}
 
+	if f.emptyStreamBeforeExit() {
+		// Return 200 with no body to simulate a connection interrupted before
+		// any SSE frames were written. The client must treat this as a resume.
+		c.Status(http.StatusOK)
+		return
+	}
+
 	if resp == nil {
 		resp = &ExecResponse{
 			CommandID: "cmd-123",
@@ -446,6 +458,18 @@ func (f *FakeCircleCI) dropBeforeExit() bool {
 		return false
 	}
 	f.DropStreamsBeforeExit--
+	return true
+}
+
+// emptyStreamBeforeExit reports whether this request should return an empty
+// body (no SSE frames), consuming one from the configured budget.
+func (f *FakeCircleCI) emptyStreamBeforeExit() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.EmptyStreamsBeforeExit <= 0 {
+		return false
+	}
+	f.EmptyStreamsBeforeExit--
 	return true
 }
 
