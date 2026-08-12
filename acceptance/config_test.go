@@ -330,6 +330,93 @@ func TestConfigSetOrgID(t *testing.T) {
 	assert.Equal(t, cfg["orgID"], "org-xyz")
 }
 
+// The reported bug, end to end: writing one key must not strip keys chunk does
+// not model, on commands or at the top level.
+func TestConfigSetPreservesUnknownProjectKeys(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
+
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	configPath := filepath.Join(chunkDir, "config.json")
+	original := `{
+  "commands": [
+    {"name": "format", "run": "task fmt", "fileExt": "go", "always": true},
+    {"name": "lint", "run": "task lint", "fileExt": "go", "limit": 5},
+    {"name": "test", "run": "task test", "fileExt": "go", "limit": 5},
+    {"name": "build", "run": "task build", "fileExt": "go", "always": false}
+  ],
+  "myTool": {"nested": [1, 2]}
+}`
+	assert.NilError(t, os.WriteFile(configPath, []byte(original), 0o644))
+
+	result := binary.RunCLI(t, []string{"config", "set", "validation.sidecarImage", "snap-1"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+
+	var cfg map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(data, &cfg))
+	_, kept := cfg["myTool"]
+	assert.Assert(t, kept, "unknown top-level key was dropped: %s", data)
+
+	var commands []map[string]json.RawMessage
+	assert.NilError(t, json.Unmarshal(cfg["commands"], &commands))
+	assert.Equal(t, len(commands), 4)
+	for _, c := range commands {
+		_, hasFileExt := c["fileExt"]
+		assert.Assert(t, hasFileExt, "fileExt dropped from %v", c)
+	}
+
+	got := string(data)
+	assert.Check(t, cmp.Contains(got, `"limit": 5`))
+	assert.Check(t, cmp.Contains(got, `"always": true`))
+	assert.Check(t, cmp.Contains(got, `"snap-1"`))
+	// And the user is told which keys chunk kept but does not recognize.
+	assert.Check(t, cmp.Contains(result.Stderr, "commands[].fileExt"))
+	assert.Check(t, cmp.Contains(result.Stderr, "myTool"))
+}
+
+// A config that does not parse must be left alone, not replaced wholesale.
+func TestConfigSetRefusesMalformedProjectConfig(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
+
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	configPath := filepath.Join(chunkDir, "config.json")
+	broken := `{"commands": [{"name": "test", "run": "task test"}`
+	assert.NilError(t, os.WriteFile(configPath, []byte(broken), 0o644))
+
+	result := binary.RunCLI(t, []string{"config", "set", "orgID", "org-xyz"}, env, workDir)
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for malformed config\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Check(t, cmp.Contains(result.Stdout+result.Stderr, ".chunk/config.json"))
+
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), broken, "malformed config must not be rewritten")
+}
+
+func TestConfigSetPreservesUnknownUserConfigKeys(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	configPath := filepath.Join(env.HomeDir, ".config", "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
+	assert.NilError(t, os.WriteFile(configPath, []byte(`{"model":"old","myTool":42}`), 0o600))
+
+	result := binary.RunCLI(t, []string{"config", "set", "model", "claude-haiku-4-5-20251001"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+	got := string(data)
+	assert.Check(t, cmp.Contains(got, `"myTool": 42`), got)
+	assert.Check(t, cmp.Contains(got, "claude-haiku-4-5-20251001"), got)
+	assert.Check(t, cmp.Contains(result.Stderr, "myTool"))
+}
+
 func TestConfigShowOrgIDFromProjectConfig(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	env := testenv.NewTestEnv(t)

@@ -74,6 +74,11 @@ func detectHook(r io.Reader) *hookContext {
 func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, statusFn iostream.StatusFunc) error {
 	cfg, err := config.LoadProjectConfig(workDir)
 	if err != nil {
+		// A config that does not parse has commands we cannot see, so say so
+		// rather than reporting that none are configured.
+		if errors.Is(err, config.ErrParseProjectConfig) {
+			streams.ErrPrintf("warning: %v\n", err)
+		}
 		cfg = &config.ProjectConfig{}
 	}
 	if jsonOut {
@@ -869,12 +874,14 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
-	// Persist the org ID so future sidecar creation skips the picker.
-	projCfg, loadErr := config.LoadProjectConfig(workDir)
-	if loadErr != nil {
-		projCfg = &config.ProjectConfig{}
-	}
-	if projCfg.OrgID == "" {
+	// Persist the org ID so future sidecar creation skips the picker. A config
+	// that does not parse is left alone: saving would replace it wholesale, and
+	// skipping the picker next time is not worth that.
+	projCfg, loadErr := config.LoadProjectConfigForUpdate(workDir)
+	switch {
+	case loadErr != nil:
+		streams.ErrPrintf("warning: could not save org ID to project config: %v\n", loadErr)
+	case projCfg.OrgID == "":
 		projCfg.OrgID = resolvedOrgID
 		if saveErr := config.SaveProjectConfig(workDir, projCfg); saveErr != nil {
 			streams.ErrPrintf("warning: could not save org ID to project config: %v\n", saveErr)

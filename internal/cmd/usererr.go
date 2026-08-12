@@ -222,6 +222,17 @@ func GoneError(err error) error {
 		wrap(err)
 }
 
+// malformedProjectConfigError reports a .chunk/config.json that exists but does
+// not parse. Write paths return it instead of continuing, because they would
+// otherwise save an empty config over a file they could not read.
+func malformedProjectConfigError(err error) *userError {
+	return newUserError(msgMalformedProjectConfig).
+		withCode("config.parse_failed").
+		withDetail(detailMalformedProjectConfig).
+		withSuggestion(suggestionFixProjectConfig).
+		wrap(err)
+}
+
 // nonInteractive reports whether the process is running in a CI/CD environment.
 // CI is set by most CI/CD systems to indicate non-interactive pipeline execution.
 func nonInteractive() bool {

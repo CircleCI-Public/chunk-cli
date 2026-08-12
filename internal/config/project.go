@@ -2,11 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
+	"github.com/CircleCI-Public/chunk-cli/internal/jsonmerge"
 )
 
 // Command roles describe what a command does. Only RoleGate is acted on:
@@ -47,22 +50,61 @@ type ProjectConfig struct {
 	Environment         *envspec.Environment `json:"environment,omitempty"`
 }
 
-// LoadProjectConfig reads .chunk/config.json from workDir.
+// ErrParseProjectConfig marks a .chunk/config.json that exists but is not valid
+// JSON. Telling that apart from a missing file lets write paths refuse to
+// overwrite a config they could not read.
+var ErrParseProjectConfig = errors.New("parse config.json")
+
+func projectConfigPath(workDir string) string {
+	return filepath.Join(workDir, ".chunk", "config.json")
+}
+
+// LoadProjectConfig reads .chunk/config.json from workDir. A missing file
+// reports fs.ErrNotExist and a malformed one ErrParseProjectConfig, both via
+// errors.Is; callers that write the config back must distinguish them — see
+// LoadProjectConfigForUpdate.
 func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
-	path := filepath.Join(workDir, ".chunk", "config.json")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(projectConfigPath(workDir))
 	if err != nil {
 		return nil, fmt.Errorf("could not read config.json: %w", err)
 	}
 	var cfg ProjectConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config.json: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrParseProjectConfig, err)
 	}
 	// Configs written by earlier versions may carry a "test" step in the saved
 	// environment. Drop it on load so it is neither run as a setup step nor
 	// written back out on the next save.
 	cfg.Environment = cfg.Environment.ForConfig()
 	return &cfg, nil
+}
+
+// LoadProjectConfigForUpdate loads the project config for a read-modify-write
+// cycle. A missing .chunk/config.json yields an empty config, but one that
+// exists and does not parse is an error: saving on top of it would discard
+// everything the user has in it.
+func LoadProjectConfigForUpdate(workDir string) (*ProjectConfig, error) {
+	cfg, err := LoadProjectConfig(workDir)
+	switch {
+	case err == nil:
+		return cfg, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return &ProjectConfig{}, nil
+	default:
+		return nil, err
+	}
+}
+
+// UnknownProjectConfigKeys returns the paths in .chunk/config.json that chunk
+// does not recognize. They are preserved on save; reporting them lets a caller
+// point out a typo instead of keeping it forever. A missing or malformed file
+// has nothing to report.
+func UnknownProjectConfigKeys(workDir string) []string {
+	data, err := os.ReadFile(projectConfigPath(workDir))
+	if err != nil {
+		return nil
+	}
+	return jsonmerge.UnknownKeys(data, &ProjectConfig{})
 }
 
 // HasCommands reports whether any commands are configured.
@@ -125,24 +167,27 @@ func (c *ProjectConfig) FindCommand(name string) *Command {
 	return nil
 }
 
-// SaveProjectConfig writes the config back to .chunk/config.json.
+// SaveProjectConfig writes the config back to .chunk/config.json, preserving any
+// keys in the existing file that ProjectConfig does not model. Every key it does
+// model comes from cfg, so callers must load before saving.
 func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
 	dir := filepath.Join(workDir, ".chunk")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := marshalIndent(cfg)
+	path := projectConfigPath(workDir)
+	data, err := marshalPreserving(path, cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "config.json"), append(data, '\n'), 0o644)
+	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
 // SaveCommand upserts a command in .chunk/config.json.
 func SaveCommand(workDir, name, command string) error {
-	cfg, err := LoadProjectConfig(workDir)
+	cfg, err := LoadProjectConfigForUpdate(workDir)
 	if err != nil {
-		cfg = &ProjectConfig{}
+		return err
 	}
 
 	found := false

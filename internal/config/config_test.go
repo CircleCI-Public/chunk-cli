@@ -255,6 +255,59 @@ func TestClear_CircleCIToken(t *testing.T) {
 	assert.Equal(t, cfg.Model, "m1") // model preserved
 }
 
+func TestSave_PreservesUnknownKeys(t *testing.T) {
+	dir := setupTempConfig(t)
+	p := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	assert.NilError(t, os.WriteFile(p, []byte(`{"model":"old","myTool":{"x":1},"limit":1000000}`), 0o600))
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	cfg.Model = "m2"
+	assert.NilError(t, Save(cfg))
+
+	data, err := os.ReadFile(p)
+	assert.NilError(t, err)
+	got := string(data)
+	assert.Assert(t, strings.Contains(got, `"model": "m2"`), got)
+	assert.Assert(t, strings.Contains(got, `"myTool"`), got)
+	// Copied as bytes, so a large integer is not rewritten as 1e+06.
+	assert.Assert(t, strings.Contains(got, `"limit": 1000000`), got)
+
+	info, err := os.Stat(p)
+	assert.NilError(t, err)
+	assert.Equal(t, info.Mode().Perm(), os.FileMode(filePermission))
+}
+
+// Clearing a credential works by omitting the field, so preservation must not
+// resurrect it: a revoked token left in the file would be reported as removed.
+func TestClear_RemovesCredentialWithUnknownKeysPresent(t *testing.T) {
+	dir := setupTempConfig(t)
+	p := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	assert.NilError(t, os.WriteFile(p,
+		[]byte(`{"circleCIToken":"tok-secret","model":"m1","myTool":1}`), 0o600))
+
+	assert.NilError(t, Clear("circleCIToken"))
+
+	data, err := os.ReadFile(p)
+	assert.NilError(t, err)
+	got := string(data)
+	assert.Assert(t, !strings.Contains(got, "tok-secret"), "cleared token must be gone from disk:\n%s", got)
+	assert.Assert(t, strings.Contains(got, `"myTool": 1`), got)
+	assert.Assert(t, strings.Contains(got, `"model": "m1"`), got)
+}
+
+func TestUnknownUserConfigKeys(t *testing.T) {
+	dir := setupTempConfig(t)
+	assert.Equal(t, len(UnknownUserConfigKeys()), 0) // no file yet
+
+	p := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	assert.NilError(t, os.WriteFile(p, []byte(`{"model":"m1","myTool":1,"typo":2}`), 0o600))
+	assert.DeepEqual(t, UnknownUserConfigKeys(), []string{"myTool", "typo"})
+}
+
 func TestClear_UnknownKey(t *testing.T) {
 	setupTempConfig(t)
 

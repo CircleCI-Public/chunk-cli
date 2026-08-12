@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -134,9 +135,9 @@ func newConfigSetCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				projCfg, err := config.LoadProjectConfig(workDir)
+				projCfg, err := config.LoadProjectConfigForUpdate(workDir)
 				if err != nil {
-					projCfg = &config.ProjectConfig{}
+					return malformedProjectConfigError(err)
 				}
 				switch key {
 				case "orgID":
@@ -153,6 +154,7 @@ func newConfigSetCmd() *cobra.Command {
 					return &userError{msg: "Could not save project configuration.", suggestion: configFilePermHint, err: err}
 				}
 				io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))
+				reportUnknownKeys(io, ".chunk/config.json", config.UnknownProjectConfigKeys(workDir))
 				return nil
 			}
 
@@ -207,7 +209,23 @@ func newConfigSetCmd() *cobra.Command {
 			}
 
 			io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))
+			reportUnknownKeys(io, "the chunk config file", config.UnknownUserConfigKeys())
 			return nil
 		},
 	}
+}
+
+// reportUnknownKeys notes the keys a write kept but does not recognize. They are
+// preserved either way; saying so is what keeps a typo from silently doing
+// nothing forever.
+func reportUnknownKeys(io iostream.Streams, file string, keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	noun := "keys"
+	if len(keys) == 1 {
+		noun = "key"
+	}
+	io.ErrPrintln(ui.Dim(fmt.Sprintf("Kept %d unrecognized %s in %s: %s",
+		len(keys), noun, file, strings.Join(keys, ", "))))
 }

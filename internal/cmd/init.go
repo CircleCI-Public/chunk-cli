@@ -473,10 +473,17 @@ hook config files.`,
 					return nil
 				}
 			}
+			// A config that exists but does not parse would sail past the guard
+			// above and be overwritten. Only --force may do that.
+			if !force && errors.Is(loadErr, config.ErrParseProjectConfig) {
+				return malformedProjectConfigError(loadErr).
+					withSuggestion("Fix the JSON syntax in .chunk/config.json, or overwrite it with: chunk init --force")
+			}
 
-			// Seed from existing config when --force so skipped sections are preserved.
+			// Seed from the existing config so sections init does not detect —
+			// orgID, validation, and any keys chunk does not model — survive.
 			cfg := &config.ProjectConfig{}
-			if force && loadErr == nil {
+			if loadErr == nil {
 				cfg = existingCfg
 			}
 

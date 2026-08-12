@@ -13,20 +13,64 @@ import (
 	"github.com/google/uuid"
 	"github.com/sethvargo/go-envconfig"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/jsonmerge"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 )
 
-// marshalIndent encodes v as indented JSON without HTML-escaping special characters
-// like & < > so that shell commands remain human-readable in config files.
-func marshalIndent(v any) ([]byte, error) {
+// marshalCompact encodes v as compact JSON without HTML-escaping special
+// characters like & < > so that shell commands remain human-readable in config
+// files.
+func marshalCompact(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+// indentJSON reformats compact JSON with the two-space indentation chunk uses in
+// config files. It only adds whitespace, so it never re-escapes string contents.
+func indentJSON(data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, data, "", "  "); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// marshalIndent encodes v as indented JSON without HTML-escaping special characters
+// like & < > so that shell commands remain human-readable in config files.
+func marshalIndent(v any) ([]byte, error) {
+	data, err := marshalCompact(v)
+	if err != nil {
+		return nil, err
+	}
+	return indentJSON(data)
+}
+
+// marshalPreserving encodes cfg for the file at path, carrying over any keys
+// already in that file that cfg's type does not model — hand-added keys, or keys
+// written by a newer version of chunk.
+//
+// cfg stays the source of truth for every key it does model: a modeled key it
+// omits is removed from the file, which is how clearing a value persists.
+// Callers must therefore load before saving, or they will drop keys the file
+// already had. A missing or unparseable file falls back to a plain marshal; a
+// caller that must not overwrite an unparseable config checks for that first,
+// via LoadProjectConfigForUpdate.
+func marshalPreserving(path string, cfg any) ([]byte, error) {
+	data, err := marshalCompact(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if existing, readErr := os.ReadFile(path); readErr == nil {
+		if merged, mergeErr := jsonmerge.Merge(data, existing, cfg); mergeErr == nil {
+			data = merged
+		}
+	}
+	return indentJSON(data)
 }
 
 // Model constants define the Claude models used for different operations.
@@ -219,7 +263,9 @@ func Load() (UserConfig, error) {
 	return cfg, nil
 }
 
-// Save writes the config file, creating the directory with 0o700 and file with 0o600.
+// Save writes the config file, creating the directory with 0o700 and file with
+// 0o600. Keys the UserConfig type does not model are preserved from the existing
+// file; see marshalPreserving for what that does and does not cover.
 func Save(cfg UserConfig) error {
 	dir, err := Dir()
 	if err != nil {
@@ -228,15 +274,31 @@ func Save(cfg UserConfig) error {
 	if err := os.MkdirAll(dir, dirPermission); err != nil {
 		return err
 	}
-	data, err := marshalIndent(cfg)
-	if err != nil {
-		return err
-	}
 	p, err := Path()
 	if err != nil {
 		return err
 	}
+	data, err := marshalPreserving(p, cfg)
+	if err != nil {
+		return err
+	}
 	return os.WriteFile(p, data, filePermission)
+}
+
+// UnknownUserConfigKeys returns the paths in the user config file that chunk does
+// not recognize. They are preserved on save; reporting them lets a caller point
+// out a typo instead of keeping it forever. A missing or malformed file has
+// nothing to report.
+func UnknownUserConfigKeys() []string {
+	p, err := Path()
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	return jsonmerge.UnknownKeys(data, UserConfig{})
 }
 
 // Clear removes a stored config value by key.

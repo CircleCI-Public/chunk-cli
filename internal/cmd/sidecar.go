@@ -671,16 +671,19 @@ image's CMD, not a step that runs during setup. Pipe stdout into
 			}
 
 			if !noSave {
-				cfg, loadErr := config.LoadProjectConfig(dir)
+				// A config that does not parse is left alone rather than
+				// replaced; the spec is still printed to stdout below.
+				cfg, loadErr := config.LoadProjectConfigForUpdate(dir)
 				if loadErr != nil {
-					cfg = &config.ProjectConfig{}
-				}
-				// Save without the test step: it is only an input to the
-				// Dockerfile CMD, which is generated from the spec printed to
-				// stdout below, not from the saved copy.
-				cfg.Environment = env.ForConfig()
-				if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
-					io.ErrPrintf("Warning: could not save environment to config: %v\n", saveErr)
+					io.ErrPrintf("Warning: could not save environment to config: %v\n", loadErr)
+				} else {
+					// Save without the test step: it is only an input to the
+					// Dockerfile CMD, which is generated from the spec printed to
+					// stdout below, not from the saved copy.
+					cfg.Environment = env.ForConfig()
+					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
+						io.ErrPrintf("Warning: could not save environment to config: %v\n", saveErr)
+					}
 				}
 			}
 
@@ -976,10 +979,12 @@ Example:
 				return err
 			}
 
-			// Load project config (best-effort; start fresh when absent).
-			cfg, loadErr := config.LoadProjectConfig(dir)
+			// Start fresh when absent, but refuse a config that does not parse:
+			// it drives both the environment cache and the remote-command
+			// marking below, and saving would replace it wholesale.
+			cfg, loadErr := config.LoadProjectConfigForUpdate(dir)
 			if loadErr != nil {
-				cfg = &config.ProjectConfig{}
+				return malformedProjectConfigError(loadErr)
 			}
 
 			// Step 1: Detect environment (skip when cached and --force not set).

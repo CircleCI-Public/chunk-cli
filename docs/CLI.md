@@ -217,6 +217,13 @@ chunk
 project directory, the resolved `orgID` (env var takes precedence over project
 config).
 
+Keys outside this table are preserved but ignored. `chunk config set` merges onto
+the existing file rather than replacing it, so hand-added keys — including extra
+keys on individual `commands[]` entries — survive a write, and `config set`
+prints the ones it does not recognize so a typo does not go unnoticed. A
+`.chunk/config.json` that exists but is not valid JSON is never overwritten:
+commands that would write it fail and ask you to fix the syntax first.
+
 ## Flag Conventions
 
 - Required flags use cobra's `MarkFlagRequired()`

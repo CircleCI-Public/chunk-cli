@@ -181,6 +181,31 @@ Project config lives in `.chunk/config.json` (per repository):
 }
 ```
 
+### Unknown config keys are preserved
+
+Both config files are hand-editable and `.chunk/config.json` is committed, so a
+write must not delete what it does not understand. `config.SaveProjectConfig` and
+`config.Save` merge onto the file they are about to replace instead of
+overwriting it, via `internal/jsonmerge`:
+
+- Keys the Go struct models come from the struct alone. A modeled key it omits is
+  deleted — that is how clearing a value persists, and `chunk auth clear` depends
+  on it to remove a credential.
+- Keys the struct does not model are copied over verbatim, after the modeled keys
+  of the same object. Values are carried as raw bytes, so numbers and escapes are
+  not reformatted.
+- `commands[]` and `environment.setup[]` entries are paired between the two
+  documents by `name`. Only entries the struct has survive, so an entry chunk
+  dropped is not resurrected, while extra keys on the entries that remain are
+  kept.
+
+Two consequences worth knowing when adding a writer: the in-memory struct owns
+every key it models, so a caller must load before saving — use
+`config.LoadProjectConfigForUpdate`, which yields an empty config for a missing
+file but refuses one that does not parse, rather than replacing a config it could
+not read. And config writes must go through these functions, never a direct
+marshal of a config struct to the file.
+
 ### Client constructors accept config, not env
 
 Client `New()` functions receive values from the resolved config. They
