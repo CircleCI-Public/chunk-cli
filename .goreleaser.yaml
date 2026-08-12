@@ -25,6 +25,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
 
     goarch:
       - amd64
@@ -32,6 +33,10 @@ builds:
 
 archives:
   - id: default
+    # Windows users expect .zip; other platforms keep the default tarball.
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_

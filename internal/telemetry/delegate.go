@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 
 	"github.com/segmentio/analytics-go/v3"
 
@@ -63,7 +62,7 @@ func (d *delegateDestination) send(in io.Reader) error {
 	cmd := exec.Command(bin, "receive-telemetry")
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // avoid signals sent to the parent (e.g. Ctrl-C) reaching this subprocess too
+	detachProcess(cmd) // avoid signals sent to the parent (e.g. Ctrl-C) reaching this subprocess too
 	cmd.Env = append(os.Environ(),
 		receiver.EnvWriteKey+"="+d.writeKey,
 		receiver.EnvTelemetryEndpoint+"="+d.endpoint,
