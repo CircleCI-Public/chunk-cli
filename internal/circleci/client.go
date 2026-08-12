@@ -309,13 +309,13 @@ func (c *Client) streamCommandOutput(ctx context.Context, commandID string, onOu
 		}
 
 		// A connection that delivered any frame proves the far end is alive and
-		// talking, so it resets the stall count even when the command produced no
-		// new output — a command can legitimately be silent for minutes while it
-		// compiles, and the server closes each connection on a timer regardless.
-		// Counting those as failures would abandon a healthy but quiet command.
+		// talking, so it resets the stall count. An empty stream (no frames,
+		// no error) means the connection was interrupted before any data
+		// arrived — that is a resume trigger, not a failure. Only a genuine
+		// connectivity error (5xx, transport failure) counts as a stall.
 		if outcome.frames > 0 {
 			stalls = 0
-		} else {
+		} else if err != nil {
 			stalls++
 			if stalls > maxStreamStalls {
 				return nil, fmt.Errorf(
@@ -328,10 +328,9 @@ func (c *Client) streamCommandOutput(ctx context.Context, commandID string, onOu
 				"stream command output: gave up after %d reconnects without the command finishing", attempts)
 		}
 
-		// A stream cut short by the server's timeout is routine, so resume at
-		// once — inserting a delay every few seconds would make output stutter
-		// for no reason. Only back off when an attempt yielded nothing.
-		if stalls == 0 {
+		// Resume immediately after a normal drop or an interrupted empty
+		// connection. Only back off after a real connectivity error.
+		if err == nil || stalls == 0 {
 			continue
 		}
 		delay := min(time.Duration(stalls)*streamRetryBase, 10*streamRetryBase)
