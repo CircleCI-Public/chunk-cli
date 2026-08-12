@@ -171,6 +171,23 @@ func TestExecKeepsResumingWhileServerStaysAlive(t *testing.T) {
 	assert.Equal(t, attempts, drops+1)
 }
 
+// A command that produces no output while it runs forces every reconnect to
+// return an empty stream (no SSE frames at all). That is the normal "connection
+// interrupted" signal from the API and must not be counted as a failure.
+func TestExecKeepsResumingOnEmptyStreams(t *testing.T) {
+	empties := maxStreamStalls * 4
+
+	resp, stdout, _, attempts, err := execCounting(t, &fakes.ExecResponse{
+		CommandID: "cmd-1", Stdout: "done\n", ExitCode: 0,
+	}, func(f *fakes.FakeCircleCI) {
+		f.EmptyStreamsBeforeExit = empties
+	})
+	assert.NilError(t, err, "empty streams must not be treated as failures")
+	assert.Equal(t, string(stdout), "done\n")
+	assert.Equal(t, resp.ExitCode, 0)
+	assert.Equal(t, attempts, empties+1)
+}
+
 // A server that keeps talking but never terminates the stream is still bounded,
 // so a bug there cannot spin forever.
 func TestExecGivesUpWhenStreamNeverTerminates(t *testing.T) {
