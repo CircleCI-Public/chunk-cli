@@ -73,6 +73,11 @@ func Merge(existing, generated []byte) (*MergeResult, error) {
 	// Merge hooks.PreToolUse — replace the chunk-managed hook group by matcher.
 	mergeHooks(merged, generatedMap)
 
+	// Merge hooks.Stop — replace the chunk-managed group by command. Without
+	// this a repo that already had a settings.json keeps its commit hooks but
+	// never gets the Stop hook, so validation stops running at session end.
+	mergeStopHooks(merged, generatedMap)
+
 	mergedBytes, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal merged settings: %w", err)

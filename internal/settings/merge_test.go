@@ -239,6 +239,99 @@ func TestMergePreservesOtherHookTypes(t *testing.T) {
 	assert.Equal(t, len(preToolUse), 1)
 }
 
+// A repo that already had a settings.json before chunk init ran gets the Stop
+// hook added, not just PreToolUse. Without it the repo keeps its commit hooks
+// but never validates at session end.
+func TestMergeAddsStopHookToExistingSettings(t *testing.T) {
+	existing := []byte(`{
+		"permissions": {"allow": ["Bash(task *)"]},
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "task test", "timeout": 300}]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "cd . && task test", "timeout": 300}]}
+			],
+			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 330}]}]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	stop, ok := hooks["Stop"].([]interface{})
+	assert.Assert(t, ok && len(stop) == 1, "expected a Stop hook group, got: %v", hooks["Stop"])
+
+	group := stop[0].(map[string]interface{})
+	entry := group["hooks"].([]interface{})[0].(map[string]interface{})
+	assert.Equal(t, entry["command"], "chunk validate")
+	assert.Equal(t, entry["timeout"], float64(330))
+}
+
+// The chunk-managed Stop group is replaced in place so a changed timeout takes
+// effect instead of stacking a second "chunk validate" entry.
+func TestMergeReplacesStopHook(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 30}]}]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 600}]}]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	stop := hooks["Stop"].([]interface{})
+	assert.Equal(t, len(stop), 1)
+
+	group := stop[0].(map[string]interface{})
+	entry := group["hooks"].([]interface{})[0].(map[string]interface{})
+	assert.Equal(t, entry["timeout"], float64(600))
+}
+
+// A Stop hook the user wrote themselves is left alone; chunk only manages its own.
+func TestMergePreservesUserStopHooks(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"Stop": [
+				{"hooks": [{"type": "command", "command": "notify-send done", "timeout": 5}]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 600}]}]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	stop, ok := hooks["Stop"].([]interface{})
+	assert.Assert(t, ok && len(stop) == 2, "expected both Stop groups to be present, got: %v", len(stop))
+}
+
 func TestMergeNoChangeWhenAlreadyMerged(t *testing.T) {
 	settings := []byte(`{
 		"$schema": "https://json.schemastore.org/claude-code-settings.json",
