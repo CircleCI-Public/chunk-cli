@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -37,7 +38,13 @@ func runTestMain(m *testing.M) int {
 	}
 	defer os.RemoveAll(dir)
 
+	// Windows will not execute a file without an executable extension, and
+	// `go build -o` does not add one when the output path is explicit. Without
+	// this the stub builds fine but never starts, and the tests see zero events.
 	receiverBinPath = filepath.Join(dir, "receiverbin")
+	if runtime.GOOS == "windows" {
+		receiverBinPath += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", receiverBinPath, "./testdata/receiverbin")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
