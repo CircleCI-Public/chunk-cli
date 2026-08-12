@@ -459,6 +459,9 @@ func iconAndMsg(e eventlog.Event) (string, string) {
 	case levelError:
 		return red("✗"), red(e.Msg)
 	default:
+		if strings.HasPrefix(e.Msg, "$ ") {
+			return muted("$"), muted(strings.TrimPrefix(e.Msg, "$ "))
+		}
 		return vdim("›"), muted(e.Msg)
 	}
 }
