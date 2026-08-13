@@ -185,6 +185,100 @@ func TestInitForcePreservesSkippedSections(t *testing.T) {
 	assert.Equal(t, cmd0["run"], "echo test")
 }
 
+// writeMalformedProjectConfig writes a .chunk/config.json that is not valid JSON
+// and returns its path along with the exact bytes written, so a test can assert
+// the file was left untouched.
+func writeMalformedProjectConfig(t *testing.T, workDir string) (path, contents string) {
+	t.Helper()
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	contents = `{"commands": [{"name": "test", "run": "echo test"}`
+	path = filepath.Join(chunkDir, "config.json")
+	assert.NilError(t, os.WriteFile(path, []byte(contents), 0o644))
+	return path, contents
+}
+
+// A config that does not parse has no commands and no VCS as far as the
+// exists-already guard can tell, so without this check init would overwrite it.
+func TestInitRefusesMalformedProjectConfig(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	path, original := writeMalformedProjectConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks", "--skip-validate",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for malformed config\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, ".chunk/config.json"),
+		"expected the error to name the file, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "--force"),
+		"expected the error to offer --force, got: %s", combined)
+
+	data, err := os.ReadFile(path)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), original, "malformed config must not be rewritten")
+}
+
+// --force is the documented way through, so it still overwrites.
+func TestInitForceOverwritesMalformedProjectConfig(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	path, original := writeMalformedProjectConfig(t, workDir)
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--force", "--skip-hooks", "--skip-validate",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	data, err := os.ReadFile(path)
+	assert.NilError(t, err)
+	assert.Assert(t, string(data) != original, "expected --force to replace the malformed config")
+	var cfg map[string]interface{}
+	assert.NilError(t, json.Unmarshal(data, &cfg), "expected valid JSON after --force, got: %s", data)
+}
+
+// init seeds from an existing parseable config even without --force, so settings
+// it does not detect survive. Reachable because a config carrying only orgID and
+// validation has neither commands nor VCS, and so falls past the guard that
+// stops init when a config already has data.
+func TestInitPreservesUndetectedSectionsWithoutForce(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	existing := `{"orgID":"org-keep-me","validation":{"sidecarImage":"snap-keep"},"myTool":{"nested":true}}`
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(existing), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks", "--skip-validate",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	cfg := readInitConfig(t, workDir)
+	assert.Equal(t, cfg["orgID"], "org-keep-me", "orgID was dropped: %v", cfg)
+	validation, ok := cfg["validation"].(map[string]interface{})
+	assert.Assert(t, ok, "validation section was dropped: %v", cfg)
+	assert.Equal(t, validation["sidecarImage"], "snap-keep")
+	// And keys chunk does not model survive the same write.
+	_, kept := cfg["myTool"]
+	assert.Assert(t, kept, "unknown key was dropped: %v", cfg)
+	// The run still did its job: VCS came from the git remote.
+	vcs, ok := cfg["vcs"].(map[string]interface{})
+	assert.Assert(t, ok, "expected vcs to be detected, got: %v", cfg)
+	assert.Equal(t, vcs["org"], "test-org")
+}
+
 func TestInitNotGitRepo(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 

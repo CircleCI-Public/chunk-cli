@@ -3,6 +3,8 @@ package acceptance
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -192,6 +194,91 @@ func TestSidecarEnvNonexistentDir(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for nonexistent dir")
+}
+
+// "sidecar env" saves the detected environment, so an unreadable config would be
+// replaced wholesale. It warns and leaves the file alone instead — and still
+// prints the spec, since detection succeeded and stdout is the point of the
+// command.
+func TestSidecarEnvWarnsOnMalformedConfig(t *testing.T) {
+	dir := t.TempDir()
+	chunkDir := filepath.Join(dir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	original := `{"commands": [{"name": "test", "run": "echo test"}`
+	configPath := filepath.Join(chunkDir, "config.json")
+	assert.NilError(t, os.WriteFile(configPath, []byte(original), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLI(t, []string{
+		"sidecar", "env",
+		"--dir", dir,
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "could not save environment to config"),
+		"expected a save warning, got stderr: %s", result.Stderr)
+
+	var spec map[string]interface{}
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &spec),
+		"expected the spec on stdout, got: %s", result.Stdout)
+
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), original, "malformed config must not be rewritten")
+}
+
+// "--no-save" never touches the config, so a malformed one is not its problem and
+// must not produce a warning.
+func TestSidecarEnvNoSaveIgnoresMalformedConfig(t *testing.T) {
+	dir := t.TempDir()
+	chunkDir := filepath.Join(dir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"),
+		[]byte(`{"commands": [`), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLI(t, []string{
+		"sidecar", "env",
+		"--dir", dir,
+		"--no-save",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stderr, "could not save environment to config"),
+		"--no-save must not warn about saving, got stderr: %s", result.Stderr)
+}
+
+// "sidecar setup" reads the config for the environment cache and writes it back,
+// so it refuses outright rather than starting fresh and discarding the file.
+func TestSidecarSetupRefusesMalformedConfig(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	original := `{"environment": {`
+	configPath := filepath.Join(chunkDir, "config.json")
+	assert.NilError(t, os.WriteFile(configPath, []byte(original), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "setup",
+		"--dir", workDir,
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for malformed config\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, ".chunk/config.json"),
+		"expected the error to name the file, got: %s", combined)
+
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), original, "malformed config must not be rewritten")
 }
 
 // --- create error paths ---
