@@ -72,6 +72,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .claude/settings.json"))
+		streams.ErrPrintln(ui.Dim("  Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session."))
 		return nil
 	}
 
@@ -124,6 +125,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .claude/settings.json"))
+	streams.ErrPrintln(ui.Dim("  Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session."))
 	return nil
 }
 
@@ -177,6 +179,7 @@ func writeCodexHooks(workDir string, commands []config.Command, streams iostream
 			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .codex/hooks.json"))
+		streams.ErrPrintln(ui.Dim("  Hidden Codex config. Same hooks as .claude/settings.json, for Codex sessions."))
 		return nil
 	}
 
@@ -226,6 +229,7 @@ func writeCodexHooks(workDir string, commands []config.Command, streams iostream
 		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .codex/hooks.json"))
+	streams.ErrPrintln(ui.Dim("  Hidden Codex config. Same hooks as .claude/settings.json, for Codex sessions."))
 	return nil
 }
 
@@ -367,6 +371,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .git/hooks/pre-commit"))
+		streams.ErrPrintln(ui.Dim("  Not tracked in git. Runs `chunk validate` locally before every commit you make."))
 		return nil
 	}
 
@@ -392,6 +397,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .git/hooks/pre-commit"))
+	streams.ErrPrintln(ui.Dim("  Not tracked in git. Runs `chunk validate` locally before every commit you make."))
 	return nil
 }
 
