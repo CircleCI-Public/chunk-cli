@@ -16,21 +16,22 @@ import (
 )
 
 var (
-	styleHeader    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	styleColHeader = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
-	styleActive    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleStale     = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
-	styleEnded     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleErr       = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	styleDim       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleCursorFg  = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("236"))
-	styleValOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleValFail   = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	styleTool      = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
-	styleGitAhead  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // orange: ahead of upstream
-	styleGitBehind = lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // red: behind upstream
-	styleGitClean  = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // dim: clean
-	styleGitDirty  = lipgloss.NewStyle().Foreground(lipgloss.Color("179")) // yellow: dirty
+	styleHeader      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	styleColHeader   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
+	styleActive      = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	styleStale       = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
+	styleEnded       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	styleErr         = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	styleDim         = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	styleCursorFg    = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("236"))
+	styleValOK       = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	styleValFail     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	styleTool        = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	styleGitAhead    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))            // orange: ahead of upstream
+	styleGitBehind   = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))            // red: behind upstream
+	styleGitClean    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))            // dim: clean
+	styleGitDirty    = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))            // yellow: dirty
+	styleGitConflict = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")) // bold red: conflict
 )
 
 type dashboardView int
@@ -278,6 +279,8 @@ func applyGitStyle(gitStatus, padded string) string {
 	switch {
 	case gitStatus == gitStatusClean || gitStatus == "":
 		return styleGitClean.Render(padded)
+	case gitStatus == gitStatusConflict:
+		return styleGitConflict.Render(padded)
 	case gitStatus == "dirty":
 		return styleGitDirty.Render(padded)
 	case strings.HasPrefix(gitStatus, "↓"):

@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const gitStatusClean = "clean"
+const (
+	gitStatusClean    = "clean"
+	gitStatusConflict = "conflict"
+)
 
 // startGitChecker runs a background loop that checks git upstream status for
 // active sessions every two minutes.
@@ -77,6 +80,11 @@ func repoStatus(dir string) string {
 		return gitStatusClean
 	}
 
+	// Check for merge conflicts before reporting ahead/behind counts.
+	if behind > 0 && hasConflictsWithUpstream(dir) {
+		return gitStatusConflict
+	}
+
 	var parts []string
 	switch {
 	case ahead > 0 && behind > 0:
@@ -93,6 +101,22 @@ func repoStatus(dir string) string {
 		return gitStatusClean
 	}
 	return strings.Join(parts, " ")
+}
+
+// hasConflictsWithUpstream uses git merge-tree to simulate merging the upstream
+// into HEAD without touching the working tree or index. Returns true if the
+// simulated merge would produce conflict markers.
+func hasConflictsWithUpstream(dir string) bool {
+	baseOut, err := gitCmd(dir, "merge-base", "HEAD", "@{upstream}").Output()
+	if err != nil {
+		return false
+	}
+	base := strings.TrimSpace(string(baseOut))
+	out, err := gitCmd(dir, "merge-tree", base, "HEAD", "@{upstream}").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "<<<<<<<")
 }
 
 func isWorkingTreeDirty(dir string) bool {
