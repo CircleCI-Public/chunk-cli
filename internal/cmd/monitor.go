@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -273,6 +274,10 @@ func newMonitorAgentValidateCmd() *cobra.Command {
 				return fmt.Errorf("get executable: %w", err)
 			}
 			validateCmd := exec.Command(exe, "validate")
+			// Re-encode and forward the hook payload so chunk validate can
+			// detect hook mode and apply the clean-tree skip and result cache.
+			payloadJSON, _ := json.Marshal(payload)
+			validateCmd.Stdin = bytes.NewReader(payloadJSON)
 			// Route validate stdout to stderr so our stdout stays clean for
 			// any JSON hook output (e.g. additionalContext from reportConflict).
 			validateCmd.Stdout = cmd.ErrOrStderr()
