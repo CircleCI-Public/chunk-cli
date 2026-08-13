@@ -45,8 +45,6 @@ type Session struct {
 	// GitStatus is set by the server's background checker.
 	// Format: "" unknown, "clean", "dirty", "↑N" ahead, "↓N" behind, "↑N↓M" diverged.
 	GitStatus string `json:"git_status,omitempty"`
-	// ResolutionBranch is set when the server has created a conflict-resolution branch.
-	ResolutionBranch string `json:"resolution_branch,omitempty"`
 }
 
 // Event is a single recorded event within a session.

@@ -292,9 +292,9 @@ func newMonitorAgentValidateCmd() *cobra.Command {
 					Timestamp: time.Now(),
 				})
 
-				// If a conflict-resolution branch is ready, surface it now so the
+				// If the branch has upstream conflicts, surface them now so the
 				// agent can act on it in its next turn.
-				proposeResolution(cmd, payload.SessionID)
+				reportConflict(cmd, payload.SessionID)
 			}
 
 			return validateErr
@@ -418,10 +418,10 @@ func ensureAgentRunning(ctx context.Context) error {
 	return ensureRunning(ctx, "agent", "monitor", "agent", "_daemon")
 }
 
-// proposeResolution checks whether the server has prepared a conflict-resolution
-// branch for this session and, if so, prints a message to the hook's stdout so
-// Claude Code surfaces it to the agent on its next turn.
-func proposeResolution(cmd *cobra.Command, sessionID string) {
+// reportConflict checks whether the current session has an upstream merge
+// conflict and, if so, prints a message to the hook's stdout so Claude Code
+// surfaces it to the agent on its next turn.
+func reportConflict(cmd *cobra.Command, sessionID string) {
 	resp, err := queryServer(ipc.Request{
 		Cmd:       ipc.CmdGetSession,
 		SessionID: sessionID,
@@ -429,14 +429,12 @@ func proposeResolution(cmd *cobra.Command, sessionID string) {
 	if err != nil || !resp.OK || len(resp.Sessions) == 0 {
 		return
 	}
-	s := resp.Sessions[0]
-	if s.ResolutionBranch == "" {
+	if resp.Sessions[0].GitStatus != "conflict" {
 		return
 	}
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(),
-		"\n[chunk monitor] Conflict resolution ready on branch %q.\n"+
-			"Run `git merge %s` to apply it, or `git diff HEAD...%s` to review first.\n",
-		s.ResolutionBranch, s.ResolutionBranch, s.ResolutionBranch)
+		"\n[chunk monitor] Warning: this branch has merge conflicts with upstream.\n"+
+			"Run `git fetch && git status` to see the details.\n")
 }
 
 func queryServer(req ipc.Request) (ipc.Response, error) {

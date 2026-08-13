@@ -129,7 +129,7 @@ func dispatch(_ context.Context, sf *stateFile, req ipc.Request) ipc.Response {
 
 	case ipc.CmdGetSession:
 		// Forward directly to the server so the response includes DB-backed fields
-		// (git_status, resolution_branch) that the agent state file doesn't track.
+		// (git_status) that the agent state file doesn't track.
 		resp, err := forwardAndReceive(req)
 		if err != nil {
 			return ipc.Response{OK: false, Error: err.Error()}
