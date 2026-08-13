@@ -16,16 +16,17 @@ import (
 )
 
 var (
-	styleHeader  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	styleActive  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleStale   = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
-	styleEnded   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleErr     = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	styleDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleCursor  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255")).Background(lipgloss.Color("24"))
-	styleValOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleValFail = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	styleTool    = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	styleHeader    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	styleColHeader = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("245"))
+	styleActive    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	styleStale     = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
+	styleEnded     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	styleErr       = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	styleDim       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	styleCursorFg  = lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("236"))
+	styleValOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	styleValFail   = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	styleTool      = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 )
 
 type dashboardView int
@@ -142,8 +143,10 @@ func (m Dashboard) View() tea.View {
 func (m Dashboard) render() string {
 	var sb strings.Builder
 
-	fmt.Fprintln(&sb, styleHeader.Render("chunk monitor"))
-	fmt.Fprintf(&sb, "server: %s   agent: %s\n\n", daemonStatusStr("server"), daemonStatusStr("agent"))
+	fmt.Fprintf(&sb, "%s\n", styleHeader.Render("chunk monitor"))
+	fmt.Fprintf(&sb, "%s %s   %s %s\n\n",
+		styleDim.Render("server:"), daemonStatusStr("server"),
+		styleDim.Render("agent:"), daemonStatusStr("agent"))
 
 	if m.activeView == viewDetail && len(m.sessions) > 0 {
 		m.renderDetail(&sb)
@@ -153,53 +156,69 @@ func (m Dashboard) render() string {
 	return sb.String()
 }
 
+const (
+	colWProject    = 22
+	colWStatus     = 8
+	colWTools      = 6
+	colWDuration   = 9
+	colWValidation = 10
+)
+
 func (m Dashboard) renderList(sb *strings.Builder) {
-	fmt.Fprintln(sb, styleDim.Render("j/k: move   enter: detail   r: refresh   q: quit"))
+	fmt.Fprintln(sb, styleDim.Render("  j/k  move    enter  detail    r  refresh    q  quit"))
 	fmt.Fprintln(sb)
 
 	if m.fetchErr != nil {
-		fmt.Fprintln(sb, styleErr.Render("error: "+m.fetchErr.Error()))
+		fmt.Fprintln(sb, styleErr.Render("  error: "+m.fetchErr.Error()))
 		return
 	}
 
 	if len(m.sessions) == 0 {
-		fmt.Fprintln(sb, styleDim.Render("No sessions recorded."))
+		fmt.Fprintln(sb, styleDim.Render("  No sessions recorded."))
 		if !m.lastFetch.IsZero() {
-			fmt.Fprintf(sb, "\n%s\n", styleDim.Render("refreshed "+m.lastFetch.Format("15:04:05")))
+			fmt.Fprintf(sb, "\n%s\n", styleDim.Render("  refreshed "+m.lastFetch.Format("15:04:05")))
 		}
 		return
 	}
 
-	fmt.Fprintf(sb, "  %-20s  %-6s  %-8s  %-8s  %-10s  %s\n",
-		"PROJECT", "STATUS", "TOOLS", "DURATION", "VALIDATION", "SESSION")
-	fmt.Fprintln(sb, strings.Repeat("─", 90))
+	header := fmt.Sprintf("  %-*s  %-*s  %-*s  %-*s  %-*s  %s",
+		colWProject, "PROJECT",
+		colWStatus, "STATUS",
+		colWTools, "TOOLS",
+		colWDuration, "DURATION",
+		colWValidation, "VALIDATION",
+		"SESSION",
+	)
+	fmt.Fprintln(sb, styleColHeader.Render(header))
+	fmt.Fprintln(sb, styleDim.Render("  "+strings.Repeat("─", 78)))
 
 	for i, s := range m.sessions {
-		project := shortProject(s.ProjectDir)
-		status, styledStatus := statusDisplay(s.Status)
-		_ = status
-		validation := validationDisplay(s.ValidationStatus)
-		duration := formatDuration(s.StartedAt, s.LastSeenAt)
+		project := fmt.Sprintf("%-*s", colWProject, truncate(shortProject(s.ProjectDir), colWProject))
+		rawStatus := fmt.Sprintf("%-*s", colWStatus, s.Status)
+		tools := fmt.Sprintf("%-*d", colWTools, s.ToolUseCount)
+		duration := fmt.Sprintf("%-*s", colWDuration, formatDuration(s.StartedAt, s.LastSeenAt))
+		rawVal, valStyle := validationParts(s.ValidationStatus)
+		val := fmt.Sprintf("%-*s", colWValidation, rawVal)
 		id := shortID(s.ID)
-		tools := fmt.Sprintf("%d", s.ToolUseCount)
 
-		line := fmt.Sprintf("  %-20s  %s  %-8s  %-8s  %-10s  %s",
-			truncate(project, 20),
-			styledStatus,
-			tools,
-			duration,
-			validation,
-			id,
-		)
 		if i == m.selectedIdx {
-			fmt.Fprintln(sb, styleCursor.Render(line))
+			// cursor row: plain text with full-row background, no per-cell color
+			plain := fmt.Sprintf("  %s  %s  %s  %s  %s  %s", project, rawStatus, tools, duration, val, id)
+			rowWidth := m.width
+			if rowWidth < 1 {
+				rowWidth = 82
+			}
+			fmt.Fprintln(sb, styleCursorFg.Width(rowWidth).Render(plain))
 		} else {
-			fmt.Fprintln(sb, line)
+			styledStatus := applyStatusStyle(s.Status, rawStatus)
+			styledVal := valStyle.Render(val)
+			fmt.Fprintf(sb, "  %s  %s  %s  %s  %s  %s\n",
+				project, styledStatus, styleDim.Render(tools), styleDim.Render(duration), styledVal, styleDim.Render(id))
 		}
 	}
 
 	if !m.lastFetch.IsZero() {
-		fmt.Fprintf(sb, "\n%s\n", styleDim.Render("refreshed "+m.lastFetch.Format("15:04:05")))
+		fmt.Fprintf(sb, "\n%s\n", styleDim.Render("  refreshed "+m.lastFetch.Format("15:04:05")))
 	}
 }
 
@@ -245,30 +264,36 @@ func daemonStatusStr(name string) string {
 	return styleEnded.Render("stopped")
 }
 
-func statusDisplay(s string) (string, string) {
-	return s, statusStyled(s)
+func applyStatusStyle(status, padded string) string {
+	switch status {
+	case statusActive:
+		return styleActive.Render(padded)
+	case "stale": //nolint:goconst
+		return styleStale.Render(padded)
+	default:
+		return styleEnded.Render(padded)
+	}
 }
 
 func statusStyled(s string) string {
+	return applyStatusStyle(s, s)
+}
+
+// validationParts returns the display string and the style to apply to it.
+func validationParts(s string) (string, lipgloss.Style) {
 	switch s {
-	case statusActive:
-		return styleActive.Render(s)
-	case "stale": //nolint:goconst
-		return styleStale.Render(s)
+	case "passed":
+		return "✓ passed", styleValOK
+	case "failed":
+		return "✗ failed", styleValFail
 	default:
-		return styleEnded.Render(s)
+		return "—", styleDim
 	}
 }
 
 func validationDisplay(s string) string {
-	switch s {
-	case "passed":
-		return styleValOK.Render("✓ passed")
-	case "failed":
-		return styleValFail.Render("✗ failed")
-	default:
-		return styleDim.Render("—")
-	}
+	text, style := validationParts(s)
+	return style.Render(text)
 }
 
 func shortProject(dir string) string {
