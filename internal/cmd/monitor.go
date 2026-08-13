@@ -267,17 +267,6 @@ func newMonitorAgentValidateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			payload := readHookPayload(cmd.InOrStdin())
 
-			// Send session_end before validate so the session is marked even if validate hangs.
-			if payload.SessionID != "" {
-				_ = ensureAgentRunning(cmd.Context())
-				_ = sendToAgent(ipc.Request{
-					Cmd:       ipc.CmdEvent,
-					SessionID: payload.SessionID,
-					EventType: ipc.EventSessionEnd,
-					Timestamp: time.Now(),
-				})
-			}
-
 			// Run validate using the same binary so dev builds test themselves.
 			exe, err := os.Executable()
 			if err != nil {
@@ -288,8 +277,10 @@ func newMonitorAgentValidateCmd() *cobra.Command {
 			validateCmd.Stderr = cmd.ErrOrStderr()
 			validateErr := validateCmd.Run()
 
-			// Record the result.
+			// Record the result. Don't send session_end — the Stop hook fires after
+			// every response, not just the final one. Stale detection handles cleanup.
 			if payload.SessionID != "" {
+				_ = ensureAgentRunning(cmd.Context())
 				status := "passed"
 				if validateErr != nil {
 					status = "failed"

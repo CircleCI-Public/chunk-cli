@@ -59,6 +59,8 @@ func RunDaemon(ctx context.Context) error {
 
 	log.Printf("server daemon started pid=%d socket=%s", os.Getpid(), sockPath)
 
+	startGitChecker(ctx, db)
+
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()

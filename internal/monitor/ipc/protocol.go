@@ -41,6 +41,9 @@ type Session struct {
 	Status           string    `json:"status"` // "active" | "stale" | "ended"
 	ValidationStatus string    `json:"validation_status,omitempty"`
 	ToolUseCount     int       `json:"tool_use_count,omitempty"`
+	// GitStatus is set by the server's background checker.
+	// Format: "" unknown, "clean", "dirty", "↑N" ahead, "↓N" behind, "↑N↓M" diverged.
+	GitStatus string `json:"git_status,omitempty"`
 }
 
 // Event is a single recorded event within a session.

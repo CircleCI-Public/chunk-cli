@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 	last_seen_at      TEXT    NOT NULL,
 	status            TEXT    NOT NULL DEFAULT 'active',
 	validation_status TEXT    NOT NULL DEFAULT '',
-	tool_use_count    INTEGER NOT NULL DEFAULT 0
+	tool_use_count    INTEGER NOT NULL DEFAULT 0,
+	git_status        TEXT    NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS events (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS events (
 var alterations = []string{
 	"ALTER TABLE sessions ADD COLUMN project_dir TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE sessions ADD COLUMN tool_use_count INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE sessions ADD COLUMN git_status TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE events ADD COLUMN tool_name TEXT NOT NULL DEFAULT ''",
 }
 
@@ -104,7 +106,7 @@ const staleThreshold = 30 * time.Minute
 
 func listSessions(ctx context.Context, db *sql.DB) ([]ipc.Session, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, project_dir, started_at, last_seen_at, status, validation_status, tool_use_count
+		SELECT id, project_dir, started_at, last_seen_at, status, validation_status, tool_use_count, git_status
 		FROM sessions
 		ORDER BY last_seen_at DESC
 		LIMIT 100
@@ -120,13 +122,43 @@ func listSessions(ctx context.Context, db *sql.DB) ([]ipc.Session, error) {
 		var s ipc.Session
 		var startedAt, lastSeenAt string
 		if err := rows.Scan(&s.ID, &s.ProjectDir, &startedAt, &lastSeenAt,
-			&s.Status, &s.ValidationStatus, &s.ToolUseCount); err != nil {
+			&s.Status, &s.ValidationStatus, &s.ToolUseCount, &s.GitStatus); err != nil {
 			return nil, fmt.Errorf("scan session: %w", err)
 		}
 		s.StartedAt, _ = time.Parse(time.RFC3339, startedAt)
 		s.LastSeenAt, _ = time.Parse(time.RFC3339, lastSeenAt)
 		if s.Status == statusActive && now.Sub(s.LastSeenAt) > staleThreshold {
 			s.Status = "stale"
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+func setGitStatus(ctx context.Context, db *sql.DB, sessionID, status string) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE sessions SET git_status = ? WHERE id = ?`,
+		status, sessionID)
+	return err
+}
+
+// activeSessions returns sessions that have a project_dir and are not ended,
+// used by the background git status checker.
+func activeSessions(ctx context.Context, db *sql.DB) ([]ipc.Session, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, project_dir FROM sessions
+		WHERE project_dir != '' AND status != 'ended'
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query active sessions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var sessions []ipc.Session
+	for rows.Next() {
+		var s ipc.Session
+		if err := rows.Scan(&s.ID, &s.ProjectDir); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
 		}
 		sessions = append(sessions, s)
 	}

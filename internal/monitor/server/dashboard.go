@@ -27,6 +27,10 @@ var (
 	styleValOK     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleValFail   = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	styleTool      = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
+	styleGitAhead  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // orange: ahead of upstream
+	styleGitBehind = lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // red: behind upstream
+	styleGitClean  = lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // dim: clean
+	styleGitDirty  = lipgloss.NewStyle().Foreground(lipgloss.Color("179")) // yellow: dirty
 )
 
 type dashboardView int
@@ -158,6 +162,7 @@ func (m Dashboard) render() string {
 
 const (
 	colWProject    = 22
+	colWGit        = 8
 	colWStatus     = 8
 	colWTools      = 6
 	colWDuration   = 9
@@ -181,8 +186,9 @@ func (m Dashboard) renderList(sb *strings.Builder) {
 		return
 	}
 
-	header := fmt.Sprintf("  %-*s  %-*s  %-*s  %-*s  %-*s  %s",
+	header := fmt.Sprintf("  %-*s  %-*s  %-*s  %-*s  %-*s  %-*s  %s",
 		colWProject, "PROJECT",
+		colWGit, "GIT",
 		colWStatus, "STATUS",
 		colWTools, "TOOLS",
 		colWDuration, "DURATION",
@@ -190,10 +196,11 @@ func (m Dashboard) renderList(sb *strings.Builder) {
 		"SESSION",
 	)
 	fmt.Fprintln(sb, styleColHeader.Render(header))
-	fmt.Fprintln(sb, styleDim.Render("  "+strings.Repeat("─", 78)))
+	fmt.Fprintln(sb, styleDim.Render("  "+strings.Repeat("─", 88)))
 
 	for i, s := range m.sessions {
 		project := fmt.Sprintf("%-*s", colWProject, truncate(shortProject(s.ProjectDir), colWProject))
+		rawGit := fmt.Sprintf("%-*s", colWGit, s.GitStatus)
 		rawStatus := fmt.Sprintf("%-*s", colWStatus, s.Status)
 		tools := fmt.Sprintf("%-*d", colWTools, s.ToolUseCount)
 		duration := fmt.Sprintf("%-*s", colWDuration, formatDuration(s.StartedAt, s.LastSeenAt))
@@ -202,18 +209,20 @@ func (m Dashboard) renderList(sb *strings.Builder) {
 		id := shortID(s.ID)
 
 		if i == m.selectedIdx {
-			// cursor row: plain text with full-row background, no per-cell color
-			plain := fmt.Sprintf("  %s  %s  %s  %s  %s  %s", project, rawStatus, tools, duration, val, id)
+			plain := fmt.Sprintf("  %s  %s  %s  %s  %s  %s  %s", project, rawGit, rawStatus, tools, duration, val, id)
 			rowWidth := m.width
 			if rowWidth < 1 {
-				rowWidth = 82
+				rowWidth = 92
 			}
 			fmt.Fprintln(sb, styleCursorFg.Width(rowWidth).Render(plain))
 		} else {
+			styledGit := applyGitStyle(s.GitStatus, rawGit)
 			styledStatus := applyStatusStyle(s.Status, rawStatus)
 			styledVal := valStyle.Render(val)
-			fmt.Fprintf(sb, "  %s  %s  %s  %s  %s  %s\n",
-				project, styledStatus, styleDim.Render(tools), styleDim.Render(duration), styledVal, styleDim.Render(id))
+			fmt.Fprintf(sb, "  %s  %s  %s  %s  %s  %s  %s\n",
+				project, styledGit, styledStatus,
+				styleDim.Render(tools), styleDim.Render(duration),
+				styledVal, styleDim.Render(id))
 		}
 	}
 
@@ -229,6 +238,7 @@ func (m Dashboard) renderDetail(sb *strings.Builder) {
 	fmt.Fprintf(sb, "Session:    %s\n", s.ID)
 	fmt.Fprintf(sb, "Project:    %s\n", s.ProjectDir)
 	fmt.Fprintf(sb, "Status:     %s\n", statusStyled(s.Status))
+	fmt.Fprintf(sb, "Git:        %s\n", applyGitStyle(s.GitStatus, gitStatusLabel(s.GitStatus)))
 	fmt.Fprintf(sb, "Validation: %s\n", validationDisplay(s.ValidationStatus))
 	fmt.Fprintf(sb, "Started:    %s\n", s.StartedAt.Local().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(sb, "Duration:   %s\n", formatDuration(s.StartedAt, s.LastSeenAt))
@@ -262,6 +272,27 @@ func daemonStatusStr(name string) string {
 		return styleActive.Render(fmt.Sprintf("running (pid %d)", p))
 	}
 	return styleEnded.Render("stopped")
+}
+
+func applyGitStyle(gitStatus, padded string) string {
+	switch {
+	case gitStatus == gitStatusClean || gitStatus == "":
+		return styleGitClean.Render(padded)
+	case gitStatus == "dirty":
+		return styleGitDirty.Render(padded)
+	case strings.HasPrefix(gitStatus, "↓"):
+		return styleGitBehind.Render(padded)
+	default:
+		return styleGitAhead.Render(padded)
+	}
+}
+
+// gitStatusLabel returns a human-readable label for display in the detail view.
+func gitStatusLabel(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }
 
 func applyStatusStyle(status, padded string) string {
