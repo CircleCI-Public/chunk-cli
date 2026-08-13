@@ -273,7 +273,9 @@ func newMonitorAgentValidateCmd() *cobra.Command {
 				return fmt.Errorf("get executable: %w", err)
 			}
 			validateCmd := exec.Command(exe, "validate")
-			validateCmd.Stdout = cmd.OutOrStdout()
+			// Route validate stdout to stderr so our stdout stays clean for
+			// any JSON hook output (e.g. additionalContext from reportConflict).
+			validateCmd.Stdout = cmd.ErrOrStderr()
 			validateCmd.Stderr = cmd.ErrOrStderr()
 			validateErr := validateCmd.Run()
 
@@ -432,18 +434,23 @@ func reportConflict(cmd *cobra.Command, sessionID string) {
 	if resp.Sessions[0].GitStatus != "conflict" {
 		return
 	}
+	const msg = "[chunk monitor] This branch has merge conflicts with upstream. " +
+		"Run `git fetch && git status` to review the conflicts, then resolve them before continuing."
 	type hookOutput struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext"`
 	}
 	type response struct {
+		SystemMessage      string     `json:"systemMessage"`
 		HookSpecificOutput hookOutput `json:"hookSpecificOutput"`
 	}
-	out := response{HookSpecificOutput: hookOutput{
-		HookEventName: "Stop",
-		AdditionalContext: "[chunk monitor] This branch has merge conflicts with upstream. " +
-			"Run `git fetch && git status` to review the conflicts, then resolve them before continuing.",
-	}}
+	out := response{
+		SystemMessage: msg,
+		HookSpecificOutput: hookOutput{
+			HookEventName:     "Stop",
+			AdditionalContext: msg,
+		},
+	}
 	data, _ := json.Marshal(out)
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", data)
 }
