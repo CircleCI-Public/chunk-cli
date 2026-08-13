@@ -126,28 +126,42 @@ func dispatch(_ context.Context, sf *stateFile, req ipc.Request) ipc.Response {
 
 	case ipc.CmdGetEvents:
 		return ipc.Response{OK: false, Error: "get_events is not supported by the agent"}
+
+	case ipc.CmdGetSession:
+		// Forward directly to the server so the response includes DB-backed fields
+		// (git_status, resolution_branch) that the agent state file doesn't track.
+		resp, err := forwardAndReceive(req)
+		if err != nil {
+			return ipc.Response{OK: false, Error: err.Error()}
+		}
+		return resp
 	default:
 		return ipc.Response{OK: false, Error: fmt.Sprintf("unknown command %q", req.Cmd)}
 	}
 }
 
 func forwardToServer(req ipc.Request) {
+	if _, err := forwardAndReceive(req); err != nil {
+		log.Printf("forward: %v", err)
+	}
+}
+
+func forwardAndReceive(req ipc.Request) (ipc.Response, error) {
 	sockPath, err := monitor.SocketPath("server")
 	if err != nil {
-		log.Printf("forward: socket path: %v", err)
-		return
+		return ipc.Response{}, fmt.Errorf("socket path: %w", err)
 	}
 	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
 	if err != nil {
-		log.Printf("forward: connect to server: %v", err)
-		return
+		return ipc.Response{}, fmt.Errorf("connect to server: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 	if err := ipc.Send(conn, req); err != nil {
-		log.Printf("forward: send: %v", err)
-		return
+		return ipc.Response{}, fmt.Errorf("send: %w", err)
 	}
-	if _, err := ipc.ReceiveResponse(conn); err != nil {
-		log.Printf("forward: response: %v", err)
+	resp, err := ipc.ReceiveResponse(conn)
+	if err != nil {
+		return ipc.Response{}, fmt.Errorf("response: %w", err)
 	}
+	return resp, nil
 }

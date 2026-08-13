@@ -291,6 +291,10 @@ func newMonitorAgentValidateCmd() *cobra.Command {
 					Payload:   map[string]any{"status": status},
 					Timestamp: time.Now(),
 				})
+
+				// If a conflict-resolution branch is ready, surface it now so the
+				// agent can act on it in its next turn.
+				proposeResolution(cmd, payload.SessionID)
 			}
 
 			return validateErr
@@ -412,6 +416,43 @@ func ensureServerRunning(ctx context.Context) error {
 
 func ensureAgentRunning(ctx context.Context) error {
 	return ensureRunning(ctx, "agent", "monitor", "agent", "_daemon")
+}
+
+// proposeResolution checks whether the server has prepared a conflict-resolution
+// branch for this session and, if so, prints a message to the hook's stdout so
+// Claude Code surfaces it to the agent on its next turn.
+func proposeResolution(cmd *cobra.Command, sessionID string) {
+	resp, err := queryServer(ipc.Request{
+		Cmd:       ipc.CmdGetSession,
+		SessionID: sessionID,
+	})
+	if err != nil || !resp.OK || len(resp.Sessions) == 0 {
+		return
+	}
+	s := resp.Sessions[0]
+	if s.ResolutionBranch == "" {
+		return
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+		"\n[chunk monitor] Conflict resolution ready on branch %q.\n"+
+			"Run `git merge %s` to apply it, or `git diff HEAD...%s` to review first.\n",
+		s.ResolutionBranch, s.ResolutionBranch, s.ResolutionBranch)
+}
+
+func queryServer(req ipc.Request) (ipc.Response, error) {
+	sockPath, err := monitor.SocketPath("server")
+	if err != nil {
+		return ipc.Response{}, err
+	}
+	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	if err != nil {
+		return ipc.Response{}, fmt.Errorf("connect to server: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := ipc.Send(conn, req); err != nil {
+		return ipc.Response{}, fmt.Errorf("send: %w", err)
+	}
+	return ipc.ReceiveResponse(conn)
 }
 
 func sendToAgent(req ipc.Request) error {

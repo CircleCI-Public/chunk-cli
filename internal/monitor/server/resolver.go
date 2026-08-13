@@ -113,6 +113,9 @@ func resolveConflicts(ctx context.Context, db *sql.DB, sessionID, dir, ref, base
 	if err := setConflictBaseSHA(ctx, db, sessionID, base); err != nil {
 		log.Printf("resolver: save base sha: %v", err)
 	}
+	if err := setResolutionBranch(ctx, db, sessionID, resolutionBranch); err != nil {
+		log.Printf("resolver: save resolution branch: %v", err)
+	}
 	log.Printf("resolver: branch %q is ready — merge it to apply the resolution", resolutionBranch)
 	return nil
 }

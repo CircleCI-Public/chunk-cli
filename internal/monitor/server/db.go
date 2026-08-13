@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 	validation_status   TEXT    NOT NULL DEFAULT '',
 	tool_use_count      INTEGER NOT NULL DEFAULT 0,
 	git_status          TEXT    NOT NULL DEFAULT '',
-	conflict_base_sha   TEXT    NOT NULL DEFAULT ''
+	conflict_base_sha   TEXT    NOT NULL DEFAULT '',
+	resolution_branch   TEXT    NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS events (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +45,7 @@ var alterations = []string{
 	"ALTER TABLE sessions ADD COLUMN tool_use_count INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE sessions ADD COLUMN git_status TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE sessions ADD COLUMN conflict_base_sha TEXT NOT NULL DEFAULT ''",
+	"ALTER TABLE sessions ADD COLUMN resolution_branch TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE events ADD COLUMN tool_name TEXT NOT NULL DEFAULT ''",
 }
 
@@ -108,7 +110,8 @@ const staleThreshold = 30 * time.Minute
 
 func listSessions(ctx context.Context, db *sql.DB) ([]ipc.Session, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, project_dir, started_at, last_seen_at, status, validation_status, tool_use_count, git_status
+		SELECT id, project_dir, started_at, last_seen_at, status, validation_status,
+		       tool_use_count, git_status, resolution_branch
 		FROM sessions
 		ORDER BY last_seen_at DESC
 		LIMIT 100
@@ -124,7 +127,7 @@ func listSessions(ctx context.Context, db *sql.DB) ([]ipc.Session, error) {
 		var s ipc.Session
 		var startedAt, lastSeenAt string
 		if err := rows.Scan(&s.ID, &s.ProjectDir, &startedAt, &lastSeenAt,
-			&s.Status, &s.ValidationStatus, &s.ToolUseCount, &s.GitStatus); err != nil {
+			&s.Status, &s.ValidationStatus, &s.ToolUseCount, &s.GitStatus, &s.ResolutionBranch); err != nil {
 			return nil, fmt.Errorf("scan session: %w", err)
 		}
 		s.StartedAt, _ = time.Parse(time.RFC3339, startedAt)
@@ -191,6 +194,29 @@ func getEvents(ctx context.Context, db *sql.DB, sessionID string) ([]ipc.Event, 
 		events = append(events, e)
 	}
 	return events, rows.Err()
+}
+
+func getSession(ctx context.Context, db *sql.DB, sessionID string) (ipc.Session, error) {
+	var s ipc.Session
+	var startedAt, lastSeenAt string
+	err := db.QueryRowContext(ctx, `
+		SELECT id, project_dir, started_at, last_seen_at, status, validation_status,
+		       tool_use_count, git_status, resolution_branch
+		FROM sessions WHERE id = ?`, sessionID).
+		Scan(&s.ID, &s.ProjectDir, &startedAt, &lastSeenAt,
+			&s.Status, &s.ValidationStatus, &s.ToolUseCount, &s.GitStatus, &s.ResolutionBranch)
+	if err != nil {
+		return ipc.Session{}, fmt.Errorf("get session: %w", err)
+	}
+	s.StartedAt, _ = time.Parse(time.RFC3339, startedAt)
+	s.LastSeenAt, _ = time.Parse(time.RFC3339, lastSeenAt)
+	return s, nil
+}
+
+func setResolutionBranch(ctx context.Context, db *sql.DB, sessionID, branch string) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE sessions SET resolution_branch = ? WHERE id = ?`, branch, sessionID)
+	return err
 }
 
 func getConflictBaseSHA(ctx context.Context, db *sql.DB, sessionID string) string {

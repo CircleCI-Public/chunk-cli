@@ -144,6 +144,16 @@ func dispatch(ctx context.Context, db *sql.DB, req ipc.Request) ipc.Response {
 		}
 		return ipc.Response{OK: true, Events: events}
 
+	case ipc.CmdGetSession:
+		if req.SessionID == "" {
+			return ipc.Response{OK: false, Error: errMissingSessionID}
+		}
+		s, err := getSession(ctx, db, req.SessionID)
+		if err != nil {
+			return ipc.Response{OK: false, Error: err.Error()}
+		}
+		return ipc.Response{OK: true, Sessions: []ipc.Session{s}}
+
 	default:
 		return ipc.Response{OK: false, Error: fmt.Sprintf("unknown command %q", req.Cmd)}
 	}
