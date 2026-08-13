@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -124,7 +126,10 @@ func newConfigSetCmd() *cobra.Command {
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
 		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, useSSHIdentityFile, telemetry\nProject keys: orgID, validation.sidecarImage",
-		Args:  cobra.ExactArgs(2),
+		Args:  configSetArgs,
+		// configSetArgs names what is missing and lists the keys, so cobra's
+		// usage dump ahead of it would only bury the part worth reading.
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
 			key, value := args[0], args[1]
@@ -159,7 +164,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, useSSHIdentityFile, telemetry, orgID, validation.sidecarImage.",
+					detail: fmt.Sprintf("Supported keys: %s, %s.", configKeyList(config.ValidConfigKeys), configKeyList(config.ValidProjectConfigKeys)),
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}
@@ -210,4 +215,43 @@ func newConfigSetCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// configSetArgs requires exactly a key and a value. cobra.ExactArgs would report
+// "accepts 2 arg(s), received 0", which carries no user-facing message and so
+// surfaces as "An unknown error occurred" — a dead end for someone who just
+// forgot an argument. Naming what is missing and listing the keys gives them the
+// next step instead.
+func configSetArgs(_ *cobra.Command, args []string) error {
+	if len(args) == 2 {
+		return nil
+	}
+	var msg string
+	switch len(args) {
+	case 0:
+		msg = "Missing key and value."
+	case 1:
+		msg = fmt.Sprintf("Missing value for %q.", args[0])
+	default:
+		msg = fmt.Sprintf("Too many arguments: expected a key and a value, got %d.", len(args))
+	}
+	return newUserError(msg).
+		withCode("config.set_args").
+		withDetail(fmt.Sprintf("Project keys: %s\nUser keys: %s",
+			configKeyList(config.ValidProjectConfigKeys),
+			configKeyList(config.ValidConfigKeys))).
+		withSuggestion("Run 'chunk config set <key> <value>', for example: chunk config set orgID <your-org-id>").
+		wrapMsg(fmt.Sprintf("config set accepts 2 args, received %d", len(args)))
+}
+
+// configKeyList renders a key-validity map as a sorted, comma-joined list, so
+// the keys quoted in help and error text cannot drift from the ones "config set"
+// actually accepts.
+func configKeyList(keys map[string]bool) string {
+	out := make([]string, 0, len(keys))
+	for k := range keys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ", ")
 }
