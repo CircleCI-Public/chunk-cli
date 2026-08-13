@@ -219,6 +219,21 @@ func TestUnknownKeys(t *testing.T) {
 	})
 }
 
+// Merge cannot pair an array element that has no name, so its unknown keys are
+// dropped on save. Reporting them would promise a preservation that never
+// happens.
+func TestUnknownKeysSkipsUnnamedArrayElements(t *testing.T) {
+	data := `{"commands":[{"run":"go test","fileExt":"go"},{"name":"lint","limit":5}]}`
+
+	assert.DeepEqual(t, UnknownKeys([]byte(data), &testConfig{}), []string{"commands[].limit"})
+
+	// The same document through Merge: the unnamed element keeps nothing.
+	cfg := &testConfig{Commands: []testCommand{{Run: "go test"}, {Name: "lint", Run: "golangci-lint run"}}}
+	got := mergeInto(t, cfg, data)
+	assert.Equal(t, got, `{"commands":[{"name":"","run":"go test"},`+
+		`{"name":"lint","run":"golangci-lint run","limit":5}]}`)
+}
+
 func TestUnknownKeysNoneForModeledDocument(t *testing.T) {
 	cfg := &testConfig{Commands: []testCommand{{Name: "test", Run: "go test"}}, OrgID: "org-1"}
 	data, err := json.Marshal(cfg)

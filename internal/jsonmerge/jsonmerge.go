@@ -65,7 +65,9 @@ func Merge(typed, existing []byte, model any) ([]byte, error) {
 // sorted and deduplicated. Paths join object keys with "." and mark array
 // elements with "[]", so an unmodeled key on a command reads as
 // "commands[].fileExt". Merge preserves these keys; this reports them so a
-// caller can point out a typo instead of keeping it forever.
+// caller can point out a typo instead of keeping it forever. Only keys Merge
+// would actually carry across are reported, so array elements Merge cannot pair
+// are skipped here too.
 func UnknownKeys(data []byte, model any) []string {
 	root := schemaOf(reflect.TypeOf(model))
 	if root == nil || !json.Valid(data) {
@@ -105,6 +107,12 @@ func collectUnknown(data json.RawMessage, n *node, prefix string, seen map[strin
 			return
 		}
 		for _, e := range elems {
+			// mergeArray pairs elements by matchKey, so an element without one
+			// never gets its unknown keys carried across. Skipping it here keeps
+			// this report to the keys a save would actually preserve.
+			if _, named := objectKey(e, matchKey); !named {
+				continue
+			}
 			collectUnknown(e, n.elem, prefix+"[]", seen, out)
 		}
 	}
