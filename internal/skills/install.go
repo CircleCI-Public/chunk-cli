@@ -54,6 +54,10 @@ var All = []Skill{
 		Name:        "chunk-sidecar",
 		Description: `Run build/test/validate on a remote chunk sidecar instead of locally. Use when asked to "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "check this on the sidecar", "run smarter testing doctor", "diagnose smarter testing", or when edits need remote verification. Also covers creating sidecars, snapshots, and env customization.`,
 	},
+	{
+		Name:        "chunk-sidecar-setup",
+		Description: `Interactive onboarding wizard for setting up a chunk sidecar from scratch. Use when asked to "set up chunk sidecar", "onboard to chunk", "first time sidecar", "configure sidecar from scratch", "walk me through sidecar setup", or "I've never used a chunk sidecar before". Covers auth, orgID, sidecar creation, dependency install, snapshot creation, and handoff to the dev loop.`,
+	},
 }
 
 // Agent represents a target agent with its config directories.
