@@ -332,6 +332,51 @@ func TestMergePreservesUserStopHooks(t *testing.T) {
 	assert.Assert(t, ok && len(stop) == 2, "expected both Stop groups to be present, got: %v", len(stop))
 }
 
+// A user entry sharing the group with chunk's own survives the merge. Chunk owns
+// the "chunk validate" entry, not the group it happens to sit in, so the entry is
+// replaced in place rather than the whole group being overwritten.
+func TestMergePreservesUserEntriesInChunkStopGroup(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"Stop": [
+				{"hooks": [
+					{"type": "command", "command": "chunk validate", "timeout": 30},
+					{"type": "command", "command": "notify-send done", "timeout": 5}
+				]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 600}]}]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	stop := hooks["Stop"].([]interface{})
+	assert.Equal(t, len(stop), 1)
+
+	entries := stop[0].(map[string]interface{})["hooks"].([]interface{})
+	assert.Equal(t, len(entries), 2)
+
+	commands := make([]string, 0, len(entries))
+	for _, e := range entries {
+		entry := e.(map[string]interface{})
+		cmd, _ := entry["command"].(string)
+		commands = append(commands, cmd)
+		if cmd == StopCommand {
+			assert.Equal(t, entry["timeout"], float64(600))
+		}
+	}
+	assert.DeepEqual(t, commands, []string{StopCommand, "notify-send done"})
+}
+
 func TestMergeNoChangeWhenAlreadyMerged(t *testing.T) {
 	settings := []byte(`{
 		"$schema": "https://json.schemastore.org/claude-code-settings.json",
@@ -556,6 +601,48 @@ func TestMergeCodexPreservesUserStopHooks(t *testing.T) {
 			assert.Assert(t, timeout == 600, "expected updated chunk validate timeout, got: %v", timeout)
 		}
 	}
+}
+
+// The Codex path shares mergeStopHooks, so it keeps user entries that sit in the
+// same group as chunk's own entry too.
+func TestMergeCodexPreservesUserEntriesInChunkStopGroup(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"Stop": [
+				{"hooks": [
+					{"type": "command", "command": "notify-team", "timeout": 10},
+					{"type": "command", "command": "chunk validate", "timeout": 30}
+				]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 600}]}]
+		}
+	}`)
+
+	result, err := MergeCodex(existing, generated)
+	assert.NilError(t, err)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	stop := hooks["Stop"].([]interface{})
+	assert.Equal(t, len(stop), 1)
+
+	entries := stop[0].(map[string]interface{})["hooks"].([]interface{})
+	assert.Equal(t, len(entries), 2)
+
+	// The user's entry keeps its position and timeout; chunk's is updated in place.
+	first := entries[0].(map[string]interface{})
+	assert.Equal(t, first["command"], "notify-team")
+	assert.Equal(t, first["timeout"], float64(10))
+
+	second := entries[1].(map[string]interface{})
+	assert.Equal(t, second["command"], StopCommand)
+	assert.Equal(t, second["timeout"], float64(600))
 }
 
 func TestMergeCodexNoChangeWhenAlreadyMerged(t *testing.T) {

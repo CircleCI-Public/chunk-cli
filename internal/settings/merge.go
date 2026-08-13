@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 
 	udiff "github.com/aymanbagabas/go-udiff"
@@ -24,6 +25,11 @@ const CommitIfFilter = "Bash(git commit*)"
 // of chunk init. Recognised during merge so existing settings can be migrated
 // to the current format without leaving a stale duplicate group behind.
 const legacyCommitMatcher = "Bash(git commit*)"
+
+// StopCommand is the Stop hook command that chunk manages. Merge identifies
+// chunk's own Stop entry by this exact string, so it must stay in sync with the
+// command written by Build and BuildCodex.
+const StopCommand = "chunk validate"
 
 // MergeResult holds the computed merge without performing any I/O.
 type MergeResult struct {
@@ -179,28 +185,28 @@ func mergeHooks(merged, generated map[string]interface{}) {
 	}
 
 	// Replace existing group with same matcher (or legacy matcher), or append.
-	replaced := false
-	for i, g := range mergedPreToolUse {
-		group, isMap := g.(map[string]interface{})
-		if !isMap {
-			continue
-		}
-		matcher, _ := group["matcher"].(string)
-		if matcher == CommitMatcher || matcher == legacyCommitMatcher {
-			mergedPreToolUse[i] = chunkGroup
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		mergedPreToolUse = append(mergedPreToolUse, chunkGroup)
-	}
-
-	mergedHooks["PreToolUse"] = mergedPreToolUse
+	mergedHooks["PreToolUse"] = replaceOrAppend(mergedPreToolUse, isChunkCommitGroup, chunkGroup)
 }
 
-// mergeStopHooks replaces the chunk-managed Stop hook group (identified by the
-// "chunk validate" command) within Stop, preserving all other Stop groups.
+// isChunkCommitGroup reports whether a PreToolUse group is the chunk-managed
+// commit group, accepting the legacy matcher so older settings migrate in place.
+func isChunkCommitGroup(g interface{}) bool {
+	group, ok := g.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	matcher, _ := group["matcher"].(string)
+	return matcher == CommitMatcher || matcher == legacyCommitMatcher
+}
+
+// mergeStopHooks installs chunk's Stop hook entry into hooks.Stop, preserving
+// every entry chunk does not own.
+//
+// Chunk owns a single entry (identified by StopCommand), not a whole group. A
+// user may have added their own entries to that same group, so the entry is
+// replaced in place and its siblings are left alone — replacing the enclosing
+// group would silently delete them. Only when no chunk entry exists anywhere is
+// chunk's own group appended.
 func mergeStopHooks(merged, generated map[string]interface{}) {
 	genHooks, ok := generated["hooks"].(map[string]interface{})
 	if !ok {
@@ -211,15 +217,19 @@ func mergeStopHooks(merged, generated map[string]interface{}) {
 		return
 	}
 
-	// Find the chunk-managed group in generated Stop hooks.
-	var chunkGroup interface{}
+	// Find chunk's group in the generated Stop hooks, and the entry within it.
+	var chunkGroup, chunkEntry interface{}
 	for _, g := range genStop {
-		if isChunkStopGroup(g) {
-			chunkGroup = g
+		_, entries, isGroup := stopGroupEntries(g)
+		if !isGroup {
+			continue
+		}
+		if i := slices.IndexFunc(entries, isChunkStopEntry); i >= 0 {
+			chunkGroup, chunkEntry = g, entries[i]
 			break
 		}
 	}
-	if chunkGroup == nil {
+	if chunkEntry == nil {
 		return
 	}
 
@@ -235,43 +245,53 @@ func mergeStopHooks(merged, generated map[string]interface{}) {
 		mergedStop = []interface{}{}
 	}
 
-	// Replace existing chunk-managed group, or append.
-	replaced := false
-	for i, g := range mergedStop {
-		if isChunkStopGroup(g) {
-			mergedStop[i] = chunkGroup
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		mergedStop = append(mergedStop, chunkGroup)
-	}
-
-	mergedHooks["Stop"] = mergedStop
-}
-
-// isChunkStopGroup reports whether a Stop hook group is chunk-managed,
-// identified by containing a hook with command "chunk validate".
-func isChunkStopGroup(g interface{}) bool {
-	group, ok := g.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	hooks, ok := group["hooks"].([]interface{})
-	if !ok {
-		return false
-	}
-	for _, h := range hooks {
-		entry, ok := h.(map[string]interface{})
-		if !ok {
+	// Update chunk's entry wherever it already lives, keeping the user's own
+	// entries in that group intact.
+	for _, g := range mergedStop {
+		group, entries, isGroup := stopGroupEntries(g)
+		if !isGroup || !slices.ContainsFunc(entries, isChunkStopEntry) {
 			continue
 		}
-		if cmd, _ := entry["command"].(string); cmd == "chunk validate" {
-			return true
-		}
+		group["hooks"] = replaceOrAppend(entries, isChunkStopEntry, chunkEntry)
+		mergedHooks["Stop"] = mergedStop
+		return
 	}
-	return false
+
+	mergedHooks["Stop"] = append(mergedStop, chunkGroup)
+}
+
+// stopGroupEntries returns a Stop hook group's map and its list of hook entries.
+func stopGroupEntries(g interface{}) (map[string]interface{}, []interface{}, bool) {
+	group, ok := g.(map[string]interface{})
+	if !ok {
+		return nil, nil, false
+	}
+	entries, ok := group["hooks"].([]interface{})
+	if !ok {
+		return nil, nil, false
+	}
+	return group, entries, true
+}
+
+// isChunkStopEntry reports whether a Stop hook entry is the one chunk manages,
+// identified by its command.
+func isChunkStopEntry(h interface{}) bool {
+	entry, ok := h.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	cmd, _ := entry["command"].(string)
+	return cmd == StopCommand
+}
+
+// replaceOrAppend replaces the first element of s that match reports true for
+// with v, appending v when nothing matches. Returns the possibly-grown slice.
+func replaceOrAppend[T any](s []T, match func(T) bool, v T) []T {
+	if i := slices.IndexFunc(s, match); i >= 0 {
+		s[i] = v
+		return s
+	}
+	return append(s, v)
 }
 
 // MergeCodex computes the merged .codex/hooks.json from existing and generated bytes.
