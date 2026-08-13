@@ -191,6 +191,76 @@ func TestValidateNoConfigShowsSkillHint(t *testing.T) {
 		"expected suggestion to mention chunk-sidecar skill, got: %q", ue.Suggestion())
 }
 
+// runValidateListCLI runs "validate --list" against workDir, returning what the
+// command wrote to stdout and stderr.
+func runValidateListCLI(t *testing.T, workDir string, extraArgs ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs(append([]string{"validate", "--list", "--project", workDir}, extraArgs...))
+	err = root.Execute()
+	return outBuf.String(), errBuf.String(), err
+}
+
+// A config that does not parse hides commands from the listing, so "--list" says
+// so. Reporting "No commands configured." alone would read as "you have none"
+// when the truth is "we could not tell".
+func TestValidateListWarnsOnMalformedConfig(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	chunkDir := filepath.Join(dir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"),
+		[]byte(`{"commands": [{"name": "test", "run": "task test"}`), 0o644))
+
+	stdout, stderr, err := runValidateListCLI(t, dir)
+	assert.NilError(t, err)
+
+	assert.Assert(t, strings.Contains(stderr, "warning:"),
+		"expected a warning about the unparseable config, got stderr: %q", stderr)
+	assert.Assert(t, strings.Contains(stderr, "config.json"),
+		"expected the warning to name the file, got stderr: %q", stderr)
+	// The listing still runs, so the empty result is visible alongside the reason.
+	assert.Assert(t, strings.Contains(stdout+stderr, "No commands configured."),
+		"expected the listing to still report an empty config, got: %q", stdout+stderr)
+}
+
+// The warning goes to stderr, so "--list --json" stays machine-readable.
+func TestValidateListMalformedConfigKeepsJSONParseable(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	chunkDir := filepath.Join(dir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"),
+		[]byte(`{"commands": [`), 0o644))
+
+	stdout, stderr, err := runValidateListCLI(t, dir, "--json")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(stderr, "warning:"),
+		"expected the warning on stderr, got: %q", stderr)
+
+	var cmds []config.Command
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &cmds),
+		"stdout must stay valid JSON, got: %q", stdout)
+	assert.Equal(t, len(cmds), 0)
+}
+
+// A missing config is not a malformed one: there is nothing to warn about, and a
+// warning here would fire on every fresh checkout.
+func TestValidateListNoWarningWhenConfigMissing(t *testing.T) {
+	isolateConfig(t)
+
+	stdout, stderr, err := runValidateListCLI(t, t.TempDir())
+	assert.NilError(t, err)
+
+	assert.Assert(t, !strings.Contains(stderr, "warning:"),
+		"a missing config must not warn, got stderr: %q", stderr)
+	assert.Assert(t, strings.Contains(stdout+stderr, "No commands configured."),
+		"expected the empty listing, got: %q", stdout+stderr)
+}
+
 func TestValidateEnvFlagBadValue(t *testing.T) {
 	isolateConfig(t)
 	dir := t.TempDir()
