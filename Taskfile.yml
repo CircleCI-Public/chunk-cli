@@ -39,6 +39,16 @@ tasks:
     cmds:
       - go mod tidy -v
 
+  monitor:
+    desc: Build, restart monitor daemons, and open the monitor dashboard
+    cmds:
+      - task: build
+      - dist/chunk monitor server stop || true
+      - dist/chunk monitor agent stop || true
+      - dist/chunk monitor server start
+      - dist/chunk monitor agent start
+      - dist/chunk monitor
+
   dev-install:
     desc: Symlink dist/chunk into ~/.local/bin so hooks pick up the local build automatically after each `task build`
     cmds:
