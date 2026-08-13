@@ -292,13 +292,9 @@ func newMonitorAgentValidateCmd() *cobra.Command {
 					Timestamp: time.Now(),
 				})
 
-				// If validate passed and the branch has upstream conflicts, surface
-				// them now so the agent can act on it in its next turn.
-				if validateErr == nil {
-					if conflictErr := reportConflict(cmd, payload.SessionID); conflictErr != nil {
-						return conflictErr
-					}
-				}
+				// Surface any upstream conflicts as additionalContext so Claude
+				// can act on them regardless of validation outcome.
+				reportConflict(cmd, payload.SessionID)
 			}
 
 			return validateErr
@@ -422,32 +418,34 @@ func ensureAgentRunning(ctx context.Context) error {
 	return ensureRunning(ctx, "agent", "monitor", "agent", "_daemon")
 }
 
-// conflictExitError is returned when a session has upstream merge conflicts.
-// It implements ExitCode() so main.go exits with code 2, which signals Claude
-// Code to re-invoke the agent with the hook's stderr output as feedback.
-type conflictExitError struct{}
-
-func (conflictExitError) Error() string { return "" }
-func (conflictExitError) ExitCode() int { return 2 }
-
 // reportConflict checks whether the current session has an upstream merge
-// conflict and, if so, writes a warning to stderr and returns a conflictExitError
-// so Claude Code re-invokes the agent with the message as feedback.
-func reportConflict(cmd *cobra.Command, sessionID string) error {
+// conflict and, if so, injects a warning into Claude's context window via the
+// Stop hook JSON output format so Claude can act on it in its next turn.
+func reportConflict(cmd *cobra.Command, sessionID string) {
 	resp, err := queryServer(ipc.Request{
 		Cmd:       ipc.CmdGetSession,
 		SessionID: sessionID,
 	})
 	if err != nil || !resp.OK || len(resp.Sessions) == 0 {
-		return nil
+		return
 	}
 	if resp.Sessions[0].GitStatus != "conflict" {
-		return nil
+		return
 	}
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
-		"\n[chunk monitor] Warning: this branch has merge conflicts with upstream.\n"+
-			"Run `git fetch && git status` to review, then resolve before continuing.\n")
-	return conflictExitError{}
+	type hookOutput struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	}
+	type response struct {
+		HookSpecificOutput hookOutput `json:"hookSpecificOutput"`
+	}
+	out := response{HookSpecificOutput: hookOutput{
+		HookEventName: "Stop",
+		AdditionalContext: "[chunk monitor] This branch has merge conflicts with upstream. " +
+			"Run `git fetch && git status` to review the conflicts, then resolve them before continuing.",
+	}}
+	data, _ := json.Marshal(out)
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", data)
 }
 
 func queryServer(req ipc.Request) (ipc.Response, error) {
