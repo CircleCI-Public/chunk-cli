@@ -7,6 +7,17 @@
     ]
   },
   "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/dist/chunk monitor agent event",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash(git commit*)",
@@ -34,8 +45,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "chunk validate",
-            "timeout": 420
+            "command": "${CLAUDE_PROJECT_DIR}/dist/chunk monitor agent validate",
+            "timeout": 425
           }
         ]
       }
