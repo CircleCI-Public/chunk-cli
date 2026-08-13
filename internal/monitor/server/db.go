@@ -81,7 +81,7 @@ func upsertSession(ctx context.Context, db *sql.DB, req ipc.Request) error {
 		ON CONFLICT(id) DO UPDATE SET
 			last_seen_at   = excluded.last_seen_at,
 			project_dir    = CASE WHEN excluded.project_dir != '' THEN excluded.project_dir ELSE sessions.project_dir END,
-			status         = CASE WHEN excluded.status = 'ended' THEN 'ended' ELSE sessions.status END,
+			status         = excluded.status,
 			tool_use_count = sessions.tool_use_count + ?
 	`, req.SessionID, req.ProjectDir, ts, ts, status, toolUseInc, toolUseInc)
 	return err
