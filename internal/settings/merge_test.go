@@ -293,6 +293,9 @@ func TestMergeReplacesStopHook(t *testing.T) {
 
 	result, err := Merge(existing, generated)
 	assert.NilError(t, err)
+	// init.go gates the settings.json write on Changed, so a timeout-only
+	// difference has to register as a change or the new value is never written.
+	assert.Assert(t, result.Changed)
 
 	var merged map[string]interface{}
 	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
@@ -302,7 +305,10 @@ func TestMergeReplacesStopHook(t *testing.T) {
 	assert.Equal(t, len(stop), 1)
 
 	group := stop[0].(map[string]interface{})
-	entry := group["hooks"].([]interface{})[0].(map[string]interface{})
+	entries := group["hooks"].([]interface{})
+	assert.Equal(t, len(entries), 1)
+	entry := entries[0].(map[string]interface{})
+	assert.Equal(t, entry["command"], StopCommand)
 	assert.Equal(t, entry["timeout"], float64(600))
 }
 
@@ -323,6 +329,7 @@ func TestMergePreservesUserStopHooks(t *testing.T) {
 
 	result, err := Merge(existing, generated)
 	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
 
 	var merged map[string]interface{}
 	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
@@ -330,6 +337,20 @@ func TestMergePreservesUserStopHooks(t *testing.T) {
 	hooks := merged["hooks"].(map[string]interface{})
 	stop, ok := hooks["Stop"].([]interface{})
 	assert.Assert(t, ok && len(stop) == 2, "expected both Stop groups to be present, got: %v", len(stop))
+
+	// The user's group keeps its position and content untouched.
+	userEntries := stop[0].(map[string]interface{})["hooks"].([]interface{})
+	assert.Equal(t, len(userEntries), 1)
+	userEntry := userEntries[0].(map[string]interface{})
+	assert.Equal(t, userEntry["command"], "notify-send done")
+	assert.Equal(t, userEntry["timeout"], float64(5))
+
+	// Chunk's group is appended after it, carrying the generated command and timeout.
+	chunkEntries := stop[1].(map[string]interface{})["hooks"].([]interface{})
+	assert.Equal(t, len(chunkEntries), 1)
+	chunkEntry := chunkEntries[0].(map[string]interface{})
+	assert.Equal(t, chunkEntry["command"], StopCommand)
+	assert.Equal(t, chunkEntry["timeout"], float64(600))
 }
 
 // A user entry sharing the group with chunk's own survives the merge. Chunk owns
@@ -377,6 +398,9 @@ func TestMergePreservesUserEntriesInChunkStopGroup(t *testing.T) {
 	assert.DeepEqual(t, commands, []string{StopCommand, "notify-send done"})
 }
 
+// Re-running init over already-merged settings is a no-op. The fixture carries a
+// Stop hook as well as PreToolUse so mergeStopHooks is covered too — replacing
+// chunk's entry with an identical one must not register as a change.
 func TestMergeNoChangeWhenAlreadyMerged(t *testing.T) {
 	settings := []byte(`{
 		"$schema": "https://json.schemastore.org/claude-code-settings.json",
@@ -385,6 +409,30 @@ func TestMergeNoChangeWhenAlreadyMerged(t *testing.T) {
 		"hooks": {
 			"PreToolUse": [
 				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "test", "timeout": 60}]}
+			],
+			"Stop": [
+				{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 330}]}
+			]
+		}
+	}`)
+
+	result, err := Merge(settings, settings)
+	assert.NilError(t, err)
+	assert.Assert(t, !result.Changed)
+}
+
+// Idempotency holds when chunk's Stop entry shares a group with a user's entry —
+// the in-place entry swap must not reorder or duplicate anything.
+func TestMergeNoChangeWhenChunkStopEntryHasUserSibling(t *testing.T) {
+	settings := []byte(`{
+		"$schema": "https://json.schemastore.org/claude-code-settings.json",
+		"permissions": {"allow": ["Bash(chunk:*)"]},
+		"hooks": {
+			"Stop": [
+				{"hooks": [
+					{"type": "command", "command": "chunk validate", "timeout": 330},
+					{"type": "command", "command": "notify-send done", "timeout": 5}
+				]}
 			]
 		}
 	}`)
