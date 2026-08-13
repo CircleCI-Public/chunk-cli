@@ -107,12 +107,16 @@ func repoStatus(dir string) string {
 // into HEAD without touching the working tree or index. Returns true if the
 // simulated merge would produce conflict markers.
 func hasConflictsWithUpstream(dir string) bool {
-	baseOut, err := gitCmd(dir, "merge-base", "HEAD", "@{upstream}").Output()
+	ref, ok := upstreamRef(dir)
+	if !ok {
+		return false
+	}
+	baseOut, err := gitCmd(dir, "merge-base", "HEAD", ref).Output()
 	if err != nil {
 		return false
 	}
 	base := strings.TrimSpace(string(baseOut))
-	out, err := gitCmd(dir, "merge-tree", base, "HEAD", "@{upstream}").Output()
+	out, err := gitCmd(dir, "merge-tree", base, "HEAD", ref).Output()
 	if err != nil {
 		return false
 	}
@@ -127,8 +131,28 @@ func isWorkingTreeDirty(dir string) bool {
 	return len(strings.TrimSpace(string(out))) > 0
 }
 
+// upstreamRef returns the best available upstream ref for the given repo:
+// the configured tracking branch if set, otherwise origin/HEAD as a fallback.
+func upstreamRef(dir string) (string, bool) {
+	out, err := gitCmd(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").Output()
+	if err == nil {
+		if ref := strings.TrimSpace(string(out)); ref != "" && ref != "@{upstream}" {
+			return ref, true
+		}
+	}
+	// No tracking branch — fall back to origin/HEAD (the remote's default branch).
+	if err := gitCmd(dir, "rev-parse", "--verify", "origin/HEAD").Run(); err == nil {
+		return "origin/HEAD", true
+	}
+	return "", false
+}
+
 func upstreamDivergence(dir string) (ahead, behind int, ok bool) {
-	out, err := gitCmd(dir, "rev-list", "--left-right", "--count", "HEAD...@{upstream}").Output()
+	ref, ok := upstreamRef(dir)
+	if !ok {
+		return 0, 0, false
+	}
+	out, err := gitCmd(dir, "rev-list", "--left-right", "--count", "HEAD..."+ref).Output()
 	if err != nil {
 		return 0, 0, false
 	}
