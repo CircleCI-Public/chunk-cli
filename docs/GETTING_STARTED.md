@@ -1,10 +1,10 @@
 # Getting Started with chunk
 
-`chunk` is a CLI that does two related things:
+`chunk` runs your quality checks (tests, lint, format) on a **sidecar** — a clean cloud environment on CircleCI — while your AI agent is still working. Failures surface in the inner loop instead of in CI, so you catch what only reproduces outside your machine before you ever push.
 
-1. **Generates team review context** — mines real PR review comments from GitHub, analyzes them with Claude, and produces a `.chunk/context/review-prompt.md` file that encodes how your team actually reviews code. AI coding agents pick this file up automatically and apply your team's standards.
+This guide sets that up: authenticate, initialize your project, create a sidecar, and run the dev loop against it.
 
-2. **Validates changes remotely** — runs your quality checks (tests, lint, format) in a clean cloud environment on CircleCI before you push, so you catch failures that only reproduce outside your machine.
+It also covers **team review context** ([below](#team-review-context)) — an additional tool that mines your PR review history into a prompt file your agents read automatically. Useful, but independent of the sidecar workflow; skip it until the loop above is working.
 
 ---
 
@@ -24,17 +24,6 @@ chunk --version
 
 ## Concepts
 
-### .chunk/ directory
-
-The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After running `chunk init` and `chunk build-prompt`, it looks like:
-
-```
-.chunk/
-├── config.json              # Configured validation commands
-└── context/
-    └── review-prompt.md     # Generated team review standards
-```
-
 ### Sidecars
 
 A **sidecar** is an ephemeral Linux environment running on CircleCI. Instead of running tests locally, you sync your working tree to a sidecar and run checks there. This catches failures caused by local environment differences (different OS, missing dependencies, port conflicts) before they reach CI.
@@ -43,7 +32,18 @@ Sidecars are available to all CircleCI customers, including the free plans.
 
 ### Skills
 
-**Skills** are instructions for AI coding agents (Claude Code, Cursor, Codex). Running `chunk skill install` copies skill files into your agent's configuration directory, teaching it commands like `/chunk-review` and how to run the sidecar dev loop.
+**Skills** are instructions for AI coding agents (Claude Code, Cursor, Codex). Running `chunk skill install` copies skill files into your agent's configuration directory, teaching it how to run the sidecar dev loop and commands like `/chunk-review`.
+
+### .chunk/ directory
+
+The `.chunk/` directory lives at the root of your project and holds configuration that should be version-controlled. After `chunk init` it holds your validation commands; `chunk build-prompt` adds the review context file if you generate one:
+
+```
+.chunk/
+├── config.json              # Configured validation commands
+└── context/
+    └── review-prompt.md     # Generated team review standards (optional)
+```
 
 ---
 
@@ -52,15 +52,15 @@ Sidecars are available to all CircleCI customers, including the free plans.
 Store credentials for the services you plan to use:
 
 ```bash
-chunk auth set anthropic   # required for build-prompt and init
-chunk auth set github      # required for build-prompt
-
-# For CircleCI (required for sidecars and task runs), browser OAuth is recommended:
+# CircleCI — required for sidecars. Browser OAuth is recommended:
 chunk auth login           # existing CircleCI account
 chunk auth signup          # new CircleCI account
 
 # Or set a personal API token directly:
 chunk auth set circleci
+
+chunk auth set anthropic   # required for init (command detection) and build-prompt
+chunk auth set github      # only needed for build-prompt
 ```
 
 Check status at any time:
@@ -116,70 +116,11 @@ chunk validate --dry-run # print commands without executing
 
 ---
 
-## Step 3: Generate team review context
+## Step 3: Create your first sidecar
 
-This step mines your GitHub PR history and generates a prompt that captures how your team reviews code. Run it once and commit the output.
-
-```bash
-# Auto-detects org and repos from your git remote
-chunk build-prompt
-
-# Or specify explicitly
-chunk build-prompt --org myorg --repos api,backend --top 10 --since 2024-01-01
-```
-
-The pipeline runs three steps:
-
-1. **Discover** — fetches PR review comments from GitHub, identifies top reviewers
-2. **Analyze** — sends comments to Claude Sonnet to extract patterns
-3. **Generate** — sends patterns to Claude Opus to produce a focused prompt
-
-Output lands at `.chunk/context/review-prompt.md`. Commit this file — your team's AI agents will read it automatically.
-
----
-
-## Step 4: Install skills
-
-Skills install slash commands into your AI coding agents so they can run reviews and use sidecars.
-
-```bash
-chunk skill install     # install or update all skills
-chunk skill list        # check installation status
-```
-
-After installing, your agent gains these skills:
-
-| Skill | Trigger | What it does |
-|---|---|---|
-| `chunk-review` | "review my changes" / "chunk review" | Applies your team's review standards to the current diff |
-| `chunk-sidecar` | "validate on the sidecar" / "sidecar dev loop" | Syncs and validates changes on a remote CircleCI environment |
-| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing to find undertested code |
-| `debug-ci-failures` | "debug CI" / "why is CI failing" | Analyzes CircleCI build failures and flaky tests |
-
-See [docs/SKILLS.md](SKILLS.md) for full details on each skill.
-
----
-
-## Step 5: Review changes
-
-Once `.chunk/context/review-prompt.md` exists and skills are installed, ask your agent to review:
-
-```
-chunk review
-review my changes
-review PR #123
-```
-
-The agent loads your team's prompt, diffs the changes, and returns filtered findings (Critical/High issues, capped at 10 comments).
-
----
-
-## Sidecar workflow (preview)
-
-### First-time sidecar setup
-
-Before creating a sidecar in a non-interactive session (AI agents, scripts), set
-your CircleCI org ID once per project:
+Creating a sidecar interactively will prompt you to pick an organization. In a
+non-interactive session (AI agents, scripts) there is nothing to prompt, so set
+your CircleCI org ID once per project first:
 
 ```bash
 chunk auth set circleci
@@ -192,9 +133,11 @@ chunk sidecar create
 See [docs/CLI.md](CLI.md) for the full resolution order (`--org-id` → env →
 project config → interactive picker).
 
-### Dev loop
+---
 
-Sidecars let you run validations in a clean cloud environment. The typical loop:
+## Step 4: Run the dev loop
+
+This is the core workflow — sync your working tree to the sidecar, then run your validation commands there:
 
 ```bash
 # Create a sidecar (--name is optional; a random name is generated if omitted)
@@ -223,6 +166,37 @@ run the tests on the sidecar
 ```
 
 The skill handles the full loop: auth checks → find active sidecar → sync → validate → interpret failures → fix locally → repeat.
+
+---
+
+## Step 5: Install skills
+
+Skills let your AI coding agent drive the loop above itself, instead of you running each command by hand.
+
+```bash
+chunk skill install     # install or update all skills
+chunk skill list        # check installation status
+```
+
+After installing, your agent gains these skills:
+
+| Skill | Trigger | What it does |
+|---|---|---|
+| `chunk-sidecar` | "validate on the sidecar" / "sidecar dev loop" | Syncs and validates changes on a sidecar |
+| `chunk-sidecar-setup` | "set up chunk sidecar" / "walk me through sidecar setup" | Interactive first-time onboarding: auth, orgID, create, install deps, snapshot |
+| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing to find undertested code |
+| `debug-ci-failures` | "debug CI" / "why is CI failing" | Analyzes CircleCI build failures and flaky tests |
+| `chunk-review` | "review my changes" / "chunk review" | Applies your team's review standards to the current diff |
+
+See [docs/SKILLS.md](SKILLS.md) for full details on each skill.
+
+**Shortcut:** rather than doing Steps 3–4 by hand, you can hand them to your agent. Say "set up chunk sidecar" and the `chunk-sidecar-setup` wizard walks through auth, orgID, creation, dependency installation, and snapshotting — then hands off to `chunk-sidecar` for the dev loop.
+
+---
+
+## Sidecar reference
+
+The sections below cover the sidecar workflow in more detail. Skip them until you need something specific.
 
 ### Syncing
 
@@ -436,23 +410,58 @@ See [docs/HOOKS.md](HOOKS.md) for configuration details and [Result Caching](HOO
 
 ---
 
+## Team review context
+
+An additional tool, independent of the sidecar workflow above. `chunk build-prompt` mines your GitHub PR history and generates a prompt that captures how your team reviews code. Run it once and commit the output.
+
+```bash
+# Auto-detects org and repos from your git remote
+chunk build-prompt
+
+# Or specify explicitly
+chunk build-prompt --org myorg --repos api,backend --top 10 --since 2024-01-01
+```
+
+The pipeline runs three steps:
+
+1. **Discover** — fetches PR review comments from GitHub, identifies top reviewers
+2. **Analyze** — sends comments to Claude Sonnet to extract patterns
+3. **Generate** — sends patterns to Claude Opus to produce a focused prompt
+
+Output lands at `.chunk/context/review-prompt.md`. Commit this file — your team's AI agents will read it automatically.
+
+Requires `chunk auth set anthropic` and `chunk auth set github`.
+
+Once that file exists and skills are installed, ask your agent to review:
+
+```
+chunk review
+review my changes
+review PR #123
+```
+
+The agent loads your team's prompt, diffs the changes, and returns filtered findings (Critical/High issues, capped at 10 comments).
+
+---
+
 ## Typical day-to-day workflow
 
 ```
-Start coding session
-    └─ Agent picks up .chunk/context/review-prompt.md automatically
-
 Make changes
+
+Validate on a sidecar
     └─ chunk sidecar sync + chunk validate --remote   (or locally: chunk validate)
+    └─ or hand it to the agent: "validate on the sidecar"
     └─ chunk watch   (optional: live dashboard to see sync/validate progress)
 
 Before committing
     └─ Hook runs chunk validate automatically
 
-Ask for a review
-    └─ "chunk review" → agent applies team standards → filtered findings
-
 Push
+
+Optionally, if you generated review context
+    └─ Agent picks up .chunk/context/review-prompt.md automatically
+    └─ "chunk review" → agent applies team standards → filtered findings
 ```
 
 ---

@@ -1,6 +1,8 @@
 # Skills
 
-Skills are instruction files for AI coding agents. Installing them teaches agents how to use `chunk` commands — code review, remote validation, test gap analysis, and CI debugging — through natural-language triggers.
+Skills are instruction files for AI coding agents. Installing them teaches agents how to use `chunk` commands — sidecar setup and the remote validation dev loop, plus test gap analysis, CI debugging, and code review — through natural-language triggers.
+
+Skills below are listed alphabetically. If you are setting up for the first time, start with [`chunk-sidecar-setup`](#chunk-sidecar-setup), then use [`chunk-sidecar`](#chunk-sidecar) for the day-to-day loop.
 
 ## Installing skills
 
