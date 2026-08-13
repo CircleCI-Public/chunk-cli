@@ -142,12 +142,12 @@ func setGitStatus(ctx context.Context, db *sql.DB, sessionID, status string) err
 	return err
 }
 
-// activeSessions returns sessions that have a project_dir and are not ended,
+// sessionsWithDir returns all sessions that have a project_dir set,
 // used by the background git status checker.
-func activeSessions(ctx context.Context, db *sql.DB) ([]ipc.Session, error) {
+func sessionsWithDir(ctx context.Context, db *sql.DB) ([]ipc.Session, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, project_dir FROM sessions
-		WHERE project_dir != '' AND status != 'ended'
+		WHERE project_dir != ''
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("query active sessions: %w", err)

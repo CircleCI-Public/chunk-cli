@@ -32,13 +32,15 @@ func startGitChecker(ctx context.Context, db *sql.DB) {
 }
 
 func updateGitStatuses(ctx context.Context, db *sql.DB) {
-	sessions, err := activeSessions(ctx, db)
+	sessions, err := sessionsWithDir(ctx, db)
 	if err != nil {
 		log.Printf("git checker: list sessions: %v", err)
 		return
 	}
+	log.Printf("git checker: checking %d session(s)", len(sessions))
 	for _, s := range sessions {
 		status := repoStatus(s.ProjectDir)
+		log.Printf("git checker: %s → %q", s.ProjectDir, status)
 		if err := setGitStatus(ctx, db, s.ID, status); err != nil {
 			log.Printf("git checker: set git status: %v", err)
 		}
