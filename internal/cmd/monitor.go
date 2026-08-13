@@ -429,14 +429,19 @@ func ensureAgentRunning(ctx context.Context) error {
 // conflict and, if so, injects a warning into Claude's context window via the
 // Stop hook JSON output format so Claude can act on it in its next turn.
 func reportConflict(cmd *cobra.Command, sessionID string) {
+	start := time.Now()
 	resp, err := queryServer(ipc.Request{
 		Cmd:       ipc.CmdGetSession,
 		SessionID: sessionID,
 	})
+	elapsed := time.Since(start)
 	if err != nil || !resp.OK || len(resp.Sessions) == 0 {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[chunk monitor] conflict check: %s (error: %v)\n", elapsed.Round(time.Millisecond), err)
 		return
 	}
-	if resp.Sessions[0].GitStatus != "conflict" {
+	gitStatus := resp.Sessions[0].GitStatus
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[chunk monitor] conflict check: %s (git_status=%q)\n", elapsed.Round(time.Millisecond), gitStatus)
+	if gitStatus != "conflict" {
 		return
 	}
 	const msg = "[chunk monitor] This branch has merge conflicts with upstream. " +
