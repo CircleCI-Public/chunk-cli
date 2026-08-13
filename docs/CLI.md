@@ -160,8 +160,11 @@ chunk
 - `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
-- `config set` user keys: `model`, `telemetry`. Project keys (`.chunk/config.json`):
-  `orgID`, `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
+- `config set` user keys: `model`, `telemetry`, `useSSHIdentityFile`. Project keys
+  (`.chunk/config.json`): `orgID`, `validation.sidecarImage`. Credentials use
+  `chunk auth set`, not `config set`. Bare `config set` prints help and exits 0;
+  a partial call names what is missing and lists these keys rather than reporting
+  an argument count.
 - Telemetry is anonymous and opt-out. It's disabled by the
   `CHUNK_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
   variables (first match wins, in that order), or `chunk config set telemetry false`.

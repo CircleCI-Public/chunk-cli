@@ -297,22 +297,55 @@ func TestConfigShowModelFileOverDefault(t *testing.T) {
 		"expected config file source")
 }
 
+// "config set model" with no value names the key whose value is missing, rather
+// than reporting an argument count.
 func TestConfigSetMissingValue(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	// "config set model" with no value — cobra ExactArgs(2) should reject
 	result := binary.RunCLI(t, []string{"config", "set", "model"}, env, env.HomeDir)
 	assert.Assert(t, result.ExitCode != 0,
 		"expected non-zero exit for missing value\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Contains(combined, `Missing value for "model"`),
+		"expected the error to name the key, got: %s", combined)
+	assert.Check(t, !strings.Contains(combined, "An unknown error occurred"),
+		"a missing argument is a known error, got: %s", combined)
 }
 
-func TestConfigSetMissingKeyAndValue(t *testing.T) {
+// Bare "config set" asks how the command works rather than failing to set
+// anything, so it prints help, lists the keys, and succeeds.
+func TestConfigSetNoArgsPrintsHelp(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	// "config set" with no args — cobra ExactArgs(2) should reject
 	result := binary.RunCLI(t, []string{"config", "set"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0,
+		"expected help and exit 0 for no args\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Contains(combined, "chunk config set <key> <value>"),
+		"expected usage line, got: %s", combined)
+	assert.Check(t, !strings.Contains(combined, "An unknown error occurred"),
+		"asking for help is not an error, got: %s", combined)
+	for _, key := range []string{"orgID", "validation.sidecarImage", "model", "telemetry", "useSSHIdentityFile"} {
+		assert.Check(t, cmp.Contains(combined, key),
+			"expected key %q to be listed, got: %s", key, combined)
+	}
+}
+
+// Too many arguments is as much a usage mistake as too few, and reports as one.
+func TestConfigSetTooManyArgs(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	result := binary.RunCLI(t, []string{"config", "set", "model", "a", "b"}, env, env.HomeDir)
 	assert.Assert(t, result.ExitCode != 0,
-		"expected non-zero exit for missing args\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+		"expected non-zero exit for extra args\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Contains(combined, "Too many arguments"),
+		"expected a too-many-arguments message, got: %s", combined)
+	assert.Check(t, !strings.Contains(combined, "An unknown error occurred"),
+		"a usage mistake is a known error, got: %s", combined)
 }
 
 func TestConfigSetOrgID(t *testing.T) {
