@@ -43,6 +43,11 @@ tasks:
     desc: Build, restart monitor daemons, and open the monitor dashboard
     cmds:
       - task: build
+      - |
+        for wt in $(git worktree list --porcelain | awk '/^worktree / && !/bare/ {print $2}'); do
+          [ "$wt" = "$(pwd)" ] && continue
+          [ -d "$wt/dist" ] && cp dist/chunk "$wt/dist/chunk" && echo "synced binary → $wt"
+        done
       - dist/chunk monitor server stop || true
       - dist/chunk monitor agent stop || true
       - dist/chunk monitor server start
