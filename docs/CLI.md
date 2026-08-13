@@ -162,8 +162,9 @@ chunk
   to disable.
 - `config set` user keys: `model`, `telemetry`, `useSSHIdentityFile`. Project keys
   (`.chunk/config.json`): `orgID`, `validation.sidecarImage`. Credentials use
-  `chunk auth set`, not `config set`. Called with the wrong number of arguments, it
-  names what is missing and lists these keys rather than reporting a count.
+  `chunk auth set`, not `config set`. Bare `config set` prints help and exits 0;
+  a partial call names what is missing and lists these keys rather than reporting
+  an argument count.
 - Telemetry is anonymous and opt-out. It's disabled by the
   `CHUNK_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
   variables (first match wins, in that order), or `chunk config set telemetry false`.

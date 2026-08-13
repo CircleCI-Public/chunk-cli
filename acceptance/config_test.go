@@ -313,20 +313,20 @@ func TestConfigSetMissingValue(t *testing.T) {
 		"a missing argument is a known error, got: %s", combined)
 }
 
-// "config set" with no args says what is missing and lists the accepted keys, so
-// the user's next command is in front of them.
-func TestConfigSetMissingKeyAndValue(t *testing.T) {
+// Bare "config set" asks how the command works rather than failing to set
+// anything, so it prints help, lists the keys, and succeeds.
+func TestConfigSetNoArgsPrintsHelp(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{"config", "set"}, env, env.HomeDir)
-	assert.Assert(t, result.ExitCode != 0,
-		"expected non-zero exit for missing args\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Equal(t, result.ExitCode, 0,
+		"expected help and exit 0 for no args\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
-	assert.Check(t, cmp.Contains(combined, "Missing key and value"),
-		"expected a message naming what is missing, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "chunk config set <key> <value>"),
+		"expected usage line, got: %s", combined)
 	assert.Check(t, !strings.Contains(combined, "An unknown error occurred"),
-		"a missing argument is a known error, got: %s", combined)
+		"asking for help is not an error, got: %s", combined)
 	for _, key := range []string{"orgID", "validation.sidecarImage", "model", "telemetry", "useSSHIdentityFile"} {
 		assert.Check(t, cmp.Contains(combined, key),
 			"expected key %q to be listed, got: %s", key, combined)

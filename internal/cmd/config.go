@@ -131,6 +131,13 @@ func newConfigSetCmd() *cobra.Command {
 		// usage dump ahead of it would only bury the part worth reading.
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Bare "config set" is a request to see how the command works, not a
+			// failed attempt to set something, so it prints help and succeeds —
+			// matching "chunk config". A partial invocation still errors.
+			if len(args) == 0 {
+				return cmd.Help()
+			}
+
 			io := iostream.FromCmd(cmd)
 			key, value := args[0], args[1]
 
@@ -217,23 +224,19 @@ func newConfigSetCmd() *cobra.Command {
 	}
 }
 
-// configSetArgs requires exactly a key and a value. cobra.ExactArgs would report
-// "accepts 2 arg(s), received 0", which carries no user-facing message and so
-// surfaces as "An unknown error occurred" — a dead end for someone who just
-// forgot an argument. Naming what is missing and listing the keys gives them the
-// next step instead.
+// configSetArgs accepts a key and a value, or nothing at all — no arguments is a
+// request for help, handled in RunE. One argument or three is a real mistake, and
+// cobra.ExactArgs would report it as "accepts 2 arg(s), received 1", which carries
+// no user-facing message and so surfaces as "An unknown error occurred" — a dead
+// end for someone who just forgot an argument. Naming what is missing and listing
+// the keys gives them the next step instead.
 func configSetArgs(_ *cobra.Command, args []string) error {
-	if len(args) == 2 {
+	if len(args) == 0 || len(args) == 2 {
 		return nil
 	}
-	var msg string
-	switch len(args) {
-	case 0:
-		msg = "Missing key and value."
-	case 1:
+	msg := fmt.Sprintf("Too many arguments: expected a key and a value, got %d.", len(args))
+	if len(args) == 1 {
 		msg = fmt.Sprintf("Missing value for %q.", args[0])
-	default:
-		msg = fmt.Sprintf("Too many arguments: expected a key and a value, got %d.", len(args))
 	}
 	return newUserError(msg).
 		withCode("config.set_args").
