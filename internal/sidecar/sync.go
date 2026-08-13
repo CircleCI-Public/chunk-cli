@@ -127,10 +127,9 @@ func Sync(ctx context.Context,
 // both cases any uncommitted working-tree changes are applied on top as a patch.
 //
 // When neither the HEAD commit nor the working-tree patch has changed since the
-// previous sync, all remote operations are skipped entirely so golangci-lint
-// caches remain untouched. When only the working-tree changed (no new commits),
-// a reverse+apply delta is used instead of a full reset+clean+apply, which
-// likewise leaves committed files untouched.
+// previous sync, all remote operations are skipped entirely. When only the
+// working-tree changed (no new commits), a reverse+apply delta is used instead
+// of a full reset+clean+apply, leaving committed files untouched.
 func BundleSync(ctx context.Context,
 	client *circleci.Client, sidecarID, identityFile, authSock, workdir, cwd string, status iostream.StatusFunc) error {
 
@@ -202,8 +201,7 @@ func BundleSync(ctx context.Context,
 	patchChanged := patchHash != active.LastSyncedPatchHash
 
 	if !commitsChanged && !patchChanged {
-		// Nothing has changed since the last sync. Skip all remote operations so
-		// golangci-lint caches remain valid.
+		// Nothing has changed since the last sync; skip all remote operations.
 		status(iostream.LevelDone, "Synced (up to date)")
 		return nil
 	}
@@ -226,8 +224,7 @@ func BundleSync(ctx context.Context,
 
 	// When only the working-tree changed (no new commits), try a delta sync:
 	// reverse the previously applied patch and apply the new one. This avoids
-	// reset+clean which would touch every committed file and force golangci-lint
-	// to re-analyse the entire codebase.
+	// reset+clean which would touch every committed file.
 	if !commitsChanged && patchChanged && stateDir != "" {
 		if oldPatch, hasPatch := loadSyncedPatch(ctx, stateDir, repoRoot); hasPatch {
 			if err := applyDeltaPatch(ctx, sess, repoPath, oldPatch, patch, status); err == nil {
@@ -354,7 +351,7 @@ func saveSyncedPatch(ctx context.Context, dir, repoRoot, patch string) error {
 }
 
 // applyDeltaPatch reverses the previously applied patch then applies the new
-// one. This avoids touching committed files so golangci-lint caches stay valid.
+// one. This avoids touching committed files.
 // oldPatch may be empty (previous sync had a clean working tree); in that case
 // only the forward apply is performed. Returns an error if either git command
 // fails; the caller should fall back to a full reset+clean+apply.

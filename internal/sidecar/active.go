@@ -27,9 +27,7 @@ type ActiveSidecar struct {
 	Workspace     string `json:"workspace,omitempty"`
 	LastSyncedRef string `json:"last_synced_ref,omitempty"`
 	// LastSyncedPatchHash is a SHA-256 hex digest of the working-tree patch
-	// last applied to the sidecar. BundleSync uses it to skip the
-	// reset+clean+apply cycle when neither commits nor working-tree have
-	// changed since the previous sync.
+	// last applied to the sidecar.
 	LastSyncedPatchHash string `json:"last_synced_patch_hash,omitempty"`
 }
 
