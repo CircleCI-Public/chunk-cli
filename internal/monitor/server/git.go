@@ -47,6 +47,9 @@ func updateGitStatuses(ctx context.Context, db *sql.DB) {
 		if err := setGitStatus(ctx, db, s.ID, status); err != nil {
 			log.Printf("git checker: set git status: %v", err)
 		}
+		if status == gitStatusConflict {
+			maybeDispatchResolver(ctx, db, s.ID, s.ProjectDir)
+		}
 	}
 }
 

@@ -19,14 +19,15 @@ const (
 
 const schema = `
 CREATE TABLE IF NOT EXISTS sessions (
-	id                TEXT    PRIMARY KEY,
-	project_dir       TEXT    NOT NULL DEFAULT '',
-	started_at        TEXT    NOT NULL,
-	last_seen_at      TEXT    NOT NULL,
-	status            TEXT    NOT NULL DEFAULT 'active',
-	validation_status TEXT    NOT NULL DEFAULT '',
-	tool_use_count    INTEGER NOT NULL DEFAULT 0,
-	git_status        TEXT    NOT NULL DEFAULT ''
+	id                  TEXT    PRIMARY KEY,
+	project_dir         TEXT    NOT NULL DEFAULT '',
+	started_at          TEXT    NOT NULL,
+	last_seen_at        TEXT    NOT NULL,
+	status              TEXT    NOT NULL DEFAULT 'active',
+	validation_status   TEXT    NOT NULL DEFAULT '',
+	tool_use_count      INTEGER NOT NULL DEFAULT 0,
+	git_status          TEXT    NOT NULL DEFAULT '',
+	conflict_base_sha   TEXT    NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS events (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +43,7 @@ var alterations = []string{
 	"ALTER TABLE sessions ADD COLUMN project_dir TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE sessions ADD COLUMN tool_use_count INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE sessions ADD COLUMN git_status TEXT NOT NULL DEFAULT ''",
+	"ALTER TABLE sessions ADD COLUMN conflict_base_sha TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE events ADD COLUMN tool_name TEXT NOT NULL DEFAULT ''",
 }
 
@@ -189,4 +191,17 @@ func getEvents(ctx context.Context, db *sql.DB, sessionID string) ([]ipc.Event, 
 		events = append(events, e)
 	}
 	return events, rows.Err()
+}
+
+func getConflictBaseSHA(ctx context.Context, db *sql.DB, sessionID string) string {
+	var sha string
+	_ = db.QueryRowContext(ctx,
+		`SELECT conflict_base_sha FROM sessions WHERE id = ?`, sessionID).Scan(&sha)
+	return sha
+}
+
+func setConflictBaseSHA(ctx context.Context, db *sql.DB, sessionID, sha string) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE sessions SET conflict_base_sha = ? WHERE id = ?`, sha, sessionID)
+	return err
 }
