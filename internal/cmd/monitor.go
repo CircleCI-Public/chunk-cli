@@ -448,8 +448,8 @@ func reportConflict(cmd *cobra.Command, sessionID string) {
 	if resp.Sessions[0].ConflictNotified {
 		return
 	}
-	const msg = "[chunk monitor] Warning: this branch has merge conflicts with upstream. " +
-		"Run `git fetch && git status` to review the conflicts, then resolve them before continuing."
+	const msg = "[chunk monitor] This branch has unresolved merge conflicts with its upstream. " +
+		"A rebase or merge is needed before this work can be pushed."
 	type hookOutput struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext"`
