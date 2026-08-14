@@ -74,6 +74,15 @@ chunk
 │   --project <path>                # Override project directory
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
+│   │
+│   └── variants <variants-file>    # Run code variants on parallel throwaway sidecars
+│       --name <command>            # Validate command to run (default: all remote commands)
+│       --parallel <n>              # Max concurrent sidecars (default 5)
+│       --timeout <seconds>         # Per-command timeout when the command sets none (0 for no limit)
+│       --org-id <id>               # Organization ID
+│       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
+│       --identity-file <path>      # SSH identity file
+│       --workdir <path>            # Remote working directory
 │
 ├── sidecar
 │   ├── list                        # List sidecars
@@ -191,6 +200,37 @@ chunk
   without one, and deletes nothing if the listing fails, since an empty listing is
   not proof of absence. A sidecar the API rejects as out of date (410) is deleted
   when a sync hits it, because no listing reveals that state.
+- **`validate variants` sidecars are outside that scheme.** Each variant gets its
+  own sidecar, and none of them are written to the active-sidecar file — parallel
+  workers would race on it and leave the user's own session pointing at a sidecar
+  about to be deleted. That also makes them invisible to the reaper above, so the
+  command cleans up after itself instead: it deletes each sidecar as its variant
+  finishes, catches SIGINT/SIGTERM so an interrupt still unwinds through those
+  deletes, and sweeps stranded `variant-*` sidecars from an earlier crashed run
+  before starting a new one. Each name carries that sidecar's own creation time
+  (`variant-<base36 seconds>--<id>`), which is what lets the sweep spare a
+  concurrent run's in-flight sidecars — two runs at once, in two worktrees or two
+  repos, is a normal shape for the mutation-testing skill — and only collect ones
+  too old for any live run to own. Per-sidecar rather than per-run, because a run
+  of a hundred variants takes hours and its newest sidecar must not inherit the
+  age of the run that booted it. The delimiter is two dashes and variant IDs are
+  sanitised to collapse dash runs, so the timestamp is recoverable by a plain
+  split rather than by guessing which segment is a date. A name without one is
+  reported and left alone. For the same reason `validate variants` syncs
+  without persisting a workspace and therefore requires a resolvable workdir; it
+  resolves one through `sidecar.ResolveWorkspace`, the same
+  `--workdir` → active sidecar → `<sidecarHome>/<repo>` order as every other
+  sidecar command, and fails before booting anything when none of the three
+  applies.
+- **`validate variants` never reports an environmental failure as a caught
+  mutant.** A killed variant means the validate command ran and exited non-zero
+  on its own terms. Exit codes 126 and 127 are the shell failing to run the
+  command at all, and a command that outruns its timeout never returned a verdict;
+  both are recorded as errors instead, and errors are neither kills nor survivors.
+  Commands are template-expanded locally before being shipped, since a literal
+  `{{CHANGED_PACKAGES}}` reaching the remote shell would otherwise fail every
+  variant the same way. The command warns when every variant was killed, because
+  that pattern is more often one broken command than a fully covered codebase.
 - Commands that require a CircleCI token (`task run`, `task config`, `sidecar *`,
   `validate --sidecar-id`) prompt for it inline at the point of need rather than
   failing with an error.

@@ -38,9 +38,16 @@ PLANS.md
 .chunk/sidecar.json
 .chunk/sidecar.*.json
 
+# mutation variants scratch file
+.chunk/variants.json
+
 # hook disable sentinel
 .chunk/hooks-disabled
 
 # unikraft
 .unikraft/
 test-fetch-on-stale-sidecar.log
+
+# toolchain installers downloaded into the repo root
+*.pkg
+*.tar.gz

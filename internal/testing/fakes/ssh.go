@@ -30,6 +30,7 @@ type SSHServer struct {
 	mu       sync.Mutex
 	stdout   string
 	exitCode int
+	resultFn func(command string) (string, int)
 	commands []string
 	envVars  map[string]string
 }
@@ -122,6 +123,17 @@ func (s *SSHServer) SetResult(stdout string, exitCode int) {
 	defer s.mu.Unlock()
 	s.stdout = stdout
 	s.exitCode = exitCode
+}
+
+// SetResultFn configures a per-command result and takes precedence over
+// SetResult. Use it when a test needs one command in a sequence to behave
+// differently from the rest — a validate command exiting 127 while the sync
+// commands before it succeed, say. The function is called outside the server's
+// lock, so it may block to simulate a command that never returns.
+func (s *SSHServer) SetResultFn(fn func(command string) (stdout string, exitCode int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resultFn = fn
 }
 
 // Commands returns a copy of all exec command strings received so far.
@@ -221,10 +233,16 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		s.commands = append(s.commands, cmd)
 		stdout := s.stdout
 		exitCode := s.exitCode
+		resultFn := s.resultFn
 		s.mu.Unlock()
 
 		if req.WantReply {
 			_ = req.Reply(true, nil)
+		}
+		// Called after the lock is released so a resultFn that blocks — standing in
+		// for a command that never returns — does not stall the whole server.
+		if resultFn != nil {
+			stdout, exitCode = resultFn(cmd)
 		}
 		if stdout != "" {
 			_, _ = ch.Write([]byte(stdout))

@@ -146,7 +146,7 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 
 	maxWidth := nameWidth(commands)
 	for i, c := range commands {
-		run := expandCommand(workDir, c.Run)
+		run := ExpandCommand(workDir, c.Run)
 		status(iostream.LevelInfo, "$ "+run)
 		script := "cd " + shellEscape(dest) + " && " + run
 		start := time.Now()
@@ -202,11 +202,16 @@ func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 	return nil
 }
 
-// expandCommand replaces template variables in command before execution.
+// ExpandCommand replaces template variables in command before execution.
 // {{CHANGED_PACKAGES}} expands to the space-separated list of Go package
 // paths whose source files appear in `git diff HEAD`.
 // Expands to "./..." when no .go files changed.
-func expandCommand(workDir, command string) string {
+//
+// Exported because every path that ships a configured command somewhere else to
+// run must expand it first. Skipping expansion does not fail loudly: the literal
+// {{CHANGED_PACKAGES}} reaches the shell, which exits non-zero for a reason that
+// has nothing to do with the code under test.
+func ExpandCommand(workDir, command string) string {
 	if !strings.Contains(command, "{{CHANGED_PACKAGES}}") {
 		return command
 	}
@@ -237,7 +242,7 @@ func expandCommand(workDir, command string) string {
 }
 
 func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, nameWidth int, status iostream.StatusFunc, streams iostream.Streams) error {
-	command = expandCommand(workDir, command)
+	command = ExpandCommand(workDir, command)
 	status(iostream.LevelInfo, "$ "+command)
 
 	if timeoutSec <= 0 {
