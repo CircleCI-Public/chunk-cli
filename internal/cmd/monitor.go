@@ -444,17 +444,31 @@ func reportConflict(cmd *cobra.Command, sessionID string) {
 	if gitStatus != "conflict" {
 		return
 	}
-	// Use systemMessage only — additionalContext on Stop continues the
-	// conversation, which re-fires Stop, causing an infinite loop.
+	// Already notified Claude about this conflict — skip until it clears.
+	if resp.Sessions[0].ConflictNotified {
+		return
+	}
+	const msg = "[chunk monitor] Warning: this branch has merge conflicts with upstream. " +
+		"Run `git fetch && git status` to review the conflicts, then resolve them before continuing."
+	type hookOutput struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	}
 	type response struct {
-		SystemMessage string `json:"systemMessage"`
+		SystemMessage      string     `json:"systemMessage"`
+		HookSpecificOutput hookOutput `json:"hookSpecificOutput"`
 	}
 	out := response{
-		SystemMessage: "[chunk monitor] Warning: this branch has merge conflicts with upstream. " +
-			"Run `git fetch && git status` to review, then resolve before continuing.",
+		SystemMessage: msg,
+		HookSpecificOutput: hookOutput{
+			HookEventName:     "Stop",
+			AdditionalContext: msg,
+		},
 	}
 	data, _ := json.Marshal(out)
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", data)
+	// Mark notified so subsequent Stop firings skip until the conflict clears.
+	_, _ = queryServer(ipc.Request{Cmd: ipc.CmdAckConflict, SessionID: sessionID})
 }
 
 func queryServer(req ipc.Request) (ipc.Response, error) {

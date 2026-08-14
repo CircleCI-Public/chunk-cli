@@ -154,6 +154,15 @@ func dispatch(ctx context.Context, db *sql.DB, req ipc.Request) ipc.Response {
 		}
 		return ipc.Response{OK: true, Sessions: []ipc.Session{s}}
 
+	case ipc.CmdAckConflict:
+		if req.SessionID == "" {
+			return ipc.Response{OK: false, Error: errMissingSessionID}
+		}
+		if err := setConflictNotified(ctx, db, req.SessionID); err != nil {
+			return ipc.Response{OK: false, Error: err.Error()}
+		}
+		return ipc.Response{OK: true}
+
 	default:
 		return ipc.Response{OK: false, Error: fmt.Sprintf("unknown command %q", req.Cmd)}
 	}

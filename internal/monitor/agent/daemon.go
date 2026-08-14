@@ -127,9 +127,9 @@ func dispatch(_ context.Context, sf *stateFile, req ipc.Request) ipc.Response {
 	case ipc.CmdGetEvents:
 		return ipc.Response{OK: false, Error: "get_events is not supported by the agent"}
 
-	case ipc.CmdGetSession:
-		// Forward directly to the server so the response includes DB-backed fields
-		// (git_status) that the agent state file doesn't track.
+	case ipc.CmdGetSession, ipc.CmdAckConflict:
+		// Forward directly to the server — these operate on DB-backed fields
+		// that the agent state file doesn't track.
 		resp, err := forwardAndReceive(req)
 		if err != nil {
 			return ipc.Response{OK: false, Error: err.Error()}
