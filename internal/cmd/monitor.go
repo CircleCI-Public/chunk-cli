@@ -444,10 +444,6 @@ func reportConflict(cmd *cobra.Command, sessionID string) {
 	if gitStatus != "conflict" {
 		return
 	}
-	// Already notified Claude about this conflict — skip until it clears.
-	if resp.Sessions[0].ConflictNotified {
-		return
-	}
 	const msg = "[chunk monitor] This branch has unresolved merge conflicts with its upstream. " +
 		"A rebase or merge is needed before this work can be pushed."
 	type hookOutput struct {
@@ -467,8 +463,6 @@ func reportConflict(cmd *cobra.Command, sessionID string) {
 	}
 	data, _ := json.Marshal(out)
 	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", data)
-	// Mark notified so subsequent Stop firings skip until the conflict clears.
-	_, _ = queryServer(ipc.Request{Cmd: ipc.CmdAckConflict, SessionID: sessionID})
 }
 
 func queryServer(req ipc.Request) (ipc.Response, error) {

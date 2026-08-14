@@ -19,7 +19,6 @@ const (
 	CmdGetEvents     Cmd = "get_events"
 	CmdSetValidation Cmd = "set_validation"
 	CmdGetSession    Cmd = "get_session"
-	CmdAckConflict   Cmd = "ack_conflict"
 	CmdPing          Cmd = "ping"
 )
 
@@ -46,9 +45,6 @@ type Session struct {
 	// GitStatus is set by the server's background checker.
 	// Format: "" unknown, "clean", "dirty", "↑N" ahead, "↓N" behind, "↑N↓M" diverged.
 	GitStatus string `json:"git_status,omitempty"`
-	// ConflictNotified is true once the Stop hook has injected the conflict warning
-	// into Claude's context. Reset when git_status transitions away from "conflict".
-	ConflictNotified bool `json:"conflict_notified,omitempty"`
 }
 
 // Event is a single recorded event within a session.
