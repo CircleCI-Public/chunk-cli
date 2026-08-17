@@ -128,9 +128,9 @@ OAuth is the default. It opens a browser, exchanges the code over PKCE, and stor
 chunk auth login
 ```
 
-Run it with a **Bash timeout of 300000ms** — the command blocks until the browser callback lands (5 minute server-side limit). It prints the authorize URL first, so tell the user to complete the login in the browser window that opens. Stdin is not a terminal under the agent, so it opens the browser immediately without waiting for Enter.
+Run it with a **Bash timeout of 300000ms** — the command blocks until the browser callback lands (5 minute limit). No browser opens when the agent runs it: stdin is not a terminal, so `chunk auth login` prints the authorize URL and waits. **Relay that URL to the user and ask them to open it.** Never open a browser on their behalf.
 
-If the browser cannot open (headless, SSH, remote sandbox), use `chunk auth login --no-browser` and relay the printed URL to the user. The callback still listens on `127.0.0.1` on **this** machine, so the URL only works from a browser on the same host.
+The callback listens on `127.0.0.1` on **this** machine, so the URL only works from a browser on the same host. `--no-browser` forces the same print-and-wait behaviour when a terminal is present.
 
 Fall back to `chunk auth set circleci` (paste a personal API token) only when OAuth is unavailable, or when the user explicitly asks for token auth. Both paths land in the keychain; `--insecure-storage` writes to `~/.config/chunk/config.json` instead.
 

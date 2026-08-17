@@ -63,15 +63,15 @@ If CircleCI shows "Not set", run the OAuth login yourself — see [Logging in](#
 
 #### Logging in
 
-OAuth is the default. It opens a browser, exchanges the code over PKCE, and stores the token in the system keychain — no token pasting.
+OAuth is the default. The user opens a URL, the code comes back over PKCE, and the token lands in the system keychain — no token pasting.
 
 ```bash
 chunk auth login
 ```
 
-- Run with a **Bash timeout of 300000ms**: it blocks until the browser callback lands (5 minute limit). Tell the user to finish the login in the browser window that opens.
-- Stdin is not a terminal under the agent, so it skips the "press Enter" prompt and opens the browser straight away.
-- No browser available (headless, SSH, remote sandbox)? Use `chunk auth login --no-browser` and relay the printed URL. The callback listens on `127.0.0.1` on **this** machine, so it only works from a browser on the same host.
+- Run with a **Bash timeout of 300000ms**: it blocks until the callback lands (5 minute limit).
+- No browser opens when the agent runs it. Stdin is not a terminal, so the command prints the authorize URL and waits. **Relay that URL and ask the user to open it** — never open a browser on their behalf.
+- The callback listens on `127.0.0.1` on **this** machine, so the URL only works from a browser on the same host.
 - If the source already reads `Environment`, `CIRCLE_TOKEN` is set and wins over the keychain. Do not log in — treat it as configured.
 - `chunk auth set circleci` (paste a personal API token) is the fallback for when OAuth fails or the user asks for token auth.
 
