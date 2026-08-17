@@ -391,15 +391,23 @@ func TestConfigSetPreservesUnknownProjectKeys(t *testing.T) {
 
 	var cfg map[string]json.RawMessage
 	assert.NilError(t, json.Unmarshal(data, &cfg))
-	_, kept := cfg["myTool"]
-	assert.Assert(t, kept, "unknown top-level key was dropped: %s", data)
+	kept, ok := cfg["myTool"]
+	assert.Assert(t, ok, "unknown top-level key was dropped: %s", data)
+
+	// The value has to come back too, not just the key: a preserved key holding
+	// something other than what was written would still be data loss.
+	var gotTool, wantTool any
+	assert.NilError(t, json.Unmarshal(kept, &gotTool))
+	assert.NilError(t, json.Unmarshal([]byte(`{"nested": [1, 2]}`), &wantTool))
+	assert.DeepEqual(t, gotTool, wantTool)
 
 	var commands []map[string]json.RawMessage
 	assert.NilError(t, json.Unmarshal(cfg["commands"], &commands))
 	assert.Equal(t, len(commands), 4)
 	for _, c := range commands {
-		_, hasFileExt := c["fileExt"]
+		fileExt, hasFileExt := c["fileExt"]
 		assert.Assert(t, hasFileExt, "fileExt dropped from %v", c)
+		assert.Equal(t, string(fileExt), `"go"`, "fileExt value changed in %v", c)
 	}
 
 	got := string(data)
@@ -409,6 +417,33 @@ func TestConfigSetPreservesUnknownProjectKeys(t *testing.T) {
 	// And the user is told which keys chunk kept but does not recognize.
 	assert.Check(t, cmp.Contains(result.Stderr, "commands[].fileExt"))
 	assert.Check(t, cmp.Contains(result.Stderr, "myTool"))
+}
+
+// `config set` writes modeled keys only, so it cannot be used to introduce an
+// unknown one. Unknown keys reach the file by hand-editing or another tool, which
+// is why TestConfigSetPreservesUnknownProjectKeys seeds them directly.
+func TestConfigSetRejectsUnknownKey(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	env := testenv.NewTestEnv(t)
+
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	configPath := filepath.Join(chunkDir, "config.json")
+	original := "{\n  \"myTool\": {\"nested\": [1, 2]}\n}\n"
+	assert.NilError(t, os.WriteFile(configPath, []byte(original), 0o644))
+
+	result := binary.RunCLI(t, []string{"config", "set", "madeUpConfig", "madeup value"}, env, workDir)
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for an unknown key\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Contains(combined, `Unknown config key: "madeUpConfig"`),
+		"expected the error to name the key, got: %s", combined)
+
+	// A rejected write leaves the file exactly as it was.
+	data, err := os.ReadFile(configPath)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), original)
 }
 
 // A config that does not parse must be left alone, not replaced wholesale.
