@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,16 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/monitor"
+	"github.com/CircleCI-Public/chunk-cli/internal/monitor/ipc"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+)
+
+type tabView int
+
+const (
+	tabSidecars tabView = iota
+	tabSessions
 )
 
 const (
@@ -110,6 +120,11 @@ type dataMsg struct {
 	headRefs []string
 }
 
+type sessionsMsg struct {
+	sessions []ipc.Session
+	err      error
+}
+
 // Model is the BubbleTea model for the watch dashboard.
 type Model struct {
 	projects []ProjectEntry
@@ -120,6 +135,11 @@ type Model struct {
 	sidecars    []sidecarInfo
 	selectedIdx int
 	events      []eventlog.Event
+
+	activeTab   tabView
+	sessions    []ipc.Session
+	sessionIdx  int
+	sessionsErr error
 
 	width      int
 	height     int
@@ -138,7 +158,7 @@ func New(projects []ProjectEntry) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.loadData, doSpin())
+	return tea.Batch(m.loadData, doSpin(), doFetchSessions)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -152,13 +172,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Code {
 		case 'q', tea.KeyEscape:
 			return m, tea.Quit
+		case tea.KeyTab:
+			if m.activeTab == tabSidecars {
+				m.activeTab = tabSessions
+			} else {
+				m.activeTab = tabSidecars
+			}
 		case 'j', tea.KeyDown:
-			if m.selectedIdx < len(m.sidecars)-1 {
-				m.selectedIdx++
+			if m.activeTab == tabSessions {
+				if m.sessionIdx < len(m.sessions)-1 {
+					m.sessionIdx++
+				}
+			} else {
+				if m.selectedIdx < len(m.sidecars)-1 {
+					m.selectedIdx++
+				}
 			}
 		case 'k', tea.KeyUp:
-			if m.selectedIdx > 0 {
-				m.selectedIdx--
+			if m.activeTab == tabSessions {
+				if m.sessionIdx > 0 {
+					m.sessionIdx--
+				}
+			} else {
+				if m.selectedIdx > 0 {
+					m.selectedIdx--
+				}
 			}
 		case 'c':
 			if msg.Mod == tea.ModCtrl {
@@ -179,8 +217,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hasSpinner = anyRunning(m.sidecars)
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 
+	case sessionsMsg:
+		m.sessions = msg.sessions
+		m.sessionsErr = msg.err
+		if m.sessionIdx >= len(m.sessions) && len(m.sessions) > 0 {
+			m.sessionIdx = len(m.sessions) - 1
+		}
+		return m, nil
+
 	case tickMsg:
-		return m, m.loadData
+		return m, tea.Batch(m.loadData, doFetchSessions)
 
 	case spinMsg:
 		m.spinIdx++
@@ -210,11 +256,6 @@ func (m Model) render() string {
 }
 
 func (m Model) renderHeader() string {
-	count := fmt.Sprintf("%d sidecar", len(m.sidecars))
-	if len(m.sidecars) != 1 {
-		count += "s"
-	}
-
 	var contextTag string
 	if len(m.projects) > 1 {
 		contextTag = "  " + muted(fmt.Sprintf("%d projects", len(m.projects)))
@@ -226,8 +267,15 @@ func (m Model) renderHeader() string {
 		}
 	}
 
+	var tabBar string
+	if m.activeTab == tabSidecars {
+		tabBar = "  " + bold("sidecars") + "  " + vdim("sessions")
+	} else {
+		tabBar = "  " + vdim("sidecars") + "  " + bold("sessions")
+	}
+
 	clock := time.Now().Format("15:04:05")
-	title := bold("chunk watch") + "  " + muted(count) + contextTag
+	title := bold("chunk watch") + contextTag + tabBar
 	right := vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
@@ -246,8 +294,14 @@ func (m Model) renderBody() string {
 		contentHeight = 1
 	}
 
-	leftLines := m.renderSidecarPane(contentHeight)
-	rightLines := m.renderActivityPane(contentHeight)
+	var leftLines, rightLines []string
+	if m.activeTab == tabSessions {
+		leftLines = m.renderSessionsPane(contentHeight)
+		rightLines = m.renderSessionDetailPane(contentHeight)
+	} else {
+		leftLines = m.renderSidecarPane(contentHeight)
+		rightLines = m.renderActivityPane(contentHeight)
+	}
 
 	var b strings.Builder
 	for i := 0; i < contentHeight; i++ {
@@ -466,6 +520,7 @@ func iconAndMsg(e eventlog.Event) (string, string) {
 func (m Model) renderFooter() string {
 	keys := []struct{ key, action string }{
 		{"↑/↓ j/k", "select"},
+		{"tab", "switch view"},
 		{"q", "quit"},
 	}
 	parts := make([]string, 0, len(keys))
@@ -474,6 +529,159 @@ func (m Model) renderFooter() string {
 	}
 	bar := strings.Join(parts, "  "+vdim("·")+"  ")
 	return vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
+}
+
+// renderSessionsPane renders the left pane for the sessions tab.
+func (m Model) renderSessionsPane(maxLines int) []string {
+	lines := []string{vdim("sessions"), ""}
+
+	if m.sessionsErr != nil {
+		lines = append(lines, muted("server not running"), "", dim("chunk monitor server start"))
+		return lines
+	}
+	if len(m.sessions) == 0 {
+		lines = append(lines, muted("no sessions yet"))
+		return lines
+	}
+
+	for i, s := range m.sessions {
+		if len(lines) >= maxLines-2 {
+			break
+		}
+		selected := i == m.sessionIdx
+		proj := filepath.Base(s.ProjectDir)
+		if proj == "." || proj == "" {
+			proj = truncate(s.ID, 12)
+		}
+		nameLine := truncate(proj, leftPaneWidth-3)
+		if selected {
+			lines = append(lines, muted("▶ ")+bold(nameLine))
+		} else {
+			lines = append(lines, "  "+nameLine)
+		}
+
+		switch s.Status {
+		case "active":
+			lines = append(lines, "  "+green("● active"))
+		case "stale":
+			lines = append(lines, "  "+yellow("○ stale"))
+		case "ended":
+			lines = append(lines, "  "+vdim("○ ended"))
+		default:
+			lines = append(lines, "  "+vdim("○ "+s.Status))
+		}
+
+		if i < len(m.sessions)-1 {
+			lines = append(lines, vdim(strings.Repeat("·", leftPaneWidth)))
+		}
+	}
+	return lines
+}
+
+// renderSessionDetailPane renders the right pane for the sessions tab.
+func (m Model) renderSessionDetailPane(maxLines int) []string {
+	lines := []string{vdim("session details"), ""}
+
+	if len(m.sessions) == 0 || m.sessionIdx >= len(m.sessions) {
+		return lines
+	}
+
+	s := m.sessions[m.sessionIdx]
+	rightWidth := m.width - leftPaneWidth - 4
+	proj := s.ProjectDir
+	if proj == "" {
+		proj = s.ID
+	}
+
+	addRow := func(label, value string) {
+		lines = append(lines, vdim(label+"  ")+value)
+	}
+
+	addRow("project ", truncate(proj, rightWidth-10))
+	addRow("session ", vdim(truncate(s.ID, 16)))
+	addRow("git     ", renderGitStatus(s.GitStatus))
+	addRow("tools   ", fmt.Sprintf("%d uses", s.ToolUseCount))
+	addRow("running ", sessionDuration(s.StartedAt, s.LastSeenAt))
+	lines = append(lines, "")
+
+	switch s.ValidationStatus {
+	case "passed":
+		addRow("validate", green("✓ passed"))
+	case "failed":
+		addRow("validate", red("✗ failed"))
+	default:
+		addRow("validate", vdim("—"))
+	}
+
+	if len(lines) < maxLines {
+		lines = append(lines, "")
+		lines = append(lines, vdim("last seen  ")+vdim(ago(s.LastSeenAt)))
+	}
+
+	return lines
+}
+
+// renderGitStatus formats a git_status string with colour.
+func renderGitStatus(s string) string {
+	switch {
+	case s == "":
+		return vdim("—")
+	case s == "clean":
+		return vdim("clean")
+	case s == "dirty":
+		return yellow("dirty")
+	case s == "conflict":
+		return red("conflict!")
+	case strings.HasPrefix(s, "↑") && strings.Contains(s, "↓"):
+		return orange(s)
+	case strings.HasPrefix(s, "↑"):
+		return amber(s)
+	case strings.HasPrefix(s, "↓"):
+		return red(s)
+	default:
+		return muted(s)
+	}
+}
+
+// sessionDuration formats how long a session has been running.
+func sessionDuration(start, lastSeen time.Time) string {
+	if start.IsZero() {
+		return vdim("—")
+	}
+	end := lastSeen
+	if end.IsZero() || end.Before(start) {
+		end = time.Now()
+	}
+	d := end.Sub(start)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh%dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
+
+// doFetchSessions queries the monitor server for active sessions.
+func doFetchSessions() tea.Msg {
+	sockPath, err := monitor.SocketPath("server")
+	if err != nil {
+		return sessionsMsg{err: err}
+	}
+	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	if err != nil {
+		return sessionsMsg{err: err}
+	}
+	defer func() { _ = conn.Close() }()
+	if err := ipc.Send(conn, ipc.Request{Cmd: ipc.CmdListSessions}); err != nil {
+		return sessionsMsg{err: err}
+	}
+	resp, err := ipc.ReceiveResponse(conn)
+	if err != nil {
+		return sessionsMsg{err: err}
+	}
+	return sessionsMsg{sessions: resp.Sessions}
 }
 
 // loadData reads sidecar state files and new event log entries from all projects.

@@ -1,315 +1,63 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"github.com/spf13/cobra"
-
 	"github.com/CircleCI-Public/chunk-cli/internal/monitor"
-	"github.com/CircleCI-Public/chunk-cli/internal/monitor/agent"
 	"github.com/CircleCI-Public/chunk-cli/internal/monitor/ipc"
 	"github.com/CircleCI-Public/chunk-cli/internal/monitor/pid"
-	"github.com/CircleCI-Public/chunk-cli/internal/monitor/server"
 )
 
-func newMonitorCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "monitor",
-		Short: "Monitor coding agent sessions",
-		RunE:  runMonitorDashboard,
-	}
-	cmd.AddCommand(newMonitorStatusCmd())
-	cmd.AddCommand(newMonitorServerCmd())
-	cmd.AddCommand(newMonitorAgentCmd())
-	return cmd
+// reportHookValidation sends the validate pass/fail result to the agent daemon.
+// Called from finishValidate when running as a Stop hook. Errors are silently
+// ignored — monitoring is best-effort and must never affect the hook exit code.
+func reportHookValidation(sessionID string, passed bool) {
+	go func() {
+		ctx := context.Background()
+		if err := ensureAgentRunning(ctx); err != nil {
+			return
+		}
+		status := "passed"
+		if !passed {
+			status = "failed"
+		}
+		_ = sendToAgent(ipc.Request{
+			Cmd:       ipc.CmdSetValidation,
+			SessionID: sessionID,
+			Payload:   map[string]any{"status": status},
+			Timestamp: time.Now(),
+		})
+	}()
 }
 
-func runMonitorDashboard(cmd *cobra.Command, _ []string) error {
-	if err := ensureServerRunning(cmd.Context()); err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not start server: %v\n", err)
-	}
-	m := server.Dashboard{}
-	p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
-	_, err := p.Run()
-	return err
-}
-
-// --- monitor status ---
-
-func newMonitorStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show status of monitor daemons",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			printDaemonStatus(cmd.OutOrStdout(), "server")
-			printDaemonStatus(cmd.OutOrStdout(), "agent")
-			return nil
-		},
-	}
-}
-
-func printDaemonStatus(out io.Writer, name string) {
-	pidPath, err := monitor.PIDPath(name)
+func sendToAgent(req ipc.Request) error {
+	sockPath, err := monitor.SocketPath("agent")
 	if err != nil {
-		_, _ = fmt.Fprintf(out, "%s: error: %v\n", name, err)
-		return
+		return err
 	}
-	running, p, _ := pid.Running(pidPath)
-	if running {
-		_, _ = fmt.Fprintf(out, "%s: running (pid %d)\n", name, p)
-	} else {
-		_, _ = fmt.Fprintf(out, "%s: stopped\n", name)
+	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("connect to agent: %w", err)
 	}
+	defer func() { _ = conn.Close() }()
+	if err := ipc.Send(conn, req); err != nil {
+		return fmt.Errorf("send event: %w", err)
+	}
+	resp, err := ipc.ReceiveResponse(conn)
+	if err != nil {
+		return fmt.Errorf("receive response: %w", err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("agent error: %s", resp.Error)
+	}
+	return nil
 }
-
-// --- monitor server ---
-
-func newMonitorServerCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "server",
-		Short: "Manage the monitor server daemon",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newMonitorServerStartCmd())
-	cmd.AddCommand(newMonitorServerStopCmd())
-	cmd.AddCommand(newMonitorServerStatusCmd())
-	cmd.AddCommand(newMonitorServerLogsCmd())
-	cmd.AddCommand(&cobra.Command{
-		Use:    "_daemon",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return server.RunDaemon(cmd.Context())
-		},
-	})
-	return cmd
-}
-
-func newMonitorServerStartCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "start",
-		Short: "Start the monitor server daemon",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return startDaemon(cmd.OutOrStdout(), "server", "monitor", "server", "_daemon")
-		},
-	}
-}
-
-func newMonitorServerStopCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "stop",
-		Short: "Stop the monitor server daemon",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return stopDaemon(cmd.OutOrStdout(), "server")
-		},
-	}
-}
-
-func newMonitorServerStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show server daemon status",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			printDaemonStatus(cmd.OutOrStdout(), "server")
-			return nil
-		},
-	}
-}
-
-func newMonitorServerLogsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "logs",
-		Short: "Print server daemon logs",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return showLogs(cmd.OutOrStdout(), "server")
-		},
-	}
-}
-
-// --- monitor agent ---
-
-func newMonitorAgentCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "agent",
-		Short: "Manage the monitor agent daemon",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newMonitorAgentStartCmd())
-	cmd.AddCommand(newMonitorAgentStopCmd())
-	cmd.AddCommand(newMonitorAgentStatusCmd())
-	cmd.AddCommand(newMonitorAgentLogsCmd())
-	cmd.AddCommand(newMonitorAgentEventCmd())
-	cmd.AddCommand(newMonitorAgentValidateCmd())
-	cmd.AddCommand(&cobra.Command{
-		Use:    "_daemon",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return agent.RunDaemon(cmd.Context())
-		},
-	})
-	return cmd
-}
-
-func newMonitorAgentStartCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "start",
-		Short: "Start the monitor agent daemon",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return startDaemon(cmd.OutOrStdout(), "agent", "monitor", "agent", "_daemon")
-		},
-	}
-}
-
-func newMonitorAgentStopCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "stop",
-		Short: "Stop the monitor agent daemon",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return stopDaemon(cmd.OutOrStdout(), "agent")
-		},
-	}
-}
-
-func newMonitorAgentStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show agent daemon status",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			printDaemonStatus(cmd.OutOrStdout(), "agent")
-			return nil
-		},
-	}
-}
-
-func newMonitorAgentLogsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "logs",
-		Short: "Print agent daemon logs",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return showLogs(cmd.OutOrStdout(), "agent")
-		},
-	}
-}
-
-// monitorHookPayload is the JSON Claude Code delivers to every hook via stdin.
-type monitorHookPayload struct {
-	SessionID      string `json:"session_id"`
-	ToolName       string `json:"tool_name"`        // set on PostToolUse
-	StopHookActive bool   `json:"stop_hook_active"` // set on Stop
-}
-
-func (p monitorHookPayload) eventType() ipc.EventType {
-	if p.StopHookActive {
-		return ipc.EventSessionEnd
-	}
-	if p.ToolName != "" {
-		return ipc.EventToolUse
-	}
-	return ipc.EventHeartbeat
-}
-
-func readHookPayload(r io.Reader) monitorHookPayload {
-	raw, _ := io.ReadAll(r)
-	var p monitorHookPayload
-	_ = json.Unmarshal(raw, &p)
-	if p.SessionID == "" {
-		p.SessionID = os.Getenv("CLAUDE_SESSION_ID")
-	}
-	return p
-}
-
-func newMonitorAgentEventCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "event",
-		Short: "Record a hook event (reads Claude Code hook payload from stdin)",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			payload := readHookPayload(cmd.InOrStdin())
-			if payload.SessionID == "" {
-				return &userError{
-					msg:    "Session ID required.",
-					errMsg: "missing session_id in hook payload or CLAUDE_SESSION_ID",
-				}
-			}
-			if err := ensureAgentRunning(cmd.Context()); err != nil {
-				return fmt.Errorf("start agent daemon: %w", err)
-			}
-			if err := ensureServerRunning(cmd.Context()); err != nil {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not start server: %v\n", err)
-			}
-			return sendToAgent(ipc.Request{
-				Cmd:        ipc.CmdEvent,
-				SessionID:  payload.SessionID,
-				EventType:  payload.eventType(),
-				ToolName:   payload.ToolName,
-				ProjectDir: os.Getenv("CLAUDE_PROJECT_DIR"),
-				Timestamp:  time.Now(),
-			})
-		},
-	}
-}
-
-func newMonitorAgentValidateCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "validate",
-		Short: "Run chunk validate and record the result for this session",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			payload := readHookPayload(cmd.InOrStdin())
-
-			// Run validate using the same binary so dev builds test themselves.
-			exe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("get executable: %w", err)
-			}
-			validateCmd := exec.Command(exe, "validate")
-			// Re-encode and forward the hook payload so chunk validate can
-			// detect hook mode and apply the clean-tree skip and result cache.
-			payloadJSON, _ := json.Marshal(payload)
-			validateCmd.Stdin = bytes.NewReader(payloadJSON)
-			// Route validate stdout to stderr so our stdout stays clean for
-			// any JSON hook output (e.g. additionalContext from reportConflict).
-			validateCmd.Stdout = cmd.ErrOrStderr()
-			validateCmd.Stderr = cmd.ErrOrStderr()
-			validateErr := validateCmd.Run()
-
-			// Record the result. Don't send session_end — the Stop hook fires after
-			// every response, not just the final one. Stale detection handles cleanup.
-			if payload.SessionID != "" {
-				_ = ensureAgentRunning(cmd.Context())
-				status := "passed"
-				if validateErr != nil {
-					status = "failed"
-				}
-				_ = sendToAgent(ipc.Request{
-					Cmd:       ipc.CmdSetValidation,
-					SessionID: payload.SessionID,
-					Payload:   map[string]any{"status": status},
-					Timestamp: time.Now(),
-				})
-
-				// Surface any upstream conflicts as additionalContext so Claude
-				// can act on them regardless of validation outcome.
-				reportConflict(cmd, payload.SessionID)
-			}
-
-			return validateErr
-		},
-	}
-}
-
-// --- shared helpers ---
 
 func launchDaemon(name string, subArgs []string) error {
 	if _, err := monitor.EnsureDir(); err != nil {
@@ -353,58 +101,6 @@ func launchDaemon(name string, subArgs []string) error {
 	return fmt.Errorf("%s daemon did not start within 5s; check %s", name, logPath)
 }
 
-func startDaemon(out io.Writer, name string, subArgs ...string) error {
-	pidPath, err := monitor.PIDPath(name)
-	if err != nil {
-		return err
-	}
-	running, p, _ := pid.Running(pidPath)
-	if running {
-		_, _ = fmt.Fprintf(out, "%s already running (pid %d)\n", name, p)
-		return nil
-	}
-	if err := launchDaemon(name, subArgs); err != nil {
-		return err
-	}
-	_, p, _ = pid.Running(pidPath)
-	_, _ = fmt.Fprintf(out, "%s started (pid %d)\n", name, p)
-	return nil
-}
-
-func stopDaemon(out io.Writer, name string) error {
-	pidPath, err := monitor.PIDPath(name)
-	if err != nil {
-		return err
-	}
-	running, _, _ := pid.Running(pidPath)
-	if !running {
-		_, _ = fmt.Fprintf(out, "%s not running\n", name)
-		return nil
-	}
-	if err := pid.Kill(pidPath); err != nil {
-		return fmt.Errorf("stop %s: %w", name, err)
-	}
-	_, _ = fmt.Fprintf(out, "%s stopped\n", name)
-	return nil
-}
-
-func showLogs(out io.Writer, name string) error {
-	logPath, err := monitor.LogPath(name)
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(logPath)
-	if os.IsNotExist(err) {
-		_, _ = fmt.Fprintf(out, "no logs for %s\n", name)
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read logs: %w", err)
-	}
-	_, _ = out.Write(data)
-	return nil
-}
-
 func ensureRunning(_ context.Context, name string, subArgs ...string) error {
 	pidPath, err := monitor.PIDPath(name)
 	if err != nil {
@@ -418,88 +114,9 @@ func ensureRunning(_ context.Context, name string, subArgs ...string) error {
 }
 
 func ensureServerRunning(ctx context.Context) error {
-	return ensureRunning(ctx, "server", "monitor", "server", "_daemon")
+	return ensureRunning(ctx, "server", "watch", "_server-daemon")
 }
 
 func ensureAgentRunning(ctx context.Context) error {
-	return ensureRunning(ctx, "agent", "monitor", "agent", "_daemon")
-}
-
-// reportConflict checks whether the current session has an upstream merge
-// conflict and, if so, injects a warning into Claude's context window via the
-// Stop hook JSON output format so Claude can act on it in its next turn.
-func reportConflict(cmd *cobra.Command, sessionID string) {
-	start := time.Now()
-	resp, err := queryServer(ipc.Request{
-		Cmd:       ipc.CmdGetSession,
-		SessionID: sessionID,
-	})
-	elapsed := time.Since(start)
-	if err != nil || !resp.OK || len(resp.Sessions) == 0 {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[chunk monitor] conflict check: %s (error: %v)\n", elapsed.Round(time.Millisecond), err)
-		return
-	}
-	gitStatus := resp.Sessions[0].GitStatus
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "[chunk monitor] conflict check: %s (git_status=%q)\n", elapsed.Round(time.Millisecond), gitStatus)
-	if gitStatus != "conflict" {
-		return
-	}
-	const msg = "[chunk monitor] This branch has unresolved merge conflicts with its upstream. " +
-		"A rebase or merge is needed before this work can be pushed."
-	type hookOutput struct {
-		HookEventName     string `json:"hookEventName"`
-		AdditionalContext string `json:"additionalContext"`
-	}
-	type response struct {
-		SystemMessage      string     `json:"systemMessage"`
-		HookSpecificOutput hookOutput `json:"hookSpecificOutput"`
-	}
-	out := response{
-		SystemMessage: msg,
-		HookSpecificOutput: hookOutput{
-			HookEventName:     "Stop",
-			AdditionalContext: msg,
-		},
-	}
-	data, _ := json.Marshal(out)
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", data)
-}
-
-func queryServer(req ipc.Request) (ipc.Response, error) {
-	sockPath, err := monitor.SocketPath("server")
-	if err != nil {
-		return ipc.Response{}, err
-	}
-	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
-	if err != nil {
-		return ipc.Response{}, fmt.Errorf("connect to server: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-	if err := ipc.Send(conn, req); err != nil {
-		return ipc.Response{}, fmt.Errorf("send: %w", err)
-	}
-	return ipc.ReceiveResponse(conn)
-}
-
-func sendToAgent(req ipc.Request) error {
-	sockPath, err := monitor.SocketPath("agent")
-	if err != nil {
-		return err
-	}
-	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
-	if err != nil {
-		return fmt.Errorf("connect to agent: %w", err)
-	}
-	defer func() { _ = conn.Close() }()
-	if err := ipc.Send(conn, req); err != nil {
-		return fmt.Errorf("send event: %w", err)
-	}
-	resp, err := ipc.ReceiveResponse(conn)
-	if err != nil {
-		return fmt.Errorf("receive response: %w", err)
-	}
-	if !resp.OK {
-		return fmt.Errorf("agent error: %s", resp.Error)
-	}
-	return nil
+	return ensureRunning(ctx, "agent", "watch", "_agent-daemon")
 }

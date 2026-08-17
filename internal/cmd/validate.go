@@ -459,6 +459,7 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 		return execErr
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
+	reportHookValidation(hook.sessionID, execErr == nil)
 	if hookErr == nil && execErr == nil {
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", ui.FormatDuration(time.Since(start)))))
 		return nil

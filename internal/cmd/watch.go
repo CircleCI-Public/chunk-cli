@@ -11,6 +11,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/monitor/agent"
+	"github.com/CircleCI-Public/chunk-cli/internal/monitor/server"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	internaltui "github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui/watch"
@@ -83,6 +85,10 @@ func newWatchCmd() *cobra.Command {
 				})
 			}
 
+			if err := ensureServerRunning(cmd.Context()); err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not start monitor server: %v\n", err)
+			}
+
 			m := watch.New(entries)
 			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
 			_, err = p.Run()
@@ -91,5 +97,22 @@ func newWatchCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects, not just the current directory")
+
+	// Hidden daemon entry points — launched by ensureServerRunning / ensureAgentRunning.
+	cmd.AddCommand(&cobra.Command{
+		Use:    "_server-daemon",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return server.RunDaemon(cmd.Context())
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:    "_agent-daemon",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return agent.RunDaemon(cmd.Context())
+		},
+	})
+
 	return cmd
 }

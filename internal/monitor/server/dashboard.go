@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/monitor"
 	"github.com/CircleCI-Public/chunk-cli/internal/monitor/ipc"
 	"github.com/CircleCI-Public/chunk-cli/internal/monitor/pid"
