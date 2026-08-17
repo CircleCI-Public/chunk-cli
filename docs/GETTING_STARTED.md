@@ -88,10 +88,16 @@ Run this once per project. It auto-detects your test and lint commands (using Cl
 chunk init
 ```
 
+Run this after authenticating — init uses your CircleCI credentials to detect your org ID and save it to the project config. If you belong to one org it's selected automatically; if you belong to several, init shows a picker. Org ID is needed for sidecar commands, so capturing it here means you won't be prompted later.
+
 What it creates:
 
-- **`.chunk/config.json`** — list of validation commands (test, lint, format)
-- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session
+- **`.chunk/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
+- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session; tracked in git
+- **`.codex/hooks.json`** — the same hooks, for Codex sessions (only written if Codex is installed); tracked in git
+- **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
+
+`chunk init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
 
 Review the generated config and adjust commands if needed:
 
@@ -153,7 +159,7 @@ After installing, your agent gains these skills:
 |---|---|---|
 | `chunk-review` | "review my changes" / "chunk review" | Applies your team's review standards to the current diff |
 | `chunk-sidecar` | "validate on the sidecar" / "sidecar dev loop" | Syncs and validates changes on a remote CircleCI environment |
-| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing to find undertested code |
+| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing on parallel sidecars to find undertested code |
 | `debug-ci-failures` | "debug CI" / "why is CI failing" | Analyzes CircleCI build failures and flaky tests |
 
 See [docs/SKILLS.md](SKILLS.md) for full details on each skill.
@@ -178,13 +184,16 @@ The agent loads your team's prompt, diffs the changes, and returns filtered find
 
 ### First-time sidecar setup
 
-Before creating a sidecar in a non-interactive session (AI agents, scripts), set
-your CircleCI org ID once per project:
+Sidecar commands need a CircleCI org ID. The recommended path is to authenticate and run `chunk init` before using sidecars — init captures the org ID automatically and saves it to `.chunk/config.json`. After that, `chunk sidecar create` just works.
+
+If you skipped that or need to set the org ID manually:
 
 ```bash
-chunk auth set circleci
+# List your orgs — single-org users can skip this, init auto-selected it
+chunk org list
+
+# Persist the ID to the project config
 chunk config set orgID <your-org-id>
-chunk sidecar create
 ```
 
 `chunk config show` displays the resolved `orgID` when set. One-off overrides:

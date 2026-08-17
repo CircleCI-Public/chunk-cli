@@ -198,8 +198,9 @@ func TestBundleSync_SendsBundle(t *testing.T) {
 		"expected reset --hard FETCH_HEAD after bundle; got: %v", cmds)
 }
 
-// TestBundleSync_NoOpSkipsBundle verifies that when HEAD has not changed since
-// the last sync, no bundle is sent and the reset target is HEAD.
+// TestBundleSync_NoOpSkipsBundle verifies that when HEAD has not changed and
+// the working tree is clean, no bundle is sent and no remote reset/apply is
+// performed on subsequent syncs.
 func TestBundleSync_NoOpSkipsBundle(t *testing.T) {
 	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
 
@@ -220,10 +221,11 @@ func TestBundleSync_NoOpSkipsBundle(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
 
-	// First sync records LastSyncedRef.
+	// First sync records LastSyncedRef and LastSyncedPatchHash.
 	assert.NilError(t, sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus))
 
-	// Second sync: HEAD unchanged — no bundle should be sent.
+	// Second sync: HEAD unchanged, working tree clean — nothing should be sent
+	// beyond the pre-flight mkdir and repo-existence check.
 	sshSrv.Reset()
 	assert.NilError(t, sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus))
 
@@ -231,10 +233,11 @@ func TestBundleSync_NoOpSkipsBundle(t *testing.T) {
 	for _, cmd := range cmds {
 		assert.Assert(t, !strings.Contains(cmd, "tee"),
 			"no bundle should be sent on no-op sync; got command: %q", cmd)
+		assert.Assert(t, !strings.Contains(cmd, "reset --hard"),
+			"no reset should be sent on no-op sync; got command: %q", cmd)
+		assert.Assert(t, !strings.Contains(cmd, "git apply"),
+			"no apply should be sent on no-op sync; got command: %q", cmd)
 	}
-	// On a no-op sync the reset target is HEAD (not FETCH_HEAD).
-	assert.Assert(t, containsMatch(cmds, "reset --hard HEAD"),
-		"expected reset --hard HEAD on no-op sync; got: %v", cmds)
 }
 
 // TestBundleSync_ApplyWhitespaceNowarn verifies that BundleSync passes
@@ -314,6 +317,111 @@ func TestSync_ApplyWhitespaceNowarn(t *testing.T) {
 	assert.Assert(t, applyCmd != "", "expected a git apply command; got: %v", sshSrv.Commands())
 	assert.Assert(t, strings.Contains(applyCmd, "--whitespace=nowarn"),
 		"git apply must use --whitespace=nowarn; got: %q", applyCmd)
+}
+
+// TestBundleSync_DeltaSkipsResetOnPatchChange verifies that when only the
+// working-tree changes between syncs (commits unchanged), BundleSync uses a
+// delta sync (reverse old patch + apply new patch) instead of reset+clean+apply,
+// so committed files are untouched and golangci-lint caches stay valid.
+func TestBundleSync_DeltaSkipsResetOnPatchChange(t *testing.T) {
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	t.Setenv(config.EnvHome, t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+
+	repoDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	t.Chdir(repoDir)
+
+	cl := newClient(t, srv.URL)
+	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
+
+	// First sync: clean working tree, establishes baseline state.
+	assert.NilError(t, sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus))
+
+	// Introduce a working-tree change (new untracked file) without committing.
+	assert.NilError(t, os.WriteFile(filepath.Join(repoDir, "wip.go"), []byte("package main\n"), 0o644))
+
+	// Second sync: same HEAD, different working-tree patch → delta path.
+	sshSrv.Reset()
+	assert.NilError(t, sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus))
+
+	cmds := sshSrv.Commands()
+
+	// No bundle (commits did not change).
+	for _, cmd := range cmds {
+		assert.Assert(t, !strings.Contains(cmd, "tee"),
+			"no bundle should be sent when only working-tree changed; got: %q", cmd)
+	}
+
+	// No reset --hard (committed files must remain untouched).
+	for _, cmd := range cmds {
+		assert.Assert(t, !strings.Contains(cmd, "reset --hard"),
+			"delta sync must not reset; got command: %q", cmd)
+	}
+
+	// A git apply must be sent (applying the new patch).
+	assert.Assert(t, containsMatch(cmds, "apply --whitespace"),
+		"expected git apply in delta sync; got: %v", cmds)
+}
+
+// TestBundleSync_NoPatchFileUsesFullSync verifies that when the patch content
+// file is unavailable (e.g. the state directory was wiped), BundleSync falls
+// back to the full reset+clean+apply path so the sidecar is always brought to
+// a consistent state.
+func TestBundleSync_NoPatchFileUsesFullSync(t *testing.T) {
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	t.Setenv(config.EnvHome, t.TempDir())
+	xdgDir := t.TempDir()
+	t.Setenv(config.EnvXDGDataHome, xdgDir)
+
+	repoDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	t.Chdir(repoDir)
+
+	cl := newClient(t, srv.URL)
+	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
+
+	// First sync: establishes LastSyncedPatchHash in the sidecar state file, and
+	// writes the patch content file.
+	assert.NilError(t, sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus))
+
+	// Delete patch content files so the delta path is unavailable, while leaving
+	// sidecar.json (which holds LastSyncedPatchHash) intact.
+	// StateDir returns the exact per-project state directory.
+	stateDir, err := sidecar.StateDir()
+	assert.NilError(t, err)
+	diffs, _ := filepath.Glob(filepath.Join(stateDir, "*.diff"))
+	for _, d := range diffs {
+		assert.NilError(t, os.Remove(d))
+	}
+
+	// Introduce a working-tree change so the patch hash differs.
+	assert.NilError(t, os.WriteFile(filepath.Join(repoDir, "wip.go"), []byte("package main\n"), 0o644))
+
+	// Second sync: patchChanged=true but patch file missing → full reset path.
+	sshSrv.Reset()
+	assert.NilError(t, sidecar.BundleSync(context.Background(), cl, "sb-1", keyFile, "", "", repoDir, noopStatus))
+
+	// The fallback full-sync path must issue reset --hard.
+	cmds := sshSrv.Commands()
+	assert.Assert(t, containsMatch(cmds, "reset --hard"),
+		"full sync fallback must issue reset --hard; got: %v", cmds)
 }
 
 func containsMatch(cmds []string, substr string) bool {
