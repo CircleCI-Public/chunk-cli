@@ -171,6 +171,105 @@ func TestMergeHooksMigratesLegacyMatcher(t *testing.T) {
 	assert.Equal(t, entry["if"], "Bash(git commit*)")
 }
 
+// A user's own Bash hook survives even though it sits in the group chunk writes
+// into. The group matcher is the bare tool name, so a team with any non-commit
+// Bash hook shares the group with chunk — replacing the group would delete it.
+func TestMergePreservesUserEntriesInChunkCommitGroup(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "command": "audit-log", "timeout": 5}]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "task test", "timeout": 60}]}
+			]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	preToolUse := hooks["PreToolUse"].([]interface{})
+	assert.Equal(t, len(preToolUse), 1)
+
+	group := preToolUse[0].(map[string]interface{})
+	assert.Equal(t, group["matcher"], CommitMatcher)
+	entries := group["hooks"].([]interface{})
+	assert.Equal(t, len(entries), 2)
+
+	// The user's entry keeps its position and content; chunk's is appended after it.
+	first := entries[0].(map[string]interface{})
+	assert.Equal(t, first["command"], "audit-log")
+	assert.Equal(t, first["timeout"], float64(5))
+
+	second := entries[1].(map[string]interface{})
+	assert.Equal(t, second["command"], "task test")
+	assert.Equal(t, second["if"], CommitIfFilter)
+
+	// Re-running init over the merged result must not stack a second copy.
+	again, err := Merge(result.Merged, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, !again.Changed, "expected a second merge to be a no-op, got:\n%s", Diff(again.Original, again.Merged))
+}
+
+// Duplicate chunk entries left behind by an earlier version collapse to one
+// instead of surviving every merge and running validation twice per session.
+func TestMergeCollapsesDuplicateChunkEntries(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash(git commit*)", "hooks": [{"type": "command", "command": "old-cmd", "timeout": 30}]},
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "task test", "timeout": 30}]}
+			],
+			"Stop": [
+				{"hooks": [
+					{"type": "command", "command": "chunk validate", "timeout": 30},
+					{"type": "command", "command": "chunk validate", "timeout": 330}
+				]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "task test", "timeout": 60}]}
+			],
+			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 600}]}]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+	hooks := merged["hooks"].(map[string]interface{})
+
+	// The legacy group and the current one collapse into a single group.
+	preToolUse := hooks["PreToolUse"].([]interface{})
+	assert.Equal(t, len(preToolUse), 1)
+	commitEntries := preToolUse[0].(map[string]interface{})["hooks"].([]interface{})
+	assert.Equal(t, len(commitEntries), 1)
+	assert.Equal(t, commitEntries[0].(map[string]interface{})["timeout"], float64(60))
+
+	// Both stale "chunk validate" entries give way to the one generated entry.
+	stop := hooks["Stop"].([]interface{})
+	assert.Equal(t, len(stop), 1)
+	stopEntries := stop[0].(map[string]interface{})["hooks"].([]interface{})
+	assert.Equal(t, len(stopEntries), 1)
+	assert.Equal(t, stopEntries[0].(map[string]interface{})["timeout"], float64(600))
+}
+
 func TestMergeHooksPreservesDifferentMatcher(t *testing.T) {
 	existing := []byte(`{
 		"hooks": {
@@ -375,6 +474,9 @@ func TestMergePreservesUserEntriesInChunkStopGroup(t *testing.T) {
 
 	result, err := Merge(existing, generated)
 	assert.NilError(t, err)
+	// init.go gates the write on Changed, so the shared-group path has to report
+	// the timeout update or the new value never reaches disk.
+	assert.Assert(t, result.Changed)
 
 	var merged map[string]interface{}
 	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
@@ -672,6 +774,7 @@ func TestMergeCodexPreservesUserEntriesInChunkStopGroup(t *testing.T) {
 
 	result, err := MergeCodex(existing, generated)
 	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
 
 	var merged map[string]interface{}
 	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
