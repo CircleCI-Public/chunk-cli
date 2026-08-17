@@ -335,7 +335,7 @@ func newAuthStatusCmd() *cobra.Command {
 					io.ErrPrintln(ui.FormatError(
 						"CircleCI token validation failed.",
 						"",
-						"Run `chunk auth set circleci` to set a new token.",
+						"Run `chunk auth login` to log in again, or `chunk auth set circleci` to set a token manually.",
 					))
 					hasFailure = true
 				} else {

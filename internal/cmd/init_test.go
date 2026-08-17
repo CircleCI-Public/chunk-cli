@@ -438,6 +438,23 @@ func TestInstallSkillsStepUsesProjectScope(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err), "skill must not be installed under $HOME")
 }
 
+// TestInstallSkillsStepInstallsSidecarSetup verifies the onboarding wizard ships
+// alongside chunk-sidecar. Without it, chunk-sidecar's first-time setup path
+// routes to a skill that is not installed.
+func TestInstallSkillsStepInstallsSidecarSetup(t *testing.T) {
+	workDir := t.TempDir()
+	t.Setenv(config.EnvHome, t.TempDir())
+
+	streams, _, _ := testStreams()
+	installSkillsStep(workDir, streams)
+
+	for _, name := range []string{"chunk-sidecar", "chunk-sidecar-setup"} {
+		skillPath := filepath.Join(workDir, ".claude", "skills", name, "SKILL.md")
+		_, err := os.Stat(skillPath)
+		assert.NilError(t, err, "expected skill installed at %s", skillPath)
+	}
+}
+
 func TestPrintInitSummaryWithCommands(t *testing.T) {
 	ui.SetColorEnabled(false)
 	defer ui.SetColorEnabled(true)
