@@ -26,6 +26,9 @@ type ActiveSidecar struct {
 	OrgID         string `json:"org_id,omitempty"`
 	Workspace     string `json:"workspace,omitempty"`
 	LastSyncedRef string `json:"last_synced_ref,omitempty"`
+	// LastSyncedPatchHash is a SHA-256 hex digest of the working-tree patch
+	// last applied to the sidecar.
+	LastSyncedPatchHash string `json:"last_synced_patch_hash,omitempty"`
 }
 
 // CurrentBranch returns the current git branch for the repo rooted at root.

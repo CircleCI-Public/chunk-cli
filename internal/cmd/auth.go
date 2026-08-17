@@ -110,7 +110,7 @@ func newAuthSetCmd() *cobra.Command {
 		Use:       "set <provider>",
 		Short:     "Store credentials for a provider",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{"circleci", "anthropic", "github"},
+		ValidArgs: []string{providerCircleCI, providerAnthropic, providerGitHub},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -335,7 +335,7 @@ func newAuthStatusCmd() *cobra.Command {
 					io.ErrPrintln(ui.FormatError(
 						"CircleCI token validation failed.",
 						"",
-						"Run `chunk auth set circleci` to set a new token.",
+						"Run `chunk auth login` to log in again, or `chunk auth set circleci` to set a token manually.",
 					))
 					hasFailure = true
 				} else {
@@ -407,7 +407,7 @@ func newAuthRemoveCmd() *cobra.Command {
 		Use:       "remove <provider>",
 		Short:     "Remove stored credentials",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{"circleci", "anthropic", "github"},
+		ValidArgs: []string{providerCircleCI, providerAnthropic, providerGitHub},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)

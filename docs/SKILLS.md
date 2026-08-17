@@ -114,7 +114,7 @@ Interactive onboarding wizard for setting up a sidecar from scratch. Also invoke
 
 **Prerequisites**:
 - `chunk` CLI installed
-- CircleCI token available to configure (`chunk auth set circleci`)
+- CircleCI auth (`chunk auth login`, or `chunk auth set circleci` for token auth)
 
 **What it does** (8 guided stages):
 
@@ -140,9 +140,11 @@ Runs a four-stage mutation testing process to find undertested code paths.
 **What it does**:
 
 1. **Discovery** — identifies mutation candidates in changed code
-2. **Validation** — verifies surviving mutants using git worktrees and CI
+2. **Validation** — triages candidates locally, then runs the survivors on parallel throwaway sidecars via `chunk validate variants`
 3. **Production cross-reference** — checks whether survivors touch production code paths
 4. **Risk assessment** — reports high-risk survivors with recommended tests
+
+Mutants never leave your machine as VCS artifacts: each one is carried as a patch and applied on a sidecar that is deleted afterwards. No branches are pushed and no pull requests are opened.
 
 ---
 

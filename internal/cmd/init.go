@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -72,6 +74,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .claude/settings.json"))
+		streams.ErrPrintln(ui.Dim("  Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session."))
 		return nil
 	}
 
@@ -124,6 +127,7 @@ func writeSettings(workDir string, commands []config.Command, streams iostream.S
 		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .claude/settings.json"))
+	streams.ErrPrintln(ui.Dim("  Hidden Claude Code config. Runs `chunk validate` before commits and after each agent session."))
 	return nil
 }
 
@@ -177,6 +181,7 @@ func writeCodexHooks(workDir string, commands []config.Command, streams iostream
 			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .codex/hooks.json"))
+		streams.ErrPrintln(ui.Dim("  Hidden Codex config. Same hooks as .claude/settings.json, for Codex sessions."))
 		return nil
 	}
 
@@ -226,6 +231,7 @@ func writeCodexHooks(workDir string, commands []config.Command, streams iostream
 		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .codex/hooks.json"))
+	streams.ErrPrintln(ui.Dim("  Hidden Codex config. Same hooks as .claude/settings.json, for Codex sessions."))
 	return nil
 }
 
@@ -257,7 +263,7 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 }
 
 func installSkillsStep(workDir string, streams iostream.Streams) {
-	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, "chunk-sidecar") {
+	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, "chunk-sidecar", "chunk-sidecar-setup") {
 		if r.Skipped {
 			continue
 		}
@@ -367,6 +373,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 			}
 		}
 		streams.ErrPrintln(ui.Success("Wrote .git/hooks/pre-commit"))
+		streams.ErrPrintln(ui.Dim("  Not tracked in git. Runs `chunk validate` locally before every commit you make."))
 		return nil
 	}
 
@@ -392,6 +399,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 		}
 	}
 	streams.ErrPrintln(ui.Success("Updated .git/hooks/pre-commit"))
+	streams.ErrPrintln(ui.Dim("  Not tracked in git. Runs `chunk validate` locally before every commit you make."))
 	return nil
 }
 
@@ -421,8 +429,31 @@ func printInitSummary(commands []config.Command, streams iostream.Streams) {
 	}
 }
 
+// detectOrgID attempts to resolve a CircleCI org ID without prompting for auth.
+// Auto-selects when the user belongs to exactly one org; shows a picker when
+// interactive with multiple orgs. Skipped gracefully on auth failure, no TTY,
+// or cancellation — none of these are fatal for chunk init.
+func detectOrgID(ctx context.Context, rc config.ResolvedConfig, streams iostream.Streams, cfg *config.ProjectConfig) {
+	client, err := authprompt.ResolveCircleCIClient(rc, nil)
+	if err != nil {
+		if !errors.Is(err, authprompt.ErrNeedsAuth) {
+			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect org ID: %v", err)))
+		}
+		return
+	}
+	orgID, err := orgPicker(ctx, client)()
+	if err != nil {
+		if !errors.Is(err, tui.ErrNoTTY) && !errors.Is(err, tui.ErrCancelled) {
+			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect org ID: %v", err)))
+		}
+		return
+	}
+	cfg.OrgID = orgID
+	streams.ErrPrintf("Org ID: %s\n", ui.Bold(orgID))
+}
+
 func newInitCmd() *cobra.Command {
-	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites bool
+	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID bool
 	var projectDir string
 
 	cmd := &cobra.Command{
@@ -496,9 +527,13 @@ hook config files.`,
 				streams.ErrPrintf("Detected repository: %s\n", ui.Bold(fmt.Sprintf("%s/%s", org, repo)))
 			}
 
+			rc, rcErr := config.Resolve("", "", insecureStorage)
+			if rcErr != nil {
+				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not load config: %v", rcErr)))
+			}
+
 			// Step 2: Validate command detection
 			if !skipValidate {
-				rc, _ := config.Resolve("", "", insecureStorage)
 				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
 				commands, detectErr := validate.DetectCommands(ctx, claude, workDir)
 				if detectErr != nil {
@@ -518,6 +553,11 @@ hook config files.`,
 				}
 			}
 
+			// Step 3: CircleCI org ID
+			if !skipOrgID && cfg.OrgID == "" {
+				detectOrgID(ctx, rc, streams, cfg)
+			}
+
 			// init owns the whole file: it has either merged the existing config
 			// into cfg above, or been told with --force to replace one that could
 			// not be read at all. Either way this write is meant to be wholesale.
@@ -530,7 +570,7 @@ hook config files.`,
 			}
 			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
 
-			// Step 3: Write hook config files for supported agents.
+			// Step 4: Write hook config files for supported agents.
 			if !skipHooks {
 				if err := writeAllHookFiles(workDir, cfg.Commands, streams); err != nil {
 					return err
@@ -542,12 +582,12 @@ hook config files.`,
 				}
 			}
 
-			// Step 4: Shell completions
+			// Step 5: Shell completions
 			if !skipCompletions {
 				maybeInstallCompletions(streams)
 			}
 
-			// Step 5: CircleCI Smarter Testing test-suites.yml
+			// Step 6: CircleCI Smarter Testing test-suites.yml
 			if skipTestSuites {
 				printTestSuitesHint(workDir, streams)
 			} else {
@@ -556,7 +596,7 @@ hook config files.`,
 				}
 			}
 
-			// Step 6: Agent skills
+			// Step 7: Agent skills
 			if !skipSkills {
 				installSkillsStep(workDir, streams)
 			}
@@ -574,6 +614,7 @@ hook config files.`,
 	cmd.Flags().BoolVar(&skipCompletions, "skip-completions", false, "Skip shell completion installation")
 	cmd.Flags().BoolVar(&skipSkills, "skip-skills", false, "Skip agent skill installation")
 	cmd.Flags().BoolVar(&skipTestSuites, "skip-test-suites", true, "Skip CircleCI test-suites.yml generation (default: skip; pass =false to use built-in Go/pytest templates)")
+	cmd.Flags().BoolVar(&skipOrgID, "skip-org-id", false, "Skip CircleCI org ID detection")
 	cmd.Flags().StringVar(&projectDir, "project-dir", "", "Project directory (defaults to current directory)")
 
 	return cmd

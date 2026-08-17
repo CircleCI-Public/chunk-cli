@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -435,6 +438,23 @@ func TestInstallSkillsStepUsesProjectScope(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err), "skill must not be installed under $HOME")
 }
 
+// TestInstallSkillsStepInstallsSidecarSetup verifies the onboarding wizard ships
+// alongside chunk-sidecar. Without it, chunk-sidecar's first-time setup path
+// routes to a skill that is not installed.
+func TestInstallSkillsStepInstallsSidecarSetup(t *testing.T) {
+	workDir := t.TempDir()
+	t.Setenv(config.EnvHome, t.TempDir())
+
+	streams, _, _ := testStreams()
+	installSkillsStep(workDir, streams)
+
+	for _, name := range []string{"chunk-sidecar", "chunk-sidecar-setup"} {
+		skillPath := filepath.Join(workDir, ".claude", "skills", name, "SKILL.md")
+		_, err := os.Stat(skillPath)
+		assert.NilError(t, err, "expected skill installed at %s", skillPath)
+	}
+}
+
 func TestPrintInitSummaryWithCommands(t *testing.T) {
 	ui.SetColorEnabled(false)
 	defer ui.SetColorEnabled(true)
@@ -472,6 +492,59 @@ func TestPrintInitSummaryNoCommands(t *testing.T) {
 	assert.Assert(t, !strings.Contains(out, "Validation commands:"), "should not show command table when none configured")
 	assert.Assert(t, strings.Contains(out, ".chunk/config.json"), "missing config path")
 	assert.Assert(t, strings.Contains(out, "chunk validate"), "missing validate hint")
+}
+
+func newDetectOrgIDFake(t *testing.T) (*fakes.FakeCircleCI, config.ResolvedConfig) {
+	t.Helper()
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+	rc := config.ResolvedConfig{CircleCIToken: "test-token", CircleCIBaseURL: srv.URL}
+	return cci, rc
+}
+
+func TestDetectOrgID_NoAuth(t *testing.T) {
+	cfg := &config.ProjectConfig{}
+	streams, _, errOut := testStreams()
+	detectOrgID(context.Background(), config.ResolvedConfig{}, streams, cfg)
+	assert.Equal(t, cfg.OrgID, "")
+	assert.Equal(t, errOut.Len(), 0)
+}
+
+func TestDetectOrgID_SingleOrg(t *testing.T) {
+	cci, rc := newDetectOrgIDFake(t)
+	cci.Collaborations = []fakes.Collaboration{{ID: "org-xyz", Name: "myorg"}}
+
+	cfg := &config.ProjectConfig{}
+	streams, _, errOut := testStreams()
+	detectOrgID(context.Background(), rc, streams, cfg)
+	assert.Equal(t, cfg.OrgID, "org-xyz")
+	assert.Assert(t, strings.Contains(errOut.String(), "org-xyz"))
+}
+
+func TestDetectOrgID_MultipleOrgs_NoTTY(t *testing.T) {
+	cci, rc := newDetectOrgIDFake(t)
+	cci.Collaborations = []fakes.Collaboration{
+		{ID: "org-1", Name: "first"},
+		{ID: "org-2", Name: "second"},
+	}
+
+	cfg := &config.ProjectConfig{}
+	streams, _, errOut := testStreams()
+	detectOrgID(context.Background(), rc, streams, cfg)
+	assert.Equal(t, cfg.OrgID, "")
+	assert.Equal(t, errOut.Len(), 0, "ErrNoTTY should be suppressed silently")
+}
+
+func TestDetectOrgID_APIError(t *testing.T) {
+	cci, rc := newDetectOrgIDFake(t)
+	cci.CollaborationsStatusCode = 500
+
+	cfg := &config.ProjectConfig{}
+	streams, _, errOut := testStreams()
+	detectOrgID(context.Background(), rc, streams, cfg)
+	assert.Equal(t, cfg.OrgID, "")
+	assert.Assert(t, strings.Contains(errOut.String(), "Could not detect org ID"))
 }
 
 func TestInstallCompletionBashWritesRCFile(t *testing.T) {

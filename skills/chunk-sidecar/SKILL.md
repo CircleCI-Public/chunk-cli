@@ -1,11 +1,14 @@
 ---
 name: chunk-sidecar
 description: Use when the user says "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "sidecar dev loop", "check this on the sidecar", "validate remotely", "scaffold test-suites.yml", "set up smarter testing", "write .circleci/test-suites.yml", "run smarter testing doctor", or "diagnose smarter testing", or when you have made edits and want to verify them on a remote `chunk` sidecar instead of running locally. Also covers creating sidecars, snapshotting a configured environment, customizing the sidecar image via `chunk sidecar`, and scaffolding `.circleci/test-suites.yml` for CircleCI Smarter Testing.
-version: 2.0.0
+version: 2.1.0
 allowed-tools:
   - Bash(chunk --version)
   - Bash(chunk auth status)
+  - Bash(chunk auth login)
+  - Bash(chunk auth login --no-browser)
   - Bash(chunk config set:*)
+  - Bash(chunk org list:*)
   - Bash(chunk sidecar:*)
   - Bash(chunk validate:*)
   - Bash(cat .chunk/config.json)
@@ -37,7 +40,7 @@ chunk sidecar current 2>&1
 
 **If `chunk` is not installed:** Stop. Tell the user to install `chunk` before using this skill.
 
-**If auth shows CircleCI "Not set":** Stop. Tell the user to run `chunk auth set circleci` first.
+**If auth shows CircleCI "Not set":** Run the OAuth login for them — see [Logging in](#logging-in) — then re-run `chunk auth status`. Only continue once CircleCI shows "Configured".
 
 **Otherwise, call AskUserQuestion** based on detected state (choose the block that matches):
 
@@ -110,10 +113,28 @@ AskUserQuestion:
 Before any `chunk sidecar` command, confirm:
 
 1. `chunk --version` — CLI is installed and on PATH.
-2. `chunk auth status` — exit code 0, CircleCI shows "Configured". If not, run `chunk auth set circleci`.
-3. **OrgID** — read `cat .chunk/config.json` and check `orgID`. If missing, run `test -n "${CIRCLECI_ORG_ID:-}"`. If **both** are unset, ask the user for their org ID **exactly once** and persist with `chunk config set orgID <id>`.
+2. `chunk auth status` — exit code 0, CircleCI shows "Configured". If not, see [Logging in](#logging-in).
+3. **OrgID** — read `cat .chunk/config.json` and check `orgID`. If missing, run `test -n "${CIRCLECI_ORG_ID:-}"`. If **both** are unset, run `chunk org list --json`: one org, use it automatically; several, show the list and ask **exactly once**; error or empty, stop and see [Logging in](#logging-in). Persist with `chunk config set orgID <id>`.
 
 Never run `echo $CIRCLE_TOKEN`, `env`, `printenv`, or any command that exposes credential env vars.
+
+---
+
+## Logging in
+
+OAuth is the default. It opens a browser, exchanges the code over PKCE, and stores the token in the system keychain — no token pasting, nothing on disk in plaintext.
+
+```bash
+chunk auth login
+```
+
+Run it with a **Bash timeout of 300000ms** — the command blocks until the browser callback lands (5 minute limit). No browser opens when the agent runs it: stdin is not a terminal, so `chunk auth login` prints the authorize URL and waits. **Relay that URL to the user and ask them to open it.** Never open a browser on their behalf.
+
+The callback listens on `127.0.0.1` on **this** machine, so the URL only works from a browser on the same host. `--no-browser` forces the same print-and-wait behaviour when a terminal is present.
+
+Fall back to `chunk auth set circleci` (paste a personal API token) only when OAuth is unavailable, or when the user explicitly asks for token auth. Both paths land in the keychain; `--insecure-storage` writes to `~/.config/chunk/config.json` instead.
+
+If `chunk auth status` reports the CircleCI source as `Environment`, do **not** log in — `CIRCLE_TOKEN` is already set and takes precedence over the keychain, so a login would store a token that never gets used. Treat it as configured and move on.
 
 ---
 
@@ -192,8 +213,8 @@ If `circleci-testsuite` is not installed, fall back to manual validation (see v1
 
 ## Troubleshooting
 
-- **`Could not select an organization` / `no interactive terminal`** — orgID missing. Ask user once, then `chunk config set orgID <id>`.
-- **Auth errors (401/403, "token invalid")** — run `chunk auth status`, follow its printed remediation.
+- **`Could not select an organization` / `no interactive terminal`** — orgID missing. Run `chunk org list --json`, auto-select if there is one org, otherwise ask once, then `chunk config set orgID <id>`.
+- **Auth errors (401/403, "token invalid")** — run `chunk auth status`. If the CircleCI token is stale or missing, re-run `chunk auth login` ([Logging in](#logging-in)); otherwise follow the printed remediation.
 - **Sidecar 404 on `current` / `sync` / `validate`** — sidecar was deleted externally. Run `chunk sidecar forget`, return to Step 0.
 - **`permission denied (publickey)`** — run `chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub`. If it persists, tell user to remove `~/.ssh/chunk_ai*` to regenerate the keypair.
 - **`context deadline exceeded` on SSH or API calls** — sidecar is unhealthy. If `sidecarImage` is set, create a fresh one from snapshot. Otherwise `chunk sidecar forget` and redo setup via `chunk-sidecar-setup`.

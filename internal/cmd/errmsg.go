@@ -8,6 +8,7 @@ const (
 	msgCouldNotLoadSidecar      = "Could not load the active sidecar."
 	msgHomeNotSet               = "HOME environment variable is not set."
 	errMsgHomeNotSet            = "HOME not set"
+	msgValidateNotConfigured    = "No validate commands configured."
 	msgMalformedProjectConfig   = "Could not read .chunk/config.json."
 	msgUnreadableProjectConfig  = "Could not open .chunk/config.json."
 

@@ -536,7 +536,7 @@ func TestRunRemoteInline(t *testing.T) {
 	})
 }
 
-// --- expandCommand ---
+// --- ExpandCommand ---
 
 // gitRun runs git in dir with the isolated env the test helpers use.
 func gitRun(t *testing.T, dir string, args ...string) {
@@ -568,7 +568,7 @@ func TestExpandCommandSkipsDeletedPackages(t *testing.T) {
 		filepath.Join(dir, "kept", "a.go"), []byte("package kept // edited\n"), 0o644))
 	assert.NilError(t, os.RemoveAll(filepath.Join(dir, "gone")))
 
-	got := expandCommand(dir, "task test -- {{CHANGED_PACKAGES}}")
+	got := ExpandCommand(dir, "task test -- {{CHANGED_PACKAGES}}")
 	assert.Equal(t, got, "task test -- ./kept")
 }
 
@@ -584,10 +584,10 @@ func TestExpandCommandAllPackagesDeleted(t *testing.T) {
 	gitRun(t, dir, "commit", "-m", "add package")
 	assert.NilError(t, os.RemoveAll(filepath.Join(dir, "gone")))
 
-	got := expandCommand(dir, "task test -- {{CHANGED_PACKAGES}}")
+	got := ExpandCommand(dir, "task test -- {{CHANGED_PACKAGES}}")
 	assert.Equal(t, got, "task test -- ./...")
 }
 
 func TestExpandCommandWithoutTemplate(t *testing.T) {
-	assert.Equal(t, expandCommand(t.TempDir(), "task test"), "task test")
+	assert.Equal(t, ExpandCommand(t.TempDir(), "task test"), "task test")
 }

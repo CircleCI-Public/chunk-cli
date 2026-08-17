@@ -127,23 +127,25 @@ func Install(scope Scope, baseDir string) []AgentInstallResult {
 	return results
 }
 
-// InstallByName installs a single skill by name.
-// Returns nil if the skill name is not found.
-func InstallByName(scope Scope, baseDir, name string) []AgentInstallResult {
-	var s *Skill
-	for i := range All {
-		if All[i].Name == name {
-			s = &All[i]
-			break
+// InstallByName installs the named skills, in the order given.
+// Unknown names are ignored; returns nil if none of the names match.
+func InstallByName(scope Scope, baseDir string, names ...string) []AgentInstallResult {
+	subset := make([]Skill, 0, len(names))
+	for _, name := range names {
+		for i := range All {
+			if All[i].Name == name {
+				subset = append(subset, All[i])
+				break
+			}
 		}
 	}
-	if s == nil {
+	if len(subset) == 0 {
 		return nil
 	}
 	all := agents(scope, baseDir)
 	results := make([]AgentInstallResult, 0, len(all))
 	for _, agent := range all {
-		results = append(results, installForAgent(agent, []Skill{*s}))
+		results = append(results, installForAgent(agent, subset))
 	}
 	return results
 }

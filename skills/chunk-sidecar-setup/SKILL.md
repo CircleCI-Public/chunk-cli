@@ -5,6 +5,8 @@ version: 1.0.0
 allowed-tools:
   - Bash(chunk --version)
   - Bash(chunk auth status)
+  - Bash(chunk auth login)
+  - Bash(chunk auth login --no-browser)
   - Bash(chunk config set:*)
   - Bash(chunk sidecar:*)
   - Bash(chunk validate:*)
@@ -57,7 +59,21 @@ Read the output carefully — it prints the status of each credential:
 | GitHub      | Validate commands that fetch PRs/issues   |
 | Anthropic   | Validate commands that invoke Claude      |
 
-If CircleCI shows "Not set", tell the user to run `chunk auth set circleci` and confirm it passes before continuing. For GitHub and Anthropic, surface that they're missing but do not block if the user's validate commands don't need them.
+If CircleCI shows "Not set", run the OAuth login yourself — see [Logging in](#logging-in) below — then re-run `chunk auth status` and confirm it shows "Configured" before continuing. For GitHub and Anthropic, surface that they're missing but do not block if the user's validate commands don't need them.
+
+#### Logging in
+
+OAuth is the default. The user opens a URL, the code comes back over PKCE, and the token lands in the system keychain — no token pasting.
+
+```bash
+chunk auth login
+```
+
+- Run with a **Bash timeout of 300000ms**: it blocks until the callback lands (5 minute limit).
+- No browser opens when the agent runs it. Stdin is not a terminal, so the command prints the authorize URL and waits. **Relay that URL and ask the user to open it** — never open a browser on their behalf.
+- The callback listens on `127.0.0.1` on **this** machine, so the URL only works from a browser on the same host.
+- If the source already reads `Environment`, `CIRCLE_TOKEN` is set and wins over the keychain. Do not log in — treat it as configured.
+- `chunk auth set circleci` (paste a personal API token) is the fallback for when OAuth fails or the user asks for token auth.
 
 **Never run `echo $CIRCLE_TOKEN`, `env`, `printenv`, or any command that exposes credential env vars.** The `chunk auth status` output masks tokens — that is the only safe way to check credentials.
 
@@ -74,7 +90,8 @@ AskUserQuestion:
     - "Re-run chunk auth status"
       → run chunk auth status again and show output
     - "I need to set a credential"
-      → ask which one, then tell user to run chunk auth set <service>
+      → for CircleCI, run chunk auth login (see Logging in);
+        for GitHub or Anthropic, tell user to run chunk auth set <service>
 ```
 
 ---
@@ -287,7 +304,7 @@ When Stage 8 validate passes, tell the user:
 ## Troubleshooting
 
 - **`Could not select an organization` / `no interactive terminal`** — OrgID is missing. Return to Stage 2.
-- **Auth errors (401/403, "token invalid")** — run `chunk auth status` and follow its printed remediation. Never dump env vars.
+- **Auth errors (401/403, "token invalid")** — run `chunk auth status`. If the CircleCI token is stale or missing, re-run `chunk auth login` ([Logging in](#logging-in)). Never dump env vars.
 - **`permission denied (publickey)` on sync or exec** — run `chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub`. If it persists, tell the user to remove `~/.ssh/chunk_ai*` to regenerate the keypair on next use.
 - **`context deadline exceeded`** — sidecar is unhealthy. Run `chunk sidecar forget` and restart from Stage 4 with a new sidecar.
 - **Missing binary after `chunk sidecar setup`** — install with `chunk validate --remote --cmd "<install>"`, verify with `chunk validate`, then re-snapshot (Stage 7 onward).
