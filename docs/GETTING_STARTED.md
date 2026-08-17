@@ -213,9 +213,14 @@ chunk sidecar create --name my-sidecar
 # Set it as active
 chunk sidecar use <id>
 
+# Mark which commands belong on the sidecar (once per project)
+chunk validate --mark-remote        # every configured command
+chunk validate --mark-remote test   # or just one
+
 # Dev loop: sync then validate
 chunk sidecar sync           # push local changes to sidecar
-chunk validate --remote      # run validate commands on sidecar
+chunk validate               # marked commands run on the sidecar, the rest locally
+chunk validate --remote      # or force every command onto the sidecar
 
 # Inspect or clear the active sidecar
 chunk sidecar current        # show which sidecar is active

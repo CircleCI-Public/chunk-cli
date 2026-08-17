@@ -210,7 +210,33 @@ If `test-suites.yml` was found locally, recommend "Yes" in the question text.
 
 ---
 
-## Stage 6 — Run Validate
+## Stage 6 — Mark Commands Remote
+
+**Do this before running validate.** Nothing routes to the sidecar until a command
+is marked `remote: true` in `.chunk/config.json`, and the sidecar now being up
+does not mark anything on its own:
+
+- `chunk sidecar setup` (Stage 5, auto-detect path) marks only `install` and
+  gate-role commands.
+- The "I'll specify the install commands" and "Skip" paths in Stage 5 mark nothing
+  at all.
+
+So check what is marked, then mark the rest:
+
+```bash
+chunk validate --list                  # shows configured commands
+chunk validate --mark-remote           # mark every configured command
+chunk validate --mark-remote test      # or one at a time
+```
+
+Mark every command the user wants running on the sidecar. Leave autofix commands
+(formatters, codegen) local — they rewrite files, and the edits belong in the
+local working tree, not on the sidecar. Already-marked commands report no change,
+so re-running is safe.
+
+---
+
+## Stage 7 — Run Validate
 
 Confirm the sidecar environment is working:
 
@@ -220,12 +246,7 @@ chunk validate
 
 `chunk validate` runs all configured commands in `.chunk/config.json`. Commands marked `remote: true` run on the sidecar; others run locally. Zero exit = everything passed.
 
-**If nothing ran on the sidecar**, no command is marked remote — `chunk sidecar setup` only marks install and gate commands, and the manual path in Stage 4 marks none. Mark them and re-run:
-
-```bash
-chunk validate --mark-remote           # mark every configured command
-chunk validate --mark-remote test      # or just one
-```
+**If nothing ran on the sidecar**, no command is marked — go back to Stage 6.
 
 **If it fails:**
 - Read the stderr output — `chunk validate` prints per-command headers and propagates the first non-zero exit.
@@ -237,7 +258,7 @@ When it passes, tell the user: "Validate passed. Your sidecar environment is hea
 
 ---
 
-## Stage 7 — Create a Snapshot
+## Stage 8 — Create a Snapshot
 
 A snapshot saves the current sidecar state as a reusable image. Future sessions create a new sidecar from this snapshot and skip the whole install process — typically 30 seconds to a working environment instead of several minutes.
 
@@ -265,7 +286,7 @@ Create the snapshot:
 chunk sidecar snapshot create --name <snapshot-name>
 ```
 
-Note the snapshot ID from the output. The source sidecar is automatically deleted after a successful snapshot — that is expected behavior. Local active-sidecar state is also cleared; `chunk sidecar current` will return empty until you launch from the snapshot in Stage 8.
+Note the snapshot ID from the output. The source sidecar is automatically deleted after a successful snapshot — that is expected behavior. Local active-sidecar state is also cleared; `chunk sidecar current` will return empty until you launch from the snapshot in Stage 9.
 
 Persist the snapshot ID:
 
@@ -275,7 +296,7 @@ chunk config set validation.sidecarImage <snapshot-id>
 
 ---
 
-## Stage 8 — Launch From Snapshot
+## Stage 9 — Launch From Snapshot
 
 Create a fresh sidecar from the snapshot — this is the clean environment you'll use going forward:
 
@@ -296,7 +317,7 @@ This second validate confirms the snapshot boots correctly and your code is in s
 
 ## Done — You're Ready
 
-When Stage 8 validate passes, tell the user:
+When Stage 9 validate passes, tell the user:
 
 > Setup complete. Here's what was configured:
 >
@@ -314,5 +335,5 @@ When Stage 8 validate passes, tell the user:
 - **Auth errors (401/403, "token invalid")** — run `chunk auth status`. If the CircleCI token is stale or missing, re-run `chunk auth login` ([Logging in](#logging-in)). Never dump env vars.
 - **`permission denied (publickey)` on sync or exec** — run `chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub`. If it persists, tell the user to remove `~/.ssh/chunk_ai*` to regenerate the keypair on next use.
 - **`context deadline exceeded`** — sidecar is unhealthy. Run `chunk sidecar forget` and restart from Stage 4 with a new sidecar.
-- **Missing binary after `chunk sidecar setup`** — install with `chunk validate --remote --cmd "<install>"`, verify with `chunk validate`, then re-snapshot (Stage 7 onward).
+- **Missing binary after `chunk sidecar setup`** — install with `chunk validate --remote --cmd "<install>"`, verify with `chunk validate`, then re-snapshot (Stage 8 onward).
 - **Snapshot `--image` won't boot a new sidecar** — snapshot IDs are org-scoped. Confirm the new sidecar is being created in the same org as the snapshot. Run `chunk sidecar snapshot list` to verify available IDs.
