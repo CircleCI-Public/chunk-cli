@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ const (
 	RoleGate    = "gate"    // pass/fail check
 	RoleAutofix = "autofix" // rewrites files (formatters)
 )
+
+// CmdInstall is the conventional name for the dependency install command. It has
+// no role of its own but sidecar setup treats it like a gate command.
+const CmdInstall = "install"
 
 // Command is a single validation command.
 type Command struct {
@@ -92,7 +97,7 @@ func commandEligibleForSidecarRemote(cmd Command) bool {
 	if cmd.Remote {
 		return false
 	}
-	if cmd.Name == "install" {
+	if cmd.Name == CmdInstall {
 		return true
 	}
 	return cmd.Role == RoleGate
@@ -113,6 +118,34 @@ func (c *ProjectConfig) MarkRemoteCommandsForSidecarSetup() bool {
 		}
 	}
 	return changed
+}
+
+// ErrNoSuchCommand reports a command name that is not in the project config.
+var ErrNoSuchCommand = errors.New("no such command")
+
+// MarkCommandRemote marks commands for remote execution. An empty name applies
+// to every configured command, otherwise only to the named one. Returns the
+// names it changed — commands already marked remote are left out, so an empty
+// slice means there was nothing to do.
+func (c *ProjectConfig) MarkCommandRemote(name string) ([]string, error) {
+	if c == nil {
+		return nil, fmt.Errorf("%w: %q", ErrNoSuchCommand, name)
+	}
+	if name != "" && c.FindCommand(name) == nil {
+		return nil, fmt.Errorf("%w: %q", ErrNoSuchCommand, name)
+	}
+	var changed []string
+	for i := range c.Commands {
+		if name != "" && c.Commands[i].Name != name {
+			continue
+		}
+		if c.Commands[i].Remote {
+			continue
+		}
+		c.Commands[i].Remote = true
+		changed = append(changed, c.Commands[i].Name)
+	}
+	return changed, nil
 }
 
 // FindCommand returns the command with the given name, or nil if not found.

@@ -220,6 +220,13 @@ chunk validate
 
 `chunk validate` runs all configured commands in `.chunk/config.json`. Commands marked `remote: true` run on the sidecar; others run locally. Zero exit = everything passed.
 
+**If nothing ran on the sidecar**, no command is marked remote — `chunk sidecar setup` only marks install and gate commands, and the manual path in Stage 4 marks none. Mark them and re-run:
+
+```bash
+chunk validate --mark-remote           # mark every configured command
+chunk validate --mark-remote test      # or just one
+```
+
 **If it fails:**
 - Read the stderr output — `chunk validate` prints per-command headers and propagates the first non-zero exit.
 - Fix missing binaries: `chunk validate --remote --cmd "<install-command>"`.

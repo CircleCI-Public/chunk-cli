@@ -86,6 +86,45 @@ func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, sta
 	return validate.List(cfg, statusFn)
 }
 
+// runMarkRemote flips the remote flag on one command, or on all of them when
+// name is empty, so plain `chunk validate` routes them to the sidecar. Until
+// now only `chunk sidecar setup` set this, and only for install and gate
+// commands, leaving a hand edit of .chunk/config.json as the only other way.
+func runMarkRemote(workDir, name string, streams iostream.Streams) error {
+	cfg, err := config.LoadProjectConfig(workDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
+	}
+	if err != nil || !cfg.HasCommands() {
+		return &userError{
+			msg:        msgValidateNotConfigured,
+			suggestion: suggestionValidateNotConfigured,
+			errMsg:     "no validate commands configured",
+			hideDetail: true,
+		}
+	}
+
+	changed, err := cfg.MarkCommandRemote(name)
+	if err != nil {
+		return &userError{
+			msg:        fmt.Sprintf("No command named %q in .chunk/config.json.", name),
+			suggestion: "List the configured commands with: chunk validate --list",
+			err:        err,
+		}
+	}
+	if len(changed) == 0 {
+		streams.ErrPrintf("%s\n", ui.Dim("Already marked remote; nothing to change."))
+		return nil
+	}
+	if err := config.SaveProjectConfig(workDir, cfg); err != nil {
+		return &userError{msg: "Could not save project configuration.", suggestion: configFilePermHint, err: err}
+	}
+
+	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Marked remote: %s", strings.Join(changed, ", "))))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("now runs these on the sidecar"))
+	return nil
+}
+
 type validateOpts struct {
 	sidecarID    string
 	identityFile string
@@ -95,6 +134,7 @@ type validateOpts struct {
 	list         bool
 	save         bool
 	remote       bool
+	markRemote   bool
 	jsonOut      bool
 	inlineCmd    string
 	projectDir   string
@@ -128,6 +168,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&opts.identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
 	cmd.Flags().StringVar(&opts.workdir, "workdir", "", "Working directory on sidecar (reads from sidecar.json, defaults to /home/user/<repo>)")
+	cmd.Flags().BoolVar(&opts.markRemote, "mark-remote", false, "Mark [name] (or every command) as remote in .chunk/config.json and exit")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show commands without executing")
 	cmd.Flags().BoolVar(&opts.list, "list", false, "List all configured commands")
 	cmd.Flags().BoolVar(&opts.jsonOut, "json", false, "Output as JSON (only applies with --list)")
@@ -258,6 +299,12 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 	if opts.jsonOut {
 		return fmt.Errorf("--json requires --list")
+	}
+
+	// --mark-remote edits the config and stops; it never runs anything, so it
+	// takes its own read-modify-write path ahead of the run setup below.
+	if opts.markRemote {
+		return runMarkRemote(workDir, name, streams)
 	}
 
 	cfg, err := config.LoadProjectConfig(workDir)

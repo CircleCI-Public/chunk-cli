@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,7 +74,7 @@ func TestHasSidecarImage(t *testing.T) {
 func TestMarkRemoteCommandsForSidecarSetup(t *testing.T) {
 	cfg := &ProjectConfig{
 		Commands: []Command{
-			{Name: "install", Run: "npm ci"},
+			{Name: CmdInstall, Run: "npm ci"},
 			{Name: "test", Run: "npm test", Role: RoleGate},
 			{Name: "format", Run: "npm run format", Role: RoleAutofix},
 			{Name: "lint", Run: "npm run lint"},
@@ -83,11 +84,66 @@ func TestMarkRemoteCommandsForSidecarSetup(t *testing.T) {
 
 	changed := cfg.MarkRemoteCommandsForSidecarSetup()
 	assert.Assert(t, changed)
-	assert.Assert(t, cfg.FindCommand("install").Remote)
+	assert.Assert(t, cfg.FindCommand(CmdInstall).Remote)
 	assert.Assert(t, cfg.FindCommand("test").Remote)
 	assert.Assert(t, !cfg.FindCommand("format").Remote)
 	assert.Assert(t, !cfg.FindCommand("lint").Remote)
 	assert.Assert(t, cfg.FindCommand("test-changed").Remote)
 
 	assert.Assert(t, !cfg.MarkRemoteCommandsForSidecarSetup())
+}
+
+func TestMarkCommandRemote(t *testing.T) {
+	newCfg := func() *ProjectConfig {
+		return &ProjectConfig{
+			Commands: []Command{
+				{Name: CmdInstall, Run: "npm ci"},
+				{Name: "test", Run: "npm test", Role: RoleGate},
+				{Name: "format", Run: "npm run format", Role: RoleAutofix, Remote: true},
+			},
+		}
+	}
+
+	t.Run("named command", func(t *testing.T) {
+		cfg := newCfg()
+		changed, err := cfg.MarkCommandRemote("test")
+		assert.NilError(t, err)
+		assert.DeepEqual(t, changed, []string{"test"})
+		assert.Assert(t, cfg.FindCommand("test").Remote)
+		// Role is irrelevant here, unlike sidecar setup, but untargeted commands
+		// still keep whatever they had.
+		assert.Assert(t, !cfg.FindCommand(CmdInstall).Remote)
+	})
+
+	t.Run("empty name marks every command", func(t *testing.T) {
+		cfg := newCfg()
+		changed, err := cfg.MarkCommandRemote("")
+		assert.NilError(t, err)
+		// "format" is already remote, so it is not reported as changed.
+		assert.DeepEqual(t, changed, []string{CmdInstall, "test"})
+		for _, c := range cfg.Commands {
+			assert.Assert(t, c.Remote, c.Name)
+		}
+	})
+
+	t.Run("already remote reports no change", func(t *testing.T) {
+		cfg := newCfg()
+		changed, err := cfg.MarkCommandRemote("format")
+		assert.NilError(t, err)
+		assert.Equal(t, len(changed), 0)
+	})
+
+	t.Run("unknown name", func(t *testing.T) {
+		cfg := newCfg()
+		_, err := cfg.MarkCommandRemote("nope")
+		assert.Assert(t, errors.Is(err, ErrNoSuchCommand))
+		// Nothing is written when the name misses.
+		assert.Assert(t, !cfg.FindCommand("test").Remote)
+	})
+
+	t.Run("nil config", func(t *testing.T) {
+		var cfg *ProjectConfig
+		_, err := cfg.MarkCommandRemote("test")
+		assert.Assert(t, errors.Is(err, ErrNoSuchCommand))
+	})
 }

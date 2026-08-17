@@ -587,3 +587,103 @@ func TestSidecarAutoNameNoSessionLongBranch(t *testing.T) {
 	// branch truncated to 30 chars
 	assert.Equal(t, got, filepath.Base(dir)+"-"+long[:30]+"-validate")
 }
+
+// runMarkRemoteCLI runs "validate --mark-remote" against workDir.
+func runMarkRemoteCLI(t *testing.T, workDir string, extraArgs ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs(append([]string{"validate", "--mark-remote", "--project", workDir}, extraArgs...))
+	err = root.Execute()
+	return outBuf.String(), errBuf.String(), err
+}
+
+func TestValidateMarkRemoteNamedCommand(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "install", Run: "go mod download"},
+			{Name: "test", Run: "go test ./..."},
+		},
+	}))
+
+	_, stderr, err := runMarkRemoteCLI(t, dir, "test")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(stderr, "test"), "got: %q", stderr)
+
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Assert(t, cfg.FindCommand("test").Remote)
+	assert.Assert(t, !cfg.FindCommand("install").Remote)
+	assert.Assert(t, cfg.HasRemoteCommands())
+}
+
+func TestValidateMarkRemoteAllCommands(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "install", Run: "go mod download"},
+			{Name: "lint", Run: "task lint"},
+		},
+	}))
+
+	_, _, err := runMarkRemoteCLI(t, dir)
+	assert.NilError(t, err)
+
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	for _, c := range cfg.Commands {
+		assert.Assert(t, c.Remote, c.Name)
+	}
+}
+
+func TestValidateMarkRemoteUnknownCommand(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "go test ./..."}},
+	}))
+
+	_, _, err := runMarkRemoteCLI(t, dir, "nope")
+	assert.Assert(t, err != nil)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T", err)
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "--list"), "got: %q", ue.Suggestion())
+
+	// A miss must not rewrite the file.
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Assert(t, !cfg.FindCommand("test").Remote)
+}
+
+func TestValidateMarkRemoteNoCommandsConfigured(t *testing.T) {
+	isolateConfig(t)
+	_, _, err := runMarkRemoteCLI(t, t.TempDir())
+	assert.Assert(t, err != nil)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T", err)
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk init"), "got: %q", ue.Suggestion())
+}
+
+// A malformed config must not be overwritten: the commands it holds are
+// invisible, so marking one would discard the rest.
+func TestValidateMarkRemoteRefusesMalformedConfig(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	chunkDir := filepath.Join(dir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	original := `{"commands": [{"name": "test", "run": "task test"}`
+	path := filepath.Join(chunkDir, "config.json")
+	assert.NilError(t, os.WriteFile(path, []byte(original), 0o644))
+
+	_, _, err := runMarkRemoteCLI(t, dir, "test")
+	assert.Assert(t, err != nil)
+
+	data, readErr := os.ReadFile(path)
+	assert.NilError(t, readErr)
+	assert.Equal(t, string(data), original)
+}

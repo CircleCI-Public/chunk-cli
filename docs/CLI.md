@@ -67,6 +67,7 @@ chunk
 │   --cmd <command>                 # Run an inline command
 │   --save                          # Save --cmd to config
 │   --remote                        # Run on the active sidecar
+│   --mark-remote                   # Mark [name] (or all commands) remote in config, then exit
 │   --sidecar-id <id>               # Remote execution in specific sidecar
 │   --org-id <id>                   # Organization ID (used when creating a new sidecar)
 │   --identity-file <path>          # SSH identity file for sidecar
@@ -171,6 +172,12 @@ chunk
   to disable.
 - `config set` user keys: `model`, `telemetry`. Project keys (`.chunk/config.json`):
   `orgID`, `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
+- `validate --mark-remote` sets `remote: true` on commands in `.chunk/config.json`
+  and exits without running anything. With a `[name]` it marks that one command,
+  without it every configured command. Commands already marked are reported as no
+  change. `chunk sidecar setup` marks install and gate commands automatically, so
+  `--mark-remote` is for the rest: a sidecar set up by hand, or a command whose
+  role does not qualify. Unmarking is still a hand edit of the config.
 - Telemetry is anonymous and opt-out. It's disabled by the
   `CHUNK_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
   variables (first match wins, in that order), or `chunk config set telemetry false`.
