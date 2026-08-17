@@ -3,6 +3,7 @@ package envspec
 import (
 	"testing"
 
+	"github.com/go-json-experiment/json/jsontext"
 	"gotest.tools/v3/assert"
 )
 
@@ -50,6 +51,67 @@ func TestForConfig(t *testing.T) {
 	t.Run("empty setup", func(t *testing.T) {
 		t.Parallel()
 		assert.Equal(t, len((&Environment{}).ForConfig().Setup), 0)
+	})
+}
+
+// A detected environment carries no extras of its own, so replacing the saved
+// block with one has to inherit the keys the user hand-added or they are lost on
+// the next `sidecar env` / `sidecar setup`.
+func TestWithExtrasFrom(t *testing.T) {
+	t.Parallel()
+
+	prev := &Environment{
+		Stack: "go",
+		Setup: []Step{
+			{Name: "install", Command: "go mod download", Extra: jsontext.Value(`{"cache":true}`)},
+			{Name: "gone", Command: "old", Extra: jsontext.Value(`{"stale":1}`)},
+		},
+		Extra: jsontext.Value(`{"cacheKey":"v1"}`),
+	}
+
+	t.Run("carries environment and step extras", func(t *testing.T) {
+		t.Parallel()
+		detected := &Environment{
+			Stack: "go",
+			Setup: []Step{
+				{Name: "install", Command: "go mod download"},
+				{Name: "build", Command: "go build ./..."},
+			},
+		}
+
+		got := detected.WithExtrasFrom(prev)
+		assert.Equal(t, string(got.Extra), `{"cacheKey":"v1"}`)
+		assert.Equal(t, string(got.Setup[0].Extra), `{"cache":true}`)
+
+		// A step only the detected spec has keeps its own (absent) extras, and a
+		// step that disappeared takes its extras with it.
+		assert.Equal(t, len(got.Setup), 2)
+		assert.Equal(t, len(got.Setup[1].Extra), 0)
+
+		// The detected spec is not mutated — callers still hold it for the
+		// Dockerfile.
+		assert.Equal(t, len(detected.Extra), 0)
+		assert.Equal(t, len(detected.Setup[0].Extra), 0)
+	})
+
+	t.Run("does not overwrite extras the receiver already has", func(t *testing.T) {
+		t.Parallel()
+		detected := &Environment{
+			Setup: []Step{{Name: "install", Extra: jsontext.Value(`{"cache":false}`)}},
+			Extra: jsontext.Value(`{"cacheKey":"v2"}`),
+		}
+
+		got := detected.WithExtrasFrom(prev)
+		assert.Equal(t, string(got.Extra), `{"cacheKey":"v2"}`)
+		assert.Equal(t, string(got.Setup[0].Extra), `{"cache":false}`)
+	})
+
+	t.Run("nil receiver or nil previous", func(t *testing.T) {
+		t.Parallel()
+		assert.Assert(t, (*Environment)(nil).WithExtrasFrom(prev) == nil)
+
+		detected := &Environment{Stack: "go"}
+		assert.Equal(t, detected.WithExtrasFrom(nil), detected)
 	})
 }
 

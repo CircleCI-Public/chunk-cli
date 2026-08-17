@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
@@ -29,8 +30,7 @@ func TestSidecarExecMissingCommand(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for missing --command")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "command"),
-		"expected error about missing --command flag, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "command"))
 }
 
 func TestSidecarExecMissingSidecarID(t *testing.T) {
@@ -43,8 +43,7 @@ func TestSidecarExecMissingSidecarID(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for missing --sidecar-id")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "sidecar-id"),
-		"expected error about missing --sidecar-id, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "sidecar-id"))
 }
 
 func TestSidecarExecStderrOutput(t *testing.T) {
@@ -69,8 +68,7 @@ func TestSidecarExecStderrOutput(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "exit code should be 0")
-	assert.Assert(t, strings.Contains(result.Stderr, "something went wrong"),
-		"expected stderr output, got: %s", result.Stderr)
+	assert.Check(t, cmp.Contains(result.Stderr, "something went wrong"))
 }
 
 func TestSidecarExecArgsInRequestBody(t *testing.T) {
@@ -152,8 +150,7 @@ func TestSidecarBuildInvalidTag(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for invalid tag")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Invalid image tag"),
-		"expected invalid tag error, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "Invalid image tag"))
 }
 
 func TestSidecarBuildNonexistentDir(t *testing.T) {
@@ -215,8 +212,7 @@ func TestSidecarEnvWarnsOnMalformedConfig(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "could not save environment to config"),
-		"expected a save warning, got stderr: %s", result.Stderr)
+	assert.Check(t, cmp.Contains(result.Stderr, "could not save environment to config"))
 
 	var spec map[string]interface{}
 	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &spec),
@@ -244,8 +240,7 @@ func TestSidecarEnvNoSaveIgnoresMalformedConfig(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, !strings.Contains(result.Stderr, "could not save environment to config"),
-		"--no-save must not warn about saving, got stderr: %s", result.Stderr)
+	assert.Check(t, !strings.Contains(result.Stderr, "could not save environment to config"), "--no-save must not warn about saving, got stderr: %s", result.Stderr)
 }
 
 // "sidecar setup" reads the config for the environment cache and writes it back,
@@ -273,8 +268,7 @@ func TestSidecarSetupRefusesMalformedConfig(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0,
 		"expected non-zero exit for malformed config\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, ".chunk/config.json"),
-		"expected the error to name the file, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, ".chunk/config.json"))
 
 	data, err := os.ReadFile(configPath)
 	assert.NilError(t, err)
@@ -356,8 +350,7 @@ func TestSidecarCreateNoOrgIDNoConfig(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit without org-id")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "--org-id"),
-		"expected helpful error, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "--org-id"))
 }
 
 func TestSidecarCreateAPIError500(t *testing.T) {
@@ -414,10 +407,8 @@ func TestSidecarCreateCollaborationsAPIError(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "--org-id"),
-		"expected org-id error, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "Could not list organizations"),
-		"expected collaborations error detail, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "--org-id"))
+	assert.Check(t, cmp.Contains(combined, "Could not list organizations"))
 }
 
 func TestSidecarCreateNoCollaborationsAvailable(t *testing.T) {
@@ -435,8 +426,7 @@ func TestSidecarCreateNoCollaborationsAvailable(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "--org-id"),
-		"expected org-id error, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "--org-id"))
 
 	reqs := cci.Recorder.AllRequests()
 	collabReqs := filterByMethod(reqs, "GET", "/api/v2/me/collaborations")
@@ -564,8 +554,7 @@ func TestSidecarSSHMissingSidecarID(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for missing --sidecar-id")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "sidecar-id"),
-		"expected error about missing --sidecar-id, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "sidecar-id"))
 }
 
 func TestSidecarSyncMissingSidecarID(t *testing.T) {
@@ -577,6 +566,5 @@ func TestSidecarSyncMissingSidecarID(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for missing --sidecar-id")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "sidecar-id"),
-		"expected error about missing --sidecar-id, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "sidecar-id"))
 }

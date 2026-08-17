@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -128,8 +129,7 @@ func TestInitExistingConfigNoForce(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0, "expected clean exit when config exists without --force\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "already exists") || strings.Contains(combined, "--force"),
-		"expected existing config message, got: %s", combined)
+	assert.Check(t, strings.Contains(combined, "already exists") || strings.Contains(combined, "--force"), "expected existing config message, got: %s", combined)
 }
 
 func TestInitExistingConfigWithForce(t *testing.T) {
@@ -214,14 +214,50 @@ func TestInitRefusesMalformedProjectConfig(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0,
 		"expected non-zero exit for malformed config\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, ".chunk/config.json"),
-		"expected the error to name the file, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "--force"),
-		"expected the error to offer --force, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, ".chunk/config.json"))
+	assert.Check(t, cmp.Contains(combined, "--force"))
 
 	data, err := os.ReadFile(path)
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), original, "malformed config must not be rewritten")
+}
+
+// A config that cannot be read at all is as replaceable as a malformed one: the
+// write path renames a temp file over it, and rename needs no read permission on
+// its target. So the guard has to cover every load failure, not just parse
+// errors, or a permissions problem silently costs the user their whole config.
+func TestInitRefusesUnreadableProjectConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file mode does not prevent reads")
+	}
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	path := filepath.Join(chunkDir, "config.json")
+	original := `{"orgID": "org-1", "myTool": {"keep": true}}`
+	assert.NilError(t, os.WriteFile(path, []byte(original), 0o644))
+	// Write-only: readable by nobody, still renameable over.
+	assert.NilError(t, os.Chmod(path, 0o200))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks", "--skip-validate",
+	}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0,
+		"expected non-zero exit for unreadable config\nstdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Check(t, cmp.Contains(combined, ".chunk/config.json"))
+	assert.Check(t, cmp.Contains(combined, "--force"))
+
+	assert.NilError(t, os.Chmod(path, 0o644))
+	data, err := os.ReadFile(path)
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), original, "unreadable config must not be rewritten")
 }
 
 // --force is the documented way through, so it still overwrites.
@@ -288,8 +324,7 @@ func TestInitNotGitRepo(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "git"),
-		"expected git repo error, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "git"))
 }
 
 // --- Validate command detection (Gap 2) ---
@@ -660,8 +695,7 @@ func TestInitCreatesHookFiles(t *testing.T) {
 	assert.NilError(t, err, "expected .claude/settings.json to exist")
 
 	settingsContent := string(data)
-	assert.Assert(t, strings.Contains(settingsContent, "hooks"),
-		"expected hooks section in settings.json, got: %s", settingsContent)
+	assert.Check(t, cmp.Contains(settingsContent, "hooks"))
 }
 
 func TestInitHookExistingSettingsForceWritesExample(t *testing.T) {
@@ -686,13 +720,11 @@ func TestInitHookExistingSettingsForceWritesExample(t *testing.T) {
 	// and an example is written instead
 	data, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "existing"),
-		"expected settings.json to be preserved, got: %s", string(data))
+	assert.Check(t, cmp.Contains(string(data), "existing"))
 
 	exampleData, err := os.ReadFile(filepath.Join(claudeDir, "settings.example.json"))
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(exampleData), "hooks"),
-		"expected example to contain hooks, got: %s", string(exampleData))
+	assert.Check(t, cmp.Contains(string(exampleData), "hooks"))
 }
 
 func TestInitHookExistingSettingsWritesExample(t *testing.T) {
@@ -718,8 +750,7 @@ func TestInitHookExistingSettingsWritesExample(t *testing.T) {
 	// Original settings.json should be unchanged
 	data, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(data), "existing"),
-		"expected original settings.json to be preserved without --force")
+	assert.Check(t, cmp.Contains(string(data), "existing"))
 
 	// Example should exist
 	examplePath := filepath.Join(claudeDir, "settings.example.json")
@@ -745,8 +776,7 @@ func TestInitNoCircleCINoToken(t *testing.T) {
 
 	// init must not mention CircleCI
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, !strings.Contains(combined, "CircleCI"),
-		"expected init to not mention CircleCI, got: %s", combined)
+	assert.Check(t, !strings.Contains(combined, "CircleCI"), "expected init to not mention CircleCI, got: %s", combined)
 }
 
 // TestInitNoCircleCIWithToken verifies init ignores a CircleCI token if present.
@@ -764,8 +794,7 @@ func TestInitNoCircleCIWithToken(t *testing.T) {
 
 	// init must not mention CircleCI even when a token is available
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, !strings.Contains(combined, "CircleCI"),
-		"expected init to not mention CircleCI, got: %s", combined)
+	assert.Check(t, !strings.Contains(combined, "CircleCI"), "expected init to not mention CircleCI, got: %s", combined)
 }
 
 // --- --project-dir flag ---
@@ -810,8 +839,8 @@ func TestInitWritesTestSuitesForGoWhenCircleDirExists(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(workDir, ".circleci", "test-suites.yml"))
 	assert.NilError(t, err, "expected .circleci/test-suites.yml to exist")
 	body := string(data)
-	assert.Assert(t, strings.Contains(body, "go list -f"), "got: %s", body)
-	assert.Assert(t, strings.Contains(body, "<< test.atoms >>"), "got: %s", body)
+	assert.Check(t, cmp.Contains(body, "go list -f"))
+	assert.Check(t, cmp.Contains(body, "<< test.atoms >>"))
 }
 
 func TestInitCreatesCircleDirAndWritesTestSuites(t *testing.T) {
@@ -830,8 +859,8 @@ func TestInitCreatesCircleDirAndWritesTestSuites(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(workDir, ".circleci", "test-suites.yml"))
 	assert.NilError(t, err, "expected init to create .circleci/test-suites.yml even when .circleci/ was missing")
 	body := string(data)
-	assert.Assert(t, strings.Contains(body, "go list -f"), "got: %s", body)
-	assert.Assert(t, strings.Contains(body, "<< test.atoms >>"), "got: %s", body)
+	assert.Check(t, cmp.Contains(body, "go list -f"))
+	assert.Check(t, cmp.Contains(body, "<< test.atoms >>"))
 }
 
 func TestInitDoesNotOverwriteExistingTestSuites(t *testing.T) {
@@ -872,10 +901,8 @@ func TestInitSkipsTestSuitesByDefault(t *testing.T) {
 	_, err := os.Stat(filepath.Join(workDir, ".circleci", "test-suites.yml"))
 	assert.Assert(t, os.IsNotExist(err), "expected default to skip write, err=%v", err)
 
-	assert.Assert(t, strings.Contains(result.Stderr, "chunk-sidecar"),
-		"expected sidecar hint in stderr, got: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "set up a sidecar"),
-		"expected hint to mention setting up a sidecar, got: %s", result.Stderr)
+	assert.Check(t, cmp.Contains(result.Stderr, "chunk-sidecar"))
+	assert.Check(t, cmp.Contains(result.Stderr, "set up a sidecar"))
 }
 
 func TestInitProjectDirNotGitRepo(t *testing.T) {
@@ -889,6 +916,5 @@ func TestInitProjectDirNotGitRepo(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for non-git project-dir")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "git"),
-		"expected git error, got: %s", combined)
+	assert.Check(t, cmp.Contains(combined, "git"))
 }

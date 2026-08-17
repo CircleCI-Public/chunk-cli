@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -218,10 +219,12 @@ func TestValidateListWarnsOnMalformedConfig(t *testing.T) {
 	stdout, stderr, err := runValidateListCLI(t, dir)
 	assert.NilError(t, err)
 
-	assert.Assert(t, strings.Contains(stderr, "warning:"),
-		"expected a warning about the unparseable config, got stderr: %q", stderr)
-	assert.Assert(t, strings.Contains(stderr, "config.json"),
-		"expected the warning to name the file, got stderr: %q", stderr)
+	// Asserted on the message, not on a "warning:" prefix: the report goes through
+	// statusFn so that both --json and text mode carry it, and statusFn owns how a
+	// warning is marked.
+	assert.Check(t, cmp.Contains(stderr, "Could not read .chunk/config.json"))
+	// One report, not two — the raw error used to be printed alongside this.
+	assert.Check(t, cmp.Equal(strings.Count(stderr, "Could not read .chunk/config.json"), 1))
 	// "No commands configured" would be a lie: the commands exist, they just
 	// could not be read. Claiming an empty config here is how a broken file turns
 	// into validation silently never running under a hook.
@@ -243,8 +246,9 @@ func TestValidateListMalformedConfigKeepsJSONParseable(t *testing.T) {
 
 	stdout, stderr, err := runValidateListCLI(t, dir, "--json")
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(stderr, "warning:"),
-		"expected the warning on stderr, got: %q", stderr)
+	// --json returns before the text-mode branch, so the warning has to be emitted
+	// ahead of it or the mode a hook runs reports an empty list and says nothing.
+	assert.Check(t, cmp.Contains(stderr, "Could not read .chunk/config.json"))
 
 	var cmds []config.Command
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &cmds),

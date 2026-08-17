@@ -125,8 +125,14 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, useSSHIdentityFile, telemetry\nProject keys: orgID, validation.sidecarImage",
-		Args:  configSetArgs,
+		// Built from the same maps the unknown-key error reads, so the keys the
+		// help lists cannot drift from the ones the command accepts. Bare
+		// "config set" prints this, making it the primary listing a user sees.
+		Long: fmt.Sprintf(
+			"Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: %s\nProject keys: %s",
+			configKeyList(config.ValidConfigKeys), configKeyList(config.ValidProjectConfigKeys),
+		),
+		Args: configSetArgs,
 		// configSetArgs names what is missing and lists the keys, so cobra's
 		// usage dump ahead of it would only bury the part worth reading.
 		SilenceUsage: true,
@@ -179,7 +185,7 @@ func newConfigSetCmd() *cobra.Command {
 
 			cfg, err := config.Load()
 			if err != nil {
-				return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
+				return malformedUserConfigError(msgCouldNotLoadConfig, err)
 			}
 
 			switch key {
@@ -215,8 +221,10 @@ func newConfigSetCmd() *cobra.Command {
 				}
 			}
 
+			// Save refuses a file it could not parse rather than flattening it, so
+			// this reports the parse failure the same way the load above does.
 			if err := config.Save(cfg); err != nil {
-				return &userError{msg: "Could not save configuration.", suggestion: configFilePermHint, err: err}
+				return malformedUserConfigError("Could not save configuration.", err)
 			}
 
 			io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))

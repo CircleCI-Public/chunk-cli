@@ -452,6 +452,25 @@ func detectOrgID(ctx context.Context, rc config.ResolvedConfig, streams iostream
 	streams.ErrPrintf("Org ID: %s\n", ui.Bold(orgID))
 }
 
+// unloadableConfigError returns the error init should stop on when
+// .chunk/config.json exists but could not be loaded, and nil when it is safe to
+// continue.
+//
+// init's write replaces the file without reading it, so anything the load could
+// not get at is silently lost. That is not limited to a parse failure: os.Rename
+// needs no read permission on its target, so an unreadable config is just as
+// replaceable as a malformed one. Only --force may do either.
+func unloadableConfigError(loadErr error, force bool) error {
+	if force || loadErr == nil || errors.Is(loadErr, fs.ErrNotExist) {
+		return nil
+	}
+	hint := "Check permissions on .chunk/config.json, or overwrite it with: chunk init --force"
+	if errors.Is(loadErr, config.ErrParseProjectConfig) {
+		hint = "Fix the JSON syntax in .chunk/config.json, or overwrite it with: chunk init --force"
+	}
+	return malformedProjectConfigError(loadErr).withSuggestion(hint)
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID bool
 	var projectDir string
@@ -504,11 +523,8 @@ hook config files.`,
 					return nil
 				}
 			}
-			// A config that exists but does not parse would sail past the guard
-			// above and be overwritten. Only --force may do that.
-			if !force && errors.Is(loadErr, config.ErrParseProjectConfig) {
-				return malformedProjectConfigError(loadErr).
-					withSuggestion("Fix the JSON syntax in .chunk/config.json, or overwrite it with: chunk init --force")
+			if err := unloadableConfigError(loadErr, force); err != nil {
+				return err
 			}
 
 			// Seed from the existing config so sections init does not detect —

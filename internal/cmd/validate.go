@@ -77,12 +77,19 @@ func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, sta
 	cfg, err := config.LoadProjectConfig(workDir)
 	unreadable := err != nil && errors.Is(err, config.ErrParseProjectConfig)
 	if err != nil {
-		// A config that does not parse has commands we cannot see, so say so
-		// rather than reporting that none are configured.
-		if unreadable {
-			streams.ErrPrintf("warning: %v\n", err)
-		}
 		cfg = &config.ProjectConfig{}
+	}
+
+	// validate.List would report "No commands configured", which is a different
+	// thing from "the file is broken so we cannot tell" — and the difference
+	// matters when this runs as a hook and validation silently stops happening.
+	//
+	// Reported here rather than in each branch below: --json returns before the
+	// text path is reached, so anything said down there is invisible to the mode
+	// a hook actually runs. statusFn writes to stderr, leaving stdout valid JSON.
+	if unreadable {
+		statusFn(iostream.LevelWarn, "Could not read .chunk/config.json, so no commands could be listed.")
+		statusFn(iostream.LevelInfo, "Fix the JSON syntax in .chunk/config.json, then run this command again.")
 	}
 	if jsonOut {
 		cmds := cfg.Commands
@@ -100,12 +107,7 @@ func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, sta
 		_, err = fmt.Fprintf(streams.Out, "%s\n", data)
 		return err
 	}
-	// validate.List would report "No commands configured", which is a different
-	// thing from "the file is broken so we cannot tell" — and the difference
-	// matters when this runs as a hook and validation silently stops happening.
 	if unreadable {
-		statusFn(iostream.LevelWarn, "Could not read .chunk/config.json, so no commands could be listed.")
-		statusFn(iostream.LevelInfo, "Fix the JSON syntax in .chunk/config.json, then run this command again.")
 		return nil
 	}
 	return validate.List(cfg, statusFn)

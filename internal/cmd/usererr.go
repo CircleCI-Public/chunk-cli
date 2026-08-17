@@ -243,6 +243,25 @@ func malformedProjectConfigError(err error) *userError {
 		wrap(err)
 }
 
+// malformedUserConfigError reports a user config file a command could not load
+// or save, mirroring malformedProjectConfigError for the file under
+// ~/.config/chunk. Without the parse branch a truncated file reports only
+// "Could not load configuration." and a permissions hint, which sends the user
+// checking modes on a file whose modes are fine.
+func malformedUserConfigError(msg string, err error) *userError {
+	if !errors.Is(err, config.ErrParseUserConfig) {
+		return newUserError(msg).
+			withCode("config.read_failed").
+			withSuggestion(configFilePermHint).
+			wrap(err)
+	}
+	return newUserError(msgMalformedUserConfig).
+		withCode("config.parse_failed").
+		withDetail(detailMalformedUserConfig).
+		withSuggestion(suggestionFixUserConfig).
+		wrap(err)
+}
+
 // nonInteractive reports whether the process is running in a CI/CD environment.
 // CI is set by most CI/CD systems to indicate non-interactive pipeline execution.
 func nonInteractive() bool {

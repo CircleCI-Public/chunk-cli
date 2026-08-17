@@ -52,6 +52,47 @@ func (e *Environment) ForConfig() *Environment {
 	return &out
 }
 
+// WithExtrasFrom returns a copy of e carrying the unknown keys of prev, the
+// environment block it is about to replace in .chunk/config.json.
+//
+// A detected Environment has empty Extra fields — nothing read them off disk —
+// so assigning one straight into a loaded config drops every key a user
+// hand-added under "environment", which is exactly what preserving unknown keys
+// is meant to prevent. Steps are paired by name, matching how config merging
+// pairs array elements; a step that is gone from the detected spec takes its
+// extras with it, and one that only appears there keeps its own.
+func (e *Environment) WithExtrasFrom(prev *Environment) *Environment {
+	if e == nil || prev == nil {
+		return e
+	}
+	out := *e
+	if len(out.Extra) == 0 {
+		out.Extra = prev.Extra
+	}
+
+	prevExtras := make(map[string]jsontext.Value, len(prev.Setup))
+	for _, s := range prev.Setup {
+		if s.Name != "" && len(s.Extra) > 0 {
+			prevExtras[s.Name] = s.Extra
+		}
+	}
+	if len(prevExtras) == 0 {
+		return &out
+	}
+
+	out.Setup = make([]Step, len(e.Setup))
+	copy(out.Setup, e.Setup)
+	for i := range out.Setup {
+		if len(out.Setup[i].Extra) > 0 {
+			continue
+		}
+		if extra, ok := prevExtras[out.Setup[i].Name]; ok {
+			out.Setup[i].Extra = extra
+		}
+	}
+	return &out
+}
+
 // ProvisioningSteps returns the number of steps that really run during setup,
 // i.e. Setup without StepTest. Zero for a nil receiver.
 func (e *Environment) ProvisioningSteps() int {

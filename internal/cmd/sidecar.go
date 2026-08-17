@@ -690,8 +690,10 @@ image's CMD, not a step that runs during setup. Pipe stdout into
 				} else {
 					// Save without the test step: it is only an input to the
 					// Dockerfile CMD, which is generated from the spec printed to
-					// stdout below, not from the saved copy.
-					cfg.Environment = env.ForConfig()
+					// stdout below, not from the saved copy. Carry the extras off
+					// the block being replaced — a detected spec has none, so
+					// assigning it straight in would drop the user's own keys.
+					cfg.Environment = env.ForConfig().WithExtrasFrom(cfg.Environment)
 					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
 						io.ErrPrintf("Warning: could not save environment to config: %v\n", saveErr)
 					}
@@ -1009,7 +1011,7 @@ Example:
 				status(iostream.LevelStep, fmt.Sprintf("Detecting environment in %s...", dir))
 				env, detectionErr = envbuilder.DetectEnvironment(cmd.Context(), dir)
 				if detectionErr == nil {
-					cfg.Environment = env.ForConfig()
+					cfg.Environment = env.ForConfig().WithExtrasFrom(cfg.Environment)
 					if saveErr := config.SaveProjectConfig(dir, cfg); saveErr != nil {
 						streams.ErrPrintf("Warning: could not save config: %v\n", saveErr)
 					}
