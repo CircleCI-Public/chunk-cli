@@ -114,7 +114,7 @@ Interactive onboarding wizard for setting up a sidecar from scratch. Also invoke
 
 **Prerequisites**:
 - `chunk` CLI installed
-- CircleCI token available to configure (`chunk auth set circleci`)
+- CircleCI auth (`chunk auth login`, or `chunk auth set circleci` for token auth)
 
 **What it does** (8 guided stages):
 

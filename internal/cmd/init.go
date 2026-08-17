@@ -263,7 +263,7 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 }
 
 func installSkillsStep(workDir string, streams iostream.Streams) {
-	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, "chunk-sidecar") {
+	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, "chunk-sidecar", "chunk-sidecar-setup") {
 		if r.Skipped {
 			continue
 		}

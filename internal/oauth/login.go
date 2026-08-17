@@ -57,20 +57,17 @@ func Login(ctx context.Context, cfg LoginConfig, status io.Writer) (string, erro
 
 	w := func(s string) { _, _ = fmt.Fprintln(status, s) }
 
-	if cfg.NoBrowser {
-		w("Open this URL in your browser to log in:")
-		w("")
-		w("  " + authorizeURL)
-		w("")
-	} else {
-		w(authorizeURL)
-		if waitForEnter(ctx, status) {
-			if err := OpenBrowser(authorizeURL); err != nil {
-				w("Could not open browser. Open this URL manually:")
-				w("")
-				w("  " + authorizeURL)
-				w("")
-			}
+	w("Open this URL in your browser to log in:")
+	w("")
+	w("  " + authorizeURL)
+	w("")
+
+	// Only offer to open a browser when there is a terminal to confirm on.
+	// Under an agent or a script stdin is not a terminal, and opening a window
+	// unprompted gives the user no say in where they are being sent.
+	if !cfg.NoBrowser && stdinIsTerminal() && waitForEnter(ctx, status) {
+		if err := OpenBrowser(authorizeURL); err != nil {
+			w("Could not open browser - use the URL above.")
 		}
 	}
 	w("Waiting for login (up to 5 minutes)...")
@@ -101,12 +98,13 @@ func Login(ctx context.Context, cfg LoginConfig, status io.Writer) (string, erro
 	return tok.AccessToken, nil
 }
 
+// stdinIsTerminal reports whether stdin is an interactive terminal.
+// Swapped out in tests.
+var stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
 // waitForEnter prompts the user to press Enter before opening the browser.
-// Returns true if the browser should be opened, false if cancelled or non-interactive.
+// Returns true if the browser should be opened, false if cancelled.
 func waitForEnter(ctx context.Context, status io.Writer) bool {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return true
-	}
 	_, _ = fmt.Fprint(status, "Press Enter to open CircleCI in your browser...")
 	errCh := make(chan error, 1)
 	go func() {
