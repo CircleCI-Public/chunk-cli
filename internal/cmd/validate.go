@@ -405,7 +405,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			// A hit is a success, so it finishes the same way a real successful run
 			// does rather than repeating that bookkeeping here: clearing the failure
 			// counter, and whatever else the success branch grows later.
-			return finishValidate(cmd, hook, nil, start, opts.sidecarID, cfg, statusFn, streams)
+			return finishValidate(cmd, hook, nil, start, opts.sidecarID, cfg, wrapEventLogStatusFn(statusFn, "", nil, workDir, hook), streams)
 		}
 	}
 
@@ -441,11 +441,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// Wire event log only when a sidecar is involved. The wrap goes here — after
-	// setupRemote fills opts.sidecarID but before loadSidecarEnvVars — so that
-	// sync and env-resolve status events are captured. Skipping when there is no
-	// sidecar avoids writing events with an empty sidecar_id that the TUI would
-	// filter out and never display.
+	// Wire event log for all runs (both local and remote). The wrap goes here —
+	// after setupRemote fills opts.sidecarID but before loadSidecarEnvVars — so
+	// that sync and env-resolve status events are captured.
 	// Kept unwrapped so a replacement sidecar can be rewrapped against its own ID
 	// rather than logging its events under the sidecar it replaced.
 	baseStatusFn := statusFn
@@ -512,14 +510,10 @@ func loadEnvVarsWithRetry(
 	return envVars, statusFn, freshlyCreated, nil
 }
 
-// wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
-// is active. Returns statusFn unchanged when no sidecar is involved, so callers
-// with empty sidecar IDs never write events with a blank sidecar_id.
+// wrapEventLogStatusFn wraps statusFn with event log recording for all runs,
+// both remote (sidecarID set) and local (sidecarID empty).
 func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) iostream.StatusFunc {
-	if sidecarID == "" {
-		return statusFn
-	}
-	dataDir, err := sidecar.StateDir()
+	dataDir, err := config.ProjectDataDir(workDir)
 	if err != nil {
 		return statusFn
 	}
@@ -542,29 +536,28 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 			maxAttempts = ma
 		}
 	}
+
+	location := "local"
+	if sidecarID != "" {
+		location = "remote"
+	}
+
 	if execErr != nil {
 		if hook != nil {
 			attempt := validate.ReadAttempts(hook.sessionID) + 1
-			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed, attempt %d/%d)", ui.FormatDuration(time.Since(start)), attempt, maxAttempts))
+			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (%s, failed, attempt %d/%d)", ui.FormatDuration(time.Since(start)), location, attempt, maxAttempts))
 		} else {
-			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
+			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (%s, failed)", ui.FormatDuration(time.Since(start)), location))
 		}
-	} else if hook == nil {
-		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
-	}
-	if sidecarID != "" {
-		if execErr != nil {
-			statusFn(iostream.LevelError, "validate failed")
-		} else {
-			statusFn(iostream.LevelDone, "validate passed")
-		}
+	} else {
+		statusFn(iostream.LevelDone, fmt.Sprintf("done in %s (%s)", ui.FormatDuration(time.Since(start)), location))
 	}
 	if hook == nil {
 		return execErr
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", ui.FormatDuration(time.Since(start)))))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s · %s)", ui.FormatDuration(time.Since(start)), location)))
 		return nil
 	}
 	return hookErr
@@ -680,6 +673,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 	}
 
 	// Run all
+	statusFn(iostream.LevelInfo, "running locally")
 	return mapValidateError(validate.RunAll(ctx, workDir, cfg, statusFn, streams))
 }
 
