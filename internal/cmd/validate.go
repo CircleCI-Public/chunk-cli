@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -73,10 +75,11 @@ func detectHook(r io.Reader) *hookContext {
 
 func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, statusFn iostream.StatusFunc) error {
 	cfg, err := config.LoadProjectConfig(workDir)
+	unreadable := err != nil && errors.Is(err, config.ErrParseProjectConfig)
 	if err != nil {
 		// A config that does not parse has commands we cannot see, so say so
 		// rather than reporting that none are configured.
-		if errors.Is(err, config.ErrParseProjectConfig) {
+		if unreadable {
 			streams.ErrPrintf("warning: %v\n", err)
 		}
 		cfg = &config.ProjectConfig{}
@@ -86,7 +89,24 @@ func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, sta
 		if cmds == nil {
 			cmds = []config.Command{}
 		}
-		return iostream.PrintJSON(streams.Out, cmds)
+		// Not iostream.PrintJSON: that uses encoding/json, which does not
+		// understand the `json:",embed"` field these types carry and would
+		// print the keys chunk does not model as a literal "Extra" member —
+		// dropping their contents from output that hooks and agents parse.
+		data, err := jsonv2.Marshal(cmds, jsontext.WithIndent("  "))
+		if err != nil {
+			return fmt.Errorf("encode commands: %w", err)
+		}
+		_, err = fmt.Fprintf(streams.Out, "%s\n", data)
+		return err
+	}
+	// validate.List would report "No commands configured", which is a different
+	// thing from "the file is broken so we cannot tell" — and the difference
+	// matters when this runs as a hook and validation silently stops happening.
+	if unreadable {
+		statusFn(iostream.LevelWarn, "Could not read .chunk/config.json, so no commands could be listed.")
+		statusFn(iostream.LevelInfo, "Fix the JSON syntax in .chunk/config.json, then run this command again.")
+		return nil
 	}
 	return validate.List(cfg, statusFn)
 }

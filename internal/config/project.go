@@ -1,15 +1,17 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+
+	json "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
-	"github.com/CircleCI-Public/chunk-cli/internal/jsonmerge"
 )
 
 // Command roles describe what a command does. Only RoleGate is acted on:
@@ -20,24 +22,38 @@ const (
 )
 
 // Command is a single validation command.
+//
+// Numeric and boolean fields use omitzero rather than omitempty: under
+// encoding/json/v2 omitempty only drops values that encode as an empty JSON
+// value, so omitempty would write "timeout": 0 into every command.
 type Command struct {
 	Name         string `json:"name"`
 	Run          string `json:"run"`
 	Role         string `json:"role,omitempty"`
-	Timeout      int    `json:"timeout,omitempty"`
-	Remote       bool   `json:"remote,omitempty"`
+	Timeout      int    `json:"timeout,omitzero"`
+	Remote       bool   `json:"remote,omitzero"`
 	SidecarImage string `json:"sidecarImage,omitempty"`
+
+	// Extra holds object members this type does not model, so a write does not
+	// delete keys hand-added to an individual command. See SaveProjectConfig.
+	Extra jsontext.Value `json:",embed"`
 }
 
 // VCSConfig holds VCS configuration for the project.
 type VCSConfig struct {
 	Org  string `json:"org,omitempty"`
 	Repo string `json:"repo,omitempty"`
+
+	// Extra holds object members this type does not model. See Command.Extra.
+	Extra jsontext.Value `json:",embed"`
 }
 
 // ValidationConfig holds project-level defaults for validation behaviour.
 type ValidationConfig struct {
 	SidecarImage string `json:"sidecarImage,omitempty"`
+
+	// Extra holds object members this type does not model. See Command.Extra.
+	Extra jsontext.Value `json:",embed"`
 }
 
 // ProjectConfig is the per-repo configuration stored in .chunk/config.json.
@@ -46,8 +62,11 @@ type ProjectConfig struct {
 	VCS                 *VCSConfig           `json:"vcs,omitempty"`
 	Validation          *ValidationConfig    `json:"validation,omitempty"`
 	OrgID               string               `json:"orgID,omitempty"`
-	StopHookMaxAttempts int                  `json:"stopHookMaxAttempts,omitempty"`
+	StopHookMaxAttempts int                  `json:"stopHookMaxAttempts,omitzero"`
 	Environment         *envspec.Environment `json:"environment,omitempty"`
+
+	// Extra holds object members this type does not model. See Command.Extra.
+	Extra jsontext.Value `json:",embed"`
 }
 
 // ErrParseProjectConfig marks a .chunk/config.json that exists but is not valid
@@ -95,16 +114,53 @@ func LoadProjectConfigForUpdate(workDir string) (*ProjectConfig, error) {
 	}
 }
 
-// UnknownProjectConfigKeys returns the paths in .chunk/config.json that chunk
-// does not recognize. They are preserved on save; reporting them lets a caller
-// point out a typo instead of keeping it forever. A missing or malformed file
-// has nothing to report.
-func UnknownProjectConfigKeys(workDir string) []string {
-	data, err := os.ReadFile(projectConfigPath(workDir))
-	if err != nil {
-		return nil
+// UnknownKeys returns the paths in the loaded config that chunk does not model.
+// They are preserved on save; reporting them lets a caller point out a typo
+// instead of keeping it forever.
+//
+// The set of types that can appear in the file is small and closed, so the walk
+// is spelled out rather than derived by reflection. A new nested section with an
+// Extra field needs a branch here, or its keys are preserved but never reported.
+func (c *ProjectConfig) UnknownKeys() []string {
+	var paths []string
+	paths = appendUnknownKeys(paths, "", c.Extra)
+	for _, cmd := range c.Commands {
+		paths = appendUnknownKeys(paths, "commands[]", cmd.Extra)
 	}
-	return jsonmerge.UnknownKeys(data, &ProjectConfig{})
+	if c.VCS != nil {
+		paths = appendUnknownKeys(paths, "vcs", c.VCS.Extra)
+	}
+	if c.Validation != nil {
+		paths = appendUnknownKeys(paths, "validation", c.Validation.Extra)
+	}
+	if c.Environment != nil {
+		paths = appendUnknownKeys(paths, "environment", c.Environment.Extra)
+		for _, s := range c.Environment.Setup {
+			paths = appendUnknownKeys(paths, "environment.setup[]", s.Extra)
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths)
+}
+
+// appendUnknownKeys adds each member name in extra to paths, prefixed with the
+// path of the object it was found on.
+func appendUnknownKeys(paths []string, prefix string, extra jsontext.Value) []string {
+	if len(extra) == 0 {
+		return paths
+	}
+	var members map[string]jsontext.Value
+	if err := json.Unmarshal(extra, &members); err != nil {
+		return paths
+	}
+	for name := range members {
+		if prefix == "" {
+			paths = append(paths, name)
+			continue
+		}
+		paths = append(paths, prefix+"."+name)
+	}
+	return paths
 }
 
 // HasCommands reports whether any commands are configured.
@@ -167,24 +223,45 @@ func (c *ProjectConfig) FindCommand(name string) *Command {
 	return nil
 }
 
-// SaveProjectConfig writes the config back to .chunk/config.json, preserving any
-// keys in the existing file that ProjectConfig does not model. Every key it does
-// model comes from cfg, so callers must load before saving.
+// SaveProjectConfig writes the config back to .chunk/config.json. Keys the file
+// had that ProjectConfig does not model ride along in the Extra fields and are
+// written back out, so callers must load before saving: a config built from
+// scratch has no unknown keys to carry and would drop the ones on disk.
 //
-// A file that does not parse is replaced, because `chunk init --force` has to be
-// able to overwrite one. Callers that must not do that use
-// LoadProjectConfigForUpdate, which refuses before the write.
+// An existing file that does not parse is refused with ErrParseProjectConfig and
+// left alone, because cfg cannot be carrying its unknown keys — nothing could
+// have read them. Use OverwriteProjectConfig for the one caller whose job is to
+// replace such a file.
 func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
+	path := projectConfigPath(workDir)
+	data, err := os.ReadFile(path)
+	if err == nil {
+		var probe ProjectConfig
+		if err := json.Unmarshal(data, &probe); err != nil {
+			return fmt.Errorf("%w: %w", ErrParseProjectConfig, err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("could not read config.json: %w", err)
+	}
+	return OverwriteProjectConfig(workDir, cfg)
+}
+
+// OverwriteProjectConfig writes cfg to .chunk/config.json without reading what
+// is already there, replacing an unparseable file rather than refusing it.
+//
+// This is the destructive path and has to be asked for by name: `chunk init
+// --force` exists to overwrite a config nobody can fix by hand. Every other
+// writer wants SaveProjectConfig.
+func OverwriteProjectConfig(workDir string, cfg *ProjectConfig) error {
 	dir := filepath.Join(workDir, ".chunk")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := projectConfigPath(workDir)
-	data, err := marshalOverwriting(path, cfg)
+	data, err := marshalIndent(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return writeFileAtomic(projectConfigPath(workDir), append(data, '\n'), 0o644)
 }
 
 // SaveCommand upserts a command in .chunk/config.json.

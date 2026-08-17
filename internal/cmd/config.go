@@ -165,7 +165,7 @@ func newConfigSetCmd() *cobra.Command {
 					return &userError{msg: "Could not save project configuration.", suggestion: configFilePermHint, err: err}
 				}
 				io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))
-				reportUnknownKeys(io, ".chunk/config.json", config.UnknownProjectConfigKeys(workDir))
+				reportUnknownKeys(io, ".chunk/config.json", projCfg.UnknownKeys())
 				return nil
 			}
 
@@ -220,7 +220,7 @@ func newConfigSetCmd() *cobra.Command {
 			}
 
 			io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))
-			reportUnknownKeys(io, "the chunk config file", config.UnknownUserConfigKeys())
+			reportUnknownKeys(io, "the chunk config file", cfg.UnknownKeys())
 			return nil
 		},
 	}

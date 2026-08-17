@@ -12,6 +12,11 @@ task lint               # Run linters
 task fmt                # Format code
 ```
 
+The config types preserve JSON keys chunk does not model, using
+`github.com/go-json-experiment/json` rather than `encoding/json`. Encoding one of
+them with `encoding/json` silently corrupts the output. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#unknown-config-keys-are-preserved).
+
 ## Documentation Map
 
 Read these when working in the relevant area:

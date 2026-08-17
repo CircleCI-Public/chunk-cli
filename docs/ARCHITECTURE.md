@@ -184,34 +184,66 @@ Project config lives in `.chunk/config.json` (per repository):
 ### Unknown config keys are preserved
 
 Both config files are hand-editable and `.chunk/config.json` is committed, so a
-write must not delete what it does not understand. `config.SaveProjectConfig` and
-`config.Save` merge onto the file they are about to replace instead of
-overwriting it, via `internal/jsonmerge`:
+write must not delete what it does not understand. Every type in a config
+document carries an `Extra jsontext.Value` field tagged `json:",embed"` — an
+*embedded fallback* in `github.com/go-json-experiment/json` — so members the
+struct does not model are captured on load and written back out on save:
 
 - Keys the Go struct models come from the struct alone. A modeled key it omits is
   deleted — that is how clearing a value persists, and `chunk auth clear` depends
   on it to remove a credential.
-- Keys the struct does not model are copied over verbatim, after the modeled keys
-  of the same object. Values are carried as raw bytes, so numbers and escapes are
-  not reformatted.
-- `commands[]` and `environment.setup[]` entries are paired between the two
-  documents by `name`. Only entries the struct has survive, so an entry chunk
-  dropped is not resurrected, while extra keys on the entries that remain are
-  kept.
+- Keys the struct does not model are held as raw bytes on the object they were
+  found on and re-emitted after the modeled keys, so numbers and escapes are not
+  reformatted.
+- Because the unknown keys travel with the value, an entry in `commands[]` or
+  `environment.setup[]` keeps its extra keys wherever it moves in the list, and a
+  step chunk deliberately drops (`envspec.StepTest`) takes its extras with it
+  rather than being resurrected.
 
-A file that does not parse cannot be merged onto, and its unknown keys cannot be
-read out of it, so the write refuses rather than flattening the file to the keys
-chunk models. `config.Save` returns `jsonmerge.ErrInvalidJSON` and leaves the file
-alone. `config.SaveProjectConfig` is the one exception — it replaces an
-unparseable file, because `chunk init --force` exists to overwrite a config nobody
-can fix by hand — so its other callers check first with
-`config.LoadProjectConfigForUpdate`, which yields an empty config for a missing
-file but refuses one that does not parse.
+The consequence for a new writer: the in-memory struct owns the whole document,
+so **a caller must load before saving** — a config built from scratch carries no
+unknown keys and would flatten the file. Both savers guard against that by
+refusing when the file on disk does not parse, since it could not have been
+loaded: `config.Save` returns `config.ErrParseUserConfig` and
+`config.SaveProjectConfig` returns `config.ErrParseProjectConfig`, leaving the
+file untouched either way.
 
-Two consequences worth knowing when adding a writer: the in-memory struct owns
-every key it models, so a caller must load before saving. And config writes must
-go through these functions, never a direct marshal of a config struct to the
-file.
+`config.OverwriteProjectConfig` is the one destructive path — it writes without
+reading, replacing an unparseable file — and it has to be asked for by name.
+Only `chunk init` uses it, because `--force` exists to overwrite a config nobody
+can fix by hand.
+
+Writes are atomic: `writeFileAtomic` writes a temp file in the same directory and
+renames it over the target. Since every write path refuses a config it cannot
+parse, a half-written file would lock the user out, and for the user config there
+is no `--force` to recover with.
+
+#### Why a module and not `encoding/json/v2`
+
+The embedded-fallback tag is a v2 feature, and Go 1.26 ships `encoding/json/v2`
+only behind `GOEXPERIMENT=jsonv2`. That variable cannot be set from `go.mod`, so
+depending on the stdlib copy would break `go install` and any direct `go` command
+for everyone outside this repo's Taskfile. The module is the same design
+available as an ordinary dependency, so a plain `go build` works.
+
+Two things to know when touching these types:
+
+- **The tag spelling differs from the stdlib copy.** The module uses `,embed`;
+  `encoding/json/v2` calls the same thing `,unknown`. The module *silently
+  ignores* tag options it does not recognize, so a mistyped option does not
+  error — it turns the field into an ordinary member named `Extra`. If you ever
+  see `"Extra"` in output, that is the symptom.
+- **v1 must not encode these types.** `encoding/json` ignores the tag entirely
+  and emits the literal `"Extra"` member while dropping the preserved keys, so
+  every encode or decode of a config or env-spec type goes through the module.
+  That is why `internal/cmd/sidecar.go`, `internal/validate/cache.go`, and the
+  `--list --json` path in `internal/cmd/validate.go` do not use
+  `iostream.PrintJSON`. `TestValidateListJSONDoesNotLeakUnknownMemberField`
+  guards the one case where a v1 helper was reachable.
+
+`staticcheck` validates struct tags against `encoding/json`'s vocabulary and so
+reports `embed` as unknown (`SA5008`); `.golangci.yml` excludes exactly that
+message.
 
 ### Client constructors accept config, not env
 

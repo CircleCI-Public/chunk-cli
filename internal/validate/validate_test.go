@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 func TestShellEscape(t *testing.T) {
@@ -532,4 +534,60 @@ func TestRunRemoteInline(t *testing.T) {
 		assert.ErrorContains(t, err, "remote custom")
 		assert.ErrorContains(t, err, "connection lost")
 	})
+}
+
+// --- expandCommand ---
+
+// gitRun runs git in dir with the isolated env the test helpers use.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitrepo.GitEnv(dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+// Deleting a package leaves its files in `git diff HEAD`, but `go test` fails
+// the entire run on a directory that no longer exists, so the expansion must
+// drop it and keep the packages that are still there.
+func TestExpandCommandSkipsDeletedPackages(t *testing.T) {
+	dir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+	for _, pkg := range []string{"kept", "gone"} {
+		assert.NilError(t, os.MkdirAll(filepath.Join(dir, pkg), 0o755))
+		assert.NilError(t, os.WriteFile(
+			filepath.Join(dir, pkg, "a.go"), []byte("package "+pkg+"\n"), 0o644))
+	}
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "add packages")
+
+	// One package edited, the other deleted outright.
+	assert.NilError(t, os.WriteFile(
+		filepath.Join(dir, "kept", "a.go"), []byte("package kept // edited\n"), 0o644))
+	assert.NilError(t, os.RemoveAll(filepath.Join(dir, "gone")))
+
+	got := expandCommand(dir, "task test -- {{CHANGED_PACKAGES}}")
+	assert.Equal(t, got, "task test -- ./kept")
+}
+
+// With every changed package deleted there is nothing to name, so the expansion
+// falls back to the whole tree rather than emitting an empty package list.
+func TestExpandCommandAllPackagesDeleted(t *testing.T) {
+	dir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "gone"), 0o755))
+	assert.NilError(t, os.WriteFile(
+		filepath.Join(dir, "gone", "a.go"), []byte("package gone\n"), 0o644))
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-m", "add package")
+	assert.NilError(t, os.RemoveAll(filepath.Join(dir, "gone")))
+
+	got := expandCommand(dir, "task test -- {{CHANGED_PACKAGES}}")
+	assert.Equal(t, got, "task test -- ./...")
+}
+
+func TestExpandCommandWithoutTemplate(t *testing.T) {
+	assert.Equal(t, expandCommand(t.TempDir(), "task test"), "task test")
 }

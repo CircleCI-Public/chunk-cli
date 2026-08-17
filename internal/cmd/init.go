@@ -518,8 +518,10 @@ hook config files.`,
 				}
 			}
 
-			// Save config
-			if err := config.SaveProjectConfig(workDir, cfg); err != nil {
+			// init owns the whole file: it has either merged the existing config
+			// into cfg above, or been told with --force to replace one that could
+			// not be read at all. Either way this write is meant to be wholesale.
+			if err := config.OverwriteProjectConfig(workDir, cfg); err != nil {
 				return &userError{
 					msg:        "Could not write .chunk/config.json.",
 					suggestion: suggestionCheckPerms,

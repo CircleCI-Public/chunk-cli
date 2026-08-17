@@ -222,7 +222,14 @@ func expandCommand(workDir, command string) string {
 		if line == "" || !strings.HasSuffix(line, ".go") {
 			continue
 		}
-		pkg := "./" + filepath.Dir(line)
+		dir := filepath.Dir(line)
+		// A deleted file is still listed by `git diff HEAD`. Passing the package
+		// it used to live in to `go test` fails the whole run with "directory
+		// not found", so drop directories that are gone.
+		if _, statErr := os.Stat(filepath.Join(workDir, dir)); statErr != nil {
+			continue
+		}
+		pkg := "./" + dir
 		if !seen[pkg] {
 			seen[pkg] = true
 			pkgs = append(pkgs, pkg)

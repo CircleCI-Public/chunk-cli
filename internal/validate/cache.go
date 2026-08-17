@@ -1,8 +1,9 @@
 package validate
 
 import (
-	"encoding/json"
 	"time"
+
+	json "github.com/go-json-experiment/json"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"

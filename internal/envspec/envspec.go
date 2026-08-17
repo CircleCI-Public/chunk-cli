@@ -1,9 +1,16 @@
 package envspec
 
+import "github.com/go-json-experiment/json/jsontext"
+
 // Step is a single named provisioning command in the sidecar setup sequence.
 type Step struct {
 	Name    string `json:"name"`
 	Command string `json:"command"`
+
+	// Extra holds object members this type does not model, so that rewriting
+	// .chunk/config.json through it does not delete keys a user hand-added to a
+	// setup step. Encoding requires encoding/json/v2; see config.SaveProjectConfig.
+	Extra jsontext.Value `json:",embed"`
 }
 
 // Environment describes the detected tech stack and build configuration for a repository.
@@ -12,6 +19,9 @@ type Environment struct {
 	Setup        []Step `json:"setup"`
 	Image        string `json:"image"`
 	ImageVersion string `json:"image_version"`
+
+	// Extra holds object members this type does not model. See Step.Extra.
+	Extra jsontext.Value `json:",embed"`
 }
 
 // StepTest is the detected test command. It is not a provisioning step: it

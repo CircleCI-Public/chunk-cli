@@ -222,9 +222,14 @@ func TestValidateListWarnsOnMalformedConfig(t *testing.T) {
 		"expected a warning about the unparseable config, got stderr: %q", stderr)
 	assert.Assert(t, strings.Contains(stderr, "config.json"),
 		"expected the warning to name the file, got stderr: %q", stderr)
-	// The listing still runs, so the empty result is visible alongside the reason.
-	assert.Assert(t, strings.Contains(stdout+stderr, "No commands configured."),
-		"expected the listing to still report an empty config, got: %q", stdout+stderr)
+	// "No commands configured" would be a lie: the commands exist, they just
+	// could not be read. Claiming an empty config here is how a broken file turns
+	// into validation silently never running under a hook.
+	got := stdout + stderr
+	assert.Assert(t, !strings.Contains(got, "No commands configured."),
+		"an unreadable config must not be reported as an empty one, got: %q", got)
+	assert.Assert(t, strings.Contains(got, "no commands could be listed"),
+		"expected the reason to be stated, got: %q", got)
 }
 
 // The warning goes to stderr, so "--list --json" stays machine-readable.
@@ -245,6 +250,34 @@ func TestValidateListMalformedConfigKeepsJSONParseable(t *testing.T) {
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &cmds),
 		"stdout must stay valid JSON, got: %q", stdout)
 	assert.Equal(t, len(cmds), 0)
+}
+
+// `--list --json` prints commands through iostream.PrintJSON, which uses the v1
+// encoder. The unknown-member field must not surface there as a literal "Extra"
+// key: hooks and agents consume this output. Under GOEXPERIMENT=jsonv2 the v1
+// API is implemented on v2 and honours the tag, and this pins that — it is the
+// only thing standing between the Extra fields and every v1 encoder in the tree.
+func TestValidateListJSONDoesNotLeakUnknownMemberField(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	chunkDir := filepath.Join(dir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"),
+		[]byte(`{"commands":[{"name":"test","run":"task test","fileExt":"go","limit":5}]}`), 0o644))
+
+	stdout, _, err := runValidateListCLI(t, dir, "--json")
+	assert.NilError(t, err)
+
+	assert.Assert(t, !strings.Contains(stdout, "Extra"),
+		"the unknown-member field must not appear as a JSON key:\n%s", stdout)
+
+	var cmds []config.Command
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &cmds), "stdout must be valid JSON: %q", stdout)
+	assert.Equal(t, len(cmds), 1)
+	assert.Equal(t, cmds[0].Name, "test")
+	// The keys chunk does not model are carried inline, not under a wrapper.
+	assert.Assert(t, strings.Contains(stdout, `"fileExt": "go"`), stdout)
+	assert.Assert(t, strings.Contains(stdout, `"limit": 5`), stdout)
 }
 
 // A missing config is not a malformed one: there is nothing to warn about, and a

@@ -220,12 +220,16 @@ chunk
 project directory, the resolved `orgID` (env var takes precedence over project
 config).
 
-Keys outside this table are preserved but ignored. `chunk config set` merges onto
-the existing file rather than replacing it, so hand-added keys — including extra
-keys on individual `commands[]` entries — survive a write, and `config set`
-prints the ones it does not recognize so a typo does not go unnoticed. A
-`.chunk/config.json` that exists but is not valid JSON is never overwritten:
-commands that would write it fail and ask you to fix the syntax first.
+Keys outside this table are preserved but ignored. `chunk config set` reads the
+existing file, keeps the keys it does not model, and writes them back out, so
+hand-added keys — including extra keys on individual `commands[]` entries —
+survive a write, and `config set` prints the ones it does not recognize so a typo
+does not go unnoticed.
+
+A config file that exists but cannot be parsed is never overwritten: commands
+that would write it fail and ask you to fix it first. That includes a file with
+the same key twice, which is rejected rather than silently resolved to one of the
+values — correcting it by hand is safer than guessing which one you meant.
 
 ## Flag Conventions
 

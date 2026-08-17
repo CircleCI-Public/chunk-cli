@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,8 @@ import (
 	"regexp"
 
 	petname "github.com/dustinkirkland/golang-petname"
+	json "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/envbuilder"
@@ -687,7 +688,7 @@ image's CMD, not a step that runs during setup. Pipe stdout into
 				}
 			}
 
-			out, err := json.MarshalIndent(env, "", "  ")
+			out, err := json.Marshal(env, jsontext.WithIndent("  "))
 			if err != nil {
 				return &userError{msg: "Could not encode the environment spec.", err: err}
 			}

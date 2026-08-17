@@ -165,15 +165,37 @@ func TestSaveProjectConfigFormatUnchanged(t *testing.T) {
 	assert.Equal(t, readProjectConfig(t, dir), string(plain)+"\n")
 }
 
-func TestSaveProjectConfigUnparseableExistingFile(t *testing.T) {
+// The default is the safe one: cfg cannot be carrying unknown keys from a file
+// nothing could read, so writing it would discard them.
+func TestSaveProjectConfigRefusesUnparseableExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	const broken = `{"orgID": `
+	writeProjectConfig(t, dir, broken)
+
+	err := SaveProjectConfig(dir, &ProjectConfig{OrgID: "org-1"})
+	assert.ErrorIs(t, err, ErrParseProjectConfig)
+	assert.Equal(t, readProjectConfig(t, dir), broken, "the file must be left untouched")
+}
+
+// Replacing such a file is possible, but only by asking for it by name — this is
+// what backs `chunk init --force`.
+func TestOverwriteProjectConfigReplacesUnparseableFile(t *testing.T) {
 	dir := t.TempDir()
 	writeProjectConfig(t, dir, `{"orgID": `)
 
-	// SaveProjectConfig itself falls back to a plain marshal, which is what lets
-	// `chunk init --force` replace a config nobody can fix by hand. Refusing is
-	// the caller's job, via LoadProjectConfigForUpdate.
-	assert.NilError(t, SaveProjectConfig(dir, &ProjectConfig{OrgID: "org-1"}))
+	assert.NilError(t, OverwriteProjectConfig(dir, &ProjectConfig{OrgID: "org-1"}))
 	assert.Equal(t, readProjectConfig(t, dir), "{\n  \"orgID\": \"org-1\"\n}\n")
+}
+
+// A duplicated key is a parse failure too, so the same refusal applies rather
+// than silently keeping one of the two values.
+func TestSaveProjectConfigRefusesDuplicateKeys(t *testing.T) {
+	dir := t.TempDir()
+	const dupes = `{"orgID": "a", "orgID": "b"}`
+	writeProjectConfig(t, dir, dupes)
+
+	assert.ErrorIs(t, SaveProjectConfig(dir, &ProjectConfig{OrgID: "c"}), ErrParseProjectConfig)
+	assert.Equal(t, readProjectConfig(t, dir), dupes, "the file must be left untouched")
 }
 
 func TestLoadProjectConfigDistinguishesMissingFromMalformed(t *testing.T) {
@@ -211,17 +233,26 @@ func TestSaveCommandRefusesMalformedConfig(t *testing.T) {
 	assert.Equal(t, readProjectConfig(t, dir), broken)
 }
 
-func TestUnknownProjectConfigKeys(t *testing.T) {
+func TestProjectConfigUnknownKeys(t *testing.T) {
 	dir := t.TempDir()
 	writeProjectConfig(t, dir, `{
   "commands": [{"name": "test", "run": "task test", "fileExt": "go", "limit": 5}],
+  "vcs": {"org": "o", "repo": "r", "mirror": "m"},
+  "validation": {"sidecarImage": "img", "retries": 2},
+  "environment": {"stack": "go", "cacheKey": "v1", "setup": [{"name": "install", "command": "go mod download", "cache": true}]},
   "myTool": 1
 }`)
-	assert.DeepEqual(t, UnknownProjectConfigKeys(dir), []string{
-		"commands[].fileExt", "commands[].limit", "myTool",
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.UnknownKeys(), []string{
+		"commands[].fileExt", "commands[].limit",
+		"environment.cacheKey", "environment.setup[].cache",
+		"myTool", "validation.retries", "vcs.mirror",
 	})
 
-	assert.Equal(t, len(UnknownProjectConfigKeys(t.TempDir())), 0)
+	empty, err := LoadProjectConfigForUpdate(t.TempDir())
+	assert.NilError(t, err)
+	assert.Equal(t, len(empty.UnknownKeys()), 0)
 }
 
 func TestHasSidecarImage(t *testing.T) {

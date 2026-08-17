@@ -11,7 +11,6 @@ import (
 	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/jsonmerge"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 )
 
@@ -272,7 +271,7 @@ func TestSave_PreservesUnknownKeys(t *testing.T) {
 	got := string(data)
 	assert.Assert(t, strings.Contains(got, `"model": "m2"`), got)
 	assert.Assert(t, strings.Contains(got, `"myTool"`), got)
-	// Copied as bytes, so a large integer is not rewritten as 1e+06.
+	// Carried as raw bytes, so a large integer is not rewritten as 1e+06.
 	assert.Assert(t, strings.Contains(got, `"limit": 1000000`), got)
 
 	info, err := os.Stat(p)
@@ -280,9 +279,9 @@ func TestSave_PreservesUnknownKeys(t *testing.T) {
 	assert.Equal(t, info.Mode().Perm(), os.FileMode(filePermission))
 }
 
-// Preservation cannot rescue keys from a file the merge refuses to parse, so
-// rather than flatten a corrupt config to its modeled keys, Save refuses. Load
-// rejects the same file, so reaching this means it broke mid-update.
+// A corrupt config cannot yield its unknown keys, so Save refuses rather than
+// flattening it to the modeled ones. This is the guard for a writer that skipped
+// Load: cfg would carry no unknown keys and the write would drop them.
 func TestSave_RefusesToOverwriteUnparseableConfig(t *testing.T) {
 	dir := setupTempConfig(t)
 	p := filepath.Join(dir, "chunk", "config.json")
@@ -291,10 +290,26 @@ func TestSave_RefusesToOverwriteUnparseableConfig(t *testing.T) {
 	assert.NilError(t, os.WriteFile(p, []byte(original), 0o600))
 
 	err := Save(UserConfig{Model: "claude-other"})
-	assert.ErrorIs(t, err, jsonmerge.ErrInvalidJSON)
+	assert.ErrorIs(t, err, ErrParseUserConfig)
 
 	data, readErr := os.ReadFile(p)
 	assert.NilError(t, readErr)
+	assert.Equal(t, string(data), original, "the file must be left untouched")
+}
+
+// Duplicate member names are rejected too: encoding/json/v2 refuses them, and a
+// write that dropped one silently would be the bug this all exists to prevent.
+func TestSave_RefusesConfigWithDuplicateKeys(t *testing.T) {
+	dir := setupTempConfig(t)
+	p := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	original := `{"model":"a","model":"b"}`
+	assert.NilError(t, os.WriteFile(p, []byte(original), 0o600))
+
+	assert.ErrorIs(t, Save(UserConfig{Model: "c"}), ErrParseUserConfig)
+
+	data, err := os.ReadFile(p)
+	assert.NilError(t, err)
 	assert.Equal(t, string(data), original, "the file must be left untouched")
 }
 
@@ -333,14 +348,18 @@ func TestClear_RemovesCredentialWithUnknownKeysPresent(t *testing.T) {
 	assert.Assert(t, strings.Contains(got, `"model": "m1"`), got)
 }
 
-func TestUnknownUserConfigKeys(t *testing.T) {
+func TestUserConfigUnknownKeys(t *testing.T) {
 	dir := setupTempConfig(t)
-	assert.Equal(t, len(UnknownUserConfigKeys()), 0) // no file yet
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, len(cfg.UnknownKeys()), 0) // no file yet
 
 	p := filepath.Join(dir, "chunk", "config.json")
 	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
 	assert.NilError(t, os.WriteFile(p, []byte(`{"model":"m1","myTool":1,"typo":2}`), 0o600))
-	assert.DeepEqual(t, UnknownUserConfigKeys(), []string{"myTool", "typo"})
+	cfg, err = Load()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.UnknownKeys(), []string{"myTool", "typo"})
 }
 
 func TestClear_UnknownKey(t *testing.T) {
@@ -547,4 +566,56 @@ func TestEnsureInstanceID_InvalidStoredValueRegenerates(t *testing.T) {
 	id, err := EnsureInstanceID()
 	assert.NilError(t, err)
 	assert.Assert(t, id != uuid.Nil)
+}
+
+// An unreadable config may be full of unknown keys that cannot be seen from the
+// write path, so Save refuses instead of flattening it to the modeled ones.
+func TestSave_RefusesUnreadableConfig(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping: root bypasses file permission checks")
+	}
+	dir := setupTempConfig(t)
+	p := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	assert.NilError(t, os.WriteFile(p, []byte(`{"model":"m1","myTool":1}`), 0o600))
+	assert.NilError(t, os.Chmod(p, 0o200)) // write-only: replaceable but not readable
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+
+	assert.Assert(t, Save(UserConfig{Model: "m2"}) != nil,
+		"expected Save to refuse a config it cannot read")
+}
+
+// The write goes through a temp file and a rename, so a crash cannot leave a
+// truncated config behind — which matters because every write path refuses a
+// config it cannot parse. Nothing but the config file may be left in the dir.
+func TestSave_LeavesNoTempFilesBehind(t *testing.T) {
+	dir := setupTempConfig(t)
+	assert.NilError(t, Save(UserConfig{Model: "m1"}))
+	assert.NilError(t, Save(UserConfig{Model: "m2"}))
+
+	entries, err := os.ReadDir(filepath.Join(dir, "chunk"))
+	assert.NilError(t, err)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.DeepEqual(t, names, []string{"config.json"})
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	assert.Equal(t, cfg.Model, "m2")
+}
+
+// The refusal names the file, because there is no --force for the user config:
+// finding and editing it by hand is the only way out.
+func TestSave_ParseErrorNamesTheFile(t *testing.T) {
+	dir := setupTempConfig(t)
+	p := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	assert.NilError(t, os.WriteFile(p, []byte(`{"model":`), 0o600))
+
+	err := Save(UserConfig{Model: "m2"})
+	assert.ErrorIs(t, err, ErrParseUserConfig)
+	assert.Assert(t, strings.Contains(err.Error(), p),
+		"expected the error to name %s, got: %v", p, err)
 }

@@ -48,6 +48,14 @@ linters:
       - linters: [govet]
         text: 'shadow: declaration of "ctx"'
 
+        # `embed` is a github.com/go-json-experiment/json tag option marking an
+        # embedded fallback — the field that holds config keys chunk does not
+        # model. staticcheck checks struct tags against encoding/json's
+        # vocabulary, which has no such option.
+      - linters: [staticcheck]
+        text: 'SA5008: invalid appearance of unknown `embed` tag option'
+
+
         # We don't require comments on everything in services
       - linters: [revive]
         text: 'exported: exported (type|method|function) (.+) should have comment or be unexported'

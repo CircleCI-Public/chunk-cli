@@ -222,10 +222,20 @@ func GoneError(err error) error {
 		wrap(err)
 }
 
-// malformedProjectConfigError reports a .chunk/config.json that exists but does
-// not parse. Write paths return it instead of continuing, because they would
-// otherwise save an empty config over a file they could not read.
+// malformedProjectConfigError reports a .chunk/config.json a write path could
+// not load. Those paths return it instead of continuing, because they would
+// otherwise save a config over a file they could not read.
+//
+// Only a genuine parse failure gets the "fix the syntax" message. Anything else
+// — no read permission, a directory where the file should be — would send the
+// user hunting for a syntax error that is not there, so it says what happened.
 func malformedProjectConfigError(err error) *userError {
+	if !errors.Is(err, config.ErrParseProjectConfig) {
+		return newUserError(msgUnreadableProjectConfig).
+			withCode("config.read_failed").
+			withSuggestion(suggestionCheckPerms).
+			wrap(err)
+	}
 	return newUserError(msgMalformedProjectConfig).
 		withCode("config.parse_failed").
 		withDetail(detailMalformedProjectConfig).

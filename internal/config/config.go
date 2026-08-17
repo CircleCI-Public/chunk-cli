@@ -1,96 +1,87 @@
 package config
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 
+	json "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"github.com/google/uuid"
 	"github.com/sethvargo/go-envconfig"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/jsonmerge"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 )
 
-// marshalCompact encodes v as compact JSON without HTML-escaping special
-// characters like & < > so that shell commands remain human-readable in config
-// files.
-func marshalCompact(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return nil, err
+// writeFileAtomic writes data to path through a temporary file in the same
+// directory followed by a rename, which is atomic within a filesystem. A config
+// write that is interrupted — a crash, a full disk, a killed process — therefore
+// leaves the previous file intact rather than a truncated one. That matters more
+// than usual here: every write path refuses a config it cannot parse, so a
+// half-written file would lock the user out until they repaired it by hand.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file in %s: %w", dir, err)
 	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	tmp := f.Name()
+	// Any failure past this point leaves the temp file behind, and the real file
+	// untouched, which is the outcome worth having.
+	written, err := writeAndClose(f, data, perm)
+	if !written {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename %s to %s: %w", tmp, path, err)
+	}
+	return nil
 }
 
-// indentJSON reformats compact JSON with the two-space indentation chunk uses in
-// config files. It only adds whitespace, so it never re-escapes string contents.
-func indentJSON(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, data, "", "  "); err != nil {
-		return nil, err
+// writeAndClose writes data to f, applies perm, and closes it. The bool reports
+// whether f is fully on disk and ready to be renamed into place. Close is not
+// deferred: the file has to be closed before the rename, and its error is part
+// of whether the write succeeded.
+func writeAndClose(f *os.File, data []byte, perm os.FileMode) (bool, error) {
+	name := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return false, fmt.Errorf("write %s: %w", name, err)
 	}
-	return buf.Bytes(), nil
+	// Durability before the rename, so a crash cannot leave the renamed file
+	// pointing at unflushed contents.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return false, fmt.Errorf("sync %s: %w", name, err)
+	}
+	// CreateTemp makes the file 0o600; widen it only where the caller asks.
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return false, fmt.Errorf("chmod %s: %w", name, err)
+	}
+	if err := f.Close(); err != nil {
+		return false, fmt.Errorf("close %s: %w", name, err)
+	}
+	return true, nil
 }
 
-// marshalIndent encodes v as indented JSON without HTML-escaping special characters
-// like & < > so that shell commands remain human-readable in config files.
+// marshalIndent encodes v as indented JSON, the format chunk uses for its config
+// files. encoding/json/v2 does not HTML-escape by default, so shell operators
+// like && in commands stay human-readable.
+//
+// Keys the config types do not model travel in their jsontext.Value fields
+// tagged `json:",embed"` and are written back out here, which is what keeps a
+// write from deleting hand-added keys. That only works under encoding/json/v2:
+// v1 ignores the unknown tag option and would emit a literal "Extra" member.
 func marshalIndent(v any) ([]byte, error) {
-	data, err := marshalCompact(v)
-	if err != nil {
-		return nil, err
-	}
-	return indentJSON(data)
-}
-
-// marshalPreserving encodes cfg for the file at path, carrying over any keys
-// already in that file that cfg's type does not model — hand-added keys, or keys
-// written by a newer version of chunk.
-//
-// cfg stays the source of truth for every key it does model: a modeled key it
-// omits is removed from the file, which is how clearing a value persists.
-// Callers must therefore load before saving, or they will drop keys the file
-// already had.
-//
-// A file that does not parse is refused with jsonmerge.ErrInvalidJSON rather
-// than flattened to the modeled keys: the unknown keys cannot be recovered from
-// it, so writing anyway would destroy them. A missing file — or one that cannot
-// be read at all — has nothing to preserve and falls back to a plain marshal.
-// Use marshalOverwriting for the one caller that means to replace a broken file.
-func marshalPreserving(path string, cfg any) ([]byte, error) {
-	data, err := marshalCompact(cfg)
-	if err != nil {
-		return nil, err
-	}
-	existing, readErr := os.ReadFile(path)
-	if readErr != nil {
-		return indentJSON(data)
-	}
-	merged, mergeErr := jsonmerge.Merge(data, existing, cfg)
-	if mergeErr != nil {
-		return nil, fmt.Errorf("merge %s: %w", path, mergeErr)
-	}
-	return indentJSON(merged)
-}
-
-// marshalOverwriting is marshalPreserving for a caller whose job is to replace
-// the file: an unparseable config yields a plain marshal of cfg instead of an
-// error. Only the project config takes this path, because `chunk init --force`
-// exists to overwrite a config the user cannot fix by hand; every other write
-// refuses, and init without --force refuses before it gets here.
-func marshalOverwriting(path string, cfg any) ([]byte, error) {
-	data, err := marshalPreserving(path, cfg)
-	if errors.Is(err, jsonmerge.ErrInvalidJSON) {
-		return marshalIndent(cfg)
-	}
-	return data, err
+	return json.Marshal(v, jsontext.WithIndent("  "))
 }
 
 // Model constants define the Claude models used for different operations.
@@ -181,7 +172,7 @@ type UserConfig struct {
 	CircleCIToken      string `json:"circleCIToken,omitempty"`
 	GitHubToken        string `json:"gitHubToken,omitempty"`
 	Model              string `json:"model,omitempty"`
-	UseSSHIdentityFile bool   `json:"useSSHIdentityFile,omitempty"`
+	UseSSHIdentityFile bool   `json:"useSSHIdentityFile,omitzero"`
 	InstanceID         string `json:"instanceID,omitempty"`
 
 	// Telemetry is the persisted telemetry preference: true enables it,
@@ -193,6 +184,10 @@ type UserConfig struct {
 	// silently lose their stored Anthropic key on upgrade. Migrated into
 	// AnthropicAPIKey by Load and dropped on the next Save (omitempty).
 	LegacyAPIKey string `json:"apiKey,omitempty"`
+
+	// Extra holds object members this type does not model, so a write does not
+	// delete keys hand-added to the config file. See marshalIndent.
+	Extra jsontext.Value `json:",embed"`
 }
 
 // ResolvedConfig holds the final resolved values with their sources.
@@ -259,6 +254,11 @@ func resolveGitHubToken(env EnvVars, cfg UserConfig) (string, string) {
 	return "", ""
 }
 
+// ErrParseUserConfig marks a user config file that exists but is not valid JSON.
+// Both Load and Save report it: the keys chunk does not model cannot be read out
+// of such a file, so a write would drop them.
+var ErrParseUserConfig = errors.New("parse config file")
+
 // Load reads the config file. Returns empty config if not found.
 func Load() (UserConfig, error) {
 	p, err := Path()
@@ -274,7 +274,7 @@ func Load() (UserConfig, error) {
 	}
 	var cfg UserConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return UserConfig{}, err
+		return UserConfig{}, fmt.Errorf("%w: %w", ErrParseUserConfig, err)
 	}
 	if cfg.AnthropicAPIKey == "" && cfg.LegacyAPIKey != "" {
 		cfg.AnthropicAPIKey = cfg.LegacyAPIKey
@@ -284,13 +284,14 @@ func Load() (UserConfig, error) {
 }
 
 // Save writes the config file, creating the directory with 0o700 and file with
-// 0o600. Keys the UserConfig type does not model are preserved from the existing
-// file; see marshalPreserving for what that does and does not cover.
+// 0o600. Keys the UserConfig type does not model ride along in cfg.Extra and are
+// written back out, so callers must load before saving: a UserConfig built from
+// scratch has no unknown keys to carry and will drop the ones on disk.
 //
-// An existing config that does not parse is an error and the file is left alone:
-// the keys chunk does not model could not be read out of it, so writing would
-// drop them. Callers reach this having loaded the config, and Load rejects the
-// same file, so in practice this catches a file that broke in between.
+// An existing config that does not parse is refused with ErrParseUserConfig and
+// the file is left alone. Load rejects the same file, so a caller that loads
+// first never gets here — the check is what stops a writer that forgot to, since
+// cfg would then carry no unknown keys and this would flatten the file.
 func Save(cfg UserConfig) error {
 	dir, err := Dir()
 	if err != nil {
@@ -303,27 +304,46 @@ func Save(cfg UserConfig) error {
 	if err != nil {
 		return err
 	}
-	data, err := marshalPreserving(p, cfg)
+	if err := checkUserConfigParses(p); err != nil {
+		return err
+	}
+	data, err := marshalIndent(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, filePermission)
+	return writeFileAtomic(p, data, filePermission)
 }
 
-// UnknownUserConfigKeys returns the paths in the user config file that chunk does
-// not recognize. They are preserved on save; reporting them lets a caller point
-// out a typo instead of keeping it forever. A missing or malformed file has
-// nothing to report.
-func UnknownUserConfigKeys() []string {
-	p, err := Path()
-	if err != nil {
-		return nil
-	}
+// checkUserConfigParses reports an error unless the file at p is safe to replace:
+// either it does not exist, or it parses and so was loadable into the cfg being
+// written. A file that cannot be read is not safe — it may be full of unknown
+// keys that simply cannot be seen from here — so it is refused rather than
+// flattened.
+func checkUserConfigParses(p string) error {
 	data, err := os.ReadFile(p)
-	if err != nil {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return nil
+	case err != nil:
+		return fmt.Errorf("read %s: %w", p, err)
 	}
-	return jsonmerge.UnknownKeys(data, UserConfig{})
+	var probe UserConfig
+	if err := json.Unmarshal(data, &probe); err != nil {
+		// Name the file: this is the only way out, and unlike the project config
+		// there is no `--force` to overwrite it, so the user has to find and fix
+		// it by hand.
+		return fmt.Errorf("%w: %s: %w", ErrParseUserConfig, p, err)
+	}
+	return nil
+}
+
+// UnknownKeys returns the names in the loaded config that chunk does not model.
+// They are preserved on save; reporting them lets a caller point out a typo
+// instead of keeping it forever.
+func (c UserConfig) UnknownKeys() []string {
+	names := appendUnknownKeys(nil, "", c.Extra)
+	slices.Sort(names)
+	return names
 }
 
 // Clear removes a stored config value by key.
