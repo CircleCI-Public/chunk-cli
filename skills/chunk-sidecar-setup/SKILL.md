@@ -224,15 +224,19 @@ does not mark anything on its own:
 So check what is marked, then mark the rest:
 
 ```bash
-chunk validate --list                  # shows configured commands
-chunk validate --mark-remote           # mark every configured command
+chunk validate --list                  # tags each command [local|remote, role]
+chunk validate --mark-remote           # mark all but autofix commands
 chunk validate --mark-remote test      # or one at a time
 ```
 
-Mark every command the user wants running on the sidecar. Leave autofix commands
-(formatters, codegen) local — they rewrite files, and the edits belong in the
-local working tree, not on the sidecar. Already-marked commands report no change,
-so re-running is safe.
+`--list` tags every command with where it runs and its role, so read that before
+and after marking rather than guessing.
+
+The bare `--mark-remote` deliberately skips `autofix` commands (formatters,
+codegen) and prints which ones it left alone. Those rewrite files, and on the
+sidecar the edits never come back to the local working tree. Only mark one by name
+if the user explicitly wants it running remotely. Already-marked commands report
+no change, so re-running is safe.
 
 ---
 
@@ -293,6 +297,13 @@ Persist the snapshot ID:
 ```bash
 chunk config set validation.sidecarImage <snapshot-id>
 ```
+
+**This overrides the per-command routing from Stage 6.** With
+`validation.sidecarImage` set, `chunk validate` sends every command to the sidecar
+regardless of its `remote` flag or role — including autofix commands. If the user
+needs a formatter to keep rewriting local files, they run it directly (`task fmt`,
+`gofmt -w .`) rather than through `chunk validate`. Tell them that here, not after
+they wonder where their formatting went.
 
 ---
 

@@ -124,9 +124,11 @@ func (c *ProjectConfig) MarkRemoteCommandsForSidecarSetup() bool {
 var ErrNoSuchCommand = errors.New("no such command")
 
 // MarkCommandRemote marks commands for remote execution. An empty name applies
-// to every configured command, otherwise only to the named one. Returns the
-// names it changed — commands already marked remote are left out, so an empty
-// slice means there was nothing to do.
+// to every configured command except autofix ones: a formatter rewrites files,
+// and on a sidecar those edits never reach the local working tree, so sweeping
+// them in would break the thing silently. Naming one explicitly still marks it,
+// for the caller who means it. Returns the names it changed — commands already
+// marked remote are left out, so an empty slice means there was nothing to do.
 func (c *ProjectConfig) MarkCommandRemote(name string) ([]string, error) {
 	if c == nil {
 		return nil, fmt.Errorf("%w: %q", ErrNoSuchCommand, name)
@@ -136,6 +138,9 @@ func (c *ProjectConfig) MarkCommandRemote(name string) ([]string, error) {
 	}
 	var changed []string
 	for i := range c.Commands {
+		if name == "" && c.Commands[i].Role == RoleAutofix {
+			continue
+		}
 		if name != "" && c.Commands[i].Name != name {
 			continue
 		}

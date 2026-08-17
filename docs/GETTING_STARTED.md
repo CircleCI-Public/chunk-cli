@@ -214,8 +214,9 @@ chunk sidecar create --name my-sidecar
 chunk sidecar use <id>
 
 # Mark which commands belong on the sidecar (once per project)
-chunk validate --mark-remote        # every configured command
-chunk validate --mark-remote test   # or just one
+chunk validate --list               # tags each command [local|remote, role]
+chunk validate --mark-remote        # all but autofix commands (formatters stay local)
+chunk validate --mark-remote test   # or just one, autofix included if you name it
 
 # Dev loop: sync then validate
 chunk sidecar sync           # push local changes to sidecar
@@ -226,6 +227,8 @@ chunk validate --remote      # or force every command onto the sidecar
 chunk sidecar current        # show which sidecar is active
 chunk sidecar forget         # unset the active sidecar (does not delete it)
 ```
+
+Per-command routing only applies while `validation.sidecarImage` is unset. Once you record a snapshot ID there, `chunk validate` sends every command to the sidecar regardless of its `remote` flag — run formatters directly if you need them rewriting local files.
 
 The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project>/` (default: `~/.local/share/chunk/<project>/`) — never inside the repo. The project key is derived from the git root path.
 

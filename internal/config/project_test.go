@@ -99,7 +99,8 @@ func TestMarkCommandRemote(t *testing.T) {
 			Commands: []Command{
 				{Name: CmdInstall, Run: "npm ci"},
 				{Name: "test", Run: "npm test", Role: RoleGate},
-				{Name: "format", Run: "npm run format", Role: RoleAutofix, Remote: true},
+				{Name: "format", Run: "npm run format", Role: RoleAutofix},
+				{Name: "lint", Run: "npm run lint", Remote: true},
 			},
 		}
 	}
@@ -110,25 +111,34 @@ func TestMarkCommandRemote(t *testing.T) {
 		assert.NilError(t, err)
 		assert.DeepEqual(t, changed, []string{"test"})
 		assert.Assert(t, cfg.FindCommand("test").Remote)
-		// Role is irrelevant here, unlike sidecar setup, but untargeted commands
-		// still keep whatever they had.
+		// Untargeted commands keep whatever they had.
 		assert.Assert(t, !cfg.FindCommand(CmdInstall).Remote)
 	})
 
-	t.Run("empty name marks every command", func(t *testing.T) {
+	// A named autofix command is marked: the caller asked for that one by name.
+	t.Run("named autofix command", func(t *testing.T) {
+		cfg := newCfg()
+		changed, err := cfg.MarkCommandRemote("format")
+		assert.NilError(t, err)
+		assert.DeepEqual(t, changed, []string{"format"})
+		assert.Assert(t, cfg.FindCommand("format").Remote)
+	})
+
+	// The unnamed sweep skips autofix commands. A formatter running on the sidecar
+	// rewrites files there and the edits never come back to the working tree.
+	t.Run("empty name skips autofix", func(t *testing.T) {
 		cfg := newCfg()
 		changed, err := cfg.MarkCommandRemote("")
 		assert.NilError(t, err)
-		// "format" is already remote, so it is not reported as changed.
+		// "lint" is already remote, so it is not reported as changed.
 		assert.DeepEqual(t, changed, []string{CmdInstall, "test"})
-		for _, c := range cfg.Commands {
-			assert.Assert(t, c.Remote, c.Name)
-		}
+		assert.Assert(t, !cfg.FindCommand("format").Remote)
+		assert.Assert(t, cfg.FindCommand("lint").Remote)
 	})
 
 	t.Run("already remote reports no change", func(t *testing.T) {
 		cfg := newCfg()
-		changed, err := cfg.MarkCommandRemote("format")
+		changed, err := cfg.MarkCommandRemote("lint")
 		assert.NilError(t, err)
 		assert.Equal(t, len(changed), 0)
 	})

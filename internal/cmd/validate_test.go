@@ -589,6 +589,17 @@ func TestSidecarAutoNameNoSessionLongBranch(t *testing.T) {
 }
 
 // runMarkRemoteCLI runs "validate --mark-remote" against workDir.
+func runValidateListCLI(t *testing.T, workDir string) (stdout, stderr string, err error) {
+	t.Helper()
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--list", "--project", workDir})
+	err = root.Execute()
+	return outBuf.String(), errBuf.String(), err
+}
+
 func runMarkRemoteCLI(t *testing.T, workDir string, extraArgs ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
@@ -686,4 +697,55 @@ func TestValidateMarkRemoteRefusesMalformedConfig(t *testing.T) {
 	data, readErr := os.ReadFile(path)
 	assert.NilError(t, readErr)
 	assert.Equal(t, string(data), original)
+}
+
+// The unnamed sweep must leave formatters local: on the sidecar they rewrite
+// files that never come back to the working tree. The skills tell agents to run
+// the bare form, so this is the path that has to be safe.
+func TestValidateMarkRemoteSkipsAutofix(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "test", Run: "task test", Role: config.RoleGate},
+			{Name: "format", Run: "task fmt", Role: config.RoleAutofix},
+		},
+	}))
+
+	_, stderr, err := runMarkRemoteCLI(t, dir)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(stderr, "left local"), "skip should be reported: %q", stderr)
+	assert.Assert(t, strings.Contains(stderr, "format"), "got: %q", stderr)
+
+	cfg, err := config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Assert(t, cfg.FindCommand("test").Remote)
+	assert.Assert(t, !cfg.FindCommand("format").Remote)
+
+	// Naming it overrides the skip.
+	_, _, err = runMarkRemoteCLI(t, dir, "format")
+	assert.NilError(t, err)
+	cfg, err = config.LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Assert(t, cfg.FindCommand("format").Remote)
+}
+
+// --list has to show what the skills tell agents to inspect before marking.
+func TestValidateListShowsRoutingAndRole(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "test", Run: "task test", Role: config.RoleGate, Remote: true},
+			{Name: "format", Run: "task fmt", Role: config.RoleAutofix},
+			{Name: "bare", Run: "echo hi"},
+		},
+	}))
+
+	stdout, stderr, err := runValidateListCLI(t, dir)
+	assert.NilError(t, err)
+	out := stdout + stderr
+	for _, want := range []string{"test [remote, gate]", "format [local, autofix]", "bare [local]"} {
+		assert.Assert(t, strings.Contains(out, want), "missing %q in:\n%s", want, out)
+	}
 }

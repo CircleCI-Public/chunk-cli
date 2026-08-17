@@ -173,11 +173,20 @@ chunk
 - `config set` user keys: `model`, `telemetry`. Project keys (`.chunk/config.json`):
   `orgID`, `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
 - `validate --mark-remote` sets `remote: true` on commands in `.chunk/config.json`
-  and exits without running anything. With a `[name]` it marks that one command,
-  without it every configured command. Commands already marked are reported as no
+  and exits without running anything. With a `[name]` it marks that one command;
+  without it every configured command **except `role: autofix`** ones, which it
+  names as skipped — a formatter that runs on the sidecar rewrites files there and
+  the edits never reach the local working tree. Naming an autofix command marks it
+  anyway, for the caller who means it. Commands already marked are reported as no
   change. `chunk sidecar setup` marks install and gate commands automatically, so
   `--mark-remote` is for the rest: a sidecar set up by hand, or a command whose
   role does not qualify. Unmarking is still a hand edit of the config.
+- Per-command `remote` routing only decides anything while
+  `validation.sidecarImage` is unset. Once it is set, `validate` sends **every**
+  command to the sidecar (`allRemote`), marked or not, exactly as `--remote` does.
+  Since `sidecar snapshot create` is normally followed by recording that key, a
+  project on a snapshot runs everything remotely and `remote: true` becomes a
+  no-op.
 - Telemetry is anonymous and opt-out. It's disabled by the
   `CHUNK_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
   variables (first match wins, in that order), or `chunk config set telemetry false`.

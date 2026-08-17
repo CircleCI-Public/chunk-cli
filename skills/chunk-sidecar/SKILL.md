@@ -143,17 +143,24 @@ If `chunk auth status` reports the CircleCI source as `Environment`, do **not** 
 Once per project, after the sidecar is working, mark the commands that should run
 on it. A sidecar being up routes nothing on its own: `chunk sidecar setup` marks
 only `install` and gate-role commands, and a sidecar set up by hand has none
-marked. Check with `chunk validate --list`, then:
+marked. `chunk validate --list` tags each command `[local|remote, role]`, so read
+it first, then:
 
 ```bash
-chunk validate --mark-remote           # mark every configured command
+chunk validate --mark-remote           # mark all but autofix commands
 chunk validate --mark-remote test      # or one at a time
 ```
 
-Leave autofix commands (formatters, codegen) local — their edits belong in the
-local working tree. Already-marked commands report no change, so re-running is
-safe. This persists in `.chunk/config.json`, so it survives snapshots and future
-sessions.
+The bare form deliberately skips `autofix` commands (formatters, codegen) and
+prints which ones it left alone — those rewrite files, and on the sidecar the edits
+never reach the local working tree. Mark one by name only if the user wants that.
+Already-marked commands report no change, so re-running is safe, and the flag
+persists in `.chunk/config.json` across sessions.
+
+**Caveat:** this routing only applies while `validation.sidecarImage` is unset.
+Once a snapshot ID is recorded there, `chunk validate` sends every command to the
+sidecar regardless of marking or role — the same as `--remote`. On such a project,
+run formatters directly instead of through `chunk validate`.
 
 Then, for each round of edits:
 

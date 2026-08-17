@@ -104,6 +104,16 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 		}
 	}
 
+	// Collected before the mark, which reports only what it changed.
+	var skipped []string
+	if name == "" {
+		for _, c := range cfg.Commands {
+			if c.Role == config.RoleAutofix && !c.Remote {
+				skipped = append(skipped, c.Name)
+			}
+		}
+	}
+
 	changed, err := cfg.MarkCommandRemote(name)
 	if err != nil {
 		return &userError{
@@ -113,7 +123,8 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 		}
 	}
 	if len(changed) == 0 {
-		streams.ErrPrintf("%s\n", ui.Dim("Already marked remote; nothing to change."))
+		streams.ErrPrintf("%s\n", ui.Dim("Nothing to change."))
+		reportSkippedAutofix(skipped, streams)
 		return nil
 	}
 	if err := config.SaveProjectConfig(workDir, cfg); err != nil {
@@ -122,7 +133,19 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 
 	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Marked remote: %s", strings.Join(changed, ", "))))
 	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("now runs these on the sidecar"))
+	reportSkippedAutofix(skipped, streams)
 	return nil
+}
+
+// reportSkippedAutofix says which autofix commands the sweep left alone, so the
+// omission reads as deliberate rather than as a command that got missed.
+func reportSkippedAutofix(skipped []string, streams iostream.Streams) {
+	if len(skipped) == 0 {
+		return
+	}
+	streams.ErrPrintf("  %s\n", ui.Dim(fmt.Sprintf(
+		"left local (autofix rewrites files): %s", strings.Join(skipped, ", "))))
+	streams.ErrPrintf("  %s\n", ui.Dim("mark one by name to override"))
 }
 
 type validateOpts struct {
