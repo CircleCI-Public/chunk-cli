@@ -399,8 +399,8 @@ func TestMergePreservesUserEntriesInChunkStopGroup(t *testing.T) {
 }
 
 // Re-running init over already-merged settings is a no-op. The fixture carries a
-// Stop hook as well as PreToolUse so mergeStopHooks is covered too — replacing
-// chunk's entry with an identical one must not register as a change.
+// Stop hook as well as PreToolUse so both halves of mergeHooks are covered —
+// replacing chunk's entry with an identical one must not register as a change.
 func TestMergeNoChangeWhenAlreadyMerged(t *testing.T) {
 	settings := []byte(`{
 		"$schema": "https://json.schemastore.org/claude-code-settings.json",
@@ -651,7 +651,7 @@ func TestMergeCodexPreservesUserStopHooks(t *testing.T) {
 	}
 }
 
-// The Codex path shares mergeStopHooks, so it keeps user entries that sit in the
+// The Codex path shares mergeHooks, so it keeps user entries that sit in the
 // same group as chunk's own entry too.
 func TestMergeCodexPreservesUserEntriesInChunkStopGroup(t *testing.T) {
 	existing := []byte(`{

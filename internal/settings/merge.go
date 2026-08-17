@@ -76,13 +76,11 @@ func Merge(existing, generated []byte) (*MergeResult, error) {
 	// Union permissions.allow.
 	mergePermissionsAllow(merged, generatedMap)
 
-	// Merge hooks.PreToolUse — replace the chunk-managed hook group by matcher.
+	// Merge hooks.PreToolUse and hooks.Stop — replace what chunk owns, keep the
+	// rest. Without the Stop half a repo that already had a settings.json keeps
+	// its commit hooks but never gets the Stop hook, so validation stops running
+	// at session end.
 	mergeHooks(merged, generatedMap)
-
-	// Merge hooks.Stop — replace the chunk-managed group by command. Without
-	// this a repo that already had a settings.json keeps its commit hooks but
-	// never gets the Stop hook, so validation stops running at session end.
-	mergeStopHooks(merged, generatedMap)
 
 	mergedBytes, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
@@ -144,48 +142,78 @@ func mergePermissionsAllow(merged, generated map[string]interface{}) {
 	mergedPerms["allow"] = result
 }
 
-// mergeHooks replaces the chunk-managed hook group (matched by CommitMatcher)
-// within PreToolUse, preserving all other hook types and groups.
+// mergeHooks installs chunk's hooks into merged, preserving every hook type,
+// group, and entry chunk does not own.
+//
+// The two hook types chunk writes are owned at different granularities, so they
+// merge differently:
+//
+//   - PreToolUse: chunk owns a whole group, identified by CommitMatcher, so the
+//     group is replaced outright. The legacy matcher counts as a match too, so
+//     settings written by older versions migrate in place.
+//   - Stop: chunk owns a single entry, identified by StopCommand. A user may
+//     have added their own entries to the group holding it, so the entry is
+//     replaced where it sits and its siblings are left alone — replacing the
+//     enclosing group would silently delete them. Only when no chunk entry
+//     exists anywhere is chunk's own group appended.
 func mergeHooks(merged, generated map[string]interface{}) {
 	genHooks, ok := generated["hooks"].(map[string]interface{})
 	if !ok {
 		return
 	}
-	genPreToolUse, ok := genHooks["PreToolUse"].([]interface{})
-	if !ok || len(genPreToolUse) == 0 {
-		return
+
+	// PreToolUse: swap chunk's group for the one already there.
+	genPreToolUse, _ := genHooks["PreToolUse"].([]interface{})
+	if i := slices.IndexFunc(genPreToolUse, isChunkCommitGroup); i >= 0 {
+		mergedHooks := hooksMap(merged)
+		mergedPreToolUse, _ := mergedHooks["PreToolUse"].([]interface{})
+		mergedHooks["PreToolUse"] = replaceOrAppend(mergedPreToolUse, isChunkCommitGroup, genPreToolUse[i])
 	}
 
-	// Find the chunk-managed group in generated hooks.
-	var chunkGroup interface{}
-	for _, g := range genPreToolUse {
-		group, isMap := g.(map[string]interface{})
-		if !isMap {
+	// Stop: find chunk's entry in the generated hooks, and the group holding it.
+	genStop, _ := genHooks["Stop"].([]interface{})
+	var genGroup, genEntry interface{}
+	for _, g := range genStop {
+		_, entries, isGroup := stopGroupEntries(g)
+		if !isGroup {
 			continue
 		}
-		if matcher, _ := group["matcher"].(string); matcher == CommitMatcher {
-			chunkGroup = g
+		if i := slices.IndexFunc(entries, isChunkStopEntry); i >= 0 {
+			genGroup, genEntry = g, entries[i]
 			break
 		}
 	}
-	if chunkGroup == nil {
+	if genEntry == nil {
 		return
 	}
 
-	// Ensure merged has hooks.PreToolUse.
-	mergedHooks, ok := merged["hooks"].(map[string]interface{})
-	if !ok {
-		mergedHooks = map[string]interface{}{}
-		merged["hooks"] = mergedHooks
+	// Update chunk's entry wherever it already lives, keeping the user's own
+	// entries in that group intact.
+	mergedHooks := hooksMap(merged)
+	mergedStop, _ := mergedHooks["Stop"].([]interface{})
+	for _, g := range mergedStop {
+		group, entries, isGroup := stopGroupEntries(g)
+		if !isGroup || !slices.ContainsFunc(entries, isChunkStopEntry) {
+			continue
+		}
+		group["hooks"] = replaceOrAppend(entries, isChunkStopEntry, genEntry)
+		mergedHooks["Stop"] = mergedStop
+		return
 	}
 
-	mergedPreToolUse, ok := mergedHooks["PreToolUse"].([]interface{})
-	if !ok {
-		mergedPreToolUse = []interface{}{}
-	}
+	mergedHooks["Stop"] = append(mergedStop, genGroup)
+}
 
-	// Replace existing group with same matcher (or legacy matcher), or append.
-	mergedHooks["PreToolUse"] = replaceOrAppend(mergedPreToolUse, isChunkCommitGroup, chunkGroup)
+// hooksMap returns the "hooks" object in settings, creating it when absent.
+// Created lazily: adding an empty hooks object to settings that have none would
+// count as a change and prompt the user over nothing.
+func hooksMap(settings map[string]interface{}) map[string]interface{} {
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		hooks = map[string]interface{}{}
+		settings["hooks"] = hooks
+	}
+	return hooks
 }
 
 // isChunkCommitGroup reports whether a PreToolUse group is the chunk-managed
@@ -197,67 +225,6 @@ func isChunkCommitGroup(g interface{}) bool {
 	}
 	matcher, _ := group["matcher"].(string)
 	return matcher == CommitMatcher || matcher == legacyCommitMatcher
-}
-
-// mergeStopHooks installs chunk's Stop hook entry into hooks.Stop, preserving
-// every entry chunk does not own.
-//
-// Chunk owns a single entry (identified by StopCommand), not a whole group. A
-// user may have added their own entries to that same group, so the entry is
-// replaced in place and its siblings are left alone — replacing the enclosing
-// group would silently delete them. Only when no chunk entry exists anywhere is
-// chunk's own group appended.
-func mergeStopHooks(merged, generated map[string]interface{}) {
-	genHooks, ok := generated["hooks"].(map[string]interface{})
-	if !ok {
-		return
-	}
-	genStop, ok := genHooks["Stop"].([]interface{})
-	if !ok || len(genStop) == 0 {
-		return
-	}
-
-	// Find chunk's group in the generated Stop hooks, and the entry within it.
-	var chunkGroup, chunkEntry interface{}
-	for _, g := range genStop {
-		_, entries, isGroup := stopGroupEntries(g)
-		if !isGroup {
-			continue
-		}
-		if i := slices.IndexFunc(entries, isChunkStopEntry); i >= 0 {
-			chunkGroup, chunkEntry = g, entries[i]
-			break
-		}
-	}
-	if chunkEntry == nil {
-		return
-	}
-
-	// Ensure merged has hooks.Stop.
-	mergedHooks, ok := merged["hooks"].(map[string]interface{})
-	if !ok {
-		mergedHooks = map[string]interface{}{}
-		merged["hooks"] = mergedHooks
-	}
-
-	mergedStop, ok := mergedHooks["Stop"].([]interface{})
-	if !ok {
-		mergedStop = []interface{}{}
-	}
-
-	// Update chunk's entry wherever it already lives, keeping the user's own
-	// entries in that group intact.
-	for _, g := range mergedStop {
-		group, entries, isGroup := stopGroupEntries(g)
-		if !isGroup || !slices.ContainsFunc(entries, isChunkStopEntry) {
-			continue
-		}
-		group["hooks"] = replaceOrAppend(entries, isChunkStopEntry, chunkEntry)
-		mergedHooks["Stop"] = mergedStop
-		return
-	}
-
-	mergedHooks["Stop"] = append(mergedStop, chunkGroup)
 }
 
 // stopGroupEntries returns a Stop hook group's map and its list of hook entries.
@@ -314,7 +281,6 @@ func MergeCodex(existing, generated []byte) (*MergeResult, error) {
 	}
 
 	mergeHooks(existingMap, generatedMap)
-	mergeStopHooks(existingMap, generatedMap)
 
 	mergedBytes, err := json.MarshalIndent(existingMap, "", "  ")
 	if err != nil {
