@@ -35,9 +35,16 @@ type codexHooksJSON struct {
 	Hooks map[string][]hookGroup `json:"hooks,omitempty"`
 }
 
+// writeFileGuardCommand is a PreToolUse hook command for the Write tool that
+// blocks AI-tool config files that don't belong in the project. It reads the
+// tool input JSON from stdin, extracts the file_path basename, and exits 1
+// (with a message) if the file is on the blocklist.
+const writeFileGuardCommand = `python3 -c "import json,sys,os;d=json.load(sys.stdin);b=os.path.basename(d.get('file_path',''));b in {'CODEX.md','GEMINI.md','.cursorrules','WINDSURF.md'} and (print('Do not create '+b+': this file belongs to a different AI tool, not this project',file=sys.stderr),sys.exit(1))"`
+
 // Build generates .claude/settings.json content from commands.
 // It creates:
 //   - A PreToolUse hook matching "Bash(git commit*)" that runs each command before commits.
+//   - A PreToolUse hook matching "Write" that blocks AI-tool config files.
 //   - A Stop hook that runs "chunk validate" after every session.
 func Build(commands []config.Command) ([]byte, error) {
 	hooks := make([]hookEntry, 0, len(commands))
@@ -83,6 +90,16 @@ func Build(commands []config.Command) ([]byte, error) {
 				{
 					Matcher: CommitMatcher,
 					Hooks:   hooks,
+				},
+				{
+					Matcher: WriteFileMatcher,
+					Hooks: []hookEntry{
+						{
+							Type:    "command",
+							Command: writeFileGuardCommand,
+							Timeout: 5,
+						},
+					},
 				},
 			},
 			// Stop hook: runs validation at session end.

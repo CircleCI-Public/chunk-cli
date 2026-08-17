@@ -9,22 +9,35 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash(git commit*)",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
+            "if": "Bash(git commit*)",
             "command": "cd ${CLAUDE_PROJECT_DIR:-.} && task fmt",
             "timeout": 30
           },
           {
             "type": "command",
+            "if": "Bash(git commit*)",
             "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint",
             "timeout": 60
           },
           {
             "type": "command",
+            "if": "Bash(git commit*)",
             "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test",
             "timeout": 300
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json,sys,os;d=json.load(sys.stdin);b=os.path.basename(d.get('file_path',''));b in {'CODEX.md','GEMINI.md','.cursorrules','WINDSURF.md'} and (print('Do not create '+b+': this file belongs to a different AI tool, not this project',file=sys.stderr),sys.exit(1))\"",
+            "timeout": 5
           }
         ]
       }

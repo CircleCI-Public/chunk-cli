@@ -10,16 +10,20 @@ import (
 	udiff "github.com/aymanbagabas/go-udiff"
 )
 
-// CommitMatcher is the PreToolUse hook group matcher that chunk manages.
-// It targets the Bash tool by name; per Claude Code's hook spec, matcher
-// filters only on tool name. Command-content filtering is done via CommitIfFilter
-// on individual hook entries.
+// CommitMatcher is the PreToolUse hook group matcher that chunk manages for
+// commit checks. It targets the Bash tool by name; per Claude Code's hook spec,
+// matcher filters only on tool name. Command-content filtering is done via
+// CommitIfFilter on individual hook entries.
 const CommitMatcher = "Bash"
 
 // CommitIfFilter is the per-entry "if" condition that restricts hook entries
 // to git commit commands. The Bash(pattern) syntax is evaluated as a glob
 // against the bash command string, not the tool name.
 const CommitIfFilter = "Bash(git commit*)"
+
+// WriteFileMatcher is the PreToolUse hook group matcher for the Write tool.
+// The write-guard hook blocks AI-tool config files that don't belong in this project.
+const WriteFileMatcher = "Write"
 
 // legacyCommitMatcher is the old group matcher value written by earlier versions
 // of chunk init. Recognised during merge so existing settings can be migrated
@@ -152,6 +156,7 @@ func mergePermissionsAllow(merged, generated map[string]interface{}) {
 //   - PreToolUse: entries carrying CommitIfFilter, plus every entry of a group
 //     still on the legacy matcher — older versions wrote that group whole and
 //     its entries have no "if" to recognise them by.
+//   - PreToolUse: every entry in the Write matcher group (chunk owns all of them).
 //   - Stop: entries whose command is StopCommand.
 func mergeHooks(merged, generated map[string]interface{}) {
 	genHooks, ok := generated["hooks"].(map[string]interface{})
@@ -159,6 +164,7 @@ func mergeHooks(merged, generated map[string]interface{}) {
 		return
 	}
 	mergeHookType(merged, genHooks, "PreToolUse", ownsCommitEntry, isChunkCommitGroup)
+	mergeHookType(merged, genHooks, "PreToolUse", ownsWriteEntry, isChunkWriteGroup)
 	mergeHookType(merged, genHooks, "Stop", ownsStopEntry, nil)
 }
 
@@ -298,6 +304,20 @@ func hooksMap(settings map[string]interface{}) map[string]interface{} {
 func isChunkCommitGroup(group map[string]interface{}) bool {
 	matcher, _ := group["matcher"].(string)
 	return matcher == CommitMatcher || matcher == legacyCommitMatcher
+}
+
+// isChunkWriteGroup reports whether a PreToolUse group is the one chunk writes
+// its Write guard hook into.
+func isChunkWriteGroup(group map[string]interface{}) bool {
+	matcher, _ := group["matcher"].(string)
+	return matcher == WriteFileMatcher
+}
+
+// ownsWriteEntry reports whether a PreToolUse entry belongs to chunk's Write
+// guard group. Chunk owns all entries in the Write matcher group.
+func ownsWriteEntry(group map[string]interface{}, _ interface{}) bool {
+	matcher, _ := group["matcher"].(string)
+	return matcher == WriteFileMatcher
 }
 
 // groupEntries returns a hook group's map and its list of hook entries.

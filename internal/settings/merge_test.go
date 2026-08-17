@@ -221,6 +221,87 @@ func TestMergePreservesUserEntriesInChunkCommitGroup(t *testing.T) {
 	assert.Assert(t, !again.Changed, "expected a second merge to be a no-op, got:\n%s", Diff(again.Original, again.Merged))
 }
 
+func TestMergeHooksBothChunkGroupsReplaced(t *testing.T) {
+	// Existing settings have old Bash and Write groups; generated has updated versions.
+	// Both should be replaced in place, no duplicates.
+	existing := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "old-bash", "timeout": 30}]},
+				{"matcher": "Write", "hooks": [{"type": "command", "command": "old-write", "timeout": 5}]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "new-bash", "timeout": 60}]},
+				{"matcher": "Write", "hooks": [{"type": "command", "command": "new-write", "timeout": 5}]}
+			]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	preToolUse := hooks["PreToolUse"].([]interface{})
+	assert.Equal(t, len(preToolUse), 2, "expected exactly 2 groups (no duplicates)")
+
+	for _, g := range preToolUse {
+		group := g.(map[string]interface{})
+		entries := group["hooks"].([]interface{})
+		entry := entries[0].(map[string]interface{})
+		switch group["matcher"] {
+		case "Bash":
+			assert.Equal(t, entry["command"], "new-bash")
+		case "Write":
+			assert.Equal(t, entry["command"], "new-write")
+		}
+	}
+}
+
+func TestMergeHooksWriteGroupAppendedWhenMissing(t *testing.T) {
+	// Existing settings have only a Bash group; generated adds a Write group.
+	// The Write group should be appended.
+	existing := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "bash-cmd", "timeout": 60}]}
+			]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "bash-cmd", "timeout": 60}]},
+				{"matcher": "Write", "hooks": [{"type": "command", "command": "write-guard", "timeout": 5}]}
+			]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+
+	var merged map[string]interface{}
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+
+	hooks := merged["hooks"].(map[string]interface{})
+	preToolUse := hooks["PreToolUse"].([]interface{})
+	assert.Equal(t, len(preToolUse), 2)
+
+	group1 := preToolUse[1].(map[string]interface{})
+	assert.Equal(t, group1["matcher"], "Write")
+	entries := group1["hooks"].([]interface{})
+	entry := entries[0].(map[string]interface{})
+	assert.Equal(t, entry["command"], "write-guard")
+}
+
 // Duplicate chunk entries left behind by an earlier version collapse to one
 // instead of surviving every merge and running validation twice per session.
 func TestMergeCollapsesDuplicateChunkEntries(t *testing.T) {
