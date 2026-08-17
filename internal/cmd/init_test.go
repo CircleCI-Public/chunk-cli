@@ -18,6 +18,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/settings"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -31,6 +32,30 @@ func fakeConfirmErr(_ string, _ bool) (bool, error) {
 func testStreams() (iostream.Streams, *bytes.Buffer, *bytes.Buffer) {
 	var out, errOut bytes.Buffer
 	return iostream.Streams{Out: &out, Err: &errOut}, &out, &errOut
+}
+
+// mergedHookCommands flattens the hook entry commands across every group of one
+// hook type, so a test can assert on what actually runs regardless of grouping.
+func mergedHookCommands(groups interface{}) []string {
+	list, _ := groups.([]interface{})
+	var commands []string
+	for _, g := range list {
+		group, ok := g.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		entries, _ := group["hooks"].([]interface{})
+		for _, e := range entries {
+			entry, ok := e.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if cmd, ok := entry["command"].(string); ok {
+				commands = append(commands, cmd)
+			}
+		}
+	}
+	return commands
 }
 
 func TestWriteSettingsNewFile(t *testing.T) {
@@ -93,8 +118,19 @@ func TestWriteSettingsExistingMergeApplied(t *testing.T) {
 	assert.Assert(t, slices.Contains(allowStrs, "Read"))
 	assert.Assert(t, slices.Contains(allowStrs, "Bash(chunk:*)"))
 
-	// Hooks added.
-	assert.Assert(t, merged["hooks"] != nil)
+	// Hooks added — both kinds. "hooks != nil" would pass with only the commit
+	// hooks merged in, which is exactly the state that left repos looking
+	// configured while nothing validated at session end.
+	hooks, ok := merged["hooks"].(map[string]interface{})
+	assert.Assert(t, ok, "expected a hooks object, got: %s", data)
+
+	commitCommands := mergedHookCommands(hooks["PreToolUse"])
+	assert.Assert(t, slices.ContainsFunc(commitCommands, func(c string) bool {
+		return strings.Contains(c, "go test ./...")
+	}), "expected the commit hook to run the configured command, got: %v", commitCommands)
+
+	stopCommands := mergedHookCommands(hooks["Stop"])
+	assert.DeepEqual(t, stopCommands, []string{settings.StopCommand})
 
 	// No example file written.
 	_, statErr := os.Stat(filepath.Join(claudeDir, "settings.example.json"))
