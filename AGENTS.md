@@ -1,6 +1,8 @@
 # AGENTS.md
 
-`chunk` is a Go CLI (built with cobra) that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.chunk/context/` for AI coding agents to pick up automatically.
+`chunk` is a Go CLI (built with cobra) for inner loop validation. Its primary capability is **sidecars** — ephemeral Linux environments on CircleCI that a developer's working tree is synced to so quality checks (test, lint, format) run there instead of locally, catching environment-specific failures before they reach CI.
+
+It also provides `build-prompt`, a secondary tool that mines PR review comments from GitHub, analyzes them with Claude, and outputs a markdown prompt file tuned to a team's review patterns. Generated context goes in `.chunk/context/` for AI coding agents to pick up automatically.
 
 ## Common Commands
 
@@ -16,7 +18,7 @@ task fmt                # Format code
 
 Read these when working in the relevant area:
 
-- **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** — user guide: auth, init, build-prompt, skills, sidecar workflow
+- **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** — user guide: auth, init, sidecar setup, dev loop, skills, build-prompt
 - **[docs/SKILLS.md](docs/SKILLS.md)** — skills reference: installing and using agent skills
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — module layering, dependency rules, data flow, environment variables
 - **[docs/CLI.md](docs/CLI.md)** — complete command tree, flag conventions, behavior decisions

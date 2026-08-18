@@ -1,17 +1,14 @@
 # chunk
 
-CLI for [Chunk](https://chunk.ai/) — inner loop validation and AI-ready code review context for software teams building with AI agents. The chunk CLI currently has two main capabilities:
+CLI for [Chunk](https://chunk.ai/) — inner loop validation for software teams building with AI agents.
 
-- **Chunk sidecars** — lightweight microVM environments that run alongside your AI agent and validate changes in the inner loop before they reach CI
-- **build-prompt** — mines PR review comments from your GitHub org and uses Claude to generate a context file tuned to your team's code review standards
+**Chunk sidecars** are lightweight microVM environments that run alongside your AI agent and validate changes in the inner loop, before they reach CI.
 
 ## Why chunk?
 
 As AI churns out more and more code, CI pipelines get flooded with commits that haven't been well validated. Failures surface late, forcing expensive re-prompting cycles and slowing delivery.
 
 Chunk sidecars fix this by running lightweight microbuilds to validate inside the inner loop — while the agent is still working — ensuring basic checks pass before anything hits CI. Save the CI for the integration and release work that gets code to production.
-
-The build-prompt command complements this by capturing your team's real review patterns and turning them into agent context, so the code agents write reflects your standards from the start.
 
 ## Requirements
 
@@ -42,6 +39,11 @@ chunk validate --list       # list configured commands
 ### Agent Onboarding for Sidecars (Preferred method)
 
 Chunk init will install skills for working with Chunk sidecars. After the init, start a claude session and run `/chunk-sidecar` and your agent will create a sidecar and configure it for use running tests and creating snapshots of good Chunk sidecars.
+
+```bash
+# Install or update the agent skills (Claude Code, Codex, Cursor)
+chunk skill install
+```
 
 ### Manual setup
 
@@ -106,9 +108,9 @@ chunk sidecar create --name new-sidecar --image <snapshot-id>
 
 **Note:** `snapshot create` consumes the source sidecar — it is deleted once the snapshot is captured and cannot be reused. To resume work, launch a new sidecar from the snapshot with `chunk sidecar create --image <snapshot-id>`. Use `chunk sidecar snapshot list` to look up snapshot IDs for your org.
 
-### Context Generation
+## Also included: team review context
 
-Generate a review context prompt from your org's GitHub PR comments:
+An additional tool, independent of the sidecar workflow. `chunk build-prompt` mines PR review comments from your GitHub org and uses Claude to generate a context file tuned to your team's review standards, so the code agents write reflects those standards from the start.
 
 ```bash
 # From inside a git repo — org and repos are auto-detected
@@ -118,10 +120,9 @@ chunk build-prompt
 chunk build-prompt --org myorg --repos api,backend --top 10
 
 # Output lands in .chunk/context/review-prompt.md
-
-# Install review skills for Claude Code, Codex, and Cursor
-chunk skill install
 ```
+
+See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md#team-review-context) for details.
 
 ## Commands
 
@@ -149,7 +150,7 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 
 | Doc | Purpose |
 |-----|---------|
-| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Step-by-step guide: auth, init, build-prompt, skills, sidecar workflow |
+| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | Step-by-step guide: auth, init, sidecar setup, dev loop, skills |
 | [docs/SKILLS.md](docs/SKILLS.md) | Skills reference: installing, triggering, and troubleshooting agent skills |
 | [docs/CLI.md](docs/CLI.md) | Full command and flag reference |
 | [docs/HOOKS.md](docs/HOOKS.md) | Pre-commit and Stop hook configuration |
