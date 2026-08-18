@@ -589,7 +589,7 @@ func TestUpdate_initialSelectionPicksMostRecent(t *testing.T) {
 	// On first entry, New() has no selection. Even when a local runner (id="")
 	// is in the list with older activity, the freshest sidecar must be selected.
 	now := time.Now()
-	m := New(nil)
+	m := New(nil, false)
 
 	next, _ := m.Update(dataMsg{sidecars: []sidecarInfo{
 		{id: "newest", lastActivity: now.Add(-1 * time.Minute)},

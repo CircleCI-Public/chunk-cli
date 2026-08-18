@@ -161,8 +161,11 @@ type Model struct {
 // always falls back to index 0 — the most recently active sidecar.
 const noSelection = "\x00"
 
-// New creates a Model ready to run.
-func New(projects []ProjectEntry) Model {
+// New creates a Model ready to run. When watchAll is true, each poll also
+// checks for projects that have saved a sidecar since the dashboard started
+// and adds them, so a sidecar started after `chunk watch --all` launches
+// still shows up without a restart.
+func New(projects []ProjectEntry, watchAll bool) Model {
 	return Model{
 		projects:      projects,
 		offsets:       make([]int64, len(projects)),
@@ -170,17 +173,7 @@ func New(projects []ProjectEntry) Model {
 		headRefs:      make([]string, len(projects)),
 		toggledInvocs: make(map[time.Time]bool),
 		selectedID:    noSelection,
-// New creates a Model ready to run. When watchAll is true, each poll also
-// checks for projects that have saved a sidecar since the dashboard started
-// and adds them, so a sidecar started after `chunk watch --all` launches
-// still shows up without a restart.
-func New(projects []ProjectEntry, watchAll bool) Model {
-	return Model{
-		projects: projects,
-		offsets:  make([]int64, len(projects)),
-		branches: make([]string, len(projects)),
-		headRefs: make([]string, len(projects)),
-		watchAll: watchAll,
+		watchAll:      watchAll,
 	}
 }
 
