@@ -83,7 +83,7 @@ func newWatchCmd() *cobra.Command {
 				})
 			}
 
-			m := watch.New(entries)
+			m := watch.New(entries, all)
 			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
 			_, err = p.Run()
 			return err
