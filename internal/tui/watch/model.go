@@ -86,11 +86,13 @@ type ProjectEntry struct {
 	ProjectRoot string
 }
 
-// sidecarInfo holds display state for one sidecar.
+// sidecarInfo holds display state for one sidecar or the local runner.
+// id == "" identifies the local (non-sidecar) runner for a project.
 type sidecarInfo struct {
 	id            string
 	name          string
 	projectName   string
+	projectIdx    int       // index into Model.projects
 	snapshotName  string    // name of the active snapshot for this project, if any
 	fileMtime     time.Time // mtime of the sidecar state file (fallback when no events yet)
 	lastSyncedRef string
@@ -98,6 +100,7 @@ type sidecarInfo struct {
 	running       bool
 	lastActivity  time.Time
 	lastOp        eventlog.Op
+	lastLevel     string // level of the most recent event ("done", "error", etc.)
 }
 
 type tickMsg struct{}
@@ -105,7 +108,7 @@ type spinMsg struct{}
 
 type dataMsg struct {
 	sidecars []sidecarInfo
-	events   [][]eventlog.Event
+	events   [][]eventlog.Event // per-project; index matches Model.projects
 	offsets  []int64
 	branches []string
 	headRefs []string
@@ -121,7 +124,7 @@ type Model struct {
 	sidecars    []sidecarInfo
 	selectedIdx int
 	selectedID  string             // id of the selected sidecar, so selection survives reordering
-	events      [][]eventlog.Event // per project, capped independently
+	events      [][]eventlog.Event // per-project; index matches projects
 
 	width      int
 	height     int
@@ -216,8 +219,14 @@ func (m Model) render() string {
 }
 
 func (m Model) renderHeader() string {
-	count := fmt.Sprintf("%d sidecar", len(m.sidecars))
-	if len(m.sidecars) != 1 {
+	n := 0
+	for _, sc := range m.sidecars {
+		if sc.id != "" {
+			n++
+		}
+	}
+	count := fmt.Sprintf("%d sidecar", n)
+	if n != 1 {
 		count += "s"
 	}
 
@@ -321,6 +330,15 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 		case sc.running:
 			frame := spinFrames[m.spinIdx%len(spinFrames)]
 			add("  " + blue(frame+" "+string(sc.lastOp)+"..."))
+		case sc.id == "": // local runner — no sync state
+			switch sc.lastLevel {
+			case levelDone:
+				add("  " + green("✓ passed"))
+			case levelError:
+				add("  " + red("✗ failed"))
+			default:
+				add("  " + muted("no runs yet"))
+			}
 		case sc.inSync:
 			add("  " + green("✓ in sync"))
 		case sc.lastSyncedRef == "":
@@ -360,10 +378,10 @@ func (m Model) renderActivityPane(maxLines int) []string {
 
 	var filtered []eventlog.Event
 	if m.selectedIdx < len(m.sidecars) {
-		id := m.sidecars[m.selectedIdx].id
-		for _, evs := range m.events {
-			for _, e := range evs {
-				if e.SidecarID == id {
+		sc := m.sidecars[m.selectedIdx]
+		if sc.projectIdx < len(m.events) {
+			for _, e := range m.events[sc.projectIdx] {
+				if e.SidecarID == sc.id {
 					filtered = append(filtered, e)
 				}
 			}
@@ -493,7 +511,15 @@ func (m Model) renderFooter() string {
 // loadData reads sidecar state files and new event log entries from all projects.
 func (m Model) loadData() tea.Msg {
 	var allSidecars []sidecarInfo
-	newEvents := make([][]eventlog.Event, len(m.projects))
+
+	// Build per-project event slices, preserving existing events across polls.
+	allEventsByProject := make([][]eventlog.Event, len(m.projects))
+	for i := range allEventsByProject {
+		if i < len(m.events) {
+			allEventsByProject[i] = m.events[i]
+		}
+	}
+
 	newOffsets := make([]int64, len(m.projects))
 	copy(newOffsets, m.offsets)
 	newBranches := make([]string, len(m.projects))
@@ -502,27 +528,33 @@ func (m Model) loadData() tea.Msg {
 	for i, p := range m.projects {
 		newBranches[i] = sidecar.CurrentBranch(p.ProjectRoot)
 		newHeadRefs[i] = headRef(p.ProjectRoot)
+		snapName := loadSnapshotName(p.DataDir)
+		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snapName, newHeadRefs[i], i)
+		allSidecars = append(allSidecars, sidecars...)
 
-		// Events are read before the sidecars they annotate.
-		if i < len(m.events) {
-			newEvents[i] = m.events[i]
+		// Synthesize a local entry for this project; filtered out later if no activity.
+		allSidecars = append(allSidecars, sidecarInfo{
+			id:          "",
+			name:        "local",
+			projectName: filepath.Base(p.ProjectRoot),
+			projectIdx:  i,
+		})
+
+		if p.Log == nil {
+			continue
 		}
-		if p.Log != nil {
+		if i < len(m.offsets) {
 			fresh, newOff, _ := p.Log.TailFrom(m.offsets[i])
-			newEvents[i] = capEvents(newEvents[i], fresh)
+			allEventsByProject[i] = capEvents(allEventsByProject[i], fresh)
 			newOffsets[i] = newOff
 		}
-
-		snapName := loadSnapshotName(p.DataDir)
-		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snapName, newHeadRefs[i])
-		annotateActivity(sidecars, newEvents[i])
-		allSidecars = append(allSidecars, sidecars...)
 	}
 
+	annotateActivity(allSidecars, allEventsByProject)
 	sortByActivity(allSidecars)
 	allSidecars = filterSidecars(allSidecars, m.sidecarCapacity())
 
-	return dataMsg{sidecars: allSidecars, events: newEvents, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
+	return dataMsg{sidecars: allSidecars, events: allEventsByProject, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
 }
 
 // capEvents appends fresh to prior, keeping at most recentEvents. The cap is
@@ -538,11 +570,15 @@ func capEvents(prior, fresh []eventlog.Event) []eventlog.Event {
 	return merged
 }
 
-// annotateActivity fills lastActivity, lastOp and running from the newest event
-// belonging to each sidecar.
-func annotateActivity(sidecars []sidecarInfo, events []eventlog.Event) {
+// annotateActivity fills lastActivity, lastOp, lastLevel and running from the
+// newest event belonging to each sidecar.
+func annotateActivity(sidecars []sidecarInfo, eventsByProject [][]eventlog.Event) {
 	for i := range sidecars {
 		sc := &sidecars[i]
+		if sc.projectIdx >= len(eventsByProject) {
+			continue
+		}
+		events := eventsByProject[sc.projectIdx]
 		for j := len(events) - 1; j >= 0; j-- {
 			e := events[j]
 			if e.SidecarID != sc.id {
@@ -550,6 +586,7 @@ func annotateActivity(sidecars []sidecarInfo, events []eventlog.Event) {
 			}
 			sc.lastActivity = e.Ts
 			sc.lastOp = e.Op
+			sc.lastLevel = e.Level
 			if e.Level != levelDone && e.Level != levelError && time.Since(e.Ts) < runningTimeout {
 				sc.running = true
 			}
@@ -605,7 +642,7 @@ func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
 }
 
 // loadSidecars reads all sidecar*.json files from dataDir, deduplicates by ID.
-func loadSidecars(dataDir, projectRoot string, snapshotName string, head string) []sidecarInfo {
+func loadSidecars(dataDir, projectRoot string, snapshotName string, head string, projectIdx int) []sidecarInfo {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	projectName := filepath.Base(projectRoot)
 	seen := map[string]bool{}
@@ -632,6 +669,7 @@ func loadSidecars(dataDir, projectRoot string, snapshotName string, head string)
 			id:            as.SidecarID,
 			name:          as.Name,
 			projectName:   projectName,
+			projectIdx:    projectIdx,
 			snapshotName:  snapshotName,
 			fileMtime:     mtime,
 			lastSyncedRef: as.LastSyncedRef,

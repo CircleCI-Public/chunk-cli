@@ -199,7 +199,7 @@ func TestLoadSidecars_deduplicatesIDs(t *testing.T) {
 	// Duplicate id1 — should be deduplicated.
 	writeSidecarJSON(t, dir, "sidecar.sess2.json", `{"sidecar_id":"id1","name":"sc1"}`)
 
-	result := loadSidecars(dir, root, "", "abc123")
+	result := loadSidecars(dir, root, "", "abc123", 0)
 	if len(result) != 2 {
 		t.Fatalf("want 2 unique sidecars, got %d", len(result))
 	}
@@ -211,7 +211,7 @@ func TestLoadSidecars_inSyncWhenHeadMatches(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
 
-	result := loadSidecars(dir, root, "", "abc123")
+	result := loadSidecars(dir, root, "", "abc123", 0)
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}
@@ -226,7 +226,7 @@ func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","last_synced_ref":"oldref"}`)
 
-	result := loadSidecars(dir, root, "", "newref")
+	result := loadSidecars(dir, root, "", "newref", 0)
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}
@@ -238,7 +238,7 @@ func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
 func TestLoadSidecars_emptyDir(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()
-	if result := loadSidecars(dir, root, "", ""); len(result) != 0 {
+	if result := loadSidecars(dir, root, "", "", 0); len(result) != 0 {
 		t.Errorf("want 0, got %d", len(result))
 	}
 }
@@ -249,7 +249,7 @@ func TestLoadSidecars_skipsEmptySidecarID(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"","name":"empty"}`)
 
-	if result := loadSidecars(dir, root, "", ""); len(result) != 0 {
+	if result := loadSidecars(dir, root, "", "", 0); len(result) != 0 {
 		t.Errorf("want 0 (skipped empty ID), got %d", len(result))
 	}
 }
@@ -260,7 +260,7 @@ func TestLoadSidecars_snapshotName(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1"}`)
 
-	result := loadSidecars(dir, root, "my-snap", "")
+	result := loadSidecars(dir, root, "my-snap", "", 0)
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}

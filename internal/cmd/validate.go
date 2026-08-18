@@ -405,7 +405,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			// A hit is a success, so it finishes the same way a real successful run
 			// does rather than repeating that bookkeeping here: clearing the failure
 			// counter, and whatever else the success branch grows later.
-			return finishValidate(cmd, hook, nil, start, opts.sidecarID, cfg, statusFn, streams)
+			n := len(cfg.Commands)
+			return finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, wrapEventLogStatusFn(statusFn, "", nil, workDir, hook), streams)
 		}
 	}
 
@@ -441,11 +442,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// Wire event log only when a sidecar is involved. The wrap goes here — after
-	// setupRemote fills opts.sidecarID but before loadSidecarEnvVars — so that
-	// sync and env-resolve status events are captured. Skipping when there is no
-	// sidecar avoids writing events with an empty sidecar_id that the TUI would
-	// filter out and never display.
+	// Wire event log for all runs (both local and remote). The wrap goes here —
+	// after setupRemote fills opts.sidecarID but before loadSidecarEnvVars — so
+	// that sync and env-resolve status events are captured.
 	// Kept unwrapped so a replacement sidecar can be rewrapped against its own ID
 	// rather than logging its events under the sidecar it replaced.
 	baseStatusFn := statusFn
@@ -459,13 +458,13 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	result, execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
 	if execErr == nil && resultCache != nil {
 		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
 			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
 		}
 	}
-	return finishValidate(cmd, hook, execErr, start, opts.sidecarID, cfg, statusFn, streams)
+	return finishValidate(cmd, hook, execErr, start, cfg, result, statusFn, streams)
 }
 
 // loadEnvVarsWithRetry loads sidecar env vars, and if the sidecar is unusable
@@ -512,14 +511,10 @@ func loadEnvVarsWithRetry(
 	return envVars, statusFn, freshlyCreated, nil
 }
 
-// wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
-// is active. Returns statusFn unchanged when no sidecar is involved, so callers
-// with empty sidecar IDs never write events with a blank sidecar_id.
+// wrapEventLogStatusFn wraps statusFn with event log recording for all runs,
+// both remote (sidecarID set) and local (sidecarID empty).
 func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) iostream.StatusFunc {
-	if sidecarID == "" {
-		return statusFn
-	}
-	dataDir, err := sidecar.StateDir()
+	dataDir, err := config.ProjectDataDir(workDir)
 	if err != nil {
 		return statusFn
 	}
@@ -535,36 +530,32 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 }
 
 // finishValidate reports the validate outcome and handles hook exit codes.
-func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, sidecarID string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	maxAttempts := validate.DefaultMaxAttempts
 	if hook != nil {
 		if ma := cfg.StopHookMaxAttempts; ma > 0 {
 			maxAttempts = ma
 		}
 	}
+
+	elapsed := ui.FormatDuration(time.Since(start))
+	summary := fmt.Sprintf("%d/%d passed", result.Passed, result.Total)
 	if execErr != nil {
 		if hook != nil {
 			attempt := validate.ReadAttempts(hook.sessionID) + 1
-			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed, attempt %d/%d)", ui.FormatDuration(time.Since(start)), attempt, maxAttempts))
+			statusFn(iostream.LevelError, fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts))
 		} else {
-			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
+			statusFn(iostream.LevelError, fmt.Sprintf("%s  %s", summary, elapsed))
 		}
-	} else if hook == nil {
-		statusFn(iostream.LevelStep, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
-	}
-	if sidecarID != "" {
-		if execErr != nil {
-			statusFn(iostream.LevelError, "validate failed")
-		} else {
-			statusFn(iostream.LevelDone, "validate passed")
-		}
+	} else {
+		statusFn(iostream.LevelDone, fmt.Sprintf("%s  %s", summary, elapsed))
 	}
 	if hook == nil {
 		return execErr
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", ui.FormatDuration(time.Since(start)))))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", elapsed)))
 		return nil
 	}
 	return hookErr
@@ -586,14 +577,15 @@ func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, status
 		statusFn(iostream.LevelInfo, fmt.Sprintf("%s: %s", cmdName, inlineCmd))
 		return nil
 	}
-	return mapValidateError(validate.RunDryRun(cfg, name, statusFn))
+	_, err := mapValidateError(validate.Result{}, validate.RunDryRun(cfg, name, statusFn))
+	return err
 }
 
 // runValidate dispatches to the appropriate Run* function based on the
 // provided options. It is shared by both direct and hook invocations.
 // allRemote is true when --remote is passed explicitly (all commands run on the
 // sidecar); false means only commands with Remote:true are routed to the sidecar.
-func runValidate(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, workDir, name, inlineCmd string, save bool, sidecarID string, freshlyCreated bool, workdir string, allRemote bool, envVars map[string]string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+func runValidate(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, workDir, name, inlineCmd string, save bool, sidecarID string, freshlyCreated bool, workdir string, allRemote bool, envVars map[string]string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (validate.Result, error) {
 	// --cmd: inline command (always local in per-command mode)
 	if inlineCmd != "" {
 		cmdName := name
@@ -602,14 +594,14 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 		}
 		if save {
 			if err := config.SaveCommand(workDir, cmdName, inlineCmd); err != nil {
-				return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
+				return validate.Result{}, &userError{msg: "Could not save command to .chunk/config.json.", err: err}
 			}
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 		}
 		if sidecarID != "" && allRemote {
 			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 			if err != nil {
-				return err
+				return validate.Result{}, err
 			}
 			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, statusFn, streams)
 		}
@@ -620,7 +612,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 	if sidecarID != "" && allRemote {
 		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 		if err != nil {
-			return err
+			return validate.Result{}, err
 		}
 		return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, statusFn, streams)
 	}
@@ -633,7 +625,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 				statusFn(iostream.LevelInfo, fmt.Sprintf("running %s on sidecar %s", name, sidecarID))
 				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 				if err != nil {
-					return err
+					return validate.Result{}, err
 				}
 				return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, statusFn, streams)
 			}
@@ -648,7 +640,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 	if name != "" {
 		if cfg.FindCommand(name) == nil {
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
-				return &userError{
+				return validate.Result{}, &userError{
 					msg:        fmt.Sprintf("Command %q is not configured.", name),
 					suggestion: "Add it to .chunk/config.json.",
 					errMsg:     fmt.Sprintf("command %q is not configured", name),
@@ -659,21 +651,21 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			streams.ErrPrintf("What command should %s run? ", ui.Bold(name))
 			scanner := bufio.NewScanner(os.Stdin)
 			if !scanner.Scan() {
-				return &userError{msg: "No command entered.", errMsg: "no input received"}
+				return validate.Result{}, &userError{msg: "No command entered.", errMsg: "no input received"}
 			}
 			input := strings.TrimSpace(scanner.Text())
 			if input == "" {
 				streams.ErrPrintln(ui.Dim("No command entered, aborting."))
-				return &userError{msg: "No command entered.", errMsg: "no command entered"}
+				return validate.Result{}, &userError{msg: "No command entered.", errMsg: "no command entered"}
 			}
 			if err := config.SaveCommand(workDir, name, input); err != nil {
-				return &userError{msg: "Could not save command to .chunk/config.json.", err: err}
+				return validate.Result{}, &userError{msg: "Could not save command to .chunk/config.json.", err: err}
 			}
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", name)))
 			var err error
 			cfg, err = config.LoadProjectConfig(workDir)
 			if err != nil {
-				return err
+				return validate.Result{}, err
 			}
 		}
 		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, statusFn, streams))
@@ -829,7 +821,7 @@ func hostForwardEnv(token string) map[string]string {
 // When freshlyCreated is true, exec failures are hard errors rather than
 // silent local fallbacks (a newly provisioned sidecar that can't be reached
 // indicates a real problem, not temporary unavailability).
-func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, freshlyCreated bool, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, freshlyCreated bool, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (validate.Result, error) {
 	remoteCfg, localCfg := splitByRemote(cfg)
 	if len(remoteCfg.Commands) > 0 {
 		statusFn(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, commandNames(remoteCfg.Commands)))
@@ -837,12 +829,13 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 	if len(localCfg.Commands) > 0 {
 		statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCfg.Commands)))
 	}
+	var combined validate.Result
 	var runErr error
 	if len(remoteCfg.Commands) > 0 {
 		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 		if err != nil {
 			if freshlyCreated {
-				return newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).
+				return validate.Result{}, newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).
 					withCode("sidecar.unreachable").
 					withSuggestion("The sidecar may still be starting. Try again in a moment.").
 					withExitCode(ExitAPIError).
@@ -852,7 +845,7 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
 		} else if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
 			if freshlyCreated {
-				return newUserError(fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)).
+				return validate.Result{}, newUserError(fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)).
 					withCode("sidecar.workspace_missing").
 					withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
 					withExitCode(ExitNotFound).
@@ -861,15 +854,21 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 			streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
 			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
 		} else {
-			runErr = validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
+			r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
+			combined.Passed += r.Passed
+			combined.Total += r.Total
+			runErr = err
 		}
 	}
 	if len(localCfg.Commands) > 0 {
-		if err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams)); err != nil {
+		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams))
+		combined.Passed += r.Passed
+		combined.Total += r.Total
+		if err != nil {
 			runErr = errors.Join(runErr, err)
 		}
 	}
-	return runErr
+	return combined, runErr
 }
 
 // splitByRemote partitions cfg.Commands into two configs: one containing only
@@ -1096,14 +1095,14 @@ func execTarget(opts *validateOpts, cfg *config.ProjectConfig, active *sidecar.A
 	return id + "\x00" + image
 }
 
-func mapValidateError(err error) error {
+func mapValidateError(r validate.Result, err error) (validate.Result, error) {
 	if errors.Is(err, validate.ErrNotConfigured) {
-		return &userError{
+		return r, &userError{
 			msg:        msgValidateNotConfigured,
 			suggestion: suggestionValidateNotConfigured,
 			hideDetail: true,
 			err:        err,
 		}
 	}
-	return err
+	return r, err
 }
