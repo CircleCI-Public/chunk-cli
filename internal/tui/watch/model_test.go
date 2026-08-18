@@ -483,7 +483,7 @@ func TestSidecarCapacity(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := New(nil)
+			m := New(nil, false)
 			m.height = tt.height
 			if got := m.sidecarCapacity(); got != tt.want {
 				t.Errorf("height %d: want %d, got %d", tt.height, tt.want, got)
@@ -540,7 +540,7 @@ func TestLoadData_busyProjectDoesNotEvictRecentValidate(t *testing.T) {
 	m := New([]ProjectEntry{
 		{Log: noisyLog, DataDir: noisyDir, ProjectRoot: filepath.Join(noisyDir, "noisy-project")},
 		{Log: quietLog, DataDir: quietDir, ProjectRoot: filepath.Join(quietDir, "quiet-project")},
-	})
+	}, false)
 
 	msg, ok := m.loadData().(dataMsg)
 	if !ok {
@@ -561,7 +561,7 @@ func TestLoadData_busyProjectDoesNotEvictRecentValidate(t *testing.T) {
 
 func TestUpdate_selectionFollowsSidecarID(t *testing.T) {
 	now := time.Now()
-	m := New(nil)
+	m := New(nil, false)
 	m.sidecars = []sidecarInfo{{id: "a", projectName: "p"}, {id: "b", projectName: "p"}}
 
 	// Select the second sidecar.
@@ -604,7 +604,7 @@ func TestUpdate_initialSelectionPicksMostRecent(t *testing.T) {
 }
 
 func TestUpdate_unknownSelectionFallsBackToFreshest(t *testing.T) {
-	m := New(nil)
+	m := New(nil, false)
 	m.selectedID = "gone"
 
 	next, _ := m.Update(dataMsg{sidecars: []sidecarInfo{{id: "fresh"}, {id: "older"}}})

@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -120,6 +121,7 @@ type tickMsg struct{}
 type spinMsg struct{}
 
 type dataMsg struct {
+	projects []ProjectEntry
 	sidecars []sidecarInfo
 	events   [][]eventlog.Event // per-project; index matches Model.projects
 	offsets  []int64
@@ -133,6 +135,11 @@ type Model struct {
 	offsets  []int64
 	branches []string // current branch per project, refreshed each poll
 	headRefs []string // HEAD SHA per project, refreshed each poll
+
+	// watchAll, when set, means the poll loop should keep re-scanning for
+	// projects that saved their first sidecar state after this dashboard
+	// started, instead of only ever watching the projects it opened with.
+	watchAll bool
 
 	sidecars    []sidecarInfo
 	selectedIdx int
@@ -163,6 +170,17 @@ func New(projects []ProjectEntry) Model {
 		headRefs:      make([]string, len(projects)),
 		toggledInvocs: make(map[time.Time]bool),
 		selectedID:    noSelection,
+// New creates a Model ready to run. When watchAll is true, each poll also
+// checks for projects that have saved a sidecar since the dashboard started
+// and adds them, so a sidecar started after `chunk watch --all` launches
+// still shows up without a restart.
+func New(projects []ProjectEntry, watchAll bool) Model {
+	return Model{
+		projects: projects,
+		offsets:  make([]int64, len(projects)),
+		branches: make([]string, len(projects)),
+		headRefs: make([]string, len(projects)),
+		watchAll: watchAll,
 	}
 }
 
@@ -223,6 +241,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dataMsg:
+		m.projects = msg.projects
 		m.sidecars = msg.sidecars
 		m.events = msg.events
 		m.offsets = msg.offsets
@@ -860,22 +879,27 @@ func (m Model) renderFooter() string {
 
 // loadData reads sidecar state files and new event log entries from all projects.
 func (m Model) loadData() tea.Msg {
+	projects := m.projects
+	if m.watchAll {
+		projects = discoverNewProjects(projects)
+	}
+
 	var allSidecars []sidecarInfo
 
 	// Build per-project event slices, preserving existing events across polls.
-	allEventsByProject := make([][]eventlog.Event, len(m.projects))
+	allEventsByProject := make([][]eventlog.Event, len(projects))
 	for i := range allEventsByProject {
 		if i < len(m.events) {
 			allEventsByProject[i] = m.events[i]
 		}
 	}
 
-	newOffsets := make([]int64, len(m.projects))
+	newOffsets := make([]int64, len(projects))
 	copy(newOffsets, m.offsets)
-	newBranches := make([]string, len(m.projects))
-	newHeadRefs := make([]string, len(m.projects))
+	newBranches := make([]string, len(projects))
+	newHeadRefs := make([]string, len(projects))
 
-	for i, p := range m.projects {
+	for i, p := range projects {
 		newBranches[i] = sidecar.CurrentBranch(p.ProjectRoot)
 		newHeadRefs[i] = headRef(p.ProjectRoot)
 		snapName := loadSnapshotName(p.DataDir)
@@ -899,11 +923,14 @@ func (m Model) loadData() tea.Msg {
 		if p.Log == nil {
 			continue
 		}
+		// i can exceed the prior slice length for a project discovered this poll.
+		var priorOffset int64
 		if i < len(m.offsets) {
-			fresh, newOff, _ := p.Log.TailFrom(m.offsets[i])
-			allEventsByProject[i] = capEvents(allEventsByProject[i], fresh)
-			newOffsets[i] = newOff
+			priorOffset = m.offsets[i]
 		}
+		fresh, newOff, _ := p.Log.TailFrom(priorOffset)
+		allEventsByProject[i] = capEvents(allEventsByProject[i], fresh)
+		newOffsets[i] = newOff
 	}
 
 	annotateActivity(allSidecars, allEventsByProject)
@@ -911,7 +938,38 @@ func (m Model) loadData() tea.Msg {
 	allSidecars = mergeBranches(allSidecars)
 	allSidecars = filterSidecars(allSidecars, m.sidecarCapacity())
 
-	return dataMsg{sidecars: allSidecars, events: allEventsByProject, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
+	return dataMsg{projects: projects, sidecars: allSidecars, events: allEventsByProject, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
+}
+
+// discoverNewProjects returns known plus any project whose data directory
+// exists (per sidecar.AllProjectRoots) but isn't in known yet, each opened as
+// a new ProjectEntry. Roots that fail to open are skipped rather than
+// aborting the whole poll.
+func discoverNewProjects(known []ProjectEntry) []ProjectEntry {
+	roots, err := sidecar.AllProjectRoots()
+	if err != nil {
+		return known
+	}
+	seen := make(map[string]bool, len(known))
+	for _, p := range known {
+		seen[p.ProjectRoot] = true
+	}
+	for _, root := range roots {
+		if seen[root] {
+			continue
+		}
+		dataDir, err := config.ProjectDataDir(root)
+		if err != nil {
+			continue
+		}
+		el, err := eventlog.Open(dataDir)
+		if err != nil {
+			continue
+		}
+		known = append(known, ProjectEntry{Log: el, DataDir: dataDir, ProjectRoot: root})
+		seen[root] = true
+	}
+	return known
 }
 
 // capEvents appends fresh to prior, keeping at most recentEvents. The cap is
