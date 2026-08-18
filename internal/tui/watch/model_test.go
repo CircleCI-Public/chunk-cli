@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,7 +318,7 @@ func TestFilterSidecars_noPerProjectCap(t *testing.T) {
 	}
 
 	sortByActivity(sidecars)
-	got := filterSidecars(sidecars)
+	got := filterSidecars(sidecars, 2)
 
 	if len(got) != 4 {
 		t.Fatalf("want all 4 sidecars, got %d", len(got))
@@ -339,7 +340,7 @@ func TestFilterSidecars_dropsInactive(t *testing.T) {
 		{id: "no-activity-at-all", projectName: "r"},
 	}
 
-	got := filterSidecars(sidecars)
+	got := filterSidecars(sidecars, 10)
 
 	want := []string{"recent", "mtime-recent"}
 	if len(got) != len(want) {
@@ -349,6 +350,80 @@ func TestFilterSidecars_dropsInactive(t *testing.T) {
 		if got[i].id != id {
 			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
 		}
+	}
+}
+
+func TestFilterSidecars_fallsBackToPaneFullOfRecent(t *testing.T) {
+	now := time.Now()
+	// Nothing inside the hour, so the fallback fills the pane by recency.
+	sidecars := []sidecarInfo{
+		{id: "h2", projectName: "a", lastActivity: now.Add(-2 * time.Hour)},
+		{id: "h3", projectName: "b", lastActivity: now.Add(-3 * time.Hour)},
+		{id: "h4", projectName: "c", lastActivity: now.Add(-4 * time.Hour)},
+		{id: "yesterday", projectName: "d", lastActivity: now.Add(-25 * time.Hour)},
+	}
+
+	got := filterSidecars(sidecars, 2)
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 sidecars (pane capacity), got %d", len(got))
+	}
+	for i, id := range []string{"h2", "h3"} {
+		if got[i].id != id {
+			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
+		}
+	}
+}
+
+func TestFilterSidecars_fallbackStopsAtOneDay(t *testing.T) {
+	now := time.Now()
+	sidecars := []sidecarInfo{
+		{id: "just-inside", projectName: "a", lastActivity: now.Add(-23 * time.Hour)},
+		{id: "too-old", projectName: "b", lastActivity: now.Add(-25 * time.Hour)},
+	}
+
+	got := filterSidecars(sidecars, 10)
+
+	if len(got) != 1 || got[0].id != "just-inside" {
+		t.Fatalf("want only just-inside, got %v", got)
+	}
+}
+
+func TestFilterSidecars_activeSetIgnoresCapacity(t *testing.T) {
+	now := time.Now()
+	var sidecars []sidecarInfo
+	for i := range 8 {
+		sidecars = append(sidecars, sidecarInfo{
+			id: fmt.Sprintf("s%d", i), projectName: "p",
+			lastActivity: now.Add(-time.Duration(i) * time.Minute),
+		})
+	}
+
+	// All eight are inside the hour, so none are dropped to fit the pane.
+	if got := filterSidecars(sidecars, 2); len(got) != 8 {
+		t.Fatalf("want all 8 active sidecars, got %d", len(got))
+	}
+}
+
+func TestSidecarCapacity(t *testing.T) {
+	tests := []struct {
+		name   string
+		height int
+		want   int
+	}{
+		{"unset height", 0, defaultCapacity},
+		{"tiny terminal", 8, 1},
+		{"40 rows", 40, 6},
+		{"80 rows", 80, 14},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(nil)
+			m.height = tt.height
+			if got := m.sidecarCapacity(); got != tt.want {
+				t.Errorf("height %d: want %d, got %d", tt.height, tt.want, got)
+			}
+		})
 	}
 }
 
@@ -406,7 +481,8 @@ func TestLoadData_busyProjectDoesNotEvictRecentValidate(t *testing.T) {
 	if !ok {
 		t.Fatalf("want dataMsg, got %T", msg)
 	}
-	// The noisy sidecar's events are 2h old, so it falls outside activeWindow.
+	// The quiet project just validated, so only it is inside activeWindow; the
+	// noisy sidecar's events are 2h old and the fallback does not apply.
 	if len(msg.sidecars) != 1 {
 		t.Fatalf("want 1 active sidecar, got %d", len(msg.sidecars))
 	}
