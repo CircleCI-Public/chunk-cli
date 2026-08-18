@@ -140,12 +140,35 @@ If `chunk auth status` reports the CircleCI source as `Environment`, do **not** 
 
 ## Dev Loop
 
-For each round of edits:
+Once per project, after the sidecar is working, mark the commands that should run
+on it. A sidecar being up routes nothing on its own: `chunk sidecar setup` marks
+only `install` and gate-role commands, and a sidecar set up by hand has none
+marked. `chunk validate --list` tags each command `[local|remote, role]`, so read
+it first, then:
+
+```bash
+chunk validate --mark-remote           # mark all but autofix commands
+chunk validate --mark-remote test      # or one at a time
+```
+
+The bare form deliberately skips `autofix` commands (formatters, codegen) and
+prints which ones it left alone — those rewrite files, and on the sidecar the edits
+never reach the local working tree. Mark one by name only if the user wants that.
+Already-marked commands report no change, so re-running is safe, and the flag
+persists in `.chunk/config.json` across sessions.
+
+**Caveat:** this routing only applies while `validation.sidecarImage` is unset.
+Once a snapshot ID is recorded there, `chunk validate` sends every command to the
+sidecar regardless of marking or role — the same as `--remote`. On such a project,
+run formatters directly instead of through `chunk validate`.
+
+Then, for each round of edits:
 
 1. `chunk sidecar sync` — pushes the local working tree (staged + unstaged) to the active sidecar. Skip if nothing changed.
 2. `chunk validate` — runs configured commands. Commands marked `remote: true` in `.chunk/config.json` run on the sidecar; others run locally.
    - One command by name: `chunk validate <name>`
    - Ad-hoc remote command: `chunk validate --remote --cmd "<cmd>"`
+   - Everything on the sidecar regardless of marking: `chunk validate --remote`
 3. Zero exit = pass. Non-zero = go to Troubleshooting.
 
 ---
@@ -219,6 +242,7 @@ If `circleci-testsuite` is not installed, fall back to manual validation (see v1
 - **`permission denied (publickey)`** — run `chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub`. If it persists, tell user to remove `~/.ssh/chunk_ai*` to regenerate the keypair.
 - **`context deadline exceeded` on SSH or API calls** — sidecar is unhealthy. If `sidecarImage` is set, create a fresh one from snapshot. Otherwise `chunk sidecar forget` and redo setup via `chunk-sidecar-setup`.
 - **Missing binary on sidecar** — `chunk validate --remote --cmd "<install-command>"`. Re-snapshot after `chunk validate` passes.
+- **`chunk validate` ran everything locally** — no command is marked `remote: true`. Run `chunk validate --mark-remote` (see Dev Loop). Do not paper over it with `--remote` on every call.
 - **`sync` errors about merge base** — ask user to push the branch (`git push -u origin <branch>`).
 - **Snapshot `--image` won't boot** — snapshot IDs are org-scoped. Confirm both the snapshot and new sidecar are in the same org.
 

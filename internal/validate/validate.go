@@ -51,7 +51,9 @@ func shellEscape(arg string) string {
 // DefaultTimeout is the per-command execution timeout in seconds.
 const DefaultTimeout = 300
 
-// List prints all configured command names and their run strings.
+// List prints all configured command names and their run strings, tagged with
+// where each one runs and any role that decides it. Without the tags there is no
+// way to see which commands `chunk validate --mark-remote` would change.
 func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 	if !cfg.HasCommands() {
 		status(iostream.LevelInfo, "No commands configured.")
@@ -59,9 +61,21 @@ func List(cfg *config.ProjectConfig, status iostream.StatusFunc) error {
 		return nil
 	}
 	for _, c := range cfg.Commands {
-		status(iostream.LevelInfo, fmt.Sprintf("%s: %s", c.Name, c.Run))
+		status(iostream.LevelInfo, fmt.Sprintf("%s [%s]: %s", c.Name, commandTags(c), c.Run))
 	}
 	return nil
+}
+
+// commandTags describes where a command runs, and its role when it has one.
+func commandTags(c config.Command) string {
+	where := "local"
+	if c.Remote {
+		where = "remote"
+	}
+	if c.Role == "" {
+		return where
+	}
+	return where + ", " + c.Role
 }
 
 // RunInline runs an inline command string.
