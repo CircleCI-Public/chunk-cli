@@ -28,6 +28,10 @@ Read these when working in the relevant area:
 - `cmd/` contains cobra command definitions — thin wrappers that delegate to `internal/`
 - Leaf packages must not import from `cmd/`
 
+## File Conventions
+
+- Do not create configuration files for other AI tools (e.g. `CODEX.md`, `GEMINI.md`, `.cursorrules`, `WINDSURF.md`) unless the user explicitly asks for them or the project already uses that tool.
+
 ## Code Conventions
 
 - **Early returns**: Reduce nesting depth

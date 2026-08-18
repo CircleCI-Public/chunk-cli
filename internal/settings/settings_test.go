@@ -2,7 +2,6 @@ package settings
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -77,45 +76,6 @@ func TestBuildHookTimeoutRespectsExplicitValue(t *testing.T) {
 
 	timeout, _ := entry["timeout"].(float64)
 	assert.Assert(t, timeout == 120, "expected explicit timeout of 120, got: %v", timeout)
-}
-
-func TestBuildIncludesWriteFileGuard(t *testing.T) {
-	cmds := []config.Command{
-		{Name: "test", Run: "task test", Timeout: 60},
-	}
-	data, err := Build(cmds)
-	assert.NilError(t, err)
-
-	var s map[string]interface{}
-	assert.NilError(t, json.Unmarshal(data, &s))
-
-	hooks := s["hooks"].(map[string]interface{})
-	preToolUse := hooks["PreToolUse"].([]interface{})
-
-	// Must have at least two groups: Bash (commit checks) and Write (file guard).
-	assert.Assert(t, len(preToolUse) >= 2, "expected at least 2 PreToolUse groups, got %d", len(preToolUse))
-
-	var writeGroup map[string]interface{}
-	for _, g := range preToolUse {
-		group := g.(map[string]interface{})
-		if group["matcher"] == WriteFileMatcher {
-			writeGroup = group
-			break
-		}
-	}
-	assert.Assert(t, writeGroup != nil, "expected a PreToolUse group with matcher %q", WriteFileMatcher)
-
-	entries := writeGroup["hooks"].([]interface{})
-	assert.Assert(t, len(entries) > 0, "Write hook group must have at least one entry")
-
-	entry := entries[0].(map[string]interface{})
-	cmd, _ := entry["command"].(string)
-	assert.Assert(t, cmd != "", "Write hook entry must have a non-empty command")
-
-	// Command must reference the expected blocklist filenames.
-	for _, name := range []string{"CODEX.md", "GEMINI.md", ".cursorrules", "WINDSURF.md"} {
-		assert.Assert(t, strings.Contains(cmd, name), "Write guard command must reference %q", name)
-	}
 }
 
 func TestBuildCodexNoMetadata(t *testing.T) {

@@ -30,16 +30,6 @@
             "timeout": 300
           }
         ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -c \"import json,sys,os;d=json.load(sys.stdin);b=os.path.basename(d.get('file_path',''));b in {'CODEX.md','GEMINI.md','.cursorrules','WINDSURF.md'} and (print('Do not create '+b+': this file belongs to a different AI tool, not this project',file=sys.stderr),sys.exit(1))\"",
-            "timeout": 5
-          }
-        ]
       }
     ],
     "Stop": [
