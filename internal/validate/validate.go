@@ -28,6 +28,12 @@ func formatElapsed(d time.Duration) string {
 // ErrNotConfigured indicates no validate commands are configured.
 var ErrNotConfigured = errors.New("no validate commands configured")
 
+// Result holds the pass/fail counts from a validate run.
+type Result struct {
+	Passed int
+	Total  int
+}
+
 // ErrWorkspaceNotFound is returned when the remote workspace directory does not exist.
 var ErrWorkspaceNotFound = errors.New("workspace directory not found on sidecar")
 
@@ -79,17 +85,23 @@ func commandTags(c config.Command) string {
 }
 
 // RunInline runs an inline command string.
-func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) error {
-	return runCommand(ctx, workDir, name, command, 0, 0, status, streams)
+func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
+	if err := runCommand(ctx, workDir, name, command, 0, 0, status, streams); err != nil {
+		return Result{Total: 1}, err
+	}
+	return Result{Passed: 1, Total: 1}, nil
 }
 
 // RunNamed runs a single named command from config.
-func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
+func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	c := cfg.FindCommand(name)
 	if c == nil {
-		return fmt.Errorf("command %q not configured", name)
+		return Result{}, fmt.Errorf("command %q not configured", name)
 	}
-	return runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, 0, status, streams)
+	if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, 0, status, streams); err != nil {
+		return Result{Total: 1}, err
+	}
+	return Result{Passed: 1, Total: 1}, nil
 }
 
 func skipRemaining(status iostream.StatusFunc, remaining []config.Command, width int) {
@@ -109,19 +121,20 @@ func nameWidth(commands []config.Command) int {
 }
 
 // RunAll runs all configured commands, stopping at the first failure.
-func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) error {
+func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	if !cfg.HasCommands() {
-		return ErrNotConfigured
+		return Result{}, ErrNotConfigured
 	}
 
 	maxWidth := nameWidth(cfg.Commands)
+	total := len(cfg.Commands)
 	for i, c := range cfg.Commands {
 		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, maxWidth, status, streams); err != nil {
 			skipRemaining(status, cfg.Commands[i+1:], maxWidth)
-			return err
+			return Result{Passed: i, Total: total}, err
 		}
 	}
-	return nil
+	return Result{Passed: total, Total: total}, nil
 }
 
 // RunDryRun prints commands without executing them.
@@ -148,16 +161,17 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 // RunRemote runs commands on a remote sidecar via SSH.
 // If name is non-empty, only the named command is run.
 // workDir is the local repository root used to expand {{CHANGED_PACKAGES}}.
-func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) error {
+func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	commands := cfg.Commands
 	if name != "" {
 		c := cfg.FindCommand(name)
 		if c == nil {
-			return fmt.Errorf("command %q not configured", name)
+			return Result{}, fmt.Errorf("command %q not configured", name)
 		}
 		commands = []config.Command{*c}
 	}
 
+	total := len(commands)
 	maxWidth := nameWidth(commands)
 	for i, c := range commands {
 		run := ExpandCommand(workDir, c.Run)
@@ -169,7 +183,7 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		if err != nil {
 			status(iostream.LevelError, fmt.Sprintf("%-*s  exec error (remote)", maxWidth, c.Name))
 			skipRemaining(status, commands[i+1:], maxWidth)
-			return fmt.Errorf("remote %s: %w", c.Name, err)
+			return Result{Passed: i, Total: total}, fmt.Errorf("remote %s: %w", c.Name, err)
 		}
 		if exitCode != 0 && (stdout != "" || stderr != "") {
 			status(iostream.LevelInfo, c.Name+":")
@@ -183,21 +197,21 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		if exitCode != 0 {
 			status(iostream.LevelError, fmt.Sprintf("%-*s  %s (remote)", maxWidth, c.Name, formatElapsed(elapsed)))
 			skipRemaining(status, commands[i+1:], maxWidth)
-			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
+			return Result{Passed: i, Total: total}, fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
 		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s (remote)", maxWidth, c.Name, formatElapsed(elapsed)))
 	}
-	return nil
+	return Result{Passed: total, Total: total}, nil
 }
 
 // RunRemoteInline runs a single inline command on a remote sidecar via SSH.
-func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, status iostream.StatusFunc, streams iostream.Streams) error {
+func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	script := "cd " + shellEscape(dest) + " && " + command
 	start := time.Now()
 	stdout, stderr, exitCode, err := execFn(ctx, script)
 	elapsed := time.Since(start)
 	if err != nil {
-		return fmt.Errorf("remote %s: %w", name, err)
+		return Result{Total: 1}, fmt.Errorf("remote %s: %w", name, err)
 	}
 	if exitCode != 0 && (stdout != "" || stderr != "") {
 		status(iostream.LevelInfo, name+":")
@@ -210,10 +224,10 @@ func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 	}
 	if exitCode != 0 {
 		status(iostream.LevelError, fmt.Sprintf("%s  %s (remote)", name, formatElapsed(elapsed)))
-		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
+		return Result{Total: 1}, fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("%s  %s (remote)", name, formatElapsed(elapsed)))
-	return nil
+	return Result{Passed: 1, Total: 1}, nil
 }
 
 // ExpandCommand replaces template variables in command before execution.
