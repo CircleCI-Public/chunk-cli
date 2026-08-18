@@ -88,10 +88,15 @@ type ProjectEntry struct {
 
 // sidecarInfo holds display state for one sidecar or the local runner.
 // id == "" identifies the local (non-sidecar) runner for a project.
+// sidecarIDs lists every sidecar UUID (and "" for local runs) whose events
+// should appear in this entry's activity pane; populated by mergeBranches.
 type sidecarInfo struct {
 	id            string
+	sidecarIDs    []string // all IDs to match when filtering events
 	name          string
 	projectName   string
+	repoName      string    // basename of the main worktree (groups linked worktrees together)
+	branch        string    // current git branch for this worktree
 	projectIdx    int       // index into Model.projects
 	snapshotName  string    // name of the active snapshot for this project, if any
 	fileMtime     time.Time // mtime of the sidecar state file (fallback when no events yet)
@@ -102,6 +107,14 @@ type sidecarInfo struct {
 	lastOp        eventlog.Op
 	lastLevel     string // level of the most recent event ("done", "error", etc.)
 }
+
+// pane identifies which side of the split layout has keyboard focus.
+type pane int
+
+const (
+	paneLeft pane = iota
+	paneRight
+)
 
 type tickMsg struct{}
 type spinMsg struct{}
@@ -126,19 +139,30 @@ type Model struct {
 	selectedID  string             // id of the selected sidecar, so selection survives reordering
 	events      [][]eventlog.Event // per-project; index matches projects
 
+	focusedPane      pane
+	rightSelectedIdx int
+	toggledInvocs    map[time.Time]bool // invocations whose expand/collapse is flipped from default
+
 	width      int
 	height     int
 	spinIdx    int
 	hasSpinner bool
 }
 
+// noSelection is the initial selectedID sentinel. It can never match a real
+// sidecar ID (UUID) or the local runner (id == ""), so the first dataMsg
+// always falls back to index 0 — the most recently active sidecar.
+const noSelection = "\x00"
+
 // New creates a Model ready to run.
 func New(projects []ProjectEntry) Model {
 	return Model{
-		projects: projects,
-		offsets:  make([]int64, len(projects)),
-		branches: make([]string, len(projects)),
-		headRefs: make([]string, len(projects)),
+		projects:      projects,
+		offsets:       make([]int64, len(projects)),
+		branches:      make([]string, len(projects)),
+		headRefs:      make([]string, len(projects)),
+		toggledInvocs: make(map[time.Time]bool),
+		selectedID:    noSelection,
 	}
 }
 
@@ -157,20 +181,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Code {
 		case 'q', tea.KeyEscape:
 			return m, tea.Quit
-		case 'j', tea.KeyDown:
-			if m.selectedIdx < len(m.sidecars)-1 {
-				m.selectedIdx++
+		case tea.KeyRight, 'l':
+			m.focusedPane = paneRight
+		case tea.KeyLeft, 'h':
+			m.focusedPane = paneLeft
+		case 's', tea.KeyDown:
+			if m.focusedPane == paneLeft {
+				if m.selectedIdx < len(m.sidecars)-1 {
+					m.selectedIdx++
+				}
+				m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
+				m.rightSelectedIdx = 0
+			} else {
+				m.rightSelectedIdx++
 			}
-			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-		case 'k', tea.KeyUp:
-			if m.selectedIdx > 0 {
-				m.selectedIdx--
+		case 'w', tea.KeyUp:
+			if m.focusedPane == paneLeft {
+				if m.selectedIdx > 0 {
+					m.selectedIdx--
+				}
+				m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
+				m.rightSelectedIdx = 0
+			} else if m.rightSelectedIdx > 0 {
+				m.rightSelectedIdx--
 			}
-			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
+		case tea.KeyEnter, tea.KeySpace:
+			if m.focusedPane == paneRight {
+				m = m.toggleSelectedInvoc()
+			}
 		case 'c':
 			if msg.Mod == tea.ModCtrl {
 				return m, tea.Quit
 			}
+		}
+		return m, nil
+
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft {
+			m = m.withMouseClick(msg.X, msg.Y)
 		}
 		return m, nil
 
@@ -205,6 +253,7 @@ func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
 	v.WindowTitle = "chunk watch"
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -275,7 +324,11 @@ func (m Model) renderBody() string {
 			r = rightLines[i]
 		}
 		lPad := padLine(l, leftPaneWidth)
-		b.WriteString(" " + lPad + " " + vdim("│") + " " + r + "\n")
+		div := vdim("│")
+		if m.focusedPane == paneRight {
+			div = muted("│")
+		}
+		b.WriteString(" " + lPad + " " + div + " " + r + "\n")
 	}
 	return b.String()
 }
@@ -284,7 +337,11 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 	lines := make([]string, 0, maxLines)
 	add := func(s string) { lines = append(lines, s) }
 
-	add(vdim("sidecars"))
+	if m.focusedPane == paneLeft {
+		add(bold("sidecars"))
+	} else {
+		add(vdim("sidecars"))
+	}
 	add("")
 
 	if len(m.sidecars) == 0 {
@@ -297,33 +354,42 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 		return lines
 	}
 
-	var lastProject string
+	var lastRepo string
 
 	for i, sc := range m.sidecars {
 		if len(lines) >= maxLines-2 {
 			break
 		}
 
-		// Project separator — always shown so each sidecar has a project label.
-		if sc.projectName != lastProject {
-			if lastProject != "" {
+		// Repo separator — groups all worktrees of the same repo under one header.
+		if sc.repoName != lastRepo {
+			if lastRepo != "" {
 				add("")
 			}
-			label := truncate(sc.projectName, leftPaneWidth-4)
-			add(vdim("── " + label))
-			if sc.snapshotName != "" {
-				add("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
-			}
-			lastProject = sc.projectName
+			label := truncate(sc.repoName, leftPaneWidth-4)
+			add(vdim("── ") + bold(label))
+			lastRepo = sc.repoName
 		}
 
 		selected := i == m.selectedIdx
-		nameLine := truncate(sidecarDisplayName(sc.name, sc.id), leftPaneWidth-3)
+		branchLabel := sc.branch
+		if branchLabel == "" {
+			branchLabel = sidecarDisplayName(sc.name, sc.id)
+		}
+		nameLine := truncate(branchLabel, leftPaneWidth-3)
 
 		if selected {
-			add(muted("▶ ") + bold(nameLine))
+			if m.focusedPane == paneLeft {
+				add(green("▶ ") + bold(nameLine))
+			} else {
+				add(vdim("▶ ") + muted(nameLine))
+			}
 		} else {
 			add("  " + nameLine)
+		}
+
+		if sc.snapshotName != "" {
+			add("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
 		}
 
 		switch {
@@ -353,8 +419,8 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 			add("")
 		}
 
-		// Suppress dotted divider when next sidecar starts a new project group.
-		if i < len(m.sidecars)-1 && m.sidecars[i+1].projectName == sc.projectName {
+		// Suppress dotted divider when next sidecar is in the same repo group.
+		if i < len(m.sidecars)-1 && m.sidecars[i+1].repoName == sc.repoName {
 			add(vdim(strings.Repeat("·", leftPaneWidth)))
 		}
 	}
@@ -364,14 +430,25 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 func (m Model) renderActivityPane(maxLines int) []string {
 	lines := make([]string, 0, maxLines)
 
-	title := vdim("activity")
+	var title string
+	if m.focusedPane == paneRight {
+		title = bold("activity")
+	} else {
+		title = vdim("activity")
+	}
 	if m.selectedIdx < len(m.sidecars) {
 		sc := m.sidecars[m.selectedIdx]
-		displayName := sidecarDisplayName(sc.name, sc.id)
-		if sc.projectName != "" {
-			title += "  " + muted(sc.projectName+"/"+displayName)
+		branchLabel := sc.branch
+		if branchLabel == "" {
+			branchLabel = sidecarDisplayName(sc.name, sc.id)
+		}
+		if sc.repoName != "" {
+			title += "  " + muted(sc.repoName+"/"+branchLabel)
 		} else {
-			title += "  " + muted(displayName)
+			title += "  " + muted(branchLabel)
+		}
+		if sc.id != "" {
+			title += "  " + vdim(sidecarDisplayName(sc.name, sc.id))
 		}
 	}
 	lines = append(lines, title, "")
@@ -381,7 +458,7 @@ func (m Model) renderActivityPane(maxLines int) []string {
 		sc := m.sidecars[m.selectedIdx]
 		if sc.projectIdx < len(m.events) {
 			for _, e := range m.events[sc.projectIdx] {
-				if e.SidecarID == sc.id {
+				if hasSidecarID(sc.sidecarIDs, e.SidecarID) {
 					filtered = append(filtered, e)
 				}
 			}
@@ -409,25 +486,285 @@ func (m Model) renderActivityPane(maxLines int) []string {
 		return lines
 	}
 
-	return append(lines, buildActivityLines(filtered, maxLines-2)...)
+	groups := groupByInvocation(filtered)
+	rightSel := m.rightSelectedIdx
+	if len(groups) > 0 && rightSel >= len(groups) {
+		rightSel = len(groups) - 1
+	}
+	body, remaining := m.buildCollapsibleLines(groups, rightSel, maxLines-2)
+	lines = append(lines, body...)
+	if remaining > 0 {
+		lines = append(lines, "  "+vdim(fmt.Sprintf("↓ %d more", remaining)))
+	}
+	return lines
 }
 
-// buildActivityLines renders events newest-first, grouped by op-run.
-func buildActivityLines(events []eventlog.Event, maxLines int) []string {
-	groups := groupEvents(events)
+// buildCollapsibleLines renders invocation groups newest-first with expand/collapse state.
+// It returns the rendered lines and the count of groups that did not fit.
+func (m Model) buildCollapsibleLines(groups []invocationGroup, rightSel, maxLines int) ([]string, int) {
 	rendered := make([]string, 0, maxLines)
 	add := func(s string) { rendered = append(rendered, s) }
 
+	lastGI := -1
 	for gi := len(groups) - 1; gi >= 0 && len(rendered) < maxLines; gi-- {
-		if gi < len(groups)-1 {
-			add(vdim(strings.Repeat("─", 44)))
+		ri := len(groups) - 1 - gi // right-pane index: 0 = most recent
+		isMostRecent := gi == len(groups)-1
+		expanded := m.invocExpanded(groups[gi], isMostRecent)
+		selected := m.focusedPane == paneRight && ri == rightSel
+
+		if ri > 0 {
+			add("")
 		}
-		g := groups[gi]
-		for ei := len(g) - 1; ei >= 0 && len(rendered) < maxLines; ei-- {
-			add(renderEvent(g[ei]))
+		add(renderInvocationHeader(groups[gi], expanded, selected))
+		if expanded {
+			g := groups[gi]
+			for ei := len(g.events) - 1; ei >= 0 && len(rendered) < maxLines; ei-- {
+				e := g.events[ei]
+				if isSummaryEvent(e) {
+					continue // already shown in header
+				}
+				add("  " + renderEvent(e))
+			}
+		}
+		lastGI = gi
+	}
+	remaining := lastGI // groups at indices 0..lastGI-1 were not rendered
+	if remaining < 0 {
+		remaining = 0
+	}
+	return rendered, remaining
+}
+
+// invocExpanded reports whether an invocation should be shown expanded.
+// Most recent defaults to expanded; older default to collapsed. User toggles flip these.
+func (m Model) invocExpanded(g invocationGroup, isMostRecent bool) bool {
+	toggled := m.toggledInvocs[invocEndTime(g)]
+	if isMostRecent {
+		return !toggled
+	}
+	return toggled
+}
+
+// invocEndTime is the stable key for an invocation: timestamp of its last event.
+func invocEndTime(g invocationGroup) time.Time {
+	if len(g.events) == 0 {
+		return time.Time{}
+	}
+	return g.events[len(g.events)-1].Ts
+}
+
+// currentInvocGroups returns the invocation groups for the currently selected sidecar.
+func (m Model) currentInvocGroups() []invocationGroup {
+	if m.selectedIdx >= len(m.sidecars) {
+		return nil
+	}
+	sc := m.sidecars[m.selectedIdx]
+	var filtered []eventlog.Event
+	if sc.projectIdx < len(m.events) {
+		for _, e := range m.events[sc.projectIdx] {
+			if hasSidecarID(sc.sidecarIDs, e.SidecarID) {
+				filtered = append(filtered, e)
+			}
 		}
 	}
-	return rendered
+	return groupByInvocation(filtered)
+}
+
+// toggleSelectedInvoc flips the expand/collapse state of the right-pane selected invocation.
+func (m Model) toggleSelectedInvoc() Model {
+	groups := m.currentInvocGroups()
+	ri := len(groups) - 1 - m.rightSelectedIdx
+	if ri < 0 || ri >= len(groups) {
+		return m
+	}
+	key := invocEndTime(groups[ri])
+	if m.toggledInvocs[key] {
+		delete(m.toggledInvocs, key)
+	} else {
+		m.toggledInvocs[key] = true
+	}
+	return m
+}
+
+// withMouseClick processes a left-click, toggling an invocation header if one was hit.
+// The right pane content starts at terminal column leftPaneWidth+4 and terminal row 4
+// (2 rows for header+separator, 2 rows for the activity pane title+blank).
+func (m Model) withMouseClick(x, y int) Model {
+	if x <= leftPaneWidth+2 {
+		return m // click is in left pane or on divider
+	}
+	contentLine := y - 4 // 2 header rows + 2 activity title/blank rows
+	if contentLine < 0 {
+		return m
+	}
+	groups := m.currentInvocGroups()
+	ri := m.invocRiAtLine(groups, contentLine)
+	if ri < 0 {
+		return m
+	}
+	m.focusedPane = paneRight
+	m.rightSelectedIdx = ri
+	gi := len(groups) - 1 - ri
+	key := invocEndTime(groups[gi])
+	if m.toggledInvocs[key] {
+		delete(m.toggledInvocs, key)
+	} else {
+		m.toggledInvocs[key] = true
+	}
+	return m
+}
+
+// invocRiAtLine returns the right-pane index of the invocation whose header falls on
+// contentLine (0-indexed within buildCollapsibleLines output), or -1 if the line is
+// a blank separator or an event line.
+func (m Model) invocRiAtLine(groups []invocationGroup, contentLine int) int {
+	line := 0
+	for ri := 0; ri < len(groups); ri++ {
+		gi := len(groups) - 1 - ri
+		isMostRecent := gi == len(groups)-1
+		if ri > 0 {
+			if line == contentLine {
+				return -1 // blank separator
+			}
+			line++
+		}
+		if line == contentLine {
+			return ri // header line
+		}
+		line++
+		if m.invocExpanded(groups[gi], isMostRecent) {
+			nEvents := len(groups[gi].events)
+			if contentLine >= line && contentLine < line+nEvents {
+				return -1 // event line
+			}
+			line += nEvents
+		}
+	}
+	return -1
+}
+
+// invocationGroup holds all events belonging to one validate invocation.
+type invocationGroup struct {
+	events []eventlog.Event
+}
+
+// outcomeOf returns the icon, label, and terminal level of the invocation.
+// The label is the N/M count extracted from the summary event (e.g. "3/3").
+// Returns "" level when the invocation is still running.
+func outcomeOf(g invocationGroup) (icon, label, level string) {
+	for i := len(g.events) - 1; i >= 0; i-- {
+		e := g.events[i]
+		if !isSummaryEvent(e) {
+			continue
+		}
+		count := extractCount(e.Msg)
+		if count == "" {
+			count = "passed"
+		}
+		if e.Level == levelDone {
+			return "✓", count, levelDone
+		}
+		return "✗", count, levelError
+	}
+	return "●", "running", ""
+}
+
+// extractCount pulls the "N/M" fraction from a summary message like "3/3 passed  5.2s".
+func extractCount(msg string) string {
+	i := strings.IndexByte(msg, ' ')
+	if i <= 0 {
+		return ""
+	}
+	part := msg[:i]
+	if strings.Contains(part, "/") {
+		return part
+	}
+	return ""
+}
+
+// renderInvocationHeader renders a one-line summary for an invocation group.
+func renderInvocationHeader(g invocationGroup, expanded, selected bool) string {
+	var arrow string
+	if expanded {
+		arrow = "▼ "
+	} else {
+		arrow = "▶ "
+	}
+	if selected {
+		arrow = bold(arrow)
+	} else {
+		arrow = vdim(arrow)
+	}
+
+	icon, label, level := outcomeOf(g)
+	var outcomeStr string
+	switch level {
+	case levelDone:
+		outcomeStr = green(icon + " " + label)
+	case levelError:
+		outcomeStr = red(icon + " " + label)
+	default:
+		outcomeStr = blue(icon + " " + label)
+	}
+
+	var ts time.Time
+	if n := len(g.events); n > 0 {
+		ts = g.events[n-1].Ts
+	}
+	tsStr := vdim(ts.Format("15:04:05"))
+
+	durStr := ""
+	if len(g.events) > 1 {
+		dur := g.events[len(g.events)-1].Ts.Sub(g.events[0].Ts).Round(time.Second)
+		if dur >= time.Second {
+			durStr = "  " + vdim("("+dur.String()+")")
+		}
+	}
+
+	label2 := purple("validate") + "  " + outcomeStr + "  " + tsStr + durStr
+	if selected {
+		label2 = bold(purple("validate")) + "  " + outcomeStr + "  " + tsStr + durStr
+	}
+	return arrow + label2
+}
+
+// groupByInvocation collects events into invocation groups. An invocation ends
+// on the overall validate summary event ("N/M passed  Xs"), not on each
+// per-command done event. A trailing group is created for any events without a
+// terminal summary (the current in-progress invocation).
+func groupByInvocation(events []eventlog.Event) []invocationGroup {
+	var groups []invocationGroup
+	cur := make([]eventlog.Event, 0, len(events))
+	for _, e := range events {
+		cur = append(cur, e)
+		if isSummaryEvent(e) {
+			groups = append(groups, invocationGroup{events: cur})
+			cur = nil
+		}
+	}
+	if len(cur) > 0 {
+		groups = append(groups, invocationGroup{events: cur})
+	}
+	return groups
+}
+
+// isSummaryEvent reports whether e is the overall validate summary that closes
+// an invocation. Summary messages are formatted "N/M passed  Xs" — only digits
+// precede the first "/", distinguishing them from per-command done events.
+func isSummaryEvent(e eventlog.Event) bool {
+	if e.Op != eventlog.OpValidate || (e.Level != levelDone && e.Level != levelError) {
+		return false
+	}
+	i := strings.IndexByte(e.Msg, '/')
+	if i <= 0 {
+		return false
+	}
+	for _, c := range e.Msg[:i] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // eventGroup is a slice of events from a single op-run.
@@ -456,10 +793,12 @@ func groupEvents(events []eventlog.Event) []eventGroup {
 }
 
 func renderEvent(e eventlog.Event) string {
-	ts := vdim(e.Ts.Format("15:04:05"))
-	op := opTag(e.Op)
 	icon, msg := iconAndMsg(e)
-	return ts + "  " + op + "  " + icon + "  " + msg
+	if e.Op == eventlog.OpValidate {
+		// Op tag omitted — already implied by the invocation header.
+		return icon + "  " + msg
+	}
+	return opTag(e.Op) + "  " + icon + "  " + msg
 }
 
 func opTag(op eventlog.Op) string {
@@ -496,9 +835,20 @@ func iconAndMsg(e eventlog.Event) (string, string) {
 }
 
 func (m Model) renderFooter() string {
-	keys := []struct{ key, action string }{
-		{"↑/↓ j/k", "select"},
-		{"q", "quit"},
+	var keys []struct{ key, action string }
+	if m.focusedPane == paneLeft {
+		keys = []struct{ key, action string }{
+			{"↑/↓ w/s", "select"},
+			{"→", "runs"},
+			{"q", "quit"},
+		}
+	} else {
+		keys = []struct{ key, action string }{
+			{"↑/↓ w/s", "navigate"},
+			{"Enter/Space", "toggle"},
+			{"←", "sidecars"},
+			{"q", "quit"},
+		}
 	}
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
@@ -529,14 +879,20 @@ func (m Model) loadData() tea.Msg {
 		newBranches[i] = sidecar.CurrentBranch(p.ProjectRoot)
 		newHeadRefs[i] = headRef(p.ProjectRoot)
 		snapName := loadSnapshotName(p.DataDir)
-		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snapName, newHeadRefs[i], i)
+		repo := projectRepoName(p.ProjectRoot)
+		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snapName, newHeadRefs[i], i, repo, newBranches[i])
 		allSidecars = append(allSidecars, sidecars...)
 
-		// Synthesize a local entry for this project; filtered out later if no activity.
+		// Synthesize a local entry for this project; merged with a sidecar entry
+		// by mergeBranches when one exists for the same branch, or kept standalone
+		// for projects that only run locally.
 		allSidecars = append(allSidecars, sidecarInfo{
 			id:          "",
+			sidecarIDs:  []string{""},
 			name:        "local",
 			projectName: filepath.Base(p.ProjectRoot),
+			repoName:    repo,
+			branch:      newBranches[i],
 			projectIdx:  i,
 		})
 
@@ -552,6 +908,7 @@ func (m Model) loadData() tea.Msg {
 
 	annotateActivity(allSidecars, allEventsByProject)
 	sortByActivity(allSidecars)
+	allSidecars = mergeBranches(allSidecars)
 	allSidecars = filterSidecars(allSidecars, m.sidecarCapacity())
 
 	return dataMsg{sidecars: allSidecars, events: allEventsByProject, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
@@ -601,17 +958,63 @@ func annotateActivity(sidecars []sidecarInfo, eventsByProject [][]eventlog.Event
 func sortByActivity(sidecars []sidecarInfo) {
 	latest := map[string]time.Time{}
 	for _, sc := range sidecars {
-		if eff := effectiveActivity(sc); eff.After(latest[sc.projectName]) {
-			latest[sc.projectName] = eff
+		if eff := effectiveActivity(sc); eff.After(latest[sc.repoName]) {
+			latest[sc.repoName] = eff
 		}
 	}
 	sort.SliceStable(sidecars, func(i, j int) bool {
 		a, b := sidecars[i], sidecars[j]
-		if a.projectName != b.projectName {
-			return latest[a.projectName].After(latest[b.projectName])
+		if a.repoName != b.repoName {
+			return latest[a.repoName].After(latest[b.repoName])
 		}
 		return effectiveActivity(a).After(effectiveActivity(b))
 	})
+}
+
+// mergeBranches collapses entries with the same (repoName, branch, projectIdx) into
+// one. The first-seen entry (most recently active after sortByActivity) is the
+// primary; subsequent entries contribute their sidecarIDs to the merged set.
+// When the primary is a local-only entry (id == "") and a real sidecar is seen
+// later, the sidecar's identity and sync state are promoted onto the primary so
+// the left pane shows sync status rather than pass/fail.
+func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
+	type key struct {
+		repoName   string
+		branch     string
+		projectIdx int
+	}
+	seen := map[key]int{}
+	result := make([]sidecarInfo, 0, len(sidecars))
+	for _, sc := range sidecars {
+		k := key{sc.repoName, sc.branch, sc.projectIdx}
+		if idx, ok := seen[k]; !ok {
+			result = append(result, sc)
+			seen[k] = len(result) - 1
+		} else {
+			result[idx].sidecarIDs = append(result[idx].sidecarIDs, sc.sidecarIDs...)
+			// Promote a real sidecar over a local-only primary so the left pane
+			// shows sync state rather than a pass/fail badge.
+			if result[idx].id == "" && sc.id != "" {
+				result[idx].id = sc.id
+				result[idx].name = sc.name
+				result[idx].inSync = sc.inSync
+				result[idx].lastSyncedRef = sc.lastSyncedRef
+				result[idx].snapshotName = sc.snapshotName
+				result[idx].fileMtime = sc.fileMtime
+			}
+		}
+	}
+	return result
+}
+
+// hasSidecarID reports whether id is in the ids slice.
+func hasSidecarID(ids []string, id string) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
 }
 
 // effectiveActivity is the sidecar's last event time, falling back to the mtime
@@ -641,8 +1044,39 @@ func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
 	return sidecars[idx].id
 }
 
+// projectRepoName returns the basename of the main git worktree for the repo at
+// projectRoot. For a linked worktree (where .git is a file, not a directory) it
+// traces the gitdir back to the main worktree so all worktrees of the same repo
+// share a common group header. Falls back to filepath.Base(projectRoot) on any error.
+func projectRepoName(projectRoot string) string {
+	gitPath := filepath.Join(projectRoot, ".git")
+	fi, err := os.Stat(gitPath)
+	if err != nil {
+		return filepath.Base(projectRoot)
+	}
+	if fi.IsDir() {
+		return filepath.Base(projectRoot)
+	}
+	// Linked worktree: .git is a file containing "gitdir: /abs/path/.git/worktrees/<name>"
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return filepath.Base(projectRoot)
+	}
+	line := strings.TrimSpace(string(data))
+	const pfx = "gitdir: "
+	if !strings.HasPrefix(line, pfx) {
+		return filepath.Base(projectRoot)
+	}
+	// Navigate up 3 levels: <name> → worktrees → .git → main root
+	mainRoot := filepath.Dir(filepath.Dir(filepath.Dir(strings.TrimPrefix(line, pfx))))
+	if mainRoot == "" || mainRoot == "." {
+		return filepath.Base(projectRoot)
+	}
+	return filepath.Base(mainRoot)
+}
+
 // loadSidecars reads all sidecar*.json files from dataDir, deduplicates by ID.
-func loadSidecars(dataDir, projectRoot string, snapshotName string, head string, projectIdx int) []sidecarInfo {
+func loadSidecars(dataDir, projectRoot string, snapshotName string, head string, projectIdx int, repoName, branch string) []sidecarInfo {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	projectName := filepath.Base(projectRoot)
 	seen := map[string]bool{}
@@ -667,8 +1101,11 @@ func loadSidecars(dataDir, projectRoot string, snapshotName string, head string,
 		}
 		result = append(result, sidecarInfo{
 			id:            as.SidecarID,
+			sidecarIDs:    []string{as.SidecarID},
 			name:          as.Name,
 			projectName:   projectName,
+			repoName:      repoName,
+			branch:        branch,
 			projectIdx:    projectIdx,
 			snapshotName:  snapshotName,
 			fileMtime:     mtime,
