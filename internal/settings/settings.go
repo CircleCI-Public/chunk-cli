@@ -91,7 +91,7 @@ func Build(commands []config.Command) ([]byte, error) {
 					Hooks: []hookEntry{
 						{
 							Type:    "command",
-							Command: "chunk validate",
+							Command: StopCommand,
 							Timeout: stopTimeout,
 						},
 					},
@@ -144,7 +144,7 @@ func BuildCodex(commands []config.Command) ([]byte, error) {
 					Hooks: []hookEntry{
 						{
 							Type:    "command",
-							Command: "chunk validate",
+							Command: StopCommand,
 							Timeout: stopTimeout,
 						},
 					},
