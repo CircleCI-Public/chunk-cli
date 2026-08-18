@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 )
 
@@ -263,5 +265,193 @@ func TestLoadSidecars_snapshotName(t *testing.T) {
 	}
 	if result[0].snapshotName != "my-snap" {
 		t.Errorf("snapshotName should be 'my-snap', got %q", result[0].snapshotName)
+	}
+}
+
+// recency ordering and per-project event caps
+
+func TestSortByActivity_freshestProjectFirst(t *testing.T) {
+	now := time.Now()
+	sidecars := []sidecarInfo{
+		{id: "stale", projectName: "old-project", fileMtime: now.Add(-6 * time.Hour)},
+		{id: "older", projectName: "busy-project", lastActivity: now.Add(-30 * time.Minute)},
+		{id: "newest", projectName: "busy-project", lastActivity: now.Add(-1 * time.Minute)},
+	}
+
+	sortByActivity(sidecars)
+
+	want := []string{"newest", "older", "stale"}
+	for i, id := range want {
+		if sidecars[i].id != id {
+			t.Errorf("position %d: want %s, got %s", i, id, sidecars[i].id)
+		}
+	}
+}
+
+func TestSortByActivity_keepsProjectsGrouped(t *testing.T) {
+	now := time.Now()
+	sidecars := []sidecarInfo{
+		{id: "a1", projectName: "a", lastActivity: now.Add(-2 * time.Minute)},
+		{id: "b1", projectName: "b", lastActivity: now.Add(-1 * time.Minute)},
+		{id: "a2", projectName: "a", lastActivity: now.Add(-3 * time.Minute)},
+	}
+
+	sortByActivity(sidecars)
+
+	// Project b is freshest so it leads, then both of a's sidecars together.
+	want := []string{"b1", "a1", "a2"}
+	for i, id := range want {
+		if sidecars[i].id != id {
+			t.Errorf("position %d: want %s, got %s", i, id, sidecars[i].id)
+		}
+	}
+}
+
+func TestFilterSidecars_noPerProjectCap(t *testing.T) {
+	now := time.Now()
+	sidecars := []sidecarInfo{
+		{id: "s1", projectName: "p", lastActivity: now.Add(-1 * time.Minute)},
+		{id: "s2", projectName: "p", lastActivity: now.Add(-2 * time.Minute)},
+		{id: "s3", projectName: "p", lastActivity: now.Add(-3 * time.Minute)},
+		{id: "s4", projectName: "p", lastActivity: now.Add(-4 * time.Minute)},
+	}
+
+	sortByActivity(sidecars)
+	got := filterSidecars(sidecars)
+
+	if len(got) != 4 {
+		t.Fatalf("want all 4 sidecars, got %d", len(got))
+	}
+	for i, id := range []string{"s1", "s2", "s3", "s4"} {
+		if got[i].id != id {
+			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
+		}
+	}
+}
+
+func TestFilterSidecars_dropsInactive(t *testing.T) {
+	now := time.Now()
+	sidecars := []sidecarInfo{
+		{id: "recent", projectName: "p", lastActivity: now.Add(-59 * time.Minute)},
+		{id: "just-aged-out", projectName: "p", lastActivity: now.Add(-61 * time.Minute)},
+		{id: "mtime-recent", projectName: "q", fileMtime: now.Add(-10 * time.Minute)},
+		{id: "mtime-old", projectName: "q", fileMtime: now.Add(-25 * time.Hour)},
+		{id: "no-activity-at-all", projectName: "r"},
+	}
+
+	got := filterSidecars(sidecars)
+
+	want := []string{"recent", "mtime-recent"}
+	if len(got) != len(want) {
+		t.Fatalf("want %d sidecars, got %d", len(want), len(got))
+	}
+	for i, id := range want {
+		if got[i].id != id {
+			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
+		}
+	}
+}
+
+func TestCapEvents_capsPerProject(t *testing.T) {
+	prior := make([]eventlog.Event, recentEvents)
+	for i := range prior {
+		prior[i] = eventlog.Event{SidecarID: "old", Msg: "old"}
+	}
+	fresh := []eventlog.Event{{SidecarID: "new", Msg: "new"}}
+
+	got := capEvents(prior, fresh)
+
+	if len(got) != recentEvents {
+		t.Fatalf("want %d events, got %d", recentEvents, len(got))
+	}
+	if got[len(got)-1].SidecarID != "new" {
+		t.Errorf("newest event should survive the cap, got %s", got[len(got)-1].SidecarID)
+	}
+}
+
+func TestLoadData_busyProjectDoesNotEvictRecentValidate(t *testing.T) {
+	noisyDir, quietDir := t.TempDir(), t.TempDir()
+	writeSidecarJSON(t, noisyDir, "sidecar.json", `{"sidecar_id":"noisy","name":"noisy"}`)
+	writeSidecarJSON(t, quietDir, "sidecar.json", `{"sidecar_id":"quiet","name":"quiet"}`)
+
+	noisyLog, err := eventlog.Open(noisyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quietLog, err := eventlog.Open(quietDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The noisy project alone exceeds the event cap.
+	for i := 0; i < recentEvents+50; i++ {
+		if err := noisyLog.Append(eventlog.Event{
+			Ts: time.Now().Add(-2 * time.Hour), SidecarID: "noisy", Op: eventlog.OpValidate, Level: "info", Msg: "noise",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := quietLog.Append(eventlog.Event{
+		Ts: time.Now(), SidecarID: "quiet", Op: eventlog.OpValidate, Level: "done", Msg: "validate passed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New([]ProjectEntry{
+		{Log: noisyLog, DataDir: noisyDir, ProjectRoot: filepath.Join(noisyDir, "noisy-project")},
+		{Log: quietLog, DataDir: quietDir, ProjectRoot: filepath.Join(quietDir, "quiet-project")},
+	})
+
+	msg, ok := m.loadData().(dataMsg)
+	if !ok {
+		t.Fatalf("want dataMsg, got %T", msg)
+	}
+	// The noisy sidecar's events are 2h old, so it falls outside activeWindow.
+	if len(msg.sidecars) != 1 {
+		t.Fatalf("want 1 active sidecar, got %d", len(msg.sidecars))
+	}
+	if msg.sidecars[0].id != "quiet" {
+		t.Errorf("want quiet sidecar, got %s", msg.sidecars[0].id)
+	}
+	if msg.sidecars[0].lastActivity.IsZero() {
+		t.Error("recent validate lost its activity to the other project's history")
+	}
+}
+
+func TestUpdate_selectionFollowsSidecarID(t *testing.T) {
+	now := time.Now()
+	m := New(nil)
+	m.sidecars = []sidecarInfo{{id: "a", projectName: "p"}, {id: "b", projectName: "p"}}
+
+	// Select the second sidecar.
+	next, _ := m.Update(tea.KeyPressMsg{Code: 'j'})
+	m = next.(Model)
+	if m.selectedID != "b" {
+		t.Fatalf("want selectedID b, got %q", m.selectedID)
+	}
+
+	// A poll reorders the list; the selection should follow the id, not the index.
+	next, _ = m.Update(dataMsg{
+		sidecars: []sidecarInfo{
+			{id: "c", projectName: "p", lastActivity: now},
+			{id: "b", projectName: "p", lastActivity: now.Add(-time.Minute)},
+			{id: "a", projectName: "p", lastActivity: now.Add(-2 * time.Minute)},
+		},
+	})
+	m = next.(Model)
+	if m.selectedIdx != 1 || m.selectedID != "b" {
+		t.Errorf("want selection to stay on b (idx 1), got idx %d id %q", m.selectedIdx, m.selectedID)
+	}
+}
+
+func TestUpdate_unknownSelectionFallsBackToFreshest(t *testing.T) {
+	m := New(nil)
+	m.selectedID = "gone"
+
+	next, _ := m.Update(dataMsg{sidecars: []sidecarInfo{{id: "fresh"}, {id: "older"}}})
+	m = next.(Model)
+
+	if m.selectedIdx != 0 || m.selectedID != "fresh" {
+		t.Errorf("want fallback to idx 0 (fresh), got idx %d id %q", m.selectedIdx, m.selectedID)
 	}
 }
