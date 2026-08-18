@@ -48,6 +48,25 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 	}
 }
 
+// commandCounter counts per-command pass/fail events emitted by the validate
+// runner. It detects command results by the "(local)" or "(remote)" suffix that
+// RunRemote and runCommand append to every per-command status line.
+type commandCounter struct {
+	passed int
+	total  int
+}
+
+func (c *commandCounter) wrap(fn iostream.StatusFunc) iostream.StatusFunc {
+	return func(level iostream.Level, msg string) {
+		if strings.HasSuffix(msg, "(local)") || strings.HasSuffix(msg, "(remote)") {
+			if level == iostream.LevelDone {
+				c.passed++
+			}
+		}
+		fn(level, msg)
+	}
+}
+
 // hookContext holds the Claude Code Stop hook payload fields.
 type hookContext struct {
 	sessionID      string
@@ -405,7 +424,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			// A hit is a success, so it finishes the same way a real successful run
 			// does rather than repeating that bookkeeping here: clearing the failure
 			// counter, and whatever else the success branch grows later.
-			return finishValidate(cmd, hook, nil, start, cfg, wrapEventLogStatusFn(statusFn, "", nil, workDir, hook), streams)
+			return finishValidate(cmd, hook, nil, start, cfg, &commandCounter{}, wrapEventLogStatusFn(statusFn, "", nil, workDir, hook), streams)
 		}
 	}
 
@@ -457,13 +476,22 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
+	counter := &commandCounter{}
+	switch {
+	case opts.inlineCmd != "", name != "":
+		counter.total = 1
+	default:
+		counter.total = len(cfg.Commands)
+	}
+	statusFn = counter.wrap(statusFn)
+
 	execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, freshlyCreated, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
 	if execErr == nil && resultCache != nil {
 		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
 			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
 		}
 	}
-	return finishValidate(cmd, hook, execErr, start, cfg, statusFn, streams)
+	return finishValidate(cmd, hook, execErr, start, cfg, counter, statusFn, streams)
 }
 
 // loadEnvVarsWithRetry loads sidecar env vars, and if the sidecar is unusable
@@ -529,7 +557,7 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 }
 
 // finishValidate reports the validate outcome and handles hook exit codes.
-func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, counter *commandCounter, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	maxAttempts := validate.DefaultMaxAttempts
 	if hook != nil {
 		if ma := cfg.StopHookMaxAttempts; ma > 0 {
@@ -537,22 +565,24 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 		}
 	}
 
+	elapsed := ui.FormatDuration(time.Since(start))
+	summary := fmt.Sprintf("%d/%d passed", counter.passed, counter.total)
 	if execErr != nil {
 		if hook != nil {
 			attempt := validate.ReadAttempts(hook.sessionID) + 1
-			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed, attempt %d/%d)", ui.FormatDuration(time.Since(start)), attempt, maxAttempts))
+			statusFn(iostream.LevelError, fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts))
 		} else {
-			statusFn(iostream.LevelError, fmt.Sprintf("done in %s (failed)", ui.FormatDuration(time.Since(start))))
+			statusFn(iostream.LevelError, fmt.Sprintf("%s  %s", summary, elapsed))
 		}
 	} else {
-		statusFn(iostream.LevelDone, fmt.Sprintf("done in %s", ui.FormatDuration(time.Since(start))))
+		statusFn(iostream.LevelDone, fmt.Sprintf("%s  %s", summary, elapsed))
 	}
 	if hook == nil {
 		return execErr
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", ui.FormatDuration(time.Since(start)))))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", elapsed)))
 		return nil
 	}
 	return hookErr
