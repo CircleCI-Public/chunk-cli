@@ -162,6 +162,8 @@ func TestValidateRunDryRunNoConfig(t *testing.T) {
 }
 
 func TestValidateRunLocal(t *testing.T) {
+	// Local-only commands (no remote:true) are now blocked — users must configure
+	// remote validation before running chunk validate.
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo installed", "echo tested")
 
@@ -171,17 +173,18 @@ func TestValidateRunLocal(t *testing.T) {
 		"validate",
 	}, env, workDir)
 
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when remote is not configured")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "installed"),
-		"expected install command output in result, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "tested"),
-		"expected test command output in result, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Remote validation is not configured"),
+		"expected remote-not-configured message, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "sidecar setup") || strings.Contains(combined, "mark-remote"),
+		"expected actionable suggestion in output, got: %s", combined)
 }
 
 func TestValidateRunLocalFailure(t *testing.T) {
+	// Local-only commands are blocked regardless of whether they would pass or fail.
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	writeProjectConfig(t, workDir, "true", "false") // false exits non-zero
+	writeProjectConfig(t, workDir, "true", "false")
 
 	env := testenv.NewTestEnv(t)
 
@@ -189,12 +192,15 @@ func TestValidateRunLocalFailure(t *testing.T) {
 		"validate",
 	}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code for failing test command")
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when remote is not configured")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "Remote validation is not configured"),
+		"expected remote-not-configured message, got: %s", combined)
 }
 
 func TestValidateRunLocalSkipsAfterFailure(t *testing.T) {
+	// Local-only commands are blocked before any execution — no "skipped" output.
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
-	// install fails, so test should be skipped
 	writeProjectConfig(t, workDir, "false", "echo should-not-run")
 
 	env := testenv.NewTestEnv(t)
@@ -203,10 +209,12 @@ func TestValidateRunLocalSkipsAfterFailure(t *testing.T) {
 		"validate",
 	}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when remote is not configured")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "skipped"),
-		"expected skipped indicator for test command, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Remote validation is not configured"),
+		"expected remote-not-configured message, got: %s", combined)
+	assert.Assert(t, !strings.Contains(combined, "should-not-run"),
+		"blocked run must not execute any command, got: %s", combined)
 }
 
 // generateTestSSHKey writes an ed25519 keypair to identityFile and identityFile+".pub".
@@ -233,6 +241,7 @@ func generateTestSSHKey(t *testing.T, identityFile string) error {
 // --- Named command execution ---
 
 func TestValidateRunNamed(t *testing.T) {
+	// Named local commands are also blocked — remote must be configured first.
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo installed", "echo tested")
 
@@ -242,12 +251,10 @@ func TestValidateRunNamed(t *testing.T) {
 		"validate", "test",
 	}, env, workDir)
 
-	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when remote is not configured")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "tested"),
-		"expected test command output in result, got: %s", combined)
-	assert.Assert(t, !strings.Contains(combined, "installed"),
-		"install command must not run when only 'test' is requested, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "Remote validation is not configured"),
+		"expected remote-not-configured message, got: %s", combined)
 }
 
 func TestValidateRunNamedNotConfiguredNonTTY(t *testing.T) {
