@@ -1,3 +1,5 @@
+//go:build !windows
+
 package sidecar
 
 import (
@@ -11,6 +13,8 @@ import (
 
 // watchWindowSize listens for SIGWINCH and updates the remote PTY size.
 // It returns when done is closed.
+//
+// Windows has no SIGWINCH; see terminal_windows.go for the polling equivalent.
 func watchWindowSize(fd int, sess *ssh.Session, done <-chan struct{}) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGWINCH)
