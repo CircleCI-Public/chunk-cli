@@ -167,7 +167,7 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		stdout, stderr, exitCode, err := execFn(ctx, script)
 		elapsed := time.Since(start)
 		if err != nil {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  exec error", maxWidth, c.Name))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  exec error (remote)", maxWidth, c.Name))
 			skipRemaining(status, commands[i+1:], maxWidth)
 			return fmt.Errorf("remote %s: %w", c.Name, err)
 		}
@@ -181,11 +181,11 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 			_, _ = fmt.Fprint(streams.Err, stderr)
 		}
 		if exitCode != 0 {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, formatElapsed(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s (remote)", maxWidth, c.Name, formatElapsed(elapsed)))
 			skipRemaining(status, commands[i+1:], maxWidth)
 			return fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
 		}
-		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, formatElapsed(elapsed)))
+		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s (remote)", maxWidth, c.Name, formatElapsed(elapsed)))
 	}
 	return nil
 }
@@ -209,10 +209,10 @@ func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 		_, _ = fmt.Fprint(streams.Err, stderr)
 	}
 	if exitCode != 0 {
-		status(iostream.LevelError, fmt.Sprintf("%s  %s", name, formatElapsed(elapsed)))
+		status(iostream.LevelError, fmt.Sprintf("%s  %s (remote)", name, formatElapsed(elapsed)))
 		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
 	}
-	status(iostream.LevelDone, fmt.Sprintf("%s  %s", name, formatElapsed(elapsed)))
+	status(iostream.LevelDone, fmt.Sprintf("%s  %s (remote)", name, formatElapsed(elapsed)))
 	return nil
 }
 
@@ -276,17 +276,17 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  timed out after %ds  %s", nameWidth, name, timeoutSec, formatElapsed(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  timed out after %ds  %s (local)", nameWidth, name, timeoutSec, formatElapsed(elapsed)))
 			return fmt.Errorf("%s command timed out after %ds", name, timeoutSec)
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
-			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", nameWidth, name, formatElapsed(elapsed)))
+			status(iostream.LevelError, fmt.Sprintf("%-*s  %s (local)", nameWidth, name, formatElapsed(elapsed)))
 			return fmt.Errorf("%s command failed with exit code %d", name, exitErr.ExitCode())
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
-	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", nameWidth, name, formatElapsed(elapsed)))
+	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s (local)", nameWidth, name, formatElapsed(elapsed)))
 	return nil
 }
 
