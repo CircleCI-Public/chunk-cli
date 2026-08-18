@@ -10,6 +10,10 @@ const (
 	errMsgHomeNotSet            = "HOME not set"
 	msgValidateNotConfigured    = "No validate commands configured."
 
+	msgRemoteNotConfigured        = "Remote validation is not configured."
+	suggestionRemoteNotConfigured = "Set up remote validation with: chunk sidecar setup\n" +
+		"Or mark commands as remote with: chunk validate --mark-remote"
+
 	suggestionCheckPerms   = "Check file permissions."
 	suggestionNetworkRetry = "Check your network connection and try again."
 	suggestionGitRepo      = "Run this command from inside a git repo."

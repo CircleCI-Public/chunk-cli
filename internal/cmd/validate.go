@@ -241,6 +241,37 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	return ctx, streams, false, nil
 }
 
+// checkRemoteConfigured returns an error when an interactive run would fall
+// back to local execution because no commands are marked remote. Hooks and
+// explicit override flags (--remote, --sidecar-id, --cmd) bypass this gate.
+func checkRemoteConfigured(hook *hookContext, opts *validateOpts, cfg *config.ProjectConfig) error {
+	if hook != nil || opts.inlineCmd != "" || opts.remote || opts.sidecarID != "" {
+		return nil
+	}
+	if cfg == nil || !cfg.HasCommands() || cfg.HasRemoteCommands() || cfg.HasSidecarImage() {
+		return nil
+	}
+	return &userError{
+		msg:        msgRemoteNotConfigured,
+		suggestion: suggestionRemoteNotConfigured,
+		errMsg:     "remote not configured",
+		hideDetail: true,
+	}
+}
+
+// hookMissingAuth reports whether a hook run should be aborted because the
+// CircleCI token is missing. It also prints the actionable message. Returns
+// false (do not abort) for non-hook runs — those prompt interactively instead.
+func hookMissingAuth(hook *hookContext, needsSidecar bool, token string, streams iostream.Streams) bool {
+	if hook == nil || !needsSidecar || token != "" {
+		return false
+	}
+	streams.ErrPrintln("CircleCI auth is not configured.")
+	streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
+	streams.ErrPrintln("Don't have an account? Sign up at https://app.circleci.com/signup")
+	return true
+}
+
 func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig) bool {
 	if explicitRemote || cfg.HasRemoteCommands() {
 		return true
@@ -351,6 +382,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
 	}
 
+	if err := checkRemoteConfigured(hook, opts, cfg); err != nil {
+		return err
+	}
+
 	// Hook: fail early when CircleCI auth is missing and remote commands need it.
 	// In non-hook context ensureCircleCIClient prompts interactively; hooks have
 	// no TTY so we surface a clear message here instead of a confusing fallback.
@@ -358,10 +393,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	explicitRemote := opts.remote || opts.sidecarID != ""
 	needsSidecar := validateNeedsSidecar(explicitRemote, cfg)
-	if hook != nil && needsSidecar && rc.CircleCIToken == "" {
-		streams.ErrPrintln("CircleCI auth is not configured.")
-		streams.ErrPrintln("Suggestion: " + suggestionCircleCIAuth)
-		streams.ErrPrintln("Don't have an account? Sign up at https://app.circleci.com/signup")
+	if hookMissingAuth(hook, needsSidecar, rc.CircleCIToken, streams) {
 		return errSilentExit
 	}
 

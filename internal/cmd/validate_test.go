@@ -191,6 +191,55 @@ func TestValidateNoConfigShowsSkillHint(t *testing.T) {
 		"expected suggestion to mention chunk-sidecar skill, got: %q", ue.Suggestion())
 }
 
+func TestValidateRequiresRemoteConfiguration(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "test", Run: "go test ./..."},
+		},
+	}))
+
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--project", dir})
+	err := root.Execute()
+
+	assert.Assert(t, err != nil, "expected error when no remote commands configured")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T: %v", err, err)
+	assert.Assert(t, strings.Contains(ue.UserMessage(), "Remote validation is not configured"),
+		"expected remote-not-configured message, got: %q", ue.UserMessage())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "sidecar setup") || strings.Contains(ue.Suggestion(), "mark-remote"),
+		"expected suggestion to mention sidecar setup or mark-remote, got: %q", ue.Suggestion())
+}
+
+func TestValidateRequiresRemoteConfigurationSkipsInHookContext(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	gitSetup(t, dir, "main")
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "test", Run: "exit 0"},
+		},
+	}))
+
+	_, _, err := runValidateHook(t, dir)
+
+	// Hook must not be blocked by the remote-not-configured gate.
+	// (It may fail for other reasons like a dirty tree that can't be fingerprinted,
+	// but it must not return the remote-not-configured userError.)
+	if err != nil {
+		var ue *userError
+		if errors.As(err, &ue) {
+			assert.Assert(t, !strings.Contains(ue.Error(), "Remote validation is not configured"),
+				"hook must not be blocked by remote-not-configured gate, got: %q", ue.Error())
+		}
+	}
+}
+
 func TestValidateEnvFlagBadValue(t *testing.T) {
 	isolateConfig(t)
 	dir := t.TempDir()
