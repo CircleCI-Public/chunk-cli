@@ -279,12 +279,12 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 	add("")
 
 	if len(m.sidecars) == 0 {
-		// Idle is now the common empty state: sidecars may well exist, they just
-		// haven't done anything within activeWindow.
-		add(muted("nothing active"))
+		// Sidecars may well exist, they just haven't done anything recent
+		// enough to be worth showing.
+		add(muted("nothing recent"))
 		add("")
 		add(dim("no sidecar activity"))
-		add(dim("in the last hour"))
+		add(dim("in the last day"))
 		return lines
 	}
 
@@ -520,7 +520,7 @@ func (m Model) loadData() tea.Msg {
 	}
 
 	sortByActivity(allSidecars)
-	allSidecars = filterSidecars(allSidecars)
+	allSidecars = filterSidecars(allSidecars, m.sidecarCapacity())
 
 	return dataMsg{sidecars: allSidecars, events: newEvents, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
 }
@@ -641,8 +641,18 @@ func loadSidecars(dataDir, projectRoot string, snapshotName string, head string)
 	return result
 }
 
-// activeWindow is how recently a sidecar must have been active to be shown.
-const activeWindow = time.Hour
+const (
+	// activeWindow is how recently a sidecar must have been active to be shown.
+	activeWindow = time.Hour
+	// fallbackWindow bounds how far back the pane reaches when nothing has been
+	// active within activeWindow.
+	fallbackWindow = 24 * time.Hour
+	// linesPerSidecar is the worst-case row cost of one sidecar in the sidecar
+	// pane: project header, name, status, age, and the gap between projects.
+	linesPerSidecar = 5
+	// defaultCapacity is used until the first WindowSizeMsg gives a real height.
+	defaultCapacity = 5
+)
 
 // loadSnapshotName returns the Name field from any snapshot*.json in dataDir,
 // or "" if none is found or the name is not set.
@@ -663,20 +673,57 @@ func loadSnapshotName(dataDir string) string {
 	return ""
 }
 
-// filterSidecars keeps only sidecars active within activeWindow. There is no
-// per-project cap: every sidecar you have touched in the last hour is shown,
-// however many that is.
-func filterSidecars(sidecars []sidecarInfo) []sidecarInfo {
+// filterSidecars keeps every sidecar active within activeWindow, with no
+// per-project cap, however many that is. When nothing has been active that
+// recently it falls back to the most recent sidecars, enough to fill the pane
+// and reaching back no further than fallbackWindow, so an idle dashboard still
+// shows you where you left off. sidecars must already be sorted by recency.
+func filterSidecars(sidecars []sidecarInfo, capacity int) []sidecarInfo {
 	now := time.Now()
-	result := sidecars[:0]
+
+	var active []sidecarInfo
 	for _, sc := range sidecars {
-		eff := effectiveActivity(sc)
-		if eff.IsZero() || now.Sub(eff) > activeWindow {
-			continue
+		if within(now, sc, activeWindow) {
+			active = append(active, sc)
 		}
-		result = append(result, sc)
 	}
-	return result
+	if len(active) > 0 {
+		return active
+	}
+
+	if capacity < 1 {
+		capacity = 1
+	}
+	var recent []sidecarInfo
+	for _, sc := range sidecars {
+		if len(recent) >= capacity {
+			break
+		}
+		if within(now, sc, fallbackWindow) {
+			recent = append(recent, sc)
+		}
+	}
+	return recent
+}
+
+// within reports whether the sidecar was active no longer than window ago.
+func within(now time.Time, sc sidecarInfo, window time.Duration) bool {
+	eff := effectiveActivity(sc)
+	return !eff.IsZero() && now.Sub(eff) <= window
+}
+
+// sidecarCapacity is how many sidecars the left pane can render at the current
+// terminal height. It mirrors renderBody's content height, less the pane title
+// and the blank line under it.
+func (m Model) sidecarCapacity() int {
+	if m.height <= 0 {
+		return defaultCapacity
+	}
+	paneHeight := m.height - 4 - 2
+	if paneHeight < linesPerSidecar {
+		return 1
+	}
+	return paneHeight / linesPerSidecar
 }
 
 func anyRunning(sidecars []sidecarInfo) bool {
