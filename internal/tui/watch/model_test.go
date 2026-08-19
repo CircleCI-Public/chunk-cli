@@ -1,8 +1,6 @@
 package watch
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // groupEvents tests
@@ -81,7 +80,6 @@ func TestGroupEvents_opChange(t *testing.T) {
 }
 
 func TestGroupEvents_doneFollowedByNewOp(t *testing.T) {
-	// done terminates the group, next event starts a fresh one even with same op.
 	events := []eventlog.Event{
 		{Op: eventlog.OpSync, Level: "step"},
 		{Op: eventlog.OpSync, Level: "done"},
@@ -146,7 +144,6 @@ func TestTruncate(t *testing.T) {
 
 func TestPadLine_padsShortString(t *testing.T) {
 	got := padLine("hi", 5)
-	// lipgloss.Width("hi") == 2; expect 3 spaces appended.
 	if got != "hi   " {
 		t.Errorf("want %q, got %q", "hi   ", got)
 	}
@@ -164,273 +161,77 @@ func TestPadLine_alreadyAtWidth(t *testing.T) {
 func TestAgo(t *testing.T) {
 	now := time.Now()
 
-	// Minutes bucket: clearly > 1 min, < 1 hour.
 	if got := ago(now.Add(-5*time.Minute - 30*time.Second)); got != "5m ago" {
 		t.Errorf("want '5m ago', got %q", got)
 	}
 
-	// Hours bucket.
 	if got := ago(now.Add(-3*time.Hour - 30*time.Minute)); got != "3h ago" {
 		t.Errorf("want '3h ago', got %q", got)
 	}
 
-	// Seconds bucket: verify format without asserting exact count.
 	if got := ago(now.Add(-30 * time.Second)); !strings.HasSuffix(got, "s ago") {
 		t.Errorf("seconds bucket: want 'Xs ago', got %q", got)
 	}
 }
 
-// loadSidecars tests
+// buildDataMsg tests
 
-func writeSidecarJSON(t *testing.T, dir, filename, content string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
+func TestBuildDataMsg_mapsProjectsInOrder(t *testing.T) {
+	snap := watchd.Snapshot{
+		Projects: []watchd.ProjectSnapshot{
+			{Root: "/b", Branch: "main", HeadRef: "bbb"},
+			{Root: "/a", Branch: "feat", HeadRef: "aaa"},
+		},
+	}
+	entries := []ProjectEntry{{ProjectRoot: "/a"}, {ProjectRoot: "/b"}}
+
+	msg := buildDataMsg(snap, entries)
+
+	if msg.branches[0] != "feat" || msg.branches[1] != "main" {
+		t.Errorf("branches not in entry order: %v", msg.branches)
+	}
+	if msg.headRefs[0] != "aaa" || msg.headRefs[1] != "bbb" {
+		t.Errorf("headRefs not in entry order: %v", msg.headRefs)
 	}
 }
 
-func TestLoadSidecars_deduplicatesIDs(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
-	writeSidecarJSON(t, dir, "sidecar.sess1.json", `{"sidecar_id":"id2","name":"sc2"}`)
-	// Duplicate id1 — should be deduplicated.
-	writeSidecarJSON(t, dir, "sidecar.sess2.json", `{"sidecar_id":"id1","name":"sc1"}`)
-
-	result := loadSidecars(dir, root, "", "abc123")
-	if len(result) != 2 {
-		t.Fatalf("want 2 unique sidecars, got %d", len(result))
+func TestBuildDataMsg_mapsSidecars(t *testing.T) {
+	snap := watchd.Snapshot{
+		Projects: []watchd.ProjectSnapshot{
+			{
+				Root: "/p",
+				Sidecars: []watchd.SidecarState{
+					{ID: "sc1", Name: "my-sc", InSync: true},
+				},
+			},
+		},
 	}
-}
+	entries := []ProjectEntry{{ProjectRoot: "/p"}}
 
-func TestLoadSidecars_inSyncWhenHeadMatches(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
+	msg := buildDataMsg(snap, entries)
 
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
-
-	result := loadSidecars(dir, root, "", "abc123")
-	if len(result) != 1 {
-		t.Fatalf("want 1, got %d", len(result))
-	}
-	if !result[0].inSync {
-		t.Error("sidecar should be in sync when lastSyncedRef matches head")
-	}
-}
-
-func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","last_synced_ref":"oldref"}`)
-
-	result := loadSidecars(dir, root, "", "newref")
-	if len(result) != 1 {
-		t.Fatalf("want 1, got %d", len(result))
-	}
-	if result[0].inSync {
-		t.Error("sidecar should not be in sync when refs differ")
-	}
-}
-
-func TestLoadSidecars_emptyDir(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-	if result := loadSidecars(dir, root, "", ""); len(result) != 0 {
-		t.Errorf("want 0, got %d", len(result))
-	}
-}
-
-func TestLoadSidecars_skipsEmptySidecarID(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"","name":"empty"}`)
-
-	if result := loadSidecars(dir, root, "", ""); len(result) != 0 {
-		t.Errorf("want 0 (skipped empty ID), got %d", len(result))
-	}
-}
-
-func TestLoadSidecars_snapshotName(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1"}`)
-
-	result := loadSidecars(dir, root, "my-snap", "")
-	if len(result) != 1 {
-		t.Fatalf("want 1, got %d", len(result))
-	}
-	if result[0].snapshotName != "my-snap" {
-		t.Errorf("snapshotName should be 'my-snap', got %q", result[0].snapshotName)
-	}
-}
-
-// recency ordering and per-project event caps
-
-func TestSortByActivity_freshestProjectFirst(t *testing.T) {
-	now := time.Now()
-	sidecars := []sidecarInfo{
-		{id: "stale", projectName: "old-project", fileMtime: now.Add(-6 * time.Hour)},
-		{id: "older", projectName: "busy-project", lastActivity: now.Add(-30 * time.Minute)},
-		{id: "newest", projectName: "busy-project", lastActivity: now.Add(-1 * time.Minute)},
-	}
-
-	sortByActivity(sidecars)
-
-	want := []string{"newest", "older", "stale"}
-	for i, id := range want {
-		if sidecars[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, sidecars[i].id)
-		}
-	}
-}
-
-func TestSortByActivity_keepsProjectsGrouped(t *testing.T) {
-	now := time.Now()
-	sidecars := []sidecarInfo{
-		{id: "a1", projectName: "a", lastActivity: now.Add(-2 * time.Minute)},
-		{id: "b1", projectName: "b", lastActivity: now.Add(-1 * time.Minute)},
-		{id: "a2", projectName: "a", lastActivity: now.Add(-3 * time.Minute)},
-	}
-
-	sortByActivity(sidecars)
-
-	// Project b is freshest so it leads, then both of a's sidecars together.
-	want := []string{"b1", "a1", "a2"}
-	for i, id := range want {
-		if sidecars[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, sidecars[i].id)
-		}
-	}
-}
-
-func TestFilterSidecars_noPerProjectCap(t *testing.T) {
-	now := time.Now()
-	sidecars := []sidecarInfo{
-		{id: "s1", projectName: "p", lastActivity: now.Add(-1 * time.Minute)},
-		{id: "s2", projectName: "p", lastActivity: now.Add(-2 * time.Minute)},
-		{id: "s3", projectName: "p", lastActivity: now.Add(-3 * time.Minute)},
-		{id: "s4", projectName: "p", lastActivity: now.Add(-4 * time.Minute)},
-	}
-
-	sortByActivity(sidecars)
-	got := filterSidecars(sidecars)
-
-	if len(got) != 4 {
-		t.Fatalf("want all 4 sidecars, got %d", len(got))
-	}
-	for i, id := range []string{"s1", "s2", "s3", "s4"} {
-		if got[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
-		}
-	}
-}
-
-func TestFilterSidecars_dropsInactive(t *testing.T) {
-	now := time.Now()
-	sidecars := []sidecarInfo{
-		{id: "recent", projectName: "p", lastActivity: now.Add(-59 * time.Minute)},
-		{id: "just-aged-out", projectName: "p", lastActivity: now.Add(-61 * time.Minute)},
-		{id: "mtime-recent", projectName: "q", fileMtime: now.Add(-10 * time.Minute)},
-		{id: "mtime-old", projectName: "q", fileMtime: now.Add(-25 * time.Hour)},
-		{id: "no-activity-at-all", projectName: "r"},
-	}
-
-	got := filterSidecars(sidecars)
-
-	want := []string{"recent", "mtime-recent"}
-	if len(got) != len(want) {
-		t.Fatalf("want %d sidecars, got %d", len(want), len(got))
-	}
-	for i, id := range want {
-		if got[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
-		}
-	}
-}
-
-func TestCapEvents_capsPerProject(t *testing.T) {
-	prior := make([]eventlog.Event, recentEvents)
-	for i := range prior {
-		prior[i] = eventlog.Event{SidecarID: "old", Msg: "old"}
-	}
-	fresh := []eventlog.Event{{SidecarID: "new", Msg: "new"}}
-
-	got := capEvents(prior, fresh)
-
-	if len(got) != recentEvents {
-		t.Fatalf("want %d events, got %d", recentEvents, len(got))
-	}
-	if got[len(got)-1].SidecarID != "new" {
-		t.Errorf("newest event should survive the cap, got %s", got[len(got)-1].SidecarID)
-	}
-}
-
-func TestLoadData_busyProjectDoesNotEvictRecentValidate(t *testing.T) {
-	noisyDir, quietDir := t.TempDir(), t.TempDir()
-	writeSidecarJSON(t, noisyDir, "sidecar.json", `{"sidecar_id":"noisy","name":"noisy"}`)
-	writeSidecarJSON(t, quietDir, "sidecar.json", `{"sidecar_id":"quiet","name":"quiet"}`)
-
-	noisyLog, err := eventlog.Open(noisyDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	quietLog, err := eventlog.Open(quietDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The noisy project alone exceeds the event cap.
-	for i := 0; i < recentEvents+50; i++ {
-		if err := noisyLog.Append(eventlog.Event{
-			Ts: time.Now().Add(-2 * time.Hour), SidecarID: "noisy", Op: eventlog.OpValidate, Level: "info", Msg: "noise",
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := quietLog.Append(eventlog.Event{
-		Ts: time.Now(), SidecarID: "quiet", Op: eventlog.OpValidate, Level: "done", Msg: "validate passed",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	m := New([]ProjectEntry{
-		{Log: noisyLog, DataDir: noisyDir, ProjectRoot: filepath.Join(noisyDir, "noisy-project")},
-		{Log: quietLog, DataDir: quietDir, ProjectRoot: filepath.Join(quietDir, "quiet-project")},
-	})
-
-	msg, ok := m.loadData().(dataMsg)
-	if !ok {
-		t.Fatalf("want dataMsg, got %T", msg)
-	}
-	// The noisy sidecar's events are 2h old, so it falls outside activeWindow.
 	if len(msg.sidecars) != 1 {
-		t.Fatalf("want 1 active sidecar, got %d", len(msg.sidecars))
+		t.Fatalf("want 1 sidecar, got %d", len(msg.sidecars))
 	}
-	if msg.sidecars[0].id != "quiet" {
-		t.Errorf("want quiet sidecar, got %s", msg.sidecars[0].id)
-	}
-	if msg.sidecars[0].lastActivity.IsZero() {
-		t.Error("recent validate lost its activity to the other project's history")
+	sc := msg.sidecars[0]
+	if sc.id != "sc1" || sc.name != "my-sc" || !sc.inSync {
+		t.Errorf("sidecar not mapped correctly: %+v", sc)
 	}
 }
+
+// Model update tests
 
 func TestUpdate_selectionFollowsSidecarID(t *testing.T) {
 	now := time.Now()
 	m := New(nil)
 	m.sidecars = []sidecarInfo{{id: "a", projectName: "p"}, {id: "b", projectName: "p"}}
 
-	// Select the second sidecar.
 	next, _ := m.Update(tea.KeyPressMsg{Code: 'j'})
 	m = next.(Model)
 	if m.selectedID != "b" {
 		t.Fatalf("want selectedID b, got %q", m.selectedID)
 	}
 
-	// A poll reorders the list; the selection should follow the id, not the index.
 	next, _ = m.Update(dataMsg{
 		sidecars: []sidecarInfo{
 			{id: "c", projectName: "p", lastActivity: now},

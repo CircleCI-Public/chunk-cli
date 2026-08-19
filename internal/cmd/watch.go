@@ -9,11 +9,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	internaltui "github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui/watch"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newWatchCmd() *cobra.Command {
@@ -66,21 +66,16 @@ func newWatchCmd() *cobra.Command {
 					return fmt.Errorf("watch: data dir for %s: %w", abs, err)
 				}
 
-				// Register this project so future --all runs find it.
+				// Register this project so the daemon and future --all runs find it.
 				if err := os.MkdirAll(dataDir, 0o755); err == nil {
 					_ = os.WriteFile(filepath.Join(dataDir, "project-root"), []byte(abs), 0o644)
 				}
 
-				el, err := eventlog.Open(dataDir)
-				if err != nil {
-					return fmt.Errorf("watch: event log for %s: %w", abs, err)
-				}
+				entries = append(entries, watch.ProjectEntry{ProjectRoot: abs})
+			}
 
-				entries = append(entries, watch.ProjectEntry{
-					Log:         el,
-					DataDir:     dataDir,
-					ProjectRoot: abs,
-				})
+			if err := watchd.EnsureRunning([]string{"watch", "_daemon"}); err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not start watch daemon: %v\n", err)
 			}
 
 			m := watch.New(entries)
@@ -91,5 +86,15 @@ func newWatchCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects, not just the current directory")
+
+	// Hidden daemon entry point — launched by EnsureRunning.
+	cmd.AddCommand(&cobra.Command{
+		Use:    "_daemon",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return watchd.RunDaemon(cmd.Context())
+		},
+	})
+
 	return cmd
 }

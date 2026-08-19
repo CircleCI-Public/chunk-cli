@@ -2,12 +2,7 @@
 package watch
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -15,17 +10,12 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 const (
-	leftPaneWidth  = 28
-	divider        = " │ "
-	pollInterval   = 5 * time.Second
-	spinInterval   = 160 * time.Millisecond
-	runningTimeout = 5 * time.Minute
-	recentEvents   = 300
+	leftPaneWidth = 28
+	spinInterval  = 160 * time.Millisecond
 
 	levelDone  = "done"
 	levelError = "error"
@@ -79,10 +69,8 @@ func red(s string) string    { return styleRed.Render(s) }
 func muted(s string) string  { return styleMuted.Render(s) }
 func vdim(s string) string   { return styleVdim.Render(s) }
 
-// ProjectEntry holds everything the watch model needs for one project.
+// ProjectEntry identifies a project to include in the watch dashboard.
 type ProjectEntry struct {
-	Log         *eventlog.Log
-	DataDir     string
 	ProjectRoot string
 }
 
@@ -91,8 +79,8 @@ type sidecarInfo struct {
 	id            string
 	name          string
 	projectName   string
-	snapshotName  string    // name of the active snapshot for this project, if any
-	fileMtime     time.Time // mtime of the sidecar state file (fallback when no events yet)
+	snapshotName  string
+	fileMtime     time.Time
 	lastSyncedRef string
 	inSync        bool
 	running       bool
@@ -106,7 +94,6 @@ type spinMsg struct{}
 type dataMsg struct {
 	sidecars []sidecarInfo
 	events   [][]eventlog.Event
-	offsets  []int64
 	branches []string
 	headRefs []string
 }
@@ -114,7 +101,6 @@ type dataMsg struct {
 // Model is the BubbleTea model for the watch dashboard.
 type Model struct {
 	projects []ProjectEntry
-	offsets  []int64
 	branches []string // current branch per project, refreshed each poll
 	headRefs []string // HEAD SHA per project, refreshed each poll
 
@@ -133,7 +119,6 @@ type Model struct {
 func New(projects []ProjectEntry) Model {
 	return Model{
 		projects: projects,
-		offsets:  make([]int64, len(projects)),
 		branches: make([]string, len(projects)),
 		headRefs: make([]string, len(projects)),
 	}
@@ -174,7 +159,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataMsg:
 		m.sidecars = msg.sidecars
 		m.events = msg.events
-		m.offsets = msg.offsets
 		m.branches = msg.branches
 		m.headRefs = msg.headRefs
 		// Sidecars are re-sorted by recency each poll, so track the selection
@@ -183,7 +167,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 		m.hasSpinner = anyRunning(m.sidecars)
-		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+		return m, tea.Tick(watchd.PollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 
 	case tickMsg:
 		return m, m.loadData
@@ -279,8 +263,6 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 	add("")
 
 	if len(m.sidecars) == 0 {
-		// Idle is now the common empty state: sidecars may well exist, they just
-		// haven't done anything within activeWindow.
 		add(muted("nothing active"))
 		add("")
 		add(dim("no sidecar activity"))
@@ -295,7 +277,6 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 			break
 		}
 
-		// Project separator — always shown so each sidecar has a project label.
 		if sc.projectName != lastProject {
 			if lastProject != "" {
 				add("")
@@ -335,7 +316,6 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 			add("")
 		}
 
-		// Suppress dotted divider when next sidecar starts a new project group.
 		if i < len(m.sidecars)-1 && m.sidecars[i+1].projectName == sc.projectName {
 			add(vdim(strings.Repeat("·", leftPaneWidth)))
 		}
@@ -371,7 +351,6 @@ func (m Model) renderActivityPane(maxLines int) []string {
 	}
 
 	if len(filtered) == 0 {
-		// right pane width: total - 1 leading space - leftPaneWidth - 1 space - 1 divider - 1 space
 		rightWidth := m.width - leftPaneWidth - 4
 		logoMaxWidth := 0
 		for _, l := range logoLines {
@@ -490,193 +469,71 @@ func (m Model) renderFooter() string {
 	return vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
 }
 
-// loadData reads sidecar state files and new event log entries from all projects.
+// loadData fetches the current snapshot from the watch daemon and returns a
+// dataMsg with the display-ready state.
 func (m Model) loadData() tea.Msg {
-	var allSidecars []sidecarInfo
-	newEvents := make([][]eventlog.Event, len(m.projects))
-	newOffsets := make([]int64, len(m.projects))
-	copy(newOffsets, m.offsets)
-	newBranches := make([]string, len(m.projects))
-	newHeadRefs := make([]string, len(m.projects))
-
+	roots := make([]string, len(m.projects))
 	for i, p := range m.projects {
-		newBranches[i] = sidecar.CurrentBranch(p.ProjectRoot)
-		newHeadRefs[i] = headRef(p.ProjectRoot)
-
-		// Events are read before the sidecars they annotate.
-		if i < len(m.events) {
-			newEvents[i] = m.events[i]
-		}
-		if p.Log != nil {
-			fresh, newOff, _ := p.Log.TailFrom(m.offsets[i])
-			newEvents[i] = capEvents(newEvents[i], fresh)
-			newOffsets[i] = newOff
-		}
-
-		snapName := loadSnapshotName(p.DataDir)
-		sidecars := loadSidecars(p.DataDir, p.ProjectRoot, snapName, newHeadRefs[i])
-		annotateActivity(sidecars, newEvents[i])
-		allSidecars = append(allSidecars, sidecars...)
+		roots[i] = p.ProjectRoot
 	}
 
-	sortByActivity(allSidecars)
-	allSidecars = filterSidecars(allSidecars)
-
-	return dataMsg{sidecars: allSidecars, events: newEvents, offsets: newOffsets, branches: newBranches, headRefs: newHeadRefs}
-}
-
-// capEvents appends fresh to prior, keeping at most recentEvents. The cap is
-// applied per project so a project with a long history cannot evict another
-// project's recent activity.
-func capEvents(prior, fresh []eventlog.Event) []eventlog.Event {
-	merged := make([]eventlog.Event, 0, len(prior)+len(fresh))
-	merged = append(merged, prior...)
-	merged = append(merged, fresh...)
-	if len(merged) > recentEvents {
-		merged = merged[len(merged)-recentEvents:]
+	snap, err := watchd.FetchSnapshot(roots)
+	if err != nil {
+		// Daemon not available; return an empty update so the TUI retries next tick.
+		return dataMsg{}
 	}
-	return merged
+
+	return buildDataMsg(snap, m.projects)
 }
 
-// annotateActivity fills lastActivity, lastOp and running from the newest event
-// belonging to each sidecar.
-func annotateActivity(sidecars []sidecarInfo, events []eventlog.Event) {
-	for i := range sidecars {
-		sc := &sidecars[i]
-		for j := len(events) - 1; j >= 0; j-- {
-			e := events[j]
-			if e.SidecarID != sc.id {
-				continue
-			}
-			sc.lastActivity = e.Ts
-			sc.lastOp = e.Op
-			if e.Level != levelDone && e.Level != levelError && time.Since(e.Ts) < runningTimeout {
-				sc.running = true
-			}
-			break
-		}
+// buildDataMsg maps a Snapshot onto a dataMsg, preserving the project ordering
+// from entries.
+func buildDataMsg(snap watchd.Snapshot, entries []ProjectEntry) dataMsg {
+	byRoot := make(map[string]watchd.ProjectSnapshot, len(snap.Projects))
+	for _, p := range snap.Projects {
+		byRoot[p.Root] = p
 	}
-}
 
-// sortByActivity puts the most recently active project first, and within a
-// project the most recently active sidecar first. Projects stay grouped so the
-// sidecar pane still renders one header per project.
-func sortByActivity(sidecars []sidecarInfo) {
-	latest := map[string]time.Time{}
-	for _, sc := range sidecars {
-		if eff := effectiveActivity(sc); eff.After(latest[sc.projectName]) {
-			latest[sc.projectName] = eff
-		}
-	}
-	sort.SliceStable(sidecars, func(i, j int) bool {
-		a, b := sidecars[i], sidecars[j]
-		if a.projectName != b.projectName {
-			return latest[a.projectName].After(latest[b.projectName])
-		}
-		return effectiveActivity(a).After(effectiveActivity(b))
-	})
-}
+	events := make([][]eventlog.Event, len(entries))
+	branches := make([]string, len(entries))
+	headRefs := make([]string, len(entries))
+	var allSidecars []sidecarInfo
 
-// effectiveActivity is the sidecar's last event time, falling back to the mtime
-// of its state file when no events survive in the window.
-func effectiveActivity(sc sidecarInfo) time.Time {
-	if !sc.lastActivity.IsZero() {
-		return sc.lastActivity
-	}
-	return sc.fileMtime
-}
-
-// indexOfSidecar returns the position of id, or 0 when it is absent.
-func indexOfSidecar(sidecars []sidecarInfo, id string) int {
-	for i, sc := range sidecars {
-		if sc.id == id {
-			return i
-		}
-	}
-	return 0
-}
-
-// selectedSidecarID returns the id at idx, or "" when idx is out of range.
-func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
-	if idx < 0 || idx >= len(sidecars) {
-		return ""
-	}
-	return sidecars[idx].id
-}
-
-// loadSidecars reads all sidecar*.json files from dataDir, deduplicates by ID.
-func loadSidecars(dataDir, projectRoot string, snapshotName string, head string) []sidecarInfo {
-	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
-	projectName := filepath.Base(projectRoot)
-	seen := map[string]bool{}
-	var result []sidecarInfo
-	for _, path := range matches {
-		data, err := os.ReadFile(path)
-		if err != nil {
+	for i, entry := range entries {
+		p, ok := byRoot[entry.ProjectRoot]
+		if !ok {
 			continue
 		}
-		var as sidecar.ActiveSidecar
-		if json.Unmarshal(data, &as) != nil || as.SidecarID == "" {
-			continue
+		branches[i] = p.Branch
+		headRefs[i] = p.HeadRef
+		events[i] = p.Events
+		for _, ss := range p.Sidecars {
+			allSidecars = append(allSidecars, sidecarFromState(ss))
 		}
-		if seen[as.SidecarID] {
-			continue
-		}
-		seen[as.SidecarID] = true
-		inSync := head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef
-		var mtime time.Time
-		if fi, err := os.Stat(path); err == nil {
-			mtime = fi.ModTime()
-		}
-		result = append(result, sidecarInfo{
-			id:            as.SidecarID,
-			name:          as.Name,
-			projectName:   projectName,
-			snapshotName:  snapshotName,
-			fileMtime:     mtime,
-			lastSyncedRef: as.LastSyncedRef,
-			inSync:        inSync,
-		})
 	}
-	return result
+
+	return dataMsg{
+		sidecars: allSidecars,
+		events:   events,
+		branches: branches,
+		headRefs: headRefs,
+	}
 }
 
-// activeWindow is how recently a sidecar must have been active to be shown.
-const activeWindow = time.Hour
-
-// loadSnapshotName returns the Name field from any snapshot*.json in dataDir,
-// or "" if none is found or the name is not set.
-func loadSnapshotName(dataDir string) string {
-	matches, _ := filepath.Glob(filepath.Join(dataDir, "snapshot*.json"))
-	for _, path := range matches {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var snap struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(data, &snap) == nil && snap.Name != "" {
-			return snap.Name
-		}
+// sidecarFromState maps a daemon SidecarState to the TUI's internal sidecarInfo.
+func sidecarFromState(ss watchd.SidecarState) sidecarInfo {
+	return sidecarInfo{
+		id:            ss.ID,
+		name:          ss.Name,
+		projectName:   ss.ProjectName,
+		snapshotName:  ss.SnapshotName,
+		fileMtime:     ss.FileMtime,
+		lastSyncedRef: ss.LastSyncedRef,
+		inSync:        ss.InSync,
+		running:       ss.Running,
+		lastActivity:  ss.LastActivity,
+		lastOp:        ss.LastOp,
 	}
-	return ""
-}
-
-// filterSidecars keeps only sidecars active within activeWindow. There is no
-// per-project cap: every sidecar you have touched in the last hour is shown,
-// however many that is.
-func filterSidecars(sidecars []sidecarInfo) []sidecarInfo {
-	now := time.Now()
-	result := sidecars[:0]
-	for _, sc := range sidecars {
-		eff := effectiveActivity(sc)
-		if eff.IsZero() || now.Sub(eff) > activeWindow {
-			continue
-		}
-		result = append(result, sc)
-	}
-	return result
 }
 
 func anyRunning(sidecars []sidecarInfo) bool {
@@ -753,15 +610,22 @@ func isHex8(s string) bool {
 	return true
 }
 
-// headRef returns the full HEAD SHA for the git repo at dir.
-func headRef(dir string) string {
-	if dir == "" {
+// indexOfSidecar returns the position of id, or 0 when it is absent.
+func indexOfSidecar(sidecars []sidecarInfo, id string) int {
+	for i, sc := range sidecars {
+		if sc.id == id {
+			return i
+		}
+	}
+	return 0
+}
+
+// selectedSidecarID returns the id at idx, or "" when idx is out of range.
+func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
+	if idx < 0 || idx >= len(sidecars) {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	sha, _ := gitutil.HeadRefCtx(ctx, dir)
-	return sha
+	return sidecars[idx].id
 }
 
 // ago returns a human-readable duration since t.
