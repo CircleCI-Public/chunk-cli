@@ -482,8 +482,9 @@ func (c *Client) GetCommand(ctx context.Context, commandID string) (*Command, er
 }
 
 type snapshotAttrs struct {
-	Name string `json:"name"`
-	Tag  string `json:"tag,omitempty"`
+	Name     string `json:"name"`
+	Tag      string `json:"tag,omitempty"`
+	IsSystem bool   `json:"is_system,omitempty"`
 }
 
 func (c *Client) CreateSnapshot(ctx context.Context, sidecarID, name string) (*Snapshot, error) {
@@ -520,10 +521,11 @@ func (c *Client) GetSnapshot(ctx context.Context, id string) (*Snapshot, error) 
 		return nil, mapErr("get snapshot", err)
 	}
 	return &Snapshot{
-		ID:    env.Data.ID,
-		OrgID: refs.Org.ID,
-		Name:  attrs.Name,
-		Tag:   attrs.Tag,
+		ID:       env.Data.ID,
+		OrgID:    refs.Org.ID,
+		Name:     attrs.Name,
+		Tag:      attrs.Tag,
+		IsSystem: attrs.IsSystem,
 	}, nil
 }
 
@@ -545,6 +547,9 @@ func (c *Client) ListSnapshots(ctx context.Context, orgID string) ([]Snapshot, e
 			}
 			if tag, ok := attrs["tag"].(string); ok {
 				s.Tag = tag
+			}
+			if isSystem, ok := attrs["is_system"].(bool); ok {
+				s.IsSystem = isSystem
 			}
 		}
 		if refs, ok := item.References.(map[string]any); ok {
