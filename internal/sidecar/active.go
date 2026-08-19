@@ -24,6 +24,7 @@ type ActiveSidecar struct {
 	// that has been deleted from one that simply lives in an org it is not
 	// listing. Empty on state written before this field existed.
 	OrgID         string `json:"org_id,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
 	Workspace     string `json:"workspace,omitempty"`
 	LastSyncedRef string `json:"last_synced_ref,omitempty"`
 	// LastSyncedPatchHash is a SHA-256 hex digest of the working-tree patch
@@ -67,7 +68,7 @@ func sidecarFileName(sessionID, branch string) string {
 }
 
 // StateFileName returns the sidecar state file name for the given session ID
-// and git branch. Exposed so acceptance tests can construct expected paths.
+// and git branch. Exposed so tests can construct expected paths.
 func StateFileName(sessionID, branch string) string {
 	return sidecarFileName(sessionID, branch)
 }
@@ -91,13 +92,20 @@ func LoadActive(ctx context.Context) (*ActiveSidecar, error) {
 	return LoadActiveFrom(ctx, dir)
 }
 
-// LoadAnyActive returns the most recently modified sidecar state file for the
-// current project, regardless of session ID or branch. Cross-branch reuse is
-// intentional: the caller's next SaveActive re-keys the result under the
-// current session+branch, so only one sidecar accumulates per project even
-// when switching branches. ctx is accepted for signature consistency with
-// the other loaders, but is not used.
-func LoadAnyActive(_ context.Context) (*ActiveSidecar, error) {
+// AdoptIdleActive takes over a sidecar this project already has, keying it to
+// the current session, and returns nil when there is nothing to adopt.
+//
+// Reuse stops a project from accumulating one sidecar per agent session, but a
+// sidecar must never be handed to two sessions at once. State is adoptable only
+// when it is already ours (the same session on another branch), or when nobody
+// owns it (a plain terminal `chunk sidecar create`). State at a session-keyed
+// path with no owner recorded is conservatively treated as owned until Reap ages
+// it out; state that records a different session is never adopted.
+//
+// The claim is an atomic rename so of two sessions reaching for the same file
+// exactly one wins. Ownership moves rather than copies: two files naming one
+// sidecar would be two sessions holding it.
+func AdoptIdleActive(ctx context.Context) (*ActiveSidecar, error) {
 	dir, err := saveDir()
 	if err != nil {
 		return nil, err
@@ -106,9 +114,24 @@ func LoadAnyActive(_ context.Context) (*ActiveSidecar, error) {
 	if err != nil || len(entries) == 0 {
 		return nil, err
 	}
+
+	mine := session.IDFromCtx(ctx)
+	root, _ := projectRoot()
+	target := filepath.Join(dir, sidecarFileName(mine, CurrentBranch(root)))
+
 	var best *stateEntry
 	for i, e := range entries {
-		if e.active.SidecarID == "" {
+		if e.active.SidecarID == "" || e.path == target {
+			continue
+		}
+		owner := e.active.SessionID
+		// Session-keyed file with no owner recorded: conservatively skip — it may
+		// belong to a session that predates owner recording.
+		if owner == "" && filepath.Base(e.path) != defaultSidecarFile {
+			continue
+		}
+		// Owned by a different session: never adopt.
+		if owner != "" && owner != mine {
 			continue
 		}
 		if best == nil || e.modTime.After(best.modTime) {
@@ -118,7 +141,17 @@ func LoadAnyActive(_ context.Context) (*ActiveSidecar, error) {
 	if best == nil {
 		return nil, nil
 	}
+	if err := os.Rename(best.path, target); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil // another session claimed it first
+		}
+		return nil, fmt.Errorf("claim sidecar state %s: %w", filepath.Base(best.path), err)
+	}
 	active := best.active
+	active.SessionID = mine
+	if err := SaveActiveTo(ctx, dir, active); err != nil {
+		return nil, err
+	}
 	return &active, nil
 }
 
@@ -158,6 +191,7 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	a.SessionID = session.IDFromCtx(ctx)
 	data, err := json.Marshal(a)
 	if err != nil {
 		return err
@@ -176,10 +210,16 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 
 // pruneRekeyedState removes state files other than keep that name sidecarID.
 //
-// LoadAnyActive reuses one sidecar across sessions and branches, and the next
-// SaveActive re-keys it under the current session+branch. Without this the file
-// it was read from is left behind holding an out-of-date synced ref, so readers
-// that pick the wrong file report a sidecar as permanently needing a sync.
+// A sidecar is re-keyed under the current session and branch when it is adopted,
+// or when the same session switches branch. Without this the file it came from
+// is left behind holding an out-of-date synced ref, so readers that pick the
+// wrong file report a sidecar as permanently needing a sync.
+//
+// A file belonging to a live session goes too, deliberately. Adoption moves
+// state rather than copying it, so another file naming this sidecar means two
+// sessions are pointed at one — the state this whole mechanism exists to prevent.
+// Dropping it costs that session a re-sync onto a sidecar of its own, which is
+// the outcome we want, where keeping it would leave both sessions sharing.
 // Best-effort: a file that cannot be removed is left for Reap to clean up.
 func pruneRekeyedState(dir, keep, sidecarID string) {
 	if sidecarID == "" {

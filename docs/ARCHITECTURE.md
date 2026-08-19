@@ -38,7 +38,7 @@ chunk-cli/
     ├── skills/                # Skill definitions (go:embed) and installation
     ├── task/                  # Task run config and CircleCI trigger
     ├── secrets/               # Secret resolution (env var value expansion)
-    ├── session/               # Session ID tracking for Stop hook context
+    ├── session/               # Which agent session this invocation belongs to
     ├── settings/              # .claude/settings.json build and merge
     ├── telemetry/             # Anonymous usage telemetry (Segment)
     │   └── receiver/          # Forwards buffered events to Segment (used by receive-telemetry)
@@ -201,6 +201,8 @@ in `config.Resolve` and makes clients testable.
 | `CLAUDE_PROJECT_DIR` | settings | IDE-provided project directory used by generated `PreToolUse` hooks |
 | `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
 | `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
+| `CLAUDE_CODE_SESSION_ID` | session, sidecar | Which agent session is running the command, so parallel sessions in one working tree get their own sidecar |
+| `CHUNK_SESSION_ID` | session, sidecar | Pins that session identity by hand; wins over `CLAUDE_CODE_SESSION_ID` |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable anonymous usage telemetry (any non-empty value) |

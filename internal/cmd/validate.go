@@ -943,12 +943,15 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		*sidecarID = active.SidecarID
 		return false, nil
 	}
-	// Fall back to any existing sidecar for this project before creating a new one.
-	// This prevents accumulation of one sidecar per Claude Code session.
-	if existing, err := sidecar.LoadAnyActive(ctx); err == nil && existing != nil {
-		if saveErr := sidecar.SaveActive(ctx, *existing); saveErr != nil {
-			streams.ErrPrintf("warning: could not promote active sidecar: %v\n", saveErr)
-		}
+	// Fall back to a sidecar this project already has before creating a new one,
+	// which is what stops one sidecar accumulating per agent session. Adoption
+	// skips any sidecar another session is still using, so two sessions sharing
+	// this working tree get one sidecar each.
+	existing, adoptErr := sidecar.AdoptIdleActive(ctx)
+	if adoptErr != nil {
+		streams.ErrPrintf("warning: could not reuse an existing sidecar: %v\n", adoptErr)
+	}
+	if existing != nil {
 		*sidecarID = existing.SidecarID
 		return false, nil
 	}
@@ -995,9 +998,14 @@ var branchSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
 // and the current git branch.
 //
 // When a session ID is present the branch is encoded as an 8-hex-char suffix
-// (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed:
-//   - Both present → "<base>-<sessionID>-<hash8>"
-//   - Session only → "<base>-<sessionID>"
+// (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed,
+// and the session ID is trimmed to its first 8 characters so a name stays
+// readable in `chunk sidecar list` — a session ID is a 36-character UUID, and
+// unlike the state file name this one only has to be recognisable, not unique
+// (two sessions sharing a prefix get two sidecars with one name and different
+// IDs):
+//   - Both present → "<base>-<sessionID8>-<hash8>"
+//   - Session only → "<base>-<sessionID8>"
 //
 // Without a session ID the branch is sanitised and included directly (legacy
 // fallback):
@@ -1009,12 +1017,16 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 	branch := sidecar.CurrentBranch(workDir)
 
 	if sessionID != "" {
+		short := sessionID
+		if len(short) > 8 {
+			short = short[:8]
+		}
 		if branch != "" {
 			sum := sha256.Sum256([]byte(sessionID + ":" + branch))
 			hash8 := fmt.Sprintf("%x", sum[:4])
-			return base + "-" + sessionID + "-" + hash8
+			return base + "-" + short + "-" + hash8
 		}
-		return base + "-" + sessionID
+		return base + "-" + short
 	}
 
 	// No session ID: fall back to sanitised branch name for human readability.

@@ -250,7 +250,7 @@ If `circleci-testsuite` is not installed, fall back to manual validation (see v1
 
 ## Parallel Sessions
 
-When `CLAUDE_SESSION_ID` is set, `chunk` auto-scopes the active-sidecar file to `.chunk/sidecar.<session-id>.json`. Two sessions in the same repo target different sidecars without conflict. Do not hand-edit those files.
+`chunk` scopes the active-sidecar file to your session and branch (under `XDG_DATA_HOME`, keyed on `CLAUDE_CODE_SESSION_ID` or the Stop hook payload), so two sessions in the same repo target different sidecars and never sync into the same remote workspace. A session with no sidecar yet takes over one the project already has, unless another session owns it. Nothing to configure, and do not hand-edit those files.
 
 ## Out of Scope
 
