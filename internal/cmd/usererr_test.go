@@ -80,3 +80,49 @@ func TestGoneErrorDistinguishesStaleSidecarFromStaleCLI(t *testing.T) {
 		assert.Check(t, GoneError(errors.New("nope")) == nil)
 	})
 }
+
+// A 404 or 409 from a sidecar-scoped call used to reach users as bare status
+// text under "An unknown error occurred", which named neither the sidecar nor
+// what to do about it.
+func TestSidecarUnavailableNamesTheSidecarAndTheRemedy(t *testing.T) {
+	const id = "ba600ef3-907b-412d-bd01-57752350836f"
+
+	t.Run("a deleted sidecar", func(t *testing.T) {
+		err := sidecarUnavailable(id, &circleci.StatusError{
+			Op: "exec", StatusCode: http.StatusNotFound, ServerMessage: "Not found",
+		})
+		assert.Assert(t, err != nil, "a 404 must be recognised")
+		var ue *userError
+		assert.Assert(t, errors.As(err, &ue), "expected *userError, got %T", err)
+		assert.Assert(t, strings.Contains(ue.UserMessage(), id), "the message must name the sidecar: %q", ue.UserMessage())
+		assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar list"))
+		assert.Equal(t, ue.UserExitCode(), ExitNotFound)
+	})
+
+	t.Run("a paused sidecar", func(t *testing.T) {
+		err := sidecarUnavailable(id, &circleci.StatusError{
+			Op: "exec", StatusCode: http.StatusConflict, ServerMessage: "sidecar is paused",
+		})
+		assert.Assert(t, err != nil, "a paused 409 must be recognised")
+		var ue *userError
+		assert.Assert(t, errors.As(err, &ue), "expected *userError, got %T", err)
+		assert.Assert(t, strings.Contains(ue.UserMessage(), "paused"), "got %q", ue.UserMessage())
+		// No route resumes a sidecar, so a replacement is the only remedy the
+		// caller can act on.
+		assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar create"))
+		assert.Equal(t, ue.UserExitCode(), ExitAPIError)
+	})
+
+	t.Run("anything else falls through", func(t *testing.T) {
+		cases := []error{
+			errors.New("dial tcp: connection refused"),
+			// An unknown route, not a missing sidecar.
+			&circleci.StatusError{Op: "exec", StatusCode: http.StatusNotFound, ServerMessage: "Route Not Found."},
+			// A conflict this helper has no advice for.
+			&circleci.StatusError{Op: "exec", StatusCode: http.StatusConflict, ServerMessage: "command already running"},
+		}
+		for _, c := range cases {
+			assert.Assert(t, sidecarUnavailable(id, c) == nil, "must not claim to handle %v", c)
+		}
+	})
+}

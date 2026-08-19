@@ -63,6 +63,34 @@ func outdatedSidecarAPI(err error) error {
 		wrap(err)
 }
 
+// sidecarUnavailable maps the two conditions the API reports about a sidecar
+// itself, rather than about the request, into guidance that names it: the
+// sidecar no longer exists, or it is paused. Both leave a bare status code
+// otherwise, and "409 Conflict" tells nobody that their sidecar went to sleep.
+//
+// Only call this on errors from requests addressed at a specific sidecar; see
+// circleci.SidecarGone.
+func sidecarUnavailable(sidecarID string, err error) error {
+	switch {
+	case circleci.SidecarGone(err):
+		return newUserError(fmt.Sprintf("Sidecar %s no longer exists.", sidecarID)).
+			withCode("sidecar.not_found").
+			withSuggestion("See what you have with: chunk sidecar list\nOr create a new one with: chunk sidecar create").
+			withExitCode(ExitNotFound).
+			withoutDetail().
+			wrap(err)
+	case circleci.SidecarPaused(err):
+		return newUserError(fmt.Sprintf("Sidecar %s is paused.", sidecarID)).
+			withCode("sidecar.paused").
+			withSuggestion("Sidecars pause when left idle, and the API exposes no way to resume one. " +
+				"Create a replacement with: chunk sidecar create").
+			withExitCode(ExitAPIError).
+			withoutDetail().
+			wrap(err)
+	}
+	return nil
+}
+
 func sshSessionError(err error) error {
 	if e, ok := errors.AsType[*sidecar.KeyNotFoundError](err); ok {
 		return newUserError(fmt.Sprintf("SSH key not found: %s", e.Path)).

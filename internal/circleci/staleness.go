@@ -33,8 +33,31 @@ func SidecarOutOfDate(err error) bool {
 // else means a missing route, not a missing sidecar.
 func SidecarGone(err error) bool {
 	var se *StatusError
-	if !errors.As(err, &se) {
+	if !errors.As(err, &se) || se.StatusCode != http.StatusNotFound {
 		return false
 	}
-	return se.StatusCode == http.StatusNotFound
+	// The gateway answers an unknown route with 404 "Route Not Found.", which
+	// means an API too old for this command, not a sidecar that has gone away.
+	// Reporting it as a missing sidecar would prune healthy local state and send
+	// people off recreating a sidecar that was never the problem.
+	return !strings.Contains(strings.ToLower(se.ServerMessage), "route not found")
+}
+
+// SidecarPaused reports whether err is the API refusing an operation because the
+// sidecar is suspended. Sidecars pause themselves when left idle.
+//
+// The underlying sandbox can be resumed: the provider has an API for it, and
+// resume-on-connect is enabled. But the exec path checks the paused state and
+// declines rather than waking it, and no route exposes a resume. So a
+// replacement is the only remedy a caller can act on, however recoverable the
+// sidecar itself may be.
+//
+// Matched on the server's wording for the same reason as SidecarOutOfDate: the
+// V3 error envelope carries no machine-readable code.
+func SidecarPaused(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusConflict {
+		return false
+	}
+	return strings.Contains(strings.ToLower(se.ServerMessage), "paused")
 }
