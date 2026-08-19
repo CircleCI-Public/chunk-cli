@@ -294,3 +294,29 @@ func TestSidecarFileNameHashUniquenessAcrossBranches(t *testing.T) {
 	f2 := sidecarFileName("sess-abc", "feature/my-branch")
 	assert.Assert(t, f1 != f2, "different branches must produce different file names")
 }
+
+func TestSaveActivePrunesRekeyedStateFiles(t *testing.T) {
+	setupXDGData(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	stateDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	assert.NilError(t, os.MkdirAll(stateDir, 0o755))
+
+	// A file another session left behind naming the same sidecar, plus one naming
+	// a different sidecar that must survive.
+	stale := filepath.Join(stateDir, "sidecar.other-session.json")
+	assert.NilError(t, os.WriteFile(stale, []byte(`{"sidecar_id":"sb-1","last_synced_ref":"oldref"}`), 0o644))
+	keep := filepath.Join(stateDir, "sidecar.unrelated.json")
+	assert.NilError(t, os.WriteFile(keep, []byte(`{"sidecar_id":"sb-2"}`), 0o644))
+
+	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarID: "sb-1", LastSyncedRef: "newref"}))
+
+	_, err = os.Stat(stale)
+	assert.Assert(t, os.IsNotExist(err), "state file re-keyed to a new name must be removed")
+	_, err = os.Stat(keep)
+	assert.NilError(t, err, "state for a different sidecar must survive")
+	_, err = os.Stat(filepath.Join(stateDir, "sidecar.json"))
+	assert.NilError(t, err)
+}

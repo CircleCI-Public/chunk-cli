@@ -614,3 +614,29 @@ func TestUpdate_unknownSelectionFallsBackToFreshest(t *testing.T) {
 		t.Errorf("want fallback to idx 0 (fresh), got idx %d id %q", m.selectedIdx, m.selectedID)
 	}
 }
+
+func TestLoadSidecars_prefersNewestFileForDuplicateID(t *testing.T) {
+	dir := t.TempDir()
+	root := t.TempDir()
+
+	// Both files name the same sidecar. The stale one sorts first under Glob, so
+	// glob order would report the old ref and the sidecar would look out of sync.
+	writeSidecarJSON(t, dir, "sidecar.aaa.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"oldref"}`)
+	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"newref"}`)
+
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "sidecar.aaa.json"), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	result := loadSidecars(dir, root, "", "newref", 0, "root", "main")
+	if len(result) != 1 {
+		t.Fatalf("want 1 sidecar, got %d", len(result))
+	}
+	if result[0].lastSyncedRef != "newref" {
+		t.Errorf("want newest file's ref newref, got %q", result[0].lastSyncedRef)
+	}
+	if !result[0].inSync {
+		t.Error("sidecar should be in sync when the newest state file matches head")
+	}
+}
