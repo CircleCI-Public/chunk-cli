@@ -90,6 +90,7 @@ type FakeCircleCI struct {
 	CreateStatusCode         int    // override for POST /sidecar/instances
 	DeleteStatusCode         int    // override for DELETE /sidecar/instances/:id
 	ExecStatusCode           int    // override for POST /sidecar/instances/:id/exec
+	ExecMessage              string // V3 error title when ExecStatusCode is set
 	CommandOutputStatusCode  int    // override for GET /sidecar/commands/:id/output
 	CommandOutputMessage     string // error message body when CommandOutputStatusCode is set
 	// DropStreamsBeforeExit ends this many output streams after delivering their
@@ -334,10 +335,16 @@ func (f *FakeCircleCI) handleExec(c *gin.Context) {
 	f.mu.RLock()
 	resp := f.ExecResponse
 	statusCode := f.ExecStatusCode
+	msg := f.ExecMessage
 	f.mu.RUnlock()
 
 	if statusCode != 0 {
-		c.JSON(statusCode, gin.H{"message": "API error"})
+		if msg == "" {
+			msg = "API error"
+		}
+		// The V3 envelope shape, which is what this route really returns; the
+		// client has to dig the title out of it to say anything useful.
+		c.JSON(statusCode, gin.H{"error": gin.H{"id": "trace-1", "title": msg}})
 		return
 	}
 

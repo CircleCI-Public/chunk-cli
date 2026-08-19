@@ -580,11 +580,14 @@ func mapErr(op string, err error) error {
 	if he.StatusCode == http.StatusUnauthorized || he.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("%s: %w", op, ErrNotAuthorized)
 	}
-	se := &StatusError{Op: op, StatusCode: he.StatusCode}
-	if he.StatusCode == http.StatusGone {
-		se.ServerMessage = extractServerMessage(he.Body)
+	// Every status carries the server's own explanation, not just 410. The API
+	// says things like "sidecar is paused" that no status text can convey, and
+	// dropping them left users with a bare "409 Conflict" to interpret.
+	return &StatusError{
+		Op:            op,
+		StatusCode:    he.StatusCode,
+		ServerMessage: extractServerMessage(he.Body),
 	}
-	return se
 }
 
 // extractServerMessage pulls the human-readable message out of a JSON error
