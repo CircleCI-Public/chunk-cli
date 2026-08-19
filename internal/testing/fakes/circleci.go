@@ -36,10 +36,11 @@ type Sidecar struct {
 }
 
 type Snapshot struct {
-	ID    string `json:"id"`
-	OrgID string `json:"org_id"`
-	Name  string `json:"name"`
-	Tag   string `json:"tag,omitempty"`
+	ID       string `json:"id"`
+	OrgID    string `json:"org_id"`
+	Name     string `json:"name"`
+	Tag      string `json:"tag,omitempty"`
+	IsSystem bool   `json:"is_system,omitempty"`
 }
 
 type RunResponse struct {
@@ -656,7 +657,7 @@ func (f *FakeCircleCI) handleListSnapshots(c *gin.Context) {
 	var items []gin.H
 	for _, s := range f.Snapshots {
 		if s.OrgID == orgID {
-			attrs := gin.H{"name": s.Name, "is_system": false}
+			attrs := gin.H{"name": s.Name, "is_system": s.IsSystem}
 			if s.Tag != "" {
 				attrs["tag"] = s.Tag
 			}

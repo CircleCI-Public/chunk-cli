@@ -232,13 +232,24 @@ func newSidecarCreateCmd() *cobra.Command {
 					image = cfg.Validation.SidecarImage
 				}
 			}
+			// Still unset: fall back to whichever of the org's snapshots fits
+			// this repo, so an unconfigured project gets a prepared environment
+			// instead of a bare image.
+			//
+			// Tracked separately from a user-supplied image: a rejected image the
+			// caller chose is a mistake worth explaining, while a rejected one
+			// chunk chose is not something the caller can act on.
+			imageChosenByUser := image != ""
+			if image == "" {
+				image = autoSelectSnapshotImage(cmd.Context(), client, resolvedOrgID, cwd, newStatusFunc(io), io)
+			}
 			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image)
 			if err != nil {
 				if err := notAuthorized("create sidecars", err); err != nil {
 					return err
 				}
 				var se *circleci.StatusError
-				if image != "" && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
+				if imageChosenByUser && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
 					return newUserError("Could not create the sidecar.").
 						withSuggestion("--image requires a snapshot ID. Create one with 'chunk sidecar snapshot create'.").
 						wrap(err)

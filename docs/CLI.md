@@ -187,6 +187,17 @@ chunk
   Since `sidecar snapshot create` is normally followed by recording that key, a
   project on a snapshot runs everything remotely and `remote: true` becomes a
   no-op.
+- **Snapshot selection.** When a sidecar has to be created and no
+  `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
+  picks one of the org's snapshots instead of booting the bare default image.
+  A snapshot matches on its name and tag, split into tokens: the repo name
+  (from the git remote, then `vcs.repo`, then the directory name) outranks the
+  detected stack, and the org's own snapshot outranks an equivalent system one.
+  Matching is token-based, so `go` matches `go-base` but not `mongo-api`. When
+  nothing matches, the default image is used and the reason is printed —
+  guessing the wrong prepared environment produces failures that look like the
+  repo's own. Selection never fails a run: an unreachable snapshot API is
+  warned about and treated as no match.
 - Telemetry is anonymous and opt-out. It's disabled by the
   `CHUNK_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
   variables (first match wins, in that order), or `chunk config set telemetry false`.
@@ -267,7 +278,7 @@ chunk
 | `model` | user config (`~/.config/chunk/config.json`) | Claude model override |
 | `telemetry` | user config (`~/.config/chunk/config.json`) | Anonymous usage telemetry (`true`/`false`, default: `true`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
-| `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate |
+| `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
 
 `chunk config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project
