@@ -98,6 +98,71 @@ func TestGroupEvents_doneFollowedByNewOp(t *testing.T) {
 	}
 }
 
+// groupByInvocation / isSummaryEvent tests
+
+func TestGroupByInvocation_singleRun(t *testing.T) {
+	events := []eventlog.Event{
+		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "test    1.0s (remote)"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "lint    0.2s (remote)"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "2/2 passed  1.5s"},
+	}
+	groups := groupByInvocation(events)
+	if len(groups) != 1 {
+		t.Fatalf("want 1 group, got %d", len(groups))
+	}
+	if len(groups[0].events) != 4 {
+		t.Errorf("want 4 events in group, got %d", len(groups[0].events))
+	}
+}
+
+func TestGroupByInvocation_twoRuns(t *testing.T) {
+	events := []eventlog.Event{
+		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "test    1.0s (remote)"},
+		{Op: eventlog.OpValidate, Level: "error", Msg: "0/1 passed  1.0s"},
+		// second run
+		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "test    0.8s (remote)"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "1/1 passed  0.9s"},
+	}
+	groups := groupByInvocation(events)
+	if len(groups) != 2 {
+		t.Fatalf("want 2 groups, got %d", len(groups))
+	}
+}
+
+func TestGroupByInvocation_inProgress(t *testing.T) {
+	events := []eventlog.Event{
+		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
+		{Op: eventlog.OpValidate, Level: "step", Msg: "$ task test"},
+	}
+	groups := groupByInvocation(events)
+	if len(groups) != 1 {
+		t.Fatalf("want 1 in-progress group, got %d", len(groups))
+	}
+}
+
+func TestIsSummaryEvent(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"3/3 passed  5.2s", true},
+		{"0/4 passed  13.7s", true},
+		{"test    8.0s (remote)", false},
+		{"lint    0.4s (local)", false},
+		{"synced", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		e := eventlog.Event{Op: eventlog.OpValidate, Level: "done", Msg: c.msg}
+		if got := isSummaryEvent(e); got != c.want {
+			t.Errorf("isSummaryEvent(%q) = %v, want %v", c.msg, got, c.want)
+		}
+	}
+}
+
 // stripUUIDSuffix tests
 
 func TestStripUUIDSuffix(t *testing.T) {
@@ -199,7 +264,7 @@ func TestLoadSidecars_deduplicatesIDs(t *testing.T) {
 	// Duplicate id1 — should be deduplicated.
 	writeSidecarJSON(t, dir, "sidecar.sess2.json", `{"sidecar_id":"id1","name":"sc1"}`)
 
-	result := loadSidecars(dir, root, "", "abc123", 0)
+	result := loadSidecars(dir, root, "", "abc123", 0, "root", "main")
 	if len(result) != 2 {
 		t.Fatalf("want 2 unique sidecars, got %d", len(result))
 	}
@@ -211,7 +276,7 @@ func TestLoadSidecars_inSyncWhenHeadMatches(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
 
-	result := loadSidecars(dir, root, "", "abc123", 0)
+	result := loadSidecars(dir, root, "", "abc123", 0, "root", "main")
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}
@@ -226,7 +291,7 @@ func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","last_synced_ref":"oldref"}`)
 
-	result := loadSidecars(dir, root, "", "newref", 0)
+	result := loadSidecars(dir, root, "", "newref", 0, "root", "main")
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}
@@ -238,7 +303,7 @@ func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
 func TestLoadSidecars_emptyDir(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()
-	if result := loadSidecars(dir, root, "", "", 0); len(result) != 0 {
+	if result := loadSidecars(dir, root, "", "", 0, "root", "main"); len(result) != 0 {
 		t.Errorf("want 0, got %d", len(result))
 	}
 }
@@ -249,7 +314,7 @@ func TestLoadSidecars_skipsEmptySidecarID(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"","name":"empty"}`)
 
-	if result := loadSidecars(dir, root, "", "", 0); len(result) != 0 {
+	if result := loadSidecars(dir, root, "", "", 0, "root", "main"); len(result) != 0 {
 		t.Errorf("want 0 (skipped empty ID), got %d", len(result))
 	}
 }
@@ -260,7 +325,7 @@ func TestLoadSidecars_snapshotName(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1"}`)
 
-	result := loadSidecars(dir, root, "my-snap", "", 0)
+	result := loadSidecars(dir, root, "my-snap", "", 0, "root", "main")
 	if len(result) != 1 {
 		t.Fatalf("want 1, got %d", len(result))
 	}
@@ -274,9 +339,9 @@ func TestLoadSidecars_snapshotName(t *testing.T) {
 func TestSortByActivity_freshestProjectFirst(t *testing.T) {
 	now := time.Now()
 	sidecars := []sidecarInfo{
-		{id: "stale", projectName: "old-project", fileMtime: now.Add(-6 * time.Hour)},
-		{id: "older", projectName: "busy-project", lastActivity: now.Add(-30 * time.Minute)},
-		{id: "newest", projectName: "busy-project", lastActivity: now.Add(-1 * time.Minute)},
+		{id: "stale", repoName: "old-project", fileMtime: now.Add(-6 * time.Hour)},
+		{id: "older", repoName: "busy-project", lastActivity: now.Add(-30 * time.Minute)},
+		{id: "newest", repoName: "busy-project", lastActivity: now.Add(-1 * time.Minute)},
 	}
 
 	sortByActivity(sidecars)
@@ -292,9 +357,9 @@ func TestSortByActivity_freshestProjectFirst(t *testing.T) {
 func TestSortByActivity_keepsProjectsGrouped(t *testing.T) {
 	now := time.Now()
 	sidecars := []sidecarInfo{
-		{id: "a1", projectName: "a", lastActivity: now.Add(-2 * time.Minute)},
-		{id: "b1", projectName: "b", lastActivity: now.Add(-1 * time.Minute)},
-		{id: "a2", projectName: "a", lastActivity: now.Add(-3 * time.Minute)},
+		{id: "a1", repoName: "a", lastActivity: now.Add(-2 * time.Minute)},
+		{id: "b1", repoName: "b", lastActivity: now.Add(-1 * time.Minute)},
+		{id: "a2", repoName: "a", lastActivity: now.Add(-3 * time.Minute)},
 	}
 
 	sortByActivity(sidecars)
@@ -500,7 +565,7 @@ func TestUpdate_selectionFollowsSidecarID(t *testing.T) {
 	m.sidecars = []sidecarInfo{{id: "a", projectName: "p"}, {id: "b", projectName: "p"}}
 
 	// Select the second sidecar.
-	next, _ := m.Update(tea.KeyPressMsg{Code: 'j'})
+	next, _ := m.Update(tea.KeyPressMsg{Code: 's'})
 	m = next.(Model)
 	if m.selectedID != "b" {
 		t.Fatalf("want selectedID b, got %q", m.selectedID)
@@ -517,6 +582,24 @@ func TestUpdate_selectionFollowsSidecarID(t *testing.T) {
 	m = next.(Model)
 	if m.selectedIdx != 1 || m.selectedID != "b" {
 		t.Errorf("want selection to stay on b (idx 1), got idx %d id %q", m.selectedIdx, m.selectedID)
+	}
+}
+
+func TestUpdate_initialSelectionPicksMostRecent(t *testing.T) {
+	// On first entry, New() has no selection. Even when a local runner (id="")
+	// is in the list with older activity, the freshest sidecar must be selected.
+	now := time.Now()
+	m := New(nil, false)
+
+	next, _ := m.Update(dataMsg{sidecars: []sidecarInfo{
+		{id: "newest", lastActivity: now.Add(-1 * time.Minute)},
+		{id: "older", lastActivity: now.Add(-30 * time.Minute)},
+		{id: "", name: "local", lastActivity: now.Add(-45 * time.Minute)},
+	}})
+	m = next.(Model)
+
+	if m.selectedIdx != 0 || m.selectedID != "newest" {
+		t.Errorf("want initial selection at idx 0 (newest), got idx %d id %q", m.selectedIdx, m.selectedID)
 	}
 }
 
