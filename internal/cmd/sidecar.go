@@ -298,6 +298,9 @@ func newSidecarDeleteCmd() *cobra.Command {
 				if err := notAuthorized("delete sidecars", err); err != nil {
 					return err
 				}
+				if err := sidecarUnavailable(sidecarID, err); err != nil {
+					return err
+				}
 				return &userError{
 					msg:        "Could not delete the sidecar.",
 					suggestion: suggestionNetworkRetry,
@@ -370,6 +373,9 @@ or via the repeatable --args flag. Positional arguments are appended after any
 				if err := notAuthorized("execute commands", err); err != nil {
 					return err
 				}
+				if err := sidecarUnavailable(sidecarID, err); err != nil {
+					return err
+				}
 				if err := outdatedSidecarAPI(err); err != nil {
 					return err
 				}
@@ -416,6 +422,9 @@ func newSidecarAddSSHKeyCmd() *cobra.Command {
 			resp, err := sidecar.AddSSHKey(cmd.Context(), client, sidecarID, publicKey, publicKeyFile)
 			if err != nil {
 				if err := notAuthorized("add SSH keys", err); err != nil {
+					return err
+				}
+				if err := sidecarUnavailable(sidecarID, err); err != nil {
 					return err
 				}
 				switch {
@@ -489,6 +498,9 @@ func newSidecarSSHCmd() *cobra.Command {
 					return err
 				}
 				if err := notAuthorized("connect via SSH", err); err != nil {
+					return err
+				}
+				if err := sidecarUnavailable(sidecarID, err); err != nil {
 					return err
 				}
 				return err
@@ -565,6 +577,9 @@ func newSidecarSyncCmd() *cobra.Command {
 					return err
 				}
 				if err := notAuthorized("sync files", err); err != nil {
+					return err
+				}
+				if err := sidecarUnavailable(sidecarID, err); err != nil {
 					return err
 				}
 				return &userError{

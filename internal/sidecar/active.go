@@ -164,12 +164,37 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	}
 	root, _ := projectRoot()
 	branch := CurrentBranch(root)
-	if err := os.WriteFile(filepath.Join(dir, sidecarFileName(session.IDFromCtx(ctx), branch)), data, 0o644); err != nil {
+	path := filepath.Join(dir, sidecarFileName(session.IDFromCtx(ctx), branch))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
 	}
+	pruneRekeyedState(dir, path, a.SidecarID)
 	// Write a breadcrumb so chunk watch --all can discover this project.
 	_ = os.WriteFile(filepath.Join(dir, "project-root"), []byte(root), 0o644)
 	return nil
+}
+
+// pruneRekeyedState removes state files other than keep that name sidecarID.
+//
+// LoadAnyActive reuses one sidecar across sessions and branches, and the next
+// SaveActive re-keys it under the current session+branch. Without this the file
+// it was read from is left behind holding an out-of-date synced ref, so readers
+// that pick the wrong file report a sidecar as permanently needing a sync.
+// Best-effort: a file that cannot be removed is left for Reap to clean up.
+func pruneRekeyedState(dir, keep, sidecarID string) {
+	if sidecarID == "" {
+		return
+	}
+	entries, err := loadStateEntries(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.path == keep || e.active.SidecarID != sidecarID {
+			continue
+		}
+		_ = removeState(e.path)
+	}
 }
 
 // AllProjectRoots returns the roots of all projects that have ever saved a
