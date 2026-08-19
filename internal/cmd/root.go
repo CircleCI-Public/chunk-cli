@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
@@ -38,6 +39,9 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
+			if id := session.IDFromEnv(); id != "" {
+				cmd.SetContext(session.WithID(cmd.Context(), id))
+			}
 			if err := setupTelemetry(cmd, version); err != nil {
 				return err
 			}
@@ -70,6 +74,8 @@ Environment Variables:
   ANTHROPIC_BASE_URL              Anthropic API URL [default: https://api.anthropic.com]
   GITHUB_API_URL                  GitHub API URL [default: https://api.github.com]
   SSH_AUTH_SOCK                   SSH agent socket for sidecar key auth
+  CHUNK_SESSION_ID                Agent session identity; keeps parallel sessions on separate sidecars
+                                  (read from CLAUDE_CODE_SESSION_ID when unset)
   NO_COLOR                        Disable colored output
   CI                              Disable interactive prompts (set by most CI systems); also disables telemetry
   CHUNK_NO_TELEMETRY               Disable anonymous usage telemetry (any non-empty value)

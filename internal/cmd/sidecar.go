@@ -68,6 +68,11 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 		return &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 	}
 	if active == nil {
+		if adopted, adoptErr := sidecar.AdoptIdleActive(ctx); adoptErr == nil {
+			active = adopted
+		}
+	}
+	if active == nil {
 		return &userError{
 			msg:        "No active sidecar is set.",
 			suggestion: "Pass --sidecar-id, or run 'chunk sidecar use <id>' or 'chunk sidecar create'.",
@@ -76,6 +81,13 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	}
 	*sidecarID = active.SidecarID
 	return nil
+}
+
+func shortSessionID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // resolveOrgID returns orgID from the flag, then delegates to
@@ -659,11 +671,14 @@ func newSidecarCurrentCmd() *cobra.Command {
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, active)
 			}
+			line := active.SidecarID
 			if active.Name != "" {
-				io.Printf("%s  %s\n", active.Name, active.SidecarID)
-			} else {
-				io.Printf("%s\n", active.SidecarID)
+				line = active.Name + "  " + active.SidecarID
 			}
+			if active.SessionID != "" {
+				line += "  session " + shortSessionID(active.SessionID)
+			}
+			io.Printf("%s\n", line)
 			return nil
 		},
 	}
@@ -1171,6 +1186,13 @@ func sidecarSetupResolveSidecar(
 	active, err := sidecar.LoadActive(ctx)
 	if err != nil {
 		return "", "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
+	}
+	if active == nil {
+		// Same reasoning as resolveSidecarID: adopt the project's existing sidecar
+		// when it is free, so setup in a fresh session does not create a second one.
+		if adopted, adoptErr := sidecar.AdoptIdleActive(ctx); adoptErr == nil {
+			active = adopted
+		}
 	}
 	if active != nil {
 		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
