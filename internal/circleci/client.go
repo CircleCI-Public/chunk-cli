@@ -559,6 +559,16 @@ func (c *Client) ListSnapshots(ctx context.Context, orgID string) ([]Snapshot, e
 	return snapshots, nil
 }
 
+func (c *Client) DeleteSnapshot(ctx context.Context, snapshotID string) error {
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodDelete, "/api/v3/sidecar/snapshots/%s",
+		hc.RouteParams(snapshotID),
+	))
+	if err != nil {
+		return mapErr("delete snapshot", err)
+	}
+	return nil
+}
+
 func (c *Client) TriggerRun(ctx context.Context, orgID, projectID string, body TriggerRunRequest) (*RunResponse, error) {
 	var resp RunResponse
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v2/agents/org/%s/project/%s/runs",

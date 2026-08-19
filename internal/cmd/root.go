@@ -80,6 +80,7 @@ Configuration:
 	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newCompletionCmd())
 	rootCmd.AddCommand(newSidecarCmd())
+	rootCmd.AddCommand(newPruneCmd())
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newHookCmd())
