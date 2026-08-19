@@ -1126,11 +1126,16 @@ func projectRepoName(projectRoot string) string {
 	return filepath.Base(mainRoot)
 }
 
-// loadSidecars reads all sidecar*.json files from dataDir, deduplicates by ID.
+// loadSidecars reads all sidecar*.json files from dataDir, keeping one entry per
+// sidecar ID. State accumulates one file per session and branch, and several of
+// them can name the same sidecar because LoadAnyActive reuses it across sessions
+// and branches. Only the most recently written file holds the current synced ref,
+// so entries are deduplicated by newest mtime rather than by glob order — reading
+// an older file reports a stale ref and the sidecar looks permanently out of sync.
 func loadSidecars(dataDir, projectRoot string, snapshotName string, head string, projectIdx int, repoName, branch string) []sidecarInfo {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	projectName := filepath.Base(projectRoot)
-	seen := map[string]bool{}
+	idx := map[string]int{}
 	var result []sidecarInfo
 	for _, path := range matches {
 		data, err := os.ReadFile(path)
@@ -1141,16 +1146,15 @@ func loadSidecars(dataDir, projectRoot string, snapshotName string, head string,
 		if json.Unmarshal(data, &as) != nil || as.SidecarID == "" {
 			continue
 		}
-		if seen[as.SidecarID] {
-			continue
-		}
-		seen[as.SidecarID] = true
-		inSync := head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef
 		var mtime time.Time
 		if fi, err := os.Stat(path); err == nil {
 			mtime = fi.ModTime()
 		}
-		result = append(result, sidecarInfo{
+		at, dup := idx[as.SidecarID]
+		if dup && !mtime.After(result[at].fileMtime) {
+			continue
+		}
+		info := sidecarInfo{
 			id:            as.SidecarID,
 			sidecarIDs:    []string{as.SidecarID},
 			name:          as.Name,
@@ -1161,8 +1165,15 @@ func loadSidecars(dataDir, projectRoot string, snapshotName string, head string,
 			snapshotName:  snapshotName,
 			fileMtime:     mtime,
 			lastSyncedRef: as.LastSyncedRef,
-			inSync:        inSync,
-		})
+			inSync:        head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef,
+		}
+		// Replace in place so output order still follows the first sighting of an ID.
+		if dup {
+			result[at] = info
+			continue
+		}
+		idx[as.SidecarID] = len(result)
+		result = append(result, info)
 	}
 	return result
 }
