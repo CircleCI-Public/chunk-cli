@@ -20,7 +20,7 @@ func newPruneCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Delete all sidecars and snapshots",
+		Short: "Delete all sidecars",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
@@ -75,33 +75,6 @@ func newPruneCmd() *cobra.Command {
 			}
 			if len(sidecars) == 0 {
 				io.ErrPrintln(ui.Dim("No sidecars found"))
-			}
-
-			snapshots, err := client.ListSnapshots(cmd.Context(), resolvedOrgID)
-			if err != nil {
-				if errors.Is(err, circleci.ErrNotAuthorized) {
-					return &userError{
-						msg:        "Not authorized to list snapshots.",
-						suggestion: suggestionReauth,
-						err:        err,
-					}
-				}
-				return &userError{
-					msg:        "Could not list snapshots.",
-					suggestion: suggestionNetworkRetry,
-					err:        err,
-				}
-			}
-
-			for _, s := range snapshots {
-				if err := client.DeleteSnapshot(cmd.Context(), s.ID); err != nil {
-					io.ErrPrintf("Warning: could not delete snapshot %s (%s): %v\n", s.Name, s.ID, err)
-					continue
-				}
-				io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted snapshot %s (%s)", s.Name, s.ID)))
-			}
-			if len(snapshots) == 0 {
-				io.ErrPrintln(ui.Dim("No snapshots found"))
 			}
 
 			return nil
