@@ -86,7 +86,7 @@ func exists(t *testing.T, path string) bool {
 
 // TestReapDropsStateForVanishedSidecar covers the resurrection bug: a state file
 // naming a sidecar that no longer exists must go, even when it is the file for
-// the current session, since that is exactly the file LoadAnyActive promotes.
+// the current session, since that is exactly the file AdoptIdleActive promotes.
 func TestReapDropsStateForVanishedSidecar(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
@@ -247,15 +247,17 @@ func TestPruneIDDropsStateWhenRemoteDeleteFails(t *testing.T) {
 }
 
 // TestReapStopsResurrection is the end-to-end shape of the original bug: a dead
-// ID duplicated across files came back through LoadAnyActive on every run.
+// ID duplicated across files came back through adoption on every run.
 func TestReapStopsResurrection(t *testing.T) {
 	e := newReapEnv(t)
-	ctx := context.Background()
+	// Use a session context so sidecar.json (unowned) is a candidate rather than
+	// the session's own target file.
+	ctx := session.WithID(context.Background(), "sess-new")
 	e.writeState("sidecar.json", ActiveSidecar{SidecarID: "sb-dead"}, time.Minute, false)
 	e.writeState("sidecar.sess-old-deadbeef.json", ActiveSidecar{SidecarID: "sb-dead"}, 20*24*time.Hour, false)
 
-	// Before the reap, the dead sidecar is still promotable.
-	before, err := LoadAnyActive(ctx)
+	// Before the reap, the unowned dead sidecar is still promotable.
+	before, err := AdoptIdleActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, before != nil)
 	assert.Equal(t, before.SidecarID, "sb-dead")
@@ -263,7 +265,7 @@ func TestReapStopsResurrection(t *testing.T) {
 	_, err = Reap(ctx, e.client, testOrg)
 	assert.NilError(t, err)
 
-	after, err := LoadAnyActive(ctx)
+	after, err := AdoptIdleActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, after == nil, "a reaped sidecar must not be promotable again")
 }
@@ -303,7 +305,7 @@ func TestReapDropsStateWhenDeleteFails(t *testing.T) {
 	assert.Assert(t, !exists(t, path), "a failed delete must not leave promotable state")
 
 	// The whole point: it cannot come back as the active sidecar.
-	after, err := LoadAnyActive(ctx)
+	after, err := AdoptIdleActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, after == nil, "an undeletable sidecar must not be promotable")
 	assert.Assert(t, strings.Contains(res.Summary(), "may still be running"),

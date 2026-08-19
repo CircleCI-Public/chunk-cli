@@ -60,6 +60,7 @@ const (
 	EnvCircleCIOrgID      = "CIRCLECI_ORG_ID"
 	EnvChunkHooksDisabled = "CHUNK_HOOKS_DISABLED"
 	EnvChunkNoTelemetry   = "CHUNK_NO_TELEMETRY"
+	EnvChunkSessionID     = "CHUNK_SESSION_ID"
 )
 
 // System/standard environment variable names.
