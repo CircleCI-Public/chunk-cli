@@ -7,7 +7,7 @@ orbs:
 jobs:
   lint:
     docker:
-      - image: cimg/go:1.26
+      - image: cimg/go:1.27
     resource_class: medium
     steps:
       - checkout
@@ -27,7 +27,7 @@ jobs:
 
   test:
     docker:
-      - image: cimg/go:1.26
+      - image: cimg/go:1.27
     resource_class: medium
     steps:
       - checkout
@@ -43,7 +43,7 @@ jobs:
 
   acceptance-test:
     docker:
-      - image: cimg/go:1.26
+      - image: cimg/go:1.27
     resource_class: medium
     steps:
       - checkout
@@ -59,7 +59,7 @@ jobs:
 
   build-smoke-test:
     docker:
-      - image: cimg/go:1.26
+      - image: cimg/go:1.27
     resource_class: medium
     steps:
       - checkout
