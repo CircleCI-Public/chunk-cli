@@ -9,7 +9,7 @@ parameters:
 jobs:
   release:
     docker:
-      - image: cimg/go:1.26
+      - image: cimg/go:1.27
     resource_class: medium
     steps:
       - checkout
