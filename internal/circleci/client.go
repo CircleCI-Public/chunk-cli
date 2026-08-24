@@ -481,6 +481,27 @@ func (c *Client) GetCommand(ctx context.Context, commandID string) (*Command, er
 	}, nil
 }
 
+type pruneRequest struct {
+	OrgID string `json:"org_id"`
+}
+
+type pruneAttrs struct {
+	DeletedCount int `json:"deleted_count"`
+}
+
+func (c *Client) PruneSidecars(ctx context.Context, orgID string) (int, error) {
+	var attrs pruneAttrs
+	env := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
+	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances/prune",
+		hc.Body(pruneRequest{OrgID: orgID}),
+		hc.JSONDecoder(&env),
+	))
+	if err != nil {
+		return 0, mapErr("prune sidecars", err)
+	}
+	return attrs.DeletedCount, nil
+}
+
 type snapshotAttrs struct {
 	Name string `json:"name"`
 	Tag  string `json:"tag,omitempty"`

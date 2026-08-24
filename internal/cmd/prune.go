@@ -20,7 +20,7 @@ func newPruneCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Delete all sidecars",
+		Short: "Delete your sidecars (older than 1 hour)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
@@ -38,43 +38,36 @@ func newPruneCmd() *cobra.Command {
 				return err
 			}
 
-			sidecars, err := client.ListSidecars(cmd.Context(), resolvedOrgID, false)
+			deleted, err := client.PruneSidecars(cmd.Context(), resolvedOrgID)
 			if err != nil {
 				if errors.Is(err, circleci.ErrNotAuthorized) {
 					return &userError{
-						msg:        "Not authorized to list sidecars.",
+						msg:        "Not authorized to prune sidecars.",
 						suggestion: suggestionReauth,
 						err:        err,
 					}
 				}
 				return &userError{
-					msg:        "Could not list sidecars.",
+					msg:        "Could not prune sidecars.",
 					suggestion: suggestionNetworkRetry,
 					err:        err,
 				}
 			}
 
-			active, _ := sidecar.LoadActive(cmd.Context())
-			deletedActive := false
-			for _, s := range sidecars {
-				if err := client.DeleteSidecar(cmd.Context(), s.ID); err != nil {
-					io.ErrPrintf("Warning: could not delete sidecar %s (%s): %v\n", s.Name, s.ID, err)
-					continue
-				}
-				io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted sidecar %s (%s)", s.Name, s.ID)))
-				if active != nil && active.SidecarID == s.ID {
-					deletedActive = true
-				}
+			if deleted == 0 {
+				io.ErrPrintln(ui.Dim("No sidecars deleted"))
+				return nil
 			}
-			if deletedActive {
+
+			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted %d sidecar(s)", deleted)))
+
+			active, _ := sidecar.LoadActive(cmd.Context())
+			if active != nil {
 				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
 					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
 				} else {
 					io.ErrPrintln("Active sidecar cleared")
 				}
-			}
-			if len(sidecars) == 0 {
-				io.ErrPrintln(ui.Dim("No sidecars found"))
 			}
 
 			return nil
