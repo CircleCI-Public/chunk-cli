@@ -720,6 +720,15 @@ func sidecarSyncError(ctx context.Context, client *circleci.Client, sidecarID st
 	case circleci.SidecarGone(err):
 		pruneSidecarState(ctx, client, sidecarID, false, streams)
 	default:
+		// Ask sshSessionError first. The SSH failures have specific, actionable
+		// phrasing — a missing key names the ssh-keygen command that creates it —
+		// and it is only reached by asking. Wrapping bare drops that suggestion and
+		// shows the cause alone, which is how "ssh key not found" reached a user
+		// with nothing saying how to fix it. Five call sites in sidecar.go already
+		// classify this way; the validate path was the one that did not.
+		if sshErr := sshSessionError(err); sshErr != nil {
+			return sshErr
+		}
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
 	// Both wrapped, not replaced: the caller replaces the sidecar and retries, and
@@ -818,9 +827,14 @@ func hostForwardEnv(token string) map[string]string {
 
 // runSplitCommands handles per-command remote routing when no specific command
 // name is given: remote-tagged commands go to the sidecar, the rest run locally.
-// When freshlyCreated is true, exec failures are hard errors rather than
-// silent local fallbacks (a newly provisioned sidecar that can't be reached
-// indicates a real problem, not temporary unavailability).
+//
+// A sidecar that cannot be reached, or that has no workspace, is an error here
+// rather than grounds for running the remote-marked commands locally. Those
+// commands are marked remote because a local result does not answer the
+// question they were written to answer, so running them here reports a pass the
+// sidecar never gave — the same false green as a failed creation, arrived at one
+// step later. freshlyCreated only selects the wording: on a sidecar this run
+// provisioned, "try again" is sound advice, and on a pre-existing one it is not.
 func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, freshlyCreated bool, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (validate.Result, error) {
 	remoteCfg, localCfg := splitByRemote(cfg)
 	if len(remoteCfg.Commands) > 0 {
@@ -834,31 +848,15 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 	if len(remoteCfg.Commands) > 0 {
 		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 		if err != nil {
-			if freshlyCreated {
-				return validate.Result{}, newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).
-					withCode("sidecar.unreachable").
-					withSuggestion("The sidecar may still be starting. Try again in a moment.").
-					withExitCode(ExitAPIError).
-					wrap(err)
-			}
-			streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(remoteCfg.Commands))
-			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
-		} else if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
-			if freshlyCreated {
-				return validate.Result{}, newUserError(fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)).
-					withCode("sidecar.workspace_missing").
-					withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
-					withExitCode(ExitNotFound).
-					wrap(wsErr)
-			}
-			streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
-			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
-		} else {
-			r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
-			combined.Passed += r.Passed
-			combined.Total += r.Total
-			runErr = err
+			return validate.Result{}, unreachableSidecar(sidecarID, freshlyCreated, commandNames(remoteCfg.Commands), err)
 		}
+		if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
+			return validate.Result{}, missingWorkspace(sidecarID, dest, freshlyCreated, commandNames(remoteCfg.Commands), wsErr)
+		}
+		r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
+		combined.Passed += r.Passed
+		combined.Total += r.Total
+		runErr = err
 	}
 	if len(localCfg.Commands) > 0 {
 		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams))

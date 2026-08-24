@@ -157,3 +157,90 @@ func TestCannotCreateSidecarNamesOrgSource(t *testing.T) {
 			"only authorization failures are this function's business")
 	})
 }
+
+// TestUnreachableSidecarDoesNotDegradeToLocal covers the second half of
+// FACT-426. Creation was only the first way to end up running remote-marked
+// commands locally; a sidecar that already existed but could not be reached
+// took the same warn-and-continue path and produced the same false green.
+func TestUnreachableSidecarDoesNotDegradeToLocal(t *testing.T) {
+	t.Run("a pre-existing sidecar is not worth retrying", func(t *testing.T) {
+		err := unreachableSidecar("sc-1", false, "test, lint", io.EOF)
+
+		ue, ok := errors.AsType[*userError](err)
+		assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
+		assert.Equal(t, ue.ErrorCode(), "sidecar.unreachable")
+		assert.Equal(t, ue.UserExitCode(), ExitAPIError)
+		assert.Assert(t, strings.Contains(ue.Detail(), "test, lint"),
+			"the detail must name the commands that did not run, got %q", ue.Detail())
+		// A sidecar that has gone unreachable will not fix itself, so "try
+		// again" would send the user in a circle.
+		assert.Assert(t, !strings.Contains(ue.Suggestion(), "Try again"),
+			"got %q", ue.Suggestion())
+		assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar"),
+			"the suggestion must point at a next step, got %q", ue.Suggestion())
+	})
+
+	// One this run provisioned may genuinely still be booting, which is the one
+	// case where waiting is the right advice.
+	t.Run("a fresh sidecar may still be starting", func(t *testing.T) {
+		err := unreachableSidecar("sc-1", true, "test", io.EOF)
+		ue, ok := errors.AsType[*userError](err)
+		assert.Assert(t, ok)
+		assert.Assert(t, strings.Contains(ue.UserMessage(), "newly created"), "got %q", ue.UserMessage())
+		assert.Assert(t, strings.Contains(ue.Suggestion(), "Try again"), "got %q", ue.Suggestion())
+	})
+}
+
+// TestMissingWorkspaceDoesNotDegradeToLocal covers the most reachable of the
+// two: a sidecar that syncs fine but never had 'chunk sidecar env build' run
+// still has no workspace to execute in.
+func TestMissingWorkspaceDoesNotDegradeToLocal(t *testing.T) {
+	err := missingWorkspace("sc-1", "/home/circleci/project", false, "test", io.EOF)
+
+	ue, ok := errors.AsType[*userError](err)
+	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
+	assert.Equal(t, ue.ErrorCode(), "sidecar.workspace_missing")
+	assert.Equal(t, ue.UserExitCode(), ExitNotFound)
+	assert.Assert(t, strings.Contains(ue.Detail(), "/home/circleci/project"),
+		"the detail must say where the workspace was expected, got %q", ue.Detail())
+	assert.Assert(t, strings.Contains(ue.Detail(), "test"),
+		"the detail must name the commands that did not run, got %q", ue.Detail())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "env build"),
+		"the suggestion must name the command that builds it, got %q", ue.Suggestion())
+}
+
+// TestSidecarSyncErrorKeepsSSHGuidance covers the other half of what made
+// Claire's report hard to act on. sshSessionError already phrases a missing key
+// with the ssh-keygen command that creates it, but the sync path wrapped the
+// cause bare, so the suggestion was dropped and only "ssh key not found: <path>"
+// reached the user.
+func TestSidecarSyncErrorKeepsSSHGuidance(t *testing.T) {
+	keyErr := &sidecar.KeyNotFoundError{Path: "/home/dev/.ssh/chunk_ai"}
+
+	err := sidecarSyncError(
+		context.Background(), nil, "sc-1", keyErr,
+		iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	ue, ok := errors.AsType[*userError](err)
+	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
+	assert.Equal(t, ue.ErrorCode(), "ssh.key_not_found")
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "ssh-keygen"),
+		"the suggestion must name the command that creates the key, got %q", ue.Suggestion())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "/home/dev/.ssh/chunk_ai"),
+		"the suggestion must name the path it expected, got %q", ue.Suggestion())
+}
+
+// A sync failure that is not an SSH problem must keep the sync framing rather
+// than be forced through the SSH classifier.
+func TestSidecarSyncErrorKeepsSyncFramingForOtherFailures(t *testing.T) {
+	err := sidecarSyncError(
+		context.Background(), nil, "sc-1", io.ErrUnexpectedEOF,
+		iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	ue, ok := errors.AsType[*userError](err)
+	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
+	assert.Assert(t, strings.Contains(ue.UserMessage(), "sync"),
+		"got %q", ue.UserMessage())
+}

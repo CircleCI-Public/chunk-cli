@@ -74,6 +74,47 @@ func cannotCreateSidecar(orgID, source string, err error) error {
 		wrap(err)
 }
 
+// unreachableSidecar and missingWorkspace phrase the two ways a sidecar that
+// already exists can fail to run the commands routed to it. Both return an
+// error rather than letting those commands run locally: a command is marked
+// remote because a local result does not answer the question it was written to
+// answer, so running it here reports a pass the sidecar never gave. That is the
+// same false green as a refused creation, reached one step later — and it costs
+// the full suite's runtime before saying so. Naming the commands that did not
+// run keeps the skipped work visible rather than implied.
+//
+// freshlyCreated changes only the advice. A sidecar this run provisioned may
+// genuinely still be starting, so retrying is sound; a pre-existing one that has
+// gone unreachable will not fix itself on a retry, so the suggestion points at
+// inspecting or replacing it instead.
+func unreachableSidecar(sidecarID string, freshlyCreated bool, cmds string, err error) error {
+	msg := fmt.Sprintf("Could not reach sidecar %s.", sidecarID)
+	suggestion := "Check its state with 'chunk sidecar list', or provision a replacement with 'chunk sidecar create'."
+	if freshlyCreated {
+		msg = fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)
+		suggestion = "The sidecar may still be starting. Try again in a moment."
+	}
+	return newUserError(msg).
+		withCode("sidecar.unreachable").
+		withDetail(fmt.Sprintf("Did not run: %s. Commands marked remote are not run locally.", cmds)).
+		withSuggestion(suggestion).
+		withExitCode(ExitAPIError).
+		wrap(err)
+}
+
+func missingWorkspace(sidecarID, dest string, freshlyCreated bool, cmds string, err error) error {
+	msg := fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)
+	if freshlyCreated {
+		msg = fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)
+	}
+	return newUserError(msg).
+		withCode("sidecar.workspace_missing").
+		withDetail(fmt.Sprintf("Expected it at %q. Did not run: %s. Commands marked remote are not run locally.", dest, cmds)).
+		withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+		withExitCode(ExitNotFound).
+		wrap(err)
+}
+
 // outdatedSidecarAPI maps an unsupported output format to guidance that points
 // the right way. The API is behind this binary, not ahead of it, so telling
 // someone to upgrade chunk would send them in exactly the wrong direction —
