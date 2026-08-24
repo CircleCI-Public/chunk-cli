@@ -53,7 +53,7 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 						errMsg:     fmt.Sprintf("invalid duration %q", before),
 					}
 				}
-				t := time.Now().Add(-d)
+				t := time.Now().UTC().Add(-d)
 				cutoff = &t
 			}
 
