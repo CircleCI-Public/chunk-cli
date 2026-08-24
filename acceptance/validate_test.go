@@ -85,7 +85,7 @@ func TestValidateHookMode_DirtyTree(t *testing.T) {
 	writeProjectConfig(t, workDir, "", "false")
 
 	env := testenv.NewTestEnv(t)
-	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
+	result := binary.RunCLIWithStdin(t, []string{"validate", "--local"}, env, workDir,
 		hookStdin(t, "test-session-dirty", false))
 
 	assert.Equal(t, result.ExitCode, 2,
@@ -161,60 +161,73 @@ func TestValidateRunDryRunNoConfig(t *testing.T) {
 		"expected no-commands-configured error, got: %s", combined)
 }
 
-func TestValidateRunLocal(t *testing.T) {
-	// Local-only commands (no remote:true) are now blocked — users must configure
-	// remote validation before running chunk validate.
+// TestValidateDefaultsToRemote confirms that running without --local always
+// attempts remote execution. Without a valid token the attempt fails with an
+// auth error, proving commands never silently ran locally.
+func TestValidateDefaultsToRemote(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	writeProjectConfig(t, workDir, "echo should-not-run-locally", "echo should-not-run-locally")
+
+	env := testenv.NewTestEnv(t)
+	env.CircleToken = "" // no auth → sidecar creation fails
+
+	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected failure: remote attempted without valid token")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, !strings.Contains(combined, "should-not-run-locally"),
+		"commands must not have run locally, got: %s", combined)
+}
+
+// TestValidateLocalFlagRunsLocally confirms that --local executes commands in
+// the local process and succeeds without a sidecar or token.
+func TestValidateRunLocalFlag(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo installed", "echo tested")
 
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"validate",
+		"validate", "--local",
 	}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when remote is not configured")
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Remote validation is not configured"),
-		"expected remote-not-configured message, got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "sidecar setup") || strings.Contains(combined, "mark-remote"),
-		"expected actionable suggestion in output, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "installed") || strings.Contains(combined, "tested"),
+		"expected local command output, got: %s", combined)
 }
 
-func TestValidateRunLocalFailure(t *testing.T) {
-	// Local-only commands are blocked regardless of whether they would pass or fail.
+// TestValidateRunLocalFlagFailure confirms that --local with a failing command
+// exits non-zero.
+func TestValidateRunLocalFlagFailure(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "true", "false")
 
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"validate",
+		"validate", "--local",
 	}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when remote is not configured")
-	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Remote validation is not configured"),
-		"expected remote-not-configured message, got: %s", combined)
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for failing command")
 }
 
-func TestValidateRunLocalSkipsAfterFailure(t *testing.T) {
-	// Local-only commands are blocked before any execution — no "skipped" output.
+// TestValidateRunLocalFlagStopsOnFirstFailure confirms that --local stops
+// running commands after the first failure.
+func TestValidateRunLocalFlagStopsOnFirstFailure(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "false", "echo should-not-run")
 
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"validate",
+		"validate", "--local",
 	}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when remote is not configured")
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Remote validation is not configured"),
-		"expected remote-not-configured message, got: %s", combined)
 	assert.Assert(t, !strings.Contains(combined, "should-not-run"),
-		"blocked run must not execute any command, got: %s", combined)
+		"must stop on first failure, got: %s", combined)
 }
 
 // generateTestSSHKey writes an ed25519 keypair to identityFile and identityFile+".pub".
@@ -240,21 +253,22 @@ func generateTestSSHKey(t *testing.T, identityFile string) error {
 
 // --- Named command execution ---
 
-func TestValidateRunNamed(t *testing.T) {
-	// Named local commands are also blocked — remote must be configured first.
+// TestValidateRunNamedLocalFlag confirms that --local runs a named command
+// in the local process.
+func TestValidateRunNamedLocalFlag(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo installed", "echo tested")
 
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"validate", "test",
+		"validate", "--local", "test",
 	}, env, workDir)
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit when remote is not configured")
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "Remote validation is not configured"),
-		"expected remote-not-configured message, got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "tested"),
+		"expected named command output, got: %s", combined)
 }
 
 func TestValidateRunNamedNotConfiguredNonTTY(t *testing.T) {
@@ -264,7 +278,7 @@ func TestValidateRunNamedNotConfiguredNonTTY(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"validate", "nonexistent",
+		"validate", "--local", "nonexistent",
 	}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code for unknown command")
@@ -281,7 +295,7 @@ func TestValidateInlineCmd(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"validate", "--cmd", "echo inline-output",
+		"validate", "--local", "--cmd", "echo inline-output",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -314,7 +328,7 @@ func TestValidateInlineCmdSave(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
 	result := binary.RunCLI(t, []string{
-		"validate", "lint", "--cmd", "echo linting", "--save",
+		"validate", "--local", "lint", "--cmd", "echo linting", "--save",
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
@@ -562,7 +576,7 @@ func TestValidateHookMode_SuccessLine(t *testing.T) {
 	writeProjectConfig(t, workDir, "", "true")
 
 	env := testenv.NewTestEnv(t)
-	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
+	result := binary.RunCLIWithStdin(t, []string{"validate", "--local"}, env, workDir,
 		hookStdin(t, "test-session-success-line", false))
 
 	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for passing hook; stderr: %s", result.Stderr)

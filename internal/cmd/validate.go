@@ -157,6 +157,7 @@ type validateOpts struct {
 	list         bool
 	save         bool
 	remote       bool
+	local        bool
 	markRemote   bool
 	jsonOut      bool
 	inlineCmd    string
@@ -186,7 +187,8 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.remote, "remote", false, "Run on active sidecar, or create one if none is set")
+	cmd.Flags().BoolVar(&opts.remote, "remote", false, "Run on active sidecar, or create one if none is set (default behavior)")
+	cmd.Flags().BoolVar(&opts.local, "local", false, "Run commands locally instead of on sidecar")
 	cmd.Flags().StringVar(&opts.sidecarID, "sidecar-id", "", "Sidecar ID for remote execution")
 	cmd.Flags().StringVar(&opts.orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&opts.identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
@@ -242,10 +244,11 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 }
 
 // checkRemoteConfigured returns an error when an interactive run would fall
-// back to local execution because no commands are marked remote. Hooks and
-// explicit override flags (--remote, --sidecar-id, --cmd) bypass this gate.
+// back to local execution because no commands are marked remote. Hooks,
+// --local, and explicit override flags (--remote, --sidecar-id, --cmd) bypass
+// this gate.
 func checkRemoteConfigured(hook *hookContext, opts *validateOpts, cfg *config.ProjectConfig) error {
-	if hook != nil || opts.inlineCmd != "" || opts.remote || opts.sidecarID != "" {
+	if hook != nil || opts.local || opts.inlineCmd != "" || opts.remote || opts.sidecarID != "" {
 		return nil
 	}
 	if cfg == nil || !cfg.HasCommands() || cfg.HasRemoteCommands() || cfg.HasSidecarImage() {
@@ -382,6 +385,11 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
 	}
 
+	// Remote is the default; --local is the only opt-out.
+	if !opts.local {
+		opts.remote = true
+	}
+
 	if err := checkRemoteConfigured(hook, opts, cfg); err != nil {
 		return err
 	}
@@ -392,7 +400,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	rc, _ := config.ResolveCircleCI(insecureStorage)
 
 	explicitRemote := opts.remote || opts.sidecarID != ""
-	needsSidecar := validateNeedsSidecar(explicitRemote, cfg)
+	needsSidecar := !opts.local && validateNeedsSidecar(explicitRemote, cfg)
 	if hookMissingAuth(hook, needsSidecar, rc.CircleCIToken, streams) {
 		return errSilentExit
 	}
@@ -410,13 +418,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		}
 	}
 
-	// allRemote is true when the caller explicitly targets the sidecar
-	// (--remote or --sidecar-id), meaning every command runs there.
-	// Per-command routing only applies when the sidecar is resolved implicitly.
-	allRemote := explicitRemote
-	if cfg.HasSidecarImage() {
-		allRemote = true
-	}
+	// allRemote is true unless --local is passed explicitly.
+	allRemote := !opts.local && (explicitRemote || cfg.HasSidecarImage())
 
 	image := resolveImage(name, cfg)
 
@@ -678,6 +681,9 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
 // and config, then returns whether a new sidecar was provisioned.
 func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
+	if opts.local {
+		return false, nil
+	}
 	if validateNeedsSidecar(opts.remote || opts.sidecarID != "", cfg) {
 		if opts.remote {
 			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, streams)
