@@ -30,13 +30,51 @@ type ghAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
+// brewPathFragments are path fragments that only appear inside a Homebrew
+// prefix. Callers resolve symlinks before checking (os.Executable returns the
+// symlink in <prefix>/bin, which resolves into the Cellar), so both the
+// symlink and Cellar forms have to match. Bare <prefix>/bin is deliberately
+// absent for the Intel macOS prefix: /usr/local/bin holds plenty of binaries
+// Homebrew does not manage.
+var brewPathFragments = []string{
+	"/opt/homebrew/",              // Apple Silicon macOS prefix (bin and Cellar)
+	"/usr/local/Cellar/",          // Intel macOS
+	"/usr/local/Homebrew/",        // Intel macOS
+	"/home/linuxbrew/.linuxbrew/", // Linuxbrew
+}
+
+// brewUpgradeCommand upgrades the Homebrew formula, which .goreleaser.yaml
+// names "chunk" (not "chunk-cli", the repo name).
+const brewUpgradeCommand = "brew upgrade chunk"
+
 func IsBrewManaged(path string) bool {
-	return strings.Contains(path, "/opt/homebrew/bin/")
+	for _, fragment := range brewPathFragments {
+		if strings.Contains(path, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+// SelfUpgradeCommand returns the command that upgrades the running binary,
+// accounting for Homebrew installs, which must not be replaced in place.
+func SelfUpgradeCommand() string {
+	execPath, err := os.Executable()
+	if err != nil {
+		return "chunk upgrade"
+	}
+	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
+		execPath = resolved
+	}
+	if IsBrewManaged(execPath) {
+		return brewUpgradeCommand
+	}
+	return "chunk upgrade"
 }
 
 func Run(out io.Writer, client *http.Client, apiBase, installPath string) error {
 	if IsBrewManaged(installPath) {
-		return fmt.Errorf("chunk is managed by Homebrew — upgrade with: brew upgrade chunk-cli")
+		return fmt.Errorf("chunk is managed by Homebrew — upgrade with: %s", brewUpgradeCommand)
 	}
 
 	rel, err := fetchLatestRelease(client, apiBase)

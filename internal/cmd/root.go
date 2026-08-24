@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -162,11 +162,54 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	return nil
 }
 
+// Names of the commands that opt out of the update check, shared with their
+// definitions so the two cannot drift apart.
+const (
+	cmdNameCompletion       = "completion"
+	cmdNameReceiveTelemetry = "receive-telemetry"
+	cmdNameUpgrade          = "upgrade"
+	cmdNameWatch            = "watch"
+)
+
+// updateNoticeWait bounds how long printUpdateNotice waits for the background
+// check. The wait is only ever paid on the once-a-day fetch: with a fresh
+// cache the goroutine returns after a single file read, so short-lived
+// commands stay fast while still getting far enough to write the cache.
+const updateNoticeWait = 3 * time.Second
+
+// noUpdateCheckCommands are commands that must not run the update check.
+// Completion helpers run on every TAB press and receive-telemetry is re-execed
+// by every chunk invocation, so checking there would burn through GitHub's
+// unauthenticated rate limit; upgrade would compare against the version it is
+// replacing; and watch renders its own notice in the TUI footer.
+var noUpdateCheckCommands = map[string]bool{
+	cobra.ShellCompRequestCmd:       true,
+	cobra.ShellCompNoDescRequestCmd: true,
+	cmdNameCompletion:               true,
+	cmdNameReceiveTelemetry:         true,
+	cmdNameUpgrade:                  true,
+	cmdNameWatch:                    true,
+}
+
+// skipUpdateCheck reports whether cmd, or any command it is nested under, is
+// in noUpdateCheckCommands.
+func skipUpdateCheck(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if noUpdateCheckCommands[c.Name()] {
+			return true
+		}
+	}
+	return false
+}
+
 // startUpdateCheck launches a background goroutine to check for a newer
 // version. The result is sent on a buffered channel stored in the context so
 // printUpdateNotice can read it after the command completes.
 func startUpdateCheck(cmd *cobra.Command, version string) {
 	if os.Getenv(config.EnvCI) != "" || testing.Testing() {
+		return
+	}
+	if skipUpdateCheck(cmd) {
 		return
 	}
 	ch := make(chan string, 1)
@@ -186,8 +229,11 @@ func startUpdateCheck(cmd *cobra.Command, version string) {
 	}()
 }
 
-// printUpdateNotice reads from the update check channel (non-blocking) and
-// prints a notice to stderr if a newer version is available.
+// printUpdateNotice waits up to updateNoticeWait for the background check and
+// prints a notice to stderr if a newer version is available. The wait matters
+// beyond the notice itself: the goroutine writes the 24 h cache only after the
+// HTTP round trip, so returning early here would let the process exit before
+// the result is cached and send every later invocation back to GitHub.
 func printUpdateNotice(cmd *cobra.Command) {
 	ch, ok := cmd.Context().Value(updateCheckKey{}).(chan string)
 	if !ok {
@@ -196,22 +242,12 @@ func printUpdateNotice(cmd *cobra.Command) {
 	var latest string
 	select {
 	case latest = <-ch:
-	default:
+	case <-time.After(updateNoticeWait):
 		return
 	}
 	if latest == "" {
 		return
 	}
 
-	execPath, _ := os.Executable()
-	execPath, _ = filepath.EvalSymlinks(execPath)
-
-	var upgradeCmd string
-	if upgrade.IsBrewManaged(execPath) {
-		upgradeCmd = "brew upgrade chunk-cli"
-	} else {
-		upgradeCmd = "chunk upgrade"
-	}
-
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s\nRun: %s\n", latest, upgradeCmd)
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s\nRun: %s\n", latest, upgrade.SelfUpgradeCommand())
 }

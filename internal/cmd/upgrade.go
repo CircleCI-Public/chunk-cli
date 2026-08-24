@@ -14,7 +14,7 @@ import (
 
 func newUpgradeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "upgrade",
+		Use:   cmdNameUpgrade,
 		Short: "Upgrade chunk to the latest version",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)

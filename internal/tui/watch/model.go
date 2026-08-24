@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -159,7 +160,7 @@ type Model struct {
 	hasSpinner bool
 
 	updateAvailable string // non-empty tag (e.g. "v1.2.3") when an update is available
-	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk-cli"
+	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk"
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -879,13 +880,14 @@ func (m Model) renderFooter() string {
 	}
 	bar := strings.Join(parts, "  "+vdim("·")+"  ")
 
+	// Right-align the update notice, but drop it entirely when it does not
+	// fit: padding it onto an over-long bar would wrap the footer and break
+	// the fixed-height layout.
 	if m.updateAvailable != "" {
 		notice := amber("↑ "+m.updateAvailable) + "  " + dim(m.upgradeCmd)
-		gap := m.width - 2 - lipgloss.Width(bar) - lipgloss.Width(notice)
-		if gap < 2 {
-			gap = 2
+		if gap := m.width - 2 - lipgloss.Width(bar) - lipgloss.Width(notice); gap >= 2 {
+			bar += strings.Repeat(" ", gap) + notice
 		}
-		bar += strings.Repeat(" ", gap) + notice
 	}
 
 	return vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
@@ -1297,8 +1299,16 @@ func doSpin() tea.Cmd {
 	return tea.Tick(spinInterval, func(time.Time) tea.Msg { return spinMsg{} })
 }
 
+// checkUpdateCmd checks for a newer release for the footer notice. Root's
+// PersistentPreRunE skips watch (see noUpdateCheckCommands) so this is the
+// only check on this path — two would race on the cache file and print the
+// notice twice. It carries the same CI and test guards root's check has,
+// since those guards do not apply on this path.
 func checkUpdateCmd() tea.Cmd {
 	return func() tea.Msg {
+		if os.Getenv(config.EnvCI) != "" || testing.Testing() {
+			return updateCheckMsg{}
+		}
 		stateDir, err := config.AppState()
 		if err != nil {
 			return updateCheckMsg{}
@@ -1311,13 +1321,7 @@ func checkUpdateCmd() tea.Cmd {
 		if latest == "" {
 			return updateCheckMsg{}
 		}
-		execPath, _ := os.Executable()
-		execPath, _ = filepath.EvalSymlinks(execPath)
-		upgradeCmd := "chunk upgrade"
-		if upgrade.IsBrewManaged(execPath) {
-			upgradeCmd = "brew upgrade chunk-cli"
-		}
-		return updateCheckMsg{latest: latest, upgradeCmd: upgradeCmd}
+		return updateCheckMsg{latest: latest, upgradeCmd: upgrade.SelfUpgradeCommand()}
 	}
 }
 
