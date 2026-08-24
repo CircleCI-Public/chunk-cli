@@ -1,11 +1,41 @@
 package watchd
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"time"
 )
+
+// FetchSnapshot connects to the running watch daemon and returns the current
+// snapshot for the given project roots. If roots is empty all known projects
+// are returned.
+func FetchSnapshot(roots []string) (Snapshot, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	body, err := json.Marshal(roots)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("marshal roots: %w", err)
+	}
+	resp, err := unixClient(sockPath).Post("http://watchd/snapshot", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("connect to watch daemon: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return Snapshot{}, fmt.Errorf("watch daemon returned %s", resp.Status)
+	}
+	var snap Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return Snapshot{}, fmt.Errorf("decode snapshot: %w", err)
+	}
+	return snap, nil
+}
 
 // ping returns true if the daemon at sockPath is reachable.
 func ping(sockPath string) bool {
@@ -24,7 +54,10 @@ func EnsureRunning(subArgs []string) error {
 	if err != nil {
 		return err
 	}
-	running, _, _ := IsRunning(pidPath)
+	running, _, err := IsRunning(pidPath)
+	if err != nil {
+		return fmt.Errorf("check running: %w", err)
+	}
 	if running {
 		return nil
 	}

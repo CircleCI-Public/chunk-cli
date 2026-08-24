@@ -7,6 +7,9 @@ import (
 )
 
 func watchdDir() (string, error) {
+	if override := os.Getenv("CHUNK_WATCHD_DIR"); override != "" {
+		return override, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)

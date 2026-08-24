@@ -14,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	internaltui "github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui/watch"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newWatchCmd() *cobra.Command {
@@ -27,6 +28,10 @@ func newWatchCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := internaltui.RequireStdoutTTY(); err != nil {
 				return fmt.Errorf("watch requires a TTY")
+			}
+
+			if err := watchd.EnsureRunning([]string{"watch", "_daemon"}); err != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 
 			cwd, err := os.Getwd()

@@ -124,7 +124,7 @@ type dataMsg struct {
 
 // Model is the BubbleTea model for the watch dashboard.
 type Model struct {
-	client   *Client
+	loadFn   func(Model) tea.Msg
 	projects []ProjectEntry
 	offsets  []int64
 	branches []string // current branch per project, refreshed each poll
@@ -161,7 +161,7 @@ const noSelection = "\x00"
 // still shows up without a restart.
 func New(projects []ProjectEntry, watchAll bool) Model {
 	return Model{
-		client:        &Client{},
+		loadFn:        loadFromDaemon,
 		projects:      projects,
 		offsets:       make([]int64, len(projects)),
 		branches:      make([]string, len(projects)),
@@ -865,47 +865,9 @@ func (m Model) renderFooter() string {
 	return vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
 }
 
-// loadData delegates all disk and subprocess I/O to the client.
+// loadData delegates all disk and subprocess I/O to loadFn.
 func (m Model) loadData() tea.Msg {
-	return m.client.load(m)
-}
-
-// capEvents appends fresh to prior, keeping at most recentEvents. The cap is
-// applied per project so a project with a long history cannot evict another
-// project's recent activity.
-func capEvents(prior, fresh []eventlog.Event) []eventlog.Event {
-	merged := make([]eventlog.Event, 0, len(prior)+len(fresh))
-	merged = append(merged, prior...)
-	merged = append(merged, fresh...)
-	if len(merged) > recentEvents {
-		merged = merged[len(merged)-recentEvents:]
-	}
-	return merged
-}
-
-// annotateActivity fills lastActivity, lastOp, lastLevel and running from the
-// newest event belonging to each sidecar.
-func annotateActivity(sidecars []sidecarInfo, eventsByProject [][]eventlog.Event) {
-	for i := range sidecars {
-		sc := &sidecars[i]
-		if sc.projectIdx >= len(eventsByProject) {
-			continue
-		}
-		events := eventsByProject[sc.projectIdx]
-		for j := len(events) - 1; j >= 0; j-- {
-			e := events[j]
-			if e.SidecarID != sc.id {
-				continue
-			}
-			sc.lastActivity = e.Ts
-			sc.lastOp = e.Op
-			sc.lastLevel = e.Level
-			if e.Level != levelDone && e.Level != levelError && time.Since(e.Ts) < runningTimeout {
-				sc.running = true
-			}
-			break
-		}
-	}
+	return m.loadFn(m)
 }
 
 // sortByActivity puts the most recently active project first, and within a
@@ -999,8 +961,6 @@ func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
 	}
 	return sidecars[idx].id
 }
-
-
 
 const (
 	// activeWindow is how recently a sidecar must have been active to be shown.
