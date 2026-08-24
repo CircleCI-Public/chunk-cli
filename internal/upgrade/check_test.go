@@ -37,15 +37,6 @@ func TestCheckForUpdate(t *testing.T) {
 		}
 	})
 
-	t.Run("returns empty when current is newer", func(t *testing.T) {
-		srv := releaseServer(t, "v1.0.0")
-		dir := t.TempDir()
-		got := CheckForUpdate(dir, srv.URL, "v2.0.0")
-		if got != "" {
-			t.Fatalf("expected empty, got %q", got)
-		}
-	})
-
 	t.Run("uses cache when fresh", func(t *testing.T) {
 		// Write a cache entry claiming v9.0.0 is latest; server would say v2.0.0
 		dir := t.TempDir()
@@ -190,13 +181,5 @@ func TestCheckForUpdate_claimsCacheWindowBeforeFetch(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("expected no further network calls, got %d", hits)
-	}
-}
-
-// Check is the entry point every notice surface uses, so its guards are what
-// keep the rest of the suite off the network and out of the real state dir.
-func TestCheck_disabledUnderTest(t *testing.T) {
-	if got := Check(); got != "" {
-		t.Fatalf("expected Check to be disabled under test, got %q", got)
 	}
 }

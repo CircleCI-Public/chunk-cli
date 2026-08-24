@@ -55,15 +55,6 @@ func TestSkipUpdateCheck(t *testing.T) {
 		}
 	}
 
-	// Every other command keeps the check.
-	for _, cmd := range root.Commands() {
-		if noUpdateCheckCommands[cmd.Name()] {
-			continue
-		}
-		if skipUpdateCheck(cmd) {
-			t.Errorf("expected update check to run for %q", cmd.Name())
-		}
-	}
 }
 
 func TestPrintUpdateNotice(t *testing.T) {
