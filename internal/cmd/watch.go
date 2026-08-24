@@ -91,5 +91,6 @@ func newWatchCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects, not just the current directory")
+	cmd.AddCommand(newWatchDaemonCmd())
 	return cmd
 }
