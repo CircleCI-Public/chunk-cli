@@ -687,7 +687,7 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", opts.sidecarID))
 			return created, nil
 		}
-		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, activeSidecar, streams), nil
+		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, activeSidecar, streams)
 	}
 	return false, nil
 }
@@ -914,18 +914,23 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 // sidecarImage is configured). It uses the active sidecar when available,
 // and auto-creates one otherwise.
 // Returns true when a brand-new sidecar was provisioned in this call.
-func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, active *sidecar.ActiveSidecar, streams iostream.Streams) bool {
+//
+// A failure here is returned rather than downgraded to a local run. Commands
+// marked remote are marked that way because local results do not answer the
+// question they were written to answer, so quietly running them here reports a
+// pass the sidecar never gave. The three ways this fails in practice — no org
+// ID, no TTY to pick one, a token that cannot create sidecars — are all
+// configuration, so a retry without user action fails identically; falling
+// back only spends the full suite's runtime before saying so. This matches
+// --remote, which has always returned the error from this same call.
+func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, active *sidecar.ActiveSidecar, streams iostream.Streams) (bool, error) {
 	statusFn := newStatusFunc(streams)
 	if active != nil {
 		*sidecarID = active.SidecarID
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
-		return false
+		return false, nil
 	}
-	created, err := resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
-	if err != nil {
-		streams.ErrPrintf("warning: could not create sidecar (%v); running commands locally instead\n", err)
-	}
-	return created
+	return resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
 }
 
 // resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
@@ -952,7 +957,11 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		*sidecarID = existing.SidecarID
 		return false, nil
 	}
-	streams.ErrPrintf("No active sidecar found, creating a new sidecar...\n")
+	// A status line, not stderr prose: having no sidecar yet is the normal state
+	// of a first run, and printing it raw made it the headline of the hook's
+	// "Stop hook error:" banner even when everything then went fine.
+	statusFn := newStatusFunc(streams)
+	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
 	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
 		return false, err
@@ -960,7 +969,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	sandboxName := sidecarAutoName(ctx, workDir)
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {
-		if authErr := notAuthorized("create sidecars", err); authErr != nil {
+		if authErr := cannotCreateSidecar(resolvedOrgID, orgSource(orgID, workDir), err); authErr != nil {
 			return false, authErr
 		}
 		return false, &userError{

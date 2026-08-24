@@ -91,6 +91,18 @@ func resolveOrgID(orgID, workDir string, pickOrg func() (string, error)) (string
 	return pickOrg()
 }
 
+// orgSource names where resolveOrgID would have taken the org ID from, for use
+// in error messages. It mirrors resolveOrgID's precedence and must be kept in
+// step with it. An empty result means the picker supplied the value, which for
+// a single-collaboration account happens without prompting.
+func orgSource(orgID, workDir string) string {
+	if orgID != "" {
+		return "--org-id"
+	}
+	_, source := config.ResolveOrgID(workDir)
+	return source
+}
+
 func orgPicker(ctx context.Context, client *circleci.Client) func() (string, error) {
 	return func() (string, error) {
 		collabs, err := client.ListCollaborations(ctx)
@@ -121,10 +133,13 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 		idx, err := tui.SelectFromList("Select an organization:", labels)
 		if err != nil {
 			if errors.Is(err, tui.ErrNoTTY) {
+				// hideDetail: the wrapped error is "no interactive terminal
+				// available", which the message already says in full.
 				return "", &userError{
 					msg:        "No interactive terminal available to select an organization.",
 					suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
 					err:        err,
+					hideDetail: true,
 				}
 			}
 			return "", &userError{msg: "Could not select an organization.", suggestion: "Pass --org-id instead.", err: err}

@@ -47,6 +47,33 @@ func notAuthorized(action string, err error) error {
 		wrap(err)
 }
 
+// cannotCreateSidecar phrases a rejected sidecar creation, or returns nil when
+// err is not an authorization failure.
+//
+// The generic notAuthorized() says to check the token, which is the wrong lead
+// here: the token is usually fine and the org is the problem. An org ID reaches
+// Create from four places — a flag, an env var, .chunk/config.json, or a silent
+// auto-pick when the account has exactly one collaboration — and nothing on
+// screen says which one was used. Naming the org and its source makes "chunk
+// tried the wrong org" a visible possibility rather than a guess.
+func cannotCreateSidecar(orgID, source string, err error) error {
+	if !errors.Is(err, circleci.ErrNotAuthorized) {
+		return nil
+	}
+	detail := fmt.Sprintf("Org %s rejected the request", orgID)
+	if source != "" {
+		detail += " (org ID from " + source + ")"
+	}
+	return newUserError("Not authorized to create sidecars in this organization.").
+		withCode("sidecar.not_authorized").
+		withDetail(detail + ".").
+		withSuggestion("Confirm this is the right org: 'chunk org list' shows the ones you belong to, and " +
+			"'chunk config set orgID <id>' records the one this repo should use.\n" +
+			"If the org is correct, it may not have sidecars enabled yet, or your token may lack access to it.").
+		withExitCode(ExitAuthError).
+		wrap(err)
+}
+
 // outdatedSidecarAPI maps an unsupported output format to guidance that points
 // the right way. The API is behind this binary, not ahead of it, so telling
 // someone to upgrade chunk would send them in exactly the wrong direction —
