@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,11 +17,15 @@ import (
 )
 
 func newPruneCmd() *cobra.Command {
-	var orgID string
+	var orgID, before string
 
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Delete your sidecars (older than 1 hour)",
+		Short: "Delete your sidecars",
+		Long: `Delete your sidecar instances for the given org.
+
+By default the API deletes sidecars created more than 1 hour ago.
+Pass --before to extend the cutoff (e.g. --before 24h).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
@@ -38,7 +43,21 @@ func newPruneCmd() *cobra.Command {
 				return err
 			}
 
-			deleted, err := client.PruneSidecars(cmd.Context(), resolvedOrgID)
+			var cutoff *time.Time
+			if before != "" {
+				d, parseErr := time.ParseDuration(before)
+				if parseErr != nil || d <= 0 {
+					return &userError{
+						msg:        fmt.Sprintf("Invalid --before value %q.", before),
+						suggestion: "Use a Go duration like 2h or 24h.",
+						errMsg:     fmt.Sprintf("invalid duration %q", before),
+					}
+				}
+				t := time.Now().Add(-d)
+				cutoff = &t
+			}
+
+			deleted, err := client.PruneSidecars(cmd.Context(), resolvedOrgID, cutoff)
 			if err != nil {
 				if errors.Is(err, circleci.ErrNotAuthorized) {
 					return &userError{
@@ -75,6 +94,7 @@ func newPruneCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
+	cmd.Flags().StringVar(&before, "before", "", "Delete sidecars created more than this long ago (e.g. 2h, 24h; default: 1h)")
 
 	return cmd
 }
