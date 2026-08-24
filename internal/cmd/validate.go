@@ -824,9 +824,8 @@ func hostForwardEnv(token string) map[string]string {
 
 // runSplitCommands handles per-command remote routing when no specific command
 // name is given: remote-tagged commands go to the sidecar, the rest run locally.
-// When freshlyCreated is true, exec failures are hard errors rather than
-// silent local fallbacks (a newly provisioned sidecar that can't be reached
-// indicates a real problem, not temporary unavailability).
+// Any error reaching or using the sidecar is returned immediately — there is no
+// local fallback.
 func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, freshlyCreated bool, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (validate.Result, error) {
 	remoteCfg, localCfg := splitByRemote(cfg)
 	if len(remoteCfg.Commands) > 0 {
@@ -840,31 +839,23 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 	if len(remoteCfg.Commands) > 0 {
 		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 		if err != nil {
-			if freshlyCreated {
-				return validate.Result{}, newUserError(fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)).
-					withCode("sidecar.unreachable").
-					withSuggestion("The sidecar may still be starting. Try again in a moment.").
-					withExitCode(ExitAPIError).
-					wrap(err)
-			}
-			streams.ErrPrintf("warning: could not reach sidecar (%v); running %s locally instead\n", err, commandNames(remoteCfg.Commands))
-			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
-		} else if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
-			if freshlyCreated {
-				return validate.Result{}, newUserError(fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)).
-					withCode("sidecar.workspace_missing").
-					withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
-					withExitCode(ExitNotFound).
-					wrap(wsErr)
-			}
-			streams.ErrPrintf("warning: %v (%q); run 'chunk sidecar env build' to set up the workspace; running %s locally instead\n", wsErr, dest, commandNames(remoteCfg.Commands))
-			localCfg.Commands = append(remoteCfg.Commands, localCfg.Commands...)
-		} else {
-			r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
-			combined.Passed += r.Passed
-			combined.Total += r.Total
-			runErr = err
+			return validate.Result{}, newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
+				withCode("sidecar.unreachable").
+				withSuggestion("The sidecar may still be starting. Try again in a moment.").
+				withExitCode(ExitAPIError).
+				wrap(err)
 		}
+		if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
+			return validate.Result{}, newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
+				withCode("sidecar.workspace_missing").
+				withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+				withExitCode(ExitNotFound).
+				wrap(wsErr)
+		}
+		r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
+		combined.Passed += r.Passed
+		combined.Total += r.Total
+		runErr = err
 	}
 	if len(localCfg.Commands) > 0 {
 		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams))
