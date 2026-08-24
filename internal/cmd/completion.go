@@ -21,7 +21,7 @@ const completionTag = "# chunk shell completion"
 
 func newCompletionCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   cmdNameCompletion,
+		Use:   "completion",
 		Short: "Manage shell completions",
 	}
 

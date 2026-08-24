@@ -151,3 +151,52 @@ func releaseServer(t *testing.T, tagName string) *httptest.Server {
 	t.Cleanup(srv.Close)
 	return srv
 }
+
+// The cache window is claimed before the HTTP request, so a caller that exits
+// without waiting for the fetch still suppresses checks for 24 h rather than
+// sending every later invocation back to GitHub.
+func TestCheckForUpdate_claimsCacheWindowBeforeFetch(t *testing.T) {
+	dir := t.TempDir()
+
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	if got := CheckForUpdate(dir, srv.URL, "v1.0.0"); got != "" {
+		t.Fatalf("expected empty on a failed fetch, got %q", got)
+	}
+	if hits != 1 {
+		t.Fatalf("expected 1 network call, got %d", hits)
+	}
+
+	cached, ok := readCache(filepath.Join(dir, cacheFileName))
+	if !ok {
+		t.Fatal("expected the failed fetch to still claim the cache window")
+	}
+	if cached.LatestVersion != "" {
+		t.Fatalf("expected no version recorded, got %q", cached.LatestVersion)
+	}
+	if time.Since(cached.CheckedAt) > time.Minute {
+		t.Fatal("expected checked_at to be set to now")
+	}
+
+	// The claimed window holds off the next check, and an empty cached
+	// version yields no notice rather than a bogus one.
+	if got := CheckForUpdate(dir, srv.URL, "v1.0.0"); got != "" {
+		t.Fatalf("expected empty from the claimed window, got %q", got)
+	}
+	if hits != 1 {
+		t.Fatalf("expected no further network calls, got %d", hits)
+	}
+}
+
+// Check is the entry point every notice surface uses, so its guards are what
+// keep the rest of the suite off the network and out of the real state dir.
+func TestCheck_disabledUnderTest(t *testing.T) {
+	if got := Check(); got != "" {
+		t.Fatalf("expected Check to be disabled under test, got %q", got)
+	}
+}

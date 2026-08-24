@@ -6,7 +6,6 @@ import (
 	"os"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -42,7 +41,7 @@ func NewRootCmd(version string) *cobra.Command {
 			if err := setupTelemetry(cmd, version); err != nil {
 				return err
 			}
-			startUpdateCheck(cmd, version)
+			startUpdateCheck(cmd)
 			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
@@ -162,21 +161,6 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	return nil
 }
 
-// Names of the commands that opt out of the update check, shared with their
-// definitions so the two cannot drift apart.
-const (
-	cmdNameCompletion       = "completion"
-	cmdNameReceiveTelemetry = "receive-telemetry"
-	cmdNameUpgrade          = "upgrade"
-	cmdNameWatch            = "watch"
-)
-
-// updateNoticeWait bounds how long printUpdateNotice waits for the background
-// check. The wait is only ever paid on the once-a-day fetch: with a fresh
-// cache the goroutine returns after a single file read, so short-lived
-// commands stay fast while still getting far enough to write the cache.
-const updateNoticeWait = 3 * time.Second
-
 // noUpdateCheckCommands are commands that must not run the update check.
 // Completion helpers run on every TAB press and receive-telemetry is re-execed
 // by every chunk invocation, so checking there would burn through GitHub's
@@ -185,10 +169,10 @@ const updateNoticeWait = 3 * time.Second
 var noUpdateCheckCommands = map[string]bool{
 	cobra.ShellCompRequestCmd:       true,
 	cobra.ShellCompNoDescRequestCmd: true,
-	cmdNameCompletion:               true,
-	cmdNameReceiveTelemetry:         true,
-	cmdNameUpgrade:                  true,
-	cmdNameWatch:                    true,
+	"completion":                    true,
+	"receive-telemetry":             true,
+	"upgrade":                       true,
+	"watch":                         true,
 }
 
 // skipUpdateCheck reports whether cmd, or any command it is nested under, is
@@ -205,35 +189,22 @@ func skipUpdateCheck(cmd *cobra.Command) bool {
 // startUpdateCheck launches a background goroutine to check for a newer
 // version. The result is sent on a buffered channel stored in the context so
 // printUpdateNotice can read it after the command completes.
-func startUpdateCheck(cmd *cobra.Command, version string) {
-	if os.Getenv(config.EnvCI) != "" || testing.Testing() {
-		return
-	}
+func startUpdateCheck(cmd *cobra.Command) {
 	if skipUpdateCheck(cmd) {
 		return
 	}
 	ch := make(chan string, 1)
 	cmd.SetContext(context.WithValue(cmd.Context(), updateCheckKey{}, ch))
 
-	go func() {
-		stateDir, err := config.AppState()
-		if err != nil {
-			ch <- ""
-			return
-		}
-		apiBase := os.Getenv(config.EnvGitHubAPIURL)
-		if apiBase == "" {
-			apiBase = "https://api.github.com"
-		}
-		ch <- upgrade.CheckForUpdate(stateDir, apiBase, version)
-	}()
+	go func() { ch <- upgrade.Check() }()
 }
 
-// printUpdateNotice waits up to updateNoticeWait for the background check and
-// prints a notice to stderr if a newer version is available. The wait matters
-// beyond the notice itself: the goroutine writes the 24 h cache only after the
-// HTTP round trip, so returning early here would let the process exit before
-// the result is cached and send every later invocation back to GitHub.
+// printUpdateNotice prints a notice to stderr if the background check has
+// already found a newer version. It never waits: with a warm cache the check is
+// a single file read and has long since finished, and on the once-a-day fetch
+// the notice is worth less than the delay it would cost every command. A fetch
+// still in flight is simply dropped — it claims the cache window before making
+// its request, so the notice lands on a later invocation instead.
 func printUpdateNotice(cmd *cobra.Command) {
 	ch, ok := cmd.Context().Value(updateCheckKey{}).(chan string)
 	if !ok {
@@ -242,7 +213,7 @@ func printUpdateNotice(cmd *cobra.Command) {
 	var latest string
 	select {
 	case latest = <-ch:
-	case <-time.After(updateNoticeWait):
+	default:
 		return
 	}
 	if latest == "" {

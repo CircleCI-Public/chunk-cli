@@ -194,7 +194,7 @@ in `config.Resolve` and makes clients testable.
 | `ANTHROPIC_API_KEY` | anthropic, config, validate | Anthropic authentication |
 | `ANTHROPIC_BASE_URL` | anthropic, validate | API endpoint override |
 | `GITHUB_TOKEN` | github | GitHub authentication |
-| `GITHUB_API_URL` | github | GitHub API endpoint override |
+| `GITHUB_API_URL` | github, upgrade | GitHub API endpoint override (also used by the update check) |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |
 | `CIRCLECI_ORG_ID` | sidecar | CircleCI organization ID (overrides `orgID` in `.chunk/config.json`) |
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
@@ -202,11 +202,11 @@ in `config.Resolve` and makes clients testable.
 | `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
 | `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
-| `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
+| `XDG_DATA_HOME` | sidecar, validate, upgrade | Per-project state directory, including the hook-mode validate result cache and the 24 h update-check cache (default: `~/.local/share`) |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
-| `CI` | telemetry | Also disables anonymous usage telemetry (set by most CI systems) |
+| `CI` | telemetry, upgrade | Also disables anonymous usage telemetry and the update check (set by most CI systems) |
 | `CHUNK_TELEMETRY_LOG` | telemetry | Log telemetry events to stderr instead of (or alongside) sending them |
 
 ## Telemetry (`internal/telemetry/`)

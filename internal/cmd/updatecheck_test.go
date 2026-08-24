@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"bytes"
+	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -21,11 +25,13 @@ func TestSkipUpdateCheck(t *testing.T) {
 
 	// receive-telemetry is re-execed by every chunk invocation, and upgrade
 	// and watch report versions themselves.
-	for _, name := range []string{cmdNameCompletion, cmdNameReceiveTelemetry, cmdNameUpgrade, cmdNameWatch} {
+	for _, name := range []string{"completion", "receive-telemetry", "upgrade", "watch"} {
 		cmd, _, err := root.Find([]string{name})
 		if err != nil {
 			t.Fatalf("find %q: %v", name, err)
 		}
+		// Find falls back to root for an unknown name, so this is what
+		// catches a command being renamed out from under the skip map.
 		if cmd.Name() != name {
 			t.Fatalf("Find(%q) resolved to %q — command missing from the tree", name, cmd.Name())
 		}
@@ -36,7 +42,7 @@ func TestSkipUpdateCheck(t *testing.T) {
 
 	// Subcommands of a skipped command are skipped too (completion has one
 	// per shell).
-	completion, _, err := root.Find([]string{cmdNameCompletion})
+	completion, _, err := root.Find([]string{"completion"})
 	if err != nil {
 		t.Fatalf("find completion: %v", err)
 	}
@@ -58,4 +64,73 @@ func TestSkipUpdateCheck(t *testing.T) {
 			t.Errorf("expected update check to run for %q", cmd.Name())
 		}
 	}
+}
+
+func TestPrintUpdateNotice(t *testing.T) {
+	newCmd := func(ch chan string) (*cobra.Command, *bytes.Buffer) {
+		cmd := &cobra.Command{Use: "test"}
+		var stderr bytes.Buffer
+		cmd.SetErr(&stderr)
+		ctx := context.Background()
+		if ch != nil {
+			ctx = context.WithValue(ctx, updateCheckKey{}, ch)
+		}
+		cmd.SetContext(ctx)
+		return cmd, &stderr
+	}
+
+	t.Run("prints when a newer version is already available", func(t *testing.T) {
+		ch := make(chan string, 1)
+		ch <- "v9.9.9"
+		cmd, stderr := newCmd(ch)
+
+		printUpdateNotice(cmd)
+
+		if !strings.Contains(stderr.String(), "v9.9.9") {
+			t.Errorf("expected notice mentioning v9.9.9, got %q", stderr.String())
+		}
+	})
+
+	// A fetch still in flight must not hold up the command: the check claims
+	// its cache window before the request, so the notice lands on a later run.
+	t.Run("does not wait on a check still in flight", func(t *testing.T) {
+		cmd, stderr := newCmd(make(chan string, 1))
+
+		done := make(chan struct{})
+		go func() {
+			printUpdateNotice(cmd)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("printUpdateNotice blocked on a pending check")
+		}
+
+		if stderr.String() != "" {
+			t.Errorf("expected no output, got %q", stderr.String())
+		}
+	})
+
+	t.Run("prints nothing when up to date", func(t *testing.T) {
+		ch := make(chan string, 1)
+		ch <- ""
+		cmd, stderr := newCmd(ch)
+
+		printUpdateNotice(cmd)
+
+		if stderr.String() != "" {
+			t.Errorf("expected no output, got %q", stderr.String())
+		}
+	})
+
+	t.Run("prints nothing when the check never started", func(t *testing.T) {
+		cmd, stderr := newCmd(nil)
+
+		printUpdateNotice(cmd)
+
+		if stderr.String() != "" {
+			t.Errorf("expected no output, got %q", stderr.String())
+		}
+	})
 }

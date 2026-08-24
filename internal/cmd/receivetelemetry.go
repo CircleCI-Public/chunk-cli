@@ -14,7 +14,7 @@ import (
 // Segment. Telemetry is disabled here so receiving telemetry never emits its own.
 func newReceiveTelemetryCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          cmdNameReceiveTelemetry,
+		Use:          "receive-telemetry",
 		Short:        "Receive telemetry events and forward them to Segment",
 		Hidden:       true,
 		SilenceUsage: true,

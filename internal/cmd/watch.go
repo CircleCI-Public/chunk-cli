@@ -20,7 +20,7 @@ func newWatchCmd() *cobra.Command {
 	var all bool
 
 	cmd := &cobra.Command{
-		Use:          cmdNameWatch + " [dir...]",
+		Use:          "watch [dir...]",
 		Short:        "Live dashboard for active sidecars and recent activity",
 		SilenceUsage: true,
 		Args:         cobra.ArbitraryArgs,

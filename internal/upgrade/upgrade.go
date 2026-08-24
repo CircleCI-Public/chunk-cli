@@ -47,7 +47,7 @@ var brewPathFragments = []string{
 // names "chunk" (not "chunk-cli", the repo name).
 const brewUpgradeCommand = "brew upgrade chunk"
 
-func IsBrewManaged(path string) bool {
+func isBrewManaged(path string) bool {
 	for _, fragment := range brewPathFragments {
 		if strings.Contains(path, fragment) {
 			return true
@@ -66,14 +66,14 @@ func SelfUpgradeCommand() string {
 	if resolved, err := filepath.EvalSymlinks(execPath); err == nil {
 		execPath = resolved
 	}
-	if IsBrewManaged(execPath) {
+	if isBrewManaged(execPath) {
 		return brewUpgradeCommand
 	}
 	return "chunk upgrade"
 }
 
 func Run(out io.Writer, client *http.Client, apiBase, installPath string) error {
-	if IsBrewManaged(installPath) {
+	if isBrewManaged(installPath) {
 		return fmt.Errorf("chunk is managed by Homebrew — upgrade with: %s", brewUpgradeCommand)
 	}
 

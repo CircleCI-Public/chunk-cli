@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -20,7 +19,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
-	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
 const (
@@ -1302,22 +1300,10 @@ func doSpin() tea.Cmd {
 // checkUpdateCmd checks for a newer release for the footer notice. Root's
 // PersistentPreRunE skips watch (see noUpdateCheckCommands) so this is the
 // only check on this path — two would race on the cache file and print the
-// notice twice. It carries the same CI and test guards root's check has,
-// since those guards do not apply on this path.
+// notice twice.
 func checkUpdateCmd() tea.Cmd {
 	return func() tea.Msg {
-		if os.Getenv(config.EnvCI) != "" || testing.Testing() {
-			return updateCheckMsg{}
-		}
-		stateDir, err := config.AppState()
-		if err != nil {
-			return updateCheckMsg{}
-		}
-		apiBase := os.Getenv(config.EnvGitHubAPIURL)
-		if apiBase == "" {
-			apiBase = "https://api.github.com"
-		}
-		latest := upgrade.CheckForUpdate(stateDir, apiBase, version.Value)
+		latest := upgrade.Check()
 		if latest == "" {
 			return updateCheckMsg{}
 		}

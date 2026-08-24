@@ -259,6 +259,21 @@ chunk
   `skipped` instead of re-running. Manual runs, `--cmd` inline commands, and
   repos whose state cannot be hashed never cache. Entries expire after 7 days.
   See [HOOKS.md](HOOKS.md#result-caching).
+- Every command checks GitHub for a newer release in the background and prints a
+  notice to stderr once it finishes. The result is cached in the app state dir
+  (`update-check.json`) for 24 h to stay inside GitHub's unauthenticated rate
+  limit of 60 requests/hour. The window is claimed before the request is made,
+  so a command that exits mid-flight does not send the next invocation back to
+  GitHub — the notice simply appears on a later run.
+- The update check never delays a command: if the check has not finished by the
+  time the command has, the notice is dropped rather than waited for. It is
+  skipped entirely in CI (`CI` set), under `go test`, and for `completion`,
+  `receive-telemetry`, `upgrade`, and shell-completion requests, which either run
+  on every keypress or report versions themselves. `watch` runs its own check and
+  renders the notice in the TUI footer instead.
+- The notice suggests `brew upgrade chunk` when the running binary resolves into
+  a Homebrew prefix, and `chunk upgrade` otherwise. `chunk upgrade` refuses to
+  replace a Homebrew-managed binary in place.
 
 ## Config keys
 
