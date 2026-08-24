@@ -159,9 +159,9 @@ func TestIsBrewManaged(t *testing.T) {
 		{"/tmp/chunk", false},
 	}
 	for _, tt := range tests {
-		got := isBrewManaged(tt.path)
+		got := IsBrewManaged(tt.path)
 		if got != tt.want {
-			t.Errorf("isBrewManaged(%q) = %v, want %v", tt.path, got, tt.want)
+			t.Errorf("IsBrewManaged(%q) = %v, want %v", tt.path, got, tt.want)
 		}
 	}
 }

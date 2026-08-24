@@ -18,6 +18,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
+	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
 const (
@@ -119,6 +121,7 @@ const (
 
 type tickMsg struct{}
 type spinMsg struct{}
+type updateCheckMsg struct{ latest, upgradeCmd string }
 
 type dataMsg struct {
 	projects []ProjectEntry
@@ -154,6 +157,9 @@ type Model struct {
 	height     int
 	spinIdx    int
 	hasSpinner bool
+
+	updateAvailable string // non-empty tag (e.g. "v1.2.3") when an update is available
+	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk-cli"
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -178,7 +184,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.loadData, doSpin())
+	return tea.Batch(m.loadData, doSpin(), checkUpdateCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -247,6 +253,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 		m.hasSpinner = anyRunning(m.sidecars)
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+
+	case updateCheckMsg:
+		m.updateAvailable = msg.latest
+		m.upgradeCmd = msg.upgradeCmd
+		return m, nil
 
 	case tickMsg:
 		return m, m.loadData
@@ -867,6 +878,16 @@ func (m Model) renderFooter() string {
 		parts = append(parts, vdim(k.key)+" "+dim(k.action))
 	}
 	bar := strings.Join(parts, "  "+vdim("·")+"  ")
+
+	if m.updateAvailable != "" {
+		notice := amber("↑ "+m.updateAvailable) + "  " + dim(m.upgradeCmd)
+		gap := m.width - 2 - lipgloss.Width(bar) - lipgloss.Width(notice)
+		if gap < 2 {
+			gap = 2
+		}
+		bar += strings.Repeat(" ", gap) + notice
+	}
+
 	return vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
 }
 
@@ -1274,6 +1295,30 @@ func anyRunning(sidecars []sidecarInfo) bool {
 
 func doSpin() tea.Cmd {
 	return tea.Tick(spinInterval, func(time.Time) tea.Msg { return spinMsg{} })
+}
+
+func checkUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		stateDir, err := config.AppState()
+		if err != nil {
+			return updateCheckMsg{}
+		}
+		apiBase := os.Getenv(config.EnvGitHubAPIURL)
+		if apiBase == "" {
+			apiBase = "https://api.github.com"
+		}
+		latest := upgrade.CheckForUpdate(stateDir, apiBase, version.Value)
+		if latest == "" {
+			return updateCheckMsg{}
+		}
+		execPath, _ := os.Executable()
+		execPath, _ = filepath.EvalSymlinks(execPath)
+		upgradeCmd := "chunk upgrade"
+		if upgrade.IsBrewManaged(execPath) {
+			upgradeCmd = "brew upgrade chunk-cli"
+		}
+		return updateCheckMsg{latest: latest, upgradeCmd: upgradeCmd}
+	}
 }
 
 // padLine pads s to exactly width visible characters, accounting for ANSI codes.

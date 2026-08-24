@@ -30,12 +30,12 @@ type ghAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-func isBrewManaged(path string) bool {
+func IsBrewManaged(path string) bool {
 	return strings.Contains(path, "/opt/homebrew/bin/")
 }
 
 func Run(out io.Writer, client *http.Client, apiBase, installPath string) error {
-	if isBrewManaged(installPath) {
+	if IsBrewManaged(installPath) {
 		return fmt.Errorf("chunk is managed by Homebrew — upgrade with: brew upgrade chunk-cli")
 	}
 

@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -10,7 +13,10 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
+	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
+
+type updateCheckKey struct{}
 
 // writeKey is the Segment write key for chunk-cli's anonymous usage
 // telemetry. Segment write keys are not secret — they only allow sending
@@ -33,9 +39,14 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			return setupTelemetry(cmd, version)
+			if err := setupTelemetry(cmd, version); err != nil {
+				return err
+			}
+			startUpdateCheck(cmd, version)
+			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
+			printUpdateNotice(cmd)
 			return telemetry.FromContext(cmd.Context()).Close()
 		},
 	}
@@ -149,4 +160,58 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 
 	cmd.SetContext(telemetry.WithSender(cmd.Context(), tc))
 	return nil
+}
+
+// startUpdateCheck launches a background goroutine to check for a newer
+// version. The result is sent on a buffered channel stored in the context so
+// printUpdateNotice can read it after the command completes.
+func startUpdateCheck(cmd *cobra.Command, version string) {
+	if os.Getenv(config.EnvCI) != "" || testing.Testing() {
+		return
+	}
+	ch := make(chan string, 1)
+	cmd.SetContext(context.WithValue(cmd.Context(), updateCheckKey{}, ch))
+
+	go func() {
+		stateDir, err := config.AppState()
+		if err != nil {
+			ch <- ""
+			return
+		}
+		apiBase := os.Getenv(config.EnvGitHubAPIURL)
+		if apiBase == "" {
+			apiBase = "https://api.github.com"
+		}
+		ch <- upgrade.CheckForUpdate(stateDir, apiBase, version)
+	}()
+}
+
+// printUpdateNotice reads from the update check channel (non-blocking) and
+// prints a notice to stderr if a newer version is available.
+func printUpdateNotice(cmd *cobra.Command) {
+	ch, ok := cmd.Context().Value(updateCheckKey{}).(chan string)
+	if !ok {
+		return
+	}
+	var latest string
+	select {
+	case latest = <-ch:
+	default:
+		return
+	}
+	if latest == "" {
+		return
+	}
+
+	execPath, _ := os.Executable()
+	execPath, _ = filepath.EvalSymlinks(execPath)
+
+	var upgradeCmd string
+	if upgrade.IsBrewManaged(execPath) {
+		upgradeCmd = "brew upgrade chunk-cli"
+	} else {
+		upgradeCmd = "chunk upgrade"
+	}
+
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s\nRun: %s\n", latest, upgradeCmd)
 }
