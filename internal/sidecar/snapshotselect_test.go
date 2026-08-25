@@ -61,6 +61,32 @@ func TestSelectSnapshot(t *testing.T) {
 			wantID:   "s2",
 		},
 		{
+			// normalizeName feeds the token path, so it has to agree with
+			// isSeparator on '+'. Collapsing it to a dash would split "c++"
+			// into a "c" token that nameTokens never produces, so this
+			// snapshot would score zero and the repo would get no match.
+			name: "plus survives normalization for a repo token match",
+			snapshots: []circleci.Snapshot{
+				{ID: "s1", Name: "unrelated"},
+				{ID: "s2", Name: "c++-base"},
+			},
+			// Stack is empty on purpose: with it set to "cpp" the c++ alias
+			// matches this snapshot on its own and hides a broken repo match.
+			criteria: SnapshotCriteria{Repo: "c++", Stack: ""},
+			wantID:   "s2",
+		},
+		{
+			// The same disagreement in reverse: with '+' collapsed,
+			// "notify++" and "notify" both normalize to "notify" and this
+			// unrelated snapshot takes a match it has no claim to.
+			name: "plus is not collapsed into a shorter name",
+			snapshots: []circleci.Snapshot{
+				{ID: "s1", Name: "notify"},
+			},
+			criteria: SnapshotCriteria{Repo: "notify++", Stack: ""},
+			wantID:   "",
+		},
+		{
 			name: "stack alias matches when the repo does not",
 			snapshots: []circleci.Snapshot{
 				{ID: "s1", Name: "python-base"},
