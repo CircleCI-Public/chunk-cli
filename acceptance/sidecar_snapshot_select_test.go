@@ -32,8 +32,8 @@ func writeRemoteCommandConfig(t *testing.T, workDir string) {
 }
 
 // createdSidecarImage returns the image attribute of the single create-sidecar
-// request recorded by cci.
-func createdSidecarImage(t *testing.T, cci *fakes.FakeCircleCI) any {
+// request recorded by cci, or "" when the request carried no image.
+func createdSidecarImage(t *testing.T, cci *fakes.FakeCircleCI) string {
 	t.Helper()
 	createReqs := filterByPath(cci.Recorder.AllRequests(), "/api/v3/sidecar/instances")
 	assert.Equal(t, len(createReqs), 1, "expected exactly 1 create-sidecar request")
@@ -44,7 +44,14 @@ func createdSidecarImage(t *testing.T, cci *fakes.FakeCircleCI) any {
 	assert.Assert(t, ok, "expected data envelope in request body")
 	attrs, ok := envelope["attributes"].(map[string]any)
 	assert.Assert(t, ok, "expected attributes in data envelope")
-	return attrs["image"]
+
+	raw, ok := attrs["image"]
+	if !ok || raw == nil {
+		return ""
+	}
+	image, ok := raw.(string)
+	assert.Assert(t, ok, "expected image to be a string, got %T", raw)
+	return image
 }
 
 // runValidateForSnapshotSelection runs `chunk validate` in a fresh repo with no
@@ -105,8 +112,7 @@ func TestValidateKeepsDefaultImageWhenNoSnapshotMatches(t *testing.T) {
 	cci := runValidateForSnapshotSelection(t, []fakes.Snapshot{
 		{ID: "snap-unrelated", OrgID: "org-aaa", Name: "billing-service"},
 	}, nil)
-	image := createdSidecarImage(t, cci)
-	assert.Assert(t, image == nil || image == "", "expected no image, got %v", image)
+	assert.Equal(t, createdSidecarImage(t, cci), "")
 }
 
 // A snapshot in another org must never be selected.
@@ -114,6 +120,5 @@ func TestValidateIgnoresSnapshotsFromOtherOrgs(t *testing.T) {
 	cci := runValidateForSnapshotSelection(t, []fakes.Snapshot{
 		{ID: "snap-other-org", OrgID: "org-bbb", Name: "test-repo"},
 	}, nil)
-	image := createdSidecarImage(t, cci)
-	assert.Assert(t, image == nil || image == "", "expected no image, got %v", image)
+	assert.Equal(t, createdSidecarImage(t, cci), "")
 }
