@@ -1984,6 +1984,18 @@ func parseJavaVersionFromText(content string) int {
 	return -1
 }
 
+// StackUnknown is the stack name reported when nothing in a directory
+// identifies a supported tech stack.
+const StackUnknown = stackUnknown
+
+// DetectStack identifies the dominant tech stack in dir. It is the first step
+// of DetectEnvironment, exported separately for callers that need only the
+// stack name: unlike DetectEnvironment it never touches the network, so it is
+// cheap enough to run on paths that must not block on Docker Hub.
+func DetectStack(dir string) (string, error) {
+	return detectStack(dir)
+}
+
 // DetectEnvironment analyses the repository at dir and returns a detected Environment.
 func DetectEnvironment(ctx context.Context, dir string) (*Environment, error) {
 	stack, err := detectStack(dir)

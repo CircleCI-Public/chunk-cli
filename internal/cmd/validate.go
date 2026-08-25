@@ -956,6 +956,13 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	if err != nil {
 		return false, err
 	}
+	// No image configured means no snapshot was ever recorded for this repo.
+	// Rather than boot the bare default image, look for one of the org's
+	// snapshots that fits this repo; autoSelectSnapshotImage returns "" (the
+	// old behaviour) when none does.
+	if image == "" {
+		image = autoSelectSnapshotImage(ctx, client, resolvedOrgID, workDir, newStatusFunc(streams), streams)
+	}
 	sandboxName := sidecarAutoName(ctx, workDir)
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {

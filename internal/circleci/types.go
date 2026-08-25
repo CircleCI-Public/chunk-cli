@@ -58,6 +58,10 @@ type Snapshot struct {
 	OrgID string `json:"org_id"`
 	Name  string `json:"name"`
 	Tag   string `json:"tag,omitempty"`
+	// IsSystem marks a CircleCI-provided base snapshot rather than one an org
+	// captured itself. Snapshot selection prefers an org's own snapshot when
+	// both match a repo equally well.
+	IsSystem bool `json:"is_system,omitempty"`
 }
 
 type Command struct {
