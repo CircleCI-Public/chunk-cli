@@ -283,12 +283,12 @@ func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig) bool {
 }
 
 func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc, streams iostream.Streams) (map[string]string, error) {
-	if opts.sidecarID == "" {
-		return nil, nil
-	}
 	envVars, err := resolveEnvVars(ctx, workDir, opts.envFile, opts.envVarsFlag)
 	if err != nil {
 		return nil, err
+	}
+	if opts.sidecarID == "" {
+		return envVars, nil
 	}
 	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn, streams); err != nil {
 		return nil, err
@@ -455,9 +455,6 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	baseStatusFn := statusFn
 	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 
-	// Only load env vars and resolve secrets when a sidecar is actually
-	// being used — avoids parsing .env.local or hitting secrets APIs on
-	// purely local runs.
 	envVars, statusFn, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
 	if err != nil {
 		return err
@@ -610,7 +607,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			}
 			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, statusFn, streams)
 		}
-		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, statusFn, streams)
+		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, envVars, statusFn, streams)
 	}
 
 	// All-remote execution (--remote flag): send everything to the sidecar.
@@ -673,11 +670,11 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 				return validate.Result{}, err
 			}
 		}
-		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, statusFn, streams))
+		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, envVars, statusFn, streams))
 	}
 
 	// Run all
-	return mapValidateError(validate.RunAll(ctx, workDir, cfg, statusFn, streams))
+	return mapValidateError(validate.RunAll(ctx, workDir, cfg, envVars, statusFn, streams))
 }
 
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
@@ -860,7 +857,7 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 		runErr = err
 	}
 	if len(localCfg.Commands) > 0 {
-		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams))
+		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, envVars, statusFn, streams))
 		combined.Passed += r.Passed
 		combined.Total += r.Total
 		if err != nil {
