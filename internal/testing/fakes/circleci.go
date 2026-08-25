@@ -90,6 +90,7 @@ type FakeCircleCI struct {
 	ListStatusCode           int    // override for GET /sidecar/instances
 	CreateStatusCode         int    // override for POST /sidecar/instances
 	DeleteStatusCode         int    // override for DELETE /sidecar/instances/:id
+	PruneStatusCode          int    // override for POST /sidecar/instances/prune
 	ExecStatusCode           int    // override for POST /sidecar/instances/:id/exec
 	ExecMessage              string // V3 error title when ExecStatusCode is set
 	CommandOutputStatusCode  int    // override for GET /sidecar/commands/:id/output
@@ -145,6 +146,7 @@ func NewFakeCircleCI() *FakeCircleCI {
 	// Sidecar V3 endpoints
 	r.GET("/api/v3/sidecar/instances", f.handleListSidecars)
 	r.POST("/api/v3/sidecar/instances", f.handleCreateSidecar)
+	r.POST("/api/v3/sidecar/instances/prune", f.handlePruneSidecars)
 	r.DELETE("/api/v3/sidecar/instances/:id", f.handleDeleteSidecar)
 	r.POST("/api/v3/sidecar/instances/:id/ssh/add-key", f.handleAddSSHKey)
 	r.POST("/api/v3/sidecar/instances/:id/exec", f.handleExec)
@@ -309,6 +311,40 @@ func (f *FakeCircleCI) handleDeleteSidecar(c *gin.Context) {
 	}
 	f.Sidecars = kept
 	c.Status(http.StatusNoContent)
+}
+
+func (f *FakeCircleCI) handlePruneSidecars(c *gin.Context) {
+	if !f.requireToken(c) {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.PruneStatusCode != 0 {
+		c.JSON(f.PruneStatusCode, gin.H{"message": "API error"})
+		return
+	}
+	var body struct {
+		OrgID string `json:"org_id"`
+	}
+	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil || body.OrgID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"title": "Not found"}})
+		return
+	}
+	kept := f.Sidecars[:0]
+	deleted := 0
+	for _, s := range f.Sidecars {
+		if s.OrgID == body.OrgID {
+			deleted++
+		} else {
+			kept = append(kept, s)
+		}
+	}
+	f.Sidecars = kept
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"attributes": gin.H{"deleted_count": deleted},
+		},
+	})
 }
 
 func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {

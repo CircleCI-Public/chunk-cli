@@ -12,13 +12,19 @@ Chunk sidecars fix this by running lightweight microbuilds to validate inside th
 
 ## Requirements
 
-- **macOS** (arm64 or x86_64) or **Linux** (arm64 or x86_64)
+- **macOS** (arm64 or x86_64), **Linux** (arm64 or x86_64), or **Windows** (arm64 or x86_64)
 
 ## Installation
+
+### macOS / Linux
 
 ```bash
 brew install CircleCI-Public/circleci/chunk
 ```
+
+### Windows
+
+Download the latest `chunk-cli_Windows_x86_64.zip` or `chunk-cli_Windows_arm64.zip` from [GitHub Releases](https://github.com/CircleCI-Public/chunk-cli/releases), extract it, and put `chunk.exe` on your `PATH`.
 
 ## Quick Start
 
@@ -176,7 +182,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete environment va
 | macOS (Intel) | Supported |
 | Linux (arm64) | Supported |
 | Linux (x86_64) | Supported |
-| Windows | Not supported |
+| Windows (arm64) | Supported |
+| Windows (x86_64) | Supported |
 
 ## Development
 
