@@ -416,6 +416,9 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 		if sc.snapshotName != "" {
 			add("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
 		}
+		if sc.id != "" && sc.name != "" {
+			add("   " + vdim(truncate(sidecarDisplayName(sc.name, sc.id), leftPaneWidth-6)))
+		}
 
 		switch {
 		case sc.running:
@@ -444,9 +447,9 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 			add("")
 		}
 
-		// Suppress dotted divider when next sidecar is in the same repo group.
+		// Divider between sidecars in the same repo group.
 		if i < len(m.sidecars)-1 && m.sidecars[i+1].repoName == sc.repoName {
-			add(vdim(strings.Repeat("·", leftPaneWidth)))
+			add(muted(strings.Repeat("─", leftPaneWidth)))
 		}
 	}
 	return lines
@@ -942,6 +945,14 @@ func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
 			result = append(result, sc)
 			seen[k] = len(result) - 1
 		} else {
+			// Only merge when one entry is a local runner (id == ""). Two real
+			// sidecars on the same branch belong to different sessions and must
+			// stay separate so they are distinguishable in the left pane.
+			if result[idx].id != "" && sc.id != "" {
+				result = append(result, sc)
+				seen[k] = len(result) - 1
+				continue
+			}
 			result[idx].sidecarIDs = append(result[idx].sidecarIDs, sc.sidecarIDs...)
 			// Promote a real sidecar over a local-only primary so the left pane
 			// shows sync state rather than a pass/fail badge.
