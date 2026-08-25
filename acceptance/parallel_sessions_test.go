@@ -109,10 +109,9 @@ func TestSameSessionReusesItsSidecar(t *testing.T) {
 	assert.Equal(t, e.createdSidecars(t), 1, "a session must reuse the sidecar it already has")
 }
 
-// TestSessionAdoptsUnownedSidecar covers the setup handoff: a sidecar created in
-// a plain terminal has no session recorded against it, and the first session to
-// need one takes it over rather than creating a second.
-func TestSessionAdoptsUnownedSidecar(t *testing.T) {
+// TestSessionCreatesOwnSidecarAlways covers that a session always creates its
+// own sidecar, even when an unowned one already exists for the project.
+func TestSessionCreatesOwnSidecarAlways(t *testing.T) {
 	e := newSessionEnv(t)
 
 	// No session ID: this is a human running the command.
@@ -121,7 +120,7 @@ func TestSessionAdoptsUnownedSidecar(t *testing.T) {
 	assert.Equal(t, e.createdSidecars(t), 1)
 
 	e.validateAs(t, "session-one")
-	assert.Equal(t, e.createdSidecars(t), 1, "an unowned sidecar must be adopted, not duplicated")
+	assert.Equal(t, e.createdSidecars(t), 2, "a session must create its own sidecar, not adopt an unowned one")
 }
 
 // TestLegacyStateIsNotAdoptedWhileWarm is the regression for what happened on the

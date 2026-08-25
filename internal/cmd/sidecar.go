@@ -68,11 +68,6 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 		return &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 	}
 	if active == nil {
-		if adopted, adoptErr := sidecar.AdoptIdleActive(ctx); adoptErr == nil {
-			active = adopted
-		}
-	}
-	if active == nil {
 		return &userError{
 			msg:        "No active sidecar is set.",
 			suggestion: "Pass --sidecar-id, or run 'chunk sidecar use <id>' or 'chunk sidecar create'.",
@@ -1186,13 +1181,6 @@ func sidecarSetupResolveSidecar(
 	active, err := sidecar.LoadActive(ctx)
 	if err != nil {
 		return "", "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
-	}
-	if active == nil {
-		// Same reasoning as resolveSidecarID: adopt the project's existing sidecar
-		// when it is free, so setup in a fresh session does not create a second one.
-		if adopted, adoptErr := sidecar.AdoptIdleActive(ctx); adoptErr == nil {
-			active = adopted
-		}
 	}
 	if active != nil {
 		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))

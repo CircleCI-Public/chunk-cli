@@ -968,18 +968,6 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		*sidecarID = active.SidecarID
 		return false, nil
 	}
-	// Fall back to a sidecar this project already has before creating a new one,
-	// which is what stops one sidecar accumulating per agent session. Adoption
-	// skips any sidecar another session is still using, so two sessions sharing
-	// this working tree get one sidecar each.
-	existing, adoptErr := sidecar.AdoptIdleActive(ctx)
-	if adoptErr != nil {
-		streams.ErrPrintf("warning: could not reuse an existing sidecar: %v\n", adoptErr)
-	}
-	if existing != nil {
-		*sidecarID = existing.SidecarID
-		return false, nil
-	}
 	// A status line, not stderr prose: having no sidecar yet is the normal state
 	// of a first run, and printing it raw made it the headline of the hook's
 	// "Stop hook error:" banner even when everything then went fine.

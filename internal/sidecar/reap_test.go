@@ -246,30 +246,6 @@ func TestPruneIDDropsStateWhenRemoteDeleteFails(t *testing.T) {
 	assert.Assert(t, !exists(t, path), "state must be dropped even when the delete fails")
 }
 
-// TestReapStopsResurrection is the end-to-end shape of the original bug: a dead
-// ID duplicated across files came back through adoption on every run.
-func TestReapStopsResurrection(t *testing.T) {
-	e := newReapEnv(t)
-	// Use a session context so sidecar.json (unowned) is a candidate rather than
-	// the session's own target file.
-	ctx := session.WithID(context.Background(), "sess-new")
-	e.writeState("sidecar.json", ActiveSidecar{SidecarID: "sb-dead"}, time.Minute, false)
-	e.writeState("sidecar.sess-old-deadbeef.json", ActiveSidecar{SidecarID: "sb-dead"}, 20*24*time.Hour, false)
-
-	// Before the reap, the unowned dead sidecar is still promotable.
-	before, err := AdoptIdleActive(ctx)
-	assert.NilError(t, err)
-	assert.Assert(t, before != nil)
-	assert.Equal(t, before.SidecarID, "sb-dead")
-
-	_, err = Reap(ctx, e.client, testOrg)
-	assert.NilError(t, err)
-
-	after, err := AdoptIdleActive(ctx)
-	assert.NilError(t, err)
-	assert.Assert(t, after == nil, "a reaped sidecar must not be promotable again")
-}
-
 // TestReapDropsStateWhenDeleteReturnsGone covers a sidecar the listing still
 // shows but the API has already let go of. The end state is the same as one that
 // was never listed.
@@ -302,12 +278,7 @@ func TestReapDropsStateWhenDeleteFails(t *testing.T) {
 	assert.NilError(t, err)
 
 	assert.DeepEqual(t, res.Failed, []string{"sb-stuck"})
-	assert.Assert(t, !exists(t, path), "a failed delete must not leave promotable state")
-
-	// The whole point: it cannot come back as the active sidecar.
-	after, err := AdoptIdleActive(ctx)
-	assert.NilError(t, err)
-	assert.Assert(t, after == nil, "an undeletable sidecar must not be promotable")
+	assert.Assert(t, !exists(t, path), "a failed delete must not leave state files behind")
 	assert.Assert(t, strings.Contains(res.Summary(), "may still be running"),
 		"the leak must be reported, got: %s", res.Summary())
 }

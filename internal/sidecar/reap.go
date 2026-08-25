@@ -110,10 +110,8 @@ func (e stateEntry) ids() []string {
 // local state files.
 //
 // State accumulates one file per session and branch, and nothing else removes
-// them, which causes two problems. Forgotten sidecars keep costing money. Worse,
-// AdoptIdleActive promotes the most recently modified file it can adopt, so a file
-// naming a sidecar that no longer exists resurrects that dead ID run after run,
-// and every command against it fails with a bare 404.
+// them. Forgotten sidecars keep costing money, and a state file naming a sidecar
+// that no longer exists causes every command against it to fail with a bare 404.
 //
 // Three cases, deliberately treated differently:
 //

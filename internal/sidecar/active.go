@@ -92,69 +92,6 @@ func LoadActive(ctx context.Context) (*ActiveSidecar, error) {
 	return LoadActiveFrom(ctx, dir)
 }
 
-// AdoptIdleActive takes over a sidecar this project already has, keying it to
-// the current session, and returns nil when there is nothing to adopt.
-//
-// Reuse stops a project from accumulating one sidecar per agent session, but a
-// sidecar must never be handed to two sessions at once. State is adoptable only
-// when it is already ours (the same session on another branch), or when nobody
-// owns it (a plain terminal `chunk sidecar create`). State at a session-keyed
-// path with no owner recorded is conservatively treated as owned until Reap ages
-// it out; state that records a different session is never adopted.
-//
-// The claim is an atomic rename so of two sessions reaching for the same file
-// exactly one wins. Ownership moves rather than copies: two files naming one
-// sidecar would be two sessions holding it.
-func AdoptIdleActive(ctx context.Context) (*ActiveSidecar, error) {
-	dir, err := saveDir()
-	if err != nil {
-		return nil, err
-	}
-	entries, err := loadStateEntries(dir)
-	if err != nil || len(entries) == 0 {
-		return nil, err
-	}
-
-	mine := session.IDFromCtx(ctx)
-	root, _ := projectRoot()
-	target := filepath.Join(dir, sidecarFileName(mine, CurrentBranch(root)))
-
-	var best *stateEntry
-	for i, e := range entries {
-		if e.active.SidecarID == "" || e.path == target {
-			continue
-		}
-		owner := e.active.SessionID
-		// Session-keyed file with no owner recorded: conservatively skip — it may
-		// belong to a session that predates owner recording.
-		if owner == "" && filepath.Base(e.path) != defaultSidecarFile {
-			continue
-		}
-		// Owned by a different session: never adopt.
-		if owner != "" && owner != mine {
-			continue
-		}
-		if best == nil || e.modTime.After(best.modTime) {
-			best = &entries[i]
-		}
-	}
-	if best == nil {
-		return nil, nil
-	}
-	if err := os.Rename(best.path, target); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil // another session claimed it first
-		}
-		return nil, fmt.Errorf("claim sidecar state %s: %w", filepath.Base(best.path), err)
-	}
-	active := best.active
-	active.SessionID = mine
-	if err := SaveActiveTo(ctx, dir, active); err != nil {
-		return nil, err
-	}
-	return &active, nil
-}
-
 // LoadActiveFrom reads the active sidecar from dir.
 func LoadActiveFrom(ctx context.Context, dir string) (*ActiveSidecar, error) {
 	root, _ := projectRoot()
