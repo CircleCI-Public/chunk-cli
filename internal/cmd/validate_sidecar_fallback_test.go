@@ -163,39 +163,27 @@ func TestCannotCreateSidecarNamesOrgSource(t *testing.T) {
 // commands locally; a sidecar that already existed but could not be reached
 // took the same warn-and-continue path and produced the same false green.
 func TestUnreachableSidecarDoesNotDegradeToLocal(t *testing.T) {
-	t.Run("a pre-existing sidecar is not worth retrying", func(t *testing.T) {
-		err := unreachableSidecar("sc-1", false, "test, lint", io.EOF)
+	err := unreachableSidecar("sc-1", "test, lint", io.EOF)
 
-		ue, ok := errors.AsType[*userError](err)
-		assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
-		assert.Equal(t, ue.ErrorCode(), "sidecar.unreachable")
-		assert.Equal(t, ue.UserExitCode(), ExitAPIError)
-		assert.Assert(t, strings.Contains(ue.Detail(), "test, lint"),
-			"the detail must name the commands that did not run, got %q", ue.Detail())
-		// A sidecar that has gone unreachable will not fix itself, so "try
-		// again" would send the user in a circle.
-		assert.Assert(t, !strings.Contains(ue.Suggestion(), "Try again"),
-			"got %q", ue.Suggestion())
-		assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar"),
-			"the suggestion must point at a next step, got %q", ue.Suggestion())
-	})
-
-	// One this run provisioned may genuinely still be booting, which is the one
-	// case where waiting is the right advice.
-	t.Run("a fresh sidecar may still be starting", func(t *testing.T) {
-		err := unreachableSidecar("sc-1", true, "test", io.EOF)
-		ue, ok := errors.AsType[*userError](err)
-		assert.Assert(t, ok)
-		assert.Assert(t, strings.Contains(ue.UserMessage(), "newly created"), "got %q", ue.UserMessage())
-		assert.Assert(t, strings.Contains(ue.Suggestion(), "Try again"), "got %q", ue.Suggestion())
-	})
+	ue, ok := errors.AsType[*userError](err)
+	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
+	assert.Equal(t, ue.ErrorCode(), "sidecar.unreachable")
+	assert.Equal(t, ue.UserExitCode(), ExitAPIError)
+	assert.Assert(t, strings.Contains(ue.Detail(), "test, lint"),
+		"the detail must name the commands that did not run, got %q", ue.Detail())
+	// A sidecar that has gone unreachable will not fix itself, so "try again"
+	// would send the user in a circle.
+	assert.Assert(t, !strings.Contains(ue.Suggestion(), "Try again"),
+		"got %q", ue.Suggestion())
+	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar"),
+		"the suggestion must point at a next step, got %q", ue.Suggestion())
 }
 
 // TestMissingWorkspaceDoesNotDegradeToLocal covers the most reachable of the
 // two: a sidecar that syncs fine but never had 'chunk sidecar env build' run
 // still has no workspace to execute in.
 func TestMissingWorkspaceDoesNotDegradeToLocal(t *testing.T) {
-	err := missingWorkspace("sc-1", "/home/circleci/project", false, "test", io.EOF)
+	err := missingWorkspace("sc-1", "/home/circleci/project", "test", io.EOF)
 
 	ue, ok := errors.AsType[*userError](err)
 	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)

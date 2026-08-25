@@ -11,9 +11,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	internaltui "github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui/watch"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newWatchCmd() *cobra.Command {
@@ -27,6 +29,10 @@ func newWatchCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := internaltui.RequireStdoutTTY(); err != nil {
 				return fmt.Errorf("watch requires a TTY")
+			}
+
+			if err := watchd.EnsureRunning([]string{"watch", "_daemon"}); err != nil {
+				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 
 			cwd, err := os.Getwd()
@@ -91,5 +97,6 @@ func newWatchCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects, not just the current directory")
+	cmd.AddCommand(newWatchDaemonCmd())
 	return cmd
 }

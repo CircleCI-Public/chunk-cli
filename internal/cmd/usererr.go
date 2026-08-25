@@ -83,31 +83,21 @@ func cannotCreateSidecar(orgID, source string, err error) error {
 // the full suite's runtime before saying so. Naming the commands that did not
 // run keeps the skipped work visible rather than implied.
 //
-// freshlyCreated changes only the advice. A sidecar this run provisioned may
-// genuinely still be starting, so retrying is sound; a pre-existing one that has
-// gone unreachable will not fix itself on a retry, so the suggestion points at
-// inspecting or replacing it instead.
-func unreachableSidecar(sidecarID string, freshlyCreated bool, cmds string, err error) error {
-	msg := fmt.Sprintf("Could not reach sidecar %s.", sidecarID)
-	suggestion := "Check its state with 'chunk sidecar list', or provision a replacement with 'chunk sidecar create'."
-	if freshlyCreated {
-		msg = fmt.Sprintf("Could not reach newly created sidecar %s.", sidecarID)
-		suggestion = "The sidecar may still be starting. Try again in a moment."
-	}
-	return newUserError(msg).
+// The advice does not distinguish a sidecar this run provisioned from a
+// pre-existing one. Inspecting or replacing it is sound either way, and
+// "chunk sidecar list" shows a still-starting sidecar as such, so the caller
+// does not have to thread that state down here to word the error.
+func unreachableSidecar(sidecarID, cmds string, err error) error {
+	return newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
 		withCode("sidecar.unreachable").
 		withDetail(fmt.Sprintf("Did not run: %s. Commands marked remote are not run locally.", cmds)).
-		withSuggestion(suggestion).
+		withSuggestion("Check its state with 'chunk sidecar list', or provision a replacement with 'chunk sidecar create'.").
 		withExitCode(ExitAPIError).
 		wrap(err)
 }
 
-func missingWorkspace(sidecarID, dest string, freshlyCreated bool, cmds string, err error) error {
-	msg := fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)
-	if freshlyCreated {
-		msg = fmt.Sprintf("Workspace not found on newly created sidecar %s.", sidecarID)
-	}
-	return newUserError(msg).
+func missingWorkspace(sidecarID, dest, cmds string, err error) error {
+	return newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
 		withCode("sidecar.workspace_missing").
 		withDetail(fmt.Sprintf("Expected it at %q. Did not run: %s. Commands marked remote are not run locally.", dest, cmds)).
 		withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
