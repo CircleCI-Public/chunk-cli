@@ -157,10 +157,11 @@ type Model struct {
 // always falls back to index 0 — the most recently active sidecar.
 const noSelection = "\x00"
 
-// New creates a Model ready to run. When watchAll is true, each poll also
-// checks for projects that have saved a sidecar since the dashboard started
-// and adds them, so a sidecar started after `chunk watch --all` launches
-// still shows up without a restart.
+// New creates a Model ready to run. When watchAll is true (the default for
+// `chunk watch`; `--focus` turns it off), each poll also checks for projects
+// that have saved a sidecar since the dashboard started and adds them, so a
+// sidecar started after the dashboard launches still shows up without a
+// restart.
 func New(projects []ProjectEntry, watchAll bool) Model {
 	return Model{
 		loadFn:        loadFromDaemon,
