@@ -138,14 +138,6 @@ func TestSelectSnapshot(t *testing.T) {
 			wantID:   "s1",
 		},
 		{
-			name: "unknown stack contributes nothing",
-			snapshots: []circleci.Snapshot{
-				{ID: "s1", Name: "unknown-base"},
-			},
-			criteria: SnapshotCriteria{Repo: "chunk-cli", Stack: "unknown"},
-			wantID:   "",
-		},
-		{
 			name: "names are compared case- and separator-insensitively",
 			snapshots: []circleci.Snapshot{
 				{ID: "s1", Name: "Chunk CLI"},

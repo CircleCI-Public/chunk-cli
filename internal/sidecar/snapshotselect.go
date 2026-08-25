@@ -15,7 +15,7 @@ type SnapshotCriteria struct {
 	// Repo is the repository name, e.g. "chunk-cli".
 	Repo string
 	// Stack is the detected tech stack as envbuilder names it, e.g. "go" or
-	// "typescript". Callers pass "" or "unknown" when detection failed.
+	// "typescript". Callers pass "" when detection failed.
 	Stack string
 }
 
@@ -50,7 +50,6 @@ var stackAliases = map[string][]string{
 	"scala":      {"jvm", "openjdk", "jdk", "sbt"},
 	"dotnet":     {"net", "csharp", "dot-net"},
 	"cpp":        {"c++", "cplusplus"},
-	"php":        {"php"},
 	"rust":       {"rs", "cargo"},
 	"elixir":     {"ex", "beam"},
 	"haskell":    {"hs", "ghc"},
@@ -83,16 +82,17 @@ func isSeparator(r rune) bool {
 }
 
 // normalizeName lowercases a snapshot name and collapses separators so that
-// "Chunk CLI" and "chunk-cli" compare equal.
+// "Chunk CLI" and "chunk-cli" compare equal. It defers to isSeparator for what
+// counts as a separator: the two must agree, or a name normalizes into parts
+// that nameTokens can never produce and the token match silently fails.
 func normalizeName(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
+		if isSeparator(r) {
 			b.WriteRune('-')
+			continue
 		}
+		b.WriteRune(r)
 	}
 	return strings.Trim(b.String(), "-")
 }
@@ -115,7 +115,7 @@ func scoreSnapshot(s circleci.Snapshot, c SnapshotCriteria) (int, string) {
 		}
 	}
 
-	if stack := strings.ToLower(c.Stack); stack != "" && stack != "unknown" {
+	if stack := strings.ToLower(c.Stack); stack != "" {
 		for _, alias := range append([]string{stack}, stackAliases[stack]...) {
 			if tokens[alias] {
 				score += scoreStack
