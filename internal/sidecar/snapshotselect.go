@@ -136,19 +136,16 @@ func scoreSnapshot(s circleci.Snapshot, c SnapshotCriteria) (int, string) {
 }
 
 // containsAll reports whether every part is present in tokens. Empty parts are
-// ignored so a trailing separator in a repo name does not fail the match.
+// ignored so a doubled separator in a repo name does not fail the match, which
+// leaves an all-empty parts list vacuously true — the sole caller only reaches
+// here with a normalized name that has at least one real token.
 func containsAll(tokens map[string]bool, parts []string) bool {
-	found := false
 	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		if !tokens[p] {
+		if p != "" && !tokens[p] {
 			return false
 		}
-		found = true
 	}
-	return found
+	return true
 }
 
 // SelectSnapshot picks the snapshot that best fits criteria, reporting false
