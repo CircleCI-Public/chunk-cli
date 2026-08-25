@@ -281,12 +281,12 @@ chunk watch  1 sidecar  main@a3f9e12                      15:04:32
   ↑/↓ j/k  select  ·  q  quit
 ```
 
-To watch multiple projects at once:
+`watch` shows every project you've watched before, not just the current one:
 
 ```bash
-chunk watch                   # current directory only
+chunk watch                   # all projects you've watched before
+chunk watch --focus           # current directory only
 chunk watch /path/to/other    # add another project
-chunk watch --all             # all projects you've watched before
 ```
 
 `watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).

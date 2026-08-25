@@ -19,7 +19,10 @@ import (
 )
 
 func newWatchCmd() *cobra.Command {
-	var all bool
+	var (
+		focus bool
+		all   bool
+	)
 
 	cmd := &cobra.Command{
 		Use:          "watch [dir...]",
@@ -39,15 +42,10 @@ func newWatchCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("watch: could not determine working directory: %w", err)
 			}
-			roots := []string{cwd}
-			if all {
-				known, err := sidecar.AllProjectRoots()
-				if err != nil {
-					return fmt.Errorf("watch: could not list projects: %w", err)
-				}
-				roots = append(roots, known...)
+			roots, err := watchRoots(cwd, focus, args)
+			if err != nil {
+				return err
 			}
-			roots = append(roots, args...)
 
 			seen := map[string]bool{}
 			var entries []watch.ProjectEntry
@@ -72,7 +70,7 @@ func newWatchCmd() *cobra.Command {
 					return fmt.Errorf("watch: data dir for %s: %w", abs, err)
 				}
 
-				// Register this project so future --all runs find it.
+				// Register this project so future runs discover it.
 				if err := os.MkdirAll(dataDir, 0o755); err == nil {
 					_ = os.WriteFile(filepath.Join(dataDir, "project-root"), []byte(abs), 0o644)
 				}
@@ -89,14 +87,32 @@ func newWatchCmd() *cobra.Command {
 				})
 			}
 
-			m := watch.New(entries, all)
+			m := watch.New(entries, !focus)
 			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
 			_, err = p.Run()
 			return err
 		},
 	}
 
-	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects, not just the current directory")
+	cmd.Flags().BoolVar(&focus, "focus", false, "Watch only the current directory instead of all known projects")
+	// --all is now the default; keep the flag so existing invocations keep working.
+	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects (default)")
+	_ = cmd.Flags().MarkDeprecated("all", "watching all known projects is now the default; use --focus to watch only the current directory")
 	cmd.AddCommand(newWatchDaemonCmd())
 	return cmd
+}
+
+// watchRoots returns the directories the dashboard should watch: the current
+// directory plus any explicitly named ones, and — unless focus is set — every
+// project chunk has seen before.
+func watchRoots(cwd string, focus bool, args []string) ([]string, error) {
+	roots := []string{cwd}
+	if !focus {
+		known, err := sidecar.AllProjectRoots()
+		if err != nil {
+			return nil, fmt.Errorf("watch: could not list projects: %w", err)
+		}
+		roots = append(roots, known...)
+	}
+	return append(roots, args...), nil
 }
