@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	internaltui "github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui/watch"
@@ -31,7 +32,7 @@ func newWatchCmd() *cobra.Command {
 			}
 
 			if err := watchd.EnsureRunning([]string{"watch", "_daemon"}); err != nil {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "chunk watch: daemon unavailable, running without background updates: %v\n", err)
+				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 
 			cwd, err := os.Getwd()

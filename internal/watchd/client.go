@@ -47,10 +47,15 @@ func ping(sockPath string) bool {
 	return resp.StatusCode == 200
 }
 
-// EnsureRunning checks whether the watch daemon is running and launches it if not.
-// subArgs are the CLI arguments used to invoke the daemon (e.g. ["watch", "_daemon"]).
+// EnsureRunning checks whether the watch daemon is running and serving, and
+// launches it if not. subArgs are the CLI arguments used to invoke the daemon
+// (e.g. ["watch", "_daemon"]).
 func EnsureRunning(subArgs []string) error {
 	pidPath, err := PIDPath()
+	if err != nil {
+		return err
+	}
+	sockPath, err := SocketPath()
 	if err != nil {
 		return err
 	}
@@ -58,7 +63,7 @@ func EnsureRunning(subArgs []string) error {
 	if err != nil {
 		return fmt.Errorf("check running: %w", err)
 	}
-	if running {
+	if running && ping(sockPath) {
 		return nil
 	}
 	return launchDaemon(subArgs)

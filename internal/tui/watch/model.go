@@ -112,6 +112,7 @@ const (
 
 type tickMsg struct{}
 type spinMsg struct{}
+type errMsg struct{ err error }
 
 type dataMsg struct {
 	projects []ProjectEntry
@@ -148,6 +149,7 @@ type Model struct {
 	height     int
 	spinIdx    int
 	hasSpinner bool
+	daemonErr  error // set when the last poll failed; cleared on success
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -228,7 +230,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case errMsg:
+		m.daemonErr = msg.err
+		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+
 	case dataMsg:
+		m.daemonErr = nil
 		m.projects = msg.projects
 		m.sidecars = msg.sidecars
 		m.events = msg.events
@@ -862,7 +869,11 @@ func (m Model) renderFooter() string {
 		parts = append(parts, vdim(k.key)+" "+dim(k.action))
 	}
 	bar := strings.Join(parts, "  "+vdim("·")+"  ")
-	return vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
+	footer := vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
+	if m.daemonErr != nil {
+		footer += "  " + red("daemon unavailable: "+m.daemonErr.Error()) + "\n"
+	}
+	return footer
 }
 
 // loadData delegates all disk and subprocess I/O to loadFn.

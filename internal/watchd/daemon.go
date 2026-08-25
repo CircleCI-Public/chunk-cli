@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -96,26 +97,31 @@ func (d *daemon) pollLoop(ctx context.Context) {
 }
 
 // poll refreshes state for all registered projects, discovering any new ones
-// since the last poll. All I/O runs outside the lock; only the final state
-// swap acquires a write lock.
+// since the last poll. All I/O (including initProject) runs outside the lock;
+// only the final state swap acquires a write lock.
 func (d *daemon) poll() {
 	roots, _ := sidecar.AllProjectRoots()
 
 	d.mu.RLock()
 	work := make([]*projectState, 0, len(roots))
-	newProjects := make(map[string]*projectState)
+	var newRoots []string
 	for _, root := range roots {
-		ps, ok := d.projects[root]
-		if !ok {
-			ps = d.initProject(root)
-			if ps == nil {
-				continue
-			}
-			newProjects[root] = ps
+		if ps, ok := d.projects[root]; ok {
+			work = append(work, ps)
+		} else {
+			newRoots = append(newRoots, root)
 		}
-		work = append(work, ps)
 	}
 	d.mu.RUnlock()
+
+	// initProject does file I/O; run it outside the lock.
+	newProjects := make(map[string]*projectState, len(newRoots))
+	for _, root := range newRoots {
+		if ps := d.initProject(root); ps != nil {
+			newProjects[root] = ps
+			work = append(work, ps)
+		}
+	}
 
 	if len(newProjects) > 0 {
 		d.mu.Lock()
@@ -211,5 +217,8 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 		}
 		return Snapshot{Projects: ordered}
 	}
+	// Map iteration is random; sort by root so project rows stay stable
+	// between polls when watchAll mode requests all projects.
+	sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
 	return Snapshot{Projects: projects}
 }
