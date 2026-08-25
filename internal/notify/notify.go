@@ -31,8 +31,12 @@ func (osSender) Send(title, body string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		script := fmt.Sprintf(`display notification %q with title %q`, body, title)
-		cmd = exec.CommandContext(ctx, "osascript", "-e", script)
+		if path, err := exec.LookPath("terminal-notifier"); err == nil {
+			cmd = exec.CommandContext(ctx, path, "-title", title, "-message", body)
+		} else {
+			script := fmt.Sprintf(`display notification %q with title %q`, body, title)
+			cmd = exec.CommandContext(ctx, "osascript", "-e", script)
+		}
 	case "linux":
 		cmd = exec.CommandContext(ctx, "notify-send", title, body)
 	case "windows":

@@ -3,8 +3,9 @@ package notify_test
 import (
 	"testing"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/notify"
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/notify"
 )
 
 type spySender struct {
