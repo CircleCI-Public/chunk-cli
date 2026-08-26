@@ -467,7 +467,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	envVars, statusFn, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
 	if err != nil {
-		return err
+		return failBeforeRun(statusFn, start, err)
 	}
 
 	result, execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
@@ -539,6 +539,28 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 		op = eventlog.OpHook
 	}
 	return eventlog.WrapFromDir(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
+}
+
+// maxSetupFailReason caps the error text folded into the terminal event so the
+// event log keeps one line per event.
+const maxSetupFailReason = 120
+
+// failBeforeRun records a terminal event for a failure that happened after the
+// event log was wired but before any command ran — a sync, secrets or env
+// resolve failure. finishValidate writes the only other terminal event and is
+// unreachable from these paths, so without this the invocation stays open in
+// the log and chunk watch reads it as still running. The message keeps the
+// "N/M passed" shape the log reader uses to close an invocation.
+func failBeforeRun(statusFn iostream.StatusFunc, start time.Time, err error) error {
+	reason := err.Error()
+	if i := strings.IndexByte(reason, '\n'); i >= 0 {
+		reason = reason[:i]
+	}
+	if r := []rune(reason); len(r) > maxSetupFailReason {
+		reason = string(r[:maxSetupFailReason]) + "…"
+	}
+	statusFn(iostream.LevelError, fmt.Sprintf("0/0 passed  %s  setup failed: %s", ui.FormatDuration(time.Since(start)), reason))
+	return err
 }
 
 // notifyFunc returns notify.Send when enabled is true, or nil to skip notifications.

@@ -152,6 +152,7 @@ func TestIsSummaryEvent(t *testing.T) {
 	}{
 		{"3/3 passed  5.2s", true},
 		{"0/4 passed  13.7s", true},
+		{"0/0 passed  3.1s  setup failed: agent: failed to sign challenge", true},
 		{"test    8.0s (remote)", false},
 		{"lint    0.4s (local)", false},
 		{"synced", false},
@@ -992,4 +993,57 @@ func TestConvertSnapshot_localRowStaysSeparateWhenSessionsShareAWorktree(t *test
 	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
 	assert.Assert(t, strings.Contains(pane, "this session"), pane)
+}
+
+// outcomeOf tests
+
+func TestOutcomeOf(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		events    []eventlog.Event
+		wantIcon  string
+		wantLabel string
+		wantLevel string
+	}{
+		{
+			name:      "running while recent",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace...", Ts: now.Add(-time.Minute)}},
+			wantIcon:  "●",
+			wantLabel: "running",
+			wantLevel: "",
+		},
+		{
+			name:      "abandoned once past the running timeout",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace...", Ts: now.Add(-8 * time.Hour)}},
+			wantIcon:  "⊘",
+			wantLabel: "abandoned",
+			wantLevel: levelAbandoned,
+		},
+		{
+			name: "passed",
+			events: []eventlog.Event{
+				{Op: eventlog.OpValidate, Level: "info", Msg: "$ task test", Ts: now.Add(-8 * time.Hour)},
+				{Op: eventlog.OpValidate, Level: "done", Msg: "4/4 passed  32.4s", Ts: now.Add(-8 * time.Hour)},
+			},
+			wantIcon:  "✓",
+			wantLabel: "4/4",
+			wantLevel: levelDone,
+		},
+		{
+			name:      "setup failure closes the invocation",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "error", Msg: "0/0 passed  3.1s  setup failed: agent: failed to sign challenge", Ts: now.Add(-8 * time.Hour)}},
+			wantIcon:  "✗",
+			wantLabel: "0/0",
+			wantLevel: levelError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			icon, label, level := outcomeOf(invocationGroup{events: tt.events})
+			if icon != tt.wantIcon || label != tt.wantLabel || level != tt.wantLevel {
+				t.Errorf("outcomeOf() = (%q, %q, %q), want (%q, %q, %q)", icon, label, level, tt.wantIcon, tt.wantLabel, tt.wantLevel)
+			}
+		})
+	}
 }

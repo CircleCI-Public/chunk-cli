@@ -32,6 +32,10 @@ const (
 	// localRunnerName labels the synthesised row for validate runs that happened
 	// locally rather than on a sidecar.
 	localRunnerName = "local"
+
+	// levelAbandoned is not an event level: it marks an invocation whose process
+	// died before writing a terminal event, so nothing will ever close it.
+	levelAbandoned = "abandoned"
 )
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -797,7 +801,10 @@ type invocationGroup struct {
 
 // outcomeOf returns the icon, label, and terminal level of the invocation.
 // The label is the N/M count extracted from the summary event (e.g. "3/3").
-// Returns "" level when the invocation is still running.
+// Returns "" level when the invocation is still running, and levelAbandoned
+// when it has no summary and has been silent for longer than runningTimeout —
+// a process that died without reporting will never close its group, so without
+// this it would read as running forever.
 func outcomeOf(g invocationGroup) (icon, label, level string) {
 	for i := len(g.events) - 1; i >= 0; i-- {
 		e := g.events[i]
@@ -812,6 +819,9 @@ func outcomeOf(g invocationGroup) (icon, label, level string) {
 			return ui.IconOK, count, levelDone
 		}
 		return ui.IconFail, count, levelError
+	}
+	if n := len(g.events); n > 0 && time.Since(g.events[n-1].Ts) > runningTimeout {
+		return "⊘", "abandoned", levelAbandoned
 	}
 	return "●", "running", ""
 }
@@ -850,6 +860,8 @@ func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selecte
 		outcomeStr = st.success(icon + " " + label)
 	case levelError:
 		outcomeStr = st.err(icon + " " + label)
+	case levelAbandoned:
+		outcomeStr = st.warning(icon + " " + label)
 	default:
 		outcomeStr = st.running(icon + " " + label)
 	}

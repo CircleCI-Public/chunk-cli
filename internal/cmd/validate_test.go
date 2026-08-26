@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -834,4 +835,32 @@ func TestValidateListShowsRoutingAndRole(t *testing.T) {
 	for _, want := range []string{"test [remote, gate]", "format [local, autofix]", "bare [local]"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q in:\n%s", want, out)
 	}
+}
+
+func TestFailBeforeRunEmitsTerminalEvent(t *testing.T) {
+	var gotLevel iostream.Level
+	var gotMsg string
+	statusFn := func(level iostream.Level, msg string) {
+		gotLevel, gotMsg = level, msg
+	}
+
+	inErr := errors.New("bundle sync: agent: failed to sign challenge\nmore detail")
+	outErr := failBeforeRun(statusFn, time.Now(), inErr)
+
+	assert.Equal(t, outErr, inErr)
+	assert.Equal(t, gotLevel, iostream.LevelError)
+	// The "N/M passed" prefix is what chunk watch reads to close an invocation.
+	assert.Assert(t, strings.HasPrefix(gotMsg, "0/0 passed  "), "got %q", gotMsg)
+	assert.Assert(t, strings.Contains(gotMsg, "setup failed: bundle sync: agent: failed to sign challenge"), "got %q", gotMsg)
+	assert.Assert(t, !strings.Contains(gotMsg, "\n"), "got %q", gotMsg)
+}
+
+func TestFailBeforeRunTruncatesLongReason(t *testing.T) {
+	var gotMsg string
+	statusFn := func(_ iostream.Level, msg string) { gotMsg = msg }
+
+	failBeforeRun(statusFn, time.Now(), errors.New(strings.Repeat("x", maxSetupFailReason+50)))
+
+	assert.Assert(t, strings.Contains(gotMsg, strings.Repeat("x", maxSetupFailReason)+"…"), "got %q", gotMsg)
+	assert.Assert(t, !strings.Contains(gotMsg, strings.Repeat("x", maxSetupFailReason+1)), "got %q", gotMsg)
 }
