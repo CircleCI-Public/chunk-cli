@@ -65,6 +65,21 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 
 	status(iostream.LevelInfo, fmt.Sprintf("Syncing workspace %s...", repoPath))
 
+	if check, err := ExecOverSSH(ctx, sess, "which rsync", nil, nil); err != nil {
+		return fmt.Errorf("rsync: check remote rsync: %w", err)
+	} else if check.ExitCode != 0 {
+		if result, err := ExecOverSSH(ctx, sess, "sudo apt-get update -qq", nil, nil); err != nil {
+			return fmt.Errorf("rsync: apt-get update: %w", err)
+		} else if result.ExitCode != 0 {
+			return fmt.Errorf("rsync: apt-get update: exit %d: %s", result.ExitCode, result.Stderr)
+		}
+		if result, err := ExecOverSSH(ctx, sess, "sudo apt-get install -y -qq rsync", nil, nil); err != nil {
+			return fmt.Errorf("rsync: install rsync on sidecar: %w", err)
+		} else if result.ExitCode != 0 {
+			return fmt.Errorf("rsync: install rsync on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
+		}
+	}
+
 	if result, err := ExecOverSSH(ctx, sess, "mkdir -p "+ShellEscape(repoPath), nil, nil); err != nil {
 		return fmt.Errorf("rsync: mkdir: %w", err)
 	} else if result.ExitCode != 0 {
