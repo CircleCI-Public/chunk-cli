@@ -20,6 +20,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -837,30 +838,28 @@ func TestValidateListShowsRoutingAndRole(t *testing.T) {
 	}
 }
 
-func TestFailBeforeRunEmitsTerminalEvent(t *testing.T) {
-	var gotLevel iostream.Level
-	var gotMsg string
-	statusFn := func(level iostream.Level, msg string) {
-		gotLevel, gotMsg = level, msg
-	}
+func TestFailBeforeRunClosesTheRun(t *testing.T) {
+	dir := t.TempDir()
+	log, err := eventlog.Open(dir)
+	assert.NilError(t, err)
 
-	inErr := errors.New("bundle sync: agent: failed to sign challenge\nmore detail")
-	outErr := failBeforeRun(statusFn, time.Now(), inErr)
+	var reported string
+	rec := log.Recorder(func(_ iostream.Level, msg string) { reported = msg }, eventlog.OpValidate, "", "", "")
 
-	assert.Equal(t, outErr, inErr)
-	assert.Equal(t, gotLevel, iostream.LevelError)
-	// The "N/M passed" prefix is what chunk watch reads to close an invocation.
-	assert.Assert(t, strings.HasPrefix(gotMsg, "0/0 passed  "), "got %q", gotMsg)
-	assert.Assert(t, strings.Contains(gotMsg, "setup failed: bundle sync: agent: failed to sign challenge"), "got %q", gotMsg)
-	assert.Assert(t, !strings.Contains(gotMsg, "\n"), "got %q", gotMsg)
-}
+	inErr := errors.New("bundle sync: agent: failed to sign challenge")
+	assert.Equal(t, failBeforeRun(rec, time.Now(), inErr), inErr)
 
-func TestFailBeforeRunTruncatesLongReason(t *testing.T) {
-	var gotMsg string
-	statusFn := func(_ iostream.Level, msg string) { gotMsg = msg }
+	events, err := log.Recent(10)
+	assert.NilError(t, err)
+	assert.Equal(t, len(events), 1)
+	assert.Equal(t, events[0].Level, "error")
+	assert.Assert(t, strings.Contains(events[0].Msg, "setup failed"), "got %q", events[0].Msg)
+	assert.Assert(t, strings.Contains(events[0].Msg, inErr.Error()), "got %q", events[0].Msg)
+	assert.Equal(t, reported, events[0].Msg)
 
-	failBeforeRun(statusFn, time.Now(), errors.New(strings.Repeat("x", maxSetupFailReason+50)))
-
-	assert.Assert(t, strings.Contains(gotMsg, strings.Repeat("x", maxSetupFailReason)+"…"), "got %q", gotMsg)
-	assert.Assert(t, !strings.Contains(gotMsg, strings.Repeat("x", maxSetupFailReason+1)), "got %q", gotMsg)
+	// Nothing ran, so the run closes on a 0/0 tally.
+	passed, total, ok := events[0].Outcome()
+	assert.Assert(t, ok)
+	assert.Equal(t, passed, 0)
+	assert.Equal(t, total, 0)
 }

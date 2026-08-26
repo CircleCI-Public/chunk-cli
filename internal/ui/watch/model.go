@@ -671,7 +671,7 @@ func (m Model) buildCollapsibleLines(st watchStyles, groups []invocationGroup, r
 			g := groups[gi]
 			for ei := len(g.events) - 1; ei >= 0 && len(rendered) < maxLines; ei-- {
 				e := g.events[ei]
-				if isSummaryEvent(e) {
+				if closesRun(e) {
 					continue // already shown in header
 				}
 				add("  " + renderEvent(st, e))
@@ -808,13 +808,11 @@ type invocationGroup struct {
 func outcomeOf(g invocationGroup) (icon, label, level string) {
 	for i := len(g.events) - 1; i >= 0; i-- {
 		e := g.events[i]
-		if !isSummaryEvent(e) {
+		passed, total, ok := e.Outcome()
+		if !ok {
 			continue
 		}
-		count := extractCount(e.Msg)
-		if count == "" {
-			count = "passed"
-		}
+		count := fmt.Sprintf("%d/%d", passed, total)
 		if e.Level == levelDone {
 			return ui.IconOK, count, levelDone
 		}
@@ -824,19 +822,6 @@ func outcomeOf(g invocationGroup) (icon, label, level string) {
 		return "⊘", "abandoned", levelAbandoned
 	}
 	return "●", "running", ""
-}
-
-// extractCount pulls the "N/M" fraction from a summary message like "3/3 passed  5.2s".
-func extractCount(msg string) string {
-	i := strings.IndexByte(msg, ' ')
-	if i <= 0 {
-		return ""
-	}
-	part := msg[:i]
-	if strings.Contains(part, "/") {
-		return part
-	}
-	return ""
 }
 
 // renderInvocationHeader renders a one-line summary for an invocation group.
@@ -896,7 +881,7 @@ func groupByInvocation(events []eventlog.Event) []invocationGroup {
 	cur := make([]eventlog.Event, 0, len(events))
 	for _, e := range events {
 		cur = append(cur, e)
-		if isSummaryEvent(e) {
+		if closesRun(e) {
 			groups = append(groups, invocationGroup{events: cur})
 			cur = nil
 		}
@@ -907,23 +892,10 @@ func groupByInvocation(events []eventlog.Event) []invocationGroup {
 	return groups
 }
 
-// isSummaryEvent reports whether e is the overall validate summary that closes
-// an invocation. Summary messages are formatted "N/M passed  Xs" — only digits
-// precede the first "/", distinguishing them from per-command done events.
-func isSummaryEvent(e eventlog.Event) bool {
-	if e.Op != eventlog.OpValidate || (e.Level != levelDone && e.Level != levelError) {
-		return false
-	}
-	i := strings.IndexByte(e.Msg, '/')
-	if i <= 0 {
-		return false
-	}
-	for _, c := range e.Msg[:i] {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+// closesRun reports whether e is the event that closes an invocation.
+func closesRun(e eventlog.Event) bool {
+	_, _, ok := e.Outcome()
+	return ok
 }
 
 // eventGroup is a slice of events from a single op-run.
@@ -978,18 +950,21 @@ func opTag(st watchStyles, op eventlog.Op) string {
 }
 
 func iconAndMsg(st watchStyles, e eventlog.Event) (string, string) {
+	// One event is one line in the pane, whatever the writer put in it: a
+	// message can carry an error, and errors wrap.
+	msg := strings.ReplaceAll(e.Msg, "\n", " ")
 	switch e.Level {
 	case levelDone:
-		return st.success(ui.IconOK), st.success(e.Msg)
+		return st.success(ui.IconOK), st.success(msg)
 	case "warn":
-		return st.warning(ui.IconWarn), st.warning(e.Msg)
+		return st.warning(ui.IconWarn), st.warning(msg)
 	case levelError:
-		return st.err(ui.IconFail), st.err(e.Msg)
+		return st.err(ui.IconFail), st.err(msg)
 	default:
-		if strings.HasPrefix(e.Msg, "$ ") {
-			return st.muted("$"), st.muted(strings.TrimPrefix(e.Msg, "$ "))
+		if cmd, ok := strings.CutPrefix(msg, "$ "); ok {
+			return st.muted("$"), st.muted(cmd)
 		}
-		return st.vdim("›"), st.muted(e.Msg)
+		return st.vdim("›"), st.muted(msg)
 	}
 }
 

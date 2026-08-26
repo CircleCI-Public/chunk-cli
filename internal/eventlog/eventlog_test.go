@@ -148,7 +148,7 @@ func TestTailFromNoNewEvents(t *testing.T) {
 	}
 }
 
-func TestWrapForwardsAndLogs(t *testing.T) {
+func TestRecorderForwardsAndLogs(t *testing.T) {
 	dir := t.TempDir()
 	l, err := Open(dir)
 	if err != nil {
@@ -160,9 +160,9 @@ func TestWrapForwardsAndLogs(t *testing.T) {
 		innerCalls = append(innerCalls, msg)
 	}
 
-	wrapped := l.Wrap(inner, OpExec, "sc-id", "my-sc", "main")
-	wrapped(iostream.LevelStep, "step1")
-	wrapped(iostream.LevelDone, "done1")
+	rec := l.Recorder(inner, OpExec, "sc-id", "my-sc", "main")
+	rec.Status(iostream.LevelStep, "step1")
+	rec.Status(iostream.LevelDone, "done1")
 
 	if len(innerCalls) != 2 {
 		t.Fatalf("want 2 inner calls, got %d", len(innerCalls))
@@ -183,14 +183,14 @@ func TestWrapForwardsAndLogs(t *testing.T) {
 	}
 }
 
-func TestWrapNilInner(t *testing.T) {
+func TestRecorderNilInner(t *testing.T) {
 	dir := t.TempDir()
 	l, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrapped := l.Wrap(nil, OpSync, "", "", "")
-	wrapped(iostream.LevelInfo, "should not panic")
+	rec := l.Recorder(nil, OpSync, "", "", "")
+	rec.Status(iostream.LevelInfo, "should not panic")
 }
 
 func TestLevelStr(t *testing.T) {
@@ -208,5 +208,71 @@ func TestLevelStr(t *testing.T) {
 		if got := levelStr(tt.in); got != tt.want {
 			t.Errorf("levelStr(%v) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+func TestFinalRecordsOutcome(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := l.Recorder(nil, OpValidate, "sc-id", "my-sc", "main")
+	rec.Status(iostream.LevelInfo, "$ task test")
+	rec.Final(iostream.LevelError, "1/2 passed  3s", 1, 2)
+
+	got, err := l.Recent(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := got[0].Outcome(); ok {
+		t.Error("status event should not close the operation")
+	}
+	passed, total, ok := got[1].Outcome()
+	if !ok || passed != 1 || total != 2 {
+		t.Errorf("Outcome() = (%d, %d, %v), want (1, 2, true)", passed, total, ok)
+	}
+}
+
+// A Recorder with no log still reports, so a project without a data dir does
+// not lose its status output.
+func TestRecordWithoutLogStillReports(t *testing.T) {
+	var got []string
+	rec := Record("", func(_ iostream.Level, msg string) { got = append(got, msg) }, OpValidate, "", "", "")
+	rec.Status(iostream.LevelInfo, "syncing")
+	rec.Final(iostream.LevelDone, "1/1 passed", 1, 1)
+	if len(got) != 2 {
+		t.Fatalf("want 2 reported messages, got %d", len(got))
+	}
+}
+
+func TestOutcomeLegacyMessages(t *testing.T) {
+	cases := []struct {
+		msg    string
+		passed int
+		total  int
+		want   bool
+	}{
+		{"3/3 passed  5.2s", 3, 3, true},
+		{"0/4 passed  13.7s", 0, 4, true},
+		{"test    8.0s (remote)", 0, 0, false},
+		{"lint    0.4s (local)", 0, 0, false},
+		{"synced", 0, 0, false},
+		{"", 0, 0, false},
+		{"a/b passed", 0, 0, false},
+	}
+	for _, c := range cases {
+		e := Event{Op: OpValidate, Level: levelDone, Msg: c.msg}
+		passed, total, ok := e.Outcome()
+		if ok != c.want || passed != c.passed || total != c.total {
+			t.Errorf("Event{Msg: %q}.Outcome() = (%d, %d, %v), want (%d, %d, %v)", c.msg, passed, total, ok, c.passed, c.total, c.want)
+		}
+	}
+}
+
+func TestOutcomeLegacyIgnoresOtherOps(t *testing.T) {
+	e := Event{Op: OpSync, Level: levelDone, Msg: "1/1 passed  1s"}
+	if _, _, ok := e.Outcome(); ok {
+		t.Error("a sync event should not close a validate run")
 	}
 }
