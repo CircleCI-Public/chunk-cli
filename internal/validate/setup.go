@@ -21,9 +21,20 @@ type PackageManager struct {
 }
 
 // DetectCommands returns the full set of validate commands for the repo with metadata.
-// For known toolchains it returns richer commands without calling Claude. Claude is
-// only used as a fallback for unknown toolchains, and only when a client is provided.
+//
+// A checked-in CircleCI config is preferred over everything else: it names the
+// checks that actually gate the branch, where root filenames only suggest a
+// toolchain. Repos whose real build system is outranked by a stray manifest —
+// a bazel monorepo containing a package.json, say — are misdetected otherwise.
+//
+// Failing that, known toolchains return richer commands without calling Claude.
+// Claude is only used as a fallback for unknown toolchains, and only when a
+// client is provided.
 func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir string) ([]config.Command, error) {
+	if cmds := commandsFromCI(workDir); len(cmds) > 0 {
+		return cmds, nil
+	}
+
 	entries, _ := os.ReadDir(workDir)
 	files := make([]string, 0, len(entries))
 	for _, e := range entries {

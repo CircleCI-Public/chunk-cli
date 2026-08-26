@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -404,6 +405,13 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 }
 
 // printInitSummary prints the discovered validation commands and next-step hints.
+// hasInstallCommand reports whether detection already produced an install step.
+func hasInstallCommand(commands []config.Command) bool {
+	return slices.ContainsFunc(commands, func(c config.Command) bool {
+		return c.Name == config.CmdInstall
+	})
+}
+
 func printInitSummary(commands []config.Command, streams iostream.Streams) {
 	if len(commands) > 0 {
 		entries := make([]ui.CommandEntry, len(commands))
@@ -533,10 +541,15 @@ hook config files.`,
 					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", detectErr)))
 				} else {
 					allCommands := []config.Command{}
-					pm := validate.DetectPackageManager(workDir)
-					if pm != nil {
-						streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
-						allCommands = append(allCommands, config.Command{Name: "install", Run: pm.InstallCommand})
+					// Detection may already have found an install command — a
+					// CircleCI config names one directly. Only fall back to
+					// guessing from the lock file when it did not.
+					if !hasInstallCommand(commands) {
+						pm := validate.DetectPackageManager(workDir)
+						if pm != nil {
+							streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
+							allCommands = append(allCommands, config.Command{Name: config.CmdInstall, Run: pm.InstallCommand})
+						}
 					}
 					allCommands = append(allCommands, commands...)
 					cfg.Commands = allCommands
