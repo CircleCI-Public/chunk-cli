@@ -5,52 +5,55 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
-// Sender fires a desktop notification.
-type Sender interface {
-	Send(title, body string)
-}
-
-// DefaultSender is the process-wide Sender. Replace in tests with a spy.
-var DefaultSender Sender = &osSender{}
-
-// Send fires a desktop notification via DefaultSender. Errors are silently
+// Send fires a desktop notification in the background. Errors are silently
 // discarded — notifications are best-effort and must not disrupt the caller.
 func Send(title, body string) {
-	DefaultSender.Send(title, body)
-}
-
-type osSender struct{}
-
-func (osSender) Send(title, body string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		if path, err := exec.LookPath("terminal-notifier"); err == nil {
-			cmd = exec.CommandContext(ctx, path, "-title", title, "-message", body)
-		} else {
-			script := fmt.Sprintf(`display notification %q with title %q`, body, title)
-			cmd = exec.CommandContext(ctx, "osascript", "-e", script)
-		}
+		script := fmt.Sprintf(`display notification %s with title %s`, asQuote(body), asQuote(title))
+		cmd = exec.Command("osascript", "-e", script)
 	case "linux":
-		cmd = exec.CommandContext(ctx, "notify-send", title, body)
+		cmd = exec.Command("notify-send", title, body)
 	case "windows":
 		ps := fmt.Sprintf(
 			`[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; `+
 				`$n = New-Object System.Windows.Forms.NotifyIcon; `+
 				`$n.Icon = [System.Drawing.SystemIcons]::Information; `+
-				`$n.BalloonTipTitle = %q; $n.BalloonTipText = %q; `+
+				`$n.BalloonTipTitle = %s; $n.BalloonTipText = %s; `+
 				`$n.Visible = $true; $n.ShowBalloonTip(5000)`,
-			title, body,
+			psQuote(title), psQuote(body),
 		)
-		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
+		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
 	default:
 		return
 	}
-	_ = cmd.Run()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = cmd.Start()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-ctx.Done():
+			_ = cmd.Process.Kill()
+		case <-done:
+		}
+	}()
+}
+
+// asQuote wraps s in an AppleScript double-quoted string literal, escaping
+// internal double quotes by doubling them.
+func asQuote(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// psQuote wraps s in a PowerShell single-quoted string literal, escaping
+// internal single quotes by doubling them.
+func psQuote(s string) string {
+	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
 }
