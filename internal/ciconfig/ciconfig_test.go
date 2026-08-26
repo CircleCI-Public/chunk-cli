@@ -508,23 +508,22 @@ workflows:
 	})
 }
 
-func TestExtractRecordsWorkingDirectory(t *testing.T) {
+func TestExtractRecordsStepWorkingDirectory(t *testing.T) {
 	dir := writeConfig(t, "config.yml", `
 version: 2.1
 jobs:
-  backend:
-    working_directory: ~/repo/services/api
+  test:
     steps:
-      - run: pytest
-  frontend:
-    working_directory: ~/repo/web
-    steps:
-      - run: pytest
+      - run:
+          command: pytest
+          working_directory: services/api
+      - run:
+          command: pytest
+          working_directory: web
 workflows:
   main:
     jobs:
-      - backend
-      - frontend
+      - test
 `)
 	res, err := Extract(dir)
 	assert.NilError(t, err)
@@ -532,8 +531,36 @@ workflows:
 	// Same command, different directories — two distinct pieces of work, so
 	// dedupe must not collapse them.
 	assert.Equal(t, len(res.Candidates), 2)
-	assert.Equal(t, res.Candidates[0].WorkingDir, "~/repo/services/api")
-	assert.Equal(t, res.Candidates[1].WorkingDir, "~/repo/web")
+	assert.Equal(t, res.Candidates[0].WorkingDir, "services/api")
+	assert.Equal(t, res.Candidates[1].WorkingDir, "web")
+}
+
+func TestExtractIgnoresJobWorkingDirectory(t *testing.T) {
+	// A job-level working_directory is where checkout puts the repo, so it is
+	// the repo root — not a narrowing of where the command runs. Treating it
+	// as one would silently discard every step in configs that set it, which
+	// is common boilerplate.
+	dir := writeConfig(t, "config.yml", `
+version: 2.1
+jobs:
+  test:
+    working_directory: ~/repo
+    steps:
+      - run: yarn install --frozen-lockfile
+      - run: yarn test
+workflows:
+  main:
+    jobs:
+      - test
+`)
+	res, err := Extract(dir)
+	assert.NilError(t, err)
+
+	assert.DeepEqual(t, commands(res), []string{
+		"yarn install --frozen-lockfile",
+		"yarn test",
+	})
+	assert.Equal(t, res.Candidates[0].WorkingDir, "")
 }
 
 func TestExtractLegacyConfigWithoutWorkflows(t *testing.T) {

@@ -20,12 +20,23 @@ const (
 // inner loop: deploys, uploads, and machine provisioning. Matched case-folded
 // against the command.
 var skipMarkers = []string{
-	"deploy", "publish", "release", "notify", "slack", "upload",
+	"deploy", "publish", "notify", "slack", "upload",
 	"codecov", "coveralls", "sonar", "artifact",
 	"docker push", "docker build", "docker login",
 	"terraform", "kubectl", "helm ", "aws ", "gcloud ", "gsutil",
 	"apt-get", "apt ", "brew ", "curl ", "wget ",
 	"git push", "git tag", "goreleaser", "npm publish",
+	// "release" alone would swallow `cargo test --release` and every other
+	// build-profile flag, so match only commands that are a release.
+	"make release", "task release", "npm run release", "./release",
+	"release.sh",
+}
+
+// toolInstallMarkers install a binary into the CI image rather than the
+// project's dependencies, so they must not be taken for the install step.
+var toolInstallMarkers = []string{
+	"cargo install", "go install", "npm install -g", "npm i -g",
+	"yarn global add", "pipx install",
 }
 
 // ciOnlyMarkers mark a step that cannot run outside a CircleCI container.
@@ -44,7 +55,7 @@ var roleMarkers = []struct {
 	{roleInstall, []string{
 		// Covers npm/yarn/pnpm/bun/bundle/pip/poetry install in one marker.
 		// "apt-get install" and friends are removed by skipMarkers first.
-		" install", "npm ci", "uv sync", "go mod download",
+		" install", "npm ci", "uv sync", "go mod download", "cargo fetch",
 		"mod-download", "mod_download", "install-deps", "install_deps",
 	}},
 	{roleFormat, []string{
@@ -128,8 +139,10 @@ func classify(c ciconfig.Candidate) string {
 	if strings.Contains(strings.TrimSpace(c.Command), "\n") {
 		return roleNone
 	}
-	// A command scoped to a subdirectory needs context this package does not
-	// carry into .chunk/config.json, so it cannot be written verbatim.
+	// A step that narrows its own working directory needs context this package
+	// does not carry into .chunk/config.json, so it cannot be written verbatim.
+	// A job-level working_directory is only where checkout puts the repo, and
+	// does not narrow anything.
 	if c.WorkingDir != "" {
 		return roleNone
 	}
@@ -141,6 +154,11 @@ func classify(c ciconfig.Candidate) string {
 		}
 	}
 	for _, m := range skipMarkers {
+		if strings.Contains(cmd, m) {
+			return roleNone
+		}
+	}
+	for _, m := range toolInstallMarkers {
 		if strings.Contains(cmd, m) {
 			return roleNone
 		}

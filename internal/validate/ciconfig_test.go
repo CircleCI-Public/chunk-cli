@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -111,9 +112,10 @@ func TestCommandsFromCISkipsUnrunnableSteps(t *testing.T) {
 version: 2.1
 jobs:
   build:
-    working_directory: ~/repo/services/api
     steps:
-      - run: pytest
+      - run:
+          command: pytest
+          working_directory: services/api
   other:
     steps:
       - run:
@@ -131,6 +133,68 @@ workflows:
 	// A subdirectory-scoped command, a multi-line script, and a step that
 	// only works inside a CircleCI container are all unusable verbatim.
 	assert.Equal(t, len(commandsFromCI(dir)), 0)
+}
+
+func TestCommandsFromCIKeepsJobsWithAWorkingDirectory(t *testing.T) {
+	// working_directory at job level is standard boilerplate for the checkout
+	// path. Reading it as a subdirectory silently disabled detection.
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  test:
+    working_directory: ~/repo
+    steps:
+      - run: yarn install --frozen-lockfile
+      - run: yarn test
+workflows:
+  main:
+    jobs:
+      - test
+`)
+	assert.DeepEqual(t, runs(commandsFromCI(dir)), []string{
+		"install=yarn install --frozen-lockfile",
+		"test=yarn test",
+	})
+}
+
+func TestCommandsFromCIKeepsBuildProfileFlags(t *testing.T) {
+	// "release" as a bare skip marker swallowed `cargo test --release`.
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  test:
+    steps:
+      - run: cargo test --release
+      - run: ./release.sh
+workflows:
+  main:
+    jobs:
+      - test
+`)
+	assert.DeepEqual(t, runs(commandsFromCI(dir)), []string{"test=cargo test --release"})
+}
+
+func TestCommandsFromCIIgnoresToolInstalls(t *testing.T) {
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  test:
+    steps:
+      - run: cargo install cargo-nextest
+      - run: cargo fetch --locked
+      - run: cargo nextest run
+workflows:
+  main:
+    jobs:
+      - test
+`)
+	// Installing a test binary is not the project's dependency install, so it
+	// must not claim the install slot.
+	got := runs(commandsFromCI(dir))
+	assert.Assert(t, !slices.Contains(got, "install=cargo install cargo-nextest"), "got: %v", got)
 }
 
 func TestCommandsFromCIFallsBackWhenUnavailable(t *testing.T) {

@@ -49,8 +49,10 @@ type Candidate struct {
 	Step    string // step name, empty if the step was unnamed
 	Command string // shell command, with parameters substituted
 
-	// WorkingDir is the job's working_directory, empty when unset. A command
-	// from a monorepo job often only makes sense relative to it.
+	// WorkingDir is the step's own working_directory, empty when unset. Only
+	// a step-level directory narrows where a command runs: a job-level
+	// working_directory is where checkout places the repo, so it is the
+	// repo root and every step in the job already runs relative to it.
 	WorkingDir string
 }
 
@@ -107,7 +109,7 @@ func Extract(workDir string) (*Result, error) {
 			e.noteOrb(wj.Name)
 			continue
 		}
-		jc := jobCtx{name: wj.Name, workingDir: job.WorkingDirectory}
+		jc := jobCtx{name: wj.Name}
 		args := mergeArgs(job.Parameters, wj.Params)
 
 		// pre-steps and post-steps are injected around the job's own steps by
@@ -222,8 +224,7 @@ type extractor struct {
 
 // jobCtx carries the job-level facts a candidate needs to be interpretable.
 type jobCtx struct {
-	name       string
-	workingDir string
+	name string
 }
 
 // walk collects run steps from steps, substituting args into any parameter
@@ -275,7 +276,7 @@ func (e *extractor) addRun(jc jobCtx, s step, args map[string]string) {
 		return
 	}
 	// Identical commands in different working directories are different work.
-	key := jc.workingDir + "\x00" + cmd
+	key := s.WorkingDir + "\x00" + cmd
 	if e.seen[key] {
 		return
 	}
@@ -288,7 +289,7 @@ func (e *extractor) addRun(jc jobCtx, s step, args map[string]string) {
 		Job:        jc.name,
 		Step:       s.Name,
 		Command:    cmd,
-		WorkingDir: jc.workingDir,
+		WorkingDir: s.WorkingDir,
 	})
 }
 
@@ -332,9 +333,8 @@ type file struct {
 }
 
 type job struct {
-	Steps            []step               `yaml:"steps"`
-	Parameters       map[string]parameter `yaml:"parameters"`
-	WorkingDirectory string               `yaml:"working_directory"`
+	Steps      []step               `yaml:"steps"`
+	Parameters map[string]parameter `yaml:"parameters"`
 }
 
 type command struct {
@@ -451,6 +451,7 @@ type step struct {
 	Kind       string            // "run", "checkout", "when", "node/install-packages", ...
 	Name       string            // run step name
 	Command    string            // run step command
+	WorkingDir string            // run step's own working_directory, if narrowed
 	Background bool              // background steps are processes, not gates
 	Params     map[string]string // scalar params passed to a custom command
 	Nested     []step            // steps under a when/unless
@@ -512,11 +513,12 @@ func (s *step) decodeRun(n *yaml.Node) {
 		Name       string `yaml:"name"`
 		Command    string `yaml:"command"`
 		Background bool   `yaml:"background"`
+		WorkingDir string `yaml:"working_directory"`
 	}
 	if err := n.Decode(&r); err != nil {
 		return
 	}
-	s.Name, s.Command, s.Background = r.Name, r.Command, r.Background
+	s.Name, s.Command, s.Background, s.WorkingDir = r.Name, r.Command, r.Background, r.WorkingDir
 }
 
 // scalarParams collects the scalar-valued keys of a mapping. Non-scalar
