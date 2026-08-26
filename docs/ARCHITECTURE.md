@@ -212,13 +212,13 @@ in `config.Resolve` and makes clients testable.
 ## Telemetry (`internal/telemetry/`)
 
 Modeled on circleci-cli's `internal/telemetry` package. Every command reports
-a single `chunk_command_invocation` event containing the command path and the
-names (never values) of flags the user set — no flag values, argument
-values, file paths, or other PII. The event is named `chunk_command_invocation`
-rather than the generic `command_invocation` circleci-cli's own telemetry
-package uses, because both tools currently share the same Segment write
-key/workspace; the `chunk_` prefix keeps chunk-cli's events unambiguous in
-the event stream.
+a single `command_invocation` event containing the command path and the names
+(never values) of flags the user set — no flag values, argument values, file
+paths, or other PII. chunk-cli and circleci-cli share the same Segment write key/workspace; events
+are distinguished by `context_app_name` (`chunk-cli` vs `circleci-cli`). The
+install UUID is sent as `AnonymousId` (not `UserId`) to avoid mixing machine
+identifiers with real user IDs in shared event counts. When the user has
+authenticated, their CircleCI user UUID is also sent as `UserId`.
 
 Every event's `Context` also carries the operating system (`runtime.GOOS`)
 and, if detected, the AI coding agent chunk-cli was invoked from (e.g.

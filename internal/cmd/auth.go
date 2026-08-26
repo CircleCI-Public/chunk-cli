@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
@@ -283,7 +284,8 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 
 func saveCircleCIToken(ctx context.Context, token string, streams iostream.Streams, circleCIBaseURL string, insecureStorage bool) error {
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
-	if err := authprompt.ValidateCircleCIToken(ctx, token, circleCIBaseURL); err != nil {
+	userID, err := authprompt.ValidateCircleCIToken(ctx, token, circleCIBaseURL)
+	if err != nil {
 		return &userError{
 			msg:        "CircleCI token validation failed.",
 			suggestion: "Check that your token is correct.",
@@ -296,6 +298,11 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 			msg:        "Failed to save CircleCI token.",
 			suggestion: "Check that your config file is writable.",
 			err:        fmt.Errorf("save token: %w", err),
+		}
+	}
+	if userID != uuid.Nil {
+		if err := config.SaveUserID(userID); err != nil {
+			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
 		}
 	}
 
@@ -331,7 +338,7 @@ func newAuthStatusCmd() *cobra.Command {
 				io.Printf("  Source: %s\n", rc.CircleCITokenSource)
 				io.Printf("  Token:  %s\n", config.MaskKey(rc.CircleCIToken))
 				io.ErrPrintln(ui.Dim("Validating CircleCI token..."))
-				if err := authprompt.ValidateCircleCIToken(cmd.Context(), rc.CircleCIToken, rc.CircleCIBaseURL); err != nil {
+				if _, err := authprompt.ValidateCircleCIToken(cmd.Context(), rc.CircleCIToken, rc.CircleCIBaseURL); err != nil {
 					io.ErrPrintln(ui.FormatError(
 						"CircleCI token validation failed.",
 						"",

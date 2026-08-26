@@ -173,7 +173,7 @@ func (f *FakeCircleCI) handleGetCurrentUser(c *gin.Context) {
 	if !f.requireToken(c) {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": "user-123", "login": "testuser"})
+	c.JSON(http.StatusOK, gin.H{"id": "00000000-0000-0000-0000-000000000123", "login": "testuser"})
 }
 
 func (f *FakeCircleCI) requireToken(c *gin.Context) bool {

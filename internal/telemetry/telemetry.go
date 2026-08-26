@@ -63,6 +63,10 @@ type Config struct {
 type Meta struct {
 	Version    string
 	InstanceID uuid.UUID
+	// UserID is the authenticated CircleCI user UUID. When non-zero it is sent
+	// as UserId so events can be attributed to a real user. The install UUID
+	// (InstanceID) is always sent as AnonymousId regardless.
+	UserID uuid.UUID
 
 	// OS is the operating system chunk-cli is running on, e.g. runtime.GOOS.
 	OS string
@@ -139,12 +143,15 @@ func (s *Sender) Track(eventName string, props map[string]any) error {
 		p.Set(key, val)
 	}
 
-	return s.dest.Enqueue(analytics.Track{
-		Event:      eventName,
-		Timestamp:  time.Now(),
-		Properties: p,
-
-		UserId:  s.meta.InstanceID.String(),
-		Context: s.meta.toContext(),
-	})
+	track := analytics.Track{
+		Event:       eventName,
+		Timestamp:   time.Now(),
+		Properties:  p,
+		AnonymousId: s.meta.InstanceID.String(),
+		Context:     s.meta.toContext(),
+	}
+	if s.meta.UserID != uuid.Nil {
+		track.UserId = s.meta.UserID.String()
+	}
+	return s.dest.Enqueue(track)
 }

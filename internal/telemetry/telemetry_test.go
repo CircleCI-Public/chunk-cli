@@ -51,13 +51,38 @@ func TestSender_Track(t *testing.T) {
 	assert.Equal(t, len(fake.tracks), 1)
 	tr := fake.tracks[0]
 	assert.Equal(t, tr.Event, "command_invocation")
-	assert.Equal(t, tr.UserId, instanceID.String())
+	assert.Equal(t, tr.AnonymousId, instanceID.String())
+	assert.Equal(t, tr.UserId, "")
 	assert.Equal(t, tr.Properties["command"], "chunk config show")
 	assert.Equal(t, tr.Properties["flags"], "json")
+	assert.Equal(t, tr.Context.App.Name, "chunk-cli")
 	assert.Equal(t, tr.Context.App.Version, "1.2.3")
 	assert.Equal(t, tr.Context.Device.Id, instanceID.String())
 	assert.Equal(t, tr.Context.OS.Name, "linux")
 	assert.Equal(t, tr.Context.Extra["codingAgent"], agentClaudeCode)
+}
+
+func TestSender_Track_WithUserID(t *testing.T) {
+	fake := &fakeDestination{}
+	instanceID := uuid.New()
+	userID := uuid.New()
+
+	s, err := NewSender(Config{
+		TestDestination: fake,
+		Metadata: Meta{
+			Version:    "1.2.3",
+			InstanceID: instanceID,
+			UserID:     userID,
+			OS:         "linux",
+		},
+	})
+	assert.NilError(t, err)
+
+	assert.NilError(t, s.Track("command_invocation", nil))
+
+	tr := fake.tracks[0]
+	assert.Equal(t, tr.AnonymousId, instanceID.String())
+	assert.Equal(t, tr.UserId, userID.String())
 }
 
 func TestMeta_ToContext_OmitsCodingAgentWhenUndetected(t *testing.T) {
@@ -113,7 +138,8 @@ func TestRecordForSubcommands_TracksCommandInvocation(t *testing.T) {
 	assert.NilError(t, root.Execute())
 
 	assert.Equal(t, len(fake.tracks), 1)
-	assert.Equal(t, fake.tracks[0].Event, "chunk_command_invocation")
+	assert.Equal(t, fake.tracks[0].Event, "command_invocation")
+	assert.Equal(t, fake.tracks[0].Context.App.Name, "chunk-cli")
 	assert.Equal(t, fake.tracks[0].Properties["command"], "chunk show")
 	assert.Equal(t, fake.tracks[0].Properties["flags"], "json")
 	assert.Equal(t, fake.tracks[0].Properties["outcome"], "success")

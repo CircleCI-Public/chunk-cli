@@ -100,7 +100,7 @@ Configuration:
 
 // setupTelemetry resolves the user's telemetry preference and attaches a
 // telemetry.Sender to cmd's context so RecordNow can report a
-// chunk_command_invocation event once the command finishes.
+// command_invocation event once the command finishes.
 func setupTelemetry(cmd *cobra.Command, version string) error {
 	if telemetry.IsTelemetryDisabled(cmd) {
 		return nil
@@ -140,6 +140,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		Metadata: telemetry.Meta{
 			Version:     version,
 			InstanceID:  instanceID,
+			UserID:      config.GetUserID(),
 			OS:          runtime.GOOS,
 			CodingAgent: telemetry.DetectCodingAgent(),
 		},
