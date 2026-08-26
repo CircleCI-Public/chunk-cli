@@ -265,12 +265,12 @@ func newSidecarCreateCmd() *cobra.Command {
 				}
 				var se *circleci.StatusError
 				if imageChosenByUser && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
-					return newUserError("Could not create the sidecar.").
+					return newUserError(msgCouldNotCreateSidecar).
 						withSuggestion("--image requires a snapshot ID. Create one with 'chunk sidecar snapshot create'.").
 						wrap(err)
 				}
 				return &userError{
-					msg:        "Could not create the sidecar.",
+					msg:        msgCouldNotCreateSidecar,
 					suggestion: suggestionNetworkRetry,
 					err:        err,
 				}
@@ -1183,7 +1183,7 @@ func sidecarSetupResolveSidecar(
 			return "", "", authErr
 		}
 		return "", "", &userError{
-			msg:        "Could not create the sidecar.",
+			msg:        msgCouldNotCreateSidecar,
 			suggestion: suggestionNetworkRetry,
 			err:        err,
 		}

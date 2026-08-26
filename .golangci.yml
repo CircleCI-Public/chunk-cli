@@ -145,7 +145,7 @@ linters:
         # Cobra command Use names and step name comparisons are not constants.
       - linters: [goconst]
         path: internal/cmd/
-        text: 'string `(config|install|test)`'
+        text: 'string `(config|install|status|test)`'
 
     paths:
       - third_party$
