@@ -695,7 +695,7 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", opts.sidecarID))
 			return created, nil
 		}
-		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, activeSidecar, streams), nil
+		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, activeSidecar, streams)
 	}
 	return false, nil
 }
@@ -728,6 +728,15 @@ func sidecarSyncError(ctx context.Context, client *circleci.Client, sidecarID st
 	case circleci.SidecarGone(err):
 		pruneSidecarState(ctx, client, sidecarID, false, streams)
 	default:
+		// Ask sshSessionError first. The SSH failures have specific, actionable
+		// phrasing — a missing key names the ssh-keygen command that creates it —
+		// and it is only reached by asking. Wrapping bare drops that suggestion and
+		// shows the cause alone, which is how "ssh key not found" reached a user
+		// with nothing saying how to fix it. Five call sites in sidecar.go already
+		// classify this way; the validate path was the one that did not.
+		if sshErr := sshSessionError(err); sshErr != nil {
+			return sshErr
+		}
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
 	// Both wrapped, not replaced: the caller replaces the sidecar and retries, and
@@ -826,8 +835,13 @@ func hostForwardEnv(token string) map[string]string {
 
 // runSplitCommands handles per-command remote routing when no specific command
 // name is given: remote-tagged commands go to the sidecar, the rest run locally.
-// Any error reaching or using the sidecar is returned immediately — there is no
-// local fallback.
+//
+// A sidecar that cannot be reached, or that has no workspace, is an error here
+// rather than grounds for running the remote-marked commands locally. Those
+// commands are marked remote because a local result does not answer the
+// question they were written to answer, so running them here reports a pass the
+// sidecar never gave — the same false green as a failed creation, arrived at one
+// step later.
 func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (validate.Result, error) {
 	remoteCfg, localCfg := splitByRemote(cfg)
 	if len(remoteCfg.Commands) > 0 {
@@ -841,18 +855,10 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 	if len(remoteCfg.Commands) > 0 {
 		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
 		if err != nil {
-			return validate.Result{}, newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
-				withCode("sidecar.unreachable").
-				withSuggestion("The sidecar may still be starting. Try again in a moment.").
-				withExitCode(ExitAPIError).
-				wrap(err)
+			return validate.Result{}, unreachableSidecar(sidecarID, commandNames(remoteCfg.Commands), err)
 		}
 		if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
-			return validate.Result{}, newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
-				withCode("sidecar.workspace_missing").
-				withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
-				withExitCode(ExitNotFound).
-				wrap(wsErr)
+			return validate.Result{}, missingWorkspace(sidecarID, dest, commandNames(remoteCfg.Commands), wsErr)
 		}
 		r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
 		combined.Passed += r.Passed
@@ -913,18 +919,23 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 // sidecarImage is configured). It uses the active sidecar when available,
 // and auto-creates one otherwise.
 // Returns true when a brand-new sidecar was provisioned in this call.
-func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, active *sidecar.ActiveSidecar, streams iostream.Streams) bool {
+//
+// A failure here is returned rather than downgraded to a local run. Commands
+// marked remote are marked that way because local results do not answer the
+// question they were written to answer, so quietly running them here reports a
+// pass the sidecar never gave. The three ways this fails in practice — no org
+// ID, no TTY to pick one, a token that cannot create sidecars — are all
+// configuration, so a retry without user action fails identically; falling
+// back only spends the full suite's runtime before saying so. This matches
+// --remote, which has always returned the error from this same call.
+func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, active *sidecar.ActiveSidecar, streams iostream.Streams) (bool, error) {
 	statusFn := newStatusFunc(streams)
 	if active != nil {
 		*sidecarID = active.SidecarID
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
-		return false
+		return false, nil
 	}
-	created, err := resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
-	if err != nil {
-		streams.ErrPrintf("warning: could not create sidecar (%v); running commands locally instead\n", err)
-	}
-	return created
+	return resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
 }
 
 // resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
@@ -951,7 +962,11 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		*sidecarID = existing.SidecarID
 		return false, nil
 	}
-	streams.ErrPrintf("No active sidecar found, creating a new sidecar...\n")
+	// A status line, not stderr prose: having no sidecar yet is the normal state
+	// of a first run, and printing it raw made it the headline of the hook's
+	// "Stop hook error:" banner even when everything then went fine.
+	statusFn := newStatusFunc(streams)
+	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
 	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
 	if err != nil {
 		return false, err
@@ -966,7 +981,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	sandboxName := sidecarAutoName(ctx, workDir)
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {
-		if authErr := notAuthorized("create sidecars", err); authErr != nil {
+		if authErr := cannotCreateSidecar(resolvedOrgID, orgSource(orgID, workDir), err); authErr != nil {
 			return false, authErr
 		}
 		return false, &userError{
