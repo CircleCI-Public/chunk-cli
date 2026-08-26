@@ -150,7 +150,7 @@ func (s *Sender) Track(eventName string, props map[string]any) error {
 		AnonymousId: s.meta.InstanceID.String(),
 		Context:     s.meta.toContext(),
 	}
-	if s.meta.UserID != (uuid.UUID{}) {
+	if s.meta.UserID != uuid.Nil {
 		track.UserId = s.meta.UserID.String()
 	}
 	return s.dest.Enqueue(track)

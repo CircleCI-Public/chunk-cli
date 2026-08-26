@@ -300,8 +300,10 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 			err:        fmt.Errorf("save token: %w", err),
 		}
 	}
-	if userID != (uuid.UUID{}) {
-		_ = config.SaveUserID(userID)
+	if userID != uuid.Nil {
+		if err := config.SaveUserID(userID); err != nil {
+			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
+		}
 	}
 
 	streams.ErrPrintln("")

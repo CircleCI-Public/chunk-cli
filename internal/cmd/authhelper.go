@@ -132,8 +132,12 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 	if err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, insecureStorage); err != nil {
 		return nil, err
 	}
-	if userID != (uuid.UUID{}) {
-		_ = config.SaveUserID(userID)
+	if userID != uuid.Nil {
+		// Intentionally overwrites any previously saved user ID — account
+		// switching should reflect the newly authenticated user.
+		if err := config.SaveUserID(userID); err != nil {
+			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
+		}
 	}
 	printSaved(streams, "CircleCI token", insecureStorage)
 	return circleci.NewClient(circleci.Config{

@@ -299,6 +299,11 @@ func EnsureInstanceID() (uuid.UUID, error) {
 
 // SaveUserID persists the CircleCI user UUID for the current user so it can
 // be attached to telemetry events as the real UserId.
+//
+// Note: like EnsureInstanceID, this does a Load→Save cycle without a file
+// lock, so concurrent writes from two processes can race. In practice the
+// only caller is the auth flow, which runs once interactively, making the
+// race window negligible.
 func SaveUserID(id uuid.UUID) error {
 	cfg, err := Load()
 	if err != nil {
@@ -309,7 +314,10 @@ func SaveUserID(id uuid.UUID) error {
 }
 
 // GetUserID returns the persisted CircleCI user UUID, or uuid.Nil if none has
-// been saved yet (e.g. the user has not authenticated).
+// been saved yet (e.g. the user has not authenticated) or the config cannot
+// be read. Errors are silently swallowed because this is a best-effort
+// telemetry helper — a missing user ID degrades gracefully to anonymous
+// attribution rather than blocking the command.
 func GetUserID() uuid.UUID {
 	cfg, err := Load()
 	if err != nil {
