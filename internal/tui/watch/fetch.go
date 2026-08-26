@@ -55,23 +55,21 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 
 		for _, sc := range p.Sidecars {
 			allSidecars = append(allSidecars, sidecarInfo{
-				id:            sc.ID,
-				sidecarIDs:    []string{sc.ID},
-				name:          sc.Name,
-				sessionID:     sc.SessionID,
-				projectName:   sc.ProjectName,
-				repoName:      sc.RepoName,
-				projectPath:   p.Root,
-				branch:        p.Branch,
-				projectIdx:    i,
-				snapshotName:  sc.SnapshotName,
-				fileMtime:     sc.FileMtime,
-				lastSyncedRef: sc.LastSyncedRef,
-				inSync:        sc.InSync,
-				lastActivity:  sc.LastActivity,
-				lastOp:        sc.LastOp,
-				lastLevel:     sc.LastLevel,
-				running:       sc.Running,
+				id:           sc.ID,
+				sidecarIDs:   []string{sc.ID},
+				name:         sc.Name,
+				sessionID:    sc.SessionID,
+				projectName:  sc.ProjectName,
+				repoName:     sc.RepoName,
+				projectPath:  p.Root,
+				branch:       p.Branch,
+				projectIdx:   i,
+				snapshotName: sc.SnapshotName,
+				fileMtime:    sc.FileMtime,
+				lastActivity: sc.LastActivity,
+				lastOp:       sc.LastOp,
+				lastLevel:    sc.LastLevel,
+				running:      sc.Running,
 			})
 		}
 

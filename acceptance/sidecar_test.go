@@ -354,9 +354,9 @@ func TestSidecarsAddSSHKeyPrivateKeyRejected(t *testing.T) {
 		"expected private key error, got: %s", combined)
 }
 
-// TestSidecarsSyncCheckoutFlag verifies that --checkout is a recognised flag
-// and that the command progresses past flag parsing before failing at SSH.
-func TestSidecarsSyncCheckoutFlag(t *testing.T) {
+// TestSidecarsSyncCheckoutFlagRemoved verifies that --checkout is no longer a
+// recognised flag now that sync uses rsync unconditionally.
+func TestSidecarsSyncCheckoutFlagRemoved(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -367,17 +367,13 @@ func TestSidecarsSyncCheckoutFlag(t *testing.T) {
 	result := binary.RunCLI(t, []string{
 		"sidecar", "sync",
 		"--sidecar-id", "sb-111",
-		"--identity-file", "/tmp/fake-key",
 		"--checkout",
 	}, env, env.HomeDir)
 
-	// Must fail at SSH, not at flag parsing ("unknown flag: --checkout").
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit")
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, !strings.Contains(combined, "unknown flag"),
-		"--checkout flag must be recognised; got: %s", combined)
-	assert.Assert(t, strings.Contains(combined, "SSH key not found"),
-		"expected SSH key error (proves flag was accepted); got: %s", combined)
+	assert.Assert(t, strings.Contains(combined, "unknown flag"),
+		"--checkout must be an unknown flag; got: %s", combined)
 }
 
 // TestSidecarsSshSyncFlags verifies that SSH/sync flags are accepted and

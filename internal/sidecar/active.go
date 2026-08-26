@@ -23,13 +23,9 @@ type ActiveSidecar struct {
 	// OrgID records which org the sidecar belongs to, so Reap can tell a sidecar
 	// that has been deleted from one that simply lives in an org it is not
 	// listing. Empty on state written before this field existed.
-	OrgID         string `json:"org_id,omitempty"`
-	SessionID     string `json:"session_id,omitempty"`
-	Workspace     string `json:"workspace,omitempty"`
-	LastSyncedRef string `json:"last_synced_ref,omitempty"`
-	// LastSyncedPatchHash is a SHA-256 hex digest of the working-tree patch
-	// last applied to the sidecar.
-	LastSyncedPatchHash string `json:"last_synced_patch_hash,omitempty"`
+	OrgID     string `json:"org_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // CurrentBranch returns the current git branch for the repo rooted at root.
