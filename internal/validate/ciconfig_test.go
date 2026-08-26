@@ -47,7 +47,7 @@ workflows:
     jobs:
       - build
 `)
-	got := commandsFromCI(dir)
+	got := commandsFromCI(dir).Commands
 
 	// Emitted in install, test, lint, format order regardless of config order.
 	assert.DeepEqual(t, runs(got), []string{
@@ -82,7 +82,7 @@ workflows:
       - test
       - acceptance
 `)
-	assert.DeepEqual(t, runs(commandsFromCI(dir)), []string{"test=task ci:test"})
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{"test=task ci:test"})
 }
 
 func TestCommandsFromCISkipsNonInnerLoopSteps(t *testing.T) {
@@ -103,7 +103,7 @@ workflows:
     jobs:
       - build
 `)
-	assert.DeepEqual(t, runs(commandsFromCI(dir)), []string{"test=go test ./..."})
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{"test=go test ./..."})
 }
 
 func TestCommandsFromCISkipsUnrunnableSteps(t *testing.T) {
@@ -115,7 +115,7 @@ jobs:
     steps:
       - run:
           command: pytest
-          working_directory: services/api
+          working_directory: /home/circleci/project/api
   other:
     steps:
       - run:
@@ -130,9 +130,226 @@ workflows:
       - build
       - other
 `)
-	// A subdirectory-scoped command, a multi-line script, and a step that
-	// only works inside a CircleCI container are all unusable verbatim.
-	assert.Equal(t, len(commandsFromCI(dir)), 0)
+	// An absolute working directory, a multi-line script, and a step that only
+	// works inside a CircleCI container are all unusable verbatim.
+	assert.Equal(t, len(commandsFromCI(dir).Commands), 0)
+}
+
+func TestCommandsFromCIKeepsSubdirectoryStepsWithACdPrefix(t *testing.T) {
+	// A monorepo's real gates live in subdirectories. Dropping them left
+	// detection with nothing and sent it back to guessing from root filenames.
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run:
+          name: Frontend tests
+          working_directory: frontend
+          command: yarn test
+      - run:
+          name: Lint
+          working_directory: services/api
+          command: ruff check .
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{
+		"test=cd frontend && yarn test",
+		"lint=cd services/api && ruff check .",
+	})
+}
+
+func TestCommandsFromCIRejectsWorkingDirectoriesOutsideTheRepo(t *testing.T) {
+	for _, dirName := range []string{"~/other", "/opt/build", "../sibling", "$HOME/x", "a dir"} {
+		t.Run(dirName, func(t *testing.T) {
+			dir := t.TempDir()
+			writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run:
+          working_directory: `+dirName+`
+          command: pytest
+workflows:
+  main:
+    jobs:
+      - build
+`)
+			assert.Equal(t, len(commandsFromCI(dir).Commands), 0)
+		})
+	}
+}
+
+func TestCommandsFromCIIgnoresScheduledWorkflows(t *testing.T) {
+	// A nightly is not a branch gate, and is routinely a slower superset of the
+	// real checks. Sorting workflows by name let this one win on "a" < "z".
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  nightly:
+    steps:
+      - run: make test-everything
+  test:
+    steps:
+      - run: go test ./...
+workflows:
+  a-nightly:
+    triggers:
+      - schedule:
+          cron: "0 0 * * *"
+          filters:
+            branches:
+              only: [main]
+    jobs:
+      - nightly
+  z-ci:
+    jobs:
+      - test
+`)
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{"test=go test ./..."})
+}
+
+func TestCommandsFromCIPrefersTheFirstWorkflowInTheFile(t *testing.T) {
+	// Document order, not alphabetical: a config's primary workflow is
+	// conventionally written first.
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  primary:
+    steps:
+      - run: go test ./...
+  extended:
+    steps:
+      - run: go test -tags=extended ./...
+workflows:
+  zz-primary:
+    jobs:
+      - primary
+  aa-extended:
+    jobs:
+      - extended
+`)
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{"test=go test ./..."})
+}
+
+func TestCommandsFromCIKeepsToolNamesInsideArguments(t *testing.T) {
+	// Provisioning tools are skipped where they are invoked, not wherever their
+	// name appears: matching "aws " anywhere dropped a real test command.
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run: pytest tests/aws_client tests/helm_chart
+      - run: aws s3 cp dist s3://bucket
+      - run: mkdir -p reports && curl -sSL https://example.com/x | sh
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{
+		"test=pytest tests/aws_client tests/helm_chart",
+	})
+}
+
+func TestCommandsFromCIReportsWhatItCouldNotRead(t *testing.T) {
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+orbs:
+  node: circleci/node@5
+jobs:
+  build:
+    steps:
+      - node/install-packages
+      - run: yarn test
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	det := commandsFromCI(dir)
+	assert.Equal(t, det.Source, ".circleci/config.yml")
+	assert.DeepEqual(t, det.Notes, []string{
+		"steps from orbs were not read: node/install-packages",
+	})
+}
+
+func TestDetectCommandsExplainsAnUnusableCIConfig(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
+	writeCI(t, dir, "version: 2.1\nsetup: true\n")
+
+	det, err := DetectCommands(context.Background(), nil, dir)
+	assert.NilError(t, err)
+	assert.Equal(t, det.Source, sourceLayout)
+	assert.DeepEqual(t, det.Notes, []string{
+		"the config generates its real config at run time, so its checks are not visible",
+		"no runnable checks were found in .circleci/config.yml",
+	})
+}
+
+func TestDetectCommandsKeepsTheToolchainFormatter(t *testing.T) {
+	// CI gates formatting by diffing the tree, so it names no command that
+	// rewrites files. Taking it literally left the user with no formatter.
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "Taskfile.yml"), []byte("version: '3'\n"), 0o644))
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run: task ci:test
+      - run: task ci:lint
+      - run: task ci:diff
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	det, err := DetectCommands(context.Background(), nil, dir)
+	assert.NilError(t, err)
+	assert.Equal(t, det.Source, ".circleci/config.yml")
+
+	// The gates come from CI; only the missing autofix falls back.
+	assert.DeepEqual(t, runs(det.Commands), []string{
+		"test=task ci:test",
+		"lint=task ci:lint",
+		"format=task fmt",
+	})
+}
+
+func TestDetectCommandsDoesNotOverrideACIFormatter(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run: go test ./...
+      - run: goimports -w .
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	det, err := DetectCommands(context.Background(), nil, dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, runs(det.Commands), []string{
+		"test=go test ./...",
+		"format=goimports -w .",
+	})
 }
 
 func TestCommandsFromCIKeepsJobsWithAWorkingDirectory(t *testing.T) {
@@ -152,7 +369,7 @@ workflows:
     jobs:
       - test
 `)
-	assert.DeepEqual(t, runs(commandsFromCI(dir)), []string{
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{
 		"install=yarn install --frozen-lockfile",
 		"test=yarn test",
 	})
@@ -173,7 +390,7 @@ workflows:
     jobs:
       - test
 `)
-	assert.DeepEqual(t, runs(commandsFromCI(dir)), []string{"test=cargo test --release"})
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{"test=cargo test --release"})
 }
 
 func TestCommandsFromCIIgnoresToolInstalls(t *testing.T) {
@@ -193,13 +410,13 @@ workflows:
 `)
 	// Installing a test binary is not the project's dependency install, so it
 	// must not claim the install slot.
-	got := runs(commandsFromCI(dir))
+	got := runs(commandsFromCI(dir).Commands)
 	assert.Assert(t, !slices.Contains(got, "install=cargo install cargo-nextest"), "got: %v", got)
 }
 
 func TestCommandsFromCIFallsBackWhenUnavailable(t *testing.T) {
 	t.Run("no config", func(t *testing.T) {
-		assert.Assert(t, commandsFromCI(t.TempDir()) == nil)
+		assert.Assert(t, len(commandsFromCI(t.TempDir()).Commands) == 0)
 	})
 
 	t.Run("dynamic config", func(t *testing.T) {
@@ -216,7 +433,7 @@ workflows:
     jobs:
       - setup
 `)
-		assert.Assert(t, commandsFromCI(dir) == nil)
+		assert.Assert(t, len(commandsFromCI(dir).Commands) == 0)
 	})
 
 	t.Run("nothing classifies", func(t *testing.T) {
@@ -232,7 +449,7 @@ workflows:
     jobs:
       - build
 `)
-		assert.Assert(t, commandsFromCI(dir) == nil)
+		assert.Assert(t, len(commandsFromCI(dir).Commands) == 0)
 	})
 }
 
@@ -251,7 +468,7 @@ workflows:
     jobs:
       - build
 `)
-	assert.DeepEqual(t, runs(commandsFromCI(dir)), []string{"test=./scripts/ci.sh"})
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{"test=./scripts/ci.sh"})
 }
 
 func TestDetectCommandsPrefersCIConfig(t *testing.T) {
@@ -272,20 +489,20 @@ workflows:
     jobs:
       - test
 `)
-	got, err := DetectCommands(context.Background(), nil, dir)
+	det, err := DetectCommands(context.Background(), nil, dir)
 	assert.NilError(t, err)
 
 	// Without the CircleCI config this would have been "pnpm test".
-	assert.DeepEqual(t, runs(got), []string{"test=bazel test //..."})
+	assert.DeepEqual(t, runs(det.Commands), []string{"test=bazel test //..."})
 }
 
 func TestDetectCommandsFallsBackToFilenames(t *testing.T) {
 	dir := t.TempDir()
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
 
-	got, err := DetectCommands(context.Background(), nil, dir)
+	det, err := DetectCommands(context.Background(), nil, dir)
 	assert.NilError(t, err)
-	assert.DeepEqual(t, runs(got), []string{
+	assert.DeepEqual(t, runs(det.Commands), []string{
 		"test=go test ./...",
 		"lint=golangci-lint run ./...",
 		"format=gofmt -w .",
@@ -298,7 +515,7 @@ func TestDetectCommandsIgnoresUnusableCIConfig(t *testing.T) {
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
 	writeCI(t, dir, "version: 2.1\nsetup: true\n")
 
-	got, err := DetectCommands(context.Background(), nil, dir)
+	det, err := DetectCommands(context.Background(), nil, dir)
 	assert.NilError(t, err)
-	assert.Equal(t, got[0].Run, "go test ./...")
+	assert.Equal(t, det.Commands[0].Run, "go test ./...")
 }

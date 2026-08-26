@@ -77,11 +77,6 @@ type Result struct {
 	Unresolved int
 }
 
-// Usable reports whether the result says anything actionable about the repo.
-func (r *Result) Usable() bool {
-	return r != nil && len(r.Candidates) > 0
-}
-
 // Extract reads workDir's CircleCI config and returns the run steps belonging
 // to jobs that gate the default branch. It returns ErrNotFound if no config
 // exists, so callers can fall back to filename-based detection.
@@ -139,10 +134,16 @@ func read(workDir string) (string, []byte, error) {
 }
 
 // gateJobs returns the workflow entries that run on the default branch, in
-// config order, deduplicated. Approval holds and branch-filtered jobs are
-// excluded.
+// config order, deduplicated. Approval holds, branch-filtered jobs and
+// scheduled workflows are excluded.
+//
+// Workflows are visited in the order they appear in the file rather than
+// alphabetically: the caller keeps the first command it finds per role, and a
+// config's primary workflow is conventionally written first. Sorting by name
+// would let an unrelated workflow that happens to sort earlier supply the
+// commands.
 func gateJobs(f file) []workflowJob {
-	if len(f.Workflows) == 0 {
+	if f.Workflows.Kind != yaml.MappingNode || len(f.Workflows.Content) == 0 {
 		// A CircleCI 2.0 config with no workflows block runs the job named
 		// "build" implicitly.
 		if _, ok := f.Jobs["build"]; ok {
@@ -151,22 +152,23 @@ func gateJobs(f file) []workflowJob {
 		return nil
 	}
 
-	names := make([]string, 0, len(f.Workflows))
-	for name := range f.Workflows {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
 	var out []workflowJob
 	seen := map[string]bool{}
-	for _, name := range names {
-		node := f.Workflows[name]
+	for i := 0; i+1 < len(f.Workflows.Content); i += 2 {
+		node := f.Workflows.Content[i+1]
 		if node.Kind != yaml.MappingNode {
 			// `workflows: version: 2` — a scalar, not a workflow.
 			continue
 		}
 		var w workflow
 		if err := node.Decode(&w); err != nil {
+			continue
+		}
+		if len(w.Triggers) > 0 {
+			// A workflow with `triggers:` runs on a schedule, not on a push, so
+			// its jobs do not gate the branch. Nightlies are also routinely a
+			// slower superset of the real gates — exactly what a developer
+			// should not be handed as an inner-loop command.
 			continue
 		}
 		for _, j := range w.Jobs {
@@ -244,7 +246,7 @@ func (e *extractor) walk(jc jobCtx, steps []step, args map[string]string, depth 
 				continue
 			}
 			cmd := e.commands[s.Kind]
-			e.walk(jc, cmd.Steps, mergeArgs(cmd.Parameters, s.Params), depth+1)
+			e.walk(jc, cmd.Steps, mergeArgs(cmd.Parameters, substituteAll(s.Params, args)), depth+1)
 			// A command taking a `steps:` parameter inlines those steps into
 			// its body, so they run in this job too.
 			e.walk(jc, s.Nested, args, depth)
@@ -323,13 +325,31 @@ func substitute(s string, args map[string]string) string {
 	})
 }
 
+// substituteAll resolves parameter references in the values a step passes to a
+// custom command. A job routinely forwards its own parameter through —
+// `run-suite: {suite: << parameters.suite >>}` — and without this the value
+// reaches the command body unresolved and the step is discarded.
+func substituteAll(params, args map[string]string) map[string]string {
+	if len(params) == 0 || len(args) == 0 {
+		return params
+	}
+	out := make(map[string]string, len(params))
+	for name, v := range params {
+		out[name] = substitute(v, args)
+	}
+	return out
+}
+
 // file is the subset of a CircleCI config this package reads.
 type file struct {
-	Setup     bool                 `yaml:"setup"`
-	Orbs      map[string]string    `yaml:"orbs"`
-	Commands  map[string]command   `yaml:"commands"`
-	Jobs      map[string]job       `yaml:"jobs"`
-	Workflows map[string]yaml.Node `yaml:"workflows"`
+	Setup    bool               `yaml:"setup"`
+	Orbs     map[string]string  `yaml:"orbs"`
+	Commands map[string]command `yaml:"commands"`
+	Jobs     map[string]job     `yaml:"jobs"`
+
+	// Workflows stays a node so it can be walked in document order; a map
+	// would lose the ordering the caller relies on to pick a primary workflow.
+	Workflows yaml.Node `yaml:"workflows"`
 }
 
 type job struct {
@@ -364,6 +384,10 @@ type parameter struct {
 
 type workflow struct {
 	Jobs []workflowJob `yaml:"jobs"`
+
+	// Triggers is only inspected for presence: any trigger block means the
+	// workflow is scheduled rather than run on a push.
+	Triggers []yaml.Node `yaml:"triggers"`
 }
 
 // workflowJob is one entry in a workflow's job list, which YAML allows to be

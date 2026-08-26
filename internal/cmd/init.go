@@ -404,7 +404,6 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 	return nil
 }
 
-// printInitSummary prints the discovered validation commands and next-step hints.
 // hasInstallCommand reports whether detection already produced an install step.
 func hasInstallCommand(commands []config.Command) bool {
 	return slices.ContainsFunc(commands, func(c config.Command) bool {
@@ -412,6 +411,21 @@ func hasInstallCommand(commands []config.Command) bool {
 	})
 }
 
+// printDetectionSource says where the detected commands came from, and what
+// detection could not read. Commands lifted from a CircleCI config can look
+// nothing like the toolchain defaults, so the provenance is the difference
+// between a surprising config and an explicable one.
+func printDetectionSource(det validate.Detection, streams iostream.Streams) {
+	if det.Source == "" {
+		return
+	}
+	streams.ErrPrintf("Detected commands from %s\n", ui.Bold(det.Source))
+	for _, note := range det.Notes {
+		streams.ErrPrintln(ui.Dim("  " + note))
+	}
+}
+
+// printInitSummary prints the discovered validation commands and next-step hints.
 func printInitSummary(commands []config.Command, streams iostream.Streams) {
 	if len(commands) > 0 {
 		entries := make([]ui.CommandEntry, len(commands))
@@ -536,24 +550,25 @@ hook config files.`,
 			// Step 2: Validate command detection
 			if !skipValidate {
 				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
-				commands, detectErr := validate.DetectCommands(ctx, claude, workDir)
+				det, detectErr := validate.DetectCommands(ctx, claude, workDir)
 				if detectErr != nil {
 					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", detectErr)))
 				} else {
+					printDetectionSource(det, streams)
 					allCommands := []config.Command{}
 					// Detection may already have found an install command — a
 					// CircleCI config names one directly. Only fall back to
 					// guessing from the lock file when it did not.
-					if !hasInstallCommand(commands) {
+					if !hasInstallCommand(det.Commands) {
 						pm := validate.DetectPackageManager(workDir)
 						if pm != nil {
 							streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
 							allCommands = append(allCommands, config.Command{Name: config.CmdInstall, Run: pm.InstallCommand})
 						}
 					}
-					allCommands = append(allCommands, commands...)
+					allCommands = append(allCommands, det.Commands...)
 					cfg.Commands = allCommands
-					for _, c := range commands {
+					for _, c := range det.Commands {
 						streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
 					}
 				}

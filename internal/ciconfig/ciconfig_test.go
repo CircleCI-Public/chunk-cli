@@ -107,7 +107,6 @@ workflows:
 	assert.Assert(t, res.Dynamic)
 	// An empty list here means "could not tell", not "no gates".
 	assert.Equal(t, len(res.Candidates), 0)
-	assert.Assert(t, !res.Usable())
 }
 
 func TestExtractSkipsNonGateJobs(t *testing.T) {
@@ -483,6 +482,102 @@ workflows:
 	assert.Equal(t, res.Unresolved, 0)
 }
 
+func TestExtractForwardsJobParametersIntoCustomCommands(t *testing.T) {
+	// A job passing its own parameter through to a command it invokes. Without
+	// resolving the value first the reference reached the command body intact
+	// and every step in the job was discarded as unresolved.
+	dir := writeConfig(t, "config.yml", `
+version: 2.1
+commands:
+  run-suite:
+    parameters:
+      suite:
+        type: string
+    steps:
+      - run: pytest tests/<< parameters.suite >>
+jobs:
+  test:
+    parameters:
+      suite:
+        type: string
+        default: unit
+    steps:
+      - run-suite:
+          suite: << parameters.suite >>
+workflows:
+  main:
+    jobs:
+      - test:
+          suite: integration
+      - test
+`)
+	res, err := Extract(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, commands(res), []string{
+		"pytest tests/integration",
+		"pytest tests/unit",
+	})
+	assert.Equal(t, res.Unresolved, 0)
+}
+
+func TestExtractSkipsScheduledWorkflows(t *testing.T) {
+	dir := writeConfig(t, "config.yml", `
+version: 2.1
+jobs:
+  nightly:
+    steps:
+      - run: make test-everything
+  test:
+    steps:
+      - run: go test ./...
+workflows:
+  nightly:
+    triggers:
+      - schedule:
+          cron: "0 0 * * *"
+          filters:
+            branches:
+              only:
+                - main
+    jobs:
+      - nightly
+  ci:
+    jobs:
+      - test
+`)
+	res, err := Extract(dir)
+	assert.NilError(t, err)
+
+	// A cron workflow does not gate a push, so its jobs are not candidates.
+	assert.DeepEqual(t, commands(res), []string{"go test ./..."})
+}
+
+func TestExtractWalksWorkflowsInDocumentOrder(t *testing.T) {
+	dir := writeConfig(t, "config.yml", `
+version: 2.1
+jobs:
+  first:
+    steps:
+      - run: echo first
+  second:
+    steps:
+      - run: echo second
+workflows:
+  zz-declared-first:
+    jobs:
+      - first
+  aa-declared-second:
+    jobs:
+      - second
+`)
+	res, err := Extract(dir)
+	assert.NilError(t, err)
+
+	// Callers keep the first candidate per role, so the order has to follow
+	// the file rather than the workflow names.
+	assert.DeepEqual(t, commands(res), []string{"echo first", "echo second"})
+}
+
 func TestExtractWalksPreAndPostSteps(t *testing.T) {
 	dir := writeConfig(t, "config.yml", `
 version: 2.1
@@ -616,5 +711,4 @@ func TestExtractEmptyConfig(t *testing.T) {
 	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.Equal(t, len(res.Candidates), 0)
-	assert.Assert(t, !res.Usable())
 }
