@@ -62,6 +62,7 @@ func newConfigShowCmd() *cobra.Command {
 					OrgID              configEntry `json:"orgID"`
 					UseSSHIdentityFile bool        `json:"useSSHIdentityFile"`
 					Telemetry          bool        `json:"telemetry"`
+					Notifications      bool        `json:"notifications"`
 				}
 				maskOrEmpty := func(key string) string {
 					if key == "" {
@@ -77,6 +78,7 @@ func newConfigShowCmd() *cobra.Command {
 					OrgID:              configEntry{Value: orgID, Source: orgIDSource},
 					UseSSHIdentityFile: rc.UseSSHIdentityFile,
 					Telemetry:          telemetryEnabled,
+					Notifications:      userCfg.Notifications,
 				})
 			}
 
@@ -109,6 +111,7 @@ func newConfigShowCmd() *cobra.Command {
 
 			io.Printf("%s %v\n", ui.Label("useSSHIdentityFile:", w), rc.UseSSHIdentityFile)
 			io.Printf("%s %v\n", ui.Label("telemetry:", w), telemetryEnabled)
+			io.Printf("%s %v\n", ui.Label("notifications:", w), userCfg.Notifications)
 
 			return nil
 		},
@@ -123,7 +126,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, useSSHIdentityFile, telemetry\nProject keys: orgID, validation.sidecarImage",
+		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, useSSHIdentityFile, telemetry, notifications\nProject keys: orgID, validation.sidecarImage",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -159,7 +162,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, useSSHIdentityFile, telemetry, orgID, validation.sidecarImage.",
+					detail: "Supported keys: model, useSSHIdentityFile, telemetry, notifications, orgID, validation.sidecarImage.",
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}
@@ -173,33 +176,23 @@ func newConfigSetCmd() *cobra.Command {
 			case "model":
 				cfg.Model = value
 			case "useSSHIdentityFile":
-				switch value {
-				case "true", "1":
-					cfg.UseSSHIdentityFile = true
-				case "false", "0":
-					cfg.UseSSHIdentityFile = false
-				default:
-					return &userError{
-						msg:    fmt.Sprintf("Invalid value %q for useSSHIdentityFile.", value),
-						detail: "Accepted values: true, false.",
-						errMsg: fmt.Sprintf("invalid boolean value %q", value),
-					}
+				b, err := parseBoolValue("useSSHIdentityFile", value)
+				if err != nil {
+					return err
 				}
+				cfg.UseSSHIdentityFile = b
 			case "telemetry":
-				switch value {
-				case "true", "1":
-					enabled := true
-					cfg.Telemetry = &enabled
-				case "false", "0":
-					enabled := false
-					cfg.Telemetry = &enabled
-				default:
-					return &userError{
-						msg:    fmt.Sprintf("Invalid value %q for telemetry.", value),
-						detail: "Accepted values: true, false.",
-						errMsg: fmt.Sprintf("invalid boolean value %q", value),
-					}
+				b, err := parseBoolValue("telemetry", value)
+				if err != nil {
+					return err
 				}
+				cfg.Telemetry = &b
+			case "notifications":
+				b, err := parseBoolValue("notifications", value)
+				if err != nil {
+					return err
+				}
+				cfg.Notifications = b
 			}
 
 			if err := config.Save(cfg); err != nil {
@@ -209,5 +202,20 @@ func newConfigSetCmd() *cobra.Command {
 			io.Printf("%s\n", ui.Success(fmt.Sprintf("Set %s to %s", key, value)))
 			return nil
 		},
+	}
+}
+
+func parseBoolValue(key, value string) (bool, error) {
+	switch value {
+	case "true", "1":
+		return true, nil
+	case "false", "0":
+		return false, nil
+	default:
+		return false, &userError{
+			msg:    fmt.Sprintf("Invalid value %q for %s.", value, key),
+			detail: "Accepted values: true, false.",
+			errMsg: fmt.Sprintf("invalid boolean value %q", value),
+		}
 	}
 }

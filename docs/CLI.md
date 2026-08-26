@@ -170,7 +170,7 @@ chunk
 - `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
-- `config set` user keys: `model`, `telemetry`. Project keys (`.chunk/config.json`):
+- `config set` user keys: `model`, `telemetry`, `notifications`. Project keys (`.chunk/config.json`):
   `orgID`, `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
 - `validate --mark-remote` sets `remote: true` on commands in `.chunk/config.json`
   and exits without running anything. With a `[name]` it marks that one command;
@@ -277,6 +277,7 @@ chunk
 |-----|-------|-------------|
 | `model` | user config (`~/.config/chunk/config.json`) | Claude model override |
 | `telemetry` | user config (`~/.config/chunk/config.json`) | Anonymous usage telemetry (`true`/`false`, default: `true`) |
+| `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
 

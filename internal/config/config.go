@@ -125,6 +125,10 @@ type UserConfig struct {
 	// case telemetry defaults to enabled (it is opt-out).
 	Telemetry *bool `json:"telemetry,omitempty"`
 
+	// Notifications enables OS desktop notifications after validate completes.
+	// false (zero value) means disabled; true means enabled (opt-in).
+	Notifications bool `json:"notifications,omitempty"`
+
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
 	// AnthropicAPIKey by Load and dropped on the next Save (omitempty).
@@ -147,6 +151,7 @@ type ResolvedConfig struct {
 	AnalyzeModel          string
 	PromptModel           string
 	UseSSHIdentityFile    bool
+	Notifications         bool
 }
 
 func resolveCircleCIToken(env EnvVars, cfg UserConfig) (string, string) {
@@ -336,6 +341,7 @@ func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error) {
 	rc.AnthropicBaseURL = env.AnthropicBaseURL
 	rc.GitHubAPIURL = env.GitHubAPIURL
 	rc.UseSSHIdentityFile = cfg.UseSSHIdentityFile
+	rc.Notifications = cfg.Notifications
 
 	return rc, err
 }
@@ -361,6 +367,7 @@ func ResolveCircleCI(_ bool) (ResolvedConfig, error) {
 		AnthropicBaseURL:   env.AnthropicBaseURL,
 		GitHubAPIURL:       env.GitHubAPIURL,
 		UseSSHIdentityFile: cfg.UseSSHIdentityFile,
+		Notifications:      cfg.Notifications,
 	}
 	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg)
 	return rc, nil
@@ -395,6 +402,7 @@ var ValidConfigKeys = map[string]bool{
 	"model":              true,
 	"useSSHIdentityFile": true,
 	"telemetry":          true,
+	"notifications":      true,
 }
 
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to
