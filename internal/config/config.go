@@ -115,6 +115,7 @@ func LoadEnv(ctx context.Context) (EnvVars, error) {
 type UserConfig struct {
 	AnthropicAPIKey    string `json:"anthropicAPIKey,omitempty"`
 	CircleCIToken      string `json:"circleCIToken,omitempty"`
+	CircleCIUserID     string `json:"circleCIUserID,omitempty"`
 	GitHubToken        string `json:"gitHubToken,omitempty"`
 	Model              string `json:"model,omitempty"`
 	UseSSHIdentityFile bool   `json:"useSSHIdentityFile,omitempty"`
@@ -294,6 +295,31 @@ func EnsureInstanceID() (uuid.UUID, error) {
 		return uuid.Nil, err
 	}
 	return id, nil
+}
+
+// SaveUserID persists the CircleCI user UUID for the current user so it can
+// be attached to telemetry events as the real UserId.
+func SaveUserID(id uuid.UUID) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	cfg.CircleCIUserID = id.String()
+	return Save(cfg)
+}
+
+// GetUserID returns the persisted CircleCI user UUID, or uuid.Nil if none has
+// been saved yet (e.g. the user has not authenticated).
+func GetUserID() uuid.UUID {
+	cfg, err := Load()
+	if err != nil {
+		return uuid.Nil
+	}
+	id, err := uuid.Parse(cfg.CircleCIUserID)
+	if err != nil {
+		return uuid.Nil
+	}
+	return id
 }
 
 // Resolve computes the final config from flags, env, file, and keychain.
