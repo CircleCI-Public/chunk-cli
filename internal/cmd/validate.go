@@ -226,6 +226,16 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	// Route stdout to stderr so all output appears in the Stop
 	// hook feedback block that Claude Code shows the agent.
 	streams = iostream.Streams{Out: streams.Err, Err: streams.Err}
+	// Print a header so concurrent stop-hook runs are distinguishable.
+	sessionLabel := hook.sessionID
+	if len(sessionLabel) > 8 {
+		sessionLabel = sessionLabel[:8]
+	}
+	if branch, err := gitutil.CurrentBranchIn(workDir); err == nil && branch != "" {
+		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate · %s [%s]", branch, sessionLabel)))
+	} else {
+		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate [%s]", sessionLabel)))
+	}
 	if validate.HooksDisabled(workDir, os.Getenv(config.EnvChunkHooksDisabled) != "") {
 		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)

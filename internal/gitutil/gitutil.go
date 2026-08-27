@@ -32,7 +32,21 @@ func RepoRoot(from string) (string, error) {
 	}
 }
 
-// CurrentBranch returns the current git branch name.
+// CurrentBranchIn returns the current git branch name for the repo rooted at dir.
+// Returns an error if in detached HEAD state or not in a git repo.
+func CurrentBranchIn(dir string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", gitHEAD).Output()
+	if err != nil {
+		return "", fmt.Errorf("get current branch: %w", err)
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == gitHEAD {
+		return "", fmt.Errorf("detached HEAD state")
+	}
+	return branch, nil
+}
+
+// CurrentBranch returns the current git branch name resolved from the process CWD.
 // Returns an error if in detached HEAD state or not in a git repo.
 func CurrentBranch() (string, error) {
 	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", gitHEAD).Output()
