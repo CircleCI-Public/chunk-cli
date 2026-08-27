@@ -281,6 +281,50 @@ func ClearActive(ctx context.Context) error {
 	return ClearActiveFrom(ctx, dir)
 }
 
+// ClearActiveByOrg removes all sidecar state files across every known project
+// whose OrgID matches orgID. It is called after a bulk prune so that the TUI
+// does not show deleted sidecars on the next watch tick.
+// Returns the number of files removed. Per-project and per-file failures do not
+// stop the sweep; they are accumulated into the returned error so the caller can
+// warn about a prune that only partially cleared state.
+func ClearActiveByOrg(orgID string) (int, error) {
+	base, err := config.AppData()
+	if err != nil {
+		return 0, err
+	}
+	dirs, err := os.ReadDir(base)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	removed := 0
+	var errs []error
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		dir := filepath.Join(base, d.Name())
+		entries, lerr := loadStateEntries(dir)
+		if lerr != nil {
+			errs = append(errs, fmt.Errorf("read sidecar state in %s: %w", d.Name(), lerr))
+			continue
+		}
+		for _, e := range entries {
+			if e.active.OrgID != orgID {
+				continue
+			}
+			if rerr := removeState(e.path); rerr != nil {
+				errs = append(errs, rerr)
+				continue
+			}
+			removed++
+		}
+	}
+	return removed, errors.Join(errs...)
+}
+
 // ClearActiveFrom removes the active sidecar state file in dir.
 func ClearActiveFrom(ctx context.Context, dir string) error {
 	root, _ := projectRoot()

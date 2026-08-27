@@ -34,6 +34,7 @@ func newServer(d *daemon) *http.Server {
 // unixClient returns an *http.Client that dials the given Unix socket path.
 func unixClient(sockPath string) *http.Client {
 	return &http.Client{
+		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
