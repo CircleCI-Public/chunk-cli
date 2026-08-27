@@ -78,6 +78,13 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	return nil
 }
 
+func shortSessionID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 // resolveOrgID returns orgID from the flag, then delegates to
 // config.ResolveOrgID for the env-vs-project-config precedence, and finally
 // calls pickOrg as a last resort (e.g. to present a TUI picker).
@@ -659,11 +666,14 @@ func newSidecarCurrentCmd() *cobra.Command {
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, active)
 			}
+			line := active.SidecarID
 			if active.Name != "" {
-				io.Printf("%s  %s\n", active.Name, active.SidecarID)
-			} else {
-				io.Printf("%s\n", active.SidecarID)
+				line = active.Name + "  " + active.SidecarID
 			}
+			if active.SessionID != "" {
+				line += "  session " + shortSessionID(active.SessionID)
+			}
+			io.Printf("%s\n", line)
 			return nil
 		},
 	}

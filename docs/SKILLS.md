@@ -104,7 +104,7 @@ Agent: [probes state — active sidecar found]
        ✓ all validations passed
 ```
 
-**Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar. State is keyed by `CLAUDE_SESSION_ID` and stored in `XDG_DATA_HOME` (see Architecture docs). No manual configuration is needed.
+**Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar — two sessions never sync into the same remote workspace. State is keyed by session and branch and stored in `XDG_DATA_HOME` (see Architecture docs); the session comes from the Stop hook payload, or from `CLAUDE_CODE_SESSION_ID` for commands the agent runs itself. No manual configuration is needed; set `CHUNK_SESSION_ID` to pin the identity by hand (for an agent other than Claude Code, say).
 
 ---
 
