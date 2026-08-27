@@ -30,6 +30,23 @@ import (
 // ErrNotFound reports that workDir has no CircleCI config.
 var ErrNotFound = errors.New("no CircleCI config found")
 
+// ConfigError reports a config that exists but could not be used — unreadable
+// or unparseable. It carries Path so a caller can tell it apart from
+// ErrNotFound: there is nothing to explain when a repo has no config, but a
+// config that was found and rejected has to be said out loud rather than
+// silently falling back to guessing from filenames.
+type ConfigError struct {
+	Op   string // "read" or "parse"
+	Path string
+	Err  error
+}
+
+func (e *ConfigError) Error() string {
+	return fmt.Sprintf("%s %s: %v", e.Op, e.Path, e.Err)
+}
+
+func (e *ConfigError) Unwrap() error { return e.Err }
+
 const (
 	// maxCandidates bounds the returned list so a pathological config cannot
 	// blow up a downstream prompt. Overflow is counted in Result.Truncated.
@@ -72,14 +89,16 @@ type Result struct {
 	// Truncated counts candidates dropped at maxCandidates.
 	Truncated int
 
-	// Unresolved counts run steps skipped because they still referenced a
-	// parameter that could not be substituted.
+	// Unresolved counts run steps skipped because they still carried an
+	// interpolation we could not substitute — an unbound parameter, or a
+	// pipeline-time reference such as << pipeline.parameters.x >>.
 	Unresolved int
 }
 
 // Extract reads workDir's CircleCI config and returns the run steps belonging
 // to jobs that gate the default branch. It returns ErrNotFound if no config
-// exists, so callers can fall back to filename-based detection.
+// exists, so callers can fall back to filename-based detection, and a
+// *ConfigError if one exists but cannot be read or parsed.
 func Extract(workDir string) (*Result, error) {
 	path, data, err := read(workDir)
 	if err != nil {
@@ -88,7 +107,7 @@ func Extract(workDir string) (*Result, error) {
 
 	var f file
 	if err := yaml.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, &ConfigError{Op: "parse", Path: path, Err: err}
 	}
 
 	res := &Result{Path: path, Dynamic: f.Setup}
@@ -127,7 +146,7 @@ func read(workDir string) (string, []byte, error) {
 			return path, data, nil
 		}
 		if !os.IsNotExist(err) {
-			return "", nil, fmt.Errorf("read %s: %w", path, err)
+			return "", nil, &ConfigError{Op: "read", Path: path, Err: err}
 		}
 	}
 	return "", nil, ErrNotFound
@@ -191,25 +210,33 @@ func gateJobs(f file) []workflowJob {
 	return out
 }
 
-// runsOnDefaultBranch reports whether a job's filters let it run on main.
+// runsOnDefaultBranch reports whether a job's filters let it run on main. A
+// pattern we cannot read must not decide the job's fate, so each direction
+// passes the fail-open answer for its own sense: an unreadable ignore counts as
+// not matching main, an unreadable only as matching it. Both keep the job.
 func runsOnDefaultBranch(f filters) bool {
-	if slices.ContainsFunc(f.Branches.Ignore, matchesDefaultBranch) {
+	if slices.ContainsFunc(f.Branches.Ignore, func(p string) bool {
+		return matchesDefaultBranch(p, false)
+	}) {
 		return false
 	}
 	if len(f.Branches.Only) == 0 {
 		return true
 	}
-	return slices.ContainsFunc(f.Branches.Only, matchesDefaultBranch)
+	return slices.ContainsFunc(f.Branches.Only, func(p string) bool {
+		return matchesDefaultBranch(p, true)
+	})
 }
 
 // matchesDefaultBranch reports whether a CircleCI branch pattern — a literal
-// name or a /regex/ — matches a default branch name. An uncompilable regex
-// matches, so an unparseable filter keeps the job rather than dropping it.
-func matchesDefaultBranch(pattern string) bool {
+// name or a /regex/ — matches a default branch name. onBadPattern is the answer
+// for a regex that will not compile; it is the caller's because the value that
+// keeps the job differs between only: and ignore:.
+func matchesDefaultBranch(pattern string, onBadPattern bool) bool {
 	if len(pattern) > 1 && strings.HasPrefix(pattern, "/") && strings.HasSuffix(pattern, "/") {
 		re, err := regexp.Compile(strings.Trim(pattern, "/"))
 		if err != nil {
-			return true
+			return onBadPattern
 		}
 		return slices.ContainsFunc(defaultBranches, re.MatchString)
 	}
@@ -264,16 +291,17 @@ func (e *extractor) walk(jc jobCtx, steps []step, args map[string]string, depth 
 }
 
 // addRun records a run step as a candidate, unless it is a background process,
-// a duplicate, or still carries an unsubstituted parameter.
+// conditional on the job's outcome, a duplicate, or still carries an
+// unsubstituted parameter.
 func (e *extractor) addRun(jc jobCtx, s step, args map[string]string) {
-	if s.Background {
+	if s.Background || !gatingWhen(s.When) {
 		return
 	}
 	cmd := strings.TrimSpace(substitute(s.Command, args))
 	if cmd == "" {
 		return
 	}
-	if paramRef.MatchString(cmd) {
+	if unresolvedRef.MatchString(cmd) {
 		e.res.Unresolved++
 		return
 	}
@@ -295,6 +323,21 @@ func (e *extractor) addRun(jc jobCtx, s step, args map[string]string) {
 	})
 }
 
+// gatingWhen reports whether a run step's when: makes it part of the gate.
+// on_fail only runs on a red build, so it is diagnostic work — dumping logs,
+// printing a failing test list — and letting it claim a role slot would
+// displace the command that actually failed. always does run on green builds,
+// but in practice marks cleanup and artifact upload rather than a check, so it
+// is skipped too. Anything else, including the default on_success and an
+// unrecognised value, is treated as a gate.
+func gatingWhen(when string) bool {
+	switch strings.TrimSpace(when) {
+	case "on_fail", "always":
+		return false
+	}
+	return true
+}
+
 func (e *extractor) isCustomCommand(kind string) bool {
 	_, ok := e.commands[kind]
 	return ok
@@ -307,8 +350,16 @@ func (e *extractor) noteOrb(name string) {
 	e.res.SkippedOrbs = append(e.res.SkippedOrbs, name)
 }
 
-// paramRef matches a CircleCI parameter interpolation, e.g. << parameters.x >>.
+// paramRef matches a job or command parameter interpolation, e.g.
+// << parameters.x >>. These are the only references substitute resolves.
 var paramRef = regexp.MustCompile(`<<\s*parameters\.([A-Za-z0-9_-]+)\s*>>`)
+
+// unresolvedRef matches any CircleCI interpolation, deliberately wider than
+// paramRef: << pipeline.parameters.x >>, << pipeline.git.branch >> and
+// << matrix.os >> are resolved by CircleCI at pipeline time, never by us. A
+// command still carrying one is not runnable — << is a bash heredoc operator,
+// so passing it through yields a syntax error or a hang.
+var unresolvedRef = regexp.MustCompile(`<<\s*[a-z]+\.`)
 
 // substitute replaces << parameters.name >> references with args values,
 // leaving unknown references in place for the caller to detect.
@@ -477,6 +528,7 @@ type step struct {
 	Command    string            // run step command
 	WorkingDir string            // run step's own working_directory, if narrowed
 	Background bool              // background steps are processes, not gates
+	When       string            // run step's when: on_success (default), on_fail, always
 	Params     map[string]string // scalar params passed to a custom command
 	Nested     []step            // steps under a when/unless
 }
@@ -538,11 +590,13 @@ func (s *step) decodeRun(n *yaml.Node) {
 		Command    string `yaml:"command"`
 		Background bool   `yaml:"background"`
 		WorkingDir string `yaml:"working_directory"`
+		When       string `yaml:"when"`
 	}
 	if err := n.Decode(&r); err != nil {
 		return
 	}
 	s.Name, s.Command, s.Background, s.WorkingDir = r.Name, r.Command, r.Background, r.WorkingDir
+	s.When = r.When
 }
 
 // scalarParams collects the scalar-valued keys of a mapping. Non-scalar

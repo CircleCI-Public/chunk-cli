@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -15,9 +16,14 @@ import (
 const (
 	roleNone    = ""
 	roleInstall = "install"
-	roleFormat  = "format"
-	roleLint    = "lint"
-	roleTest    = "test"
+	// roleFormat is a formatter that rewrites the tree, so it becomes an
+	// autofix. roleFormatCheck is the same tool asked only to report, which is
+	// a gate: it cannot fix anything, and it must not occupy the autofix slot
+	// the toolchain default fills.
+	roleFormat      = "format"
+	roleFormatCheck = "format-check"
+	roleLint        = "lint"
+	roleTest        = "test"
 )
 
 // skipMarkers mark a step that runs in CI but has no business in a developer's
@@ -75,7 +81,7 @@ var roleMarkers = []struct {
 }{
 	{roleInstall, []string{
 		// Covers npm/yarn/pnpm/bun/bundle/pip/poetry install in one marker.
-		// "apt-get install" and friends are removed by skipMarkers first.
+		// "apt-get install" and friends are removed by skipTools first.
 		" install", "npm ci", "uv sync", "go mod download", "cargo fetch",
 		"mod-download", "mod_download", "install-deps", "install_deps",
 	}},
@@ -100,26 +106,42 @@ var roleSpec = map[string]struct {
 	role    string
 	timeout int
 }{
-	roleInstall: {config.CmdInstall, "", 0},
-	roleTest:    {roleTest, config.RoleGate, 300},
-	roleLint:    {roleLint, config.RoleGate, 60},
-	roleFormat:  {roleFormat, config.RoleAutofix, 30},
+	roleInstall:     {config.CmdInstall, "", 0},
+	roleTest:        {roleTest, config.RoleGate, 300},
+	roleLint:        {roleLint, config.RoleGate, 60},
+	roleFormatCheck: {roleFormatCheck, config.RoleGate, 30},
+	roleFormat:      {roleFormat, config.RoleAutofix, 30},
 }
 
 // emitOrder is the order commands are written to .chunk/config.json.
-var emitOrder = []string{roleInstall, roleTest, roleLint, roleFormat}
+var emitOrder = []string{roleInstall, roleTest, roleLint, roleFormatCheck, roleFormat}
 
 // commandsFromCI derives validate commands from the repo's CircleCI config,
 // which names the checks that actually gate the default branch. Commands are
-// empty when there is no config, when the config is dynamic, or when nothing
-// in it classifies — in every case the caller falls back to filename
-// detection, and Notes says why so `chunk init` can tell the user.
+// empty when there is no config, when the config cannot be parsed, when it is
+// dynamic, or when nothing in it classifies — in every case the caller falls
+// back to filename detection, and Notes says why so `chunk init` can tell the
+// user.
 //
 // At most one command is kept per role: the first match wins, so a job's
 // primary test step beats a later variant like an acceptance-only run.
 func commandsFromCI(workDir string) Detection {
 	res, err := ciconfig.Extract(workDir)
-	if err != nil || res == nil {
+	if err != nil {
+		// A config that exists but cannot be read is the one failure worth
+		// reporting: the user expects their CI gates, and falling back silently
+		// looks like the config was read and found to hold nothing. A repo with
+		// no config at all has nothing to explain.
+		var cfgErr *ciconfig.ConfigError
+		if errors.As(err, &cfgErr) {
+			return Detection{
+				Source: configSource(workDir, cfgErr.Path),
+				Notes:  []string{fmt.Sprintf("the config could not be read: %v", cfgErr.Err)},
+			}
+		}
+		return Detection{}
+	}
+	if res == nil {
 		return Detection{}
 	}
 
@@ -173,7 +195,7 @@ func ciNotes(res *ciconfig.Result) []string {
 		notes = append(notes, fmt.Sprintf("steps from orbs were not read: %s", strings.Join(res.SkippedOrbs, ", ")))
 	}
 	if res.Unresolved > 0 {
-		notes = append(notes, fmt.Sprintf("%d step(s) referenced parameters that could not be resolved", res.Unresolved))
+		notes = append(notes, fmt.Sprintf("%d step(s) referenced values that could not be resolved", res.Unresolved))
 	}
 	if res.Truncated > 0 {
 		notes = append(notes, fmt.Sprintf("%d step(s) past the scan limit were not read", res.Truncated))
@@ -189,8 +211,20 @@ func candidateRun(c ciconfig.Candidate) string {
 	if c.WorkingDir == "" {
 		return c.Command
 	}
+	// && binds more loosely than the operators inside the command, so a bare
+	// prefix changes what the command means: `cd web && yarn lint || true`
+	// parses as `(cd web && yarn lint) || true`, which turns a failed cd into a
+	// pass, and `cd web && a; b` runs b from the repo root either way. A
+	// subshell keeps the command's own precedence intact.
+	if needsGrouping.MatchString(c.Command) {
+		return "cd " + c.WorkingDir + " && ( " + c.Command + " )"
+	}
 	return "cd " + c.WorkingDir + " && " + c.Command
 }
+
+// needsGrouping matches a command carrying shell control operators — ; & && | ||
+// — whose precedence a `cd &&` prefix would otherwise alter.
+var needsGrouping = regexp.MustCompile(`[;&|]`)
 
 // classify maps a CI step to a validate role, or roleNone if it is not
 // something a developer should run before committing.
@@ -230,10 +264,36 @@ func classify(c ciconfig.Candidate) string {
 	}
 
 	if role := matchRole(cmd); role != roleNone {
-		return role
+		return refineFormat(role, cmd)
 	}
 	// Fall back to the step's own label: "Run tests" around an opaque script.
-	return matchRole(strings.ToLower(c.Step))
+	label := strings.ToLower(c.Step)
+	// The label is what classified the step, so it is also the only place the
+	// check-vs-rewrite distinction can be read from.
+	return refineFormat(matchRole(label), cmd+" "+label)
+}
+
+// formatCheckFlags mark a formatter told to report rather than rewrite:
+// `prettier --check .`, `cargo fmt --check`, `gofmt -l .`, `ruff format --diff`.
+// Short flags are matched as whole words so -l does not fire on -ldflags.
+var formatCheckFlags = regexp.MustCompile(`(^|\s)(-l|-d|--check|--diff|--dry-run|--list-different)(\s|=|$)`)
+
+// formatCheckNames catch a check-only formatter behind a task or script name,
+// where there is no flag to read: `task ci:fmt-check`, `npm run format:check`.
+var formatCheckNames = regexp.MustCompile(`check[_:.-]?(fmt|format)|(fmt|format)[_:.-]?check`)
+
+// refineFormat splits the format role by whether the command rewrites the tree
+// or only reports on it. Only a rewriting formatter can serve as an autofix; a
+// check-only one is a gate, and classifying it as format would both give the
+// user an autofix that cannot fix and suppress the toolchain default that can.
+func refineFormat(role, text string) string {
+	if role != roleFormat {
+		return role
+	}
+	if formatCheckFlags.MatchString(text) || formatCheckNames.MatchString(text) {
+		return roleFormatCheck
+	}
+	return role
 }
 
 // usableWorkingDir reports whether a step's working_directory names a path

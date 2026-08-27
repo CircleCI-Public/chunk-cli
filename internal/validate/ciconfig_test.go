@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -160,6 +161,35 @@ workflows:
 	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{
 		"test=cd frontend && yarn test",
 		"lint=cd services/api && ruff check .",
+	})
+}
+
+func TestCommandsFromCIGroupsSubdirectoryCommandsWithOperators(t *testing.T) {
+	// `cd web && yarn lint || true` parses as `(cd web && yarn lint) || true`,
+	// so a failed cd reports a pass; `cd web && a; b` runs b from the root
+	// whatever cd did. The command has to keep its own precedence.
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run:
+          name: Lint
+          working_directory: web
+          command: yarn lint || true
+      - run:
+          name: Tests
+          working_directory: web
+          command: yarn build; yarn test
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{
+		"test=cd web && ( yarn build; yarn test )",
+		"lint=cd web && ( yarn lint || true )",
 	})
 }
 
@@ -350,6 +380,90 @@ workflows:
 		"test=go test ./...",
 		"format=goimports -w .",
 	})
+}
+
+func TestDetectCommandsExplainsAnUnparseableConfig(t *testing.T) {
+	// Falling back silently reads as "your config was read and had nothing in
+	// it", which is exactly the surprise Notes exists to prevent.
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
+	writeCI(t, dir, "version: 2.1\njobs:\n  test:\n   steps:\n  - run: go test ./...\n\t- bad\n")
+
+	det := commandsFromCI(dir)
+	assert.Equal(t, det.Source, ".circleci/config.yml")
+	assert.Equal(t, len(det.Commands), 0)
+	assert.Equal(t, len(det.Notes), 1)
+	assert.Assert(t, strings.Contains(det.Notes[0], "could not be read"), det.Notes[0])
+
+	// The whole path through detection keeps the explanation and still falls
+	// back to the toolchain.
+	full, err := DetectCommands(context.Background(), nil, dir)
+	assert.NilError(t, err)
+	assert.Equal(t, full.Source, sourceLayout)
+	assert.Assert(t, len(full.Commands) > 0)
+	assert.Assert(t, strings.Contains(strings.Join(full.Notes, "\n"), "could not be read"),
+		strings.Join(full.Notes, "\n"))
+	assert.Assert(t, strings.Contains(strings.Join(full.Notes, "\n"), ".circleci/config.yml"),
+		strings.Join(full.Notes, "\n"))
+}
+
+func TestDetectCommandsKeepsFormatterAlongsideACheckOnlyOne(t *testing.T) {
+	// A check-only formatter is a real gate, but it cannot fix anything. If it
+	// takes the format slot the user gets an autofix that always fails and the
+	// toolchain's real fixer is suppressed.
+	for _, tc := range []struct {
+		name  string
+		step  string
+		check string
+	}{
+		{"prettier", "prettier --check .", "prettier --check ."},
+		{"cargo", "cargo fmt --check", "cargo fmt --check"},
+		{"gofmt list", "test -z \"$(gofmt -l .)\"", "test -z \"$(gofmt -l .)\""},
+		{"named task", "task ci:fmt-check", "task ci:fmt-check"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
+			writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run: go test ./...
+      - run: `+tc.step+`
+workflows:
+  main:
+    jobs:
+      - build
+`)
+			det, err := DetectCommands(context.Background(), nil, dir)
+			assert.NilError(t, err)
+			assert.DeepEqual(t, runs(det.Commands), []string{
+				"test=go test ./...",
+				"format-check=" + tc.check,
+				"format=gofmt -w .",
+			})
+		})
+	}
+}
+
+func TestClassifyFormatCheckDoesNotFireOnRewritingFormatters(t *testing.T) {
+	// The check detection reads flags, so it must not misread a flag that
+	// happens to contain one of them.
+	for _, cmd := range []string{
+		"gofmt -w .", "goimports -w .", "cargo fmt", "task fmt",
+		"prettier --write .", "ruff format .", "rustfmt src/main.rs",
+		"go test -ldflags=-s ./... && task fmt",
+	} {
+		assert.Equal(t, refineFormat(roleFormat, cmd), roleFormat, cmd)
+	}
+	for _, cmd := range []string{
+		"prettier --check .", "cargo fmt --check", "gofmt -l .",
+		"ruff format --diff", "prettier --list-different .",
+		"task format:check", "npm run check-format", "gofmt -d .",
+	} {
+		assert.Equal(t, refineFormat(roleFormat, cmd), roleFormatCheck, cmd)
+	}
 }
 
 func TestCommandsFromCIKeepsJobsWithAWorkingDirectory(t *testing.T) {

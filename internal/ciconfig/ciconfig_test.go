@@ -253,6 +253,122 @@ workflows:
 	assert.Equal(t, res.Unresolved, 1)
 }
 
+func TestExtractKeepsJobsWithAMalformedBranchFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		filters string
+	}{
+		{"ignore", `ignore: ["/release-[/"]`},
+		{"only", `only: ["/release-[/"]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeConfig(t, "config.yml", `
+version: 2.1
+jobs:
+  test:
+    steps:
+      - run: go test ./...
+workflows:
+  main:
+    jobs:
+      - test:
+          filters:
+            branches:
+              `+tc.filters+`
+`)
+			res, err := Extract(dir)
+			assert.NilError(t, err)
+
+			// An unparseable filter says nothing about the default branch, so
+			// it must not be the reason detection finds nothing.
+			assert.Equal(t, len(res.Candidates), 1)
+		})
+	}
+}
+
+func TestExtractSkipsOutcomeConditionalSteps(t *testing.T) {
+	dir := writeConfig(t, "config.yml", `
+version: 2.1
+jobs:
+  test:
+    steps:
+      - run:
+          name: Show test failures
+          when: on_fail
+          command: ./scripts/dump-logs.sh
+      - run:
+          name: Upload artifacts
+          when: always
+          command: ./scripts/upload.sh
+      - run: go test ./...
+workflows:
+  main:
+    jobs:
+      - test
+`)
+	res, err := Extract(dir)
+	assert.NilError(t, err)
+
+	// The log dumper runs only on red and the uploader is cleanup; neither
+	// gates the build, so neither may take the test role from go test.
+	assert.Equal(t, len(res.Candidates), 1)
+	assert.Equal(t, res.Candidates[0].Command, "go test ./...")
+}
+
+func TestExtractCountsPipelineLevelReferences(t *testing.T) {
+	dir := writeConfig(t, "config.yml", `
+version: 2.1
+parameters:
+  workers:
+    type: integer
+    default: 4
+jobs:
+  test:
+    steps:
+      - run: pytest -n << pipeline.parameters.workers >>
+      - run: echo "building << pipeline.git.branch >>"
+      - run: tox -e << matrix.env >>
+      - run: go test ./...
+workflows:
+  main:
+    jobs:
+      - test
+`)
+	res, err := Extract(dir)
+	assert.NilError(t, err)
+
+	// Only CircleCI resolves pipeline, git and matrix references. Emitting one
+	// verbatim would put a bash heredoc operator in the command we run, so the
+	// steps are reported instead.
+	assert.Equal(t, res.Unresolved, 3)
+	assert.Equal(t, len(res.Candidates), 1)
+	assert.Equal(t, res.Candidates[0].Command, "go test ./...")
+}
+
+func TestExtractKeepsHeredocCommands(t *testing.T) {
+	dir := writeConfig(t, "config.yml", `
+version: 2.1
+jobs:
+  test:
+    steps:
+      - run: |
+          cat <<EOF > cfg
+          key = value
+          EOF
+          go test ./...
+workflows:
+  main:
+    jobs:
+      - test
+`)
+	res, err := Extract(dir)
+	assert.NilError(t, err)
+
+	// A real heredoc delimiter is not an interpolation.
+	assert.Equal(t, res.Unresolved, 0)
+	assert.Equal(t, len(res.Candidates), 1)
+}
+
 func TestExtractRecordsOrbSteps(t *testing.T) {
 	dir := writeConfig(t, "config.yml", `
 version: 2.1

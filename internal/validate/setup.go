@@ -111,7 +111,9 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 }
 
 // withAutofixDefaults adds the autofix commands from defaults that ci does not
-// already provide, leaving every gate ci named untouched.
+// already provide, leaving every gate ci named untouched. A check-only
+// formatter from CI is emitted as "format-check", so it does not match the
+// default's "format" name and the real fixer is still added alongside it.
 func withAutofixDefaults(ci, defaults []config.Command) []config.Command {
 	for _, d := range defaults {
 		if d.Role != config.RoleAutofix {
