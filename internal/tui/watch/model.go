@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
 const (
@@ -112,6 +113,7 @@ const (
 
 type tickMsg struct{}
 type spinMsg struct{}
+type updateCheckMsg struct{ latest, upgradeCmd string }
 type errMsg struct{ err error }
 
 type dataMsg struct {
@@ -150,6 +152,9 @@ type Model struct {
 	spinIdx    int
 	hasSpinner bool
 	daemonErr  error // set when the last poll failed; cleared on success
+
+	updateAvailable string // non-empty tag (e.g. "v1.2.3") when an update is available
+	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk"
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -176,7 +181,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.loadData, doSpin())
+	return tea.Batch(m.loadData, doSpin(), checkUpdateCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -250,6 +255,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 		m.hasSpinner = anyRunning(m.sidecars)
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+
+	case updateCheckMsg:
+		m.updateAvailable = msg.latest
+		m.upgradeCmd = msg.upgradeCmd
+		return m, nil
 
 	case tickMsg:
 		return m, m.loadData
@@ -870,6 +880,17 @@ func (m Model) renderFooter() string {
 		parts = append(parts, vdim(k.key)+" "+dim(k.action))
 	}
 	bar := strings.Join(parts, "  "+vdim("·")+"  ")
+
+	// Right-align the update notice, but drop it entirely when it does not
+	// fit: padding it onto an over-long bar would wrap the footer and break
+	// the fixed-height layout.
+	if m.updateAvailable != "" {
+		notice := amber("↑ "+m.updateAvailable) + "  " + dim(m.upgradeCmd)
+		if gap := m.width - 2 - lipgloss.Width(bar) - lipgloss.Width(notice); gap >= 2 {
+			bar += strings.Repeat(" ", gap) + notice
+		}
+	}
+
 	footer := vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
 	if m.daemonErr != nil {
 		footer += "  " + red("daemon unavailable: "+m.daemonErr.Error()) + "\n"
@@ -1051,6 +1072,20 @@ func anyRunning(sidecars []sidecarInfo) bool {
 
 func doSpin() tea.Cmd {
 	return tea.Tick(spinInterval, func(time.Time) tea.Msg { return spinMsg{} })
+}
+
+// checkUpdateCmd checks for a newer release for the footer notice. Root's
+// PersistentPreRunE skips watch (see noUpdateCheckCommands) so this is the
+// only check on this path — two would race on the cache file and print the
+// notice twice.
+func checkUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		latest := upgrade.Check()
+		if latest == "" {
+			return updateCheckMsg{}
+		}
+		return updateCheckMsg{latest: latest, upgradeCmd: upgrade.SelfUpgradeCommand()}
+	}
 }
 
 // padLine pads s to exactly width visible characters, accounting for ANSI codes.

@@ -18,6 +18,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
+// watchCmdName is the name of the watch command. It is referenced by the
+// daemon re-exec argv and by the update-check skip list, so it lives here
+// next to the command it names.
+const watchCmdName = "watch"
+
 func newWatchCmd() *cobra.Command {
 	var (
 		focus bool
@@ -34,7 +39,7 @@ func newWatchCmd() *cobra.Command {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			if err := watchd.EnsureRunning([]string{"watch", "_daemon"}); err != nil {
+			if err := watchd.EnsureRunning([]string{watchCmdName, "_daemon"}); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 

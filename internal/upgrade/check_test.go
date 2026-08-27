@@ -1,0 +1,260 @@
+package upgrade
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestCheckForUpdate(t *testing.T) {
+	t.Run("returns empty for dev version", func(t *testing.T) {
+		dir := t.TempDir()
+		got := CheckForUpdate(dir, "https://example.com", "dev")
+		if got != "" {
+			t.Fatalf("expected empty, got %q", got)
+		}
+	})
+
+	t.Run("returns latest when newer", func(t *testing.T) {
+		srv := releaseServer(t, "v2.0.0")
+		dir := t.TempDir()
+		got := CheckForUpdate(dir, srv.URL, "v1.0.0")
+		if got != "v2.0.0" {
+			t.Fatalf("expected v2.0.0, got %q", got)
+		}
+	})
+
+	t.Run("returns empty when up to date", func(t *testing.T) {
+		srv := releaseServer(t, "v1.0.0")
+		dir := t.TempDir()
+		got := CheckForUpdate(dir, srv.URL, "v1.0.0")
+		if got != "" {
+			t.Fatalf("expected empty, got %q", got)
+		}
+	})
+
+	t.Run("uses cache when fresh", func(t *testing.T) {
+		// Write a cache entry claiming v9.0.0 is latest; server would say v2.0.0
+		dir := t.TempDir()
+		cache := updateCache{
+			CheckedAt:     time.Now(),
+			LatestVersion: "v9.0.0",
+		}
+		data, _ := json.Marshal(cache)
+		_ = os.WriteFile(filepath.Join(dir, cacheFileName), data, 0o600)
+
+		hitCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			hitCount++
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(srv.Close)
+
+		got := CheckForUpdate(dir, srv.URL, "v1.0.0")
+		if got != "v9.0.0" {
+			t.Fatalf("expected v9.0.0 from cache, got %q", got)
+		}
+		if hitCount != 0 {
+			t.Fatalf("expected no network calls, got %d", hitCount)
+		}
+	})
+
+	t.Run("re-fetches when cache is stale", func(t *testing.T) {
+		dir := t.TempDir()
+		cache := updateCache{
+			CheckedAt:     time.Now().Add(-25 * time.Hour),
+			LatestVersion: "v1.5.0",
+		}
+		data, _ := json.Marshal(cache)
+		_ = os.WriteFile(filepath.Join(dir, cacheFileName), data, 0o600)
+
+		srv := releaseServer(t, "v2.0.0")
+		got := CheckForUpdate(dir, srv.URL, "v1.0.0")
+		if got != "v2.0.0" {
+			t.Fatalf("expected v2.0.0 from fresh fetch, got %q", got)
+		}
+	})
+
+	t.Run("returns empty on network error", func(t *testing.T) {
+		dir := t.TempDir()
+		got := CheckForUpdate(dir, "http://127.0.0.1:0", "v1.0.0")
+		if got != "" {
+			t.Fatalf("expected empty on error, got %q", got)
+		}
+	})
+
+	t.Run("writes cache after fetch", func(t *testing.T) {
+		dir := t.TempDir()
+		srv := releaseServer(t, "v2.0.0")
+		CheckForUpdate(dir, srv.URL, "v1.0.0")
+
+		data, err := os.ReadFile(filepath.Join(dir, cacheFileName))
+		if err != nil {
+			t.Fatalf("cache file not written: %v", err)
+		}
+		var cached updateCache
+		if err := json.Unmarshal(data, &cached); err != nil {
+			t.Fatalf("cache file malformed: %v", err)
+		}
+		if cached.LatestVersion != "v2.0.0" {
+			t.Fatalf("expected v2.0.0 in cache, got %q", cached.LatestVersion)
+		}
+		if time.Since(cached.CheckedAt) > 5*time.Second {
+			t.Fatal("cache checked_at is too old")
+		}
+	})
+}
+
+func TestNewerTag(t *testing.T) {
+	tests := []struct {
+		latest  string
+		current string
+		want    string
+	}{
+		{"v2.0.0", "v1.0.0", "v2.0.0"},
+		{"v1.0.0", "v1.0.0", ""},
+		{"v1.0.0", "v2.0.0", ""},
+		{"v1.10.0", "v1.9.0", "v1.10.0"},
+		{"invalid", "v1.0.0", ""},
+		{"v1.0.0", "invalid", ""},
+	}
+	for _, tt := range tests {
+		got := newerTag(tt.latest, tt.current)
+		if got != tt.want {
+			t.Errorf("newerTag(%q, %q) = %q, want %q", tt.latest, tt.current, got, tt.want)
+		}
+	}
+}
+
+// releaseServer returns a test server that responds to the GitHub releases
+// latest endpoint with a release tagged at tagName.
+func releaseServer(t *testing.T, tagName string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rel := ghRelease{TagName: tagName}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rel)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// The cache window is claimed before the HTTP request, so a caller that exits
+// without waiting for the fetch still suppresses checks for 24 h rather than
+// sending every later invocation back to GitHub.
+func TestCheckForUpdate_claimsCacheWindowBeforeFetch(t *testing.T) {
+	dir := t.TempDir()
+
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	if got := CheckForUpdate(dir, srv.URL, "v1.0.0"); got != "" {
+		t.Fatalf("expected empty on a failed fetch, got %q", got)
+	}
+	if hits != 1 {
+		t.Fatalf("expected 1 network call, got %d", hits)
+	}
+
+	cached, ok := readCache(filepath.Join(dir, cacheFileName))
+	if !ok {
+		t.Fatal("expected the failed fetch to still claim the cache window")
+	}
+	if cached.LatestVersion != "" {
+		t.Fatalf("expected no version recorded, got %q", cached.LatestVersion)
+	}
+	// The claim uses a short TTL so aborted fetches are retried in minutes,
+	// not suppressed for a full day. The timestamp should be near the start
+	// of the retry window (roughly checkCacheTTL - checkRetryTTL ago).
+	age := time.Since(cached.CheckedAt)
+	if age < checkCacheTTL-checkRetryTTL-time.Minute || age > checkCacheTTL-checkRetryTTL+time.Minute {
+		t.Fatalf("expected checked_at to be ~%v ago, got %v", checkCacheTTL-checkRetryTTL, age)
+	}
+
+	// The claimed window still holds off the next check within the retry window.
+	if got := CheckForUpdate(dir, srv.URL, "v1.0.0"); got != "" {
+		t.Fatalf("expected empty from the claimed window, got %q", got)
+	}
+	if hits != 1 {
+		t.Fatalf("expected no further network calls, got %d", hits)
+	}
+}
+
+// The cache is written by short-lived processes that can overlap — parallel
+// agent sessions each running chunk — and a reader that catches a truncated
+// file falls back to refetching, which is the rate-limit hole the claim
+// window exists to close. writeCache renames a temp file into place, so a
+// reader must only ever observe a complete record.
+func TestWriteCache_concurrentReadersNeverSeePartialFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, cacheFileName)
+
+	// Seed one good record so readers have something to find from the start.
+	if err := writeCache(path, updateCache{CheckedAt: time.Now(), LatestVersion: "v1.0.0"}); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Vary the payload length so a torn write would be
+				// visible rather than overwritten byte-for-byte.
+				tag := fmt.Sprintf("v1.0.%d", i%100000)
+				if err := writeCache(path, updateCache{CheckedAt: time.Now(), LatestVersion: tag}); err != nil {
+					t.Errorf("writeCache: %v", err)
+					return
+				}
+			}
+		}()
+	}
+
+	var reads, misses int64
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				atomic.AddInt64(&reads, 1)
+				if _, ok := readCache(path); !ok {
+					atomic.AddInt64(&misses, 1)
+				}
+			}
+		}()
+	}
+
+	time.Sleep(250 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	if n := atomic.LoadInt64(&reads); n < 100 {
+		t.Fatalf("only %d reads — too few to say anything about tearing", n)
+	}
+	if n := atomic.LoadInt64(&misses); n != 0 {
+		t.Errorf("%d of %d reads saw a partial or empty cache file", n, atomic.LoadInt64(&reads))
+	}
+}
