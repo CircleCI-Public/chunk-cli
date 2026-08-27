@@ -58,6 +58,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 				id:            sc.ID,
 				sidecarIDs:    []string{sc.ID},
 				name:          sc.Name,
+				sessionID:     sc.SessionID,
 				projectName:   sc.ProjectName,
 				repoName:      sc.RepoName,
 				branch:        p.Branch,
@@ -78,7 +79,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		local := sidecarInfo{
 			id:          "",
 			sidecarIDs:  []string{""},
-			name:        "local",
+			name:        localRunnerName,
 			projectName: filepath.Base(p.Root),
 			repoName:    p.RepoName,
 			branch:      p.Branch,

@@ -8,8 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // groupEvents tests
@@ -500,4 +502,165 @@ func TestRenderFooter_updateNoticeShownWhenItFits(t *testing.T) {
 	if !strings.Contains(footer, "v1.2.3") || !strings.Contains(footer, "chunk upgrade") {
 		t.Errorf("expected update notice in footer, got %q", footer)
 	}
+}
+
+// session-aware rendering tests
+
+// sessionModel builds a model whose own session is fixed, so tests do not
+// depend on whether the suite itself runs inside an agent session.
+func sessionModel(own string, sidecars []sidecarInfo) Model {
+	m := New(nil, false)
+	m.ownSession = own
+	m.sidecars = sidecars
+	m.selectedIdx = -1 // no selection, so the ▶ marker cannot mask a label
+	return m
+}
+
+func TestRenderSidecarPane_singleSessionKeepsBranchLabel(t *testing.T) {
+	m := sessionModel("sessA", []sidecarInfo{
+		{id: "id1", name: "chunk-cli-sessA", sessionID: "sessA",
+			repoName: "chunk-cli", branch: "main", lastActivity: time.Now()},
+	})
+
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+
+	// One session in the worktree: nothing to disambiguate, so the row reads
+	// exactly as it did before sessions existed.
+	assert.Assert(t, strings.Contains(pane, "main"), pane)
+	assert.Assert(t, !strings.Contains(pane, "sessions"), pane)
+	assert.Assert(t, !strings.Contains(pane, "this session"), pane)
+}
+
+func TestRenderSidecarPane_twoSessionsAreNamed(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("aaaaaaaa-1111-2222-3333-444444444444", []sidecarInfo{
+		{id: "id1", name: "chunk-cli-aaaaaaaa", sessionID: "aaaaaaaa-1111-2222-3333-444444444444",
+			repoName: "chunk-cli", branch: "main", lastActivity: now},
+		{id: "id2", name: "chunk-cli-bbbbbbbb", sessionID: "bbbbbbbb-1111-2222-3333-444444444444",
+			repoName: "chunk-cli", branch: "main", lastActivity: now.Add(-5 * time.Minute)},
+	})
+
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+
+	// The branch is named once for the group, and each row by its session.
+	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
+	assert.Assert(t, strings.Contains(pane, "this session"), pane)
+	assert.Assert(t, strings.Contains(pane, "bbbbbbbb"), pane)
+	// The full UUID is never printed — it is unreadable at this pane width.
+	assert.Assert(t, !strings.Contains(pane, "bbbbbbbb-1111"), pane)
+}
+
+func TestRenderSidecarPane_groupHeaderPrintedOncePerWorktree(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", branch: "main", lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", branch: "main", lastActivity: now},
+	})
+
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+
+	assert.Equal(t, strings.Count(pane, "2 sessions"), 1, pane)
+}
+
+func TestRenderSidecarPane_detachedHeadNamesTheDirectory(t *testing.T) {
+	now := time.Now()
+	// A distinct projectName, so finding it proves the group header used the
+	// directory rather than merely matching the repo header above it.
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "monorepo", projectName: "wt-detached", lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "monorepo", projectName: "wt-detached", lastActivity: now},
+	})
+
+	// With no branch to name the group, the header must still say something the
+	// reader can act on rather than rendering blank.
+	lines := m.renderSidecarPane(40)
+	countAt := -1
+	for i, l := range lines {
+		if strings.Contains(l, "2 sessions") {
+			countAt = i
+		}
+	}
+	assert.Assert(t, countAt > 0, strings.Join(lines, "\n"))
+	assert.Assert(t, strings.Contains(lines[countAt-1], "wt-detached"), lines[countAt-1])
+}
+
+func TestRowLabel(t *testing.T) {
+	m := New(nil, false)
+	m.ownSession = "mine1234-abcd"
+
+	tests := []struct {
+		name  string
+		sc    sidecarInfo
+		multi bool
+		want  string
+	}{
+		{"alone uses the branch", sidecarInfo{id: "x", branch: "main", sessionID: "other"}, false, "main"},
+		{"alone with no branch falls back to the name", sidecarInfo{id: "x", name: "sc-1"}, false, "sc-1"},
+		{"own session is called out", sidecarInfo{id: "x", branch: "main", sessionID: "mine1234-abcd"}, true, "● this session"},
+		{"other session is shortened", sidecarInfo{id: "x", branch: "main", sessionID: "theirs99-abcd"}, true, "○ theirs99"},
+		{"local runner keeps its name", sidecarInfo{id: "", name: localRunnerName, branch: "main"}, true, "○ " + localRunnerName},
+		{"pre-session state keeps its name", sidecarInfo{id: "x", name: "sc-legacy", branch: "main"}, true, "○ sc-legacy"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, m.rowLabel(tc.sc, tc.multi), tc.want)
+		})
+	}
+}
+
+func TestSortByActivity_keepsWorktreeGroupsTogether(t *testing.T) {
+	now := time.Now()
+	// Two sessions on main, with a busier branch in the same repo between them.
+	// Without a worktree tier the busy branch splits main's rows apart and the
+	// pane cannot print one header for them.
+	sidecars := []sidecarInfo{
+		{id: "main-old", repoName: "r", branch: "main", lastActivity: now.Add(-10 * time.Minute)},
+		{id: "feature", repoName: "r", branch: "feature", lastActivity: now.Add(-2 * time.Minute)},
+		{id: "main-new", repoName: "r", branch: "main", lastActivity: now.Add(-1 * time.Minute)},
+	}
+
+	sortByActivity(sidecars)
+
+	want := []string{"main-new", "main-old", "feature"}
+	for i, id := range want {
+		assert.Equal(t, sidecars[i].id, id, "position %d", i)
+	}
+}
+
+func TestRenderActivityPane_namesTheSelectedSession(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("mine1234-abcd", []sidecarInfo{
+		{id: "id1", name: "sc-1", sessionID: "theirs99-abcd", repoName: "chunk-cli",
+			branch: "main", lastActivity: now},
+	})
+	m.selectedIdx = 0
+	m.width = 120
+
+	pane := strings.Join(m.renderActivityPane(20), "\n")
+
+	// The left pane can be scrolled away from the selection, so the activity
+	// header has to say whose events these are on its own.
+	assert.Assert(t, strings.Contains(pane, "theirs99"), pane)
+}
+
+func TestConvertSnapshot_carriesSessionID(t *testing.T) {
+	now := time.Now()
+	snap := watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+		Root:     "/tmp/repo",
+		Branch:   "main",
+		RepoName: "repo",
+		Sidecars: []watchd.SidecarState{
+			{ID: "id1", Name: "sc-1", SessionID: "sessA", LastActivity: now},
+			{ID: "id2", Name: "sc-2", SessionID: "sessB", LastActivity: now},
+		},
+	}}}
+
+	msg := convertSnapshot(snap, New(nil, true))
+
+	got := map[string]string{}
+	for _, sc := range msg.sidecars {
+		got[sc.id] = sc.sessionID
+	}
+	assert.Equal(t, got["id1"], "sessA")
+	assert.Equal(t, got["id2"], "sessB")
 }
