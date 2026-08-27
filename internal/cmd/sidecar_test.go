@@ -12,7 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func setupSidecarCreateFake(t *testing.T) *fakes.FakeCircleCI {
@@ -159,7 +159,7 @@ func TestOrgPicker_MultipleOrgs_NoTTY(t *testing.T) {
 	client := newOrgPickerClient(t, cci)
 
 	_, err := orgPicker(context.Background(), client, "")()
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY), "expected ErrNoTTY, got: %v", err)
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY), "expected ErrNoTTY, got: %v", err)
 }
 
 func TestOrgPicker_MultipleOrgs_NonInteractive(t *testing.T) {
@@ -173,7 +173,7 @@ func TestOrgPicker_MultipleOrgs_NonInteractive(t *testing.T) {
 	client := newOrgPickerClient(t, cci)
 
 	_, err := orgPicker(context.Background(), client, "")()
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY), "expected ErrNoTTY in non-interactive mode, got: %v", err)
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY), "expected ErrNoTTY in non-interactive mode, got: %v", err)
 }
 
 func TestSnapshotCreateNameAtLimit(t *testing.T) {

@@ -21,7 +21,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -136,16 +135,16 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string)
 			return "", &userError{
 				msg:        "No interactive terminal available to select an organization.",
 				suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
-				err:        tui.ErrNoTTY,
+				err:        ui.ErrNoTTY,
 			}
 		}
 		labels := make([]string, len(collabs))
 		for i, c := range collabs {
 			labels[i] = fmt.Sprintf("%s/%s", c.VcsType, c.Name)
 		}
-		idx, err := tui.SelectFromList("Select an organization:", labels)
+		idx, err := ui.SelectFromList("Select an organization:", labels)
 		if err != nil {
-			if errors.Is(err, tui.ErrNoTTY) {
+			if errors.Is(err, ui.ErrNoTTY) {
 				// hideDetail: the wrapped error is "no interactive terminal
 				// available", which the message already says in full.
 				return "", &userError{
@@ -173,7 +172,7 @@ func newSidecarListCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -236,7 +235,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -315,7 +314,7 @@ func newSidecarDeleteCmd() *cobra.Command {
 			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -375,7 +374,7 @@ or via the repeatable --args flag. Positional arguments are appended after any
 			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -440,7 +439,7 @@ func newSidecarAddSSHKeyCmd() *cobra.Command {
 			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -501,7 +500,7 @@ func newSidecarSSHCmd() *cobra.Command {
 			authSock := os.Getenv(config.EnvSSHAuthSock)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -556,7 +555,7 @@ func newSidecarSyncCmd() *cobra.Command {
 			authSock := os.Getenv(config.EnvSSHAuthSock)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -858,7 +857,7 @@ snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -905,7 +904,7 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -941,7 +940,7 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -1010,7 +1009,7 @@ Example:
 
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, streams, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
 				return err
 			}

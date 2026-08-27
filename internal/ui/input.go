@@ -1,13 +1,17 @@
-package tui
+package ui
 
 import (
+	"errors"
 	"fmt"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 )
 
-type textInputModel struct {
+// ErrCancelled is returned when the user cancels input (Ctrl+C or Esc).
+var ErrCancelled = errors.New("cancelled")
+
+type hiddenInputModel struct {
 	input    textinput.Model
 	label    string
 	done     bool
@@ -15,22 +19,23 @@ type textInputModel struct {
 	canceled bool
 }
 
-func newTextInputModel(label, defaultVal string) textInputModel {
+func newHiddenInputModel(label string) hiddenInputModel {
 	ti := textinput.New()
-	ti.Placeholder = defaultVal
+	ti.Placeholder = ""
+	ti.EchoMode = textinput.EchoNone
 	ti.Focus()
 
-	return textInputModel{
+	return hiddenInputModel{
 		input: ti,
 		label: label,
 	}
 }
 
-func (m textInputModel) Init() tea.Cmd {
+func (m hiddenInputModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-func (m textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m hiddenInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.Code {
 		case tea.KeyEnter:
@@ -53,34 +58,30 @@ func (m textInputModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m textInputModel) View() tea.View {
+func (m hiddenInputModel) View() tea.View {
 	if m.done || m.canceled {
 		return tea.NewView("")
 	}
 	return tea.NewView(fmt.Sprintf("%s: %s", m.label, m.input.View()))
 }
 
-// PromptText prompts for text input with an optional default value shown as placeholder.
-// If the user enters nothing and presses Enter, the default value is returned.
+// PromptHidden prompts the user for hidden input (e.g. API keys).
 // Returns ErrCancelled if the user presses Ctrl+C or Esc.
-// Returns ErrNoTTY if stdin is not a terminal or CI is set.
-func PromptText(label, defaultVal string) (string, error) {
+// Returns ErrNoTTY if stdin is not a terminal.
+func PromptHidden(label string) (string, error) {
 	if err := requireTTY(); err != nil {
 		return "", err
 	}
-	model := newTextInputModel(label, defaultVal)
+	model := newHiddenInputModel(label)
 	p := tea.NewProgram(model)
 	result, err := p.Run()
 	if err != nil {
-		return "", fmt.Errorf("text prompt: %w", err)
+		return "", fmt.Errorf("input prompt: %w", err)
 	}
 
-	m := result.(textInputModel)
+	m := result.(hiddenInputModel)
 	if m.canceled {
 		return "", ErrCancelled
-	}
-	if m.value == "" {
-		return defaultVal, nil
 	}
 	return m.value, nil
 }

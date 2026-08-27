@@ -3,7 +3,8 @@ package watch
 
 import (
 	"fmt"
-	"path/filepath"
+	"os"
+	"path/filepath":internal/ui/watch/model.go
 	"sort"
 	"strings"
 	"time"
@@ -51,34 +52,52 @@ var logoLines = []string{
 	"    █████████████████",
 }
 
-// color/style helpers using lipgloss
-var (
-	styleDim    = lipgloss.NewStyle().Faint(true)
-	styleBold   = lipgloss.NewStyle().Bold(true)
-	styleGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))
-	styleYellow = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
-	styleBlue   = lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
-	stylePurple = lipgloss.NewStyle().Foreground(lipgloss.Color("140"))
-	styleTeal   = lipgloss.NewStyle().Foreground(lipgloss.Color("80"))
-	styleOrange = lipgloss.NewStyle().Foreground(lipgloss.Color("173"))
-	styleAmber  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	styleRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("167"))
-	styleMuted  = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
-	styleVdim   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-)
+// watchStyles holds lipgloss styles computed for the current terminal background.
+type watchStyles struct {
+	Dim    lipgloss.Style
+	Bold   lipgloss.Style
+	Green  lipgloss.Style
+	Yellow lipgloss.Style
+	Blue   lipgloss.Style
+	Purple lipgloss.Style
+	Teal   lipgloss.Style
+	Orange lipgloss.Style
+	Amber  lipgloss.Style
+	Red    lipgloss.Style
+	Muted  lipgloss.Style
+	VDim   lipgloss.Style
+}
 
-func dim(s string) string    { return styleDim.Render(s) }
-func bold(s string) string   { return styleBold.Render(s) }
-func green(s string) string  { return styleGreen.Render(s) }
-func yellow(s string) string { return styleYellow.Render(s) }
-func blue(s string) string   { return styleBlue.Render(s) }
-func purple(s string) string { return stylePurple.Render(s) }
-func teal(s string) string   { return styleTeal.Render(s) }
-func orange(s string) string { return styleOrange.Render(s) }
-func amber(s string) string  { return styleAmber.Render(s) }
-func red(s string) string    { return styleRed.Render(s) }
-func muted(s string) string  { return styleMuted.Render(s) }
-func vdim(s string) string   { return styleVdim.Render(s) }
+func (s watchStyles) dim(text string) string    { return s.Dim.Render(text) }
+func (s watchStyles) bold(text string) string   { return s.Bold.Render(text) }
+func (s watchStyles) green(text string) string  { return s.Green.Render(text) }
+func (s watchStyles) yellow(text string) string { return s.Yellow.Render(text) }
+func (s watchStyles) blue(text string) string   { return s.Blue.Render(text) }
+func (s watchStyles) purple(text string) string { return s.Purple.Render(text) }
+func (s watchStyles) teal(text string) string   { return s.Teal.Render(text) }
+func (s watchStyles) orange(text string) string { return s.Orange.Render(text) }
+func (s watchStyles) amber(text string) string  { return s.Amber.Render(text) }
+func (s watchStyles) red(text string) string    { return s.Red.Render(text) }
+func (s watchStyles) muted(text string) string  { return s.Muted.Render(text) }
+func (s watchStyles) vdim(text string) string   { return s.VDim.Render(text) }
+
+func newWatchStyles(hasDark bool) watchStyles {
+	ld := lipgloss.LightDark(hasDark)
+	return watchStyles{
+		Dim:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("242"), lipgloss.Color("245"))),
+		Bold:   lipgloss.NewStyle().Bold(true),
+		Green:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("28"), lipgloss.Color("78"))),
+		Yellow: lipgloss.NewStyle().Foreground(ld(lipgloss.Color("136"), lipgloss.Color("179"))),
+		Blue:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("25"), lipgloss.Color("110"))),
+		Purple: lipgloss.NewStyle().Foreground(ld(lipgloss.Color("91"), lipgloss.Color("140"))),
+		Teal:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("30"), lipgloss.Color("80"))),
+		Orange: lipgloss.NewStyle().Foreground(ld(lipgloss.Color("130"), lipgloss.Color("173"))),
+		Amber:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("136"), lipgloss.Color("214"))),
+		Red:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("160"), lipgloss.Color("167"))),
+		Muted:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("240"), lipgloss.Color("242"))),
+		VDim:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("248"), lipgloss.Color("238"))),
+	}
+}
 
 // ProjectEntry holds everything the watch model needs for one project.
 type ProjectEntry struct {
@@ -107,10 +126,12 @@ type sidecarInfo struct {
 	projectIdx   int       // index into Model.projects
 	snapshotName string    // name of the active snapshot for this project, if any
 	fileMtime    time.Time // mtime of the sidecar state file (fallback when no events yet)
-	running      bool
-	lastActivity time.Time
-	lastOp       eventlog.Op
-	lastLevel    string // level of the most recent event ("done", "error", etc.)
+	running       bool
+	lastActivity  time.Time
+	lastOp        eventlog.Op
+	lastLevel     string // level of the most recent event ("done", "error", etc.)
+	lastSyncedRef string
+	inSync        bool
 }
 
 // pane identifies which side of the split layout has keyboard focus.
@@ -163,6 +184,8 @@ type Model struct {
 	hasSpinner bool
 	daemonErr  error // set when the last poll failed; cleared on success
 
+	hasDarkBG bool // updated by tea.BackgroundColorMsg
+
 	updateAvailable string // non-empty tag (e.g. "v1.2.3") when an update is available
 	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk"
 
@@ -199,6 +222,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		selectedID:    noSelection,
 		watchAll:      watchAll,
 		ownSession:    session.IDFromEnv(),
+		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),:internal/ui/watch/model.go
 	}
 }
 
@@ -216,6 +240,10 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.hasDarkBG = msg.IsDark()
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -312,17 +340,22 @@ func (m Model) View() tea.View {
 	return v
 }
 
+func (m Model) styles() watchStyles {
+	return newWatchStyles(m.hasDarkBG)
+}
+
 func (m Model) render() string {
 	if m.width == 0 {
 		return "loading...\n"
 	}
-	return m.renderHeader() +
-		m.renderSeparator() +
-		m.renderBody() +
-		m.renderFooter()
+	st := m.styles()
+	return m.renderHeader(st) +
+		m.renderSeparator(st) +
+		m.renderBody(st) +
+		m.renderFooter(st)
 }
 
-func (m Model) renderHeader() string {
+func (m Model) renderHeader(st watchStyles) string {
 	n := 0
 	for _, sc := range m.sidecars {
 		if sc.id != "" {
@@ -336,18 +369,18 @@ func (m Model) renderHeader() string {
 
 	var contextTag string
 	if len(m.projects) > 1 {
-		contextTag = "  " + muted(fmt.Sprintf("%d projects", len(m.projects)))
+		contextTag = "  " + st.muted(fmt.Sprintf("%d projects", len(m.projects)))
 	} else if len(m.projects) == 1 {
 		branch := m.branches[0]
 		head := m.headRefs[0]
 		if branch != "" && head != "" {
-			contextTag = "  " + green(branch+"@"+head[:min(7, len(head))])
+			contextTag = "  " + st.green(branch+"@"+head[:min(7, len(head))])
 		}
 	}
 
 	clock := time.Now().Format("15:04:05")
-	title := bold("chunk watch") + "  " + muted(count) + contextTag
-	right := vdim(clock)
+	title := st.bold("chunk watch") + "  " + st.muted(count) + contextTag
+	right := st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -355,11 +388,11 @@ func (m Model) renderHeader() string {
 	return title + strings.Repeat(" ", gap) + right + "\n"
 }
 
-func (m Model) renderSeparator() string {
-	return vdim(strings.Repeat("─", m.width)) + "\n"
+func (m Model) renderSeparator(st watchStyles) string {
+	return st.vdim(strings.Repeat("─", m.width)) + "\n"
 }
 
-func (m Model) renderBody() string {
+func (m Model) renderBody(st watchStyles) string {
 	contentHeight := m.height - 4 // header + separator + footer + padding
 	// The footer grows by a line when the daemon is unreachable. Without handing
 	// that line back the message lands past the last row and is clipped at every
@@ -372,8 +405,8 @@ func (m Model) renderBody() string {
 		contentHeight = 1
 	}
 
-	leftLines := m.renderSidecarPane(contentHeight)
-	rightLines := m.renderActivityPane(contentHeight)
+	leftLines := m.renderSidecarPane(st, contentHeight)
+	rightLines := m.renderActivityPane(st, contentHeight)
 
 	var b strings.Builder
 	for i := 0; i < contentHeight; i++ {
@@ -386,33 +419,31 @@ func (m Model) renderBody() string {
 			r = rightLines[i]
 		}
 		lPad := padLine(l, leftPaneWidth)
-		div := vdim("│")
+		div := st.vdim("│")
 		if m.focusedPane == paneRight {
-			div = muted("│")
+			div = st.muted("│")
 		}
 		b.WriteString(" " + lPad + " " + div + " " + r + "\n")
 	}
 	return b.String()
 }
 
-func (m Model) renderSidecarPane(maxLines int) []string {
+func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 	lines := make([]string, 0, maxLines)
 	add := func(s string) { lines = append(lines, s) }
 
 	if m.focusedPane == paneLeft {
-		add(bold("sidecars"))
+		add(st.bold("sidecars"))
 	} else {
-		add(vdim("sidecars"))
+		add(st.vdim("sidecars"))
 	}
 	add("")
 
 	if len(m.sidecars) == 0 {
-		// Sidecars may well exist, they just haven't done anything recent
-		// enough to be worth showing.
-		add(muted("nothing recent"))
+		add(st.muted("nothing recent"))
 		add("")
-		add(dim("no sidecar activity"))
-		add(dim("in the last day"))
+		add(st.dim("no sidecar activity"))
+		add(st.dim("in the last day"))
 		return lines
 	}
 
@@ -438,7 +469,7 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 				addRow("")
 			}
 			label := truncate(sc.repoName, leftPaneWidth-4)
-			addRow(vdim("── ") + bold(label))
+			addRow(st.vdim("── ") + st.bold(label)):internal/ui/watch/model.go
 			lastRepo = sc.repoName
 			haveGroup = false
 		}
@@ -468,56 +499,58 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 			// The branch gets the full width: it is the thing the reader is
 			// looking for, and squeezing the count onto the same line would
 			// truncate a normal-length branch name to nothing.
-			addRow("  " + bold(truncate(label, leftPaneWidth-2)))
-			addRow("  " + vdim(fmt.Sprintf("%d sessions", sessions[group])))
+			addRow("  " + st.bold(truncate(label, leftPaneWidth-2)))
+			addRow("  " + st.vdim(fmt.Sprintf("%d sessions", sessions[group])))
 		}
 		lastGroup, haveGroup = group, true
 
 		selected := i == m.selectedIdx
 		nameLine := truncate(m.rowLabel(sc, multi, dirLabel), leftPaneWidth-3)
 
-		switch {
-		case selected && m.focusedPane == paneLeft:
-			addRow(green("▶ ") + bold(nameLine))
-		case selected:
-			addRow(vdim("▶ ") + muted(nameLine))
-		default:
+		if selected {
+			if m.focusedPane == paneLeft {
+				addRow(st.green("▶ ") + st.bold(nameLine))
+			} else {
+				addRow(st.vdim("▶ ") + st.muted(nameLine))
+			}
+		} else {
 			addRow("  " + nameLine)
 		}
 
 		if sc.snapshotName != "" {
-			addRow("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
-		}
-		if sc.id != "" && sc.name != "" {
-			addRow("   " + vdim(truncate(sidecarDisplayName(sc.name, sc.id), leftPaneWidth-6)))
+			addRow("   " + st.vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
 		}
 
 		switch {
 		case sc.running:
 			frame := spinFrames[m.spinIdx%len(spinFrames)]
-			addRow("  " + blue(frame+" "+string(sc.lastOp)+"..."))
+			addRow("  " + st.blue(frame+" "+string(sc.lastOp)+"..."))
 		case sc.id == "": // local runner — no sync state
 			switch sc.lastLevel {
 			case levelDone:
-				addRow("  " + green("✓ passed"))
+				addRow("  " + st.green("✓ passed"))
 			case levelError:
-				addRow("  " + red("✗ failed"))
+				addRow("  " + st.red("✗ failed"))
 			default:
-				addRow("  " + muted("no runs yet"))
+				addRow("  " + st.muted("no runs yet"))
 			}
+		case sc.inSync:
+			addRow("  " + st.green("✓ in sync"))
+		case sc.lastSyncedRef == "":
+			addRow("  " + st.muted("not synced"))
 		default:
-			addRow("  " + muted("synced via rsync"))
+			addRow("  " + st.yellow("↑ needs sync"))
 		}
 
 		if !sc.lastActivity.IsZero() {
-			addRow("  " + vdim(ago(sc.lastActivity)))
+			addRow("  " + st.vdim(ago(sc.lastActivity)))
 		} else {
 			addRow("")
 		}
 
 		// Divider between sidecars in the same repo group.
 		if i < len(m.sidecars)-1 && m.sidecars[i+1].repoName == sc.repoName {
-			addRow(muted(strings.Repeat("─", leftPaneWidth)))
+			addRow(st.vdim(strings.Repeat("·", leftPaneWidth)))
 		}
 
 		// Hold back a line for the hint whenever rows remain after this one.
@@ -534,7 +567,7 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 	if dropped > 0 {
 		// Without this the rows simply stopped: a group's session count was the
 		// only clue that any were missing, and a dropped repo had none at all.
-		lines = append(lines, "  "+vdim(fmt.Sprintf("↓ %d more", dropped)))
+		lines = append(lines, "  "+st.vdim(fmt.Sprintf("↓ %d more", dropped)))
 	}
 	return lines
 }
@@ -545,14 +578,14 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 // keeps it in range, so a negative value should not arise — but a panic here
 // takes the terminal down with it, still in the alternate screen, and the cost
 // of the second comparison is nothing next to that.
-func (m Model) renderActivityPane(maxLines int) []string {
+func (m Model) renderActivityPane(st watchStyles, maxLines int) []string {
 	lines := make([]string, 0, maxLines)
 
 	var title string
 	if m.focusedPane == paneRight {
-		title = bold("activity")
+		title = st.bold("activity")
 	} else {
-		title = vdim("activity")
+		title = st.vdim("activity")
 	}
 	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sidecars) {
 		sc := m.sidecars[m.selectedIdx]
@@ -561,22 +594,22 @@ func (m Model) renderActivityPane(maxLines int) []string {
 			branchLabel = sidecarDisplayName(sc.name, sc.id)
 		}
 		if sc.repoName != "" {
-			title += "  " + muted(sc.repoName+"/"+branchLabel)
+			title += "  " + st.muted(sc.repoName+"/"+branchLabel)
 		} else {
-			title += "  " + muted(branchLabel)
+			title += "  " + st.muted(branchLabel)
 		}
 		// Name the session as well as the sidecar. The left pane can be scrolled
 		// away from the selection, and with several sessions in one worktree the
 		// repo/branch above is no longer enough to say whose activity this is.
 		if sc.sessionID != "" {
 			if sc.sessionID == m.ownSession {
-				title += "  " + teal("● this session")
+				title += "  " + st.teal("● this session")
 			} else {
-				title += "  " + vdim("○ "+shortUUID(sc.sessionID))
+				title += "  " + st.vdim("○ "+shortUUID(sc.sessionID))
 			}
 		}
 		if sc.id != "" && sc.branch != "" {
-			title += "  " + vdim(sidecarDisplayName(sc.name, sc.id))
+			title += "  " + st.vdim(sidecarDisplayName(sc.name, sc.id))
 		}
 	}
 	lines = append(lines, title, "")
@@ -607,9 +640,9 @@ func (m Model) renderActivityPane(maxLines int) []string {
 			pad = 0
 		}
 		padStr := strings.Repeat(" ", pad)
-		lines = append(lines, muted("No activity yet."), "")
+		lines = append(lines, st.muted("No activity yet."), "")
 		for _, l := range logoLines {
-			lines = append(lines, padStr+vdim(l))
+			lines = append(lines, padStr+st.vdim(l))
 		}
 		return lines
 	}
@@ -619,17 +652,17 @@ func (m Model) renderActivityPane(maxLines int) []string {
 	if len(groups) > 0 && rightSel >= len(groups) {
 		rightSel = len(groups) - 1
 	}
-	body, remaining := m.buildCollapsibleLines(groups, rightSel, maxLines-2)
+	body, remaining := m.buildCollapsibleLines(st, groups, rightSel, maxLines-2)
 	lines = append(lines, body...)
 	if remaining > 0 {
-		lines = append(lines, "  "+vdim(fmt.Sprintf("↓ %d more", remaining)))
+		lines = append(lines, "  "+st.vdim(fmt.Sprintf("↓ %d more", remaining)))
 	}
 	return lines
 }
 
 // buildCollapsibleLines renders invocation groups newest-first with expand/collapse state.
 // It returns the rendered lines and the count of groups that did not fit.
-func (m Model) buildCollapsibleLines(groups []invocationGroup, rightSel, maxLines int) ([]string, int) {
+func (m Model) buildCollapsibleLines(st watchStyles, groups []invocationGroup, rightSel, maxLines int) ([]string, int) {
 	rendered := make([]string, 0, maxLines)
 	add := func(s string) { rendered = append(rendered, s) }
 
@@ -643,7 +676,7 @@ func (m Model) buildCollapsibleLines(groups []invocationGroup, rightSel, maxLine
 		if ri > 0 {
 			add("")
 		}
-		add(renderInvocationHeader(groups[gi], expanded, selected))
+		add(renderInvocationHeader(st, groups[gi], expanded, selected))
 		if expanded {
 			g := groups[gi]
 			for ei := len(g.events) - 1; ei >= 0 && len(rendered) < maxLines; ei-- {
@@ -651,7 +684,7 @@ func (m Model) buildCollapsibleLines(groups []invocationGroup, rightSel, maxLine
 				if isSummaryEvent(e) {
 					continue // already shown in header
 				}
-				add("  " + renderEvent(e))
+				add("  " + renderEvent(st, e))
 			}
 		}
 		lastGI = gi
@@ -811,7 +844,7 @@ func extractCount(msg string) string {
 }
 
 // renderInvocationHeader renders a one-line summary for an invocation group.
-func renderInvocationHeader(g invocationGroup, expanded, selected bool) string {
+func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selected bool) string {
 	var arrow string
 	if expanded {
 		arrow = "▼ "
@@ -819,39 +852,39 @@ func renderInvocationHeader(g invocationGroup, expanded, selected bool) string {
 		arrow = "▶ "
 	}
 	if selected {
-		arrow = bold(arrow)
+		arrow = st.bold(arrow)
 	} else {
-		arrow = vdim(arrow)
+		arrow = st.vdim(arrow)
 	}
 
 	icon, label, level := outcomeOf(g)
 	var outcomeStr string
 	switch level {
 	case levelDone:
-		outcomeStr = green(icon + " " + label)
+		outcomeStr = st.green(icon + " " + label)
 	case levelError:
-		outcomeStr = red(icon + " " + label)
+		outcomeStr = st.red(icon + " " + label)
 	default:
-		outcomeStr = blue(icon + " " + label)
+		outcomeStr = st.blue(icon + " " + label)
 	}
 
 	var ts time.Time
 	if n := len(g.events); n > 0 {
 		ts = g.events[n-1].Ts
 	}
-	tsStr := vdim(ts.Format("15:04:05"))
+	tsStr := st.vdim(ts.Format("15:04:05"))
 
 	durStr := ""
 	if len(g.events) > 1 {
 		dur := g.events[len(g.events)-1].Ts.Sub(g.events[0].Ts).Round(time.Second)
 		if dur >= time.Second {
-			durStr = "  " + vdim("("+dur.String()+")")
+			durStr = "  " + st.vdim("("+dur.String()+")")
 		}
 	}
 
-	label2 := purple("validate") + "  " + outcomeStr + "  " + tsStr + durStr
+	label2 := st.purple("validate") + "  " + outcomeStr + "  " + tsStr + durStr
 	if selected {
-		label2 = bold(purple("validate")) + "  " + outcomeStr + "  " + tsStr + durStr
+		label2 = st.bold(st.purple("validate")) + "  " + outcomeStr + "  " + tsStr + durStr
 	}
 	return arrow + label2
 }
@@ -920,49 +953,49 @@ func groupEvents(events []eventlog.Event) []eventGroup {
 	return groups
 }
 
-func renderEvent(e eventlog.Event) string {
-	icon, msg := iconAndMsg(e)
+func renderEvent(st watchStyles, e eventlog.Event) string {
+	icon, msg := iconAndMsg(st, e)
 	if e.Op == eventlog.OpValidate {
 		// Op tag omitted — already implied by the invocation header.
 		return icon + "  " + msg
 	}
-	return opTag(e.Op) + "  " + icon + "  " + msg
+	return opTag(st, e.Op) + "  " + icon + "  " + msg
 }
 
-func opTag(op eventlog.Op) string {
+func opTag(st watchStyles, op eventlog.Op) string {
 	switch op {
 	case eventlog.OpSync:
-		return blue("sync    ")
+		return st.blue("sync    ")
 	case eventlog.OpValidate:
-		return purple("validate")
+		return st.purple("validate")
 	case eventlog.OpExec:
-		return teal("exec    ")
+		return st.teal("exec    ")
 	case eventlog.OpSetup:
-		return orange("setup   ")
+		return st.orange("setup   ")
 	case eventlog.OpHook:
-		return amber("hook    ")
+		return st.amber("hook    ")
 	default:
-		return muted(fmt.Sprintf("%-8s", string(op)))
+		return st.muted(fmt.Sprintf("%-8s", string(op)))
 	}
 }
 
-func iconAndMsg(e eventlog.Event) (string, string) {
+func iconAndMsg(st watchStyles, e eventlog.Event) (string, string) {
 	switch e.Level {
 	case levelDone:
-		return green("✓"), green(e.Msg)
+		return st.green("✓"), st.green(e.Msg)
 	case "warn":
-		return yellow("⚠"), yellow(e.Msg)
+		return st.yellow("⚠"), st.yellow(e.Msg)
 	case levelError:
-		return red("✗"), red(e.Msg)
+		return st.red("✗"), st.red(e.Msg)
 	default:
 		if strings.HasPrefix(e.Msg, "$ ") {
-			return muted("$"), muted(strings.TrimPrefix(e.Msg, "$ "))
+			return st.muted("$"), st.muted(strings.TrimPrefix(e.Msg, "$ "))
 		}
-		return vdim("›"), muted(e.Msg)
+		return st.vdim("›"), st.muted(e.Msg)
 	}
 }
 
-func (m Model) renderFooter() string {
+func (m Model) renderFooter(st watchStyles) string {
 	var keys []struct{ key, action string }
 	if m.focusedPane == paneLeft {
 		keys = []struct{ key, action string }{
@@ -980,23 +1013,23 @@ func (m Model) renderFooter() string {
 	}
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, vdim(k.key)+" "+dim(k.action))
+		parts = append(parts, st.vdim(k.key)+" "+st.dim(k.action))
 	}
-	bar := strings.Join(parts, "  "+vdim("·")+"  ")
+	bar := strings.Join(parts, "  "+st.vdim("·")+"  ")
 
 	// Right-align the update notice, but drop it entirely when it does not
 	// fit: padding it onto an over-long bar would wrap the footer and break
 	// the fixed-height layout.
 	if m.updateAvailable != "" {
-		notice := amber("↑ "+m.updateAvailable) + "  " + dim(m.upgradeCmd)
+		notice := st.amber("↑ "+m.updateAvailable) + "  " + st.dim(m.upgradeCmd)
 		if gap := m.width - 2 - lipgloss.Width(bar) - lipgloss.Width(notice); gap >= 2 {
 			bar += strings.Repeat(" ", gap) + notice
 		}
 	}
 
-	footer := vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
+	footer := st.vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
 	if m.daemonErr != nil {
-		footer += "  " + red("daemon unavailable: "+m.daemonErr.Error()) + "\n"
+		footer += "  " + st.red("daemon unavailable: "+m.daemonErr.Error()) + "\n"
 	}
 	return footer
 }
@@ -1305,6 +1338,8 @@ func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
 				result[idx].id = sc.id
 				result[idx].name = sc.name
 				result[idx].sessionID = sc.sessionID
+				result[idx].inSync = sc.inSync
+				result[idx].lastSyncedRef = sc.lastSyncedRef
 				result[idx].snapshotName = sc.snapshotName
 				result[idx].fileMtime = sc.fileMtime
 			}

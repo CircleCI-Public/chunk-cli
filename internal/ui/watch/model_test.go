@@ -504,11 +504,11 @@ func TestRenderFooter_updateNoticeNeverWidensFooter(t *testing.T) {
 
 			// The key bar alone can already exceed a narrow terminal;
 			// only the notice's contribution is under test here.
-			limit := max(width, footerWidth(m.renderFooter()))
+			limit := max(width, footerWidth(m.renderFooter(m.styles())))
 
 			m.updateAvailable = "v1.2.3"
 			m.upgradeCmd = "chunk upgrade"
-			if got := footerWidth(m.renderFooter()); got > limit {
+			if got := footerWidth(m.renderFooter(m.styles())); got > limit {
 				t.Errorf("width %d, pane %v: update notice widened footer to %d (limit %d)", width, focus, got, limit)
 			}
 		}
@@ -530,7 +530,7 @@ func TestRenderFooter_updateNoticeShownWhenItFits(t *testing.T) {
 	m.updateAvailable = "v1.2.3"
 	m.upgradeCmd = "chunk upgrade"
 
-	footer := m.renderFooter()
+	footer := m.renderFooter(m.styles())
 	if !strings.Contains(footer, "v1.2.3") || !strings.Contains(footer, "chunk upgrade") {
 		t.Errorf("expected update notice in footer, got %q", footer)
 	}
