@@ -472,7 +472,7 @@ func (m Model) renderActivityPane(maxLines int) []string {
 		} else {
 			title += "  " + muted(branchLabel)
 		}
-		if sc.id != "" {
+		if sc.id != "" && sc.branch != "" {
 			title += "  " + vdim(sidecarDisplayName(sc.name, sc.id))
 		}
 	}
