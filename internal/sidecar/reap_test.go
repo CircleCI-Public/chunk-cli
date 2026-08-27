@@ -86,7 +86,7 @@ func exists(t *testing.T, path string) bool {
 
 // TestReapDropsStateForVanishedSidecar covers the resurrection bug: a state file
 // naming a sidecar that no longer exists must go, even when it is the file for
-// the current session, since that is exactly the file AdoptIdleActive promotes.
+// the current session.
 func TestReapDropsStateForVanishedSidecar(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()

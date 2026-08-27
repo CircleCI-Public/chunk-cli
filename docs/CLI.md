@@ -235,13 +235,11 @@ chunk
   workspace and reset the checkout under each other's test run. State files are
   keyed by session and branch, where the session is the Stop hook payload's
   `session_id`, or `CLAUDE_CODE_SESSION_ID` (overridable with `CHUNK_SESSION_ID`)
-  for the commands an agent runs itself. A session with no state file adopts a
-  sidecar the project already has rather than creating one, but only when nobody
-  else is using it: its own state under another branch, or state written at the
-  no-session file name (a sidecar created in a plain terminal, which is how
-  `sidecar setup` hands one over). A different session's sidecar is never adopted
-  while that session is active; once it ends, Reap eventually releases it.
-  Parallel sessions cost one sidecar each; sequential ones keep reusing the same.
+  for the commands an agent runs itself. Every session always creates its own
+  sidecar — adoption was removed to prevent two sessions from syncing into the
+  same remote workspace and resetting each other's checkout. Parallel sessions
+  cost one sidecar each; sequential ones reuse the same one (same session ID,
+  same state file).
 - **Abandoned sidecars are reaped automatically.** Local sidecar state is one file
   per session and branch, and `validate` sweeps them before resolving a sidecar:
   state naming a sidecar absent from the org listing is deleted, and a sidecar

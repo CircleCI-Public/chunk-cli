@@ -1041,10 +1041,7 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 	branch := sidecar.CurrentBranch(workDir)
 
 	if sessionID != "" {
-		short := sessionID
-		if len(short) > 8 {
-			short = short[:8]
-		}
+		short := shortSessionID(sessionID)
 		if branch != "" {
 			sum := sha256.Sum256([]byte(sessionID + ":" + branch))
 			hash8 := fmt.Sprintf("%x", sum[:4])
