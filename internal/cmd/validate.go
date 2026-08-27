@@ -453,7 +453,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 	activeSidecar, _ = sidecar.LoadActive(ctx)
 
-	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
+	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, cfg, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
 		return err
 	}
@@ -466,7 +466,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	baseStatusFn := statusFn
 	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 
-	envVars, statusFn, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
+	envVars, statusFn, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
 	if err != nil {
 		return err
 	}
@@ -486,7 +486,7 @@ func loadEnvVarsWithRetry(
 	ctx context.Context,
 	circleCIClient *circleci.Client,
 	opts *validateOpts,
-	image string,
+	image, tokenSource string,
 	freshlyCreated bool,
 	baseStatusFn, statusFn iostream.StatusFunc,
 	workDir string,
@@ -502,7 +502,7 @@ func loadEnvVarsWithRetry(
 		// like any other.
 		statusFn(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
 		opts.sidecarID = ""
-		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, streams); createErr != nil {
+		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, streams); createErr != nil {
 			return nil, statusFn, freshlyCreated, createErr
 		}
 		// A replacement has none of the setup the old one had, so exec failures on
@@ -707,20 +707,20 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
 // and config, then returns whether a new sidecar was provisioned.
-func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
+func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image, tokenSource string, cfg *config.ProjectConfig, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
 	if opts.local {
 		return false, nil
 	}
 	if validateNeedsSidecar(opts.remote || opts.sidecarID != "", cfg) {
 		if opts.remote {
-			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, streams)
+			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, streams)
 			if err != nil {
 				return false, err
 			}
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", opts.sidecarID))
 			return created, nil
 		}
-		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, activeSidecar, streams)
+		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, activeSidecar, streams)
 	}
 	return false, nil
 }
@@ -953,20 +953,20 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 // configuration, so a retry without user action fails identically; falling
 // back only spends the full suite's runtime before saying so. This matches
 // --remote, which has always returned the error from this same call.
-func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, active *sidecar.ActiveSidecar, streams iostream.Streams) (bool, error) {
+func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir, tokenSource string, active *sidecar.ActiveSidecar, streams iostream.Streams) (bool, error) {
 	statusFn := newStatusFunc(streams)
 	if active != nil {
 		*sidecarID = active.SidecarID
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
 		return false, nil
 	}
-	return resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
+	return resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, tokenSource, streams)
 }
 
 // resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
 // a new sidecar when none is configured. Returns true when a new sidecar was
 // provisioned (as opposed to loaded from the active state file).
-func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, streams iostream.Streams) (created bool, err error) {
+func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir, tokenSource string, streams iostream.Streams) (created bool, err error) {
 	if *sidecarID != "" {
 		return false, nil
 	}
@@ -983,7 +983,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	// "Stop hook error:" banner even when everything then went fine.
 	statusFn := newStatusFunc(streams)
 	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
 	if err != nil {
 		return false, err
 	}

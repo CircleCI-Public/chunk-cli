@@ -110,11 +110,11 @@ func orgSource(orgID, workDir string) string {
 	return source
 }
 
-func orgPicker(ctx context.Context, client *circleci.Client) func() (string, error) {
+func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string) func() (string, error) {
 	return func() (string, error) {
 		collabs, err := client.ListCollaborations(ctx)
 		if err != nil {
-			if err := notAuthorized("list organizations", err); err != nil {
+			if err := notAuthorized("list organizations", tokenSource, err); err != nil {
 				return "", err
 			}
 			return "", &userError{
@@ -182,7 +182,7 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
 			if err != nil {
 				return err
 			}
@@ -190,17 +190,14 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				if errors.Is(err, circleci.ErrNotAuthorized) {
 					if all {
-						return &userError{
-							msg:        "Not authorized to list all sidecars.",
-							suggestion: "Listing all sidecars requires org admin privileges.",
-							err:        err,
-						}
+						return newUserError("Not authorized to list all sidecars.").
+							withCode("auth.not_authorized").
+							withDetail(tokenSourceDetail(rc.CircleCITokenSource)).
+							withSuggestion("Listing all sidecars requires org admin privileges.").
+							withExitCode(ExitAuthError).
+							wrap(err)
 					}
-					return &userError{
-						msg:        "Not authorized to list sidecars.",
-						suggestion: suggestionReauth,
-						err:        err,
-					}
+					return notAuthorized("list sidecars", rc.CircleCITokenSource, err)
 				}
 				return &userError{
 					msg:        "Could not list sidecars.",
@@ -251,7 +248,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
 			if err != nil {
 				return err
 			}
@@ -274,7 +271,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			}
 			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image)
 			if err != nil {
-				if err := notAuthorized("create sidecars", err); err != nil {
+				if err := notAuthorized("create sidecars", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				var se *circleci.StatusError
@@ -324,7 +321,7 @@ func newSidecarDeleteCmd() *cobra.Command {
 				return err
 			}
 			if err := client.DeleteSidecar(cmd.Context(), sidecarID); err != nil {
-				if err := notAuthorized("delete sidecars", err); err != nil {
+				if err := notAuthorized("delete sidecars", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -399,7 +396,7 @@ or via the repeatable --args flag. Positional arguments are appended after any
 			}
 			resp, err := sidecar.Exec(cmd.Context(), client, sidecarID, command, allArgs, onOutput)
 			if err != nil {
-				if err := notAuthorized("execute commands", err); err != nil {
+				if err := notAuthorized("execute commands", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -450,7 +447,7 @@ func newSidecarAddSSHKeyCmd() *cobra.Command {
 			}
 			resp, err := sidecar.AddSSHKey(cmd.Context(), client, sidecarID, publicKey, publicKeyFile)
 			if err != nil {
-				if err := notAuthorized("add SSH keys", err); err != nil {
+				if err := notAuthorized("add SSH keys", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -526,7 +523,7 @@ func newSidecarSSHCmd() *cobra.Command {
 				if err := sshSessionError(err); err != nil {
 					return err
 				}
-				if err := notAuthorized("connect via SSH", err); err != nil {
+				if err := notAuthorized("connect via SSH", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -605,7 +602,7 @@ func newSidecarSyncCmd() *cobra.Command {
 				if err := sshSessionError(err); err != nil {
 					return err
 				}
-				if err := notAuthorized("sync files", err); err != nil {
+				if err := notAuthorized("sync files", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -978,7 +975,7 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
 			if err != nil {
 				return err
 			}
@@ -1081,7 +1078,7 @@ Example:
 				// Step 2: Resolve or create sidecar.
 				if sidecarID == "" {
 					var resolveErr error
-					sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, status, streams)
+					sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, rc.CircleCITokenSource, status, streams)
 					if resolveErr != nil {
 						return resolveErr
 					}
@@ -1094,7 +1091,7 @@ Example:
 
 				// Step 4: Sync files to sidecar.
 				if !skipSync {
-					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, true, dir, status); err != nil {
+					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, true, dir, rc.CircleCITokenSource, status); err != nil {
 						return err
 					}
 				}
@@ -1175,6 +1172,7 @@ func sidecarSetupResolveSidecar(
 	ctx context.Context,
 	client *circleci.Client,
 	orgID, name, workDir string,
+	tokenSource string,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
 ) (id, displayName string, err error) {
@@ -1189,14 +1187,14 @@ func sidecarSetupResolveSidecar(
 	if name == "" {
 		name = randomSidecarName()
 	}
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
 	if err != nil {
 		return "", "", err
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q...", name))
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, "")
 	if err != nil {
-		if authErr := notAuthorized("create sidecars", err); authErr != nil {
+		if authErr := notAuthorized("create sidecars", tokenSource, err); authErr != nil {
 			return "", "", authErr
 		}
 		return "", "", &userError{
@@ -1236,6 +1234,7 @@ func sidecarSetupSync(
 	sidecarID, identityFile, authSock string,
 	useBundle bool,
 	cwd string,
+	tokenSource string,
 	status iostream.StatusFunc,
 ) error {
 	status(iostream.LevelStep, "Syncing files to sidecar...")
@@ -1269,7 +1268,7 @@ func sidecarSetupSync(
 	if authErr := sshSessionError(err); authErr != nil {
 		return authErr
 	}
-	if authErr := notAuthorized("sync files", err); authErr != nil {
+	if authErr := notAuthorized("sync files", tokenSource, err); authErr != nil {
 		return authErr
 	}
 	return err
