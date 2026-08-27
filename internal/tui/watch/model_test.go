@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 )
@@ -455,5 +456,48 @@ func TestUpdate_unknownSelectionFallsBackToFreshest(t *testing.T) {
 
 	if m.selectedIdx != 0 || m.selectedID != "fresh" {
 		t.Errorf("want fallback to idx 0 (fresh), got idx %d id %q", m.selectedIdx, m.selectedID)
+	}
+}
+
+// The update notice is right-aligned with padding, so a notice that does not
+// fit would wrap the footer and push the fixed-height layout off screen.
+func TestRenderFooter_updateNoticeNeverWidensFooter(t *testing.T) {
+	for _, width := range []int{40, 80, 100, 120, 200} {
+		for _, focus := range []pane{paneLeft, paneRight} {
+			m := New(nil, false)
+			m.width = width
+			m.focusedPane = focus
+
+			// The key bar alone can already exceed a narrow terminal;
+			// only the notice's contribution is under test here.
+			limit := max(width, footerWidth(m.renderFooter()))
+
+			m.updateAvailable = "v1.2.3"
+			m.upgradeCmd = "chunk upgrade"
+			if got := footerWidth(m.renderFooter()); got > limit {
+				t.Errorf("width %d, pane %v: update notice widened footer to %d (limit %d)", width, focus, got, limit)
+			}
+		}
+	}
+}
+
+// footerWidth returns the width of the widest line in a rendered footer.
+func footerWidth(footer string) int {
+	var widest int
+	for _, line := range strings.Split(strings.TrimRight(footer, "\n"), "\n") {
+		widest = max(widest, lipgloss.Width(line))
+	}
+	return widest
+}
+
+func TestRenderFooter_updateNoticeShownWhenItFits(t *testing.T) {
+	m := New(nil, false)
+	m.width = 200
+	m.updateAvailable = "v1.2.3"
+	m.upgradeCmd = "chunk upgrade"
+
+	footer := m.renderFooter()
+	if !strings.Contains(footer, "v1.2.3") || !strings.Contains(footer, "chunk upgrade") {
+		t.Errorf("expected update notice in footer, got %q", footer)
 	}
 }

@@ -36,8 +36,9 @@ func TestValidateCircleCIToken_OK(t *testing.T) {
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
-	err := authprompt.ValidateCircleCIToken(context.Background(), randToken("cci-"), srv.URL)
+	userID, err := authprompt.ValidateCircleCIToken(context.Background(), randToken("cci-"), srv.URL)
 	assert.NilError(t, err)
+	assert.Equal(t, userID.String(), "00000000-0000-0000-0000-000000000123")
 }
 
 func TestValidateAPIKey_OK(t *testing.T) {

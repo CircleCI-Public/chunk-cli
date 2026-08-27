@@ -16,6 +16,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 )
@@ -25,6 +26,8 @@ func isolateConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
+	t.Setenv(config.EnvChunkSessionID, "")
+	t.Setenv(session.EnvClaudeSessionID, "")
 }
 
 func randToken(prefix string) string {

@@ -24,6 +24,7 @@ type ActiveSidecar struct {
 	// that has been deleted from one that simply lives in an org it is not
 	// listing. Empty on state written before this field existed.
 	OrgID         string `json:"org_id,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
 	Workspace     string `json:"workspace,omitempty"`
 	LastSyncedRef string `json:"last_synced_ref,omitempty"`
 	// LastSyncedPatchHash is a SHA-256 hex digest of the working-tree patch
@@ -67,7 +68,7 @@ func sidecarFileName(sessionID, branch string) string {
 }
 
 // StateFileName returns the sidecar state file name for the given session ID
-// and git branch. Exposed so acceptance tests can construct expected paths.
+// and git branch. Exposed so tests can construct expected paths.
 func StateFileName(sessionID, branch string) string {
 	return sidecarFileName(sessionID, branch)
 }
@@ -89,37 +90,6 @@ func LoadActive(ctx context.Context) (*ActiveSidecar, error) {
 		return nil, err
 	}
 	return LoadActiveFrom(ctx, dir)
-}
-
-// LoadAnyActive returns the most recently modified sidecar state file for the
-// current project, regardless of session ID or branch. Cross-branch reuse is
-// intentional: the caller's next SaveActive re-keys the result under the
-// current session+branch, so only one sidecar accumulates per project even
-// when switching branches. ctx is accepted for signature consistency with
-// the other loaders, but is not used.
-func LoadAnyActive(_ context.Context) (*ActiveSidecar, error) {
-	dir, err := saveDir()
-	if err != nil {
-		return nil, err
-	}
-	entries, err := loadStateEntries(dir)
-	if err != nil || len(entries) == 0 {
-		return nil, err
-	}
-	var best *stateEntry
-	for i, e := range entries {
-		if e.active.SidecarID == "" {
-			continue
-		}
-		if best == nil || e.modTime.After(best.modTime) {
-			best = &entries[i]
-		}
-	}
-	if best == nil {
-		return nil, nil
-	}
-	active := best.active
-	return &active, nil
 }
 
 // LoadActiveFrom reads the active sidecar from dir.
@@ -158,6 +128,7 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	a.SessionID = session.IDFromCtx(ctx)
 	data, err := json.Marshal(a)
 	if err != nil {
 		return err
@@ -176,10 +147,16 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 
 // pruneRekeyedState removes state files other than keep that name sidecarID.
 //
-// LoadAnyActive reuses one sidecar across sessions and branches, and the next
-// SaveActive re-keys it under the current session+branch. Without this the file
-// it was read from is left behind holding an out-of-date synced ref, so readers
-// that pick the wrong file report a sidecar as permanently needing a sync.
+// A sidecar is re-keyed under the current session and branch when it is adopted,
+// or when the same session switches branch. Without this the file it came from
+// is left behind holding an out-of-date synced ref, so readers that pick the
+// wrong file report a sidecar as permanently needing a sync.
+//
+// A file belonging to a live session goes too, deliberately. Adoption moves
+// state rather than copying it, so another file naming this sidecar means two
+// sessions are pointed at one — the state this whole mechanism exists to prevent.
+// Dropping it costs that session a re-sync onto a sidecar of its own, which is
+// the outcome we want, where keeping it would leave both sessions sharing.
 // Best-effort: a file that cannot be removed is left for Reap to clean up.
 func pruneRekeyedState(dir, keep, sidecarID string) {
 	if sidecarID == "" {
@@ -279,6 +256,50 @@ func ClearActive(ctx context.Context) error {
 		return err
 	}
 	return ClearActiveFrom(ctx, dir)
+}
+
+// ClearActiveByOrg removes all sidecar state files across every known project
+// whose OrgID matches orgID. It is called after a bulk prune so that the TUI
+// does not show deleted sidecars on the next watch tick.
+// Returns the number of files removed. Per-project and per-file failures do not
+// stop the sweep; they are accumulated into the returned error so the caller can
+// warn about a prune that only partially cleared state.
+func ClearActiveByOrg(orgID string) (int, error) {
+	base, err := config.AppData()
+	if err != nil {
+		return 0, err
+	}
+	dirs, err := os.ReadDir(base)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	removed := 0
+	var errs []error
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		dir := filepath.Join(base, d.Name())
+		entries, lerr := loadStateEntries(dir)
+		if lerr != nil {
+			errs = append(errs, fmt.Errorf("read sidecar state in %s: %w", d.Name(), lerr))
+			continue
+		}
+		for _, e := range entries {
+			if e.active.OrgID != orgID {
+				continue
+			}
+			if rerr := removeState(e.path); rerr != nil {
+				errs = append(errs, rerr)
+				continue
+			}
+			removed++
+		}
+	}
+	return removed, errors.Join(errs...)
 }
 
 // ClearActiveFrom removes the active sidecar state file in dir.

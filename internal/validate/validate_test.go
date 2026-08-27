@@ -191,6 +191,23 @@ func TestFormatDuration(t *testing.T) {
 	}
 }
 
+// --- RunAll env var tests ---
+
+func TestRunAllEnvVars(t *testing.T) {
+	t.Run("env vars are passed to commands", func(t *testing.T) {
+		cfg := &config.ProjectConfig{Commands: []config.Command{
+			{Name: "test", Run: "echo $CHUNK_TEST_VAR"},
+		}}
+		streams, out, _ := newStreams()
+		var statusBuf bytes.Buffer
+
+		envVars := map[string]string{"CHUNK_TEST_VAR": "hello-from-env-local"}
+		_, err := RunAll(context.Background(), ".", cfg, envVars, testStatus(&statusBuf), streams)
+		assert.NilError(t, err)
+		assert.Assert(t, strings.Contains(out.String(), "hello-from-env-local"), "got: %s", out.String())
+	})
+}
+
 // --- RunAll tests ---
 
 func TestRunAll(t *testing.T) {
@@ -202,7 +219,7 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		_, err := RunAll(context.Background(), ".", cfg, nil, testStatus(&statusBuf), streams)
 		assert.NilError(t, err)
 		assert.Assert(t, strings.Contains(out.String(), "installed"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(out.String(), "tested"), "got: %s", out.String())
@@ -215,7 +232,7 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		_, err := RunAll(context.Background(), ".", cfg, nil, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "no validate commands")
 	})
 
@@ -226,7 +243,7 @@ func TestRunAll(t *testing.T) {
 		streams, _, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		_, err := RunAll(context.Background(), ".", cfg, nil, testStatus(&statusBuf), streams)
 		assert.ErrorContains(t, err, "test command failed")
 	})
 
@@ -239,7 +256,7 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		_, err := RunAll(context.Background(), ".", cfg, nil, testStatus(&statusBuf), streams)
 		assert.Assert(t, err != nil, "expected error")
 		assert.Assert(t, !strings.Contains(out.String(), "should-not-run"), "skipped command should not produce output, got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[error] install"), "got: %s", statusBuf.String())
@@ -255,7 +272,7 @@ func TestRunAll(t *testing.T) {
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
 
-		_, err := RunAll(context.Background(), ".", cfg, testStatus(&statusBuf), streams)
+		_, err := RunAll(context.Background(), ".", cfg, nil, testStatus(&statusBuf), streams)
 		assert.NilError(t, err)
 		assert.Assert(t, strings.Contains(out.String(), "ok"), "got: %s", out.String())
 		assert.Assert(t, strings.Contains(statusBuf.String(), "[done] test"), "got: %s", statusBuf.String())

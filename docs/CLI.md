@@ -207,6 +207,15 @@ chunk
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
+- **`watch` rows are per branch, except when they cannot be.** A branch's local runs
+  are folded into its sidecar's row, so one row shows both kinds of run along with
+  sync state. A branch with more than one sidecar — two agent sessions in one
+  working tree, which is the normal shape (see **Sidecar state is per agent
+  session**) — keeps a row each, with local runs as their own row, since folding
+  them together hid a session's row and listed its activity under the other
+  session's name. Rows that share a branch carry a label naming the session
+  (`⧉ session d7d915b2`), because the branch name no longer tells them apart and
+  generated sidecar names shorten to the repo name for all of them.
 - `chunk init` uses Claude to auto-detect the test command for the project.
   It generates `.claude/settings.json` with pre-commit hooks. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.
@@ -214,8 +223,23 @@ chunk
   (`<lastRef>..HEAD`) on subsequent syncs. The branch does not need to be pushed
   to GitHub. Pass `--checkout` to fall back to the git checkout/patch approach
   (requires the branch to be pushed).
+- `sidecar current` prints the owning session (`session <8 chars>`) alongside the
+  name and ID. A sidecar keeps the name it was created with, and adoption transfers
+  it without renaming, so the name often carries the session that created it rather
+  than the one using it now — the session line is what tells two parallel sessions
+  apart. `--json` carries `session_id` and `owner_pid` in full.
 - `sidecar ssh -- <cmd>` forwards stdin when the process stdin is a pipe, enabling
   patterns like `cat bundle | chunk sidecar ssh -- git fetch ...`.
+- **Sidecar state is per agent session.** Two agent sessions open in the same
+  working tree must not share a sidecar: they would sync into the same remote
+  workspace and reset the checkout under each other's test run. State files are
+  keyed by session and branch, where the session is the Stop hook payload's
+  `session_id`, or `CLAUDE_CODE_SESSION_ID` (overridable with `CHUNK_SESSION_ID`)
+  for the commands an agent runs itself. Every session always creates its own
+  sidecar — adoption was removed to prevent two sessions from syncing into the
+  same remote workspace and resetting each other's checkout. Parallel sessions
+  cost one sidecar each; sequential ones reuse the same one (same session ID,
+  same state file).
 - **Abandoned sidecars are reaped automatically.** Local sidecar state is one file
   per session and branch, and `validate` sweeps them before resolving a sidecar:
   state naming a sidecar absent from the org listing is deleted, and a sidecar
@@ -270,6 +294,21 @@ chunk
   `skipped` instead of re-running. Manual runs, `--cmd` inline commands, and
   repos whose state cannot be hashed never cache. Entries expire after 7 days.
   See [HOOKS.md](HOOKS.md#result-caching).
+- Every command checks GitHub for a newer release in the background and prints a
+  notice to stderr once it finishes. The result is cached in the app state dir
+  (`update-check.json`) for 24 h to stay inside GitHub's unauthenticated rate
+  limit of 60 requests/hour. The window is claimed before the request is made,
+  so a command that exits mid-flight does not send the next invocation back to
+  GitHub — the notice simply appears on a later run.
+- The update check never delays a command: if the check has not finished by the
+  time the command has, the notice is dropped rather than waited for. It is
+  skipped entirely in CI (`CI` set), under `go test`, and for `completion`,
+  `receive-telemetry`, `upgrade`, and shell-completion requests, which either run
+  on every keypress or report versions themselves. `watch` runs its own check and
+  renders the notice in the TUI footer instead.
+- The notice suggests `brew upgrade chunk` when the running binary resolves into
+  a Homebrew prefix, and `chunk upgrade` otherwise. `chunk upgrade` refuses to
+  replace a Homebrew-managed binary in place.
 
 ## Config keys
 

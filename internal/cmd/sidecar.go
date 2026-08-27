@@ -78,6 +78,13 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 	return nil
 }
 
+func shortSessionID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 // resolveOrgID returns orgID from the flag, then delegates to
 // config.ResolveOrgID for the env-vs-project-config precedence, and finally
 // calls pickOrg as a last resort (e.g. to present a TUI picker).
@@ -125,6 +132,13 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 		}
 		if len(collabs) == 1 {
 			return collabs[0].ID, nil
+		}
+		if nonInteractive() {
+			return "", &userError{
+				msg:        "No interactive terminal available to select an organization.",
+				suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
+				err:        tui.ErrNoTTY,
+			}
 		}
 		labels := make([]string, len(collabs))
 		for i, c := range collabs {
@@ -652,11 +666,14 @@ func newSidecarCurrentCmd() *cobra.Command {
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, active)
 			}
+			line := active.SidecarID
 			if active.Name != "" {
-				io.Printf("%s  %s\n", active.Name, active.SidecarID)
-			} else {
-				io.Printf("%s\n", active.SidecarID)
+				line = active.Name + "  " + active.SidecarID
 			}
+			if active.SessionID != "" {
+				line += "  session " + shortSessionID(active.SessionID)
+			}
+			io.Printf("%s\n", line)
 			return nil
 		},
 	}

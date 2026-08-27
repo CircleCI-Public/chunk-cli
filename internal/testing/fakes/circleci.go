@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -28,11 +29,12 @@ type Project struct {
 }
 
 type Sidecar struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	OrgID    string `json:"org_id"`
-	Provider string `json:"provider,omitempty"`
-	Image    string `json:"image,omitempty"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	OrgID     string    `json:"org_id"`
+	Provider  string    `json:"provider,omitempty"`
+	Image     string    `json:"image,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
 type Snapshot struct {
@@ -173,7 +175,7 @@ func (f *FakeCircleCI) handleGetCurrentUser(c *gin.Context) {
 	if !f.requireToken(c) {
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": "user-123", "login": "testuser"})
+	c.JSON(http.StatusOK, gin.H{"id": "00000000-0000-0000-0000-000000000123", "login": "testuser"})
 }
 
 func (f *FakeCircleCI) requireToken(c *gin.Context) bool {
@@ -325,6 +327,9 @@ func (f *FakeCircleCI) handlePruneSidecars(c *gin.Context) {
 	}
 	var body struct {
 		OrgID string `json:"org_id"`
+		Scope *struct {
+			To time.Time `json:"to"`
+		} `json:"scope,omitempty"`
 	}
 	if err := json.NewDecoder(c.Request.Body).Decode(&body); err != nil || body.OrgID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"title": "Not found"}})
@@ -333,7 +338,7 @@ func (f *FakeCircleCI) handlePruneSidecars(c *gin.Context) {
 	kept := f.Sidecars[:0]
 	deleted := 0
 	for _, s := range f.Sidecars {
-		if s.OrgID == body.OrgID {
+		if s.OrgID == body.OrgID && (body.Scope == nil || s.CreatedAt.Before(body.Scope.To)) {
 			deleted++
 		} else {
 			kept = append(kept, s)

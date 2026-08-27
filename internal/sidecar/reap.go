@@ -110,10 +110,8 @@ func (e stateEntry) ids() []string {
 // local state files.
 //
 // State accumulates one file per session and branch, and nothing else removes
-// them, which causes two problems. Forgotten sidecars keep costing money. Worse,
-// LoadAnyActive promotes the most recently modified file it can find, so a file
-// naming a sidecar that no longer exists resurrects that dead ID run after run,
-// and every command against it fails with a bare 404.
+// them. Forgotten sidecars keep costing money, and a state file naming a sidecar
+// that no longer exists causes every command against it to fail with a bare 404.
 //
 // Three cases, deliberately treated differently:
 //
@@ -191,10 +189,10 @@ func Reap(ctx context.Context, client *circleci.Client, orgID string) (ReapResul
 // PruneID removes every state file for the current project that names sidecarID,
 // deleting the sidecar through the API first when it still exists.
 //
-// Removing one file is not enough. LoadAnyActive copies an ID into a fresh
-// session-and-branch file every time it promotes one, so the same ID is often
-// recorded two or three times over; dropping a single file leaves a duplicate
-// behind that resurrects the dead ID on the next run.
+// Removing one file is not enough. Adoption re-keys an ID under the adopting
+// session and branch, and older chunk versions copied rather than moved the file,
+// so the same ID can be recorded two or three times over; dropping a single file
+// leaves a duplicate behind that resurrects the dead ID on the next run.
 //
 // deleteRemote separates the two ways a sidecar stops being usable. Already
 // deleted (404) leaves nothing to delete. Out of date (410) means it is still

@@ -38,7 +38,7 @@ chunk-cli/
     ├── skills/                # Skill definitions (go:embed) and installation
     ├── task/                  # Task run config and CircleCI trigger
     ├── secrets/               # Secret resolution (env var value expansion)
-    ├── session/               # Session ID tracking for Stop hook context
+    ├── session/               # Which agent session this invocation belongs to
     ├── settings/              # .claude/settings.json build and merge
     ├── telemetry/             # Anonymous usage telemetry (Segment)
     │   └── receiver/          # Forwards buffered events to Segment (used by receive-telemetry)
@@ -194,31 +194,34 @@ in `config.Resolve` and makes clients testable.
 | `ANTHROPIC_API_KEY` | anthropic, config, validate | Anthropic authentication |
 | `ANTHROPIC_BASE_URL` | anthropic, validate | API endpoint override |
 | `GITHUB_TOKEN` | github | GitHub authentication |
-| `GITHUB_API_URL` | github | GitHub API endpoint override |
+| `GITHUB_API_URL` | github, upgrade | GitHub API endpoint override (also used by the update check) |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |
 | `CIRCLECI_ORG_ID` | sidecar | CircleCI organization ID (overrides `orgID` in `.chunk/config.json`) |
 | `CIRCLECI_BASE_URL` | circleci | CircleCI endpoint override |
 | `CLAUDE_PROJECT_DIR` | settings | IDE-provided project directory used by generated `PreToolUse` hooks |
 | `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
 | `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
+| `CLAUDE_CODE_SESSION_ID` | session, sidecar | Which agent session is running the command, so parallel sessions in one working tree get their own sidecar |
+| `CHUNK_SESSION_ID` | session, sidecar | Pins that session identity by hand; wins over `CLAUDE_CODE_SESSION_ID` |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
+| `XDG_STATE_HOME` | upgrade | User state directory for the 24 h update-check cache (default: `~/.local/state`) |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
-| `CI` | telemetry | Also disables anonymous usage telemetry (set by most CI systems) |
+| `CI` | telemetry, upgrade | Also disables anonymous usage telemetry and the update check (set by most CI systems) |
 | `CHUNK_TELEMETRY_LOG` | telemetry | Log telemetry events to stderr instead of (or alongside) sending them |
 
 ## Telemetry (`internal/telemetry/`)
 
 Modeled on circleci-cli's `internal/telemetry` package. Every command reports
-a single `chunk_command_invocation` event containing the command path and the
-names (never values) of flags the user set — no flag values, argument
-values, file paths, or other PII. The event is named `chunk_command_invocation`
-rather than the generic `command_invocation` circleci-cli's own telemetry
-package uses, because both tools currently share the same Segment write
-key/workspace; the `chunk_` prefix keeps chunk-cli's events unambiguous in
-the event stream.
+a single `command_invocation` event containing the command path and the names
+(never values) of flags the user set — no flag values, argument values, file
+paths, or other PII. chunk-cli and circleci-cli share the same Segment write key/workspace; events
+are distinguished by `context_app_name` (`chunk-cli` vs `circleci-cli`). The
+install UUID is sent as `AnonymousId` (not `UserId`) to avoid mixing machine
+identifiers with real user IDs in shared event counts. When the user has
+authenticated, their CircleCI user UUID is also sent as `UserId`.
 
 Every event's `Context` also carries the operating system (`runtime.GOOS`)
 and, if detected, the AI coding agent chunk-cli was invoked from (e.g.

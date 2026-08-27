@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"testing"
 )
@@ -26,5 +27,19 @@ func TestOpResolver_Resolve_NotInstalled(t *testing.T) {
 	}
 	if err.Error() == "" {
 		t.Fatal("error message should not be empty")
+	}
+}
+
+func TestOpResolver_NotInstalledMatchesSentinel(t *testing.T) {
+	r := &OpResolver{}
+	r.once.Do(func() { r.lookErr = exec.ErrNotFound })
+
+	_, err := r.Resolve(context.Background(), "op://vault/item/field")
+	if !errors.Is(err, ErrOpNotFound) {
+		t.Fatalf("expected ErrOpNotFound, got %v", err)
+	}
+	// The underlying lookup cause must stay reachable for diagnostics.
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("expected wrapped exec.ErrNotFound, got %v", err)
 	}
 }

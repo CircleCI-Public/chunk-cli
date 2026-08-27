@@ -226,6 +226,16 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	// Route stdout to stderr so all output appears in the Stop
 	// hook feedback block that Claude Code shows the agent.
 	streams = iostream.Streams{Out: streams.Err, Err: streams.Err}
+	// Print a header so concurrent stop-hook runs are distinguishable.
+	sessionLabel := hook.sessionID
+	if len(sessionLabel) > 8 {
+		sessionLabel = sessionLabel[:8]
+	}
+	if branch, err := gitutil.CurrentBranchIn(workDir); err == nil && branch != "" {
+		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate · %s [%s]", branch, sessionLabel)))
+	} else {
+		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate [%s]", sessionLabel)))
+	}
 	if validate.HooksDisabled(workDir, os.Getenv(config.EnvChunkHooksDisabled) != "") {
 		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)
@@ -284,12 +294,12 @@ func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig) bool {
 }
 
 func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc, streams iostream.Streams) (map[string]string, error) {
-	if opts.sidecarID == "" {
-		return nil, nil
-	}
 	envVars, err := resolveEnvVars(ctx, workDir, opts.envFile, opts.envVarsFlag)
 	if err != nil {
 		return nil, err
+	}
+	if opts.sidecarID == "" {
+		return envVars, nil
 	}
 	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn, streams); err != nil {
 		return nil, err
@@ -456,9 +466,6 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	baseStatusFn := statusFn
 	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 
-	// Only load env vars and resolve secrets when a sidecar is actually
-	// being used — avoids parsing .env.local or hitting secrets APIs on
-	// purely local runs.
 	envVars, statusFn, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
 	if err != nil {
 		return err
@@ -628,7 +635,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			}
 			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, statusFn, streams)
 		}
-		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, statusFn, streams)
+		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, envVars, statusFn, streams)
 	}
 
 	// All-remote execution (--remote flag): send everything to the sidecar.
@@ -691,11 +698,11 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 				return validate.Result{}, err
 			}
 		}
-		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, statusFn, streams))
+		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, envVars, statusFn, streams))
 	}
 
 	// Run all
-	return mapValidateError(validate.RunAll(ctx, workDir, cfg, statusFn, streams))
+	return mapValidateError(validate.RunAll(ctx, workDir, cfg, envVars, statusFn, streams))
 }
 
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
@@ -884,7 +891,7 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 		runErr = err
 	}
 	if len(localCfg.Commands) > 0 {
-		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams))
+		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, envVars, statusFn, streams))
 		combined.Passed += r.Passed
 		combined.Total += r.Total
 		if err != nil {
@@ -971,15 +978,6 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		*sidecarID = active.SidecarID
 		return false, nil
 	}
-	// Fall back to any existing sidecar for this project before creating a new one.
-	// This prevents accumulation of one sidecar per Claude Code session.
-	if existing, err := sidecar.LoadAnyActive(ctx); err == nil && existing != nil {
-		if saveErr := sidecar.SaveActive(ctx, *existing); saveErr != nil {
-			streams.ErrPrintf("warning: could not promote active sidecar: %v\n", saveErr)
-		}
-		*sidecarID = existing.SidecarID
-		return false, nil
-	}
 	// A status line, not stderr prose: having no sidecar yet is the normal state
 	// of a first run, and printing it raw made it the headline of the hook's
 	// "Stop hook error:" banner even when everything then went fine.
@@ -1034,9 +1032,14 @@ var branchSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
 // and the current git branch.
 //
 // When a session ID is present the branch is encoded as an 8-hex-char suffix
-// (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed:
-//   - Both present → "<base>-<sessionID>-<hash8>"
-//   - Session only → "<base>-<sessionID>"
+// (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed,
+// and the session ID is trimmed to its first 8 characters so a name stays
+// readable in `chunk sidecar list` — a session ID is a 36-character UUID, and
+// unlike the state file name this one only has to be recognisable, not unique
+// (two sessions sharing a prefix get two sidecars with one name and different
+// IDs):
+//   - Both present → "<base>-<sessionID8>-<hash8>"
+//   - Session only → "<base>-<sessionID8>"
 //
 // Without a session ID the branch is sanitised and included directly (legacy
 // fallback):
@@ -1048,12 +1051,13 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 	branch := sidecar.CurrentBranch(workDir)
 
 	if sessionID != "" {
+		short := shortSessionID(sessionID)
 		if branch != "" {
 			sum := sha256.Sum256([]byte(sessionID + ":" + branch))
 			hash8 := fmt.Sprintf("%x", sum[:4])
-			return base + "-" + sessionID + "-" + hash8
+			return base + "-" + short + "-" + hash8
 		}
-		return base + "-" + sessionID
+		return base + "-" + short
 	}
 
 	// No session ID: fall back to sanitised branch name for human readability.
