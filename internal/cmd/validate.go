@@ -231,7 +231,7 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	if len(sessionLabel) > 8 {
 		sessionLabel = sessionLabel[:8]
 	}
-	if branch, err := gitutil.CurrentBranch(); err == nil && branch != "" {
+	if branch, err := gitutil.CurrentBranchIn(workDir); err == nil && branch != "" {
 		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate · %s [%s]", branch, sessionLabel)))
 	} else {
 		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate [%s]", sessionLabel)))
