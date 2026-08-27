@@ -531,7 +531,7 @@ func loadEnvVarsWithRetry(
 // local (sidecarID empty).
 func newValidateRecorder(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) *eventlog.Recorder {
 	scName := ""
-	if activeSidecar != nil && activeSidecar.SidecarID == sidecarID {
+	if activeSidecar != nil && activeSidecar.ID() == sidecarID {
 		scName = activeSidecar.Name
 	}
 	op := eventlog.OpValidate
@@ -966,7 +966,7 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir, tokenSource string, active *sidecar.ActiveSidecar, streams iostream.Streams) (bool, error) {
 	statusFn := newStatusFunc(streams)
 	if active != nil {
-		*sidecarID = active.SidecarID
+		*sidecarID = active.ID()
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
 		return false, nil
 	}
@@ -985,7 +985,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		return false, &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: loadErr}
 	}
 	if active != nil {
-		*sidecarID = active.SidecarID
+		*sidecarID = active.ID()
 		return false, nil
 	}
 	// A status line, not stderr prose: having no sidecar yet is the normal state
@@ -1016,7 +1016,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			err:        err,
 		}
 	}
-	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: []string{sc.ID}, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	// Persist the org ID so future sidecar creation skips the picker.
@@ -1136,7 +1136,7 @@ func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.
 func execTarget(opts *validateOpts, cfg *config.ProjectConfig, active *sidecar.ActiveSidecar) string {
 	id := opts.sidecarID
 	if id == "" && active != nil {
-		id = active.SidecarID
+		id = active.ID()
 	}
 	var image string
 	if cfg.HasSidecarImage() {
