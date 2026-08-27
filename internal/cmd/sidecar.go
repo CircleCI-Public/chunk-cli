@@ -126,6 +126,13 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 		if len(collabs) == 1 {
 			return collabs[0].ID, nil
 		}
+		if nonInteractive() {
+			return "", &userError{
+				msg:        "No interactive terminal available to select an organization.",
+				suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
+				err:        tui.ErrNoTTY,
+			}
+		}
 		labels := make([]string, len(collabs))
 		for i, c := range collabs {
 			labels[i] = fmt.Sprintf("%s/%s", c.VcsType, c.Name)
