@@ -202,7 +202,8 @@ in `config.Resolve` and makes clients testable.
 | `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
 | `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
-| `XDG_DATA_HOME` | sidecar, validate, upgrade | Per-project state directory, including the hook-mode validate result cache and the 24 h update-check cache (default: `~/.local/share`) |
+| `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
+| `XDG_STATE_HOME` | upgrade | User state directory for the 24 h update-check cache (default: `~/.local/state`) |
 | `CHUNK_NO_TELEMETRY` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `NO_ANALYTICS` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable anonymous usage telemetry (any non-empty value) |

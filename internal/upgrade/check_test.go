@@ -170,12 +170,15 @@ func TestCheckForUpdate_claimsCacheWindowBeforeFetch(t *testing.T) {
 	if cached.LatestVersion != "" {
 		t.Fatalf("expected no version recorded, got %q", cached.LatestVersion)
 	}
-	if time.Since(cached.CheckedAt) > time.Minute {
-		t.Fatal("expected checked_at to be set to now")
+	// The claim uses a short TTL so aborted fetches are retried in minutes,
+	// not suppressed for a full day. The timestamp should be near the start
+	// of the retry window (roughly checkCacheTTL - checkRetryTTL ago).
+	age := time.Since(cached.CheckedAt)
+	if age < checkCacheTTL-checkRetryTTL-time.Minute || age > checkCacheTTL-checkRetryTTL+time.Minute {
+		t.Fatalf("expected checked_at to be ~%v ago, got %v", checkCacheTTL-checkRetryTTL, age)
 	}
 
-	// The claimed window holds off the next check, and an empty cached
-	// version yields no notice rather than a bogus one.
+	// The claimed window still holds off the next check within the retry window.
 	if got := CheckForUpdate(dir, srv.URL, "v1.0.0"); got != "" {
 		t.Fatalf("expected empty from the claimed window, got %q", got)
 	}
