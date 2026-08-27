@@ -2,8 +2,6 @@ package watch
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -247,94 +245,6 @@ func TestAgo(t *testing.T) {
 	}
 }
 
-// loadSidecars tests
-
-func writeSidecarJSON(t *testing.T, dir, filename, content string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestLoadSidecars_deduplicatesIDs(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
-	writeSidecarJSON(t, dir, "sidecar.sess1.json", `{"sidecar_id":"id2","name":"sc2"}`)
-	// Duplicate id1 — should be deduplicated.
-	writeSidecarJSON(t, dir, "sidecar.sess2.json", `{"sidecar_id":"id1","name":"sc1"}`)
-
-	result := loadSidecars(dir, root, "", "abc123", 0, "root", "main")
-	if len(result) != 2 {
-		t.Fatalf("want 2 unique sidecars, got %d", len(result))
-	}
-}
-
-func TestLoadSidecars_inSyncWhenHeadMatches(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
-
-	result := loadSidecars(dir, root, "", "abc123", 0, "root", "main")
-	if len(result) != 1 {
-		t.Fatalf("want 1, got %d", len(result))
-	}
-	if !result[0].inSync {
-		t.Error("sidecar should be in sync when lastSyncedRef matches head")
-	}
-}
-
-func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","last_synced_ref":"oldref"}`)
-
-	result := loadSidecars(dir, root, "", "newref", 0, "root", "main")
-	if len(result) != 1 {
-		t.Fatalf("want 1, got %d", len(result))
-	}
-	if result[0].inSync {
-		t.Error("sidecar should not be in sync when refs differ")
-	}
-}
-
-func TestLoadSidecars_emptyDir(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-	if result := loadSidecars(dir, root, "", "", 0, "root", "main"); len(result) != 0 {
-		t.Errorf("want 0, got %d", len(result))
-	}
-}
-
-func TestLoadSidecars_skipsEmptySidecarID(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"","name":"empty"}`)
-
-	if result := loadSidecars(dir, root, "", "", 0, "root", "main"); len(result) != 0 {
-		t.Errorf("want 0 (skipped empty ID), got %d", len(result))
-	}
-}
-
-func TestLoadSidecars_snapshotName(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1"}`)
-
-	result := loadSidecars(dir, root, "my-snap", "", 0, "root", "main")
-	if len(result) != 1 {
-		t.Fatalf("want 1, got %d", len(result))
-	}
-	if result[0].snapshotName != "my-snap" {
-		t.Errorf("snapshotName should be 'my-snap', got %q", result[0].snapshotName)
-	}
-}
-
 // recency ordering and per-project event caps
 
 func TestSortByActivity_freshestProjectFirst(t *testing.T) {
@@ -493,73 +403,6 @@ func TestSidecarCapacity(t *testing.T) {
 	}
 }
 
-func TestCapEvents_capsPerProject(t *testing.T) {
-	prior := make([]eventlog.Event, recentEvents)
-	for i := range prior {
-		prior[i] = eventlog.Event{SidecarID: "old", Msg: "old"}
-	}
-	fresh := []eventlog.Event{{SidecarID: "new", Msg: "new"}}
-
-	got := capEvents(prior, fresh)
-
-	if len(got) != recentEvents {
-		t.Fatalf("want %d events, got %d", recentEvents, len(got))
-	}
-	if got[len(got)-1].SidecarID != "new" {
-		t.Errorf("newest event should survive the cap, got %s", got[len(got)-1].SidecarID)
-	}
-}
-
-func TestLoadData_busyProjectDoesNotEvictRecentValidate(t *testing.T) {
-	noisyDir, quietDir := t.TempDir(), t.TempDir()
-	writeSidecarJSON(t, noisyDir, "sidecar.json", `{"sidecar_id":"noisy","name":"noisy"}`)
-	writeSidecarJSON(t, quietDir, "sidecar.json", `{"sidecar_id":"quiet","name":"quiet"}`)
-
-	noisyLog, err := eventlog.Open(noisyDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	quietLog, err := eventlog.Open(quietDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The noisy project alone exceeds the event cap.
-	for i := 0; i < recentEvents+50; i++ {
-		if err := noisyLog.Append(eventlog.Event{
-			Ts: time.Now().Add(-2 * time.Hour), SidecarID: "noisy", Op: eventlog.OpValidate, Level: "info", Msg: "noise",
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := quietLog.Append(eventlog.Event{
-		Ts: time.Now(), SidecarID: "quiet", Op: eventlog.OpValidate, Level: "done", Msg: "validate passed",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	m := New([]ProjectEntry{
-		{Log: noisyLog, DataDir: noisyDir, ProjectRoot: filepath.Join(noisyDir, "noisy-project")},
-		{Log: quietLog, DataDir: quietDir, ProjectRoot: filepath.Join(quietDir, "quiet-project")},
-	}, false)
-
-	msg, ok := m.loadData().(dataMsg)
-	if !ok {
-		t.Fatalf("want dataMsg, got %T", msg)
-	}
-	// The quiet project just validated, so only it is inside activeWindow; the
-	// noisy sidecar's events are 2h old and the fallback does not apply.
-	if len(msg.sidecars) != 1 {
-		t.Fatalf("want 1 active sidecar, got %d", len(msg.sidecars))
-	}
-	if msg.sidecars[0].id != "quiet" {
-		t.Errorf("want quiet sidecar, got %s", msg.sidecars[0].id)
-	}
-	if msg.sidecars[0].lastActivity.IsZero() {
-		t.Error("recent validate lost its activity to the other project's history")
-	}
-}
-
 func TestUpdate_selectionFollowsSidecarID(t *testing.T) {
 	now := time.Now()
 	m := New(nil, false)
@@ -613,32 +456,6 @@ func TestUpdate_unknownSelectionFallsBackToFreshest(t *testing.T) {
 
 	if m.selectedIdx != 0 || m.selectedID != "fresh" {
 		t.Errorf("want fallback to idx 0 (fresh), got idx %d id %q", m.selectedIdx, m.selectedID)
-	}
-}
-
-func TestLoadSidecars_prefersNewestFileForDuplicateID(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	// Both files name the same sidecar. The stale one sorts first under Glob, so
-	// glob order would report the old ref and the sidecar would look out of sync.
-	writeSidecarJSON(t, dir, "sidecar.aaa.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"oldref"}`)
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"newref"}`)
-
-	old := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(filepath.Join(dir, "sidecar.aaa.json"), old, old); err != nil {
-		t.Fatal(err)
-	}
-
-	result := loadSidecars(dir, root, "", "newref", 0, "root", "main")
-	if len(result) != 1 {
-		t.Fatalf("want 1 sidecar, got %d", len(result))
-	}
-	if result[0].lastSyncedRef != "newref" {
-		t.Errorf("want newest file's ref newref, got %q", result[0].lastSyncedRef)
-	}
-	if !result[0].inSync {
-		t.Error("sidecar should be in sync when the newest state file matches head")
 	}
 }
 

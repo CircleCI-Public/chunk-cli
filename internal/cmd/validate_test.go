@@ -96,12 +96,14 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndSidecarImage(t *testing.
 		"expected auth message in stderr, got: %q", stderr)
 }
 
-func TestValidateHookSkipsAuthCheckWhenNoRemoteCommands(t *testing.T) {
+// TestValidateHookRequiresAuthByDefault verifies that hook invocations now
+// always require CircleCI auth — even when no commands are explicitly marked
+// Remote:true — because remote is the default execution mode.
+func TestValidateHookRequiresAuthByDefault(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")
 	t.Setenv(config.EnvCircleCIToken, "")
 
-	// Local-only commands: auth check must not fire.
 	dir := t.TempDir()
 	projCfg := &config.ProjectConfig{
 		Commands: []config.Command{
@@ -112,10 +114,9 @@ func TestValidateHookSkipsAuthCheckWhenNoRemoteCommands(t *testing.T) {
 
 	_, stderr, err := runValidateHook(t, dir)
 
-	// May fail for other reasons (no git repo), but must not be an auth error.
-	assert.Assert(t, !strings.Contains(stderr, "CircleCI auth is not configured"),
-		"auth check must not fire for local-only commands, stderr: %q", stderr)
-	_ = err
+	assert.Assert(t, err != nil)
+	assert.Assert(t, strings.Contains(stderr, "CircleCI auth is not configured"),
+		"auth check must fire because remote is the default, stderr: %q", stderr)
 }
 
 func TestValidateNeedsSidecarSidecarImage(t *testing.T) {
@@ -191,12 +192,19 @@ func TestValidateNoConfigShowsSkillHint(t *testing.T) {
 		"expected suggestion to mention chunk-sidecar skill, got: %q", ue.Suggestion())
 }
 
-func TestValidateRequiresRemoteConfiguration(t *testing.T) {
+// TestValidateDefaultsToRemote confirms that running without --local always
+// attempts remote execution, even when no commands are marked Remote:true.
+// Without a valid CircleCI token the attempt fails with an auth error — proving
+// it never silently fell back to running the commands locally.
+func TestValidateDefaultsToRemote(t *testing.T) {
 	isolateConfig(t)
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
 	dir := t.TempDir()
 	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
 		Commands: []config.Command{
-			{Name: "test", Run: "go test ./..."},
+			{Name: "test", Run: "echo should-not-run-locally"},
 		},
 	}))
 
@@ -207,37 +215,64 @@ func TestValidateRequiresRemoteConfiguration(t *testing.T) {
 	root.SetArgs([]string{"validate", "--project", dir})
 	err := root.Execute()
 
-	assert.Assert(t, err != nil, "expected error when no remote commands configured")
-	var ue *userError
-	assert.Assert(t, errors.As(err, &ue), "expected userError, got %T: %v", err, err)
-	assert.Assert(t, strings.Contains(ue.UserMessage(), "Remote validation is not configured"),
-		"expected remote-not-configured message, got: %q", ue.UserMessage())
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "sidecar setup") || strings.Contains(ue.Suggestion(), "mark-remote"),
-		"expected suggestion to mention sidecar setup or mark-remote, got: %q", ue.Suggestion())
+	assert.Assert(t, err != nil, "expected error: remote should be attempted and fail without a token")
+	combined := outBuf.String() + errBuf.String()
+	assert.Assert(t, !strings.Contains(combined, "should-not-run-locally"),
+		"command must not have run locally, got: %q", combined)
 }
 
-func TestValidateRequiresRemoteConfigurationSkipsInHookContext(t *testing.T) {
+// TestValidateLocalFlagRunsLocally confirms that --local executes commands in
+// the local process without touching a sidecar.
+func TestValidateLocalFlagRunsLocally(t *testing.T) {
 	isolateConfig(t)
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
 	dir := t.TempDir()
-	gitSetup(t, dir, "main")
 	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
 		Commands: []config.Command{
-			{Name: "test", Run: "exit 0"},
+			{Name: "test", Run: "echo ran-locally"},
 		},
 	}))
 
-	_, _, err := runValidateHook(t, dir)
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--local", "--project", dir})
+	err := root.Execute()
 
-	// Hook must not be blocked by the remote-not-configured gate.
-	// (It may fail for other reasons like a dirty tree that can't be fingerprinted,
-	// but it must not return the remote-not-configured userError.)
-	if err != nil {
-		var ue *userError
-		if errors.As(err, &ue) {
-			assert.Assert(t, !strings.Contains(ue.Error(), "Remote validation is not configured"),
-				"hook must not be blocked by remote-not-configured gate, got: %q", ue.Error())
-		}
-	}
+	assert.NilError(t, err)
+	combined := outBuf.String() + errBuf.String()
+	assert.Assert(t, strings.Contains(combined, "ran-locally"),
+		"--local must execute commands in the local process, got: %q", combined)
+}
+
+// TestValidateLocalFlagOverridesRemoteConfig confirms that --local wins over
+// Remote:true in config — the flag is the explicit opt-out from remote-first.
+func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{
+			{Name: "test", Run: "echo ran-locally", Remote: true},
+		},
+	}))
+
+	var outBuf, errBuf bytes.Buffer
+	root := NewRootCmd("test")
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--local", "--project", dir})
+	err := root.Execute()
+
+	assert.NilError(t, err, "--local must bypass Remote:true config and run locally")
+	combined := outBuf.String() + errBuf.String()
+	assert.Assert(t, strings.Contains(combined, "ran-locally"),
+		"--local must execute commands locally even when Remote:true, got: %q", combined)
 }
 
 func TestValidateEnvFlagBadValue(t *testing.T) {
@@ -274,6 +309,8 @@ const skipMsg = "skipped (no changes since last successful run)"
 // runActiveStopHook fires a re-signalled Stop hook against dir and returns what
 // the agent would see, along with the exit error. Unlike runValidateHook it does
 // not assert on the error, so failing runs can be exercised too.
+// --local is passed so the tests focus on hook caching semantics rather than
+// remote routing — caching is orthogonal to where commands run.
 func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
@@ -281,7 +318,7 @@ func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetIn(strings.NewReader(activeStopHookPayload))
-	root.SetArgs([]string{"validate", "--project", dir})
+	root.SetArgs([]string{"validate", "--local", "--project", dir})
 	err = root.Execute()
 	return errBuf.String(), err
 }

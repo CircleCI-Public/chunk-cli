@@ -143,7 +143,7 @@ chunk
 │           --json                  # Output as JSON
 │
 ├── watch [dir...]                  # Live TUI dashboard for active sidecars and recent activity
-│   --all                           # Watch all known projects, not just the current directory
+│   --focus                         # Watch only the current directory instead of all known projects
 │
 ├── hook                            # Manage chunk hook execution
 │   --project <path>                # Override project directory
@@ -170,7 +170,7 @@ chunk
 - `build-prompt` does not write intermediate files by default. Pass `--debug` to write the raw details JSON, analysis markdown, and PR rankings CSV alongside the prompt — useful when diagnosing unexpected prompt output.
 - `task run` defaults to pipeline-as-tool mode; use `--no-pipeline-as-tool`
   to disable.
-- `config set` user keys: `model`, `telemetry`. Project keys (`.chunk/config.json`):
+- `config set` user keys: `model`, `telemetry`, `notifications`. Project keys (`.chunk/config.json`):
   `orgID`, `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
 - `validate --mark-remote` sets `remote: true` on commands in `.chunk/config.json`
   and exits without running anything. With a `[name]` it marks that one command;
@@ -187,6 +187,17 @@ chunk
   Since `sidecar snapshot create` is normally followed by recording that key, a
   project on a snapshot runs everything remotely and `remote: true` becomes a
   no-op.
+- **Snapshot selection.** When a sidecar has to be created and no
+  `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
+  picks one of the org's snapshots instead of booting the bare default image.
+  A snapshot matches on its name and tag, split into tokens: the repo name
+  (from the git remote, then `vcs.repo`, then the directory name) outranks the
+  detected stack, and the org's own snapshot outranks an equivalent system one.
+  Matching is token-based, so `go` matches `go-base` but not `mongo-api`. When
+  nothing matches, the default image is used and the reason is printed —
+  guessing the wrong prepared environment produces failures that look like the
+  repo's own. Selection never fails a run: an unreachable snapshot API is
+  warned about and treated as no match.
 - Telemetry is anonymous and opt-out. It's disabled by the
   `CHUNK_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
   variables (first match wins, in that order), or `chunk config set telemetry false`.
@@ -195,7 +206,7 @@ chunk
   env var → `orgID` in `.chunk/config.json` → interactive org picker (TTY only).
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
-- `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. Running `watch` in a project also registers that project so `--all` finds it in future runs.
+- `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - `chunk init` uses Claude to auto-detect the test command for the project.
   It generates `.claude/settings.json` with pre-commit hooks. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.
@@ -281,8 +292,9 @@ chunk
 |-----|-------|-------------|
 | `model` | user config (`~/.config/chunk/config.json`) | Claude model override |
 | `telemetry` | user config (`~/.config/chunk/config.json`) | Anonymous usage telemetry (`true`/`false`, default: `true`) |
+| `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
-| `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate |
+| `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
 
 `chunk config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project

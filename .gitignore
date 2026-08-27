@@ -51,3 +51,6 @@ test-fetch-on-stale-sidecar.log
 # toolchain installers downloaded into the repo root
 *.pkg
 *.tar.gz
+
+# Test and lint reports written by Taskfile (RESULTS_DIR).
+test-reports/

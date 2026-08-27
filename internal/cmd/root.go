@@ -90,6 +90,7 @@ Configuration:
 	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newCompletionCmd())
 	rootCmd.AddCommand(newSidecarCmd())
+	rootCmd.AddCommand(newPruneCmd())
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newHookCmd())
@@ -109,7 +110,7 @@ Configuration:
 
 // setupTelemetry resolves the user's telemetry preference and attaches a
 // telemetry.Sender to cmd's context so RecordNow can report a
-// chunk_command_invocation event once the command finishes.
+// command_invocation event once the command finishes.
 func setupTelemetry(cmd *cobra.Command, version string) error {
 	if telemetry.IsTelemetryDisabled(cmd) {
 		return nil
@@ -149,6 +150,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		Metadata: telemetry.Meta{
 			Version:     version,
 			InstanceID:  instanceID,
+			UserID:      config.GetUserID(),
 			OS:          runtime.GOOS,
 			CodingAgent: telemetry.DetectCodingAgent(),
 		},
@@ -172,7 +174,7 @@ var noUpdateCheckCommands = map[string]bool{
 	"completion":                    true,
 	"receive-telemetry":             true,
 	"upgrade":                       true,
-	"watch":                         true,
+	watchCmdName:                    true,
 }
 
 // skipUpdateCheck reports whether cmd, or any command it is nested under, is

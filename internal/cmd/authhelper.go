@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
@@ -120,7 +121,8 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 	}
 
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
-	if err := authprompt.ValidateCircleCIToken(ctx, token, rc.CircleCIBaseURL); err != nil {
+	userID, err := authprompt.ValidateCircleCIToken(ctx, token, rc.CircleCIBaseURL)
+	if err != nil {
 		if hc.HasStatusCode(err, http.StatusUnauthorized) {
 			return nil, fmt.Errorf("invalid CircleCI token: %w", err)
 		}
@@ -129,6 +131,13 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 
 	if err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, insecureStorage); err != nil {
 		return nil, err
+	}
+	if userID != uuid.Nil {
+		// Intentionally overwrites any previously saved user ID — account
+		// switching should reflect the newly authenticated user.
+		if err := config.SaveUserID(userID); err != nil {
+			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
+		}
 	}
 	printSaved(streams, "CircleCI token", insecureStorage)
 	return circleci.NewClient(circleci.Config{

@@ -172,6 +172,8 @@ chunk sidecar forget         # unset the active sidecar (does not delete it)
 
 Per-command routing only applies while `validation.sidecarImage` is unset. Once you record a snapshot ID there, `chunk validate` sends every command to the sidecar regardless of its `remote` flag — run formatters directly if you need them rewriting local files.
 
+With no `validation.sidecarImage` recorded, a sidecar that has to be created is started from whichever of your org's snapshots best fits the repo — one named after the repo first, then one built for the detected stack. The chosen snapshot and the reason are printed. If no snapshot fits, the default image is used, which has none of your dependencies on it; record a snapshot ID to pin the environment instead of relying on the match.
+
 The active sidecar and snapshot state are stored in `$XDG_DATA_HOME/chunk/<project>/` (default: `~/.local/share/chunk/<project>/`) — never inside the repo. The project key is derived from the git root path.
 
 Or hand this off to the `chunk-sidecar` skill:
@@ -279,12 +281,12 @@ chunk watch  1 sidecar  main@a3f9e12                      15:04:32
   ↑/↓ j/k  select  ·  q  quit
 ```
 
-To watch multiple projects at once:
+`watch` shows every project you've watched before, not just the current one:
 
 ```bash
-chunk watch                   # current directory only
+chunk watch                   # all projects you've watched before
+chunk watch --focus           # current directory only
 chunk watch /path/to/other    # add another project
-chunk watch --all             # all projects you've watched before
 ```
 
 `watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).

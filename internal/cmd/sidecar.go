@@ -91,6 +91,18 @@ func resolveOrgID(orgID, workDir string, pickOrg func() (string, error)) (string
 	return pickOrg()
 }
 
+// orgSource names where resolveOrgID would have taken the org ID from, for use
+// in error messages. It mirrors resolveOrgID's precedence and must be kept in
+// step with it. An empty result means the picker supplied the value, which for
+// a single-collaboration account happens without prompting.
+func orgSource(orgID, workDir string) string {
+	if orgID != "" {
+		return "--org-id"
+	}
+	_, source := config.ResolveOrgID(workDir)
+	return source
+}
+
 func orgPicker(ctx context.Context, client *circleci.Client) func() (string, error) {
 	return func() (string, error) {
 		collabs, err := client.ListCollaborations(ctx)
@@ -114,6 +126,13 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 		if len(collabs) == 1 {
 			return collabs[0].ID, nil
 		}
+		if nonInteractive() {
+			return "", &userError{
+				msg:        "No interactive terminal available to select an organization.",
+				suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
+				err:        tui.ErrNoTTY,
+			}
+		}
 		labels := make([]string, len(collabs))
 		for i, c := range collabs {
 			labels[i] = fmt.Sprintf("%s/%s", c.VcsType, c.Name)
@@ -121,10 +140,13 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 		idx, err := tui.SelectFromList("Select an organization:", labels)
 		if err != nil {
 			if errors.Is(err, tui.ErrNoTTY) {
+				// hideDetail: the wrapped error is "no interactive terminal
+				// available", which the message already says in full.
 				return "", &userError{
 					msg:        "No interactive terminal available to select an organization.",
 					suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
 					err:        err,
+					hideDetail: true,
 				}
 			}
 			return "", &userError{msg: "Could not select an organization.", suggestion: "Pass --org-id instead.", err: err}
@@ -232,13 +254,24 @@ func newSidecarCreateCmd() *cobra.Command {
 					image = cfg.Validation.SidecarImage
 				}
 			}
+			// Still unset: fall back to whichever of the org's snapshots fits
+			// this repo, so an unconfigured project gets a prepared environment
+			// instead of a bare image.
+			//
+			// Tracked separately from a user-supplied image: a rejected image the
+			// caller chose is a mistake worth explaining, while a rejected one
+			// chunk chose is not something the caller can act on.
+			imageChosenByUser := image != ""
+			if image == "" {
+				image = autoSelectSnapshotImage(cmd.Context(), client, resolvedOrgID, cwd, newStatusFunc(io), io)
+			}
 			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image)
 			if err != nil {
 				if err := notAuthorized("create sidecars", err); err != nil {
 					return err
 				}
 				var se *circleci.StatusError
-				if image != "" && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
+				if imageChosenByUser && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
 					return newUserError("Could not create the sidecar.").
 						withSuggestion("--image requires a snapshot ID. Create one with 'chunk sidecar snapshot create'.").
 						wrap(err)

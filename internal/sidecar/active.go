@@ -169,7 +169,7 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 		return err
 	}
 	pruneRekeyedState(dir, path, a.SidecarID)
-	// Write a breadcrumb so chunk watch --all can discover this project.
+	// Write a breadcrumb so chunk watch can discover this project.
 	_ = os.WriteFile(filepath.Join(dir, "project-root"), []byte(root), 0o644)
 	return nil
 }

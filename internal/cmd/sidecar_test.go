@@ -162,6 +162,20 @@ func TestOrgPicker_MultipleOrgs_NoTTY(t *testing.T) {
 	assert.Assert(t, errors.Is(err, tui.ErrNoTTY), "expected ErrNoTTY, got: %v", err)
 }
 
+func TestOrgPicker_MultipleOrgs_NonInteractive(t *testing.T) {
+	t.Setenv("CI", "true")
+
+	cci := fakes.NewFakeCircleCI()
+	cci.Collaborations = []fakes.Collaboration{
+		{ID: "org-1", Name: "first"},
+		{ID: "org-2", Name: "second"},
+	}
+	client := newOrgPickerClient(t, cci)
+
+	_, err := orgPicker(context.Background(), client)()
+	assert.Assert(t, errors.Is(err, tui.ErrNoTTY), "expected ErrNoTTY in non-interactive mode, got: %v", err)
+}
+
 func TestSnapshotCreateNameAtLimit(t *testing.T) {
 	cmd := newSidecarSnapshotCreateCmd()
 
