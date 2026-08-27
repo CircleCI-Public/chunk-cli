@@ -2,10 +2,13 @@ package upgrade
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -184,5 +187,74 @@ func TestCheckForUpdate_claimsCacheWindowBeforeFetch(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("expected no further network calls, got %d", hits)
+	}
+}
+
+// The cache is written by short-lived processes that can overlap — parallel
+// agent sessions each running chunk — and a reader that catches a truncated
+// file falls back to refetching, which is the rate-limit hole the claim
+// window exists to close. writeCache renames a temp file into place, so a
+// reader must only ever observe a complete record.
+func TestWriteCache_concurrentReadersNeverSeePartialFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, cacheFileName)
+
+	// Seed one good record so readers have something to find from the start.
+	if err := writeCache(path, updateCache{CheckedAt: time.Now(), LatestVersion: "v1.0.0"}); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				// Vary the payload length so a torn write would be
+				// visible rather than overwritten byte-for-byte.
+				tag := fmt.Sprintf("v1.0.%d", i%100000)
+				if err := writeCache(path, updateCache{CheckedAt: time.Now(), LatestVersion: tag}); err != nil {
+					t.Errorf("writeCache: %v", err)
+					return
+				}
+			}
+		}()
+	}
+
+	var reads, misses int64
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				atomic.AddInt64(&reads, 1)
+				if _, ok := readCache(path); !ok {
+					atomic.AddInt64(&misses, 1)
+				}
+			}
+		}()
+	}
+
+	time.Sleep(250 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	if n := atomic.LoadInt64(&reads); n < 100 {
+		t.Fatalf("only %d reads — too few to say anything about tearing", n)
+	}
+	if n := atomic.LoadInt64(&misses); n != 0 {
+		t.Errorf("%d of %d reads saw a partial or empty cache file", n, atomic.LoadInt64(&reads))
 	}
 }
