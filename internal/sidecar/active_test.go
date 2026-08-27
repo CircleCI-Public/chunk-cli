@@ -320,3 +320,73 @@ func TestSaveActivePrunesRekeyedStateFiles(t *testing.T) {
 	_, err = os.Stat(filepath.Join(stateDir, "sidecar.json"))
 	assert.NilError(t, err)
 }
+
+func TestClearActiveByOrgRemovesOnlyMatchingOrg(t *testing.T) {
+	setupXDGData(t)
+	base, err := config.AppData()
+	assert.NilError(t, err)
+
+	// Two project directories, each holding state for both orgs.
+	writeState := func(project, file, orgID string) string {
+		dir := filepath.Join(base, project)
+		assert.NilError(t, os.MkdirAll(dir, 0o755))
+		path := filepath.Join(dir, file)
+		body := fmt.Sprintf(`{"sidecar_id":"sb-1","org_id":%q}`, orgID)
+		assert.NilError(t, os.WriteFile(path, []byte(body), 0o644))
+		return path
+	}
+	goneA := writeState("projA", "sidecar.json", "org-1")
+	goneB := writeState("projB", "sidecar.json", "org-1")
+	keepA := writeState("projA", "sidecar.other.json", "org-2")
+	// State written before org_id existed must not be swept.
+	legacy := filepath.Join(base, "projB", "sidecar.legacy.json")
+	assert.NilError(t, os.WriteFile(legacy, []byte(`{"sidecar_id":"sb-9"}`), 0o644))
+	// A stray non-directory entry at the base must be skipped, not fatal.
+	assert.NilError(t, os.WriteFile(filepath.Join(base, "auth.json"), []byte(`{}`), 0o644))
+
+	removed, err := ClearActiveByOrg("org-1")
+	assert.NilError(t, err)
+	assert.Equal(t, removed, 2)
+
+	for _, p := range []string{goneA, goneB} {
+		_, statErr := os.Stat(p)
+		assert.Assert(t, os.IsNotExist(statErr), "state for the pruned org must be removed: %s", p)
+	}
+	for _, p := range []string{keepA, legacy} {
+		_, statErr := os.Stat(p)
+		assert.NilError(t, statErr, "state outside the pruned org must survive")
+	}
+}
+
+func TestClearActiveByOrgNoopWhenBaseMissing(t *testing.T) {
+	setupXDGData(t)
+
+	removed, err := ClearActiveByOrg("org-1")
+	assert.NilError(t, err)
+	assert.Equal(t, removed, 0)
+}
+
+func TestClearActiveByOrgReportsRemovalFailures(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping: root bypasses file permission checks")
+	}
+	setupXDGData(t)
+	base, err := config.AppData()
+	assert.NilError(t, err)
+
+	// A readable project whose state must still be cleared.
+	good := filepath.Join(base, "projGood")
+	assert.NilError(t, os.MkdirAll(good, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(good, "sidecar.json"), []byte(`{"sidecar_id":"sb-1","org_id":"org-1"}`), 0o644))
+
+	// An unreadable project directory: os.Remove of its state file fails.
+	bad := filepath.Join(base, "projBad")
+	assert.NilError(t, os.MkdirAll(bad, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(bad, "sidecar.json"), []byte(`{"sidecar_id":"sb-2","org_id":"org-1"}`), 0o644))
+	assert.NilError(t, os.Chmod(bad, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(bad, 0o755) })
+
+	removed, err := ClearActiveByOrg("org-1")
+	assert.Assert(t, err != nil, "failure to remove state must surface as an error")
+	assert.Equal(t, removed, 1, "the sweep must continue past a failing project")
+}

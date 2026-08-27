@@ -80,7 +80,11 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted %d sidecar(s)", deleted)))
 
-			if cleared, _ := sidecar.ClearActiveByOrg(resolvedOrgID); cleared > 0 {
+			cleared, cerr := sidecar.ClearActiveByOrg(resolvedOrgID)
+			if cerr != nil {
+				io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
+			}
+			if cleared > 0 {
 				io.ErrPrintln("Active sidecar cleared")
 			}
 
