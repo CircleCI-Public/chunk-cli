@@ -39,7 +39,7 @@ func newSession(t *testing.T, exitFor func(command string) (string, int)) (*side
 	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
 	assert.NilError(t, err)
 
-	session, err := sidecar.OpenSession(context.Background(), client, "sc-1", keyFile, "")
+	session, err := sidecar.OpenSession(context.Background(), client, "sc-1", keyFile, "", false)
 	assert.NilError(t, err)
 	return session, sshSrv
 }
