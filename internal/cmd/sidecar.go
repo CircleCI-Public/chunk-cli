@@ -1251,7 +1251,7 @@ func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
 			continue
 		}
 		opts.status(iostream.LevelStep, fmt.Sprintf("Running setup step %q: %s", step.Name, step.Command))
-		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, opts.identityFile, opts.authSock)
+		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, opts.identityFile, opts.authSock, false)
 		if err != nil {
 			if sessErr := sshSessionError(err); sessErr != nil {
 				return sessErr

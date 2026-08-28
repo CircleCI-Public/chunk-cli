@@ -119,8 +119,8 @@ func TestCreateSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if sb.ID != "sidecar-new-123" {
-		t.Errorf("expected ID sidecar-new-123, got %s", sb.ID)
+	if sb.ID != "sidecar-new-1" {
+		t.Errorf("expected ID sidecar-new-1, got %s", sb.ID)
 	}
 	if sb.Name != "my-sidecar" {
 		t.Errorf("expected name my-sidecar, got %s", sb.Name)

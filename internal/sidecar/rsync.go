@@ -46,7 +46,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	sidecarID, identityFile, authSock, workdir, cwd string, persist bool,
 	status iostream.StatusFunc) error {
 
-	sess, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
+	sess, err := OpenSession(ctx, client, sidecarID, identityFile, authSock, false)
 	if err != nil {
 		return fmt.Errorf("rsync: open session: %w", err)
 	}
