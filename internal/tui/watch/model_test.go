@@ -164,29 +164,6 @@ func TestIsSummaryEvent(t *testing.T) {
 	}
 }
 
-// stripUUIDSuffix tests
-
-func TestStripUUIDSuffix(t *testing.T) {
-	tests := []struct {
-		in, want string
-	}{
-		{"chunk-cli-2d66488f-e67f-4c3a-9abc-112233445566", "chunk-cli"},
-		{"abc-deadbeef-rest", "abc"},
-		{"no-uuid-here", "no-uuid-here"},
-		{"", ""},
-		// Leading dash: i=0 fails the i>0 guard.
-		{"-2d66488f-rest", "-2d66488f-rest"},
-		// 'g' is not valid hex.
-		{"abc-2d66488g-rest", "abc-2d66488g-rest"},
-		{"plain", "plain"},
-	}
-	for _, tt := range tests {
-		if got := stripUUIDSuffix(tt.in); got != tt.want {
-			t.Errorf("stripUUIDSuffix(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
 // truncate tests
 
 func TestTruncate(t *testing.T) {
@@ -595,11 +572,11 @@ func TestRowLabel(t *testing.T) {
 		want  string
 	}{
 		{"alone uses the branch", sidecarInfo{id: "x", branch: "main", sessionID: "other"}, false, "main"},
-		{"alone with no branch falls back to the name", sidecarInfo{id: "x", name: "sc-1"}, false, "sc-1"},
+		{"alone with no branch falls back to the identifier", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-1"}, false, "11111111-aaaa-bbbb-cccc-000000000001"},
 		{"own session is called out", sidecarInfo{id: "x", branch: "main", sessionID: "mine1234-abcd"}, true, "● this session"},
 		{"other session is shortened", sidecarInfo{id: "x", branch: "main", sessionID: "theirs99-abcd"}, true, "○ theirs99"},
 		{"local runner keeps its name", sidecarInfo{id: "", name: localRunnerName, branch: "main"}, true, "○ " + localRunnerName},
-		{"pre-session state keeps its name", sidecarInfo{id: "x", name: "sc-legacy", branch: "main"}, true, "○ sc-legacy"},
+		{"pre-session state is abbreviated too", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-legacy", branch: "main"}, true, "○ 11111111"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
