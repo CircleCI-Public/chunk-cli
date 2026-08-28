@@ -1066,6 +1066,11 @@ func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
 			// Only merge when one entry is a local runner (id == ""). Two real
 			// sidecars on the same branch belong to different sessions and must
 			// stay separate so they are distinguishable in the left pane.
+			//
+			// This guard, not the key, is what keeps sessions apart. Adding
+			// sessionID to the key instead would stop the local runner — which
+			// has no session — from ever merging into the sidecar row it belongs
+			// to, leaving a duplicate "local" row under every branch.
 			if result[idx].id != "" && sc.id != "" {
 				result = append(result, sc)
 				seen[k] = len(result) - 1
@@ -1073,10 +1078,14 @@ func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
 			}
 			result[idx].sidecarIDs = append(result[idx].sidecarIDs, sc.sidecarIDs...)
 			// Promote a real sidecar over a local-only primary so the left pane
-			// shows sync state rather than a pass/fail badge.
+			// shows sync state rather than a pass/fail badge. The session comes
+			// with it: the row now stands for that sidecar, and leaving the
+			// session behind would strip the "this session" label off the
+			// viewer's own row whenever local activity happened to sort first.
 			if result[idx].id == "" && sc.id != "" {
 				result[idx].id = sc.id
 				result[idx].name = sc.name
+				result[idx].sessionID = sc.sessionID
 				result[idx].inSync = sc.inSync
 				result[idx].lastSyncedRef = sc.lastSyncedRef
 				result[idx].snapshotName = sc.snapshotName

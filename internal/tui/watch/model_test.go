@@ -664,3 +664,66 @@ func TestConvertSnapshot_carriesSessionID(t *testing.T) {
 	assert.Equal(t, got["id1"], "sessA")
 	assert.Equal(t, got["id2"], "sessB")
 }
+
+// twoSessionSnapshot builds a daemon snapshot for one worktree driven by two
+// sessions. localAt, when non-zero, adds a local (non-sidecar) validate run.
+func twoSessionSnapshot(aAt, bAt, localAt time.Time) watchd.Snapshot {
+	ev := func(ts time.Time, sidecarID string) eventlog.Event {
+		return eventlog.Event{Ts: ts, SidecarID: sidecarID, Op: eventlog.OpValidate,
+			Level: levelDone, Msg: "1/1 passed"}
+	}
+	events := []eventlog.Event{ev(aAt, "idA"), ev(bAt, "idB")}
+	if !localAt.IsZero() {
+		events = append(events, ev(localAt, ""))
+	}
+	return watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+		Root:     "/repo",
+		Branch:   "main",
+		RepoName: "repo",
+		Sidecars: []watchd.SidecarState{
+			{ID: "idA", Name: "repo-sessA", SessionID: "sessA", RepoName: "repo", LastActivity: aAt},
+			{ID: "idB", Name: "repo-sessB", SessionID: "sessB", RepoName: "repo", LastActivity: bAt},
+		},
+		Events: events,
+	}}}
+}
+
+// The unit tests above set m.sidecars directly, so they cannot catch a merge
+// that collapses two sessions into one row. This drives the real path —
+// convertSnapshot → sortByActivity → mergeBranches → filterSidecars — and
+// asserts both sessions survive it with their identities intact.
+func TestConvertSnapshot_twoSessionsSurviveTheMerge(t *testing.T) {
+	now := time.Now()
+	msg := convertSnapshot(twoSessionSnapshot(now, now.Add(-5*time.Minute), time.Time{}), New(nil, true))
+
+	assert.Equal(t, len(msg.sidecars), 2)
+	assert.Equal(t, sharedWorktrees(msg.sidecars)[groupOf(msg.sidecars[0])], 2)
+
+	m := sessionModel("sessA", msg.sidecars)
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
+	assert.Assert(t, strings.Contains(pane, "this session"), pane)
+	assert.Assert(t, strings.Contains(pane, "sessB"), pane)
+}
+
+// A local run fresher than either sidecar makes the local row lead its group,
+// so mergeBranches promotes a sidecar onto it. The promotion has to carry the
+// session, or the viewer's own row silently loses its label.
+func TestConvertSnapshot_promotionKeepsTheSession(t *testing.T) {
+	now := time.Now()
+	msg := convertSnapshot(
+		twoSessionSnapshot(now.Add(-10*time.Minute), now.Add(-11*time.Minute), now),
+		New(nil, true))
+
+	assert.Equal(t, len(msg.sidecars), 2)
+	sessions := map[string]string{}
+	for _, sc := range msg.sidecars {
+		sessions[sc.id] = sc.sessionID
+	}
+	assert.Equal(t, sessions["idA"], "sessA")
+	assert.Equal(t, sessions["idB"], "sessB")
+
+	m := sessionModel("sessA", msg.sidecars)
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	assert.Assert(t, strings.Contains(pane, "this session"), pane)
+}
