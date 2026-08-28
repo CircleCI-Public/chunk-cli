@@ -9,26 +9,43 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
+// Status icons. Keep these in one place so prompts, results, and plain-text
+// fallbacks all use the same glyph.
+const (
+	IconOK   = "✓"
+	IconWarn = "⚠"
+	IconFail = "✗"
+)
+
 var (
 	_hasDark      = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
 	_colorEnabled = colorSupported()
 	_ld           = lipgloss.LightDark(_hasDark)
 
-	// stdout styles
-	styleSuccess  = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("28"), lipgloss.Color("78")))
-	styleWarning  = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("136"), lipgloss.Color("179")))
-	styleError    = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("160"), lipgloss.Color("167")))
-	styleEmphasis = lipgloss.NewStyle().Bold(true)
-	styleMuted    = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("240"), lipgloss.Color("242")))
-	styleDim      = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("242"), lipgloss.Color("245")))
-	styleTeal     = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("30"), lipgloss.Color("80")))
+	// SuccessStyle is for completed actions and passing status glyphs.
+	SuccessStyle = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("28"), lipgloss.Color("78")))
+	// WarningStyle is for warnings and cautionary prompts.
+	WarningStyle = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("136"), lipgloss.Color("179")))
+	// ErrorStyle is for failures and error glyphs.
+	ErrorStyle = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("160"), lipgloss.Color("167")))
+	// TitleStyle is for prompt headings and emphasized labels.
+	TitleStyle = lipgloss.NewStyle().Bold(true)
+	// HelperStyle is for de-emphasized hint text and secondary labels.
+	HelperStyle = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("252"), lipgloss.Color("250")))
+	// NoColorStyle is the fallback when color output is disabled.
+	NoColorStyle = lipgloss.NewStyle().Foreground(lipgloss.NoColor{})
 
-	// stderr styles
+	// Internal styles without a direct semantic equivalent.
+	styleDim  = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("248"), lipgloss.Color("246")))
+	styleTeal = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("30"), lipgloss.Color("80")))
+
+	// Stderr variants share the same colors but are kept separate so per-stream
+	// detection can diverge in future.
 	styleErrSuccess  = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("28"), lipgloss.Color("78")))
 	styleErrWarning  = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("136"), lipgloss.Color("179")))
 	styleErrError    = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("160"), lipgloss.Color("167")))
 	styleErrEmphasis = lipgloss.NewStyle().Bold(true)
-	styleErrDim      = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("242"), lipgloss.Color("245")))
+	styleErrDim      = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("248"), lipgloss.Color("246")))
 )
 
 func colorSupported() bool {
@@ -53,12 +70,12 @@ func render(s lipgloss.Style, text string) string {
 	return s.Render(text)
 }
 
-func Red(text string) string    { return render(styleError, text) }
-func Green(text string) string  { return render(styleSuccess, text) }
-func Yellow(text string) string { return render(styleWarning, text) }
+func Red(text string) string    { return render(ErrorStyle, text) }
+func Green(text string) string  { return render(SuccessStyle, text) }
+func Yellow(text string) string { return render(WarningStyle, text) }
 func Cyan(text string) string   { return render(styleTeal, text) }
-func Gray(text string) string   { return render(styleMuted, text) }
-func Bold(text string) string   { return render(styleEmphasis, text) }
+func Gray(text string) string   { return render(HelperStyle, text) }
+func Bold(text string) string   { return render(TitleStyle, text) }
 func Dim(text string) string    { return render(styleDim, text) }
 
 func ErrGreen(text string) string  { return render(styleErrSuccess, text) }

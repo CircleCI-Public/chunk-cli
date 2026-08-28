@@ -4,7 +4,7 @@ package watch
 import (
 	"fmt"
 	"os"
-	"path/filepath":internal/ui/watch/model.go
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
@@ -54,48 +55,48 @@ var logoLines = []string{
 
 // watchStyles holds lipgloss styles computed for the current terminal background.
 type watchStyles struct {
-	Dim    lipgloss.Style
-	Bold   lipgloss.Style
-	Green  lipgloss.Style
-	Yellow lipgloss.Style
-	Blue   lipgloss.Style
-	Purple lipgloss.Style
-	Teal   lipgloss.Style
-	Orange lipgloss.Style
-	Amber  lipgloss.Style
-	Red    lipgloss.Style
-	Muted  lipgloss.Style
-	VDim   lipgloss.Style
+	Dim      lipgloss.Style
+	Emphasis lipgloss.Style
+	Success  lipgloss.Style
+	Warning  lipgloss.Style
+	Running  lipgloss.Style
+	Purple   lipgloss.Style
+	Teal     lipgloss.Style
+	Orange   lipgloss.Style
+	Amber    lipgloss.Style
+	Error    lipgloss.Style
+	Muted    lipgloss.Style
+	VDim     lipgloss.Style
 }
 
-func (s watchStyles) dim(text string) string    { return s.Dim.Render(text) }
-func (s watchStyles) bold(text string) string   { return s.Bold.Render(text) }
-func (s watchStyles) green(text string) string  { return s.Green.Render(text) }
-func (s watchStyles) yellow(text string) string { return s.Yellow.Render(text) }
-func (s watchStyles) blue(text string) string   { return s.Blue.Render(text) }
-func (s watchStyles) purple(text string) string { return s.Purple.Render(text) }
-func (s watchStyles) teal(text string) string   { return s.Teal.Render(text) }
-func (s watchStyles) orange(text string) string { return s.Orange.Render(text) }
-func (s watchStyles) amber(text string) string  { return s.Amber.Render(text) }
-func (s watchStyles) red(text string) string    { return s.Red.Render(text) }
-func (s watchStyles) muted(text string) string  { return s.Muted.Render(text) }
-func (s watchStyles) vdim(text string) string   { return s.VDim.Render(text) }
+func (s watchStyles) dim(text string) string      { return s.Dim.Render(text) }
+func (s watchStyles) emphasis(text string) string { return s.Emphasis.Render(text) }
+func (s watchStyles) success(text string) string  { return s.Success.Render(text) }
+func (s watchStyles) warning(text string) string  { return s.Warning.Render(text) }
+func (s watchStyles) running(text string) string  { return s.Running.Render(text) }
+func (s watchStyles) purple(text string) string   { return s.Purple.Render(text) }
+func (s watchStyles) teal(text string) string     { return s.Teal.Render(text) }
+func (s watchStyles) orange(text string) string   { return s.Orange.Render(text) }
+func (s watchStyles) amber(text string) string    { return s.Amber.Render(text) }
+func (s watchStyles) err(text string) string      { return s.Error.Render(text) }
+func (s watchStyles) muted(text string) string    { return s.Muted.Render(text) }
+func (s watchStyles) vdim(text string) string     { return s.VDim.Render(text) }
 
 func newWatchStyles(hasDark bool) watchStyles {
 	ld := lipgloss.LightDark(hasDark)
 	return watchStyles{
-		Dim:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("242"), lipgloss.Color("245"))),
-		Bold:   lipgloss.NewStyle().Bold(true),
-		Green:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("28"), lipgloss.Color("78"))),
-		Yellow: lipgloss.NewStyle().Foreground(ld(lipgloss.Color("136"), lipgloss.Color("179"))),
-		Blue:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("25"), lipgloss.Color("110"))),
-		Purple: lipgloss.NewStyle().Foreground(ld(lipgloss.Color("91"), lipgloss.Color("140"))),
-		Teal:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("30"), lipgloss.Color("80"))),
-		Orange: lipgloss.NewStyle().Foreground(ld(lipgloss.Color("130"), lipgloss.Color("173"))),
-		Amber:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("136"), lipgloss.Color("214"))),
-		Red:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("160"), lipgloss.Color("167"))),
-		Muted:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("240"), lipgloss.Color("242"))),
-		VDim:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("248"), lipgloss.Color("238"))),
+		Dim:      lipgloss.NewStyle().Foreground(ld(lipgloss.Color("248"), lipgloss.Color("246"))),
+		Emphasis: lipgloss.NewStyle().Bold(true),
+		Success:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("28"), lipgloss.Color("78"))),
+		Warning:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("136"), lipgloss.Color("179"))),
+		Running:  lipgloss.NewStyle().Foreground(ld(lipgloss.Color("25"), lipgloss.Color("110"))),
+		Purple:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("91"), lipgloss.Color("140"))),
+		Teal:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("30"), lipgloss.Color("80"))),
+		Orange:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("130"), lipgloss.Color("173"))),
+		Amber:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("136"), lipgloss.Color("214"))),
+		Error:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("160"), lipgloss.Color("167"))),
+		Muted:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("252"), lipgloss.Color("250"))),
+		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
 	}
 }
 
@@ -222,7 +223,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		selectedID:    noSelection,
 		watchAll:      watchAll,
 		ownSession:    session.IDFromEnv(),
-		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),:internal/ui/watch/model.go
+		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
 	}
 }
 
@@ -374,12 +375,12 @@ func (m Model) renderHeader(st watchStyles) string {
 		branch := m.branches[0]
 		head := m.headRefs[0]
 		if branch != "" && head != "" {
-			contextTag = "  " + st.green(branch+"@"+head[:min(7, len(head))])
+			contextTag = "  " + st.success(branch+"@"+head[:min(7, len(head))])
 		}
 	}
 
 	clock := time.Now().Format("15:04:05")
-	title := st.bold("chunk watch") + "  " + st.muted(count) + contextTag
+	title := st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
 	right := st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
@@ -433,7 +434,7 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 	add := func(s string) { lines = append(lines, s) }
 
 	if m.focusedPane == paneLeft {
-		add(st.bold("sidecars"))
+		add(st.emphasis("sidecars"))
 	} else {
 		add(st.vdim("sidecars"))
 	}
@@ -469,7 +470,7 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 				addRow("")
 			}
 			label := truncate(sc.repoName, leftPaneWidth-4)
-			addRow(st.vdim("── ") + st.bold(label)):internal/ui/watch/model.go
+			addRow(st.vdim("── ") + st.emphasis(label))
 			lastRepo = sc.repoName
 			haveGroup = false
 		}
@@ -499,7 +500,7 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 			// The branch gets the full width: it is the thing the reader is
 			// looking for, and squeezing the count onto the same line would
 			// truncate a normal-length branch name to nothing.
-			addRow("  " + st.bold(truncate(label, leftPaneWidth-2)))
+			addRow("  " + st.emphasis(truncate(label, leftPaneWidth-2)))
 			addRow("  " + st.vdim(fmt.Sprintf("%d sessions", sessions[group])))
 		}
 		lastGroup, haveGroup = group, true
@@ -509,7 +510,7 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 
 		if selected {
 			if m.focusedPane == paneLeft {
-				addRow(st.green("▶ ") + st.bold(nameLine))
+				addRow(st.success("▶ ") + st.emphasis(nameLine))
 			} else {
 				addRow(st.vdim("▶ ") + st.muted(nameLine))
 			}
@@ -524,22 +525,22 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 		switch {
 		case sc.running:
 			frame := spinFrames[m.spinIdx%len(spinFrames)]
-			addRow("  " + st.blue(frame+" "+string(sc.lastOp)+"..."))
+			addRow("  " + st.running(frame+" "+string(sc.lastOp)+"..."))
 		case sc.id == "": // local runner — no sync state
 			switch sc.lastLevel {
 			case levelDone:
-				addRow("  " + st.green("✓ passed"))
+				addRow("  " + st.success(ui.IconOK+" passed"))
 			case levelError:
-				addRow("  " + st.red("✗ failed"))
+				addRow("  " + st.err(ui.IconFail+" failed"))
 			default:
 				addRow("  " + st.muted("no runs yet"))
 			}
 		case sc.inSync:
-			addRow("  " + st.green("✓ in sync"))
+			addRow("  " + st.success(ui.IconOK+" in sync"))
 		case sc.lastSyncedRef == "":
 			addRow("  " + st.muted("not synced"))
 		default:
-			addRow("  " + st.yellow("↑ needs sync"))
+			addRow("  " + st.warning("↑ needs sync"))
 		}
 
 		if !sc.lastActivity.IsZero() {
@@ -583,7 +584,7 @@ func (m Model) renderActivityPane(st watchStyles, maxLines int) []string {
 
 	var title string
 	if m.focusedPane == paneRight {
-		title = st.bold("activity")
+		title = st.emphasis("activity")
 	} else {
 		title = st.vdim("activity")
 	}
@@ -823,9 +824,9 @@ func outcomeOf(g invocationGroup) (icon, label, level string) {
 			count = "passed"
 		}
 		if e.Level == levelDone {
-			return "✓", count, levelDone
+			return ui.IconOK, count, levelDone
 		}
-		return "✗", count, levelError
+		return ui.IconFail, count, levelError
 	}
 	return "●", "running", ""
 }
@@ -852,7 +853,7 @@ func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selecte
 		arrow = "▶ "
 	}
 	if selected {
-		arrow = st.bold(arrow)
+		arrow = st.emphasis(arrow)
 	} else {
 		arrow = st.vdim(arrow)
 	}
@@ -861,11 +862,11 @@ func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selecte
 	var outcomeStr string
 	switch level {
 	case levelDone:
-		outcomeStr = st.green(icon + " " + label)
+		outcomeStr = st.success(icon + " " + label)
 	case levelError:
-		outcomeStr = st.red(icon + " " + label)
+		outcomeStr = st.err(icon + " " + label)
 	default:
-		outcomeStr = st.blue(icon + " " + label)
+		outcomeStr = st.running(icon + " " + label)
 	}
 
 	var ts time.Time
@@ -884,7 +885,7 @@ func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selecte
 
 	label2 := st.purple("validate") + "  " + outcomeStr + "  " + tsStr + durStr
 	if selected {
-		label2 = st.bold(st.purple("validate")) + "  " + outcomeStr + "  " + tsStr + durStr
+		label2 = st.emphasis(st.purple("validate")) + "  " + outcomeStr + "  " + tsStr + durStr
 	}
 	return arrow + label2
 }
@@ -965,7 +966,7 @@ func renderEvent(st watchStyles, e eventlog.Event) string {
 func opTag(st watchStyles, op eventlog.Op) string {
 	switch op {
 	case eventlog.OpSync:
-		return st.blue("sync    ")
+		return st.running("sync    ")
 	case eventlog.OpValidate:
 		return st.purple("validate")
 	case eventlog.OpExec:
@@ -982,11 +983,11 @@ func opTag(st watchStyles, op eventlog.Op) string {
 func iconAndMsg(st watchStyles, e eventlog.Event) (string, string) {
 	switch e.Level {
 	case levelDone:
-		return st.green("✓"), st.green(e.Msg)
+		return st.success(ui.IconOK), st.success(e.Msg)
 	case "warn":
-		return st.yellow("⚠"), st.yellow(e.Msg)
+		return st.warning(ui.IconWarn), st.warning(e.Msg)
 	case levelError:
-		return st.red("✗"), st.red(e.Msg)
+		return st.err(ui.IconFail), st.err(e.Msg)
 	default:
 		if strings.HasPrefix(e.Msg, "$ ") {
 			return st.muted("$"), st.muted(strings.TrimPrefix(e.Msg, "$ "))
@@ -1029,7 +1030,7 @@ func (m Model) renderFooter(st watchStyles) string {
 
 	footer := st.vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
 	if m.daemonErr != nil {
-		footer += "  " + st.red("daemon unavailable: "+m.daemonErr.Error()) + "\n"
+		footer += "  " + st.err("daemon unavailable: "+m.daemonErr.Error()) + "\n"
 	}
 	return footer
 }
