@@ -629,7 +629,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 		}
 		if sidecarID != "" && allRemote {
-			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
+			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, streams)
 			if err != nil {
 				return validate.Result{}, err
 			}
@@ -640,7 +640,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 
 	// All-remote execution (--remote flag): send everything to the sidecar.
 	if sidecarID != "" && allRemote {
-		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
+		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, streams)
 		if err != nil {
 			return validate.Result{}, err
 		}
@@ -653,7 +653,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 		if name != "" {
 			if cmd := cfg.FindCommand(name); cmd != nil && cmd.Remote {
 				statusFn(iostream.LevelInfo, fmt.Sprintf("running %s on sidecar %s", name, sidecarID))
-				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
+				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, streams)
 				if err != nil {
 					return validate.Result{}, err
 				}
@@ -810,11 +810,10 @@ func reapAbandonedSidecars(ctx context.Context, client *circleci.Client, workDir
 // stdout and stderr are therefore always empty — callers print output only when
 // it was not already streamed, so there is nothing left for them to do.
 func newExecFn(
-	ctx context.Context, client *circleci.Client, sidecarID, workdir string,
+	ctx context.Context, client *circleci.Client, sidecarID, workdir, localWorkDir string,
 	envVars map[string]string, rc config.ResolvedConfig, streams iostream.Streams,
-) (func(context.Context, string) (string, string, int, error), string, error) {
-	cwd, _ := os.Getwd()
-	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
+) (func(context.Context, string) (string, string, int, string, error), string, error) {
+	_, repo, _ := gitremote.DetectOrgAndRepo(localWorkDir)
 	dest, err := sidecar.ResolveWorkspace(ctx, workdir, repo)
 	if err != nil {
 		return nil, "", &userError{msg: "Could not determine workspace path.", err: err}
@@ -835,14 +834,33 @@ func newExecFn(
 		}
 		_, _ = w.Write(data)
 	}
-	execFn := func(ctx context.Context, script string) (string, string, int, error) {
+	execFn := func(ctx context.Context, script string) (string, string, int, string, error) {
 		result, err := client.Exec(ctx, sidecarID, "sh", []string{"-c", script}, merged, onOutput)
 		if err != nil {
-			return "", "", 0, err
+			return "", "", 0, "", err
 		}
-		return "", "", result.ExitCode, nil
+		if result.CommandID != "" {
+			logCommandID(localWorkDir, sidecarID, result.CommandID)
+		}
+		return "", "", result.ExitCode, result.CommandID, nil
 	}
 	return execFn, dest, nil
+}
+
+// logCommandID writes a structured command-ID event to the project event log.
+// This records the sandbox-provisioner command ID so that failing runs can be
+// replayed via GET /api/v3/sidecar/commands/{id}/output. Errors are silently
+// ignored: a missing log entry is better than a blocked validate run.
+func logCommandID(localWorkDir, sidecarID, commandID string) {
+	dataDir, err := config.ProjectDataDir(localWorkDir)
+	if err != nil {
+		return
+	}
+	el, err := eventlog.Open(dataDir)
+	if err != nil {
+		return
+	}
+	_ = el.AppendCommandID(commandID, sidecarID, "", sidecar.CurrentBranch(localWorkDir), eventlog.OpValidate)
 }
 
 // hostForwardEnv collects host environment variables that should be forwarded
@@ -878,7 +896,7 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 	var combined validate.Result
 	var runErr error
 	if len(remoteCfg.Commands) > 0 {
-		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
+		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, streams)
 		if err != nil {
 			return validate.Result{}, unreachableSidecar(sidecarID, commandNames(remoteCfg.Commands), err)
 		}

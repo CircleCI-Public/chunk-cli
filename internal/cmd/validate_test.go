@@ -152,10 +152,12 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
-	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", envVars, config.ResolvedConfig{}, streams)
+	// Pass a fixed remote workdir so ResolveWorkspace doesn't need to detect a
+	// repo name from a temp directory with no git remote.
+	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "/workspace/myrepo", t.TempDir(), envVars, config.ResolvedConfig{}, streams)
 	assert.NilError(t, err)
 
-	_, _, _, err = execFn(context.Background(), "echo hello")
+	_, _, _, _, err = execFn(context.Background(), "echo hello")
 	assert.NilError(t, err)
 
 	// Find the exec request and verify env vars were included in the body.

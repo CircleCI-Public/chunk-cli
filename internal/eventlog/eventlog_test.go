@@ -193,6 +193,39 @@ func TestWrapNilInner(t *testing.T) {
 	wrapped(iostream.LevelInfo, "should not panic")
 }
 
+func TestAppendCommandID(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.AppendCommandID("cmd-abc123", "sc-id", "my-sc", "main", OpValidate); err != nil {
+		t.Fatalf("AppendCommandID: %v", err)
+	}
+
+	got, err := l.Recent(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 event, got %d", len(got))
+	}
+	e := got[0]
+	if e.CommandID != "cmd-abc123" {
+		t.Errorf("CommandID = %q, want %q", e.CommandID, "cmd-abc123")
+	}
+	if e.SidecarID != "sc-id" {
+		t.Errorf("SidecarID = %q, want %q", e.SidecarID, "sc-id")
+	}
+	if e.Level != levelInfo {
+		t.Errorf("Level = %q, want %q", e.Level, levelInfo)
+	}
+	if e.Op != OpValidate {
+		t.Errorf("Op = %q, want %q", e.Op, OpValidate)
+	}
+}
+
 func TestLevelStr(t *testing.T) {
 	tests := []struct {
 		in   iostream.Level

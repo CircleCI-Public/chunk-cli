@@ -35,6 +35,7 @@ type Event struct {
 	Op          Op        `json:"op"`
 	Level       string    `json:"level"` // "step", "info", "warn", "done", "error"
 	Msg         string    `json:"msg"`
+	CommandID   string    `json:"command_id,omitempty"`
 }
 
 const logFile = "events.jsonl"
@@ -130,6 +131,22 @@ func (l *Log) Wrap(inner iostream.StatusFunc, op Op, sidecarID, sidecarName, bra
 			Msg:         msg,
 		})
 	}
+}
+
+// AppendCommandID writes an event recording the sandbox-provisioner command ID
+// for a remote exec. The commandID identifies the run and can be used to replay
+// its output via GET /api/v3/sidecar/commands/{id}/output.
+func (l *Log) AppendCommandID(commandID, sidecarID, sidecarName, branch string, op Op) error {
+	return l.Append(Event{
+		Ts:          time.Now(),
+		SidecarID:   sidecarID,
+		SidecarName: sidecarName,
+		Branch:      branch,
+		Op:          op,
+		Level:       levelInfo,
+		Msg:         "command_id: " + commandID,
+		CommandID:   commandID,
+	})
 }
 
 // WrapFromDir wraps fn with event-log appending using the log in dataDir.

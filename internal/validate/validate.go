@@ -38,8 +38,8 @@ type Result struct {
 var ErrWorkspaceNotFound = errors.New("workspace directory not found on sidecar")
 
 // WorkspaceExists checks whether dest exists as a directory on the remote sidecar.
-func WorkspaceExists(ctx context.Context, execFn func(context.Context, string) (string, string, int, error), dest string) error {
-	_, _, exitCode, err := execFn(ctx, "test -d "+shellEscape(dest))
+func WorkspaceExists(ctx context.Context, execFn func(context.Context, string) (string, string, int, string, error), dest string) error {
+	_, _, exitCode, _, err := execFn(ctx, "test -d "+shellEscape(dest))
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,7 @@ func RunDryRun(cfg *config.ProjectConfig, name string, status iostream.StatusFun
 // RunRemote runs commands on a remote sidecar via SSH.
 // If name is non-empty, only the named command is run.
 // workDir is the local repository root used to expand {{CHANGED_PACKAGES}}.
-func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), cfg *config.ProjectConfig, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
+func RunRemote(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, commandID string, err error), cfg *config.ProjectConfig, name, dest, workDir string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	commands := cfg.Commands
 	if name != "" {
 		c := cfg.FindCommand(name)
@@ -178,7 +178,7 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		status(iostream.LevelInfo, "$ "+run)
 		script := "cd " + shellEscape(dest) + " && " + run
 		start := time.Now()
-		stdout, stderr, exitCode, err := execFn(ctx, script)
+		stdout, stderr, exitCode, commandID, err := execFn(ctx, script)
 		elapsed := time.Since(start)
 		if err != nil {
 			status(iostream.LevelError, fmt.Sprintf("%-*s  exec error (remote)", maxWidth, c.Name))
@@ -195,6 +195,9 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 			_, _ = fmt.Fprint(streams.Err, stderr)
 		}
 		if exitCode != 0 {
+			if commandID != "" {
+				status(iostream.LevelInfo, "command_id: "+commandID)
+			}
 			status(iostream.LevelError, fmt.Sprintf("%-*s  %s (remote)", maxWidth, c.Name, formatElapsed(elapsed)))
 			skipRemaining(status, commands[i+1:], maxWidth)
 			return Result{Passed: i, Total: total}, fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
@@ -205,10 +208,10 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 }
 
 // RunRemoteInline runs a single inline command on a remote sidecar via SSH.
-func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, err error), name, command, dest string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
+func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, script string) (stdout, stderr string, exitCode int, commandID string, err error), name, command, dest string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	script := "cd " + shellEscape(dest) + " && " + command
 	start := time.Now()
-	stdout, stderr, exitCode, err := execFn(ctx, script)
+	stdout, stderr, exitCode, commandID, err := execFn(ctx, script)
 	elapsed := time.Since(start)
 	if err != nil {
 		return Result{Total: 1}, fmt.Errorf("remote %s: %w", name, err)
@@ -223,6 +226,9 @@ func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 		_, _ = fmt.Fprint(streams.Err, stderr)
 	}
 	if exitCode != 0 {
+		if commandID != "" {
+			status(iostream.LevelInfo, "command_id: "+commandID)
+		}
 		status(iostream.LevelError, fmt.Sprintf("%s  %s (remote)", name, formatElapsed(elapsed)))
 		return Result{Total: 1}, fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
 	}

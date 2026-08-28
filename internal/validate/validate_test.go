@@ -320,9 +320,9 @@ func TestCommandTimeoutOmitted(t *testing.T) {
 func TestRunRemote(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		var execCount int
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
+		execFn := func(_ context.Context, _ string) (string, string, int, string, error) {
 			execCount++
-			return "remote output\n", "", 0, nil
+			return "remote output\n", "", 0, "", nil
 		}
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -341,8 +341,8 @@ func TestRunRemote(t *testing.T) {
 	})
 
 	t.Run("non-zero exit code", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 1, nil
+		execFn := func(_ context.Context, _ string) (string, string, int, string, error) {
+			return "", "", 1, "", nil
 		}
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -355,8 +355,8 @@ func TestRunRemote(t *testing.T) {
 	})
 
 	t.Run("empty stdout not written", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 0, nil
+		execFn := func(_ context.Context, _ string) (string, string, int, string, error) {
+			return "", "", 0, "", nil
 		}
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -371,9 +371,9 @@ func TestRunRemote(t *testing.T) {
 
 	t.Run("named runs only matching command", func(t *testing.T) {
 		var capturedScripts []string
-		execFn := func(_ context.Context, script string) (string, string, int, error) {
+		execFn := func(_ context.Context, script string) (string, string, int, string, error) {
 			capturedScripts = append(capturedScripts, script)
-			return "", "", 0, nil
+			return "", "", 0, "", nil
 		}
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -389,8 +389,8 @@ func TestRunRemote(t *testing.T) {
 	})
 
 	t.Run("named returns error for unknown command", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 0, nil
+		execFn := func(_ context.Context, _ string) (string, string, int, string, error) {
+			return "", "", 0, "", nil
 		}
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -404,9 +404,9 @@ func TestRunRemote(t *testing.T) {
 
 	t.Run("script uses dest directory", func(t *testing.T) {
 		var capturedScript string
-		execFn := func(_ context.Context, script string) (string, string, int, error) {
+		execFn := func(_ context.Context, script string) (string, string, int, string, error) {
 			capturedScript = script
-			return "", "", 0, nil
+			return "", "", 0, "", nil
 		}
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -430,14 +430,14 @@ func TestRunRemoteSSH(t *testing.T) {
 		return client
 	}
 
-	execCallback := func(t *testing.T, session *sidecar.Session) func(context.Context, string) (string, string, int, error) {
+	execCallback := func(t *testing.T, session *sidecar.Session) func(context.Context, string) (string, string, int, string, error) {
 		t.Helper()
-		return func(ctx context.Context, script string) (string, string, int, error) {
+		return func(ctx context.Context, script string) (string, string, int, string, error) {
 			result, err := sidecar.ExecOverSSH(ctx, session, "sh -c "+sidecar.ShellEscape(script), nil, nil)
 			if err != nil {
-				return "", "", 0, err
+				return "", "", 0, "", err
 			}
-			return result.Stdout, result.Stderr, result.ExitCode, nil
+			return result.Stdout, result.Stderr, result.ExitCode, "", nil
 		}
 	}
 
@@ -523,9 +523,9 @@ func TestRunRemoteSSH(t *testing.T) {
 func TestRunRemoteInline(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		var capturedScript string
-		execFn := func(_ context.Context, script string) (string, string, int, error) {
+		execFn := func(_ context.Context, script string) (string, string, int, string, error) {
 			capturedScript = script
-			return "inline output\n", "", 0, nil
+			return "inline output\n", "", 0, "", nil
 		}
 		streams, out, _ := newStreams()
 		var statusBuf bytes.Buffer
@@ -538,8 +538,8 @@ func TestRunRemoteInline(t *testing.T) {
 	})
 
 	t.Run("non-zero exit code", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 1, nil
+		execFn := func(_ context.Context, _ string) (string, string, int, string, error) {
+			return "", "", 1, "", nil
 		}
 		streams, _, _ := newStreams()
 
@@ -548,8 +548,8 @@ func TestRunRemoteInline(t *testing.T) {
 	})
 
 	t.Run("exec error", func(t *testing.T) {
-		execFn := func(_ context.Context, _ string) (string, string, int, error) {
-			return "", "", 0, fmt.Errorf("connection lost")
+		execFn := func(_ context.Context, _ string) (string, string, int, string, error) {
+			return "", "", 0, "", fmt.Errorf("connection lost")
 		}
 		streams, _, _ := newStreams()
 
