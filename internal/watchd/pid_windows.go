@@ -8,6 +8,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// stillActive is the exit code returned by GetExitCodeProcess when the process is still running.
+// Equivalent to STILL_ACTIVE / STATUS_PENDING (0x103) from the Windows SDK.
+const stillActive = 259
+
 // IsRunning reports whether the process whose PID is stored in path is alive.
 // Returns (false, 0, nil) when the file doesn't exist.
 //
@@ -30,5 +34,5 @@ func IsRunning(path string) (bool, int, error) {
 	if err := windows.GetExitCodeProcess(h, &code); err != nil {
 		return false, 0, nil
 	}
-	return code == windows.STILL_ACTIVE, p, nil
+	return code == stillActive, p, nil
 }
