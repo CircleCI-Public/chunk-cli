@@ -10,6 +10,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ciconfig"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 )
 
 // Roles a CI step can be classified into, in the order they are emitted.
@@ -32,7 +33,7 @@ const (
 // `make deploy`, `npm run upload-coverage`.
 var skipMarkers = []string{
 	"deploy", "publish", "notify", "slack", "upload",
-	"codecov", "coveralls", "sonar", "artifact",
+	"codecov", "coveralls", "sonar",
 	"docker push", "docker build", "docker login",
 	"git push", "git tag", "npm publish",
 	// "release" alone would swallow `cargo test --release` and every other
@@ -49,6 +50,28 @@ var skipMarkers = []string{
 var skipTools = []string{
 	"apt", "apt-get", "aws", "brew", "curl", "gcloud", "goreleaser",
 	"gsutil", "helm", "kubectl", "sudo", "terraform", "wget",
+}
+
+// skipPatterns drop a step for the same reasons skipMarkers does, in the cases
+// where a bare substring would take real gates with it.
+var skipPatterns = []*regexp.Regexp{
+	// The CircleCI CLI and its agent are pipeline infrastructure, not checks:
+	// the standard parallelism idiom, `gotestsum -- $(go list ./... | circleci
+	// tests split --split-by=timings)`, needs the binary installed and
+	// CIRCLE_NODE_TOTAL and CIRCLE_NODE_INDEX set, so on a laptop it is either
+	// not found or splits nothing. Matched as a command word — after
+	// whitespace, a pipe, or a `$(` — because it appears inside a substitution
+	// as often as at the front, while a bare substring would drop `pytest
+	// tests/circleci_client`.
+	regexp.MustCompile(`(^|[\s;&|(])circleci(-agent)?\s+\w`),
+
+	// Shipping build artifacts is CI's job, not the inner loop's. It has to be
+	// the shipping that matches and not the word: "artifact" as a substring
+	// dropped `mkdir -p /tmp/artifacts && pytest
+	// --junitxml=/tmp/artifacts/results.xml`, and writing a junit or coverage
+	// report under an artifacts path is what a test job normally does. Upload
+	// and publish are already caught by their own verbs.
+	regexp.MustCompile(`(store|collect|save|archive)[-_ ]artifacts?\b`),
 }
 
 // commandSeparators split a shell one-liner into the commands it runs, so the
@@ -126,7 +149,7 @@ var emitOrder = []string{roleInstall, roleTest, roleLint, roleFormatCheck, roleF
 // At most one command is kept per role: the first match wins, so a job's
 // primary test step beats a later variant like an acceptance-only run.
 func commandsFromCI(workDir string) Detection {
-	res, err := ciconfig.Extract(workDir)
+	res, err := ciconfig.Extract(workDir, ciconfig.Options{DefaultBranch: defaultBranch(workDir)})
 	if err != nil {
 		// A config that exists but cannot be read is the one failure worth
 		// reporting: the user expects their CI gates, and falling back silently
@@ -176,6 +199,20 @@ func commandsFromCI(workDir string) Detection {
 	return det
 }
 
+// defaultBranch is the branch whose CI checks count as gates, read from the
+// repo rather than assumed. A repo that defaults to develop has no main or
+// master, so assuming those selects no gate jobs at all and reports a config
+// full of checks as holding none. An empty return leaves ciconfig on its
+// main/master fallback, which is the best a directory that is not a git
+// checkout, or has no remote HEAD, allows.
+func defaultBranch(workDir string) string {
+	branch, err := gitutil.DefaultBranchIn(workDir)
+	if err != nil {
+		return ""
+	}
+	return branch
+}
+
 // configSource renders the config path relative to the repo for display.
 func configSource(workDir, path string) string {
 	if rel, err := filepath.Rel(workDir, path); err == nil {
@@ -199,6 +236,13 @@ func ciNotes(res *ciconfig.Result) []string {
 	}
 	if res.Truncated > 0 {
 		notes = append(notes, fmt.Sprintf("%d step(s) past the scan limit were not read", res.Truncated))
+	}
+	if res.GateJobs == 0 && !res.Dynamic {
+		// Distinct from finding jobs whose steps did not classify: nothing in
+		// the config runs on this branch at all. Naming the branch is what
+		// makes a wrong guess about it visible.
+		notes = append(notes, fmt.Sprintf("no job in the config runs on %s",
+			strings.Join(res.Branches, " or ")))
 	}
 	return notes
 }
@@ -256,6 +300,9 @@ func classify(c ciconfig.Candidate) string {
 		if strings.Contains(cmd, m) {
 			return roleNone
 		}
+	}
+	if slices.ContainsFunc(skipPatterns, func(re *regexp.Regexp) bool { return re.MatchString(cmd) }) {
+		return roleNone
 	}
 	if slices.ContainsFunc(leadingWords(cmd), func(w string) bool {
 		return slices.Contains(skipTools, w)

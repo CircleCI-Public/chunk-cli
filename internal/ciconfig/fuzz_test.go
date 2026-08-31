@@ -45,7 +45,7 @@ func FuzzExtract(f *testing.F) {
 			t.Skip()
 		}
 
-		res, err := Extract(dir)
+		res, err := Extract(dir, Options{})
 		if err != nil {
 			return
 		}

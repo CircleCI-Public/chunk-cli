@@ -57,8 +57,28 @@ const (
 	maxDepth = 4
 )
 
-// defaultBranches are the branch names a job must run on to count as a gate.
-var defaultBranches = []string{"main", "master"}
+// fallbackBranches are the branch names a job must run on to count as a gate
+// when the caller does not name one. Both are guesses: a repo that defaults to
+// develop has neither, and every job in its config would then look
+// branch-filtered away. Options.DefaultBranch exists to avoid guessing.
+var fallbackBranches = []string{"main", "master"}
+
+// Options configures Extract.
+type Options struct {
+	// DefaultBranch is the branch whose checks count as gates — the branch a
+	// PR merges into. Empty falls back to main and master; whichever names were
+	// used come back in Result.Branches.
+	DefaultBranch string
+}
+
+// Step kinds this package treats specially. Everything else is either a
+// built-in with no command of its own or an invocation of a custom or orb
+// command.
+const (
+	kindRun    = "run"
+	kindWhen   = "when"
+	kindUnless = "unless"
+)
 
 // Candidate is one `run` step from a job that gates the default branch.
 type Candidate struct {
@@ -93,13 +113,23 @@ type Result struct {
 	// interpolation we could not substitute — an unbound parameter, or a
 	// pipeline-time reference such as << pipeline.parameters.x >>.
 	Unresolved int
+
+	// Branches are the branch names gate selection matched filters against, so
+	// a caller can name the branch its candidates gate.
+	Branches []string
+
+	// GateJobs counts the workflow entries that qualified as gates. Zero from a
+	// non-dynamic config means no job in it runs on Branches — a different miss
+	// from "the jobs ran but nothing in them classified", and the one a wrong
+	// default branch produces.
+	GateJobs int
 }
 
 // Extract reads workDir's CircleCI config and returns the run steps belonging
 // to jobs that gate the default branch. It returns ErrNotFound if no config
 // exists, so callers can fall back to filename-based detection, and a
 // *ConfigError if one exists but cannot be read or parsed.
-func Extract(workDir string) (*Result, error) {
+func Extract(workDir string, opts Options) (*Result, error) {
 	path, data, err := read(workDir)
 	if err != nil {
 		return nil, err
@@ -110,13 +140,21 @@ func Extract(workDir string) (*Result, error) {
 		return nil, &ConfigError{Op: "parse", Path: path, Err: err}
 	}
 
-	res := &Result{Path: path, Dynamic: f.Setup}
+	branches := fallbackBranches
+	if opts.DefaultBranch != "" {
+		branches = []string{opts.DefaultBranch}
+	}
+
+	res := &Result{Path: path, Dynamic: f.Setup, Branches: branches}
 	if f.Setup {
 		return res, nil
 	}
 
+	gates := gateJobs(f, branches)
+	res.GateJobs = len(gates)
+
 	e := &extractor{commands: f.Commands, orbs: f.Orbs, res: res, seen: map[string]bool{}}
-	for _, wj := range gateJobs(f) {
+	for _, wj := range gates {
 		job, ok := f.Jobs[wj.Name]
 		if !ok {
 			// Job comes from an orb, not this file.
@@ -153,15 +191,16 @@ func read(workDir string) (string, []byte, error) {
 }
 
 // gateJobs returns the workflow entries that run on the default branch, in
-// config order, deduplicated. Approval holds, branch-filtered jobs and
-// scheduled workflows are excluded.
+// config order, deduplicated. Approval holds, branch-filtered jobs, scheduled
+// workflows and workflows switched off by their own when:/unless: are
+// excluded.
 //
 // Workflows are visited in the order they appear in the file rather than
 // alphabetically: the caller keeps the first command it finds per role, and a
 // config's primary workflow is conventionally written first. Sorting by name
 // would let an unrelated workflow that happens to sort earlier supply the
 // commands.
-func gateJobs(f file) []workflowJob {
+func gateJobs(f file, branches []string) []workflowJob {
 	if f.Workflows.Kind != yaml.MappingNode || len(f.Workflows.Content) == 0 {
 		// A CircleCI 2.0 config with no workflows block runs the job named
 		// "build" implicitly.
@@ -170,6 +209,11 @@ func gateJobs(f file) []workflowJob {
 		}
 		return nil
 	}
+
+	// A workflow condition resolves against the pipeline parameters the config
+	// declares. Their defaults are all a checked-in file can offer: a value
+	// supplied at trigger time is not in it.
+	params := mergeArgs(f.Parameters, nil)
 
 	var out []workflowJob
 	seen := map[string]bool{}
@@ -190,11 +234,16 @@ func gateJobs(f file) []workflowJob {
 			// should not be handed as an inner-loop command.
 			continue
 		}
+		if !workflowRuns(w, params) {
+			// The workflow is switched off by default, so nothing in it gates a
+			// push either.
+			continue
+		}
 		for _, j := range w.Jobs {
 			if j.Name == "" || j.Type == "approval" {
 				continue
 			}
-			if !runsOnDefaultBranch(j.Filters) {
+			if !runsOnDefaultBranch(j.Filters, branches) {
 				continue
 			}
 			// Key on the parameters too: the same job invoked with different
@@ -210,13 +259,13 @@ func gateJobs(f file) []workflowJob {
 	return out
 }
 
-// runsOnDefaultBranch reports whether a job's filters let it run on main. A
-// pattern we cannot read must not decide the job's fate, so each direction
-// passes the fail-open answer for its own sense: an unreadable ignore counts as
-// not matching main, an unreadable only as matching it. Both keep the job.
-func runsOnDefaultBranch(f filters) bool {
+// runsOnDefaultBranch reports whether a job's filters let it run on one of
+// branches. A pattern we cannot read must not decide the job's fate, so each
+// direction passes the fail-open answer for its own sense: an unreadable ignore
+// counts as not matching, an unreadable only as matching. Both keep the job.
+func runsOnDefaultBranch(f filters, branches []string) bool {
 	if slices.ContainsFunc(f.Branches.Ignore, func(p string) bool {
-		return matchesDefaultBranch(p, false)
+		return matchesDefaultBranch(p, branches, false)
 	}) {
 		return false
 	}
@@ -224,23 +273,88 @@ func runsOnDefaultBranch(f filters) bool {
 		return true
 	}
 	return slices.ContainsFunc(f.Branches.Only, func(p string) bool {
-		return matchesDefaultBranch(p, true)
+		return matchesDefaultBranch(p, branches, true)
 	})
 }
 
 // matchesDefaultBranch reports whether a CircleCI branch pattern — a literal
-// name or a /regex/ — matches a default branch name. onBadPattern is the answer
-// for a regex that will not compile; it is the caller's because the value that
-// keeps the job differs between only: and ignore:.
-func matchesDefaultBranch(pattern string, onBadPattern bool) bool {
+// name or a /regex/ — matches one of branches. onBadPattern is the answer for a
+// regex that will not compile; it is the caller's because the value that keeps
+// the job differs between only: and ignore:.
+func matchesDefaultBranch(pattern string, branches []string, onBadPattern bool) bool {
 	if len(pattern) > 1 && strings.HasPrefix(pattern, "/") && strings.HasSuffix(pattern, "/") {
-		re, err := regexp.Compile(strings.Trim(pattern, "/"))
+		// Only the delimiters come off. strings.Trim strips every leading and
+		// trailing slash, so `/^release//` — a config with a stray slash, or a
+		// pattern ending in an escaped one — arrived as `^release/` shorn to
+		// `^release`, and `/^(feature|hotfix)\//` lost the `\` boundary it
+		// needed and failed to compile: a release-only job then failed open
+		// into a default-branch gate.
+		body := strings.TrimSuffix(strings.TrimPrefix(pattern, "/"), "/")
+		// CircleCI matches a filter regex against the whole branch name — the
+		// reason its own docs write `only: /^config-test.*/` with a trailing
+		// `.*`. Matching unanchored reads `only: /^ma/`, which CircleCI runs on
+		// no branch whatsoever, as a main-and-master gate.
+		re, err := regexp.Compile(`\A(?:` + body + `)\z`)
 		if err != nil {
 			return onBadPattern
 		}
-		return slices.ContainsFunc(defaultBranches, re.MatchString)
+		return slices.ContainsFunc(branches, re.MatchString)
 	}
-	return slices.Contains(defaultBranches, pattern)
+	return slices.Contains(branches, pattern)
+}
+
+// workflowRuns reports whether a workflow runs on a push by default. A
+// workflow-level when:/unless: gates every job under it, so a workflow that is
+// off by default holds no branch gates — and an opt-in extended workflow was
+// otherwise free to supply the commands a developer is handed.
+//
+// Only the forms a checked-in config settles decide: a literal boolean, or a
+// pipeline parameter whose declared default is one. A logic statement
+// (and:/or:/equal:) or an unresolvable value keeps the workflow, because
+// dropping the workflow that holds the real gates is the worse error.
+func workflowRuns(w workflow, params map[string]string) bool {
+	if v, known := conditionValue(w.When, params); known && !v {
+		return false
+	}
+	if v, known := conditionValue(w.Unless, params); known && v {
+		return false
+	}
+	return true
+}
+
+// conditionValue resolves a workflow when:/unless: to a boolean where it can.
+// An absent field and a logic statement are both "unknown", which is why known
+// is returned rather than folded into a default.
+func conditionValue(n yaml.Node, params map[string]string) (value, known bool) {
+	if n.Kind != yaml.ScalarNode {
+		return false, false
+	}
+	s := strings.TrimSpace(n.Value)
+	if m := pipelineParamRef.FindStringSubmatch(s); m != nil {
+		v, ok := params[m[1]]
+		if !ok {
+			return false, false
+		}
+		s = v
+	}
+	return boolValue(s)
+}
+
+// pipelineParamRef matches a pipeline parameter interpolation that is the whole
+// value — << pipeline.parameters.run-extended >> — the only form a workflow
+// condition takes in practice.
+var pipelineParamRef = regexp.MustCompile(`^<<\s*pipeline\.parameters\.([A-Za-z0-9_-]+)\s*>>$`)
+
+// boolValue parses a YAML 1.1 boolean in the spellings a config may use, and
+// reports whether the value was one at all.
+func boolValue(s string) (value, known bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "yes", "on", "1":
+		return true, true
+	case "false", "no", "off", "0":
+		return false, true
+	}
+	return false, false
 }
 
 // extractor accumulates candidates while walking a job's step tree.
@@ -261,10 +375,10 @@ type jobCtx struct {
 func (e *extractor) walk(jc jobCtx, steps []step, args map[string]string, depth int) {
 	for _, s := range steps {
 		switch {
-		case s.Kind == "run":
+		case s.Kind == kindRun:
 			e.addRun(jc, s, args)
 
-		case s.Kind == "when" || s.Kind == "unless":
+		case s.Kind == kindWhen || s.Kind == kindUnless:
 			// Conditional steps still gate the branch when the condition holds.
 			e.walk(jc, s.Nested, args, depth)
 
@@ -292,10 +406,26 @@ func (e *extractor) walk(jc jobCtx, steps []step, args map[string]string, depth 
 
 // addRun records a run step as a candidate, unless it is a background process,
 // conditional on the job's outcome, a duplicate, or still carries an
-// unsubstituted parameter.
+// unsubstituted parameter in its command or its background flag.
 func (e *extractor) addRun(jc jobCtx, s step, args map[string]string) {
-	if s.Background || !gatingWhen(s.When) {
+	if !gatingWhen(substitute(s.When, args)) {
 		return
+	}
+	// background is a string because a config may parameterize it. Whether the
+	// step is a long-running process or a gate is then unknowable until the
+	// value resolves, and unknowable is reported rather than assumed: guessing
+	// "not a process" hands the user a daemon to run before every commit, and
+	// guessing "process" drops a real gate while the notes claim nothing was
+	// missed.
+	if bg := strings.TrimSpace(substitute(s.Background, args)); bg != "" {
+		background, known := boolValue(bg)
+		if !known {
+			e.res.Unresolved++
+			return
+		}
+		if background {
+			return
+		}
 	}
 	cmd := strings.TrimSpace(substitute(s.Command, args))
 	if cmd == "" {
@@ -398,6 +528,10 @@ type file struct {
 	Commands map[string]command `yaml:"commands"`
 	Jobs     map[string]job     `yaml:"jobs"`
 
+	// Parameters are the pipeline parameters the config declares. Their
+	// defaults are what a workflow-level when:/unless: resolves against.
+	Parameters map[string]parameter `yaml:"parameters"`
+
 	// Workflows stays a node so it can be walked in document order; a map
 	// would lose the ordering the caller relies on to pick a primary workflow.
 	Workflows yaml.Node `yaml:"workflows"`
@@ -439,6 +573,11 @@ type workflow struct {
 	// Triggers is only inspected for presence: any trigger block means the
 	// workflow is scheduled rather than run on a push.
 	Triggers []yaml.Node `yaml:"triggers"`
+
+	// When and Unless stay nodes because either may be a boolean, a parameter
+	// interpolation, or a logic statement mapping.
+	When   yaml.Node `yaml:"when"`
+	Unless yaml.Node `yaml:"unless"`
 }
 
 // workflowJob is one entry in a workflow's job list, which YAML allows to be
@@ -527,7 +666,7 @@ type step struct {
 	Name       string            // run step name
 	Command    string            // run step command
 	WorkingDir string            // run step's own working_directory, if narrowed
-	Background bool              // background steps are processes, not gates
+	Background string            // raw background value; may be a parameter reference
 	When       string            // run step's when: on_success (default), on_fail, always
 	Params     map[string]string // scalar params passed to a custom command
 	Nested     []step            // steps under a when/unless
@@ -545,9 +684,9 @@ func (s *step) UnmarshalYAML(n *yaml.Node) error {
 	value := n.Content[1]
 
 	switch s.Kind {
-	case "run":
+	case kindRun:
 		s.decodeRun(value)
-	case "when", "unless":
+	case kindWhen, kindUnless:
 		var w struct {
 			Steps []step `yaml:"steps"`
 		}
@@ -580,23 +719,40 @@ func nestedSteps(n *yaml.Node) []step {
 }
 
 // decodeRun handles both `run: cmd` and the expanded mapping form.
+//
+// Fields are read one at a time rather than decoded into a struct, because a
+// single value that does not fit its Go type fails the whole decode and takes
+// the command with it. `background: << parameters.daemon >>` is not a bool and
+// `name: 3` is not a string, and either made an entire test step vanish with
+// nothing recorded to say so.
 func (s *step) decodeRun(n *yaml.Node) {
 	if n.Kind == yaml.ScalarNode {
 		s.Command = n.Value
 		return
 	}
-	var r struct {
-		Name       string `yaml:"name"`
-		Command    string `yaml:"command"`
-		Background bool   `yaml:"background"`
-		WorkingDir string `yaml:"working_directory"`
-		When       string `yaml:"when"`
-	}
-	if err := n.Decode(&r); err != nil {
+	if n.Kind != yaml.MappingNode {
 		return
 	}
-	s.Name, s.Command, s.Background, s.WorkingDir = r.Name, r.Command, r.Background, r.WorkingDir
-	s.When = r.When
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		v := n.Content[i+1]
+		if v.Kind != yaml.ScalarNode {
+			continue
+		}
+		switch n.Content[i].Value {
+		case "name":
+			s.Name = v.Value
+		case "command":
+			s.Command = v.Value
+		case "working_directory":
+			s.WorkingDir = v.Value
+		// A run step's own when: is its on_success/on_fail condition, not the
+		// step kind that wraps other steps; they share the word, not a meaning.
+		case kindWhen:
+			s.When = v.Value
+		case "background":
+			s.Background = v.Value
+		}
+	}
 }
 
 // scalarParams collects the scalar-valued keys of a mapping. Non-scalar

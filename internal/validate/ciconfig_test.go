@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
+	"github.com/CircleCI-Public/chunk-cli/internal/ciconfig"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
@@ -753,4 +755,109 @@ func TestDetectCommandsExplainsAnUnusableConfigWhenClaudeAnswersEmpty(t *testing
 		"the config generates its real config at run time, so its checks are not visible",
 		"no runnable checks were found in .circleci/config.yml",
 	})
+}
+
+func TestClassifySkipsCircleCICLISteps(t *testing.T) {
+	// The CLI is pipeline infrastructure: the split idiom needs the binary plus
+	// CIRCLE_NODE_TOTAL and CIRCLE_NODE_INDEX, so locally it is either not found
+	// or splits nothing.
+	for _, cmd := range []string{
+		"gotestsum -- $(go list ./... | circleci tests split --split-by=timings)",
+		`pytest $(circleci tests glob "tests/**/*.py")`,
+		"circleci tests run --command='go test ./...'",
+		"circleci-agent step halt",
+	} {
+		assert.Equal(t, classify(ciconfig.Candidate{Command: cmd}), roleNone, cmd)
+	}
+}
+
+func TestClassifyKeepsCircleCIInsideAPath(t *testing.T) {
+	// The tool has to be recognized where it is invoked; as a bare substring it
+	// would drop a suite that merely has a circleci-named test directory.
+	assert.Equal(t, classify(ciconfig.Candidate{Command: "pytest tests/circleci_client"}), roleTest)
+}
+
+func TestClassifyKeepsGatesWritingUnderAnArtifactsPath(t *testing.T) {
+	// "artifact" as a bare substring dropped these, and writing a junit or
+	// coverage report under an artifacts path is what a test job normally does.
+	for cmd, want := range map[string]string{
+		"mkdir -p /tmp/artifacts && pytest --junitxml=/tmp/artifacts/results.xml": roleTest,
+		"go test -coverprofile=/tmp/artifacts/cover.out ./...":                    roleTest,
+		"yarn eslint . --output-file /tmp/artifacts/eslint.json":                  roleLint,
+	} {
+		assert.Equal(t, classify(ciconfig.Candidate{Command: cmd}), want, cmd)
+	}
+}
+
+func TestClassifySkipsArtifactShipping(t *testing.T) {
+	for _, cmd := range []string{
+		"make store-artifacts",
+		"./scripts/collect_artifacts.sh",
+		"task archive-artifact",
+	} {
+		assert.Equal(t, classify(ciconfig.Candidate{Command: cmd}), roleNone, cmd)
+	}
+}
+
+func TestCommandsFromCINamesTheBranchWhenNoJobGatesIt(t *testing.T) {
+	// A develop-default repo used to get "no runnable checks were found", which
+	// reads as "your config holds nothing" rather than "nothing in it runs on
+	// the branch I looked at".
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  test:
+    steps:
+      - run: pytest
+workflows:
+  main:
+    jobs:
+      - test:
+          filters:
+            branches:
+              only: [develop]
+`)
+	det := commandsFromCI(dir)
+	assert.Equal(t, len(det.Commands), 0)
+	assert.DeepEqual(t, det.Notes, []string{"no job in the config runs on main or master"})
+}
+
+func TestCommandsFromCIUsesTheRepoDefaultBranch(t *testing.T) {
+	// The same config, in a repo that really does default to develop.
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  test:
+    steps:
+      - run: pytest
+workflows:
+  main:
+    jobs:
+      - test:
+          filters:
+            branches:
+              only: [develop]
+`)
+	initRepoWithDefaultBranch(t, dir, "develop")
+
+	det := commandsFromCI(dir)
+	assert.DeepEqual(t, runs(det.Commands), []string{"test=pytest"})
+	assert.Equal(t, len(det.Notes), 0)
+}
+
+// initRepoWithDefaultBranch makes dir a git repo whose origin/HEAD points at
+// branch, which is what DefaultBranchIn reads.
+func initRepoWithDefaultBranch(t *testing.T, dir, branch string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init", "--initial-branch=" + branch},
+		{"remote", "add", "origin", "https://example.com/x/y.git"},
+		{"symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/" + branch},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, string(out))
+	}
 }
