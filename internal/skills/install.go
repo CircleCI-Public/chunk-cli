@@ -1,112 +1,26 @@
 package skills
 
 import (
+	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-
-	"github.com/CircleCI-Public/chunk-cli/skills"
+	"os/exec"
+	"strings"
 )
 
-// Scope determines where skills are installed.
+// Scope determines where the plugin is installed.
 type Scope string
 
 const (
-	// ScopeUser installs into the user's agent config directories (~/.claude, ~/.agents).
-	// Agents whose config directories do not exist are skipped.
+	// ScopeUser installs the plugin at user scope (~/.claude).
 	ScopeUser Scope = "user"
-	// ScopeProject installs into the project's agent config directories (.claude, .agents).
-	// Directories are created as needed; no pre-existing config dir is required.
+	// ScopeProject installs the plugin at project scope (.claude in the project root).
 	ScopeProject Scope = "project"
 )
 
-// State describes the installation state of a skill for a specific agent.
-type State string
+// pluginName is the name of the CircleCI plugin in the marketplace.
+const pluginName = "circleci"
 
-// Skill installation states.
-const (
-	StateMissing  State = "missing"
-	StateCurrent  State = "current"
-	StateOutdated State = "outdated"
-)
-
-// Skill defines an embedded skill with its metadata.
-type Skill struct {
-	Name        string
-	Description string
-}
-
-// All is the ordered list of bundled skills.
-var All = []Skill{
-	{
-		Name:        "chunk-testing-gaps",
-		Description: `Use when asked to "find testing gaps", "chunk testing-gaps", "mutation test", "mutate this code", or "find surviving mutants". Runs a 4-stage mutation testing process.`,
-	},
-	{
-		Name:        "chunk-review",
-		Description: `Use when asked to "review recent changes", "chunk review", "review my diff", "review this PR", or "review my changes". Applies team-specific review standards from .chunk/review-prompt.md.`,
-	},
-	{
-		Name:        "debug-ci-failures",
-		Description: `Debug CircleCI build failures, analyze test results, and identify flaky tests. Use when asked to "debug CI", "why is CI failing", "fix CI failures", "find flaky tests", or "check CircleCI".`,
-	},
-	{
-		Name:        "chunk-sidecar",
-		Description: `Run build/test/validate on a remote chunk sidecar instead of locally. Use when asked to "validate on the sidecar", "run tests on the sidecar", "sync to sidecar", "check this on the sidecar", "run smarter testing doctor", "diagnose smarter testing", or when edits need remote verification. Also covers creating sidecars, snapshots, and env customization.`,
-	},
-	{
-		Name:        "chunk-sidecar-setup",
-		Description: `Interactive onboarding wizard for setting up a chunk sidecar from scratch. Use when asked to "set up chunk sidecar", "onboard to chunk", "first time sidecar", "configure sidecar from scratch", "walk me through sidecar setup", or "I've never used a chunk sidecar before". Covers auth, orgID, sidecar creation, dependency install, snapshot creation, and handoff to the dev loop.`,
-	},
-}
-
-// Agent represents a target agent with its config directories.
-type Agent struct {
-	Name         string
-	ConfigDir    string // parent config dir
-	SkillsDir    string // where skill subdirectories live
-	SkipIfAbsent bool   // when true, skip install if ConfigDir does not exist
-}
-
-// agents returns the list of supported agents for the given scope and base directory.
-// For ScopeUser, baseDir is the user's home directory.
-// For ScopeProject, baseDir is the project root directory.
-func agents(scope Scope, baseDir string) []Agent {
-	skipIfAbsent := scope == ScopeUser
-	return []Agent{
-		{
-			Name:         "claude",
-			ConfigDir:    filepath.Join(baseDir, ".claude"),
-			SkillsDir:    filepath.Join(baseDir, ".claude", "skills"),
-			SkipIfAbsent: skipIfAbsent,
-		},
-		{
-			Name:         "codex",
-			ConfigDir:    filepath.Join(baseDir, ".agents"),
-			SkillsDir:    filepath.Join(baseDir, ".agents", "skills"),
-			SkipIfAbsent: skipIfAbsent,
-		},
-	}
-}
-
-// SkillState checks the installation state of a skill for an agent.
-func SkillState(skillsDir string, s Skill) State {
-	path := filepath.Join(skillsDir, s.Name, "SKILL.md")
-	existing, err := os.ReadFile(path)
-	if err != nil {
-		return StateMissing
-	}
-	embedded, err := skills.Content.ReadFile(filepath.Join(s.Name, "SKILL.md"))
-	if err != nil {
-		return StateMissing
-	}
-	if string(existing) == string(embedded) {
-		return StateCurrent
-	}
-	return StateOutdated
-}
-
-// AgentInstallResult reports what happened for one agent during install.
+// AgentInstallResult reports the outcome of a plugin install attempt for one agent.
 type AgentInstallResult struct {
 	Agent     string   `json:"agent"`
 	Skipped   bool     `json:"skipped"`
@@ -115,127 +29,139 @@ type AgentInstallResult struct {
 	Errors    []string `json:"errors,omitempty"`
 }
 
-// Install installs all embedded skills for the given scope and base directory.
-// For ScopeUser, agents whose config dirs do not exist are skipped.
-// For ScopeProject, dirs are created as needed.
-func Install(scope Scope, baseDir string) []AgentInstallResult {
-	all := agents(scope, baseDir)
-	results := make([]AgentInstallResult, 0, len(all))
-	for _, agent := range all {
-		results = append(results, installForAgent(agent, All))
-	}
-	return results
-}
+// State describes the installation state of a plugin for a specific agent.
+type State string
 
-// InstallByName installs the named skills, in the order given.
-// Unknown names are ignored; returns nil if none of the names match.
-func InstallByName(scope Scope, baseDir string, names ...string) []AgentInstallResult {
-	subset := make([]Skill, 0, len(names))
-	for _, name := range names {
-		for i := range All {
-			if All[i].Name == name {
-				subset = append(subset, All[i])
-				break
-			}
-		}
-	}
-	if len(subset) == 0 {
-		return nil
-	}
-	all := agents(scope, baseDir)
-	results := make([]AgentInstallResult, 0, len(all))
-	for _, agent := range all {
-		results = append(results, installForAgent(agent, subset))
-	}
-	return results
-}
+const (
+	StateMissing  State = "missing"
+	StateCurrent  State = "current"
+	StateOutdated State = "outdated"
+)
 
-func installForAgent(agent Agent, subset []Skill) AgentInstallResult {
-	if agent.SkipIfAbsent {
-		if _, err := os.Stat(agent.ConfigDir); err != nil {
-			return AgentInstallResult{Agent: agent.Name, Skipped: true, Installed: make([]string, 0), Updated: make([]string, 0)}
-		}
-	}
-
-	result := AgentInstallResult{Agent: agent.Name, Installed: make([]string, 0), Updated: make([]string, 0)}
-
-	for _, s := range subset {
-		state := SkillState(agent.SkillsDir, s)
-		if state == StateCurrent {
-			continue
-		}
-
-		data, err := skills.Content.ReadFile(filepath.Join(s.Name, "SKILL.md"))
-		if err != nil {
-			continue
-		}
-
-		dir := filepath.Join(agent.SkillsDir, s.Name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("create dir %s: %v", dir, err))
-			continue
-		}
-		dest := filepath.Join(dir, "SKILL.md")
-		if err := os.WriteFile(dest, data, 0o644); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("write %s: %v", dest, err))
-			continue
-		}
-
-		if state == StateMissing {
-			result.Installed = append(result.Installed, s.Name)
-		} else {
-			result.Updated = append(result.Updated, s.Name)
-		}
-	}
-	return result
-}
-
-// AgentSkillStatus describes the state of a single skill for an agent.
+// AgentSkillStatus describes the state of the plugin for an agent.
 type AgentSkillStatus struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	State       State  `json:"state"`
 }
 
-// AgentStatus describes per-agent availability and skill states.
+// AgentStatus describes per-agent plugin availability.
 type AgentStatus struct {
 	Agent     string             `json:"agent"`
 	Available bool               `json:"available"`
 	Skills    []AgentSkillStatus `json:"skills"`
 }
 
-// Status returns per-agent, per-skill installation state without modifying anything.
-// For ScopeUser, an agent is available only when its config dir exists.
-// For ScopeProject, agents are always considered available.
-func Status(scope Scope, baseDir string) []AgentStatus {
-	all := agents(scope, baseDir)
-	results := make([]AgentStatus, 0, len(all))
+// pluginEntry is one entry from `claude plugin list --json`.
+type pluginEntry struct {
+	ID      string `json:"id"`
+	Scope   string `json:"scope"`
+	Enabled bool   `json:"enabled"`
+}
 
-	for _, agent := range all {
-		available := true
-		if agent.SkipIfAbsent {
-			if _, err := os.Stat(agent.ConfigDir); err != nil {
-				available = false
-			}
-		}
+// Install installs the CircleCI plugin for Claude Code at the given scope.
+// If the claude CLI is not found, the agent is reported as skipped.
+func Install(scope Scope) []AgentInstallResult {
+	return []AgentInstallResult{installForClaude(scope)}
+}
 
-		ss := make([]AgentSkillStatus, 0, len(All))
-		for _, s := range All {
-			state := StateMissing
-			if available {
-				state = SkillState(agent.SkillsDir, s)
-			}
-			ss = append(ss, AgentSkillStatus{
-				Name:        s.Name,
-				Description: s.Description,
-				State:       state,
-			})
-		}
-		results = append(results, AgentStatus{
-			Agent:     agent.Name,
-			Available: available,
-			Skills:    ss,
-		})
+// InstallByName is kept for call-site compatibility with chunk init.
+// It installs the CircleCI plugin regardless of which skill names are requested.
+func InstallByName(scope Scope, _ string, _ ...string) []AgentInstallResult {
+	return Install(scope)
+}
+
+func installForClaude(scope Scope) AgentInstallResult {
+	result := AgentInstallResult{
+		Agent:     "claude",
+		Installed: make([]string, 0),
+		Updated:   make([]string, 0),
 	}
-	return results
+
+	if _, err := exec.LookPath("claude"); err != nil {
+		result.Skipped = true
+		return result
+	}
+
+	args := []string{"plugin", "install", pluginName, "--yes", "--scope", string(scope)}
+	out, err := exec.Command("claude", args...).CombinedOutput() //nolint:gosec
+	if err != nil {
+		result.Errors = append(result.Errors, strings.TrimSpace(string(out)))
+		return result
+	}
+
+	outStr := string(out)
+	switch {
+	case strings.Contains(outStr, "already installed"):
+		result.Updated = append(result.Updated, pluginName)
+	default:
+		result.Installed = append(result.Installed, pluginName)
+	}
+	return result
+}
+
+// Status returns per-agent plugin installation state without modifying anything.
+func Status(scope Scope, _ string) []AgentStatus {
+	return []AgentStatus{statusForClaude(scope)}
+}
+
+func statusForClaude(scope Scope) AgentStatus {
+	if _, err := exec.LookPath("claude"); err != nil {
+		return AgentStatus{Agent: "claude", Available: false, Skills: pluginSkillStatuses(StateMissing)}
+	}
+
+	out, err := exec.Command("claude", "plugin", "list", "--json").CombinedOutput() //nolint:gosec
+	if err != nil {
+		return AgentStatus{Agent: "claude", Available: true, Skills: pluginSkillStatuses(StateMissing)}
+	}
+
+	var entries []pluginEntry
+	if err := json.Unmarshal(out, &entries); err != nil {
+		return AgentStatus{Agent: "claude", Available: true, Skills: pluginSkillStatuses(StateMissing)}
+	}
+
+	state := StateMissing
+	for _, e := range entries {
+		name, _, _ := strings.Cut(e.ID, "@")
+		if name == pluginName && e.Scope == string(scope) {
+			state = StateCurrent
+			break
+		}
+	}
+	return AgentStatus{Agent: "claude", Available: true, Skills: pluginSkillStatuses(state)}
+}
+
+func pluginSkillStatuses(state State) []AgentSkillStatus {
+	return []AgentSkillStatus{
+		{
+			Name:        pluginName,
+			Description: "CircleCI plugin: chunk sidecar, review, testing-gaps, CI debugging",
+			State:       state,
+		},
+	}
+}
+
+// Skill and All are kept for compatibility with callers that enumerate skills.
+type Skill struct {
+	Name        string
+	Description string
+}
+
+// All lists the skills bundled in the CircleCI plugin.
+var All = []Skill{
+	{Name: "chunk-sidecar", Description: "Sync→validate dev loop on a remote CircleCI sidecar"},
+	{Name: "chunk-sidecar-setup", Description: "Interactive onboarding wizard for first-time sidecar setup"},
+	{Name: "chunk-review", Description: "Team-prompt-driven code review via subagent"},
+	{Name: "chunk-testing-gaps", Description: "4-stage mutation testing on parallel throwaway sidecars"},
+	{Name: "debug-ci-failures", Description: "Diagnose CircleCI pipeline failures and flaky tests"},
+}
+
+// SkillState is kept for compatibility but always reflects the plugin's overall state.
+func SkillState(_ string, _ Skill) State {
+	return StateMissing
+}
+
+// ErrSkillInstall is returned when the plugin install step fails.
+func ErrSkillInstall(agent, msg string) error {
+	return fmt.Errorf("%s: %s", agent, msg)
 }
