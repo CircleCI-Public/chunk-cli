@@ -17,8 +17,12 @@ const (
 	ScopeProject Scope = "project"
 )
 
-// pluginName is the name of the CircleCI plugin in the marketplace.
-const pluginName = "circleci"
+const (
+	// pluginName is the name of the CircleCI plugin in the marketplace.
+	pluginName = "circleci"
+	// agentClaude is the name of the Claude Code agent.
+	agentClaude = "claude"
+)
 
 // AgentInstallResult reports the outcome of a plugin install attempt for one agent.
 type AgentInstallResult struct {
@@ -33,8 +37,11 @@ type AgentInstallResult struct {
 type State string
 
 const (
-	StateMissing  State = "missing"
-	StateCurrent  State = "current"
+	// StateMissing means the plugin is not installed.
+	StateMissing State = "missing"
+	// StateCurrent means the plugin is installed and up to date.
+	StateCurrent State = "current"
+	// StateOutdated means the plugin is installed but a newer version is available.
 	StateOutdated State = "outdated"
 )
 
@@ -73,18 +80,18 @@ func InstallByName(scope Scope, _ string, _ ...string) []AgentInstallResult {
 
 func installForClaude(scope Scope) AgentInstallResult {
 	result := AgentInstallResult{
-		Agent:     "claude",
+		Agent:     agentClaude,
 		Installed: make([]string, 0),
 		Updated:   make([]string, 0),
 	}
 
-	if _, err := exec.LookPath("claude"); err != nil {
+	if _, err := exec.LookPath(agentClaude); err != nil {
 		result.Skipped = true
 		return result
 	}
 
 	args := []string{"plugin", "install", pluginName, "--yes", "--scope", string(scope)}
-	out, err := exec.Command("claude", args...).CombinedOutput() //nolint:gosec
+	out, err := exec.Command(agentClaude, args...).CombinedOutput() //nolint:gosec
 	if err != nil {
 		result.Errors = append(result.Errors, strings.TrimSpace(string(out)))
 		return result
@@ -106,18 +113,18 @@ func Status(scope Scope, _ string) []AgentStatus {
 }
 
 func statusForClaude(scope Scope) AgentStatus {
-	if _, err := exec.LookPath("claude"); err != nil {
-		return AgentStatus{Agent: "claude", Available: false, Skills: pluginSkillStatuses(StateMissing)}
+	if _, err := exec.LookPath(agentClaude); err != nil {
+		return AgentStatus{Agent: agentClaude, Available: false, Skills: pluginSkillStatuses(StateMissing)}
 	}
 
-	out, err := exec.Command("claude", "plugin", "list", "--json").CombinedOutput() //nolint:gosec
+	out, err := exec.Command(agentClaude, "plugin", "list", "--json").CombinedOutput() //nolint:gosec
 	if err != nil {
-		return AgentStatus{Agent: "claude", Available: true, Skills: pluginSkillStatuses(StateMissing)}
+		return AgentStatus{Agent: agentClaude, Available: true, Skills: pluginSkillStatuses(StateMissing)}
 	}
 
 	var entries []pluginEntry
 	if err := json.Unmarshal(out, &entries); err != nil {
-		return AgentStatus{Agent: "claude", Available: true, Skills: pluginSkillStatuses(StateMissing)}
+		return AgentStatus{Agent: agentClaude, Available: true, Skills: pluginSkillStatuses(StateMissing)}
 	}
 
 	state := StateMissing
@@ -128,7 +135,7 @@ func statusForClaude(scope Scope) AgentStatus {
 			break
 		}
 	}
-	return AgentStatus{Agent: "claude", Available: true, Skills: pluginSkillStatuses(state)}
+	return AgentStatus{Agent: agentClaude, Available: true, Skills: pluginSkillStatuses(state)}
 }
 
 func pluginSkillStatuses(state State) []AgentSkillStatus {
