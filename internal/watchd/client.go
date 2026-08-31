@@ -107,6 +107,35 @@ func EnsureRunning(subArgs []string) error {
 	return launchDaemon(subArgs)
 }
 
+// EnsureLaunched starts the daemon when nothing is answering and otherwise
+// leaves whatever is there alone.
+//
+// Unlike EnsureRunning it never replaces a daemon from another build. It is
+// called when a poll fails mid-session, and a dashboard that has been open for a
+// while has no business restarting a daemon another one is using: the build
+// check is a startup decision, made once, where the cost of being wrong is one
+// restart rather than a restart per poll for as long as two dashboards are open.
+func EnsureLaunched(subArgs []string) error {
+	pidPath, err := PIDPath()
+	if err != nil {
+		return err
+	}
+	sockPath, err := SocketPath()
+	if err != nil {
+		return err
+	}
+	running, _, err := IsRunning(pidPath)
+	if err != nil {
+		return fmt.Errorf("check running: %w", err)
+	}
+	if running {
+		if reachable, _ := ping(sockPath); reachable {
+			return nil
+		}
+	}
+	return launchDaemon(subArgs)
+}
+
 func launchDaemon(subArgs []string) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)

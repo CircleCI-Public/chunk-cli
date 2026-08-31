@@ -168,6 +168,11 @@ type Model struct {
 	updateAvailable string // non-empty tag (e.g. "v1.2.3") when an update is available
 	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk"
 
+	// daemonArgs is the argv that starts the watch daemon, empty when the caller
+	// did not supply one. Held so a poll that finds the daemon gone can start
+	// another instead of freezing on the last snapshot.
+	daemonArgs []string
+
 	// ownSession is the session running this dashboard, empty when a human ran
 	// `chunk watch` from a plain shell. When it matches a row's session that row
 	// is labelled as the viewer's own, which is the fastest way to answer "which
@@ -197,6 +202,14 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		watchAll:      watchAll,
 		ownSession:    session.IDFromEnv(),
 	}
+}
+
+// WithDaemonArgs returns a copy of m that can relaunch the watch daemon when a
+// poll finds it gone. subArgs is the argv the daemon is started with, the same
+// one passed to watchd.EnsureRunning.
+func (m Model) WithDaemonArgs(subArgs []string) Model {
+	m.daemonArgs = subArgs
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -350,6 +363,13 @@ func (m Model) renderSeparator() string {
 
 func (m Model) renderBody() string {
 	contentHeight := m.height - 4 // header + separator + footer + padding
+	// The footer grows by a line when the daemon is unreachable. Without handing
+	// that line back the message lands past the last row and is clipped at every
+	// terminal size, which is how a daemon that had died came to look like a
+	// dashboard that had merely gone quiet.
+	if m.daemonErr != nil {
+		contentHeight--
+	}
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -525,6 +545,12 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 	return lines
 }
 
+// renderActivityPane renders the right-hand pane for the selected sidecar.
+//
+// The selection is bounded on both sides before it indexes m.sidecars. Update
+// keeps it in range, so a negative value should not arise — but a panic here
+// takes the terminal down with it, still in the alternate screen, and the cost
+// of the second comparison is nothing next to that.
 func (m Model) renderActivityPane(maxLines int) []string {
 	lines := make([]string, 0, maxLines)
 
@@ -534,7 +560,7 @@ func (m Model) renderActivityPane(maxLines int) []string {
 	} else {
 		title = vdim("activity")
 	}
-	if m.selectedIdx < len(m.sidecars) {
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sidecars) {
 		sc := m.sidecars[m.selectedIdx]
 		branchLabel := sc.branch
 		if branchLabel == "" {
@@ -562,7 +588,7 @@ func (m Model) renderActivityPane(maxLines int) []string {
 	lines = append(lines, title, "")
 
 	var filtered []eventlog.Event
-	if m.selectedIdx < len(m.sidecars) {
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sidecars) {
 		sc := m.sidecars[m.selectedIdx]
 		if sc.projectIdx < len(m.events) {
 			for _, e := range m.events[sc.projectIdx] {
@@ -663,7 +689,7 @@ func invocEndTime(g invocationGroup) time.Time {
 
 // currentInvocGroups returns the invocation groups for the currently selected sidecar.
 func (m Model) currentInvocGroups() []invocationGroup {
-	if m.selectedIdx >= len(m.sidecars) {
+	if m.selectedIdx < 0 || m.selectedIdx >= len(m.sidecars) {
 		return nil
 	}
 	sc := m.sidecars[m.selectedIdx]

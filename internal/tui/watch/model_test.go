@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -440,6 +441,60 @@ func TestUpdate_unknownSelectionFallsBackToFreshest(t *testing.T) {
 
 // The update notice is right-aligned with padding, so a notice that does not
 // fit would wrap the footer and push the fixed-height layout off screen.
+// The daemon-unavailable line used to be appended past the last row of the
+// terminal, so it was clipped at every height and a dead daemon looked like a
+// dashboard that had simply gone quiet.
+func TestRender_daemonErrorIsVisibleAndStillFitsTheTerminal(t *testing.T) {
+	now := time.Now()
+	for _, height := range []int{12, 24, 40, 60} {
+		m := sessionModel("", []sidecarInfo{
+			{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
+				lastActivity: now, inSync: true},
+		})
+		m.width = 100
+		m.height = height
+		m.selectedIdx = 0
+		m.daemonErr = errors.New("connect to watch daemon: no such file")
+
+		out := m.render()
+
+		assert.Assert(t, strings.Contains(out, "daemon unavailable: connect to watch daemon"),
+			"height %d: message missing:\n%s", height, out)
+		assert.Assert(t, strings.Count(out, "\n") <= height,
+			"height %d: rendered %d lines, which would clip the message", height, strings.Count(out, "\n"))
+	}
+}
+
+func TestRender_withoutADaemonErrorTheLayoutIsUnchanged(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
+			lastActivity: now, inSync: true},
+	})
+	m.width = 100
+	m.height = 24
+	m.selectedIdx = 0
+
+	assert.Equal(t, strings.Count(m.render(), "\n"), 24)
+}
+
+// sessionModel leaves the selection at -1 so labels are not masked by the ▶
+// marker. Rendering must survive that rather than indexing m.sidecars[-1].
+func TestRender_survivesAnOutOfRangeSelection(t *testing.T) {
+	now := time.Now()
+	for _, idx := range []int{-1, 0, 5} {
+		m := sessionModel("", []sidecarInfo{
+			{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
+				lastActivity: now, inSync: true},
+		})
+		m.width = 100
+		m.height = 24
+		m.selectedIdx = idx
+
+		assert.Assert(t, m.render() != "", "selection %d rendered nothing", idx)
+	}
+}
+
 func TestRenderFooter_updateNoticeNeverWidensFooter(t *testing.T) {
 	for _, width := range []int{40, 80, 100, 120, 200} {
 		for _, focus := range []pane{paneLeft, paneRight} {
