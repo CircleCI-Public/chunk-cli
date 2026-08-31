@@ -36,15 +36,25 @@ func (e *silentExitError) ExitCode() int { return e.code }
 
 var errSilentExit error = &silentExitError{code: 1}
 
-func notAuthorized(action string, err error) error {
+func notAuthorized(action, tokenSource string, err error) error {
 	if !errors.Is(err, circleci.ErrNotAuthorized) {
 		return nil
 	}
 	return newUserError(fmt.Sprintf("Not authorized to %s.", action)).
 		withCode("auth.not_authorized").
+		withDetail(tokenSourceDetail(tokenSource)).
 		withSuggestion(suggestionReauth).
 		withExitCode(ExitAuthError).
 		wrap(err)
+}
+
+// tokenSourceDetail formats a token source string for use as an error detail.
+// Returns "" when source is empty, which leaves the detail field unset.
+func tokenSourceDetail(source string) string {
+	if source == "" {
+		return ""
+	}
+	return "Token from: " + source + "."
 }
 
 // cannotCreateSidecar phrases a rejected sidecar creation, or returns nil when

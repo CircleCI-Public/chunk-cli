@@ -357,7 +357,8 @@ func TestResolve_CircleCITokenFromConfigFile(t *testing.T) {
 	rc, err := Resolve("", "", false)
 	assert.NilError(t, err)
 	assert.Assert(t, rc.CircleCIToken == "cci-from-file", "expected CircleCI token from test config file")
-	assert.Equal(t, rc.CircleCITokenSource, SourceConfigFile)
+	assert.Assert(t, strings.HasPrefix(rc.CircleCITokenSource, "Config file ("), "expected source to include config file path, got: %s", rc.CircleCITokenSource)
+	assert.Assert(t, strings.Contains(rc.CircleCITokenSource, p), "expected source to contain config path %s, got: %s", p, rc.CircleCITokenSource)
 }
 
 func TestResolveCircleCI_ConfigFile(t *testing.T) {
@@ -370,7 +371,8 @@ func TestResolveCircleCI_ConfigFile(t *testing.T) {
 	rc, err := ResolveCircleCI(false)
 	assert.NilError(t, err)
 	assert.Assert(t, rc.CircleCIToken == "cci-from-file", "expected CircleCI token from test config file")
-	assert.Equal(t, rc.CircleCITokenSource, SourceConfigFile)
+	assert.Assert(t, strings.HasPrefix(rc.CircleCITokenSource, "Config file ("), "expected source to include config file path, got: %s", rc.CircleCITokenSource)
+	assert.Assert(t, strings.Contains(rc.CircleCITokenSource, p), "expected source to contain config path %s, got: %s", p, rc.CircleCITokenSource)
 	assert.Equal(t, rc.AnthropicAPIKey, "")
 	assert.Equal(t, rc.GitHubToken, "")
 }
