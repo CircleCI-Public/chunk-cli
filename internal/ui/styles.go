@@ -23,11 +23,11 @@ var (
 	_ld           = lipgloss.LightDark(_hasDark)
 
 	// SuccessStyle is for completed actions and passing status glyphs.
-	SuccessStyle = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("28"), lipgloss.Color("78")))
+	SuccessStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	// WarningStyle is for warnings and cautionary prompts.
-	WarningStyle = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("136"), lipgloss.Color("179")))
+	WarningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	// ErrorStyle is for failures and error glyphs.
-	ErrorStyle = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("160"), lipgloss.Color("167")))
+	ErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	// TitleStyle is for prompt headings and emphasized labels.
 	TitleStyle = lipgloss.NewStyle().Bold(true)
 	// HelperStyle is for de-emphasized hint text and secondary labels.
@@ -37,13 +37,13 @@ var (
 
 	// Internal styles without a direct semantic equivalent.
 	styleDim  = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("248"), lipgloss.Color("246")))
-	styleTeal = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("30"), lipgloss.Color("80")))
+	styleTeal = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 
 	// Stderr variants share the same colors but are kept separate so per-stream
 	// detection can diverge in future.
-	styleErrSuccess  = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("28"), lipgloss.Color("78")))
-	styleErrWarning  = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("136"), lipgloss.Color("179")))
-	styleErrError    = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("160"), lipgloss.Color("167")))
+	styleErrSuccess  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	styleErrWarning  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	styleErrError    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	styleErrEmphasis = lipgloss.NewStyle().Bold(true)
 	styleErrDim      = lipgloss.NewStyle().Foreground(_ld(lipgloss.Color("248"), lipgloss.Color("246")))
 )
