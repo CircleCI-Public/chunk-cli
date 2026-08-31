@@ -60,10 +60,7 @@ type watchStyles struct {
 	Success  lipgloss.Style
 	Warning  lipgloss.Style
 	Running  lipgloss.Style
-	Purple   lipgloss.Style
 	Teal     lipgloss.Style
-	Orange   lipgloss.Style
-	Amber    lipgloss.Style
 	Error    lipgloss.Style
 	Muted    lipgloss.Style
 	VDim     lipgloss.Style
@@ -74,10 +71,7 @@ func (s watchStyles) emphasis(text string) string { return s.Emphasis.Render(tex
 func (s watchStyles) success(text string) string  { return s.Success.Render(text) }
 func (s watchStyles) warning(text string) string  { return s.Warning.Render(text) }
 func (s watchStyles) running(text string) string  { return s.Running.Render(text) }
-func (s watchStyles) purple(text string) string   { return s.Purple.Render(text) }
 func (s watchStyles) teal(text string) string     { return s.Teal.Render(text) }
-func (s watchStyles) orange(text string) string   { return s.Orange.Render(text) }
-func (s watchStyles) amber(text string) string    { return s.Amber.Render(text) }
 func (s watchStyles) err(text string) string      { return s.Error.Render(text) }
 func (s watchStyles) muted(text string) string    { return s.Muted.Render(text) }
 func (s watchStyles) vdim(text string) string     { return s.VDim.Render(text) }
@@ -90,10 +84,7 @@ func newWatchStyles(hasDark bool) watchStyles {
 		Success:  lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
 		Warning:  lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
 		Running:  lipgloss.NewStyle().Foreground(lipgloss.Color("4")),
-		Purple:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("91"), lipgloss.Color("140"))),
 		Teal:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
-		Orange:   lipgloss.NewStyle().Foreground(ld(lipgloss.Color("130"), lipgloss.Color("173"))),
-		Amber:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("136"), lipgloss.Color("214"))),
 		Error:    lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
 		Muted:    lipgloss.NewStyle().Foreground(ld(lipgloss.Color("252"), lipgloss.Color("250"))),
 		VDim:     lipgloss.NewStyle().Foreground(ld(lipgloss.Color("244"), lipgloss.Color("242"))),
@@ -883,9 +874,9 @@ func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selecte
 		}
 	}
 
-	label2 := st.purple("validate") + "  " + outcomeStr + "  " + tsStr + durStr
+	label2 := "validate" + "  " + outcomeStr + "  " + tsStr + durStr
 	if selected {
-		label2 = st.emphasis(st.purple("validate")) + "  " + outcomeStr + "  " + tsStr + durStr
+		label2 = st.emphasis("validate") + "  " + outcomeStr + "  " + tsStr + durStr
 	}
 	return arrow + label2
 }
@@ -968,13 +959,13 @@ func opTag(st watchStyles, op eventlog.Op) string {
 	case eventlog.OpSync:
 		return st.running("sync    ")
 	case eventlog.OpValidate:
-		return st.purple("validate")
+		return "validate"
 	case eventlog.OpExec:
 		return st.teal("exec    ")
 	case eventlog.OpSetup:
-		return st.orange("setup   ")
+		return "setup   "
 	case eventlog.OpHook:
-		return st.amber("hook    ")
+		return "hook    "
 	default:
 		return st.muted(fmt.Sprintf("%-8s", string(op)))
 	}
@@ -1022,7 +1013,7 @@ func (m Model) renderFooter(st watchStyles) string {
 	// fit: padding it onto an over-long bar would wrap the footer and break
 	// the fixed-height layout.
 	if m.updateAvailable != "" {
-		notice := st.amber("↑ "+m.updateAvailable) + "  " + st.dim(m.upgradeCmd)
+		notice := "↑ " + m.updateAvailable + "  " + st.dim(m.upgradeCmd)
 		if gap := m.width - 2 - lipgloss.Width(bar) - lipgloss.Width(notice); gap >= 2 {
 			bar += strings.Repeat(" ", gap) + notice
 		}
