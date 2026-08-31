@@ -160,7 +160,7 @@ func TestWrapForwardsAndLogs(t *testing.T) {
 		innerCalls = append(innerCalls, msg)
 	}
 
-	wrapped := l.Wrap(inner, OpExec, "sc-id", "my-sc", "main")
+	wrapped := l.Wrap(inner, OpExec, "sc-id", "my-sc", "main", nil)
 	wrapped(iostream.LevelStep, "step1")
 	wrapped(iostream.LevelDone, "done1")
 
@@ -189,40 +189,63 @@ func TestWrapNilInner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrapped := l.Wrap(nil, OpSync, "", "", "")
+	wrapped := l.Wrap(nil, OpSync, "", "", "", nil)
 	wrapped(iostream.LevelInfo, "should not panic")
 }
 
-func TestAppendCommandID(t *testing.T) {
+func TestWrapRecordsCommandIDOnTerminalEvent(t *testing.T) {
 	dir := t.TempDir()
 	l, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := l.AppendCommandID("cmd-abc123", "sc-id", "my-sc", "main", OpValidate); err != nil {
-		t.Fatalf("AppendCommandID: %v", err)
-	}
+	ids := &CommandIDs{}
+	wrapped := l.Wrap(nil, OpValidate, "sc-id", "my-sc", "main", ids)
 
-	got, err := l.Recent(1)
+	// One command: its output line, the exec that reports an ID, then the
+	// command's terminal event. A run-wide summary follows, belonging to no
+	// single command.
+	wrapped(iostream.LevelInfo, "$ go test ./...")
+	ids.Set("cmd-abc123")
+	wrapped(iostream.LevelError, "test  12s (remote)")
+	wrapped(iostream.LevelError, "0/1 passed  12s")
+
+	got, err := l.Recent(10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("want 1 event, got %d", len(got))
+	if len(got) != 3 {
+		t.Fatalf("want 3 events, got %d", len(got))
 	}
-	e := got[0]
-	if e.CommandID != "cmd-abc123" {
-		t.Errorf("CommandID = %q, want %q", e.CommandID, "cmd-abc123")
+	if got[0].CommandID != "" {
+		t.Errorf("info event CommandID = %q, want empty", got[0].CommandID)
 	}
-	if e.SidecarID != "sc-id" {
-		t.Errorf("SidecarID = %q, want %q", e.SidecarID, "sc-id")
+	if got[1].CommandID != "cmd-abc123" {
+		t.Errorf("terminal event CommandID = %q, want %q", got[1].CommandID, "cmd-abc123")
 	}
-	if e.Level != levelInfo {
-		t.Errorf("Level = %q, want %q", e.Level, levelInfo)
+	if got[2].CommandID != "" {
+		t.Errorf("summary event CommandID = %q, want empty", got[2].CommandID)
 	}
-	if e.Op != OpValidate {
-		t.Errorf("Op = %q, want %q", e.Op, OpValidate)
+}
+
+func TestCommandIDsSetReplacesUnclaimedID(t *testing.T) {
+	ids := &CommandIDs{}
+	ids.Set("probe-id")
+	ids.Set("cmd-id")
+	if got := ids.Take(); got != "cmd-id" {
+		t.Errorf("Take() = %q, want %q", got, "cmd-id")
+	}
+	if got := ids.Take(); got != "" {
+		t.Errorf("second Take() = %q, want empty", got)
+	}
+}
+
+func TestCommandIDsNilIsUsable(t *testing.T) {
+	var ids *CommandIDs
+	ids.Set("cmd-id")
+	if got := ids.Take(); got != "" {
+		t.Errorf("Take() on nil = %q, want empty", got)
 	}
 }
 

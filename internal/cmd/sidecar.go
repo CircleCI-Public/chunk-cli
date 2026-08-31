@@ -570,7 +570,7 @@ func newSidecarSyncCmd() *cobra.Command {
 				if as, _ := sidecar.LoadActive(cmd.Context()); as != nil && as.SidecarID == sidecarID {
 					scName = as.Name
 				}
-				syncFn = eventlog.WrapFromDir(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd))
+				syncFn = eventlog.WrapFromDir(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd), nil)
 			}
 			err = sidecar.RsyncSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, syncFn)
 			if err != nil {

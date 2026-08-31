@@ -19,6 +19,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -140,6 +141,48 @@ func TestHostForwardEnv(t *testing.T) {
 	})
 }
 
+// A failing remote command must leave its sandbox-provisioner command ID in the
+// event log, on the command's own terminal event, so the run's output can be
+// replayed afterwards via GET /api/v3/sidecar/commands/{id}/output.
+func TestRemoteFailureRecordsCommandIDOnTerminalEvent(t *testing.T) {
+	isolateConfig(t)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-abc123", PID: 42, Stdout: "boom\n", ExitCode: 1}
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+
+	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
+	cmdIDs := &eventlog.CommandIDs{}
+	execFn, dest, err := newExecFn(context.Background(), client, "sidecar-123", "/workspace/myrepo", t.TempDir(), nil, config.ResolvedConfig{}, cmdIDs, streams)
+	assert.NilError(t, err)
+
+	dataDir := t.TempDir()
+	statusFn := eventlog.WrapFromDir(dataDir, nil, eventlog.OpValidate, "sidecar-123", "", "main", cmdIDs)
+
+	cfg := &config.ProjectConfig{Commands: []config.Command{{Name: "test", Run: "go test ./...", Remote: true}}}
+	_, runErr := validate.RunRemote(context.Background(), execFn, cfg, "", dest, t.TempDir(), statusFn, streams)
+	assert.Assert(t, runErr != nil, "expected the remote command to fail")
+
+	el, err := eventlog.Open(dataDir)
+	assert.NilError(t, err)
+	events, err := el.Recent(10)
+	assert.NilError(t, err)
+	assert.Assert(t, len(events) > 0, "expected events to be logged")
+
+	terminal := events[len(events)-1]
+	assert.Equal(t, terminal.Level, "error")
+	assert.Equal(t, terminal.CommandID, "cmd-abc123")
+	// Exactly one event carries the ID: a second copy would show up twice in
+	// chunk watch and give readers two rows for one command.
+	for i, e := range events[:len(events)-1] {
+		assert.Equal(t, e.CommandID, "", "event %d also carries the command ID: %+v", i, e)
+	}
+}
+
 func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	isolateConfig(t)
 
@@ -154,7 +197,7 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
 	// Pass a fixed remote workdir so ResolveWorkspace doesn't need to detect a
 	// repo name from a temp directory with no git remote.
-	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "/workspace/myrepo", t.TempDir(), envVars, config.ResolvedConfig{}, streams)
+	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "/workspace/myrepo", t.TempDir(), envVars, config.ResolvedConfig{}, nil, streams)
 	assert.NilError(t, err)
 
 	_, _, _, _, err = execFn(context.Background(), "echo hello")

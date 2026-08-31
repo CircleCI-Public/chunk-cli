@@ -114,14 +114,53 @@ func (l *Log) Append(e Event) error {
 	return errors.Join(encErr, f.Close())
 }
 
+// CommandIDs carries the sandbox-provisioner command ID of the most recent
+// remote exec from the code that runs it to the event log, so that the terminal
+// pass/fail event for that command records the ID. The ID can then be used to
+// replay the run's output via GET /api/v3/sidecar/commands/{id}/output.
+//
+// Take clears the pending ID, so one exec stamps exactly one event: the next
+// terminal event after it, never a later run-wide summary that belongs to no
+// single command. A nil *CommandIDs is usable and always yields "", which is
+// what callers that never exec remotely pass.
+type CommandIDs struct {
+	mu sync.Mutex
+	id string
+}
+
+// Set records the command ID of the exec that just finished, replacing any ID
+// that no terminal event claimed. Pass "" when an exec failed without
+// reporting an ID, so a stale one is not attributed to it.
+func (c *CommandIDs) Set(id string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.id = id
+}
+
+// Take returns the pending command ID and clears it.
+func (c *CommandIDs) Take() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.id
+	c.id = ""
+	return id
+}
+
 // Wrap returns a StatusFunc that calls inner and also appends each call to the
 // log. All events will be tagged with op, sidecarID, sidecarName, and branch.
-func (l *Log) Wrap(inner iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string) iostream.StatusFunc {
+// Terminal events additionally carry the command ID pending in ids, if any.
+func (l *Log) Wrap(inner iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string, ids *CommandIDs) iostream.StatusFunc {
 	return func(level iostream.Level, msg string) {
 		if inner != nil {
 			inner(level, msg)
 		}
-		_ = l.Append(Event{
+		e := Event{
 			Ts:          time.Now(),
 			SidecarID:   sidecarID,
 			SidecarName: sidecarName,
@@ -129,34 +168,22 @@ func (l *Log) Wrap(inner iostream.StatusFunc, op Op, sidecarID, sidecarName, bra
 			Op:          op,
 			Level:       levelStr(level),
 			Msg:         msg,
-		})
+		}
+		if level == iostream.LevelDone || level == iostream.LevelError {
+			e.CommandID = ids.Take()
+		}
+		_ = l.Append(e)
 	}
-}
-
-// AppendCommandID writes an event recording the sandbox-provisioner command ID
-// for a remote exec. The commandID identifies the run and can be used to replay
-// its output via GET /api/v3/sidecar/commands/{id}/output.
-func (l *Log) AppendCommandID(commandID, sidecarID, sidecarName, branch string, op Op) error {
-	return l.Append(Event{
-		Ts:          time.Now(),
-		SidecarID:   sidecarID,
-		SidecarName: sidecarName,
-		Branch:      branch,
-		Op:          op,
-		Level:       levelInfo,
-		Msg:         "command_id: " + commandID,
-		CommandID:   commandID,
-	})
 }
 
 // WrapFromDir wraps fn with event-log appending using the log in dataDir.
 // Errors opening the log are silently ignored (best-effort; never blocks).
-func WrapFromDir(dataDir string, fn iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string) iostream.StatusFunc {
+func WrapFromDir(dataDir string, fn iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string, ids *CommandIDs) iostream.StatusFunc {
 	el, err := Open(dataDir)
 	if err != nil {
 		return fn
 	}
-	return el.Wrap(fn, op, sidecarID, sidecarName, branch)
+	return el.Wrap(fn, op, sidecarID, sidecarName, branch, ids)
 }
 
 // Recent returns up to n most recent events from the log.
