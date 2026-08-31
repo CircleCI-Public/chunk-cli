@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"time"
@@ -13,7 +14,12 @@ import (
 func newServer(d *daemon) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
+		// The body carries this daemon's build identity. A daemon predating the
+		// identity answers with an empty body, which reads as a mismatch — which
+		// is right, since that is exactly the daemon a client needs to replace.
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, BuildID())
 	})
 	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		var roots []string
