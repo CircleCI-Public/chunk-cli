@@ -61,6 +61,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 				sessionID:     sc.SessionID,
 				projectName:   sc.ProjectName,
 				repoName:      sc.RepoName,
+				projectPath:   p.Root,
 				branch:        p.Branch,
 				projectIdx:    i,
 				snapshotName:  sc.SnapshotName,
@@ -82,6 +83,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 			name:        localRunnerName,
 			projectName: filepath.Base(p.Root),
 			repoName:    p.RepoName,
+			projectPath: p.Root,
 			branch:      p.Branch,
 			projectIdx:  i,
 		}

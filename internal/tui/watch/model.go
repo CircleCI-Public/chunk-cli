@@ -3,6 +3,7 @@ package watch
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -101,6 +102,7 @@ type sidecarInfo struct {
 	sessionID     string
 	projectName   string
 	repoName      string    // basename of the main worktree (groups linked worktrees together)
+	projectPath   string    // absolute root of this worktree, "" when unknown
 	branch        string    // current git branch for this worktree
 	projectIdx    int       // index into Model.projects
 	snapshotName  string    // name of the active snapshot for this project, if any
@@ -399,6 +401,8 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 	var lastRepo string
 	shared := sharedWorktrees(m.sidecars)
 	sessions := sessionsPerWorktree(m.sidecars)
+	ambiguous := ambiguousBranches(m.sidecars)
+	dirLabels := worktreeLabels(m.sidecars, ambiguous)
 	lastGroup, haveGroup := groupKey{}, false
 
 	dropped := 0
@@ -427,10 +431,19 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 		// disambiguate, so it costs the reader nothing to know about sessions.
 		group := groupOf(sc)
 		multi := shared[group] > 1
+		// "" unless this branch lives in more than one directory.
+		dirLabel := ""
+		if ambiguous[worktreeKey{sc.repoName, sc.branch}] {
+			dirLabel = dirLabels[sc.projectIdx]
+		}
 		if multi && (!haveGroup || group != lastGroup) {
-			// A detached HEAD has no branch to name the worktree with; the
-			// directory is the next best thing the reader can act on.
+			// A detached HEAD has no branch to name the worktree with, and a
+			// branch checked out twice names two of them; either way the
+			// directory is what the reader can act on.
 			label := sc.branch
+			if dirLabel != "" {
+				label = dirLabel
+			}
 			if label == "" {
 				label = sc.projectName
 			}
@@ -443,7 +456,7 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 		lastGroup, haveGroup = group, true
 
 		selected := i == m.selectedIdx
-		nameLine := truncate(m.rowLabel(sc, multi), leftPaneWidth-3)
+		nameLine := truncate(m.rowLabel(sc, multi, dirLabel), leftPaneWidth-3)
 
 		switch {
 		case selected && m.focusedPane == paneLeft:
@@ -1057,12 +1070,129 @@ func sessionsPerWorktree(sidecars []sidecarInfo) map[groupKey]int {
 	return counts
 }
 
+// worktreeKey identifies a branch within a repo, with no directory attached. Two
+// rows sharing one in different directories are two checkouts of the same
+// branch — a second clone, or a worktree that happens to be on the same branch —
+// and the branch name alone cannot tell them apart.
+type worktreeKey struct {
+	repoName string
+	branch   string
+}
+
+// ambiguousBranches reports which (repo, branch) pairs are checked out in more
+// than one directory. Those rows cannot be named by their branch: repoName is the
+// basename of the main worktree, so two clones collapse under one repo header and
+// would render as two identical branch rows, separable only by a truncated
+// sidecar UUID — the very confusion per-session labels were added to remove.
+//
+// A detached HEAD has no branch to be ambiguous about, and those rows are already
+// named by their directory, so they are left alone.
+func ambiguousBranches(sidecars []sidecarInfo) map[worktreeKey]bool {
+	dirs := map[worktreeKey]map[int]bool{}
+	for _, sc := range sidecars {
+		if sc.branch == "" {
+			continue
+		}
+		k := worktreeKey{sc.repoName, sc.branch}
+		if dirs[k] == nil {
+			dirs[k] = map[int]bool{}
+		}
+		dirs[k][sc.projectIdx] = true
+	}
+	out := make(map[worktreeKey]bool, len(dirs))
+	for k, seen := range dirs {
+		if len(seen) > 1 {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// worktreeLabels names each directory involved in an ambiguous branch. A row's
+// projectIdx fixes its repo and branch — a directory is only ever on one branch
+// at a time — so one label per index is unambiguous.
+func worktreeLabels(sidecars []sidecarInfo, ambiguous map[worktreeKey]bool) map[int]string {
+	paths := map[worktreeKey]map[int]string{}
+	for _, sc := range sidecars {
+		k := worktreeKey{sc.repoName, sc.branch}
+		if !ambiguous[k] {
+			continue
+		}
+		path := sc.projectPath
+		if path == "" {
+			path = sc.projectName
+		}
+		if paths[k] == nil {
+			paths[k] = map[int]string{}
+		}
+		paths[k][sc.projectIdx] = path
+	}
+
+	labels := map[int]string{}
+	for _, byIdx := range paths {
+		for idx, label := range shortestUniqueSuffixes(byIdx) {
+			labels[idx] = label
+		}
+	}
+	return labels
+}
+
+// shortestUniqueSuffixes labels each path with the fewest trailing segments that
+// tell them all apart, so the pane spends its 28 columns on the part that
+// differs. One segment is usually not enough: two clones of a repo share a
+// basename, which is what made the branch ambiguous in the first place.
+func shortestUniqueSuffixes(paths map[int]string) map[int]string {
+	segs := make(map[int][]string, len(paths))
+	longest := 1
+	for idx, path := range paths {
+		parts := strings.Split(strings.Trim(filepath.ToSlash(path), "/"), "/")
+		segs[idx] = parts
+		if len(parts) > longest {
+			longest = len(parts)
+		}
+	}
+
+	out := make(map[int]string, len(paths))
+	for n := 1; n <= longest; n++ {
+		counts := map[string]int{}
+		for idx, parts := range segs {
+			out[idx] = pathSuffix(parts, n)
+			counts[out[idx]]++
+		}
+		collision := false
+		for _, c := range counts {
+			if c > 1 {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			return out
+		}
+	}
+	// Identical paths cannot be told apart; the full path is the best available.
+	return out
+}
+
+func pathSuffix(parts []string, n int) string {
+	if n >= len(parts) {
+		return strings.Join(parts, "/")
+	}
+	return strings.Join(parts[len(parts)-n:], "/")
+}
+
 // rowLabel names a row in the left pane. Alone in its worktree a row is its
 // branch, as it has always been. Sharing one, the branch has moved to the group
 // header and the row names its session instead — the viewer's own session by
 // name, since "which of these is mine" is the first thing they need to know.
-func (m Model) rowLabel(sc sidecarInfo, multi bool) string {
+func (m Model) rowLabel(sc sidecarInfo, multi bool, dirLabel string) string {
 	if !multi {
+		// dirLabel is set only where the branch is checked out in more than one
+		// directory, and there the directory is the only thing that distinguishes
+		// this row from its twin.
+		if dirLabel != "" {
+			return dirLabel
+		}
 		if sc.branch != "" {
 			return sc.branch
 		}

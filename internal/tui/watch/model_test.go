@@ -595,6 +595,98 @@ func TestRenderSidecarPane_noOverflowHintWhenEverythingFits(t *testing.T) {
 	assert.Assert(t, !strings.Contains(pane, "more"), pane)
 }
 
+func TestRenderSidecarPane_sameBranchInTwoCheckoutsNamesTheDirectory(t *testing.T) {
+	now := time.Now()
+	// Two clones of one repo, both on main. repoName is the basename of the main
+	// worktree, so both collapse under one repo header — and the basenames match
+	// too, which is exactly why the branch alone cannot name these rows.
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
+			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli",
+			projectPath: "/Users/j/tmp/chunk-cli", branch: "main", projectIdx: 1,
+			lastActivity: now.Add(-1 * time.Minute)},
+	})
+
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+
+	assert.Assert(t, strings.Contains(pane, "work/chunk-cli"), pane)
+	assert.Assert(t, strings.Contains(pane, "tmp/chunk-cli"), pane)
+}
+
+func TestRenderSidecarPane_distinctBranchesKeepTheirBranchLabels(t *testing.T) {
+	now := time.Now()
+	// Two directories of one repo on different branches: the branch already tells
+	// them apart, so nothing should change.
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
+			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli-wt",
+			projectPath: "/Users/j/work/chunk-cli-wt", branch: "feature", projectIdx: 1,
+			lastActivity: now.Add(-1 * time.Minute)},
+	})
+
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+
+	assert.Assert(t, strings.Contains(pane, "main"), pane)
+	assert.Assert(t, strings.Contains(pane, "feature"), pane)
+	assert.Assert(t, !strings.Contains(pane, "work/chunk-cli"), pane)
+}
+
+func TestRenderSidecarPane_ambiguousBranchNamesTheDirectoryInTheGroupHeader(t *testing.T) {
+	now := time.Now()
+	// One of the two checkouts is itself shared by two sessions: its group header
+	// has to name the directory, since "main" would match the other checkout.
+	m := sessionModel("sessA", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "chunk-cli", projectName: "chunk-cli",
+			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0, lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", projectName: "chunk-cli",
+			projectPath: "/Users/j/work/chunk-cli", branch: "main", projectIdx: 0,
+			lastActivity: now.Add(-1 * time.Minute)},
+		{id: "id3", sessionID: "sessC", repoName: "chunk-cli", projectName: "chunk-cli",
+			projectPath: "/Users/j/tmp/chunk-cli", branch: "main", projectIdx: 1,
+			lastActivity: now.Add(-2 * time.Minute)},
+	})
+
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+
+	assert.Assert(t, strings.Contains(pane, "work/chunk-cli"), pane)
+	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
+	assert.Assert(t, strings.Contains(pane, "tmp/chunk-cli"), pane)
+}
+
+func TestShortestUniqueSuffixes(t *testing.T) {
+	tests := []struct {
+		name  string
+		paths map[int]string
+		want  map[int]string
+	}{
+		{
+			"colliding basenames take the parent",
+			map[int]string{0: "/Users/j/work/chunk-cli", 1: "/Users/j/tmp/chunk-cli"},
+			map[int]string{0: "work/chunk-cli", 1: "tmp/chunk-cli"},
+		},
+		{
+			"distinct basenames stay short",
+			map[int]string{0: "/Users/j/work/chunk-cli", 1: "/Users/j/work/chunk-cli-wt"},
+			map[int]string{0: "chunk-cli", 1: "chunk-cli-wt"},
+		},
+		{
+			"digs as deep as it must",
+			map[int]string{0: "/a/one/x/repo", 1: "/a/two/x/repo"},
+			map[int]string{0: "one/x/repo", 1: "two/x/repo"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shortestUniqueSuffixes(tc.paths)
+			for idx, want := range tc.want {
+				assert.Equal(t, got[idx], want, "index %d", idx)
+			}
+		})
+	}
+}
+
 func TestSortByActivity_pinsTheViewersOwnRowFirstInItsGroup(t *testing.T) {
 	now := time.Now()
 	// The viewer's own session is the stalest of the three, so recency alone
@@ -649,21 +741,23 @@ func TestRowLabel(t *testing.T) {
 	m.ownSession = "mine1234-abcd"
 
 	tests := []struct {
-		name  string
-		sc    sidecarInfo
-		multi bool
-		want  string
+		name     string
+		sc       sidecarInfo
+		multi    bool
+		dirLabel string
+		want     string
 	}{
-		{"alone uses the branch", sidecarInfo{id: "x", branch: "main", sessionID: "other"}, false, "main"},
-		{"alone with no branch falls back to the identifier", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-1"}, false, "11111111-aaaa-bbbb-cccc-000000000001"},
-		{"own session is called out", sidecarInfo{id: "x", branch: "main", sessionID: "mine1234-abcd"}, true, "● this session"},
-		{"other session is shortened", sidecarInfo{id: "x", branch: "main", sessionID: "theirs99-abcd"}, true, "○ theirs99"},
-		{"local runner keeps its name", sidecarInfo{id: "", name: localRunnerName, branch: "main"}, true, "○ " + localRunnerName},
-		{"pre-session state is abbreviated too", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-legacy", branch: "main"}, true, "○ 11111111"},
+		{"alone uses the branch", sidecarInfo{id: "x", branch: "main", sessionID: "other"}, false, "", "main"},
+		{"a branch checked out twice is named by directory", sidecarInfo{id: "x", branch: "main"}, false, "work/repo", "work/repo"},
+		{"alone with no branch falls back to the identifier", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-1"}, false, "", "11111111-aaaa-bbbb-cccc-000000000001"},
+		{"own session is called out", sidecarInfo{id: "x", branch: "main", sessionID: "mine1234-abcd"}, true, "", "● this session"},
+		{"other session is shortened", sidecarInfo{id: "x", branch: "main", sessionID: "theirs99-abcd"}, true, "", "○ theirs99"},
+		{"local runner keeps its name", sidecarInfo{id: "", name: localRunnerName, branch: "main"}, true, "", "○ " + localRunnerName},
+		{"pre-session state is abbreviated too", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-legacy", branch: "main"}, true, "", "○ 11111111"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, m.rowLabel(tc.sc, tc.multi), tc.want)
+			assert.Equal(t, m.rowLabel(tc.sc, tc.multi, tc.dirLabel), tc.want)
 		})
 	}
 }
