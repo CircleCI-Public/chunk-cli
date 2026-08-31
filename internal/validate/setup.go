@@ -61,22 +61,18 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 
 	ci := commandsFromCI(workDir)
 	if len(ci.Commands) > 0 {
-		// CI is authoritative for the gates it names, but formatting is an
-		// autofix rather than a gate: a config usually checks formatting by
-		// diffing the tree, never by naming a command that rewrites it. Taking
-		// CI literally there would leave the user with no formatter at all, so
-		// fill only the autofix roles from the toolchain default.
-		ci.Commands = withAutofixDefaults(ci.Commands, commandsFromFilenames(workDir, has))
-		return ci, nil
+		return withDefaults(ci, commandsFromFilenames(workDir, has)), nil
 	}
 
 	if cmds := commandsFromFilenames(workDir, has); len(cmds) > 0 {
 		return Detection{Commands: cmds, Source: sourceLayout, Notes: fallbackNotes(ci)}, nil
 	}
 
-	// Unknown toolchain — ask Claude
+	// Unknown toolchain — ask Claude. With no client there is nothing left to
+	// try, but an unusable CircleCI config still needs explaining: this is the
+	// case where the user ends up with no commands at all.
 	if claude == nil {
-		return Detection{}, nil
+		return Detection{Notes: fallbackNotes(ci)}, nil
 	}
 
 	pm := DetectPackageManager(workDir)
@@ -101,7 +97,7 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 
 	result := strings.TrimSpace(resp)
 	if result == "" {
-		return Detection{}, nil
+		return Detection{Notes: fallbackNotes(ci)}, nil
 	}
 	return Detection{
 		Commands: []config.Command{{Name: "test", Run: result, Role: config.RoleGate}},
@@ -110,21 +106,65 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 	}, nil
 }
 
-// withAutofixDefaults adds the autofix commands from defaults that ci does not
-// already provide, leaving every gate ci named untouched. A check-only
+// withDefaults fills the roles a CircleCI config left unnamed from the
+// toolchain defaults, leaving every command CI did name untouched.
+//
+// CI is authoritative for the gates it names, with two exceptions. Formatting
+// is an autofix rather than a gate: a config usually checks formatting by
+// diffing the tree, never by naming a command that rewrites it, so taking CI
+// literally there would leave the user with no formatter at all. A check-only
 // formatter from CI is emitted as "format-check", so it does not match the
 // default's "format" name and the real fixer is still added alongside it.
-func withAutofixDefaults(ci, defaults []config.Command) []config.Command {
-	for _, d := range defaults {
-		if d.Role != config.RoleAutofix {
-			continue
-		}
-		if slices.ContainsFunc(ci, func(c config.Command) bool { return c.Name == d.Name }) {
-			continue
-		}
-		ci = append(ci, d)
+//
+// The test gate is filled too, because losing it is not deference to CI — it is
+// a config that validates nothing. A suite can reach CI through a multi-line
+// script, an orb-provided job, or a step whose wording trips a skip marker, and
+// none of those classify, so a config naming only lint and format would
+// otherwise be written out test-less. Gates other than test stay unnamed when
+// CI does not name them: a lint gate the repo never runs is a tool that may not
+// even be installed, and it would fail every validate run.
+func withDefaults(ci Detection, defaults []config.Command) Detection {
+	names := func(cmds []config.Command, name string) bool {
+		return slices.ContainsFunc(cmds, func(c config.Command) bool { return c.Name == name })
 	}
+	for _, d := range defaults {
+		if d.Role != config.RoleAutofix && d.Name != roleTest {
+			continue
+		}
+		if names(ci.Commands, d.Name) {
+			continue
+		}
+		if d.Name == roleTest {
+			ci.Notes = append(ci.Notes, fmt.Sprintf(
+				"no test command was found in %s, so `%s` comes from the repository layout", ci.Source, d.Run))
+		}
+		ci.Commands = append(ci.Commands, d)
+	}
+	// Neither source named a test. Nothing can be filled in, but the user is
+	// about to get a config that gates on lint alone, and should hear it here
+	// rather than discover it the first time validate passes on a broken tree.
+	if !names(ci.Commands, roleTest) {
+		ci.Notes = append(ci.Notes, fmt.Sprintf(
+			"no test command was found in %s, and the repository layout does not suggest one", ci.Source))
+	}
+	sortByEmitOrder(ci.Commands)
 	return ci
+}
+
+// sortByEmitOrder puts a backfilled command where CI's own would have gone:
+// install before the gates it installs for, and the formatter last.
+func sortByEmitOrder(cmds []config.Command) {
+	index := func(name string) int {
+		for i, role := range emitOrder {
+			if roleSpec[role].name == name {
+				return i
+			}
+		}
+		return len(emitOrder)
+	}
+	slices.SortStableFunc(cmds, func(a, b config.Command) int {
+		return index(a.Name) - index(b.Name)
+	})
 }
 
 // fallbackNotes explains why a CircleCI config that exists was not used, so a

@@ -417,6 +417,12 @@ func hasInstallCommand(commands []config.Command) bool {
 // between a surprising config and an explicable one.
 func printDetectionSource(det validate.Detection, streams iostream.Streams) {
 	if det.Source == "" {
+		// Nothing was detected, so the notes are all detection has to say — and
+		// they are what explains a CircleCI config that exists but could not be
+		// used. Printed flush left, with no source line to sit under.
+		for _, note := range det.Notes {
+			streams.ErrPrintln(ui.Dim(note))
+		}
 		return
 	}
 	streams.ErrPrintf("Detected commands from %s\n", ui.Bold(det.Source))

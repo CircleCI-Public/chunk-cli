@@ -2,6 +2,7 @@ package validate
 
 import (
 	"context"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,7 +11,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 // writeCI writes a CircleCI config into dir.
@@ -632,4 +635,122 @@ func TestDetectCommandsIgnoresUnusableCIConfig(t *testing.T) {
 	det, err := DetectCommands(context.Background(), nil, dir)
 	assert.NilError(t, err)
 	assert.Equal(t, det.Commands[0].Run, "go test ./...")
+}
+
+func TestDetectCommandsKeepsATestGateCIDoesNotName(t *testing.T) {
+	// A suite behind a multi-line script does not classify. Trusting CI for the
+	// rest and dropping test would write a config that validates nothing.
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run: golangci-lint run ./...
+      - run:
+          name: Suite
+          command: |
+            ./scripts/prepare.sh
+            go test ./...
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	det, err := DetectCommands(context.Background(), nil, dir)
+	assert.NilError(t, err)
+	assert.Equal(t, det.Source, ".circleci/config.yml")
+
+	// The backfilled test sorts ahead of CI's lint, as CI's own test would have.
+	assert.DeepEqual(t, runs(det.Commands), []string{
+		"test=go test ./...",
+		"lint=golangci-lint run ./...",
+		"format=gofmt -w .",
+	})
+	// And the substitution is stated rather than silent.
+	assert.Assert(t, slices.ContainsFunc(det.Notes, func(n string) bool {
+		return strings.Contains(n, "no test command was found in .circleci/config.yml")
+	}), strings.Join(det.Notes, "\n"))
+}
+
+func TestDetectCommandsDoesNotInventGatesBeyondTest(t *testing.T) {
+	// CI naming no lint gate is a real answer: golangci-lint may not even be
+	// installed, and a gate that always fails is worse than no gate.
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run: go test ./...
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	det, err := DetectCommands(context.Background(), nil, dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, runs(det.Commands), []string{
+		"test=go test ./...",
+		"format=gofmt -w .",
+	})
+	assert.Equal(t, len(det.Notes), 0)
+}
+
+func TestDetectCommandsSaysWhenNothingNamesATest(t *testing.T) {
+	// CI gates on lint only and the toolchain is unknown, so there is nothing to
+	// fill the test slot with. The gap is stated instead of shipped silently.
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run: shellcheck ./bin/*
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	det, err := DetectCommands(context.Background(), nil, dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, runs(det.Commands), []string{"lint=shellcheck ./bin/*"})
+	assert.DeepEqual(t, det.Notes, []string{
+		"no test command was found in .circleci/config.yml, and the repository layout does not suggest one",
+	})
+}
+
+func TestDetectCommandsExplainsAnUnusableConfigWithNothingToFallBackOn(t *testing.T) {
+	// Unknown toolchain and no Claude client: the user gets no commands at all,
+	// which is precisely when the config needs explaining.
+	dir := t.TempDir()
+	writeCI(t, dir, "version: 2.1\nsetup: true\n")
+
+	det, err := DetectCommands(context.Background(), nil, dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(det.Commands), 0)
+	assert.DeepEqual(t, det.Notes, []string{
+		"the config generates its real config at run time, so its checks are not visible",
+		"no runnable checks were found in .circleci/config.yml",
+	})
+}
+
+func TestDetectCommandsExplainsAnUnusableConfigWhenClaudeAnswersEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeCI(t, dir, "version: 2.1\nsetup: true\n")
+
+	srv := httptest.NewServer(fakes.NewFakeAnthropic(""))
+	defer srv.Close()
+	claude, err := anthropic.New(anthropic.Config{APIKey: "sk-ant-fake", BaseURL: srv.URL})
+	assert.NilError(t, err)
+
+	det, err := DetectCommands(context.Background(), claude, dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(det.Commands), 0)
+	assert.DeepEqual(t, det.Notes, []string{
+		"the config generates its real config at run time, so its checks are not visible",
+		"no runnable checks were found in .circleci/config.yml",
+	})
 }
