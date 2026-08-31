@@ -398,20 +398,25 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 
 	var lastRepo string
 	shared := sharedWorktrees(m.sidecars)
+	sessions := sessionsPerWorktree(m.sidecars)
 	lastGroup, haveGroup := groupKey{}, false
 
+	dropped := 0
 	for i, sc := range m.sidecars {
-		if len(lines) >= maxLines-2 {
-			break
-		}
+		// Cost the row before committing to it. A row is three to six lines and
+		// renderBody clips whatever runs past maxLines, so a row begun without the
+		// room to finish loses its tail — the sync state and age it exists to
+		// report. Building it aside first lets the pane drop it whole instead.
+		var row []string
+		addRow := func(s string) { row = append(row, s) }
 
 		// Repo separator — groups all worktrees of the same repo under one header.
 		if sc.repoName != lastRepo {
 			if lastRepo != "" {
-				add("")
+				addRow("")
 			}
 			label := truncate(sc.repoName, leftPaneWidth-4)
-			add(vdim("── ") + bold(label))
+			addRow(vdim("── ") + bold(label))
 			lastRepo = sc.repoName
 			haveGroup = false
 		}
@@ -432,8 +437,8 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 			// The branch gets the full width: it is the thing the reader is
 			// looking for, and squeezing the count onto the same line would
 			// truncate a normal-length branch name to nothing.
-			add("  " + bold(truncate(label, leftPaneWidth-2)))
-			add("  " + vdim(fmt.Sprintf("%d sessions", shared[group])))
+			addRow("  " + bold(truncate(label, leftPaneWidth-2)))
+			addRow("  " + vdim(fmt.Sprintf("%d sessions", sessions[group])))
 		}
 		lastGroup, haveGroup = group, true
 
@@ -442,51 +447,67 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 
 		switch {
 		case selected && m.focusedPane == paneLeft:
-			add(green("▶ ") + bold(nameLine))
+			addRow(green("▶ ") + bold(nameLine))
 		case selected:
-			add(vdim("▶ ") + muted(nameLine))
+			addRow(vdim("▶ ") + muted(nameLine))
 		default:
-			add("  " + nameLine)
+			addRow("  " + nameLine)
 		}
 
 		if sc.snapshotName != "" {
-			add("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
+			addRow("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
 		}
 		if sc.id != "" && sc.name != "" {
-			add("   " + vdim(truncate(sidecarDisplayName(sc.name, sc.id), leftPaneWidth-6)))
+			addRow("   " + vdim(truncate(sidecarDisplayName(sc.name, sc.id), leftPaneWidth-6)))
 		}
 
 		switch {
 		case sc.running:
 			frame := spinFrames[m.spinIdx%len(spinFrames)]
-			add("  " + blue(frame+" "+string(sc.lastOp)+"..."))
+			addRow("  " + blue(frame+" "+string(sc.lastOp)+"..."))
 		case sc.id == "": // local runner — no sync state
 			switch sc.lastLevel {
 			case levelDone:
-				add("  " + green("✓ passed"))
+				addRow("  " + green("✓ passed"))
 			case levelError:
-				add("  " + red("✗ failed"))
+				addRow("  " + red("✗ failed"))
 			default:
-				add("  " + muted("no runs yet"))
+				addRow("  " + muted("no runs yet"))
 			}
 		case sc.inSync:
-			add("  " + green("✓ in sync"))
+			addRow("  " + green("✓ in sync"))
 		case sc.lastSyncedRef == "":
-			add("  " + muted("not synced"))
+			addRow("  " + muted("not synced"))
 		default:
-			add("  " + yellow("↑ needs sync"))
+			addRow("  " + yellow("↑ needs sync"))
 		}
 
 		if !sc.lastActivity.IsZero() {
-			add("  " + vdim(ago(sc.lastActivity)))
+			addRow("  " + vdim(ago(sc.lastActivity)))
 		} else {
-			add("")
+			addRow("")
 		}
 
 		// Divider between sidecars in the same repo group.
 		if i < len(m.sidecars)-1 && m.sidecars[i+1].repoName == sc.repoName {
-			add(muted(strings.Repeat("─", leftPaneWidth)))
+			addRow(muted(strings.Repeat("─", leftPaneWidth)))
 		}
+
+		// Hold back a line for the hint whenever rows remain after this one.
+		budget := maxLines
+		if i < len(m.sidecars)-1 {
+			budget--
+		}
+		if len(lines)+len(row) > budget {
+			dropped = len(m.sidecars) - i
+			break
+		}
+		lines = append(lines, row...)
+	}
+	if dropped > 0 {
+		// Without this the rows simply stopped: a group's session count was the
+		// only clue that any were missing, and a dropped repo had none at all.
+		lines = append(lines, "  "+vdim(fmt.Sprintf("↓ %d more", dropped)))
 	}
 	return lines
 }
@@ -961,7 +982,7 @@ func (m Model) loadData() tea.Msg {
 // activity. Without that tier the rows of a branch with two sessions could be
 // split apart by a busier branch in the same repo, and the pane could not label
 // the group once.
-func sortByActivity(sidecars []sidecarInfo) {
+func sortByActivity(sidecars []sidecarInfo, ownSession string) {
 	latestRepo := map[string]time.Time{}
 	latestGroup := map[groupKey]time.Time{}
 	for _, sc := range sidecars {
@@ -981,6 +1002,16 @@ func sortByActivity(sidecars []sidecarInfo) {
 		ka, kb := groupOf(a), groupOf(b)
 		if ka != kb {
 			return latestGroup[ka].After(latestGroup[kb])
+		}
+		// Inside a group the viewer's own row leads. "Which of these is mine" is
+		// the first question a shared worktree raises, and a row that reshuffles
+		// by recency every poll makes the reader hunt for the answer the label
+		// was added to give. Ordering between the other rows is untouched.
+		if ownSession != "" {
+			aMine, bMine := a.sessionID == ownSession, b.sessionID == ownSession
+			if aMine != bMine {
+				return aMine
+			}
 		}
 		return effectiveActivity(a).After(effectiveActivity(b))
 	})
@@ -1009,6 +1040,19 @@ func sharedWorktrees(sidecars []sidecarInfo) map[groupKey]int {
 	counts := make(map[groupKey]int, len(sidecars))
 	for _, sc := range sidecars {
 		counts[groupOf(sc)]++
+	}
+	return counts
+}
+
+// sessionsPerWorktree counts the sessions in each group — one per sidecar. The
+// local runner occupies a row but is not a session, so a worktree with two
+// sessions and a local run reads "2 sessions" over three rows rather than three.
+func sessionsPerWorktree(sidecars []sidecarInfo) map[groupKey]int {
+	counts := make(map[groupKey]int, len(sidecars))
+	for _, sc := range sidecars {
+		if sc.id != "" {
+			counts[groupOf(sc)]++
+		}
 	}
 	return counts
 }
@@ -1061,6 +1105,18 @@ func shortUUID(id string) string {
 // later, the sidecar's identity and sync state are promoted onto the primary so
 // the left pane shows sync status rather than pass/fail.
 func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
+	// A local validate run belongs to the worktree, not to any session in it. With
+	// one session holding the worktree that distinction is invisible and folding
+	// the local row in buys a cleaner pane. With several, the fold would credit
+	// one session with runs another developer — or no agent at all — made, so
+	// those groups keep the local row separate.
+	realPerGroup := map[groupKey]int{}
+	for _, sc := range sidecars {
+		if sc.id != "" {
+			realPerGroup[groupOf(sc)]++
+		}
+	}
+
 	seen := map[groupKey]int{}
 	result := make([]sidecarInfo, 0, len(sidecars))
 	for _, sc := range sidecars {
@@ -1078,6 +1134,13 @@ func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
 			// has no session — from ever merging into the sidecar row it belongs
 			// to, leaving a duplicate "local" row under every branch.
 			if result[idx].id != "" && sc.id != "" {
+				result = append(result, sc)
+				seen[k] = len(result) - 1
+				continue
+			}
+			// One of the pair is the local runner. Fold it in only where a single
+			// session holds the worktree; see realPerGroup above.
+			if realPerGroup[k] > 1 {
 				result = append(result, sc)
 				seen[k] = len(result) - 1
 				continue
@@ -1146,8 +1209,12 @@ const (
 	// active within activeWindow.
 	fallbackWindow = 24 * time.Hour
 	// linesPerSidecar is the worst-case row cost of one sidecar in the sidecar
-	// pane: project header, name, status, age, and the gap between projects.
-	linesPerSidecar = 5
+	// pane: name, snapshot, sidecar id, status, age, and the divider to the next
+	// row. A shared worktree adds two more for its group header, so this is a
+	// floor rather than an exact figure; renderSidecarPane drops whatever does
+	// not fit and says so, so an optimistic count costs a "more" hint, not a
+	// half-drawn row.
+	linesPerSidecar = 6
 	// defaultCapacity is used until the first WindowSizeMsg gives a real height.
 	defaultCapacity = 5
 )

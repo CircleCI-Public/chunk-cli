@@ -234,7 +234,7 @@ func TestSortByActivity_freshestProjectFirst(t *testing.T) {
 		{id: "newest", repoName: "busy-project", lastActivity: now.Add(-1 * time.Minute)},
 	}
 
-	sortByActivity(sidecars)
+	sortByActivity(sidecars, "")
 
 	want := []string{"newest", "older", "stale"}
 	for i, id := range want {
@@ -252,7 +252,7 @@ func TestSortByActivity_keepsProjectsGrouped(t *testing.T) {
 		{id: "a2", repoName: "a", lastActivity: now.Add(-3 * time.Minute)},
 	}
 
-	sortByActivity(sidecars)
+	sortByActivity(sidecars, "")
 
 	// Project b is freshest so it leads, then both of a's sidecars together.
 	want := []string{"b1", "a1", "a2"}
@@ -272,7 +272,7 @@ func TestFilterSidecars_noPerProjectCap(t *testing.T) {
 		{id: "s4", projectName: "p", lastActivity: now.Add(-4 * time.Minute)},
 	}
 
-	sortByActivity(sidecars)
+	sortByActivity(sidecars, "")
 	got := filterSidecars(sidecars, 2)
 
 	if len(got) != 4 {
@@ -368,8 +368,8 @@ func TestSidecarCapacity(t *testing.T) {
 	}{
 		{"unset height", 0, defaultCapacity},
 		{"tiny terminal", 8, 1},
-		{"40 rows", 40, 6},
-		{"80 rows", 80, 14},
+		{"40 rows", 40, 5},
+		{"80 rows", 80, 12},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -561,6 +561,89 @@ func TestRenderSidecarPane_detachedHeadNamesTheDirectory(t *testing.T) {
 	assert.Assert(t, strings.Contains(lines[countAt-1], "wt-detached"), lines[countAt-1])
 }
 
+func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "main",
+			lastActivity: now, inSync: true},
+		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main",
+			lastActivity: now.Add(-time.Minute), inSync: true},
+	})
+
+	// Room for the title, the blank under it, and the first row only. The second
+	// row would previously have been started and then clipped by renderBody,
+	// losing its sync badge and age.
+	pane := strings.Join(m.renderSidecarPane(9), "\n")
+
+	// A complete row ends in an age line, so one age line per sync badge means
+	// no row was cut part-way through.
+	assert.Equal(t, strings.Count(pane, "in sync"), strings.Count(pane, "ago"), pane)
+	assert.Assert(t, strings.Contains(pane, "1 more"), pane)
+}
+
+func TestRenderSidecarPane_noOverflowHintWhenEverythingFits(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "main",
+			lastActivity: now, inSync: true},
+		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main",
+			lastActivity: now.Add(-time.Minute), inSync: true},
+	})
+
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+
+	assert.Assert(t, !strings.Contains(pane, "more"), pane)
+}
+
+func TestSortByActivity_pinsTheViewersOwnRowFirstInItsGroup(t *testing.T) {
+	now := time.Now()
+	// The viewer's own session is the stalest of the three, so recency alone
+	// would bury it in the middle of the group.
+	sidecars := []sidecarInfo{
+		{id: "theirs-new", sessionID: "sessB", repoName: "r", branch: "main", lastActivity: now},
+		{id: "mine", sessionID: "sessMine", repoName: "r", branch: "main", lastActivity: now.Add(-30 * time.Minute)},
+		{id: "theirs-mid", sessionID: "sessC", repoName: "r", branch: "main", lastActivity: now.Add(-5 * time.Minute)},
+	}
+
+	sortByActivity(sidecars, "sessMine")
+
+	// Own row first, and the rest still in recency order behind it.
+	want := []string{"mine", "theirs-new", "theirs-mid"}
+	for i, id := range want {
+		assert.Equal(t, sidecars[i].id, id, "position %d", i)
+	}
+}
+
+func TestSortByActivity_pinningDoesNotJumpGroups(t *testing.T) {
+	now := time.Now()
+	// A busier branch must still lead the repo: pinning orders rows inside a
+	// group, it does not promote the viewer's group over a fresher one.
+	sidecars := []sidecarInfo{
+		{id: "busy", sessionID: "sessB", repoName: "r", branch: "feature", lastActivity: now},
+		{id: "mine", sessionID: "sessMine", repoName: "r", branch: "main", lastActivity: now.Add(-30 * time.Minute)},
+	}
+
+	sortByActivity(sidecars, "sessMine")
+
+	assert.Equal(t, sidecars[0].id, "busy")
+}
+
+func TestRenderSidecarPane_localRunnerIsNotCountedAsASession(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "r", branch: "main", lastActivity: now},
+		{id: "id2", sessionID: "sessB", repoName: "r", branch: "main", lastActivity: now.Add(-1 * time.Minute)},
+		{id: "", name: localRunnerName, repoName: "r", branch: "main", lastActivity: now.Add(-2 * time.Minute)},
+	})
+
+	pane := strings.Join(m.renderSidecarPane(40), "\n")
+
+	// Three rows, but only two of them are sessions.
+	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
+	assert.Assert(t, !strings.Contains(pane, "3 sessions"), pane)
+	assert.Assert(t, strings.Contains(pane, "○ "+localRunnerName), pane)
+}
+
 func TestRowLabel(t *testing.T) {
 	m := New(nil, false)
 	m.ownSession = "mine1234-abcd"
@@ -596,7 +679,7 @@ func TestSortByActivity_keepsWorktreeGroupsTogether(t *testing.T) {
 		{id: "main-new", repoName: "r", branch: "main", lastActivity: now.Add(-1 * time.Minute)},
 	}
 
-	sortByActivity(sidecars)
+	sortByActivity(sidecars, "")
 
 	want := []string{"main-new", "main-old", "feature"}
 	for i, id := range want {
@@ -642,6 +725,25 @@ func TestConvertSnapshot_carriesSessionID(t *testing.T) {
 	assert.Equal(t, got["id2"], "sessB")
 }
 
+// A local validate run belongs to the worktree, not to any one agent. Folding
+// its events into a session's row makes the pane claim another session ran them.
+func TestConvertSnapshot_localRunIsNotAttributedToASession(t *testing.T) {
+	now := time.Now()
+	snap := twoSessionSnapshot(now.Add(-5*time.Minute), now.Add(-2*time.Minute), now.Add(-1*time.Minute))
+	m := New(nil, false)
+	m.height = 60
+
+	msg := convertSnapshot(snap, m)
+
+	for _, sc := range msg.sidecars {
+		if sc.sessionID == "" {
+			continue // the local row itself, or unattributed state
+		}
+		assert.Assert(t, !hasSidecarID(sc.sidecarIDs, ""),
+			"session %q absorbed the local run: ids=%v", sc.sessionID, sc.sidecarIDs)
+	}
+}
+
 // twoSessionSnapshot builds a daemon snapshot for one worktree driven by two
 // sessions. localAt, when non-zero, adds a local (non-sidecar) validate run.
 func twoSessionSnapshot(aAt, bAt, localAt time.Time) watchd.Snapshot {
@@ -683,16 +785,53 @@ func TestConvertSnapshot_twoSessionsSurviveTheMerge(t *testing.T) {
 	assert.Assert(t, strings.Contains(pane, "sessB"), pane)
 }
 
-// A local run fresher than either sidecar makes the local row lead its group,
-// so mergeBranches promotes a sidecar onto it. The promotion has to carry the
-// session, or the viewer's own row silently loses its label.
+// oneSessionSnapshot builds a snapshot for a worktree held by a single session,
+// with the local run fresher than the sidecar so the local row leads its group.
+func oneSessionSnapshot(sidecarAt, localAt time.Time) watchd.Snapshot {
+	ev := func(ts time.Time, sidecarID string) eventlog.Event {
+		return eventlog.Event{Ts: ts, SidecarID: sidecarID, Op: eventlog.OpValidate,
+			Level: levelDone, Msg: "1/1 passed"}
+	}
+	return watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+		Root:     "/repo",
+		Branch:   "main",
+		RepoName: "repo",
+		Sidecars: []watchd.SidecarState{
+			{ID: "idA", Name: "repo-sessA", SessionID: "sessA", RepoName: "repo", LastActivity: sidecarAt},
+		},
+		Events: []eventlog.Event{ev(sidecarAt, "idA"), ev(localAt, "")},
+	}}}
+}
+
+// A local run fresher than the sidecar makes the local row lead its group, so
+// mergeBranches promotes the sidecar onto it. The promotion has to carry the
+// session, or the activity pane stops naming it. Only a worktree held by one
+// session folds the local row in at all — see the test below for the other case.
 func TestConvertSnapshot_promotionKeepsTheSession(t *testing.T) {
+	now := time.Now()
+	msg := convertSnapshot(oneSessionSnapshot(now.Add(-10*time.Minute), now), New(nil, true))
+
+	assert.Equal(t, len(msg.sidecars), 1)
+	assert.Equal(t, msg.sidecars[0].id, "idA")
+	assert.Equal(t, msg.sidecars[0].sessionID, "sessA")
+
+	m := sessionModel("sessA", msg.sidecars)
+	m.selectedIdx = 0
+	m.width = 120
+	pane := strings.Join(m.renderActivityPane(20), "\n")
+	assert.Assert(t, strings.Contains(pane, "this session"), pane)
+}
+
+// Two sessions plus a local run: the local row belongs to neither session, so it
+// stays a row of its own. The worktree then shows three rows described as two
+// sessions, and no session is credited with the local run.
+func TestConvertSnapshot_localRowStaysSeparateWhenSessionsShareAWorktree(t *testing.T) {
 	now := time.Now()
 	msg := convertSnapshot(
 		twoSessionSnapshot(now.Add(-10*time.Minute), now.Add(-11*time.Minute), now),
 		New(nil, true))
 
-	assert.Equal(t, len(msg.sidecars), 2)
+	assert.Equal(t, len(msg.sidecars), 3)
 	sessions := map[string]string{}
 	for _, sc := range msg.sidecars {
 		sessions[sc.id] = sc.sessionID
@@ -702,5 +841,6 @@ func TestConvertSnapshot_promotionKeepsTheSession(t *testing.T) {
 
 	m := sessionModel("sessA", msg.sidecars)
 	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
 	assert.Assert(t, strings.Contains(pane, "this session"), pane)
 }

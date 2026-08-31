@@ -101,7 +101,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		allSidecars = append(allSidecars, local)
 	}
 
-	sortByActivity(allSidecars)
+	sortByActivity(allSidecars, m.ownSession)
 	allSidecars = mergeBranches(allSidecars)
 	allSidecars = filterSidecars(allSidecars, m.sidecarCapacity())
 
