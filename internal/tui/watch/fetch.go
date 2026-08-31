@@ -58,8 +58,10 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 				id:            sc.ID,
 				sidecarIDs:    []string{sc.ID},
 				name:          sc.Name,
+				sessionID:     sc.SessionID,
 				projectName:   sc.ProjectName,
 				repoName:      sc.RepoName,
+				projectPath:   p.Root,
 				branch:        p.Branch,
 				projectIdx:    i,
 				snapshotName:  sc.SnapshotName,
@@ -78,9 +80,10 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		local := sidecarInfo{
 			id:          "",
 			sidecarIDs:  []string{""},
-			name:        "local",
+			name:        localRunnerName,
 			projectName: filepath.Base(p.Root),
 			repoName:    p.RepoName,
+			projectPath: p.Root,
 			branch:      p.Branch,
 			projectIdx:  i,
 		}
@@ -100,7 +103,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		allSidecars = append(allSidecars, local)
 	}
 
-	sortByActivity(allSidecars)
+	sortByActivity(allSidecars, m.ownSession)
 	allSidecars = mergeBranches(allSidecars)
 	allSidecars = filterSidecars(allSidecars, m.sidecarCapacity())
 

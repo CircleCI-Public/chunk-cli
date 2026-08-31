@@ -56,6 +56,7 @@ func loadSidecars(dataDir, root, snapshotName, head string) []SidecarState {
 		ss := SidecarState{
 			ID:            as.SidecarID,
 			Name:          as.Name,
+			SessionID:     as.SessionID,
 			ProjectName:   projectName,
 			RepoName:      repoName,
 			SnapshotName:  snapshotName,

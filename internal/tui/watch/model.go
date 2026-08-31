@@ -3,6 +3,7 @@ package watch
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
 
@@ -24,6 +26,10 @@ const (
 
 	levelDone  = "done"
 	levelError = "error"
+
+	// localRunnerName labels the synthesised row for validate runs that happened
+	// locally rather than on a sidecar.
+	localRunnerName = "local"
 )
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -86,11 +92,17 @@ type ProjectEntry struct {
 // sidecarIDs lists every sidecar UUID (and "" for local runs) whose events
 // should appear in this entry's activity pane; populated by mergeBranches.
 type sidecarInfo struct {
-	id            string
-	sidecarIDs    []string // all IDs to match when filtering events
-	name          string
+	id         string
+	sidecarIDs []string // all IDs to match when filtering events
+	name       string
+	// sessionID is the agent session owning this sidecar, empty for the local
+	// runner and for state written before sidecars were session-scoped. Several
+	// sessions can hold sidecars for one worktree, so this is what distinguishes
+	// two otherwise identical rows.
+	sessionID     string
 	projectName   string
 	repoName      string    // basename of the main worktree (groups linked worktrees together)
+	projectPath   string    // absolute root of this worktree, "" when unknown
 	branch        string    // current git branch for this worktree
 	projectIdx    int       // index into Model.projects
 	snapshotName  string    // name of the active snapshot for this project, if any
@@ -155,6 +167,17 @@ type Model struct {
 
 	updateAvailable string // non-empty tag (e.g. "v1.2.3") when an update is available
 	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk"
+
+	// daemonArgs is the argv that starts the watch daemon, empty when the caller
+	// did not supply one. Held so a poll that finds the daemon gone can start
+	// another instead of freezing on the last snapshot.
+	daemonArgs []string
+
+	// ownSession is the session running this dashboard, empty when a human ran
+	// `chunk watch` from a plain shell. When it matches a row's session that row
+	// is labelled as the viewer's own, which is the fastest way to answer "which
+	// of these is mine" without reading UUIDs.
+	ownSession string
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -177,7 +200,16 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		toggledInvocs: make(map[time.Time]bool),
 		selectedID:    noSelection,
 		watchAll:      watchAll,
+		ownSession:    session.IDFromEnv(),
 	}
+}
+
+// WithDaemonArgs returns a copy of m that can relaunch the watch daemon when a
+// poll finds it gone. subArgs is the argv the daemon is started with, the same
+// one passed to watchd.EnsureRunning.
+func (m Model) WithDaemonArgs(subArgs []string) Model {
+	m.daemonArgs = subArgs
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -331,6 +363,13 @@ func (m Model) renderSeparator() string {
 
 func (m Model) renderBody() string {
 	contentHeight := m.height - 4 // header + separator + footer + padding
+	// The footer grows by a line when the daemon is unreachable. Without handing
+	// that line back the message lands past the last row and is clipped at every
+	// terminal size, which is how a daemon that had died came to look like a
+	// dashboard that had merely gone quiet.
+	if m.daemonErr != nil {
+		contentHeight--
+	}
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
@@ -380,81 +419,138 @@ func (m Model) renderSidecarPane(maxLines int) []string {
 	}
 
 	var lastRepo string
+	shared := sharedWorktrees(m.sidecars)
+	sessions := sessionsPerWorktree(m.sidecars)
+	ambiguous := ambiguousBranches(m.sidecars)
+	dirLabels := worktreeLabels(m.sidecars, ambiguous)
+	lastGroup, haveGroup := groupKey{}, false
 
+	dropped := 0
 	for i, sc := range m.sidecars {
-		if len(lines) >= maxLines-2 {
-			break
-		}
+		// Cost the row before committing to it. A row is three to six lines and
+		// renderBody clips whatever runs past maxLines, so a row begun without the
+		// room to finish loses its tail — the sync state and age it exists to
+		// report. Building it aside first lets the pane drop it whole instead.
+		var row []string
+		addRow := func(s string) { row = append(row, s) }
 
 		// Repo separator — groups all worktrees of the same repo under one header.
 		if sc.repoName != lastRepo {
 			if lastRepo != "" {
-				add("")
+				addRow("")
 			}
 			label := truncate(sc.repoName, leftPaneWidth-4)
-			add(vdim("── ") + bold(label))
+			addRow(vdim("── ") + bold(label))
 			lastRepo = sc.repoName
+			haveGroup = false
 		}
+
+		// A worktree driven by more than one session gets the branch printed
+		// once as a group header, and each row below it named by its session.
+		// Alone, a row keeps the branch as its own label: there is nothing to
+		// disambiguate, so it costs the reader nothing to know about sessions.
+		group := groupOf(sc)
+		multi := shared[group] > 1
+		// "" unless this branch lives in more than one directory.
+		dirLabel := ""
+		if ambiguous[worktreeKey{sc.repoName, sc.branch}] {
+			dirLabel = dirLabels[sc.projectIdx]
+		}
+		if multi && (!haveGroup || group != lastGroup) {
+			// A detached HEAD has no branch to name the worktree with, and a
+			// branch checked out twice names two of them; either way the
+			// directory is what the reader can act on.
+			label := sc.branch
+			if dirLabel != "" {
+				label = dirLabel
+			}
+			if label == "" {
+				label = sc.projectName
+			}
+			// The branch gets the full width: it is the thing the reader is
+			// looking for, and squeezing the count onto the same line would
+			// truncate a normal-length branch name to nothing.
+			addRow("  " + bold(truncate(label, leftPaneWidth-2)))
+			addRow("  " + vdim(fmt.Sprintf("%d sessions", sessions[group])))
+		}
+		lastGroup, haveGroup = group, true
 
 		selected := i == m.selectedIdx
-		branchLabel := sc.branch
-		if branchLabel == "" {
-			branchLabel = sidecarDisplayName(sc.name, sc.id)
-		}
-		nameLine := truncate(branchLabel, leftPaneWidth-3)
+		nameLine := truncate(m.rowLabel(sc, multi, dirLabel), leftPaneWidth-3)
 
-		if selected {
-			if m.focusedPane == paneLeft {
-				add(green("▶ ") + bold(nameLine))
-			} else {
-				add(vdim("▶ ") + muted(nameLine))
-			}
-		} else {
-			add("  " + nameLine)
+		switch {
+		case selected && m.focusedPane == paneLeft:
+			addRow(green("▶ ") + bold(nameLine))
+		case selected:
+			addRow(vdim("▶ ") + muted(nameLine))
+		default:
+			addRow("  " + nameLine)
 		}
 
 		if sc.snapshotName != "" {
-			add("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
+			addRow("   " + vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
 		}
 		if sc.id != "" && sc.name != "" {
-			add("   " + vdim(truncate(sidecarDisplayName(sc.name, sc.id), leftPaneWidth-6)))
+			addRow("   " + vdim(truncate(sidecarDisplayName(sc.name, sc.id), leftPaneWidth-6)))
 		}
 
 		switch {
 		case sc.running:
 			frame := spinFrames[m.spinIdx%len(spinFrames)]
-			add("  " + blue(frame+" "+string(sc.lastOp)+"..."))
+			addRow("  " + blue(frame+" "+string(sc.lastOp)+"..."))
 		case sc.id == "": // local runner — no sync state
 			switch sc.lastLevel {
 			case levelDone:
-				add("  " + green("✓ passed"))
+				addRow("  " + green("✓ passed"))
 			case levelError:
-				add("  " + red("✗ failed"))
+				addRow("  " + red("✗ failed"))
 			default:
-				add("  " + muted("no runs yet"))
+				addRow("  " + muted("no runs yet"))
 			}
 		case sc.inSync:
-			add("  " + green("✓ in sync"))
+			addRow("  " + green("✓ in sync"))
 		case sc.lastSyncedRef == "":
-			add("  " + muted("not synced"))
+			addRow("  " + muted("not synced"))
 		default:
-			add("  " + yellow("↑ needs sync"))
+			addRow("  " + yellow("↑ needs sync"))
 		}
 
 		if !sc.lastActivity.IsZero() {
-			add("  " + vdim(ago(sc.lastActivity)))
+			addRow("  " + vdim(ago(sc.lastActivity)))
 		} else {
-			add("")
+			addRow("")
 		}
 
 		// Divider between sidecars in the same repo group.
 		if i < len(m.sidecars)-1 && m.sidecars[i+1].repoName == sc.repoName {
-			add(muted(strings.Repeat("─", leftPaneWidth)))
+			addRow(muted(strings.Repeat("─", leftPaneWidth)))
 		}
+
+		// Hold back a line for the hint whenever rows remain after this one.
+		budget := maxLines
+		if i < len(m.sidecars)-1 {
+			budget--
+		}
+		if len(lines)+len(row) > budget {
+			dropped = len(m.sidecars) - i
+			break
+		}
+		lines = append(lines, row...)
+	}
+	if dropped > 0 {
+		// Without this the rows simply stopped: a group's session count was the
+		// only clue that any were missing, and a dropped repo had none at all.
+		lines = append(lines, "  "+vdim(fmt.Sprintf("↓ %d more", dropped)))
 	}
 	return lines
 }
 
+// renderActivityPane renders the right-hand pane for the selected sidecar.
+//
+// The selection is bounded on both sides before it indexes m.sidecars. Update
+// keeps it in range, so a negative value should not arise — but a panic here
+// takes the terminal down with it, still in the alternate screen, and the cost
+// of the second comparison is nothing next to that.
 func (m Model) renderActivityPane(maxLines int) []string {
 	lines := make([]string, 0, maxLines)
 
@@ -464,7 +560,7 @@ func (m Model) renderActivityPane(maxLines int) []string {
 	} else {
 		title = vdim("activity")
 	}
-	if m.selectedIdx < len(m.sidecars) {
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sidecars) {
 		sc := m.sidecars[m.selectedIdx]
 		branchLabel := sc.branch
 		if branchLabel == "" {
@@ -475,6 +571,16 @@ func (m Model) renderActivityPane(maxLines int) []string {
 		} else {
 			title += "  " + muted(branchLabel)
 		}
+		// Name the session as well as the sidecar. The left pane can be scrolled
+		// away from the selection, and with several sessions in one worktree the
+		// repo/branch above is no longer enough to say whose activity this is.
+		if sc.sessionID != "" {
+			if sc.sessionID == m.ownSession {
+				title += "  " + teal("● this session")
+			} else {
+				title += "  " + vdim("○ "+shortUUID(sc.sessionID))
+			}
+		}
 		if sc.id != "" && sc.branch != "" {
 			title += "  " + vdim(sidecarDisplayName(sc.name, sc.id))
 		}
@@ -482,7 +588,7 @@ func (m Model) renderActivityPane(maxLines int) []string {
 	lines = append(lines, title, "")
 
 	var filtered []eventlog.Event
-	if m.selectedIdx < len(m.sidecars) {
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.sidecars) {
 		sc := m.sidecars[m.selectedIdx]
 		if sc.projectIdx < len(m.events) {
 			for _, e := range m.events[sc.projectIdx] {
@@ -583,7 +689,7 @@ func invocEndTime(g invocationGroup) time.Time {
 
 // currentInvocGroups returns the invocation groups for the currently selected sidecar.
 func (m Model) currentInvocGroups() []invocationGroup {
-	if m.selectedIdx >= len(m.sidecars) {
+	if m.selectedIdx < 0 || m.selectedIdx >= len(m.sidecars) {
 		return nil
 	}
 	sc := m.sidecars[m.selectedIdx]
@@ -909,20 +1015,243 @@ func (m Model) loadData() tea.Msg {
 // sortByActivity puts the most recently active project first, and within a
 // project the most recently active sidecar first. Projects stay grouped so the
 // sidecar pane still renders one header per project.
-func sortByActivity(sidecars []sidecarInfo) {
-	latest := map[string]time.Time{}
+//
+// Worktree groups are the same story one level down: every row for a given
+// (repo, branch, project) sits together, ordered by the group's own most recent
+// activity. Without that tier the rows of a branch with two sessions could be
+// split apart by a busier branch in the same repo, and the pane could not label
+// the group once.
+func sortByActivity(sidecars []sidecarInfo, ownSession string) {
+	latestRepo := map[string]time.Time{}
+	latestGroup := map[groupKey]time.Time{}
 	for _, sc := range sidecars {
-		if eff := effectiveActivity(sc); eff.After(latest[sc.repoName]) {
-			latest[sc.repoName] = eff
+		eff := effectiveActivity(sc)
+		if eff.After(latestRepo[sc.repoName]) {
+			latestRepo[sc.repoName] = eff
+		}
+		if k := groupOf(sc); eff.After(latestGroup[k]) {
+			latestGroup[k] = eff
 		}
 	}
 	sort.SliceStable(sidecars, func(i, j int) bool {
 		a, b := sidecars[i], sidecars[j]
 		if a.repoName != b.repoName {
-			return latest[a.repoName].After(latest[b.repoName])
+			return latestRepo[a.repoName].After(latestRepo[b.repoName])
+		}
+		ka, kb := groupOf(a), groupOf(b)
+		if ka != kb {
+			return latestGroup[ka].After(latestGroup[kb])
+		}
+		// Inside a group the viewer's own row leads. "Which of these is mine" is
+		// the first question a shared worktree raises, and a row that reshuffles
+		// by recency every poll makes the reader hunt for the answer the label
+		// was added to give. Ordering between the other rows is untouched.
+		if ownSession != "" {
+			aMine, bMine := a.sessionID == ownSession, b.sessionID == ownSession
+			if aMine != bMine {
+				return aMine
+			}
 		}
 		return effectiveActivity(a).After(effectiveActivity(b))
 	})
+}
+
+// groupKey identifies one worktree: every row sharing it is a different session
+// (or the local runner) working in the same directory on the same branch.
+type groupKey struct {
+	repoName   string
+	branch     string
+	projectIdx int
+}
+
+func groupOf(sc sidecarInfo) groupKey {
+	return groupKey{sc.repoName, sc.branch, sc.projectIdx}
+}
+
+// sharedWorktrees counts the rows in each worktree group, so the pane can tell
+// a branch owned by one session from one several sessions are working in.
+//
+// mergeBranches has already folded the local runner into a real sidecar row
+// wherever both exist, so a group holding more than one row means two sidecars
+// claim the same worktree — which, now that sidecars are session-scoped, means
+// two sessions.
+func sharedWorktrees(sidecars []sidecarInfo) map[groupKey]int {
+	counts := make(map[groupKey]int, len(sidecars))
+	for _, sc := range sidecars {
+		counts[groupOf(sc)]++
+	}
+	return counts
+}
+
+// sessionsPerWorktree counts the sessions in each group — one per sidecar. The
+// local runner occupies a row but is not a session, so a worktree with two
+// sessions and a local run reads "2 sessions" over three rows rather than three.
+func sessionsPerWorktree(sidecars []sidecarInfo) map[groupKey]int {
+	counts := make(map[groupKey]int, len(sidecars))
+	for _, sc := range sidecars {
+		if sc.id != "" {
+			counts[groupOf(sc)]++
+		}
+	}
+	return counts
+}
+
+// worktreeKey identifies a branch within a repo, with no directory attached. Two
+// rows sharing one in different directories are two checkouts of the same
+// branch — a second clone, or a worktree that happens to be on the same branch —
+// and the branch name alone cannot tell them apart.
+type worktreeKey struct {
+	repoName string
+	branch   string
+}
+
+// ambiguousBranches reports which (repo, branch) pairs are checked out in more
+// than one directory. Those rows cannot be named by their branch: repoName is the
+// basename of the main worktree, so two clones collapse under one repo header and
+// would render as two identical branch rows, separable only by a truncated
+// sidecar UUID — the very confusion per-session labels were added to remove.
+//
+// A detached HEAD has no branch to be ambiguous about, and those rows are already
+// named by their directory, so they are left alone.
+func ambiguousBranches(sidecars []sidecarInfo) map[worktreeKey]bool {
+	dirs := map[worktreeKey]map[int]bool{}
+	for _, sc := range sidecars {
+		if sc.branch == "" {
+			continue
+		}
+		k := worktreeKey{sc.repoName, sc.branch}
+		if dirs[k] == nil {
+			dirs[k] = map[int]bool{}
+		}
+		dirs[k][sc.projectIdx] = true
+	}
+	out := make(map[worktreeKey]bool, len(dirs))
+	for k, seen := range dirs {
+		if len(seen) > 1 {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// worktreeLabels names each directory involved in an ambiguous branch. A row's
+// projectIdx fixes its repo and branch — a directory is only ever on one branch
+// at a time — so one label per index is unambiguous.
+func worktreeLabels(sidecars []sidecarInfo, ambiguous map[worktreeKey]bool) map[int]string {
+	paths := map[worktreeKey]map[int]string{}
+	for _, sc := range sidecars {
+		k := worktreeKey{sc.repoName, sc.branch}
+		if !ambiguous[k] {
+			continue
+		}
+		path := sc.projectPath
+		if path == "" {
+			path = sc.projectName
+		}
+		if paths[k] == nil {
+			paths[k] = map[int]string{}
+		}
+		paths[k][sc.projectIdx] = path
+	}
+
+	labels := map[int]string{}
+	for _, byIdx := range paths {
+		for idx, label := range shortestUniqueSuffixes(byIdx) {
+			labels[idx] = label
+		}
+	}
+	return labels
+}
+
+// shortestUniqueSuffixes labels each path with the fewest trailing segments that
+// tell them all apart, so the pane spends its 28 columns on the part that
+// differs. One segment is usually not enough: two clones of a repo share a
+// basename, which is what made the branch ambiguous in the first place.
+func shortestUniqueSuffixes(paths map[int]string) map[int]string {
+	segs := make(map[int][]string, len(paths))
+	longest := 1
+	for idx, path := range paths {
+		parts := strings.Split(strings.Trim(filepath.ToSlash(path), "/"), "/")
+		segs[idx] = parts
+		if len(parts) > longest {
+			longest = len(parts)
+		}
+	}
+
+	out := make(map[int]string, len(paths))
+	for n := 1; n <= longest; n++ {
+		counts := map[string]int{}
+		for idx, parts := range segs {
+			out[idx] = pathSuffix(parts, n)
+			counts[out[idx]]++
+		}
+		collision := false
+		for _, c := range counts {
+			if c > 1 {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			return out
+		}
+	}
+	// Identical paths cannot be told apart; the full path is the best available.
+	return out
+}
+
+func pathSuffix(parts []string, n int) string {
+	if n >= len(parts) {
+		return strings.Join(parts, "/")
+	}
+	return strings.Join(parts[len(parts)-n:], "/")
+}
+
+// rowLabel names a row in the left pane. Alone in its worktree a row is its
+// branch, as it has always been. Sharing one, the branch has moved to the group
+// header and the row names its session instead — the viewer's own session by
+// name, since "which of these is mine" is the first thing they need to know.
+func (m Model) rowLabel(sc sidecarInfo, multi bool, dirLabel string) string {
+	if !multi {
+		// dirLabel is set only where the branch is checked out in more than one
+		// directory, and there the directory is the only thing that distinguishes
+		// this row from its twin.
+		if dirLabel != "" {
+			return dirLabel
+		}
+		if sc.branch != "" {
+			return sc.branch
+		}
+		return sidecarDisplayName(sc.name, sc.id)
+	}
+	// The empty case is listed first deliberately: when the dashboard runs
+	// outside a session ownSession is empty too, and an unattributed row must
+	// not be mistaken for the viewer's own.
+	switch sc.sessionID {
+	case "":
+		// The local runner, or sidecar state written outside a session or before
+		// sessions existed. sidecarDisplayName prefers the full UUID, which does
+		// not fit beside the short session labels this row sits next to, so
+		// abbreviate it the same way; the full value stays on the detail line.
+		if sc.id != "" {
+			return "○ " + shortUUID(sc.id)
+		}
+		return "○ " + sidecarDisplayName(sc.name, sc.id)
+	case m.ownSession:
+		return "● this session"
+	default:
+		return "○ " + shortUUID(sc.sessionID)
+	}
+}
+
+// shortUUID abbreviates a session ID or sidecar UUID for display. Both are
+// UUIDs, and the first block is already enough to tell two of them apart on
+// screen — the pane is 28 columns wide, so a full one only truncates to noise.
+func shortUUID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // mergeBranches collapses entries with the same (repoName, branch, projectIdx) into
@@ -932,15 +1261,22 @@ func sortByActivity(sidecars []sidecarInfo) {
 // later, the sidecar's identity and sync state are promoted onto the primary so
 // the left pane shows sync status rather than pass/fail.
 func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
-	type key struct {
-		repoName   string
-		branch     string
-		projectIdx int
+	// A local validate run belongs to the worktree, not to any session in it. With
+	// one session holding the worktree that distinction is invisible and folding
+	// the local row in buys a cleaner pane. With several, the fold would credit
+	// one session with runs another developer — or no agent at all — made, so
+	// those groups keep the local row separate.
+	realPerGroup := map[groupKey]int{}
+	for _, sc := range sidecars {
+		if sc.id != "" {
+			realPerGroup[groupOf(sc)]++
+		}
 	}
-	seen := map[key]int{}
+
+	seen := map[groupKey]int{}
 	result := make([]sidecarInfo, 0, len(sidecars))
 	for _, sc := range sidecars {
-		k := key{sc.repoName, sc.branch, sc.projectIdx}
+		k := groupOf(sc)
 		if idx, ok := seen[k]; !ok {
 			result = append(result, sc)
 			seen[k] = len(result) - 1
@@ -948,17 +1284,33 @@ func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
 			// Only merge when one entry is a local runner (id == ""). Two real
 			// sidecars on the same branch belong to different sessions and must
 			// stay separate so they are distinguishable in the left pane.
+			//
+			// This guard, not the key, is what keeps sessions apart. Adding
+			// sessionID to the key instead would stop the local runner — which
+			// has no session — from ever merging into the sidecar row it belongs
+			// to, leaving a duplicate "local" row under every branch.
 			if result[idx].id != "" && sc.id != "" {
+				result = append(result, sc)
+				seen[k] = len(result) - 1
+				continue
+			}
+			// One of the pair is the local runner. Fold it in only where a single
+			// session holds the worktree; see realPerGroup above.
+			if realPerGroup[k] > 1 {
 				result = append(result, sc)
 				seen[k] = len(result) - 1
 				continue
 			}
 			result[idx].sidecarIDs = append(result[idx].sidecarIDs, sc.sidecarIDs...)
 			// Promote a real sidecar over a local-only primary so the left pane
-			// shows sync state rather than a pass/fail badge.
+			// shows sync state rather than a pass/fail badge. The session comes
+			// with it: the row now stands for that sidecar, and leaving the
+			// session behind would strip the "this session" label off the
+			// viewer's own row whenever local activity happened to sort first.
 			if result[idx].id == "" && sc.id != "" {
 				result[idx].id = sc.id
 				result[idx].name = sc.name
+				result[idx].sessionID = sc.sessionID
 				result[idx].inSync = sc.inSync
 				result[idx].lastSyncedRef = sc.lastSyncedRef
 				result[idx].snapshotName = sc.snapshotName
@@ -1013,8 +1365,12 @@ const (
 	// active within activeWindow.
 	fallbackWindow = 24 * time.Hour
 	// linesPerSidecar is the worst-case row cost of one sidecar in the sidecar
-	// pane: project header, name, status, age, and the gap between projects.
-	linesPerSidecar = 5
+	// pane: name, snapshot, sidecar id, status, age, and the divider to the next
+	// row. A shared worktree adds two more for its group header, so this is a
+	// floor rather than an exact figure; renderSidecarPane drops whatever does
+	// not fit and says so, so an optimistic count costs a "more" hint, not a
+	// half-drawn row.
+	linesPerSidecar = 6
 	// defaultCapacity is used until the first WindowSizeMsg gives a real height.
 	defaultCapacity = 5
 )

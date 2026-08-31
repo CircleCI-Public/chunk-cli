@@ -26,3 +26,13 @@ func IsRunning(path string) (bool, int, error) {
 	}
 	return true, p, nil
 }
+
+// terminate asks the process to exit. The daemon handles SIGTERM and shuts down
+// cleanly, removing its socket and PID file on the way out.
+func terminate(pid int) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return proc.Signal(syscall.SIGTERM)
+}
