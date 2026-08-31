@@ -39,7 +39,6 @@ func CurrentBranchIn(dir string) (string, error) {
 	return branch, nil
 }
 
-
 // HeadRef returns the SHA of the current HEAD commit in the repo at cwd.
 func HeadRef(cwd string) (string, error) {
 	return HeadRefCtx(context.Background(), cwd)

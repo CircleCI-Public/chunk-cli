@@ -100,10 +100,16 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	sshArgs := []string{"ssh", "-p", port,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "IdentitiesOnly=yes", // prevent agent key flood before explicit key is tried
 		"-q",
 	}
 	if sess.IdentityFile != "" {
-		sshArgs = append(sshArgs, "-i", ShellEscape(sess.IdentityFile))
+		// Pass path directly — rsync tokenizes -e by whitespace and calls execve,
+		// so shell quoting (ShellEscape) would embed literal quote characters in
+		// the filename and cause ssh to fall through to agent keys.
+		sshArgs = append(sshArgs, "-i", sess.IdentityFile)
+	} else if sess.UseAgent && sess.AuthSock != "" {
+		sshArgs = append(sshArgs, "-o", "IdentitiesOnly=no")
 	}
 	sshCmd := strings.Join(sshArgs, " ")
 
