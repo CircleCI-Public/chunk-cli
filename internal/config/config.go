@@ -38,7 +38,8 @@ const (
 	dirPermission   = 0o700
 	filePermission  = 0o600
 
-	// SourceConfigFile is the source label used when a value comes from the user config file.
+	// SourceConfigFile is the fallback source label used when a value comes from the user config file
+	// and the path cannot be resolved. Callers should prefer configFileSource() for user-facing messages.
 	SourceConfigFile = "Config file (user config)"
 
 	// SourceProjectConfig is the source label for values from .chunk/config.json.
@@ -156,6 +157,16 @@ type ResolvedConfig struct {
 	Notifications         bool
 }
 
+// configFileSource returns a source label that includes the actual config file
+// path, e.g. "Config file (~/.config/chunk/config.json)". Falls back to
+// SourceConfigFile if the path cannot be resolved.
+func configFileSource() string {
+	if p, err := Path(); err == nil {
+		return "Config file (" + p + ")"
+	}
+	return SourceConfigFile
+}
+
 func resolveCircleCIToken(env EnvVars, cfg UserConfig) (string, string) {
 	switch {
 	case env.CircleToken != "":
@@ -163,7 +174,7 @@ func resolveCircleCIToken(env EnvVars, cfg UserConfig) (string, string) {
 	case env.CircleCIToken != "":
 		return env.CircleCIToken, "Environment variable (" + EnvCircleCIToken + ")"
 	case cfg.CircleCIToken != "":
-		return cfg.CircleCIToken, SourceConfigFile
+		return cfg.CircleCIToken, configFileSource()
 	default:
 		if token, err := keyring.Get(keyring.ServiceCircleCI(env.CircleCIBaseURL)); err == nil {
 			return token, keyring.SourceKeychain
@@ -179,7 +190,7 @@ func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig) (str
 	case env.AnthropicAPIKey != "":
 		return env.AnthropicAPIKey, "Environment variable"
 	case cfg.AnthropicAPIKey != "":
-		return cfg.AnthropicAPIKey, SourceConfigFile
+		return cfg.AnthropicAPIKey, configFileSource()
 	default:
 		if apiKey, err := keyring.Get(keyring.ServiceAnthropic(env.AnthropicBaseURL)); err == nil {
 			return apiKey, keyring.SourceKeychain
@@ -193,7 +204,7 @@ func resolveGitHubToken(env EnvVars, cfg UserConfig) (string, string) {
 	case env.GitHubToken != "":
 		return env.GitHubToken, "Environment variable (" + EnvGitHubToken + ")"
 	case cfg.GitHubToken != "":
-		return cfg.GitHubToken, SourceConfigFile
+		return cfg.GitHubToken, configFileSource()
 	default:
 		if token, err := keyring.Get(keyring.ServiceGitHub(env.GitHubAPIURL)); err == nil {
 			return token, keyring.SourceKeychain

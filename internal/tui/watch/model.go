@@ -475,7 +475,7 @@ func (m Model) renderActivityPane(maxLines int) []string {
 		} else {
 			title += "  " + muted(branchLabel)
 		}
-		if sc.id != "" {
+		if sc.id != "" && sc.branch != "" {
 			title += "  " + vdim(sidecarDisplayName(sc.name, sc.id))
 		}
 	}
@@ -1120,44 +1120,16 @@ func truncate(s string, n int) string {
 	return string(runes[:n])
 }
 
-// sidecarDisplayName returns the best human-readable name for a sidecar.
-// Uses Name if set, otherwise strips a UUID suffix from the ID.
+// sidecarDisplayName returns the best identifier for a sidecar.
+// Prefers the UUID (id) for precise identification; falls back to name when id is empty.
 func sidecarDisplayName(name, id string) string {
+	if id != "" {
+		return id
+	}
 	if name != "" {
 		return name
 	}
-	if clean := stripUUIDSuffix(id); clean != "" && clean != id {
-		return clean
-	}
-	return id
-}
-
-// stripUUIDSuffix removes a "-<8hex>-<4hex>-..." UUID portion from s.
-// "chunk-cli-2d66488f-e67f-4c3a-9abc-112233445566" → "chunk-cli"
-func stripUUIDSuffix(s string) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] != '-' {
-			continue
-		}
-		rest := s[i+1:]
-		if len(rest) >= 9 && isHex8(rest[:8]) && rest[8] == '-' && i > 0 {
-			return s[:i]
-		}
-	}
-	return s
-}
-
-// isHex8 reports whether s is exactly 8 lowercase hex characters.
-func isHex8(s string) bool {
-	if len(s) != 8 {
-		return false
-	}
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
+	return ""
 }
 
 // ago returns a human-readable duration since t.

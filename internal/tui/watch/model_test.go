@@ -162,29 +162,6 @@ func TestIsSummaryEvent(t *testing.T) {
 	}
 }
 
-// stripUUIDSuffix tests
-
-func TestStripUUIDSuffix(t *testing.T) {
-	tests := []struct {
-		in, want string
-	}{
-		{"chunk-cli-2d66488f-e67f-4c3a-9abc-112233445566", "chunk-cli"},
-		{"abc-deadbeef-rest", "abc"},
-		{"no-uuid-here", "no-uuid-here"},
-		{"", ""},
-		// Leading dash: i=0 fails the i>0 guard.
-		{"-2d66488f-rest", "-2d66488f-rest"},
-		// 'g' is not valid hex.
-		{"abc-2d66488g-rest", "abc-2d66488g-rest"},
-		{"plain", "plain"},
-	}
-	for _, tt := range tests {
-		if got := stripUUIDSuffix(tt.in); got != tt.want {
-			t.Errorf("stripUUIDSuffix(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
 // truncate tests
 
 func TestTruncate(t *testing.T) {
