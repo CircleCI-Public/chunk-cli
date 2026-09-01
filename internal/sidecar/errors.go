@@ -35,17 +35,6 @@ func (e *PublicKeyNotFoundError) Error() string {
 	return fmt.Sprintf("ssh public key not found: %s", e.KeyPath)
 }
 
-// RemoteBaseError indicates the remote merge base could not be resolved.
-type RemoteBaseError struct {
-	Err error
-}
-
-func (e *RemoteBaseError) Error() string {
-	return fmt.Sprintf("could not resolve remote base: %v", e.Err)
-}
-
-func (e *RemoteBaseError) Unwrap() error { return e.Err }
-
 // NoOriginRemoteError indicates git remote "origin" is not configured.
 type NoOriginRemoteError struct {
 	Err error

@@ -731,7 +731,7 @@ func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, iden
 	if err != nil {
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
-	if err := sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
+	if err := sidecar.RsyncSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
 		return sidecarSyncError(ctx, client, sidecarID, err, streams)
 	}
 	return nil

@@ -15,17 +15,15 @@ type SidecarState struct {
 	// written outside a session or before sessions existed. Sidecars are
 	// isolated per session, so two entries for one project and branch are two
 	// sessions working in the same tree — this is what tells them apart.
-	SessionID     string      `json:"session_id,omitempty"`
-	ProjectName   string      `json:"project_name"`
-	RepoName      string      `json:"repo_name"`
-	SnapshotName  string      `json:"snapshot_name"`
-	FileMtime     time.Time   `json:"file_mtime"`
-	LastSyncedRef string      `json:"last_synced_ref"`
-	InSync        bool        `json:"in_sync"`
-	LastActivity  time.Time   `json:"last_activity"`
-	LastOp        eventlog.Op `json:"last_op"`
-	LastLevel     string      `json:"last_level"`
-	Running       bool        `json:"running"`
+	SessionID    string      `json:"session_id,omitempty"`
+	ProjectName  string      `json:"project_name"`
+	RepoName     string      `json:"repo_name"`
+	SnapshotName string      `json:"snapshot_name"`
+	FileMtime    time.Time   `json:"file_mtime"`
+	LastActivity time.Time   `json:"last_activity"`
+	LastOp       eventlog.Op `json:"last_op"`
+	LastLevel    string      `json:"last_level"`
+	Running      bool        `json:"running"`
 }
 
 // ProjectSnapshot is the daemon's view of one project at a point in time.
