@@ -53,7 +53,6 @@ func TestLoadSidecars_carriesSessionID(t *testing.T) {
 	assert.Equal(t, got["id3"], "")
 }
 
-
 func TestLoadSidecars_emptyDir(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()
