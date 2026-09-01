@@ -18,13 +18,16 @@ deliberately self-contained: it depends on no other branch, and it touches no
 signature that another open PR is currently changing.
 
 A caveat to record up front, because it shapes half the design: **there is no
-server-side metrics API.** Live resource usage therefore has to be sampled over
-SSH from inside the sidecar, which is the single riskiest thing in this PR — a
-persistent connection per sidecar that the daemon must supervise. It is
-specified in full in [Resource usage](#7-resource-usage), including the
-handshake-per-call trap that the obvious implementation falls into. If the PR
-needs to shed weight during review, this is the part to shed, because logs stand
-alone without it and it is the part most likely to need a second pass.
+server-side metrics API.** Live resource usage therefore has to be sampled from
+inside the sidecar. That was expected to be the riskiest thing in this PR — a
+persistent SSH connection per sidecar for the daemon to supervise — and building
+it showed the risk was avoidable: the exec API already submits a command and
+streams its output across reconnects, so the sampler is one long-lived shell loop
+submitted exactly the way a validate command is, with no connection to supervise.
+[Resource usage](#7-resource-usage) records both the handshake-per-call trap the
+obvious implementation falls into and why SSH was dropped. It remains the part to
+shed if the PR needs to lose weight in review, because logs stand alone without
+it.
 
 ## Motivation
 
@@ -303,10 +306,20 @@ Extend that rather than adding a third pane:
 
 **Joining an invocation to a command.** Without `Event.CommandID` the join is a
 heuristic: match on sidecar ID, then on `SubmittedAt` falling within the
-invocation group's time span. This is good enough — a sidecar runs validate
-commands sequentially, so overlapping candidates are rare — but it is a
-heuristic, and when it finds no match the affordance simply does not appear. It
-becomes exact once #545 lands.
+invocation group's time span (with a two-second margin at the front, since the
+`$ <cmd>` status event is written just before submission). Where several match,
+the newest wins, so a re-run inside one group resolves to the newer command. This
+is good enough — a sidecar runs validate commands sequentially, so overlapping
+candidates are rare — but it is a heuristic, and when it finds no match the
+affordance simply does not appear. It becomes exact once #545 lands.
+
+**Naming a command without touching the exec signature.** The registration's
+`Name` is derived from the script by `remoteCommandLabel`, which drops the
+`cd <workspace> &&` prefix the exec path prepends. Threading the configured
+command name down instead would mean changing `validate.RunRemote`'s signature —
+the exact surface #545 and #535 are contending over — and the name is only a pane
+header, so deriving it is the cheaper trade. A script in some unexpected shape
+degrades to the whole string rather than failing.
 
 Two rendering details that will otherwise cause bugs:
 
@@ -333,9 +346,9 @@ SSH connection" (`internal/sidecar/session.go:70`). A two-second sample interval
 implemented that way means a full handshake every two seconds per sidecar, which
 is both wasteful and a good way to get rate-limited.
 
-**Design: one persistent connection per sidecar, one long-lived remote sampler.**
-The daemon holds a `sshConn` and starts a single remote loop whose stdout it
-parses incrementally:
+**Design: one long-lived remote sampler per sidecar, submitted through the exec
+API.** The daemon submits a single shell loop with `SubmitExec` and parses frames
+off `StreamOutput` incrementally:
 
 ```sh
 while :; do
@@ -345,6 +358,21 @@ while :; do
   sleep 2
 done
 ```
+
+**Rejected: a persistent SSH connection.** It was the first plan, and it does not
+survive contact with the SSH exec channel: that channel fork/execs the command
+string rather than interpreting it, which is why every `ExecOverSSH` call in this
+repo is a bare `binary arg` invocation. A shell loop — pipes, `while`,
+redirections — cannot run over it at all. The exec API takes argv as structured
+data (`"sh", "-c", script`), so it runs scripts correctly, and its output stream
+is already long-lived and resumable. Using it removes the handshake-per-sample
+problem outright *and* the persistent connection the daemon would have had to
+supervise, which was the riskiest thing in the original design.
+
+The remote loop is bounded rather than infinite. Cancelling the stream stops the
+daemon reading, but nothing guarantees the remote process dies with it, so a loop
+that ends on its own caps how long an orphan can linger; the daemon submits
+another while a dashboard is still attached.
 
 Parsing notes, because each is a place to get a plausible-looking wrong number:
 
@@ -361,10 +389,18 @@ Parsing notes, because each is a place to get a plausible-looking wrong number:
   necessarily the workspace. Sample the resolved workspace path instead.
 
 **Lifecycle is the hard part**, not the parsing. The daemon must start a sampler
-when a sidecar appears in a poll, reconnect with backoff when the connection
-drops, stop sampling when the sidecar goes away or is reaped, and never let any
-of that block the five-second project poll. Samplers are per-sidecar goroutines
-with their own contexts, cancelled when the sidecar leaves `loadSidecars`.
+when a sidecar appears in a poll, retry with backoff when the stream breaks, stop
+sampling when the sidecar goes away or is reaped, and never let any of that block
+the five-second project poll. Samplers are per-sidecar goroutines with their own
+contexts, cancelled when the sidecar leaves `loadSidecars`.
+
+Retrying needs a ceiling and the ceiling needs an expiry. A sidecar that can never
+be sampled — deleted, or unreachable — would otherwise be retried forever at an
+API call apiece, so sampling stops after `maxSamplerFailures` consecutive
+failures; but stopping for good would let one bad minute cost that sidecar its
+numbers for the rest of the session, so it resumes after `sampleCooloff`. The
+sampler slot outlives its goroutine either way, so the last reading stays on
+screen to be dimmed as stale rather than vanishing.
 
 **Sampling is opt-out and idle-aware.** A persistent SSH connection per sidecar
 is a real resource cost for someone with several sidecars, so: sample only while
@@ -427,13 +463,21 @@ Commits 1–6 are logs; 7–8 are resource usage and depend on nothing in 1–6.
 review says the PR is too big, dropping 7–8 leaves a coherent feature and costs
 nothing already written.
 
-Out, deliberately:
+Also in, added after the first pass:
 
-- **`chunk sidecar logs <command-id>`.** Nearly free once the split in (1)
-  exists, and genuinely useful for scripts and for agents with no terminal, but
-  it is a new user-facing command with its own flags, help text, and acceptance
-  tests. It does not belong in a PR this size. Fold it in only if review shows
-  the TUI work shrinking.
+10. `chunk sidecar logs <command-id>` with `--follow`. Originally scoped out as
+    "a new user-facing command does not belong in a PR this size", then folded
+    in: it turned out to be about eighty lines on top of what commits 1–4
+    already provide, and it is the only way an agent with no terminal can read
+    why its validate failed — which is the majority reader here.
+    - It reads the daemon buffer first and falls back to the API, so it works
+      with or without a daemon.
+    - It does **not** exit non-zero when the command it reports on failed. A
+      failing command is not a failing read, and conflating the two leaves the
+      exit status meaning nothing. The status goes to stderr as `exit status N`
+      so stdout stays pipeable.
+
+Out, deliberately:
 - **Making `SidecarState.Running` a fact.** Once the daemon streams commands it
   knows which are genuinely running, so `Running` could stop being inferred from
   "most recent event is non-terminal and newer than `RunningTimeout`"
@@ -466,7 +510,7 @@ still reads as too much in review, commits 7–8 are the clean cut line.
 | Daemon streamers stall the poll loop | Dashboard freezes for all projects | Streamers strictly off the poll path, per-command contexts |
 | Registration slows down `validate` | Hook latency, worst case a hang | Best-effort dial with a short timeout, never `EnsureRunning`, failure is a no-op |
 | Fast poll while tailing burns CPU | Laptop fan, battery | Only the output request polls fast; revert on pane close |
-| Persistent SSH connection per sidecar | Resource cost, possible rate limiting | One connection per sidecar, gated on an attached dashboard, backoff on reconnect |
+| Sampling cost per sidecar | Resource cost, possible rate limiting | One long-lived exec-API command per sidecar, not one per sample; gated on an attached dashboard; bounded remote loop; failure ceiling with a cooloff |
 | Memory read from host instead of cgroup | Plausible but wrong numbers, silently | cgroup v2 → v1 → `/proc/meminfo` fallback, tested against captured fixtures |
 | Sampler dies and dashboard shows last value | Idle-looking sidecar that is actually busy | Dim samples older than three intervals rather than hiding them |
 
@@ -497,9 +541,12 @@ Consistent with the project's integration-over-mocks and fakes-over-mocks rules:
   Cover the two failure modes that produce plausible wrong answers: a single
   sample yielding no CPU percentage rather than a bogus one, and a cgroup limit
   being preferred over the host's `MemTotal`.
-- **Sampler lifecycle** — a fake SSH sampler that can be made to drop mid-stream
-  must reconnect; a sidecar disappearing from `loadSidecars` must cancel its
-  goroutine; no dashboard attached must mean no sampler running.
+- **Sampler lifecycle** — the sampling session is a field on `resourceSampler`, so
+  a fake can be made to drop mid-stream and must be retried; a sidecar
+  disappearing from `loadSidecars` must cancel its goroutine; no dashboard
+  attached must mean no sampler running; a sidecar that gave up must resume after
+  the cooloff and keep its last reading while paused. The fake is also what keeps
+  these tests off the network and out of the keychain.
 - **Race detector** on everything, per the project rule; the daemon gains
   concurrent buffer writes and reads plus per-sidecar sampler goroutines, which
   is exactly what it catches.

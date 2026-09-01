@@ -102,6 +102,8 @@ chunk
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --command <cmd>             # Command to run (required)
 │   │   --args <args>               # Command arguments
+│   ├── logs <command-id>           # Print output of a command that ran on a sidecar
+│   │   -f / --follow               # Keep printing until the command exits
 │   ├── add-ssh-key                 # Add SSH key to sidecar
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --public-key <key>          # SSH public key string
@@ -207,6 +209,43 @@ chunk
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
+- **`watch` can show a command's output.** In the activity pane, an invocation
+  marked `▤` has output the daemon still holds; `Enter` opens a scrollback view
+  of it. A command that is still running tails live — the pane polls every 200 ms
+  while it is open, and drops back to the 5 s snapshot tick when closed, so a tail
+  never speeds up everything else. `↑`/`↓` and `PgUp`/`PgDn` scroll, `g` jumps to
+  the top, `G` re-follows the end, and `Esc` closes the pane rather than quitting
+  the dashboard. Scrolling up detaches from the bottom so arriving output does not
+  yank the view away from what you are reading; scrolling back to the end
+  re-follows automatically.
+  - Output is capped at 256 KiB per command, keeping the **tail** — the end of a
+    failed run is the part worth reading. When earlier output has been dropped the
+    pane says `(earlier output dropped)` rather than presenting a partial run as if
+    it were whole.
+  - The daemon holds at most 20 commands per project, evicting the oldest
+    *finished* one first. A running command is never evicted.
+  - Buffers are in memory only, so restarting the daemon loses them. `Enter` on an
+    invocation the daemon no longer knows about says so.
+  - Output streaming needs a CircleCI token. Without one the dashboard still works
+    and shows a one-line hint in the footer; the daemon never prompts.
+- **`chunk sidecar logs <command-id>`** is the non-TUI door onto the same output,
+  for scripts and for agents with no terminal. Command IDs appear in the `watch`
+  dashboard. It reads the watch daemon's buffer when the daemon has the command
+  and falls back to streaming from the API when it does not, so it works either
+  way. `-f`/`--follow` keeps printing until the command exits.
+  - Output goes to stdout and nothing else does, so it can be piped. A non-zero
+    remote status is reported on **stderr** as `exit status N`.
+  - `logs` itself exits non-zero only when *reading* failed. A failing command is
+    not a failing read — conflating the two would make the exit status useless to
+    a caller.
+- **`watch` shows live resource usage** for the selected sidecar — CPU, memory and
+  disk, sampled every 2 seconds. Sampling only runs while a dashboard is attached,
+  since each sampled sidecar is running a shell loop for it; close `watch` and it
+  stops. A
+  sample older than three intervals renders dimmed and marked `(stale)` rather
+  than disappearing, so a stalled sampler looks stalled instead of looking like an
+  idle sidecar. Memory is read from the sidecar's cgroup, not `/proc/meminfo`,
+  because the latter reports the host's memory.
 - **`watch` rows are per branch, except when they cannot be.** A branch's local runs
   are folded into its sidecar's row, so one row shows both kinds of run along with
   sync state. A branch with more than one sidecar — two agent sessions in one
