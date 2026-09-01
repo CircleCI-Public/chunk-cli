@@ -30,7 +30,8 @@ func IsRunning(path string) (bool, int, error) {
 	if err := windows.GetExitCodeProcess(h, &code); err != nil {
 		return false, 0, nil
 	}
-	return code == windows.STILL_ACTIVE, p, nil
+	const stillActive = 259 // STILL_ACTIVE = STATUS_PENDING = 0x103; not exported by golang.org/x/sys/windows
+	return code == stillActive, p, nil
 }
 
 // terminate stops the process. Windows has no SIGTERM, so the process is killed
