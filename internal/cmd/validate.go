@@ -30,6 +30,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
@@ -165,6 +166,7 @@ type validateOpts struct {
 	projectDir   string
 	envVarsFlag  []string
 	envFile      string
+	sync         bool // bypasses daemon delegation; set by daemon when it spawns us
 }
 
 func newValidateCmd() *cobra.Command {
@@ -203,6 +205,8 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.projectDir, "project", "", "Override project directory")
 	cmd.Flags().StringArrayVarP(&opts.envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
+	cmd.Flags().BoolVar(&opts.sync, "sync", false, "")
+	_ = cmd.Flags().MarkHidden("sync")
 
 	cmd.AddCommand(newValidateVariantsCmd())
 
@@ -314,19 +318,29 @@ func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc confi
 	return ensureCircleCIClient(ctx, cmd, rc, streams, tui.PromptHidden)
 }
 
+func resolveWorkDir(opts *validateOpts) (string, error) {
+	if opts.projectDir != "" {
+		return opts.projectDir, nil
+	}
+	return os.Getwd()
+}
+
+// shouldUseDaemon reports whether this validate run should be delegated to the
+// watch daemon. Hook runs always run inline (stdin consumed, per-session attempt
+// tracking). --sync skips this to avoid recursion when the daemon spawns us.
+func shouldUseDaemon(hook *hookContext, sync bool) bool {
+	return hook == nil && !sync && watchd.IsDaemonRunning()
+}
+
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
 	streams := iostream.FromCmd(cmd)
 
 	// Record before git-status check so total captures setup overhead too.
 	start := time.Now()
 
-	workDir := opts.projectDir
-	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			return err
-		}
+	workDir, err := resolveWorkDir(opts)
+	if err != nil {
+		return err
 	}
 
 	hook := detectHook(cmd.InOrStdin())
@@ -427,6 +441,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			n := len(cfg.Commands)
 			return finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, wrapEventLogStatusFn(statusFn, "", nil, workDir, hook), streams, notifyFunc(rc.Notifications))
 		}
+	}
+
+	if shouldUseDaemon(hook, opts.sync) {
+		return runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, streams)
 	}
 
 	// allRemote is true unless --local is passed explicitly. opts.remote is
@@ -594,6 +612,21 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 func validateEnvFlag(envVarsFlag []string) error {
 	if _, err := sidecar.ParseEnvPairs(envVarsFlag); err != nil {
 		return &userError{msg: fmt.Sprintf("invalid --env value: %s", err), err: err}
+	}
+	return nil
+}
+
+// runValidateViaDaemon delegates a validate run to the watch daemon and writes
+// its captured output to streams.
+func runValidateViaDaemon(args []string, circleCIToken string, streams iostream.Streams) error {
+	resp, err := watchd.RunValidate(args, circleCIToken)
+	if err != nil {
+		return fmt.Errorf("daemon validate: %w", err)
+	}
+	_, _ = streams.Out.Write([]byte(resp.Stdout))
+	_, _ = streams.Err.Write([]byte(resp.Stderr))
+	if resp.ExitCode != 0 {
+		return errSilentExit
 	}
 	return nil
 }

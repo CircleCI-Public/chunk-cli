@@ -75,6 +75,43 @@ func stopDaemon(pid int, sockPath string) error {
 	return fmt.Errorf("watch daemon pid %d did not exit within 3s", pid)
 }
 
+// IsDaemonRunning reports whether the watch daemon is reachable.
+func IsDaemonRunning() bool {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return false
+	}
+	ok, _ := ping(sockPath)
+	return ok
+}
+
+// RunValidate delegates a validate run to the daemon. args is os.Args[1:];
+// circleCIToken is forwarded to the subprocess as CIRCLE_TOKEN.
+func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return ValidateResponse{}, err
+	}
+	body, err := json.Marshal(ValidateRequest{Args: args, CircleCIToken: circleCIToken})
+	if err != nil {
+		return ValidateResponse{}, fmt.Errorf("marshal validate request: %w", err)
+	}
+	resp, err := longUnixClient(sockPath).Post("http://watchd/validate", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return ValidateResponse{}, fmt.Errorf("connect to watch daemon: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return ValidateResponse{}, fmt.Errorf("watch daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+	}
+	var result ValidateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ValidateResponse{}, fmt.Errorf("decode validate response: %w", err)
+	}
+	return result, nil
+}
+
 // EnsureRunning checks whether the watch daemon is running and serving, and
 // launches it if not. subArgs are the CLI arguments used to invoke the daemon
 // (e.g. ["watch", "_daemon"]).
