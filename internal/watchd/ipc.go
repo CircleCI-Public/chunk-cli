@@ -31,6 +31,7 @@ func newServer(d *daemon) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(snap)
 	})
+	mux.HandleFunc("/validate", d.handleValidate)
 	return &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -41,6 +42,18 @@ func newServer(d *daemon) *http.Server {
 func unixClient(sockPath string) *http.Client {
 	return &http.Client{
 		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
+			},
+		},
+	}
+}
+
+// longUnixClient is like unixClient but with no total-request timeout, suitable
+// for long-running operations like /validate.
+func longUnixClient(sockPath string) *http.Client {
+	return &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
