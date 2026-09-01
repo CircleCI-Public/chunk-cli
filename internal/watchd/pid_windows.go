@@ -32,3 +32,13 @@ func IsRunning(path string) (bool, int, error) {
 	}
 	return code == windows.STILL_ACTIVE, p, nil
 }
+
+// terminate stops the process. Windows has no SIGTERM, so the process is killed
+// outright; the next daemon to start removes the socket file it leaves behind.
+func terminate(pid int) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return proc.Kill()
+}

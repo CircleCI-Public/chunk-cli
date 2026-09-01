@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -37,14 +39,40 @@ func FetchSnapshot(roots []string) (Snapshot, error) {
 	return snap, nil
 }
 
-// ping returns true if the daemon at sockPath is reachable.
-func ping(sockPath string) bool {
+// ping reports whether the daemon at sockPath is reachable, along with the build
+// identity it names. A daemon older than that identity reports "".
+func ping(sockPath string) (bool, string) {
 	resp, err := unixClient(sockPath).Get("http://watchd/ping")
 	if err != nil {
-		return false
+		return false, ""
 	}
-	_ = resp.Body.Close()
-	return resp.StatusCode == 200
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, ""
+	}
+	// Bounded: the identity is short, and a body this side cannot recognise is
+	// no reason to read an unbounded amount of it.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if err != nil {
+		return true, ""
+	}
+	return true, strings.TrimSpace(string(body))
+}
+
+// stopDaemon asks the daemon to exit and waits until it stops answering, so the
+// replacement does not race it for the socket.
+func stopDaemon(pid int, sockPath string) error {
+	if err := terminate(pid); err != nil {
+		return fmt.Errorf("signal pid %d: %w", pid, err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if reachable, _ := ping(sockPath); !reachable {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("watch daemon pid %d did not exit within 3s", pid)
 }
 
 // EnsureRunning checks whether the watch daemon is running and serving, and
@@ -59,12 +87,51 @@ func EnsureRunning(subArgs []string) error {
 	if err != nil {
 		return err
 	}
+	running, pid, err := IsRunning(pidPath)
+	if err != nil {
+		return fmt.Errorf("check running: %w", err)
+	}
+	if running {
+		reachable, build := ping(sockPath)
+		if reachable {
+			if build == BuildID() {
+				return nil
+			}
+			// A daemon from another build is replaced rather than reused: see
+			// BuildID for why reusing it degrades silently.
+			if stopErr := stopDaemon(pid, sockPath); stopErr != nil {
+				return fmt.Errorf("replace stale watch daemon: %w", stopErr)
+			}
+		}
+	}
+	return launchDaemon(subArgs)
+}
+
+// EnsureLaunched starts the daemon when nothing is answering and otherwise
+// leaves whatever is there alone.
+//
+// Unlike EnsureRunning it never replaces a daemon from another build. It is
+// called when a poll fails mid-session, and a dashboard that has been open for a
+// while has no business restarting a daemon another one is using: the build
+// check is a startup decision, made once, where the cost of being wrong is one
+// restart rather than a restart per poll for as long as two dashboards are open.
+func EnsureLaunched(subArgs []string) error {
+	pidPath, err := PIDPath()
+	if err != nil {
+		return err
+	}
+	sockPath, err := SocketPath()
+	if err != nil {
+		return err
+	}
 	running, _, err := IsRunning(pidPath)
 	if err != nil {
 		return fmt.Errorf("check running: %w", err)
 	}
-	if running && ping(sockPath) {
-		return nil
+	if running {
+		if reachable, _ := ping(sockPath); reachable {
+			return nil
+		}
 	}
 	return launchDaemon(subArgs)
 }
@@ -108,7 +175,7 @@ func launchDaemon(subArgs []string) error {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		ok, _, _ := IsRunning(pidPath)
-		if ok && ping(sockPath) {
+		if reachable, _ := ping(sockPath); ok && reachable {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)

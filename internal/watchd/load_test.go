@@ -29,6 +29,30 @@ func TestLoadSidecars_deduplicatesIDs(t *testing.T) {
 	assert.Equal(t, len(result), 2, "want 2 unique sidecars")
 }
 
+func TestLoadSidecars_carriesSessionID(t *testing.T) {
+	dir := t.TempDir()
+	root := t.TempDir()
+
+	// Two sessions holding a sidecar each for the same project: the session ID
+	// is the only thing that tells their state files apart, so dropping it
+	// leaves the dashboard unable to label them.
+	writeSidecarJSON(t, dir, "sidecar.sessA.json", `{"sidecar_id":"id1","name":"sc1","session_id":"sessA"}`)
+	writeSidecarJSON(t, dir, "sidecar.sessB.json", `{"sidecar_id":"id2","name":"sc2","session_id":"sessB"}`)
+	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id3","name":"sc3"}`)
+
+	result := loadSidecars(dir, root, "", "")
+	assert.Equal(t, len(result), 3)
+
+	got := map[string]string{}
+	for _, ss := range result {
+		got[ss.ID] = ss.SessionID
+	}
+	assert.Equal(t, got["id1"], "sessA")
+	assert.Equal(t, got["id2"], "sessB")
+	// State written outside a session stays unattributed rather than guessing.
+	assert.Equal(t, got["id3"], "")
+}
+
 func TestLoadSidecars_inSyncWhenHeadMatches(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()

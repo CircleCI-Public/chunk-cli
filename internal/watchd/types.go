@@ -9,8 +9,13 @@ import (
 
 // SidecarState describes one active sidecar as maintained by the daemon.
 type SidecarState struct {
-	ID            string      `json:"id"`
-	Name          string      `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// SessionID is the agent session that owns this sidecar, empty for state
+	// written outside a session or before sessions existed. Sidecars are
+	// isolated per session, so two entries for one project and branch are two
+	// sessions working in the same tree — this is what tells them apart.
+	SessionID     string      `json:"session_id,omitempty"`
 	ProjectName   string      `json:"project_name"`
 	RepoName      string      `json:"repo_name"`
 	SnapshotName  string      `json:"snapshot_name"`

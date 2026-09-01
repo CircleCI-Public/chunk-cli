@@ -39,7 +39,8 @@ func newWatchCmd() *cobra.Command {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			if err := watchd.EnsureRunning([]string{watchCmdName, "_daemon"}); err != nil {
+			daemonArgs := []string{watchCmdName, "_daemon"}
+			if err := watchd.EnsureRunning(daemonArgs); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 
@@ -92,7 +93,7 @@ func newWatchCmd() *cobra.Command {
 				})
 			}
 
-			m := watch.New(entries, !focus)
+			m := watch.New(entries, !focus).WithDaemonArgs(daemonArgs)
 			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
 			_, err = p.Run()
 			return err
