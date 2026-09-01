@@ -3,6 +3,7 @@ package watchd
 import (
 	"bufio"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -327,5 +328,40 @@ func TestResourceSamplerStopCancelsTheRunningSession(t *testing.T) {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("stopAll must cancel the running sampling session")
+	}
+}
+
+// TestReadFramesUnblocksWriterWhenScannerGivesUp covers the shape that would
+// otherwise hang a sampler for good: the frame reader stops, nothing drains the
+// pipe, and the stream callback writing into it blocks past cancellation.
+func TestReadFramesUnblocksWriterWhenScannerGivesUp(t *testing.T) {
+	pr, pw := io.Pipe()
+	frames := make(chan string, 4)
+	done := make(chan error, 1)
+	go func() { done <- readFrames(pr, frames) }()
+
+	// One line past bufio's token limit is all it takes.
+	go func() {
+		_, _ = pw.Write([]byte(strings.Repeat("x", bufio.MaxScanTokenSize+2) + "\n"))
+	}()
+
+	select {
+	case err := <-done:
+		assert.Assert(t, err != nil, "an abandoned scan must be reported, not swallowed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("readFrames never returned")
+	}
+
+	// The write side must now fail rather than wait for a reader that is gone.
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := pw.Write([]byte("still sampling\n"))
+		wrote <- err
+	}()
+	select {
+	case err := <-wrote:
+		assert.Assert(t, err != nil, "write should fail once the reader has closed the pipe")
+	case <-time.After(5 * time.Second):
+		t.Fatal("write blocked: the sampler goroutine would hang here forever")
 	}
 }

@@ -461,13 +461,14 @@ func (r *resourceSampler) sampleOnce(ctx context.Context, sc SidecarState, s *si
 
 	frames := make(chan string)
 	parsed := make(chan struct{})
+	frameErr := make(chan error, 1)
 	pr, pw := io.Pipe()
 	go func() {
 		consumeSamples(frames, s)
 		close(parsed)
 	}()
 	go func() {
-		splitFrames(bufio.NewScanner(pr), frames)
+		frameErr <- readFrames(pr, frames)
 		close(frames)
 	}()
 
@@ -476,8 +477,16 @@ func (r *resourceSampler) sampleOnce(ctx context.Context, sc SidecarState, s *si
 	})
 	_ = pw.Close()
 	<-parsed
-	_ = pr.Close()
-	return streamErr
+	if streamErr != nil {
+		return streamErr
+	}
+	// A frame reader that stopped early otherwise looks like a healthy session:
+	// the stream ends clean, and run restarts it at once — submitting a fresh
+	// exec on every pass. Reporting it is what puts the backoff in play.
+	if err := <-frameErr; err != nil {
+		return fmt.Errorf("read sampler output: %w", err)
+	}
+	return nil
 }
 
 // consumeSamples parses frames off a reader, differencing CPU between them, and
@@ -508,8 +517,9 @@ func consumeSamples(frames <-chan string, s *sidecarSampler) {
 	}
 }
 
-// splitFrames reads sampler output and emits one string per complete frame.
-func splitFrames(r *bufio.Scanner, out chan<- string) {
+// splitFrames reads sampler output and emits one string per complete frame,
+// returning the scanner's error if it stopped for any reason but end of input.
+func splitFrames(r *bufio.Scanner, out chan<- string) error {
 	var b strings.Builder
 	for r.Scan() {
 		line := r.Text()
@@ -521,4 +531,18 @@ func splitFrames(r *bufio.Scanner, out chan<- string) {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
+	return r.Err()
+}
+
+// readFrames splits sampler output into frames and guarantees the writing side
+// cannot block once it stops.
+//
+// bufio.Scanner gives up on a line past its 64KB token limit, and after that
+// nothing reads the pipe again — so StreamOutput's callback, which writes into
+// it, would block on io.Pipe forever, taking the sampler goroutine with it past
+// even cancellation. Closing the read half turns that hang into a write error.
+func readFrames(pr *io.PipeReader, out chan<- string) error {
+	err := splitFrames(bufio.NewScanner(pr), out)
+	_ = pr.CloseWithError(io.ErrClosedPipe)
+	return err
 }
