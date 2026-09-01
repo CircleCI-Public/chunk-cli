@@ -311,7 +311,7 @@ func TestSaveActivePrunesRekeyedStateFiles(t *testing.T) {
 	keep := filepath.Join(stateDir, "sidecar.unrelated.json")
 	assert.NilError(t, os.WriteFile(keep, []byte(`{"sidecar_id":"sb-2"}`), 0o644))
 
-	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarID: "sb-1", LastSyncedRef: "newref"}))
+	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarID: "sb-1"}))
 
 	_, err = os.Stat(stale)
 	assert.Assert(t, os.IsNotExist(err), "state file re-keyed to a new name must be removed")

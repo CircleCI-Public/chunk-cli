@@ -21,11 +21,11 @@ func TestLoadSidecars_deduplicatesIDs(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()
 
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
+	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1"}`)
 	writeSidecarJSON(t, dir, "sidecar.sess1.json", `{"sidecar_id":"id2","name":"sc2"}`)
 	writeSidecarJSON(t, dir, "sidecar.sess2.json", `{"sidecar_id":"id1","name":"sc1"}`)
 
-	result := loadSidecars(dir, root, "", "abc123")
+	result := loadSidecars(dir, root, "")
 	assert.Equal(t, len(result), 2, "want 2 unique sidecars")
 }
 
@@ -40,7 +40,7 @@ func TestLoadSidecars_carriesSessionID(t *testing.T) {
 	writeSidecarJSON(t, dir, "sidecar.sessB.json", `{"sidecar_id":"id2","name":"sc2","session_id":"sessB"}`)
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id3","name":"sc3"}`)
 
-	result := loadSidecars(dir, root, "", "")
+	result := loadSidecars(dir, root, "")
 	assert.Equal(t, len(result), 3)
 
 	got := map[string]string{}
@@ -53,32 +53,10 @@ func TestLoadSidecars_carriesSessionID(t *testing.T) {
 	assert.Equal(t, got["id3"], "")
 }
 
-func TestLoadSidecars_inSyncWhenHeadMatches(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"abc123"}`)
-
-	result := loadSidecars(dir, root, "", "abc123")
-	assert.Equal(t, len(result), 1)
-	assert.Assert(t, result[0].InSync, "sidecar should be in sync when LastSyncedRef matches head")
-}
-
-func TestLoadSidecars_notInSyncWhenHeadDiffers(t *testing.T) {
-	dir := t.TempDir()
-	root := t.TempDir()
-
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","last_synced_ref":"oldref"}`)
-
-	result := loadSidecars(dir, root, "", "newref")
-	assert.Equal(t, len(result), 1)
-	assert.Assert(t, !result[0].InSync, "sidecar should not be in sync when refs differ")
-}
-
 func TestLoadSidecars_emptyDir(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()
-	result := loadSidecars(dir, root, "", "")
+	result := loadSidecars(dir, root, "")
 	assert.Equal(t, len(result), 0)
 }
 
@@ -88,7 +66,7 @@ func TestLoadSidecars_skipsEmptySidecarID(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"","name":"empty"}`)
 
-	result := loadSidecars(dir, root, "", "")
+	result := loadSidecars(dir, root, "")
 	assert.Equal(t, len(result), 0, "want 0 (skipped empty ID)")
 }
 
@@ -98,7 +76,7 @@ func TestLoadSidecars_snapshotName(t *testing.T) {
 
 	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1"}`)
 
-	result := loadSidecars(dir, root, "my-snap", "")
+	result := loadSidecars(dir, root, "my-snap")
 	assert.Equal(t, len(result), 1)
 	assert.Equal(t, result[0].SnapshotName, "my-snap")
 }
@@ -107,17 +85,16 @@ func TestLoadSidecars_prefersNewestFileForDuplicateID(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()
 
-	writeSidecarJSON(t, dir, "sidecar.aaa.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"oldref"}`)
-	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1","last_synced_ref":"newref"}`)
+	writeSidecarJSON(t, dir, "sidecar.aaa.json", `{"sidecar_id":"id1","name":"sc1-old"}`)
+	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id1","name":"sc1-new"}`)
 
 	old := time.Now().Add(-time.Hour)
 	err := os.Chtimes(filepath.Join(dir, "sidecar.aaa.json"), old, old)
 	assert.NilError(t, err)
 
-	result := loadSidecars(dir, root, "", "newref")
+	result := loadSidecars(dir, root, "")
 	assert.Equal(t, len(result), 1)
-	assert.Equal(t, result[0].LastSyncedRef, "newref")
-	assert.Assert(t, result[0].InSync, "sidecar should be in sync when the newest state file matches head")
+	assert.Equal(t, result[0].Name, "sc1-new", "newest file's name should win")
 }
 
 func TestCapEvents_keepsNewest(t *testing.T) {

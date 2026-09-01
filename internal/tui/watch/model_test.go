@@ -449,7 +449,7 @@ func TestRender_daemonErrorIsVisibleAndStillFitsTheTerminal(t *testing.T) {
 	for _, height := range []int{12, 24, 40, 60} {
 		m := sessionModel("", []sidecarInfo{
 			{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
-				lastActivity: now, inSync: true},
+				lastActivity: now},
 		})
 		m.width = 100
 		m.height = height
@@ -469,7 +469,7 @@ func TestRender_withoutADaemonErrorTheLayoutIsUnchanged(t *testing.T) {
 	now := time.Now()
 	m := sessionModel("", []sidecarInfo{
 		{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
-			lastActivity: now, inSync: true},
+			lastActivity: now},
 	})
 	m.width = 100
 	m.height = 24
@@ -485,7 +485,7 @@ func TestRender_survivesAnOutOfRangeSelection(t *testing.T) {
 	for _, idx := range []int{-1, 0, 5} {
 		m := sessionModel("", []sidecarInfo{
 			{id: "id1", sessionID: "sessA", repoName: "repo", branch: "main",
-				lastActivity: now, inSync: true},
+				lastActivity: now},
 		})
 		m.width = 100
 		m.height = 24
@@ -620,9 +620,9 @@ func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
 	now := time.Now()
 	m := sessionModel("", []sidecarInfo{
 		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "main",
-			lastActivity: now, inSync: true},
+			lastActivity: now},
 		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main",
-			lastActivity: now.Add(-time.Minute), inSync: true},
+			lastActivity: now.Add(-time.Minute)},
 	})
 
 	// Room for the title, the blank under it, and the first row only. The second
@@ -632,7 +632,7 @@ func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
 
 	// A complete row ends in an age line, so one age line per sync badge means
 	// no row was cut part-way through.
-	assert.Equal(t, strings.Count(pane, "in sync"), strings.Count(pane, "ago"), pane)
+	assert.Equal(t, strings.Count(pane, "synced via rsync"), strings.Count(pane, "ago"), pane)
 	assert.Assert(t, strings.Contains(pane, "1 more"), pane)
 }
 
@@ -640,9 +640,9 @@ func TestRenderSidecarPane_noOverflowHintWhenEverythingFits(t *testing.T) {
 	now := time.Now()
 	m := sessionModel("", []sidecarInfo{
 		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "main",
-			lastActivity: now, inSync: true},
+			lastActivity: now},
 		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main",
-			lastActivity: now.Add(-time.Minute), inSync: true},
+			lastActivity: now.Add(-time.Minute)},
 	})
 
 	pane := strings.Join(m.renderSidecarPane(40), "\n")

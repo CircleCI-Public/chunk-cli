@@ -92,9 +92,10 @@ type Options struct {
 	Image        string
 	IdentityFile string
 	AuthSock     string
-	Workspace    string    // remote working directory, must be non-empty
-	Parallel     int       // max concurrent sidecars (default 5)
-	Commands     []Command // commands to run on each sidecar in order
+	Workspace    string // remote working directory, must be non-empty
+	CWD          string // local source directory to sync from
+	Parallel     int    // max concurrent sidecars (default 5)
+	Commands     []Command
 	StatusFn     iostream.StatusFunc
 }
 
@@ -170,7 +171,7 @@ func runVariant(ctx context.Context, client *circleci.Client, v Variant, opts Op
 	}()
 
 	opts.StatusFn(iostream.LevelInfo, fmt.Sprintf("[%s] syncing", v.ID))
-	if err := sidecar.SyncEphemeral(ctx, client, sc.ID, opts.IdentityFile, opts.AuthSock, opts.Workspace, opts.StatusFn); err != nil {
+	if err := sidecar.RsyncSyncEphemeral(ctx, client, sc.ID, opts.IdentityFile, opts.AuthSock, opts.Workspace, opts.CWD, opts.StatusFn); err != nil {
 		base.Error = fmt.Sprintf("sync: %v", err)
 		return base
 	}
