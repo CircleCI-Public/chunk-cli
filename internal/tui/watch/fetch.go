@@ -36,6 +36,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 	headRefs := make([]string, 0, n)
 	offsets := make([]int64, n) // daemon owns offsets; TUI keeps zeros
 	allEventsByProject := make([][]eventlog.Event, 0, n)
+	allCommandsByProject := make([][]watchd.CommandState, 0, n)
 	var allSidecars []sidecarInfo
 
 	for i, p := range snap.Projects {
@@ -52,6 +53,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		branches = append(branches, p.Branch)
 		headRefs = append(headRefs, p.HeadRef)
 		allEventsByProject = append(allEventsByProject, p.Events)
+		allCommandsByProject = append(allCommandsByProject, p.Commands)
 
 		for _, sc := range p.Sidecars {
 			allSidecars = append(allSidecars, sidecarInfo{
@@ -72,6 +74,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 				lastOp:        sc.LastOp,
 				lastLevel:     sc.LastLevel,
 				running:       sc.Running,
+				resources:     sc.Resources,
 			})
 		}
 
@@ -114,5 +117,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		offsets:  offsets,
 		branches: branches,
 		headRefs: headRefs,
+		commands: allCommandsByProject,
+		authErr:  snap.AuthError,
 	}
 }

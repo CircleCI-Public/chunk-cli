@@ -150,9 +150,14 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	assert.NilError(t, err)
 
+	// Point the daemon socket at an empty dir. Without this the command
+	// registration would reach a watch daemon actually running on the developer's
+	// machine, which is neither hermetic nor polite.
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
-	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", envVars, config.ResolvedConfig{}, streams)
+	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", t.TempDir(), envVars, config.ResolvedConfig{}, streams)
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")

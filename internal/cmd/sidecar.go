@@ -44,6 +44,7 @@ func newSidecarCmd() *cobra.Command {
 	cmd.AddCommand(newSidecarCreateCmd())
 	cmd.AddCommand(newSidecarDeleteCmd())
 	cmd.AddCommand(newSidecarExecCmd())
+	cmd.AddCommand(newSidecarLogsCmd())
 	cmd.AddCommand(newSidecarAddSSHKeyCmd())
 	cmd.AddCommand(newSidecarSSHCmd())
 	cmd.AddCommand(newSidecarSyncCmd())
