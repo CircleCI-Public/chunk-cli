@@ -356,6 +356,13 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 	ctx := cmd.Context()
 
+	// Auto-start the daemon so validate gets mutex serialization even when
+	// chunk watch was never invoked. Errors are silently ignored: a daemon that
+	// fails to start just means we run inline, which always worked.
+	if !opts.sync {
+		_ = watchd.EnsureRunning([]string{watchCmdName, "_daemon"})
+	}
+
 	// Delegate hook runs to the daemon before initHook so the subprocess prints
 	// the session header (not the client, which would cause it to appear twice).
 	if done, err := tryHookDelegate(cmd, hook, opts.sync, streams); done {
