@@ -15,12 +15,6 @@ func Create(ctx context.Context, client *circleci.Client, orgID, name, image str
 	return client.CreateSidecar(ctx, orgID, name, image)
 }
 
-func Exec(
-	ctx context.Context, client *circleci.Client, sidecarID, command string, args []string, onOutput circleci.OutputFn,
-) (*circleci.ExecResponse, error) {
-	return client.Exec(ctx, sidecarID, command, args, nil, onOutput)
-}
-
 func AddSSHKey(ctx context.Context, client *circleci.Client, sidecarID, publicKey, publicKeyFile string) (*circleci.AddSSHKeyResponse, error) {
 	if publicKey != "" && publicKeyFile != "" {
 		return nil, ErrMutuallyExclusiveKeys

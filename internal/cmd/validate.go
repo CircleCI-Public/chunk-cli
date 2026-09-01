@@ -840,23 +840,17 @@ func newExecFn(
 		_, _ = w.Write(data)
 	}
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
-		// Submit and stream are separate calls so the command ID exists before any
-		// output is consumed. Registering it here is what lets the watch daemon
-		// tail this command while it runs, and keep its output after this process
-		// exits — which for a hook-driven run is immediately.
-		commandID, err := client.SubmitExec(ctx, sidecarID, "sh", []string{"-c", script}, merged)
-		if err != nil {
-			return "", "", 0, err
-		}
-		watchd.RegisterCommand(watchd.CommandReg{
-			CommandID:   commandID,
-			SidecarID:   sidecarID,
-			ProjectRoot: projectRoot,
-			Op:          string(eventlog.OpValidate),
-			Name:        remoteCommandLabel(script),
-			SubmittedAt: time.Now(),
-		})
-		result, err := client.StreamOutput(ctx, commandID, "", onOutput)
+		// Registering before output is consumed is what lets the watch daemon tail
+		// this command while it runs, and keep its output after this process exits
+		// — which for a hook-driven run is immediately.
+		result, err := submitAndStream(ctx, client,
+			watchd.CommandReg{
+				SidecarID:   sidecarID,
+				ProjectRoot: projectRoot,
+				Op:          string(eventlog.OpValidate),
+				Name:        remoteCommandLabel(script),
+			},
+			"sh", []string{"-c", script}, merged, onOutput)
 		if err != nil {
 			return "", "", 0, err
 		}
@@ -881,20 +875,7 @@ func remoteCommandLabel(script string) string {
 			label = rest
 		}
 	}
-	label = strings.TrimSpace(label)
-	// Multi-line scripts are titled by their first line; the pane shows the full
-	// output anyway, so a header spanning the terminal earns nothing.
-	if nl := strings.IndexByte(label, '\n'); nl >= 0 {
-		label = strings.TrimSpace(label[:nl])
-	}
-	// Bounded by runes, not bytes: slicing a byte offset can land inside a
-	// multi-byte character and leave the label invalid UTF-8, which renders as a
-	// replacement char in the pane title.
-	const maxLabel = 120
-	if runes := []rune(label); len(runes) > maxLabel {
-		label = string(runes[:maxLabel])
-	}
-	return label
+	return clampLabel(label)
 }
 
 // hostForwardEnv collects host environment variables that should be forwarded
