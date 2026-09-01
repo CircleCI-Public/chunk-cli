@@ -62,6 +62,7 @@ func loadSidecars(dataDir, root, snapshotName, head string) []SidecarState {
 			SnapshotName:  snapshotName,
 			FileMtime:     mtime,
 			LastSyncedRef: as.LastSyncedRef,
+			Workspace:     as.Workspace,
 			InSync:        head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef,
 		}
 		if dup {

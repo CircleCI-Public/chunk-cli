@@ -29,6 +29,16 @@ type projectState struct {
 type daemon struct {
 	mu       sync.RWMutex
 	projects map[string]*projectState // keyed by project root
+
+	// creds resolves the CircleCI client lazily; nil-safe to use when
+	// unauthenticated, in which case output streaming is simply unavailable.
+	creds *credentials
+	// out buffers command output. Streamers run as their own goroutines and
+	// never execute on the poll path, so a hung stream cannot stall the
+	// dashboard for every other project.
+	out *outputStore
+	// res samples resource usage, only while a dashboard is attached.
+	res *resourceSampler
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -59,7 +69,15 @@ func RunDaemon(ctx context.Context) error {
 	defer func() { _ = ln.Close() }()
 	defer func() { _ = os.Remove(sockPath) }()
 
-	d := &daemon{projects: make(map[string]*projectState)}
+	creds := &credentials{}
+	d := &daemon{
+		projects: make(map[string]*projectState),
+		creds:    creds,
+		out:      newOutputStore(),
+		res:      newResourceSampler(creds),
+	}
+	defer d.out.stopAll()
+	defer d.res.stopAll()
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -136,6 +154,23 @@ func (d *daemon) poll() {
 	for _, ps := range work {
 		d.updateProject(ps)
 	}
+
+	// Reconcile samplers once per poll, across every project. Doing it inside
+	// updateProject would hand reconcile one project's sidecars at a time, and it
+	// stops any sampler absent from what it is given — so each project's turn
+	// would tear down every other project's samplers.
+	d.res.reconcile(d.allSidecars())
+}
+
+// allSidecars returns every known sidecar across all projects.
+func (d *daemon) allSidecars() []SidecarState {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var all []SidecarState
+	for _, ps := range d.projects {
+		all = append(all, ps.snap.Sidecars...)
+	}
+	return all
 }
 
 // initProject opens the event log for root and returns a new projectState.
@@ -171,6 +206,7 @@ func (d *daemon) updateProject(ps *projectState) {
 
 	sidecars := loadSidecars(ps.dataDir, ps.root, snapName, head)
 	annotateActivity(sidecars, ps.events)
+	d.res.annotate(sidecars)
 
 	snap := ProjectSnapshot{
 		Root:     ps.root,
@@ -179,6 +215,7 @@ func (d *daemon) updateProject(ps *projectState) {
 		RepoName: repoName,
 		Sidecars: sidecars,
 		Events:   ps.events,
+		Commands: d.out.commandsFor(ps.root),
 	}
 	d.mu.Lock()
 	ps.snap = snap
@@ -188,6 +225,16 @@ func (d *daemon) updateProject(ps *projectState) {
 // snapshot returns a Snapshot filtered to the requested roots.
 // If roots is empty all known projects are returned.
 func (d *daemon) snapshot(roots []string) Snapshot {
+	// A snapshot request is the daemon's signal that a dashboard is attached, and
+	// resource sampling is gated on that: a persistent SSH connection per sidecar
+	// is only worth holding while someone is looking at it.
+	d.res.touch()
+
+	// Read outside the project lock: message only reports already-resolved state,
+	// but it takes the credentials mutex, and nesting two locks here to report a
+	// string is not worth the ordering it would impose.
+	authErr := d.creds.message()
+
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -215,10 +262,10 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 				ordered = append(ordered, p)
 			}
 		}
-		return Snapshot{Projects: ordered}
+		return Snapshot{Projects: ordered, AuthError: authErr}
 	}
 	// Map iteration is random; sort by root so project rows stay stable
 	// between polls when watchAll mode requests all projects.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-	return Snapshot{Projects: projects}
+	return Snapshot{Projects: projects, AuthError: authErr}
 }
