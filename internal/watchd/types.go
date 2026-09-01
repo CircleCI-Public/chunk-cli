@@ -29,16 +29,14 @@ type SidecarState struct {
 	// written outside a session or before sessions existed. Sidecars are
 	// isolated per session, so two entries for one project and branch are two
 	// sessions working in the same tree — this is what tells them apart.
-	SessionID     string    `json:"session_id,omitempty"`
-	ProjectName   string    `json:"project_name"`
-	RepoName      string    `json:"repo_name"`
-	SnapshotName  string    `json:"snapshot_name"`
-	FileMtime     time.Time `json:"file_mtime"`
-	LastSyncedRef string    `json:"last_synced_ref"`
+	SessionID    string    `json:"session_id,omitempty"`
+	ProjectName  string    `json:"project_name"`
+	RepoName     string    `json:"repo_name"`
+	SnapshotName string    `json:"snapshot_name"`
+	FileMtime    time.Time `json:"file_mtime"`
 	// Workspace is the sidecar-side repo path, used to sample disk usage where
 	// the work actually happens rather than wherever a shell starts.
 	Workspace    string      `json:"workspace,omitempty"`
-	InSync       bool        `json:"in_sync"`
 	LastActivity time.Time   `json:"last_activity"`
 	LastOp       eventlog.Op `json:"last_op"`
 	LastLevel    string      `json:"last_level"`

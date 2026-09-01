@@ -100,20 +100,18 @@ type sidecarInfo struct {
 	// runner and for state written before sidecars were session-scoped. Several
 	// sessions can hold sidecars for one worktree, so this is what distinguishes
 	// two otherwise identical rows.
-	sessionID     string
-	projectName   string
-	repoName      string    // basename of the main worktree (groups linked worktrees together)
-	projectPath   string    // absolute root of this worktree, "" when unknown
-	branch        string    // current git branch for this worktree
-	projectIdx    int       // index into Model.projects
-	snapshotName  string    // name of the active snapshot for this project, if any
-	fileMtime     time.Time // mtime of the sidecar state file (fallback when no events yet)
-	lastSyncedRef string
-	inSync        bool
-	running       bool
-	lastActivity  time.Time
-	lastOp        eventlog.Op
-	lastLevel     string // level of the most recent event ("done", "error", etc.)
+	sessionID    string
+	projectName  string
+	repoName     string    // basename of the main worktree (groups linked worktrees together)
+	projectPath  string    // absolute root of this worktree, "" when unknown
+	branch       string    // current git branch for this worktree
+	projectIdx   int       // index into Model.projects
+	snapshotName string    // name of the active snapshot for this project, if any
+	fileMtime    time.Time // mtime of the sidecar state file (fallback when no events yet)
+	running      bool
+	lastActivity time.Time
+	lastOp       eventlog.Op
+	lastLevel    string // level of the most recent event ("done", "error", etc.)
 	// resources is the latest resource sample, nil when the daemon has none.
 	resources *watchd.Resources
 }
@@ -480,12 +478,8 @@ func (m Model) rowStatus(sc sidecarInfo) string {
 		default:
 			return muted("no runs yet")
 		}
-	case sc.inSync:
-		return green("✓ in sync")
-	case sc.lastSyncedRef == "":
-		return muted("not synced")
 	default:
-		return yellow("↑ needs sync")
+		return muted("synced via rsync")
 	}
 }
 
@@ -1415,8 +1409,6 @@ func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
 				result[idx].id = sc.id
 				result[idx].name = sc.name
 				result[idx].sessionID = sc.sessionID
-				result[idx].inSync = sc.inSync
-				result[idx].lastSyncedRef = sc.lastSyncedRef
 				result[idx].snapshotName = sc.snapshotName
 				result[idx].fileMtime = sc.fileMtime
 			}

@@ -204,7 +204,7 @@ func (d *daemon) updateProject(ps *projectState) {
 		ps.offset = newOff
 	}
 
-	sidecars := loadSidecars(ps.dataDir, ps.root, snapName, head)
+	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
 	annotateActivity(sidecars, ps.events)
 	d.res.annotate(sidecars)
 

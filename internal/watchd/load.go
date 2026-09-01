@@ -30,7 +30,7 @@ const (
 // SidecarState per unique sidecar ID. When multiple files share the same ID
 // the entry with the newest mtime wins, so a stale state file never masks a
 // more recent sync.
-func loadSidecars(dataDir, root, snapshotName, head string) []SidecarState {
+func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	projectName := filepath.Base(root)
 	repoName := projectRepoName(root)
@@ -54,16 +54,14 @@ func loadSidecars(dataDir, root, snapshotName, head string) []SidecarState {
 			continue
 		}
 		ss := SidecarState{
-			ID:            as.SidecarID,
-			Name:          as.Name,
-			SessionID:     as.SessionID,
-			ProjectName:   projectName,
-			RepoName:      repoName,
-			SnapshotName:  snapshotName,
-			FileMtime:     mtime,
-			LastSyncedRef: as.LastSyncedRef,
-			Workspace:     as.Workspace,
-			InSync:        head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef,
+			ID:           as.SidecarID,
+			Name:         as.Name,
+			SessionID:    as.SessionID,
+			ProjectName:  projectName,
+			RepoName:     repoName,
+			SnapshotName: snapshotName,
+			FileMtime:    mtime,
+			Workspace:    as.Workspace,
 		}
 		if dup {
 			result[at] = ss

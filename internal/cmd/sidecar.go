@@ -18,7 +18,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
@@ -546,7 +545,6 @@ func newSidecarSSHCmd() *cobra.Command {
 
 func newSidecarSyncCmd() *cobra.Command {
 	var sidecarID, identityFile, workdir string
-	var checkout bool
 
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -575,31 +573,8 @@ func newSidecarSyncCmd() *cobra.Command {
 				}
 				syncFn = eventlog.WrapFromDir(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd))
 			}
-			useBundle := !checkout
-			if useBundle {
-				err = sidecar.BundleSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, syncFn)
-			} else {
-				err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, syncFn)
-			}
+			err = sidecar.RsyncSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, syncFn)
 			if err != nil {
-				if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
-					return &userError{
-						msg:        "Git remote \"origin\" is required for sidecar sync.",
-						suggestion: "Run: git remote add origin <url>",
-						err:        err,
-					}
-				}
-				if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
-					suggestion := "Push your branch to the remote before syncing."
-					if errors.Is(err, gitutil.ErrNoOriginHEAD) {
-						suggestion = "Run: git fetch origin && git remote set-head origin -a"
-					}
-					return &userError{
-						msg:        "Could not resolve remote base.",
-						suggestion: suggestion,
-						err:        err,
-					}
-				}
 				if err := sshSessionError(err); err != nil {
 					return err
 				}
@@ -620,8 +595,7 @@ func newSidecarSyncCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (defaults to /home/user/<repo> when omitted)")
-	cmd.Flags().BoolVar(&checkout, "checkout", false, "Sync via git checkout/patch instead of bundle (requires branch pushed to GitHub)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (defaults to /home/user/<basename> when omitted)")
 
 	return cmd
 }
@@ -1092,7 +1066,7 @@ Example:
 
 				// Step 4: Sync files to sidecar.
 				if !skipSync {
-					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, true, dir, rc.CircleCITokenSource, status); err != nil {
+					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, dir, rc.CircleCITokenSource, status); err != nil {
 						return err
 					}
 				}
@@ -1233,38 +1207,14 @@ func sidecarSetupSync(
 	ctx context.Context,
 	client *circleci.Client,
 	sidecarID, identityFile, authSock string,
-	useBundle bool,
 	cwd string,
 	tokenSource string,
 	status iostream.StatusFunc,
 ) error {
 	status(iostream.LevelStep, "Syncing files to sidecar...")
-	var err error
-	if useBundle {
-		err = sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, "", cwd, status)
-	} else {
-		err = sidecar.Sync(ctx, client, sidecarID, identityFile, authSock, "", status)
-	}
+	err := sidecar.RsyncSync(ctx, client, sidecarID, identityFile, authSock, "", cwd, status)
 	if err == nil {
 		return nil
-	}
-	if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
-		return &userError{
-			msg:        "Git remote \"origin\" is required for sidecar sync.",
-			suggestion: "Run: git remote add origin <url>",
-			err:        err,
-		}
-	}
-	if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
-		suggestion := "Push your branch to the remote before syncing."
-		if errors.Is(err, gitutil.ErrNoOriginHEAD) {
-			suggestion = "Run: git fetch origin && git remote set-head origin -a"
-		}
-		return &userError{
-			msg:        "Could not resolve remote base.",
-			suggestion: suggestion,
-			err:        err,
-		}
 	}
 	if authErr := sshSessionError(err); authErr != nil {
 		return authErr

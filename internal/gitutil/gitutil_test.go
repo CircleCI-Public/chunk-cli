@@ -45,47 +45,6 @@ func setupRepo(t *testing.T) string {
 	return dir
 }
 
-func TestRepoRoot(t *testing.T) {
-	dir := setupRepo(t)
-
-	// From repo root itself
-	root, err := RepoRoot(dir)
-	assert.NilError(t, err)
-	assert.Equal(t, root, dir)
-
-	// From a subdirectory
-	sub := filepath.Join(dir, "sub", "deep")
-	err = os.MkdirAll(sub, 0o755)
-	assert.NilError(t, err)
-	root, err = RepoRoot(sub)
-	assert.NilError(t, err)
-	assert.Equal(t, root, dir)
-
-	// From a non-repo directory
-	noRepo := t.TempDir()
-	_, err = RepoRoot(noRepo)
-	assert.Assert(t, err != nil, "expected error for non-repo dir")
-}
-
-func TestCurrentBranch(t *testing.T) {
-	dir := setupRepo(t)
-
-	// Run CurrentBranch from the temp repo
-	origDir, _ := os.Getwd()
-	defer func() { _ = os.Chdir(origDir) }()
-	_ = os.Chdir(dir)
-
-	branch, err := CurrentBranch()
-	assert.NilError(t, err)
-	assert.Equal(t, branch, "main")
-}
-
-func TestSplitNonEmpty(t *testing.T) {
-	assert.DeepEqual(t, splitNonEmpty(""), []string(nil))
-	assert.DeepEqual(t, splitNonEmpty("a\nb\n"), []string{"a", "b"})
-	assert.DeepEqual(t, splitNonEmpty("single"), []string{"single"})
-}
-
 // gitEnvFor returns a clean git environment rooted at dir.
 func gitEnvFor(dir string) []string {
 	return []string{
@@ -113,98 +72,24 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func TestIsBranchPushed(t *testing.T) {
-	bare := t.TempDir()
-	gitRun(t, bare, "init", "--bare")
-
-	local := t.TempDir()
-	gitRun(t, local, "clone", bare, ".")
-	gitRun(t, local, "checkout", "-b", "main")
-	_ = os.WriteFile(filepath.Join(local, "file.txt"), []byte("hello\n"), 0o644)
-	gitRun(t, local, "add", "file.txt")
-	gitRun(t, local, "commit", "-m", "init")
-
-	origDir, _ := os.Getwd()
-	defer func() { _ = os.Chdir(origDir) }()
-	_ = os.Chdir(local)
-
-	// Branch not yet pushed
-	assert.Equal(t, IsBranchPushed(), false)
-
-	// Push and set upstream
-	gitRun(t, local, "push", "-u", "origin", "main")
-	assert.Equal(t, IsBranchPushed(), true)
-}
-
-func TestMergeBase(t *testing.T) {
-	// Set up a "remote" bare repo and a local clone so origin/HEAD exists.
-	bare := t.TempDir()
-	gitRun(t, bare, "init", "--bare")
-
-	local := t.TempDir()
-	gitRun(t, local, "clone", bare, ".")
-	gitRun(t, local, "checkout", "-b", "main")
-	_ = os.WriteFile(filepath.Join(local, "file.txt"), []byte("hello\n"), 0o644)
-	gitRun(t, local, "add", "file.txt")
-	gitRun(t, local, "commit", "-m", "init")
-	gitRun(t, local, "push", "-u", "origin", "main")
-	// Set origin/HEAD so MergeBase fallback works
-	gitRun(t, local, "remote", "set-head", "origin", "main")
-
-	// Create a feature branch with a commit
-	gitRun(t, local, "checkout", "-b", "feature")
-	gitRun(t, local, "push", "-u", "origin", "feature")
-	_ = os.WriteFile(filepath.Join(local, "feature.txt"), []byte("new\n"), 0o644)
-	gitRun(t, local, "add", "feature.txt")
-	gitRun(t, local, "commit", "-m", "feature work")
-
-	origDir, _ := os.Getwd()
-	defer func() { _ = os.Chdir(origDir) }()
-	_ = os.Chdir(local)
-
-	sha, err := MergeBase()
-	assert.NilError(t, err)
-	assert.Assert(t, len(sha) >= 7, "expected a commit SHA, got %q", sha)
-}
-
-func TestGeneratePatch(t *testing.T) {
+func TestRepoRoot(t *testing.T) {
 	dir := setupRepo(t)
 
-	origDir, _ := os.Getwd()
-	defer func() { _ = os.Chdir(origDir) }()
-	_ = os.Chdir(dir)
-
-	// Get the base commit
-	base := gitRun(t, dir, "rev-parse", "HEAD")
-
-	// Add a tracked change
-	_ = os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("tracked content\n"), 0o644)
-	gitRun(t, dir, "add", "tracked.txt")
-	gitRun(t, dir, "commit", "-m", "add tracked")
-
-	// Add an untracked file (should appear in the patch)
-	_ = os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("untracked content\n"), 0o644)
-
-	patch, err := GeneratePatch(base)
+	// From repo root itself
+	root, err := RepoRoot(dir)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(patch, "tracked.txt"), "patch should contain tracked file")
-	assert.Assert(t, strings.Contains(patch, "untracked.txt"), "patch should contain untracked file")
+	assert.Equal(t, root, dir)
 
-	// Verify untracked file was unstaged (reset) after patch generation
-	statusOut := gitRun(t, dir, "status", "--porcelain")
-	assert.Assert(t, strings.Contains(statusOut, "?? untracked.txt"), "untracked file should be restored to untracked state")
-}
-
-func TestGeneratePatchNoChanges(t *testing.T) {
-	dir := setupRepo(t)
-
-	origDir, _ := os.Getwd()
-	defer func() { _ = os.Chdir(origDir) }()
-	_ = os.Chdir(dir)
-
-	base := gitRun(t, dir, "rev-parse", "HEAD")
-
-	patch, err := GeneratePatch(base)
+	// From a subdirectory
+	sub := filepath.Join(dir, "sub", "deep")
+	err = os.MkdirAll(sub, 0o755)
 	assert.NilError(t, err)
-	assert.Equal(t, patch, "", "patch should be empty when no changes")
+	root, err = RepoRoot(sub)
+	assert.NilError(t, err)
+	assert.Equal(t, root, dir)
+
+	// From a non-repo directory
+	noRepo := t.TempDir()
+	_, err = RepoRoot(noRepo)
+	assert.Assert(t, err != nil, "expected error for non-repo dir")
 }

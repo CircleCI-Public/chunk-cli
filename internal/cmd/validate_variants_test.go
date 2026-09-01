@@ -36,7 +36,8 @@ func TestResolveVariantsWorkspaceDefaultsToSidecarHome(t *testing.T) {
 
 	ws, err := resolveVariantsWorkspace(context.Background(), "", repoDir)
 	assert.NilError(t, err)
-	assert.Equal(t, ws, "/home/runner/my-repo")
+	// workspace uses the local directory basename, not the git remote repo name
+	assert.Equal(t, ws, "/home/runner/"+filepath.Base(repoDir))
 }
 
 func TestResolveVariantsWorkspacePrefersWorkdirFlag(t *testing.T) {
@@ -49,14 +50,16 @@ func TestResolveVariantsWorkspacePrefersWorkdirFlag(t *testing.T) {
 	assert.Equal(t, ws, "/somewhere/else")
 }
 
-// TestResolveVariantsWorkspaceErrorsWithoutRepo covers the fresh clone, agent
-// worktree and CI cases: nothing names a workspace, so the run must stop rather
-// than guess a path the snapshot never prepared.
-func TestResolveVariantsWorkspaceErrorsWithoutRepo(t *testing.T) {
+// TestResolveVariantsWorkspaceFallsBackToBasename verifies that without a git
+// remote or active sidecar, the workspace defaults to <sidecarHome>/<basename>.
+func TestResolveVariantsWorkspaceFallsBackToBasename(t *testing.T) {
 	isolateSidecarState(t)
+	t.Setenv("CHUNK_SIDECAR_HOME", "/home/user")
 
-	_, err := resolveVariantsWorkspace(context.Background(), "", t.TempDir())
-	assert.Assert(t, err != nil, "expected an error when no workspace can be resolved")
+	dir := t.TempDir()
+	ws, err := resolveVariantsWorkspace(context.Background(), "", dir)
+	assert.NilError(t, err)
+	assert.Equal(t, ws, "/home/user/"+filepath.Base(dir))
 }
 
 func TestCommandTimeout(t *testing.T) {
