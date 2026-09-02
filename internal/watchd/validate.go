@@ -25,6 +25,9 @@ type ValidateResponse struct {
 }
 
 func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
+	d.validateMu.Lock()
+	defer d.validateMu.Unlock()
+
 	var req ValidateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)

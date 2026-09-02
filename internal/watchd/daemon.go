@@ -28,8 +28,9 @@ type projectState struct {
 }
 
 type daemon struct {
-	mu       sync.RWMutex
-	projects map[string]*projectState // keyed by project root
+	mu         sync.RWMutex
+	projects   map[string]*projectState // keyed by project root
+	validateMu sync.Mutex               // serializes concurrent /validate requests
 
 	// client streams command output. Nil when the daemon started without
 	// credentials, in which case commands are still recorded but no output is
