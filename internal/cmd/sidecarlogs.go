@@ -29,7 +29,10 @@ func newSidecarLogsCmd() *cobra.Command {
 		Short: "Print the output of a command that ran on a sidecar",
 		Long: "Print the output of a command that ran on a sidecar.\n\n" +
 			"Command IDs appear in the chunk watch dashboard. Output is read from the\n" +
-			"watch daemon's buffer when it has it, and from the CircleCI API otherwise.",
+			"watch daemon's buffer when it has it, and from the CircleCI API otherwise.\n\n" +
+			"Exits non-zero only when reading failed. A command that itself exited\n" +
+			"non-zero is reported on stderr as \"exit status N\" and does not change this\n" +
+			"command's own status, so a failing remote command is not a failing read.",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
