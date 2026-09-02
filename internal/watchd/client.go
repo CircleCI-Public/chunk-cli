@@ -191,6 +191,13 @@ func launchDaemon(subArgs []string) error {
 	if err != nil {
 		return fmt.Errorf("get executable: %w", err)
 	}
+	// A Go test binary ends with ".test"; launching one as the daemon would run
+	// the test suite rather than serve the socket, causing a 5-second startup
+	// wait per validate invocation in tests. Fail immediately so EnsureRunning
+	// (whose error is always ignored by the caller) returns without the wait.
+	if strings.HasSuffix(executable, ".test") {
+		return fmt.Errorf("watch daemon unavailable: executable is a test binary")
+	}
 
 	child := exec.Command(executable, subArgs...)
 	child.Stdout = logFile
