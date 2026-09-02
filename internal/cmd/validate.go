@@ -360,7 +360,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// chunk watch was never invoked. Errors are silently ignored: a daemon that
 	// fails to start just means we run inline, which always worked.
 	if !opts.sync {
-		_ = watchd.EnsureRunning([]string{watchCmdName, "_daemon"})
+		_ = watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd})
 	}
 
 	// Delegate hook runs to the daemon before initHook so the subprocess prints

@@ -10,7 +10,7 @@ import (
 // to start the background watch daemon. It is intentionally hidden from help output.
 func newWatchDaemonCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    "_daemon",
+		Use:    watchDaemonSubcmd,
 		Short:  "Run the watch daemon (internal use only)",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
