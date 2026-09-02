@@ -62,7 +62,7 @@ func reg(id, root string) CommandReg {
 }
 
 func TestOutputStoreBuffersAndReportsExit(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	s.register(reg("cmd-1", "/repo"), immediateStream([]string{"hello ", "world\n"}, 0))
 	waitForFinish(t, s, "cmd-1")
 
@@ -77,7 +77,7 @@ func TestOutputStoreBuffersAndReportsExit(t *testing.T) {
 }
 
 func TestOutputStoreResumesFromOffset(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	s.register(reg("cmd-1", "/repo"), immediateStream([]string{"abcdef"}, 0))
 	waitForFinish(t, s, "cmd-1")
 
@@ -93,13 +93,13 @@ func TestOutputStoreResumesFromOffset(t *testing.T) {
 }
 
 func TestOutputStoreUnknownCommandIsNotFound(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	chunk := s.read("nope", 0)
 	assert.Check(t, !chunk.Found)
 }
 
 func TestOutputStoreDuplicateRegistrationIgnored(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	var calls int
 	var mu sync.Mutex
 	counting := func(ctx context.Context, _ string, onOutput func([]byte)) (*circleci.ExecResponse, error) {
@@ -147,7 +147,7 @@ func TestBufferNotTruncatedWhenUnderCap(t *testing.T) {
 }
 
 func TestOutputStoreEvictsOldestFinishedOnly(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 
 	// One long-running command registered first, then enough finished commands
 	// to push the project over the cap.
@@ -177,7 +177,7 @@ func TestOutputStoreEvictsOldestFinishedOnly(t *testing.T) {
 }
 
 func TestOutputStoreRecordsCommandWithoutStreamer(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	// nil streamFn is the unauthenticated case: the command is still recorded so
 	// the dashboard can say it ran, but there is no output for it.
 	s.register(reg("cmd-1", "/repo"), nil)
@@ -195,7 +195,7 @@ func TestOutputStoreRecordsCommandWithoutStreamer(t *testing.T) {
 // and no exit code, which is indistinguishable from a command that printed
 // nothing — and sends them hunting a bug in their own command.
 func TestOutputStoreRecordsStreamFailureReason(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	failing := func(_ context.Context, _ string, onOutput func([]byte)) (*circleci.ExecResponse, error) {
 		onOutput([]byte("partial output\n"))
 		return nil, errors.New("400 Bad Request — Invalid command ID")
@@ -212,7 +212,7 @@ func TestOutputStoreRecordsStreamFailureReason(t *testing.T) {
 }
 
 func TestOutputStoreNoCredentialsExplainsItself(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	s.register(reg("cmd-1", "/repo"), nil)
 
 	chunk := s.read("cmd-1", 0)
@@ -221,7 +221,7 @@ func TestOutputStoreNoCredentialsExplainsItself(t *testing.T) {
 }
 
 func TestOutputStoreCleanExitHasNoError(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	s.register(reg("cmd-1", "/repo"), immediateStream([]string{"fine\n"}, 0))
 	waitForFinish(t, s, "cmd-1")
 
@@ -230,7 +230,7 @@ func TestOutputStoreCleanExitHasNoError(t *testing.T) {
 }
 
 func TestOutputStoreCommandsForIsPerProject(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	s.register(reg("a", "/repo-one"), immediateStream([]string{"1"}, 0))
 	s.register(reg("b", "/repo-two"), immediateStream([]string{"2"}, 0))
 	waitForFinish(t, s, "a")
@@ -249,7 +249,7 @@ func TestOutputStoreCommandsForIsPerProject(t *testing.T) {
 }
 
 func TestOutputStoreStopAllCancelsStreamers(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	release := make(chan struct{})
 	defer close(release)
 	s.register(reg("cmd-1", "/repo"), blockingStream([]string{"live"}, release, 0))
@@ -273,7 +273,7 @@ func TestOutputStoreStopAllCancelsStreamers(t *testing.T) {
 // A partial eviction that then runs out of finished victims must still write the
 // shortened index back, or the project keeps an evicted ID and a duplicated tail.
 func TestOutputStoreEvictionWriteBackSurvivesEarlyExit(t *testing.T) {
-	s := newOutputStore()
+	s := newOutputStore(context.Background())
 	block := make(chan struct{})
 	defer close(block)
 	runner := func(ctx context.Context, _ string, _ func([]byte)) (*circleci.ExecResponse, error) {
@@ -297,5 +297,38 @@ func TestOutputStoreEvictionWriteBackSurvivesEarlyExit(t *testing.T) {
 		if n > 1 {
 			t.Errorf("command %q listed %d times, want 1", id, n)
 		}
+	}
+}
+
+// TestStreamersStopWhenTheDaemonContextIsCancelled pins the reason streamers
+// derive from the daemon's context rather than context.Background(): cancelling
+// the daemon must stop them on its own, without depending on stopAll being
+// deferred in the right place.
+func TestStreamersStopWhenTheDaemonContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := newOutputStore(ctx)
+
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	stream := func(ctx context.Context, _ string, _ func([]byte)) (*circleci.ExecResponse, error) {
+		close(started)
+		<-ctx.Done() // a command that would otherwise run indefinitely
+		close(stopped)
+		return nil, ctx.Err()
+	}
+
+	s.register(CommandReg{CommandID: "c1", SidecarID: "sb-1", ProjectRoot: "/p"}, stream)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("streamer never started")
+	}
+
+	cancel() // no stopAll: the daemon context alone must be enough
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("streamer outlived the daemon context")
 	}
 }

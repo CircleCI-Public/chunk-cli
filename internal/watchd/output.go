@@ -153,13 +153,23 @@ type commandEntry struct {
 // restart needs a durable record of command IDs, which is what the event log's
 // command_id field is for once that lands.
 type outputStore struct {
+	// parent bounds every streamer this store starts. Deriving from it rather
+	// than context.Background() ties a streamer's lifetime to the daemon's own
+	// structurally, instead of leaving it to stopAll being deferred correctly —
+	// a guarantee that is invisible from register, where the goroutine starts.
+	parent context.Context
+
 	mu        sync.Mutex
 	cmds      map[string]*commandEntry
 	byProject map[string][]string // project root → command IDs, oldest first
 }
 
-func newOutputStore() *outputStore {
+func newOutputStore(parent context.Context) *outputStore {
+	if parent == nil {
+		parent = context.Background()
+	}
 	return &outputStore{
+		parent:    parent,
 		cmds:      make(map[string]*commandEntry),
 		byProject: make(map[string][]string),
 	}
@@ -181,7 +191,7 @@ func (s *outputStore) register(reg CommandReg, stream streamFn) {
 		s.mu.Unlock()
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.parent)
 	entry := &commandEntry{reg: reg, buf: newBuffer(), cancel: cancel}
 	s.cmds[reg.CommandID] = entry
 	s.byProject[reg.ProjectRoot] = append(s.byProject[reg.ProjectRoot], reg.CommandID)

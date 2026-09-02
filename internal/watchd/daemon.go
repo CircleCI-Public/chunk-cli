@@ -69,18 +69,24 @@ func RunDaemon(ctx context.Context) error {
 	defer func() { _ = ln.Close() }()
 	defer func() { _ = os.Remove(sockPath) }()
 
+	// The signal-aware context is built first because the output store derives
+	// every streamer from it: a streamer must not be able to outlive the daemon
+	// even if a later return path skips the deferred stopAll below.
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
+	defer stop()
+
 	creds := &credentials{}
 	d := &daemon{
 		projects: make(map[string]*projectState),
 		creds:    creds,
-		out:      newOutputStore(),
+		out:      newOutputStore(ctx),
 		res:      newResourceSampler(creds),
 	}
+	// Still cancelled explicitly: this returns before the process exits in tests
+	// and any embedded caller, and it is what stops streamers promptly rather
+	// than whenever the parent context happens to be torn down.
 	defer d.out.stopAll()
 	defer d.res.stopAll()
-
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
-	defer stop()
 
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
