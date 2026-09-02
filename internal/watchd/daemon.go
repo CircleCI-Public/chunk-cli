@@ -27,8 +27,9 @@ type projectState struct {
 }
 
 type daemon struct {
-	mu       sync.RWMutex
-	projects map[string]*projectState // keyed by project root
+	mu         sync.RWMutex
+	projects   map[string]*projectState // keyed by project root
+	validateMu sync.Mutex               // serializes concurrent /validate requests
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.

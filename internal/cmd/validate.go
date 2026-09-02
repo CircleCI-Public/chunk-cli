@@ -151,22 +151,24 @@ func reportSkippedAutofix(skipped []string, streams iostream.Streams) {
 }
 
 type validateOpts struct {
-	sidecarID    string
-	identityFile string
-	workdir      string
-	orgID        string
-	dryRun       bool
-	list         bool
-	save         bool
-	remote       bool
-	local        bool
-	markRemote   bool
-	jsonOut      bool
-	inlineCmd    string
-	projectDir   string
-	envVarsFlag  []string
-	envFile      string
-	sync         bool // bypasses daemon delegation; set by daemon when it spawns us
+	sidecarID      string
+	identityFile   string
+	workdir        string
+	orgID          string
+	dryRun         bool
+	list           bool
+	save           bool
+	remote         bool
+	local          bool
+	markRemote     bool
+	jsonOut        bool
+	inlineCmd      string
+	projectDir     string
+	envVarsFlag    []string
+	envFile        string
+	sync           bool   // bypasses daemon delegation; set by daemon when it spawns us
+	hookSessionID  string // hook session ID forwarded from client to daemon subprocess
+	stopHookActive bool   // stop_hook_active forwarded from client to daemon subprocess
 }
 
 func newValidateCmd() *cobra.Command {
@@ -207,6 +209,10 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
 	cmd.Flags().BoolVar(&opts.sync, "sync", false, "")
 	_ = cmd.Flags().MarkHidden("sync")
+	cmd.Flags().StringVar(&opts.hookSessionID, "hook-session-id", "", "")
+	_ = cmd.Flags().MarkHidden("hook-session-id")
+	cmd.Flags().BoolVar(&opts.stopHookActive, "stop-hook-active", false, "")
+	_ = cmd.Flags().MarkHidden("stop-hook-active")
 
 	cmd.AddCommand(newValidateVariantsCmd())
 
@@ -344,7 +350,17 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	hook := detectHook(cmd.InOrStdin())
+	// When running as a daemon subprocess, hook context arrives via flags.
+	if opts.hookSessionID != "" && hook == nil {
+		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive}
+	}
 	ctx := cmd.Context()
+
+	// Delegate hook runs to the daemon before initHook so the subprocess prints
+	// the session header (not the client, which would cause it to appear twice).
+	if done, err := tryHookDelegate(cmd, hook, opts.sync, streams); done {
+		return err
+	}
 
 	// The working-tree fingerprint answers both hook-only questions about the
 	// tree: whether there is anything to validate at all, and whether this exact
@@ -375,39 +391,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		name = args[0]
 	}
 
-	// --list: show configured commands
-	if opts.list {
-		return runValidateList(workDir, opts.jsonOut, streams, statusFn)
-	}
-	if opts.jsonOut {
-		return fmt.Errorf("--json requires --list")
-	}
-
-	// --mark-remote edits the config and stops; it never runs anything, so it
-	// takes its own read-modify-write path ahead of the run setup below.
-	if opts.markRemote {
-		return runMarkRemote(workDir, name, streams)
-	}
-
-	cfg, err := config.LoadProjectConfig(workDir)
-	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
-		if hook != nil {
-			return nil // no config in hook context: skip silently
-		}
-		return &userError{
-			msg:        msgValidateNotConfigured,
-			suggestion: suggestionValidateNotConfigured,
-			errMsg:     "no validate commands configured",
-			hideDetail: true,
-		}
-	}
-
-	if err := validateEnvFlag(opts.envVarsFlag); err != nil {
+	cfg, done, err := validateEarlyExits(hook, opts, name, workDir, streams, statusFn)
+	if done {
 		return err
-	}
-
-	if opts.dryRun {
-		return runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
 	}
 
 	// Remote is the default; --local is the only opt-out.
@@ -444,7 +430,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	if shouldUseDaemon(hook, opts.sync) {
-		return runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, streams)
+		return runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, nil, streams)
 	}
 
 	// allRemote is true unless --local is passed explicitly. opts.remote is
@@ -617,9 +603,17 @@ func validateEnvFlag(envVarsFlag []string) error {
 }
 
 // runValidateViaDaemon delegates a validate run to the watch daemon and writes
-// its captured output to streams.
-func runValidateViaDaemon(args []string, circleCIToken string, streams iostream.Streams) error {
-	resp, err := watchd.RunValidate(args, circleCIToken)
+// its captured output to streams. When hook is non-nil its context is forwarded
+// to the subprocess via hidden flags so it runs as a hook invocation.
+func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext, streams iostream.Streams) error {
+	reqArgs := args
+	if hook != nil {
+		reqArgs = append(append([]string(nil), args...), "--hook-session-id", hook.sessionID)
+		if hook.stopHookActive {
+			reqArgs = append(reqArgs, "--stop-hook-active")
+		}
+	}
+	resp, err := watchd.RunValidate(reqArgs, circleCIToken)
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
 	}
@@ -629,6 +623,56 @@ func runValidateViaDaemon(args []string, circleCIToken string, streams iostream.
 		return errSilentExit
 	}
 	return nil
+}
+
+// tryHookDelegate delegates a hook-invoked validate run to the daemon before
+// initHook runs, so the subprocess prints the session header (not the client).
+// Returns (true, err) when the call was delegated, (false, nil) to run inline.
+func tryHookDelegate(cmd *cobra.Command, hook *hookContext, sync bool, streams iostream.Streams) (bool, error) {
+	if hook == nil || sync || !watchd.IsDaemonRunning() {
+		return false, nil
+	}
+	// If hooks are disabled in this environment, don't delegate — the daemon
+	// subprocess won't inherit this process's env var, so initHook must handle it.
+	if os.Getenv(config.EnvChunkHooksDisabled) != "" {
+		return false, nil
+	}
+	insecureStorage := insecureStorageFlag(cmd)
+	rc, _ := config.ResolveCircleCI(insecureStorage)
+	return true, runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, hook, streams)
+}
+
+// validateEarlyExits handles --list, --mark-remote, missing config, --dry-run.
+// Returns (cfg, done=true, err) to stop, or (cfg, false, nil) to continue.
+func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+	if opts.list {
+		return nil, true, runValidateList(workDir, opts.jsonOut, streams, statusFn)
+	}
+	if opts.jsonOut {
+		return nil, true, fmt.Errorf("--json requires --list")
+	}
+	if opts.markRemote {
+		return nil, true, runMarkRemote(workDir, name, streams)
+	}
+	cfg, err := config.LoadProjectConfig(workDir)
+	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
+		if hook != nil {
+			return nil, true, nil // no config in hook context: skip silently
+		}
+		return nil, true, &userError{
+			msg:        msgValidateNotConfigured,
+			suggestion: suggestionValidateNotConfigured,
+			errMsg:     "no validate commands configured",
+			hideDetail: true,
+		}
+	}
+	if err := validateEnvFlag(opts.envVarsFlag); err != nil {
+		return nil, true, err
+	}
+	if opts.dryRun {
+		return nil, true, runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
+	}
+	return cfg, false, nil
 }
 
 func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc) error {
