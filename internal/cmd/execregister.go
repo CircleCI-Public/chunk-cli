@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -26,16 +27,25 @@ func submitAndStream(
 	reg watchd.CommandReg, command string, args []string,
 	env map[string]string, onOutput circleci.OutputFn,
 ) (*circleci.ExecResponse, error) {
+	// Both phases are wrapped so a failure says which one it was. They fail for
+	// different reasons and are worth telling apart: a rejected submission means
+	// the command never ran, while a broken stream means it may well be running
+	// still. The API op ("exec") is already in the wrapped error, so the phase
+	// alone is enough here.
 	commandID, err := client.SubmitExec(ctx, reg.SidecarID, command, args, env)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("submit: %w", err)
 	}
 	reg.CommandID = commandID
 	if reg.SubmittedAt.IsZero() {
 		reg.SubmittedAt = time.Now()
 	}
 	watchd.RegisterCommand(reg)
-	return client.StreamOutput(ctx, commandID, "", onOutput)
+	resp, err := client.StreamOutput(ctx, commandID, "", onOutput)
+	if err != nil {
+		return nil, fmt.Errorf("stream output: %w", err)
+	}
+	return resp, nil
 }
 
 // execCommandLabel titles a `sidecar exec` command with what the user typed,

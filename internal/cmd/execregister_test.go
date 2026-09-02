@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -151,4 +152,28 @@ func TestExecCommandLabel(t *testing.T) {
 	// UTF-8 rather than rendering a replacement char.
 	long := execCommandLabel("sh", []string{"-c", strings.Repeat("é", 300)})
 	assert.Check(t, cmp.Equal(len([]rune(long)), 120))
+}
+
+// TestSubmitAndStreamWrappingPreservesErrorMatching guards the risk in adding
+// context to these errors: three callers in sidecar.go dispatch on them with
+// errors.Is/errors.As (notAuthorized, sidecarUnavailable, outdatedSidecarAPI).
+// Wrapping with %w keeps that working; wrapping with %v would silently turn
+// every one of those specific diagnostics into a generic failure.
+func TestSubmitAndStreamWrappingPreservesErrorMatching(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+
+	_, err = submitAndStream(context.Background(), client,
+		watchd.CommandReg{SidecarID: "sb-1", Op: string(eventlog.OpExec)},
+		"echo", nil, nil, func(string, []byte) {})
+
+	assert.Assert(t, err != nil)
+	assert.Check(t, strings.Contains(err.Error(), "submit"),
+		"the phase must be named so a submit failure is distinguishable from a stream one: %v", err)
+	assert.Check(t, errors.Is(err, circleci.ErrNotAuthorized),
+		"wrapping must not break the errors.Is dispatch in sidecar.go: %v", err)
 }
