@@ -15,6 +15,9 @@ type ValidateRequest struct {
 	Args []string `json:"args"`
 	// CircleCIToken is forwarded to the subprocess as CIRCLE_TOKEN.
 	CircleCIToken string `json:"circleci_token,omitempty"`
+	// Env is the caller's os.Environ(), forwarded verbatim to the subprocess so
+	// session-identity variables (e.g. CLAUDE_CODE_SESSION_ID) reach it intact.
+	Env []string `json:"env,omitempty"`
 }
 
 // ValidateResponse is the response from POST /validate.
@@ -46,9 +49,12 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	args := append(append([]string(nil), req.Args...), "--sync")
 	cmd := exec.CommandContext(r.Context(), exe, args...) //nolint:gosec
 
-	env := os.Environ()
+	env := req.Env
+	if len(env) == 0 {
+		env = os.Environ()
+	}
 	if req.CircleCIToken != "" {
-		env = append(env, "CIRCLE_TOKEN="+req.CircleCIToken)
+		env = append(append([]string(nil), env...), "CIRCLE_TOKEN="+req.CircleCIToken)
 	}
 	cmd.Env = env
 
