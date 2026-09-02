@@ -29,6 +29,14 @@ type projectState struct {
 type daemon struct {
 	mu       sync.RWMutex
 	projects map[string]*projectState // keyed by project root
+
+	// creds resolves the CircleCI client lazily; nil-safe to use when
+	// unauthenticated, in which case output streaming is simply unavailable.
+	creds *credentials
+	// out buffers command output. Streamers run as their own goroutines and
+	// never execute on the poll path, so a hung stream cannot stall the
+	// dashboard for every other project.
+	out *outputStore
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -59,10 +67,22 @@ func RunDaemon(ctx context.Context) error {
 	defer func() { _ = ln.Close() }()
 	defer func() { _ = os.Remove(sockPath) }()
 
-	d := &daemon{projects: make(map[string]*projectState)}
-
+	// The signal-aware context is built first because the output store derives
+	// every streamer from it: a streamer must not be able to outlive the daemon
+	// even if a later return path skips the deferred stopAll below.
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
+
+	creds := &credentials{}
+	d := &daemon{
+		projects: make(map[string]*projectState),
+		creds:    creds,
+		out:      newOutputStore(ctx),
+	}
+	// Still cancelled explicitly: this returns before the process exits in tests
+	// and any embedded caller, and it is what stops streamers promptly rather
+	// than whenever the parent context happens to be torn down.
+	defer d.out.stopAll()
 
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
@@ -179,6 +199,7 @@ func (d *daemon) updateProject(ps *projectState) {
 		RepoName: repoName,
 		Sidecars: sidecars,
 		Events:   ps.events,
+		Commands: d.out.commandsFor(ps.root),
 	}
 	d.mu.Lock()
 	ps.snap = snap
@@ -188,6 +209,11 @@ func (d *daemon) updateProject(ps *projectState) {
 // snapshot returns a Snapshot filtered to the requested roots.
 // If roots is empty all known projects are returned.
 func (d *daemon) snapshot(roots []string) Snapshot {
+	// Read outside the project lock: message only reports already-resolved state,
+	// but it takes the credentials mutex, and nesting two locks here to report a
+	// string is not worth the ordering it would impose.
+	authErr := d.creds.message()
+
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -215,10 +241,10 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 				ordered = append(ordered, p)
 			}
 		}
-		return Snapshot{Projects: ordered}
+		return Snapshot{Projects: ordered, AuthError: authErr}
 	}
 	// Map iteration is random; sort by root so project rows stay stable
 	// between polls when watchAll mode requests all projects.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-	return Snapshot{Projects: projects}
+	return Snapshot{Projects: projects, AuthError: authErr}
 }
