@@ -61,6 +61,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 			RepoName:     repoName,
 			SnapshotName: snapshotName,
 			FileMtime:    mtime,
+			Workspace:    as.Workspace,
 		}
 		if dup {
 			result[at] = ss

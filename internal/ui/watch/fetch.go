@@ -72,6 +72,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 				lastOp:       sc.LastOp,
 				lastLevel:    sc.LastLevel,
 				running:      sc.Running,
+				resources:    sc.Resources,
 			})
 		}
 

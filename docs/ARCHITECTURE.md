@@ -277,6 +277,103 @@ refused as a key, since a config-only key would stay stable across code changes;
 it, because a repo that never caches is otherwise silent about why. See
 **[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
 
+## Watch Daemon (`internal/watchd/`)
+
+The daemon backs `chunk watch`. It polls every registered project every 5 s,
+tailing each project's `events.jsonl` by byte offset, and serves snapshots as
+JSON over a Unix socket at `~/.chunk/watchd/watchd.sock`
+(`CHUNK_WATCHD_DIR` overrides the directory).
+
+Beyond that it owns two things that outlive the processes they came from.
+
+### Command output buffering
+
+`chunk validate` and `chunk sidecar exec` submit a remote command and register
+it with the daemon before consuming any output. Both go through one helper
+(`submitAndStream`), so a new command path cannot quietly skip registration and
+leave its output unreachable:
+
+```
+POST /command   {command_id, sidecar_id, project_root, op, name, submitted_at}
+GET  /output?command_id=<id>&offset=<n>
+    → {data, next_offset, running, exit_code, truncated, found}
+GET  /snapshot  → ... plus per-project `commands` and a top-level `auth_error`
+```
+
+The daemon then streams that command's output itself and buffers it. This is
+what makes hook-driven runs observable: the hook process exits the moment its
+command finishes, so anything holding the only copy of the output loses it.
+
+Design constraints worth preserving:
+
+- **Registration is best-effort and never starts the daemon.** `RegisterCommand`
+  reports no error and uses a 2 s timeout. It sits on the hook path in front of a
+  command the developer is waiting on, so a missing daemon must cost nothing.
+  Launching one as a side effect of a hook firing would be intrusive, and a hook
+  that hangs on a daemon launch is far worse than a missing logs pane.
+- **Offsets are the daemon's own byte positions**, not the API's opaque SSE
+  cursor. The server cursor stays private to the daemon, so no reader has to
+  reason about reconnects. Positions are logical — they count evicted bytes — so
+  an offset that lands before the retained window is exactly the signal that the
+  reader missed some, which is what sets `truncated`.
+- **Buffers are capped in bytes, not lines** (`MaxCommandBytes`), keeping the
+  tail. Output is neither small nor uniform, so a line count says nothing about
+  memory.
+- **Streamers never run on the poll path.** Each is its own goroutine with its own
+  context, so a hung stream cannot stall the dashboard for every other project.
+- **Credentials resolve lazily and never prompt.** `authprompt.ResolveCircleCIClient`
+  returns `ErrNeedsAuth` rather than asking; the daemon reports that in
+  `Snapshot.AuthError` and carries on serving. It has no terminal, so a process
+  blocked on a hidden prompt would be indistinguishable from one that has hung.
+  Resolution is deferred to first use because it can read the OS keychain, and the
+  daemon starts on every `chunk watch` whether or not anything needs a token.
+
+### Resource sampling
+
+There is no metrics endpoint, so usage is sampled inside the sidecar. The naive
+implementation is a trap: `sidecar.ExecOverSSH` opens a fresh WebSocket *and* SSH
+handshake per call, so a 2 s interval would mean a handshake every 2 s per
+sidecar. Instead the daemon submits **one** long-lived shell loop through the exec
+API (`SubmitExec` with `sh -c`, then `StreamOutput`) and parses frames off its
+output stream.
+
+Going through the exec API rather than SSH is deliberate. The SSH exec channel
+fork/execs the command string instead of interpreting it, which is why every
+`ExecOverSSH` call in this repo is a bare `binary arg` invocation — a shell loop
+cannot run over it at all. The exec API takes argv as structured data, so it runs
+scripts correctly, and its output stream is already long-lived and resumable.
+That removes the handshake-per-sample problem outright with no persistent
+connection for the daemon to supervise.
+
+- **Sampling is gated on an attached dashboard.** A snapshot request is the
+  signal; after `idleShutdown` with none, samplers stop. Cost stays proportional
+  to benefit.
+- **Memory must be read cgroup-aware** — v2, then v1, then `/proc/meminfo`. The
+  sidecar is containerised, so `/proc/meminfo` reports the *host's* memory and
+  would make every sidecar look like it had hundreds of gigabytes free.
+- **CPU is a delta.** `/proc/stat` is cumulative since boot, so a percentage
+  exists only between two frames. One frame yields no CPU reading rather than a
+  number that looks plausible and means nothing.
+- **`reconcile` runs once per poll across all projects**, not per project. It
+  stops any sampler absent from what it is given, so feeding it one project's
+  sidecars at a time would make each project tear down every other project's
+  samplers.
+- **The remote loop is bounded, not infinite** (`samplerIterations`). Cancelling
+  the stream stops the daemon reading, but nothing guarantees the remote process
+  dies with it; a loop that ends on its own caps how long an orphan can linger.
+  `run` simply submits another while a dashboard is still attached.
+- **Repeated failure pauses a sidecar, it does not disqualify it.** After
+  `maxSamplerFailures` consecutive failures the daemon stops sampling that sidecar
+  for `sampleCooloff` and then retries. Without the ceiling an unsampleable
+  sidecar is retried forever, each attempt costing an API call; without the retry
+  one bad minute costs that sidecar its numbers for the rest of the session. The
+  sampler slot survives either way, so the last reading stays on screen to be
+  dimmed as stale rather than vanishing.
+
+Parsing is separated from transport (`parseSampleFrame`, `cpuPercent`,
+`splitFrames`, `consumeSamples`) so it is testable against captured fixtures with
+no SSH involved.
+
 ## HTTP Client (`internal/httpcl/`)
 
 Shared HTTP infrastructure used by `anthropic/`, `circleci/`, and `github/`:
