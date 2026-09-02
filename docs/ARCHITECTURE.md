@@ -288,8 +288,10 @@ Beyond that it owns two things that outlive the processes they came from.
 
 ### Command output buffering
 
-`chunk validate` submits a remote command and registers it with the daemon
-before consuming any output:
+`chunk validate` and `chunk sidecar exec` submit a remote command and register
+it with the daemon before consuming any output. Both go through one helper
+(`submitAndStream`), so a new command path cannot quietly skip registration and
+leave its output unreachable:
 
 ```
 POST /command   {command_id, sidecar_id, project_root, op, name, submitted_at}

@@ -275,7 +275,7 @@ chunk watch  1 sidecar  main@a3f9e12                      15:04:32
                        │
 ── chunk-cli           │ 14:58:01  sync      ✓  done
 ▶ my-sidecar           │ 14:55:12  validate  ✓  done
-  ✓ in sync            │ 14:52:44  sync      ✓  done
+  synced via rsync     │ 14:52:44  sync      ✓  done
   6m ago               │
 ──────────────────────────────────────────────────────────────────
   ↑/↓ j/k  select  ·  q  quit
@@ -337,7 +337,7 @@ sampled every 2 seconds:
 
 ```
 ▶ my-sidecar           │ 14:55:12  validate  ⣟  running
-  ✓ in sync            │
+  ⣟ validate...        │
   cpu  87%  mem  41%  disk  12%
 ```
 
