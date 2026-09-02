@@ -56,7 +56,10 @@ func newSidecarLogsCmd() *cobra.Command {
 
 			// No daemon, or it has forgotten this command: stream from the API.
 			insecureStorage := insecureStorageFlag(cmd)
-			rc, _ := config.Resolve("", "", insecureStorage)
+			rc, err := config.Resolve("", "", insecureStorage)
+			if err != nil {
+				return fmt.Errorf("resolve config: %w", err)
+			}
 			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
 			if err != nil {
 				return err
