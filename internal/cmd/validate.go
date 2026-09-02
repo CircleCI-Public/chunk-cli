@@ -627,7 +627,7 @@ func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext
 	_, _ = streams.Out.Write([]byte(resp.Stdout))
 	_, _ = streams.Err.Write([]byte(resp.Stderr))
 	if resp.ExitCode != 0 {
-		return errSilentExit
+		return &silentExitError{code: resp.ExitCode}
 	}
 	return nil
 }

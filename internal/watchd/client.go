@@ -92,7 +92,7 @@ func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) 
 	if err != nil {
 		return ValidateResponse{}, err
 	}
-	body, err := json.Marshal(ValidateRequest{Args: args, CircleCIToken: circleCIToken})
+	body, err := json.Marshal(ValidateRequest{Args: args, CircleCIToken: circleCIToken, Env: os.Environ()})
 	if err != nil {
 		return ValidateResponse{}, fmt.Errorf("marshal validate request: %w", err)
 	}
