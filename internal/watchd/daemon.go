@@ -2,6 +2,7 @@ package watchd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -12,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -30,17 +33,40 @@ type daemon struct {
 	mu       sync.RWMutex
 	projects map[string]*projectState // keyed by project root
 
-	// creds resolves the CircleCI client lazily; nil-safe to use when
-	// unauthenticated, in which case output streaming is simply unavailable.
-	creds *credentials
+	// client streams command output. Nil when the daemon started without
+	// credentials, in which case commands are still recorded but no output is
+	// streamed for them.
+	client *circleci.Client
+	// authError explains an absent client to the user, or "" when there is
+	// nothing to explain. Written once at construction and never again, so
+	// snapshot reads it without a lock.
+	authError string
 	// out buffers command output. Streamers run as their own goroutines and
 	// never execute on the poll path, so a hung stream cannot stall the
 	// dashboard for every other project.
 	out *outputStore
 }
 
+// authMessage renders a credential-resolution failure for the dashboard. An
+// empty logs pane with no explanation sends people hunting the wrong fault.
+func authMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, authprompt.ErrNeedsAuth) {
+		return "not authenticated to CircleCI — command output unavailable (run: chunk auth login)"
+	}
+	return "could not authenticate to CircleCI — command output unavailable: " + err.Error()
+}
+
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
-func RunDaemon(ctx context.Context) error {
+//
+// The client is resolved by the caller and may be nil: the daemon records
+// commands either way, and authErr is what tells the user why output is
+// missing. Resolution belongs to the caller because it can read the OS keychain,
+// and the daemon must not hold a lock over that on the command-registration path
+// — a hook is waiting on it.
+func RunDaemon(ctx context.Context, client *circleci.Client, authErr error) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -73,11 +99,11 @@ func RunDaemon(ctx context.Context) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	creds := &credentials{}
 	d := &daemon{
-		projects: make(map[string]*projectState),
-		creds:    creds,
-		out:      newOutputStore(ctx),
+		projects:  make(map[string]*projectState),
+		client:    client,
+		authError: authMessage(authErr),
+		out:       newOutputStore(ctx),
 	}
 	// Still cancelled explicitly: this returns before the process exits in tests
 	// and any embedded caller, and it is what stops streamers promptly rather
@@ -209,11 +235,6 @@ func (d *daemon) updateProject(ps *projectState) {
 // snapshot returns a Snapshot filtered to the requested roots.
 // If roots is empty all known projects are returned.
 func (d *daemon) snapshot(roots []string) Snapshot {
-	// Read outside the project lock: message only reports already-resolved state,
-	// but it takes the credentials mutex, and nesting two locks here to report a
-	// string is not worth the ordering it would impose.
-	authErr := d.creds.message()
-
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -241,10 +262,10 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 				ordered = append(ordered, p)
 			}
 		}
-		return Snapshot{Projects: ordered, AuthError: authErr}
+		return Snapshot{Projects: ordered, AuthError: d.authError}
 	}
 	// Map iteration is random; sort by root so project rows stay stable
 	// between polls when watchAll mode requests all projects.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-	return Snapshot{Projects: projects, AuthError: authErr}
+	return Snapshot{Projects: projects, AuthError: d.authError}
 }

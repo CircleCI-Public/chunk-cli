@@ -53,7 +53,7 @@ func newServer(d *daemon) *http.Server {
 		if reg.SubmittedAt.IsZero() {
 			reg.SubmittedAt = time.Now()
 		}
-		d.out.register(reg, d.creds.streamFor())
+		d.out.register(reg, streamFor(d.client))
 		w.WriteHeader(http.StatusAccepted)
 	})
 

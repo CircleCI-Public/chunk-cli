@@ -11,12 +11,22 @@ import (
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 )
 
 // startTestDaemon runs a real daemon over a real Unix socket in a temp dir and
 // returns once it is answering. Mocking the transport here would test nothing:
 // the socket, the routes and the JSON shapes are the whole point.
 func startTestDaemon(t *testing.T) {
+	t.Helper()
+	startTestDaemonWithAuth(t, nil)
+}
+
+// startTestDaemonWithAuth is startTestDaemon with an explicit credential
+// failure. Both run the daemon with a nil client: resolution is the caller's
+// job now, so no test touches the developer's real keychain.
+func startTestDaemonWithAuth(t *testing.T, authErr error) {
 	t.Helper()
 	// Not t.TempDir(): it embeds the test name, and a unix socket path is capped
 	// at 104 bytes on darwin, so a descriptive name silently breaks listen.
@@ -30,7 +40,7 @@ func startTestDaemon(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx) }()
+	go func() { errCh <- RunDaemon(ctx, nil, authErr) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -175,12 +185,47 @@ func TestRegisterCommandIsBestEffortWithoutDaemon(t *testing.T) {
 	}
 }
 
-func TestSnapshotReportsNoAuthErrorBeforeAnyCommand(t *testing.T) {
+func TestSnapshotReportsNoAuthErrorWhenResolutionSucceeded(t *testing.T) {
 	startTestDaemon(t)
 
-	// Credentials are resolved on demand, so a daemon nobody has asked to stream
-	// anything must not claim an auth problem it has not hit.
+	// Nothing failed, so the daemon must not claim an auth problem: a message
+	// here would send someone re-running `chunk auth login` for no reason.
 	snap, err := FetchSnapshot(nil)
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Equal(snap.AuthError, ""))
+}
+
+func TestSnapshotReportsAuthErrorWhenCredentialsAreMissing(t *testing.T) {
+	startTestDaemonWithAuth(t, authprompt.ErrNeedsAuth)
+
+	snap, err := FetchSnapshot(nil)
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Contains(snap.AuthError, "chunk auth login"))
+}
+
+// The daemon is useful without credentials: it cannot stream output, but it can
+// still say the command ran. Losing the registration too would leave the
+// dashboard blank with nothing to explain it.
+func TestCommandIsRecordedWithoutCredentials(t *testing.T) {
+	startTestDaemonWithAuth(t, authprompt.ErrNeedsAuth)
+
+	body, err := json.Marshal(CommandReg{
+		CommandID:   "cmd-no-creds",
+		SidecarID:   "sc-1",
+		ProjectRoot: "/repo",
+	})
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(postCommand(t, body), http.StatusAccepted))
+
+	sockPath, err := SocketPath()
+	assert.NilError(t, err)
+	resp, err := unixClient(sockPath).Get("http://watchd/output?command_id=cmd-no-creds")
+	assert.NilError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	var chunk OutputChunk
+	assert.NilError(t, json.NewDecoder(resp.Body).Decode(&chunk))
+	assert.Check(t, chunk.Found)
+	assert.Check(t, !chunk.Running)
+	assert.Check(t, cmp.Contains(chunk.Error, "credentials"))
 }

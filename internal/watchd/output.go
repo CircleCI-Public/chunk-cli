@@ -19,11 +19,6 @@ const (
 	// MaxCommands caps retained commands per project. Only finished commands are
 	// evicted, so a project running more than this many at once keeps them all.
 	MaxCommands = 20
-
-	// authRetryInterval bounds how often the daemon re-resolves credentials after
-	// a failure. Resolution can touch the OS keychain, so retrying it on every
-	// registration would turn a missing token into a stream of keychain reads.
-	authRetryInterval = 30 * time.Second
 )
 
 // CommandReg is the registration a process sends after submitting a remote
@@ -178,6 +173,24 @@ func newOutputStore(parent context.Context) *outputStore {
 // streamFn consumes a command's output, calling onOutput for each run of bytes.
 // It exists so tests can drive the store without an API client.
 type streamFn func(ctx context.Context, commandID string, onOutput func([]byte)) (*circleci.ExecResponse, error)
+
+// streamFor adapts a CircleCI client into a streamFn, or returns nil when the
+// daemon has no client. A nil streamFn means the command is still recorded but
+// no output is streamed for it, which is strictly better than dropping the
+// registration: the dashboard can still say the command ran.
+func streamFor(client *circleci.Client) streamFn {
+	if client == nil {
+		return nil
+	}
+	return func(ctx context.Context, commandID string, onOutput func([]byte)) (*circleci.ExecResponse, error) {
+		return client.StreamOutput(ctx, commandID, "", func(_ string, data []byte) {
+			// stdout and stderr are interleaved in arrival order into one
+			// buffer, which is what a terminal shows and what the developer
+			// running the command locally would have seen.
+			onOutput(data)
+		})
+	}
+}
 
 // register records a command and starts streaming it. A command ID already known
 // is ignored, so a duplicate registration cannot start a second streamer for the
