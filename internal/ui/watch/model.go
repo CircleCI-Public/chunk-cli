@@ -118,12 +118,10 @@ type sidecarInfo struct {
 	projectIdx   int       // index into Model.projects
 	snapshotName string    // name of the active snapshot for this project, if any
 	fileMtime    time.Time // mtime of the sidecar state file (fallback when no events yet)
-	running       bool
-	lastActivity  time.Time
-	lastOp        eventlog.Op
-	lastLevel     string // level of the most recent event ("done", "error", etc.)
-	lastSyncedRef string
-	inSync        bool
+	running      bool
+	lastActivity time.Time
+	lastOp       eventlog.Op
+	lastLevel    string // level of the most recent event ("done", "error", etc.)
 }
 
 // pane identifies which side of the split layout has keyboard focus.
@@ -526,12 +524,8 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 			default:
 				addRow("  " + st.muted("no runs yet"))
 			}
-		case sc.inSync:
-			addRow("  " + st.success(ui.IconOK+" in sync"))
-		case sc.lastSyncedRef == "":
-			addRow("  " + st.muted("not synced"))
 		default:
-			addRow("  " + st.warning("↑ needs sync"))
+			addRow("  " + st.muted("synced via rsync"))
 		}
 
 		if !sc.lastActivity.IsZero() {
@@ -1330,8 +1324,6 @@ func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
 				result[idx].id = sc.id
 				result[idx].name = sc.name
 				result[idx].sessionID = sc.sessionID
-				result[idx].inSync = sc.inSync
-				result[idx].lastSyncedRef = sc.lastSyncedRef
 				result[idx].snapshotName = sc.snapshotName
 				result[idx].fileMtime = sc.fileMtime
 			}
