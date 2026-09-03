@@ -14,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 type updateCheckKey struct{}
@@ -46,6 +47,7 @@ func NewRootCmd(version string) *cobra.Command {
 				return err
 			}
 			startUpdateCheck(cmd)
+			maybeAutoLaunchDaemon(cmd)
 			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
@@ -108,6 +110,9 @@ Configuration:
 
 	rootCmd.PersistentFlags().Bool("insecure-storage", false, "do not use the system's secure storage for storing tokens")
 	_ = rootCmd.PersistentFlags().MarkHidden("insecure-storage")
+
+	rootCmd.PersistentFlags().Bool("daemon", false, "auto-launch the watch daemon for this run even if autoLaunchDaemon is disabled")
+	rootCmd.PersistentFlags().Bool("no-daemon", false, "skip the watch daemon for this run even if autoLaunchDaemon is enabled")
 
 	telemetry.RecordForSubcommands(rootCmd)
 
@@ -205,6 +210,51 @@ func startUpdateCheck(cmd *cobra.Command) {
 	cmd.SetContext(context.WithValue(cmd.Context(), updateCheckKey{}, ch))
 
 	go func() { ch <- upgrade.Check() }()
+}
+
+// noAutoLaunchCommands lists commands for which the auto-launch daemon check is
+// skipped: completion helpers (called on every TAB press), the daemon itself,
+// and commands that manage the daemon directly (watch starts it on its own).
+var noAutoLaunchCommands = map[string]bool{
+	cobra.ShellCompRequestCmd:       true,
+	cobra.ShellCompNoDescRequestCmd: true,
+	"completion":                    true,
+	"receive-telemetry":             true,
+	watchCmdName:                    true,
+	watchDaemonSubcmd:               true,
+}
+
+// shouldAutoLaunch reports whether the watch daemon should be auto-launched
+// for cmd. It checks (in order): the skip list, --no-daemon, --daemon, and
+// finally the autoLaunchDaemon user setting.
+func shouldAutoLaunch(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if noAutoLaunchCommands[c.Name()] {
+			return false
+		}
+	}
+	if noDaemon, err := cmd.Flags().GetBool("no-daemon"); err == nil && noDaemon {
+		return false
+	}
+	if daemon, err := cmd.Flags().GetBool("daemon"); err == nil && daemon {
+		return true
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return false
+	}
+	return cfg.AutoLaunchDaemon
+}
+
+// maybeAutoLaunchDaemon starts the watch daemon if autoLaunchDaemon is
+// configured (or --daemon is passed) and the command is not excluded.
+// Errors are silently ignored: the daemon is an optimization and every command
+// works correctly without it.
+func maybeAutoLaunchDaemon(cmd *cobra.Command) {
+	if !shouldAutoLaunch(cmd) {
+		return
+	}
+	_ = watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd})
 }
 
 // printUpdateNotice prints a notice to stderr if the background check has

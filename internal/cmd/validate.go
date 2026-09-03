@@ -208,8 +208,6 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.projectDir, "project", "", "Override project directory")
 	cmd.Flags().StringArrayVarP(&opts.envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
-	cmd.Flags().BoolVar(&opts.noDaemon, "no-daemon", false, "")
-	_ = cmd.Flags().MarkHidden("no-daemon")
 	cmd.Flags().StringVar(&opts.hookSessionID, "hook-session-id", "", "")
 	_ = cmd.Flags().MarkHidden("hook-session-id")
 	cmd.Flags().BoolVar(&opts.stopHookActive, "stop-hook-active", false, "")
@@ -335,13 +333,19 @@ func resolveWorkDir(opts *validateOpts) (string, error) {
 // shouldUseDaemon reports whether this validate run should be delegated to the
 // watch daemon. Hook runs always run inline (stdin consumed, per-session attempt
 // tracking). --no-daemon skips this to avoid re-delegation when the daemon calls
-// us in-process.
+// us in-process. Delegation is skipped for daemons from a different build since
+// they may not support the /validate endpoint.
 func shouldUseDaemon(hook *hookContext, noDaemon bool) bool {
-	return hook == nil && !noDaemon && watchd.IsDaemonRunning()
+	return hook == nil && !noDaemon && watchd.IsDaemonCompatible()
 }
 
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
 	streams := iostream.FromCmd(cmd)
+
+	// --no-daemon is a persistent root flag; read it here so the rest of the
+	// function can use opts.noDaemon uniformly regardless of where the flag
+	// was defined.
+	opts.noDaemon, _ = cmd.Flags().GetBool("no-daemon")
 
 	// Record before git-status check so total captures setup overhead too.
 	start := time.Now()
@@ -636,7 +640,7 @@ func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext
 // initHook runs, so the subprocess prints the session header (not the client).
 // Returns (true, err) when the call was delegated, (false, nil) to run inline.
 func tryHookDelegate(cmd *cobra.Command, hook *hookContext, noDaemon bool, streams iostream.Streams) (bool, error) {
-	if hook == nil || noDaemon || !watchd.IsDaemonRunning() {
+	if hook == nil || noDaemon || !watchd.IsDaemonCompatible() {
 		return false, nil
 	}
 	// If hooks are disabled in this environment, don't delegate — the daemon
