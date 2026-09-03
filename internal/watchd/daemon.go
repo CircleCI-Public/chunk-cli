@@ -31,6 +31,7 @@ type daemon struct {
 	mu         sync.RWMutex
 	projects   map[string]*projectState // keyed by project root
 	validateMu sync.Mutex               // serializes concurrent /validate requests
+	runner     ValidateRunner
 
 	// client streams command output. Nil when the daemon started without
 	// credentials, in which case commands are still recorded but no output is
@@ -48,17 +49,11 @@ type daemon struct {
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
 //
-// The client is resolved by the caller and may be nil: the daemon records
-// commands either way, and authMessage is what tells the user why output is
-// missing. Resolution belongs to the caller because it can read the OS keychain,
-// and the daemon must not hold a lock over that on the command-registration path
-// — a hook is waiting on it.
-//
-// The message arrives already rendered, empty when there is nothing to explain.
-// Only the caller that resolved the credentials knows which failures mean "log
-// in" and which are something else, and asking the daemon to classify them
-// would make this package depend on the auth flow it deliberately sits below.
-func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string) error {
+// client and authMessage support the output-buffering feature; runner is called
+// in-process to handle /validate requests. Both client and runner may be nil
+// (the daemon still records commands without a client, and /validate returns an
+// error without a runner).
+func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -93,6 +88,7 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string)
 
 	d := &daemon{
 		projects:  make(map[string]*projectState),
+		runner:    runner,
 		client:    client,
 		authError: authMessage,
 		out:       newOutputStore(ctx),
