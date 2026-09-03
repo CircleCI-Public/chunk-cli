@@ -10,4 +10,12 @@
   "vulnerabilityAlerts": {
     "enabled": true
   },
+  "enabledManagers": ["gomod", "uv"],
+  "packageRules": [
+    {
+      "matchManagers": ["uv"],
+      "matchFileNames": ["harness/**"],
+      "groupName": "harness python deps"
+    }
+  ]
 }
