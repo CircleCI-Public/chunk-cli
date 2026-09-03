@@ -2,12 +2,20 @@ package watchd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"errors"
+	"io"
 	"net/http"
-	"os"
-	"os/exec"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
+
+// ValidateRunner runs a validate command in-process. args is os.Args[1:] from
+// the caller (e.g. ["validate", "test", "--remote"]); env is the caller's
+// os.Environ(), which may differ from the daemon's own environment.
+// stdout and stderr capture the command output. Returns the exit code.
+type ValidateRunner func(ctx context.Context, args []string, env []string, stdout, stderr io.Writer) int
 
 // ValidateRequest is the payload sent to POST /validate.
 type ValidateRequest struct {
@@ -37,41 +45,19 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exe, err := os.Executable()
-	if err != nil {
-		http.Error(w, "executable: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Append --sync so the subprocess skips daemon delegation and runs inline.
-	// The socket is owner-only (0700) and exe is the current binary, so the
-	// args are not an injection risk.
-	args := append(append([]string(nil), req.Args...), "--sync")
-	cmd := exec.CommandContext(r.Context(), exe, args...) //nolint:gosec
-
-	env := req.Env
-	if len(env) == 0 {
-		env = os.Environ()
+	// Seed the context with the caller's env and session ID so the in-process
+	// validate run behaves as if launched in the caller's environment.
+	ctx := r.Context()
+	if id := session.IDFromSlice(req.Env); id != "" {
+		ctx = session.WithID(ctx, id)
 	}
 	if req.CircleCIToken != "" {
-		env = append(append([]string(nil), env...), "CIRCLE_TOKEN="+req.CircleCIToken)
+		req.Env = append(append([]string(nil), req.Env...), "CIRCLE_TOKEN="+req.CircleCIToken)
 	}
-	cmd.Env = env
+	ctx = envctx.WithEnv(ctx, req.Env)
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	exitCode := 0
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else {
-			http.Error(w, "run: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
+	exitCode := d.runner(ctx, req.Args, req.Env, &stdout, &stderr)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ValidateResponse{

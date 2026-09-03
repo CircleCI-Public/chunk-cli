@@ -39,7 +39,7 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			if id := session.IDFromEnv(); id != "" {
+			if id := session.IDFromEnv(); id != "" && session.IDFromCtx(cmd.Context()) == "" {
 				cmd.SetContext(session.WithID(cmd.Context(), id))
 			}
 			if err := setupTelemetry(cmd, version); err != nil {

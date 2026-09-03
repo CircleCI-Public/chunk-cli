@@ -3,6 +3,7 @@ package watchd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,11 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrDaemonUnavailable is returned by RunValidate when the daemon socket is
+// unreachable, so callers can distinguish a transient connectivity failure from
+// a real validation error and fall back to inline execution.
+var ErrDaemonUnavailable = errors.New("daemon unavailable")
 
 // FetchSnapshot connects to the running watch daemon and returns the current
 // snapshot for the given project roots. If roots is empty all known projects
@@ -98,7 +104,7 @@ func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) 
 	}
 	resp, err := longUnixClient(sockPath).Post("http://watchd/validate", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return ValidateResponse{}, fmt.Errorf("connect to watch daemon: %w", err)
+		return ValidateResponse{}, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
