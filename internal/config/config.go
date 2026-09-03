@@ -132,6 +132,11 @@ type UserConfig struct {
 	// false (zero value) means disabled; true means enabled (opt-in).
 	Notifications bool `json:"notifications,omitempty"`
 
+	// AutoLaunchDaemon controls whether chunk commands automatically start the
+	// watch daemon when it is not running. false (zero value / default) means
+	// the daemon must be started explicitly with `chunk watch`.
+	AutoLaunchDaemon bool `json:"autoLaunchDaemon,omitempty"`
+
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
 	// AnthropicAPIKey by Load and dropped on the next Save (omitempty).
@@ -449,6 +454,7 @@ var ValidConfigKeys = map[string]bool{
 	"useSSHIdentityFile": true,
 	"telemetry":          true,
 	"notifications":      true,
+	"autoLaunchDaemon":   true,
 }
 
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to
