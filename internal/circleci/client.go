@@ -227,14 +227,16 @@ type execSubmitAttrs struct {
 	Phase string `json:"phase"`
 }
 
-// Exec submits a command and collects its output.
+// SubmitExec submits a command for execution and returns its command ID without
+// consuming any output.
 //
-// When onOutput is non-nil it receives each run of output bytes as it arrives
-// and Stdout/Stderr are left empty — accumulating is then the caller's choice,
-// which matters because output can be arbitrarily large.
-func (c *Client) Exec(
-	ctx context.Context, sidecarID, command string, args []string, env map[string]string, onOutput OutputFn,
-) (*ExecResponse, error) {
+// Splitting submission from streaming is what makes a command observable while
+// it runs: the ID is the handle to its output stream, and a caller that wants to
+// hand that handle to something else — a log tailer, the watch daemon — needs it
+// before the command finishes, not after.
+func (c *Client) SubmitExec(
+	ctx context.Context, sidecarID, command string, args []string, env map[string]string,
+) (string, error) {
 	var attrs execSubmitAttrs
 	envelope := v3Envelope{Data: v3DataEntity{Attributes: &attrs}}
 	_, err := c.cl.Call(ctx, hc.NewRequest(http.MethodPost, "/api/v3/sidecar/instances/%s/exec",
@@ -243,9 +245,40 @@ func (c *Client) Exec(
 		hc.JSONDecoder(&envelope),
 	))
 	if err != nil {
-		return nil, mapErr("exec", err)
+		return "", mapErr("exec", err)
 	}
-	return c.streamCommandOutput(ctx, envelope.Data.ID, onOutput)
+	return envelope.Data.ID, nil
+}
+
+// StreamOutput consumes a command's output stream from cursor to termination,
+// reconnecting as needed. An empty cursor starts from the beginning of whatever
+// output the server still retains, which is what makes this usable both to tail
+// a running command and to replay one that has already exited.
+//
+// When onOutput is non-nil it receives each run of output bytes as it arrives and
+// the returned Stdout/Stderr are left empty — accumulating is then the caller's
+// choice, which matters because output can be arbitrarily large.
+func (c *Client) StreamOutput(
+	ctx context.Context, commandID, cursor string, onOutput OutputFn,
+) (*ExecResponse, error) {
+	return c.streamCommandOutput(ctx, commandID, cursor, onOutput)
+}
+
+// Exec submits a command and collects its output. It is the composition of
+// SubmitExec and StreamOutput, retained because most callers want exactly that
+// and have no use for the command ID until the command is done.
+//
+// When onOutput is non-nil it receives each run of output bytes as it arrives
+// and Stdout/Stderr are left empty — accumulating is then the caller's choice,
+// which matters because output can be arbitrarily large.
+func (c *Client) Exec(
+	ctx context.Context, sidecarID, command string, args []string, env map[string]string, onOutput OutputFn,
+) (*ExecResponse, error) {
+	commandID, err := c.SubmitExec(ctx, sidecarID, command, args, env)
+	if err != nil {
+		return nil, err
+	}
+	return c.streamCommandOutput(ctx, commandID, "", onOutput)
 }
 
 // exitEvent is the payload of a terminal `exit` frame.
@@ -264,15 +297,17 @@ type errorEvent struct {
 
 // streamCommandOutput reads a command's output stream to its end, reconnecting
 // from the last cursor whenever the connection drops before a terminal event.
+// cursor is where to start; empty means the beginning of retained output.
 //
 // The API ends a stream with exactly one exit or error event, or with nothing at
 // all; nothing at all means the connection was interrupted, which is precisely
 // what makes resuming safe rather than a guess.
-func (c *Client) streamCommandOutput(ctx context.Context, commandID string, onOutput OutputFn) (*ExecResponse, error) {
+func (c *Client) streamCommandOutput(
+	ctx context.Context, commandID, cursor string, onOutput OutputFn,
+) (*ExecResponse, error) {
 	result := &ExecResponse{CommandID: commandID}
 
 	var (
-		cursor   string
 		attempts int
 		stalls   int
 	)
