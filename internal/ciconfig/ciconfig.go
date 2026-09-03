@@ -3,8 +3,8 @@
 //
 // It is a reducer, not an interpreter. A real config can run to thousands of
 // lines; this narrows it to the handful of `run` steps belonging to jobs that
-// gate the default branch, so a caller can classify that short list into
-// test/lint/format roles instead of guessing from root filenames.
+// run on a developer's working branch, so a caller can classify that short
+// list into test/lint/format roles instead of guessing from root filenames.
 //
 // Constructs it cannot resolve are reported rather than guessed at: orb steps
 // hide their contents behind a name, and a `setup: true` config generates the
@@ -57,19 +57,15 @@ const (
 	maxDepth = 4
 )
 
-// fallbackBranches are the branch names a job must run on to count as a gate
-// when the caller does not name one. Both are guesses: a repo that defaults to
-// develop has neither, and every job in its config would then look
-// branch-filtered away. Options.DefaultBranch exists to avoid guessing.
-var fallbackBranches = []string{"main", "master"}
-
-// Options configures Extract.
-type Options struct {
-	// DefaultBranch is the branch whose checks count as gates — the branch a
-	// PR merges into. Empty falls back to main and master; whichever names were
-	// used come back in Result.Branches.
-	DefaultBranch string
-}
+// probeBranches are the synthetic branch names a job's filters are evaluated
+// against to decide whether the job runs on a developer's working branch.
+// Nothing here can enumerate the names a developer might use, so the question
+// is asked of two chosen to look like ordinary work and to belong to no
+// release or environment convention: a filter that admits them is
+// unrestricted, and one that does not is pinned to branches that are not the
+// developer's. Both shapes are needed — a repo whose convention is namespaced
+// branches writes filters that a flat name fails.
+var probeBranches = []string{"chunk-working-branch", "chunk/working-branch"}
 
 // Step kinds this package treats specially. Everything else is either a
 // built-in with no command of its own or an invocation of a custom or orb
@@ -96,7 +92,7 @@ type Candidate struct {
 // Result is what Extract could and could not determine from a config.
 type Result struct {
 	Path       string      // config file the result came from
-	Candidates []Candidate // run steps from default-branch jobs, in config order
+	Candidates []Candidate // run steps from working-branch jobs, in config order
 
 	// Dynamic reports a `setup: true` config. The checked-in file only
 	// generates the real config at run time, so Candidates is not meaningful.
@@ -114,22 +110,18 @@ type Result struct {
 	// pipeline-time reference such as << pipeline.parameters.x >>.
 	Unresolved int
 
-	// Branches are the branch names gate selection matched filters against, so
-	// a caller can name the branch its candidates gate.
-	Branches []string
-
 	// GateJobs counts the workflow entries that qualified as gates. Zero from a
-	// non-dynamic config means no job in it runs on Branches — a different miss
-	// from "the jobs ran but nothing in them classified", and the one a wrong
-	// default branch produces.
+	// non-dynamic config means every job in it is pinned to branches a
+	// developer does not work on — a different miss from "the jobs ran but
+	// nothing in them classified".
 	GateJobs int
 }
 
 // Extract reads workDir's CircleCI config and returns the run steps belonging
-// to jobs that gate the default branch. It returns ErrNotFound if no config
-// exists, so callers can fall back to filename-based detection, and a
-// *ConfigError if one exists but cannot be read or parsed.
-func Extract(workDir string, opts Options) (*Result, error) {
+// to jobs that run on a developer's working branch. It returns ErrNotFound if
+// no config exists, so callers can fall back to filename-based detection, and
+// a *ConfigError if one exists but cannot be read or parsed.
+func Extract(workDir string) (*Result, error) {
 	path, data, err := read(workDir)
 	if err != nil {
 		return nil, err
@@ -140,17 +132,12 @@ func Extract(workDir string, opts Options) (*Result, error) {
 		return nil, &ConfigError{Op: "parse", Path: path, Err: err}
 	}
 
-	branches := fallbackBranches
-	if opts.DefaultBranch != "" {
-		branches = []string{opts.DefaultBranch}
-	}
-
-	res := &Result{Path: path, Dynamic: f.Setup, Branches: branches}
+	res := &Result{Path: path, Dynamic: f.Setup}
 	if f.Setup {
 		return res, nil
 	}
 
-	gates := gateJobs(f, branches)
+	gates := gateJobs(f)
 	res.GateJobs = len(gates)
 
 	e := &extractor{commands: f.Commands, orbs: f.Orbs, res: res, seen: map[string]bool{}}
@@ -190,17 +177,17 @@ func read(workDir string) (string, []byte, error) {
 	return "", nil, ErrNotFound
 }
 
-// gateJobs returns the workflow entries that run on the default branch, in
-// config order, deduplicated. Approval holds, branch-filtered jobs, scheduled
-// workflows and workflows switched off by their own when:/unless: are
-// excluded.
+// gateJobs returns the workflow entries that run on a developer's working
+// branch, in config order, deduplicated. Approval holds, jobs pinned to
+// branches a developer does not work on, scheduled workflows and workflows
+// switched off by their own when:/unless: are excluded.
 //
 // Workflows are visited in the order they appear in the file rather than
 // alphabetically: the caller keeps the first command it finds per role, and a
 // config's primary workflow is conventionally written first. Sorting by name
 // would let an unrelated workflow that happens to sort earlier supply the
 // commands.
-func gateJobs(f file, branches []string) []workflowJob {
+func gateJobs(f file) []workflowJob {
 	if f.Workflows.Kind != yaml.MappingNode || len(f.Workflows.Content) == 0 {
 		// A CircleCI 2.0 config with no workflows block runs the job named
 		// "build" implicitly.
@@ -243,7 +230,7 @@ func gateJobs(f file, branches []string) []workflowJob {
 			if j.Name == "" || j.Type == "approval" {
 				continue
 			}
-			if !runsOnDefaultBranch(j.Filters, branches) {
+			if !runsOnWorkingBranch(j.Filters) {
 				continue
 			}
 			// Key on the parameters too: the same job invoked with different
@@ -259,48 +246,61 @@ func gateJobs(f file, branches []string) []workflowJob {
 	return out
 }
 
-// runsOnDefaultBranch reports whether a job's filters let it run on one of
-// branches. A pattern we cannot read must not decide the job's fate, so each
-// direction passes the fail-open answer for its own sense: an unreadable ignore
-// counts as not matching, an unreadable only as matching. Both keep the job.
-func runsOnDefaultBranch(f filters, branches []string) bool {
-	if slices.ContainsFunc(f.Branches.Ignore, func(p string) bool {
-		return matchesDefaultBranch(p, branches, false)
-	}) {
+// runsOnWorkingBranch reports whether a job's filters admit an ordinary
+// working branch — the branch a developer is on while they use chunk.
+//
+// Deliberately not "runs on the default branch". A job pinned to the default
+// branch is a deploy, a publish, or a post-merge suite too slow to gate a pull
+// request, so selecting on the default branch admitted exactly those while
+// discarding the jobs carrying `ignore: [main]`, which are the ordinary checks
+// made explicit.
+//
+// A pattern that will not compile is read as not matching, which keeps the
+// likelier job in both directions: an `only` that cannot be read still marks
+// the job as pinned somewhere, while a job carrying an `ignore` is usually
+// pinned away from main rather than away from a developer's branch. It also
+// follows the cost asymmetry — a dropped gate falls back to filename
+// detection, whereas a job admitted in error hands a developer a deploy to run
+// on their laptop.
+func runsOnWorkingBranch(f filters) bool {
+	if slices.ContainsFunc(f.Branches.Ignore, admitsWorkingBranch) {
 		return false
 	}
 	if len(f.Branches.Only) == 0 {
 		return true
 	}
-	return slices.ContainsFunc(f.Branches.Only, func(p string) bool {
-		return matchesDefaultBranch(p, branches, true)
+	return slices.ContainsFunc(f.Branches.Only, admitsWorkingBranch)
+}
+
+// admitsWorkingBranch reports whether a branch pattern matches any of
+// probeBranches.
+func admitsWorkingBranch(pattern string) bool {
+	return slices.ContainsFunc(probeBranches, func(b string) bool {
+		return admits(pattern, b)
 	})
 }
 
-// matchesDefaultBranch reports whether a CircleCI branch pattern — a literal
-// name or a /regex/ — matches one of branches. onBadPattern is the answer for a
-// regex that will not compile; it is the caller's because the value that keeps
-// the job differs between only: and ignore:.
-func matchesDefaultBranch(pattern string, branches []string, onBadPattern bool) bool {
+// admits reports whether a CircleCI branch pattern — a literal name or a
+// /regex/ — matches branch.
+func admits(pattern, branch string) bool {
 	if len(pattern) > 1 && strings.HasPrefix(pattern, "/") && strings.HasSuffix(pattern, "/") {
 		// Only the delimiters come off. strings.Trim strips every leading and
 		// trailing slash, so `/^release//` — a config with a stray slash, or a
 		// pattern ending in an escaped one — arrived as `^release/` shorn to
 		// `^release`, and `/^(feature|hotfix)\//` lost the `\` boundary it
-		// needed and failed to compile: a release-only job then failed open
-		// into a default-branch gate.
+		// needed and failed to compile.
 		body := strings.TrimSuffix(strings.TrimPrefix(pattern, "/"), "/")
 		// CircleCI matches a filter regex against the whole branch name — the
 		// reason its own docs write `only: /^config-test.*/` with a trailing
-		// `.*`. Matching unanchored reads `only: /^ma/`, which CircleCI runs on
-		// no branch whatsoever, as a main-and-master gate.
+		// `.*`. Unanchored, `ignore: /^chunk/` would match a namespaced working
+		// branch and drop a job CircleCI in fact runs on it.
 		re, err := regexp.Compile(`\A(?:` + body + `)\z`)
 		if err != nil {
-			return onBadPattern
+			return false
 		}
-		return slices.ContainsFunc(branches, re.MatchString)
+		return re.MatchString(branch)
 	}
-	return slices.Contains(branches, pattern)
+	return pattern == branch
 }
 
 // workflowRuns reports whether a workflow runs on a push by default. A

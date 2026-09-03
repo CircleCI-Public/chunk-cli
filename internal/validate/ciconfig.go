@@ -10,7 +10,6 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ciconfig"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 )
 
 // Roles a CI step can be classified into, in the order they are emitted.
@@ -140,7 +139,7 @@ var roleSpec = map[string]struct {
 var emitOrder = []string{roleInstall, roleTest, roleLint, roleFormatCheck, roleFormat}
 
 // commandsFromCI derives validate commands from the repo's CircleCI config,
-// which names the checks that actually gate the default branch. Commands are
+// which names the checks that actually gate a pull request. Commands are
 // empty when there is no config, when the config cannot be parsed, when it is
 // dynamic, or when nothing in it classifies — in every case the caller falls
 // back to filename detection, and Notes says why so `chunk init` can tell the
@@ -149,7 +148,7 @@ var emitOrder = []string{roleInstall, roleTest, roleLint, roleFormatCheck, roleF
 // At most one command is kept per role: the first match wins, so a job's
 // primary test step beats a later variant like an acceptance-only run.
 func commandsFromCI(workDir string) Detection {
-	res, err := ciconfig.Extract(workDir, ciconfig.Options{DefaultBranch: defaultBranch(workDir)})
+	res, err := ciconfig.Extract(workDir)
 	if err != nil {
 		// A config that exists but cannot be read is the one failure worth
 		// reporting: the user expects their CI gates, and falling back silently
@@ -199,20 +198,6 @@ func commandsFromCI(workDir string) Detection {
 	return det
 }
 
-// defaultBranch is the branch whose CI checks count as gates, read from the
-// repo rather than assumed. A repo that defaults to develop has no main or
-// master, so assuming those selects no gate jobs at all and reports a config
-// full of checks as holding none. An empty return leaves ciconfig on its
-// main/master fallback, which is the best a directory that is not a git
-// checkout, or has no remote HEAD, allows.
-func defaultBranch(workDir string) string {
-	branch, err := gitutil.DefaultBranchIn(workDir)
-	if err != nil {
-		return ""
-	}
-	return branch
-}
-
 // configSource renders the config path relative to the repo for display.
 func configSource(workDir, path string) string {
 	if rel, err := filepath.Rel(workDir, path); err == nil {
@@ -238,11 +223,10 @@ func ciNotes(res *ciconfig.Result) []string {
 		notes = append(notes, fmt.Sprintf("%d step(s) past the scan limit were not read", res.Truncated))
 	}
 	if res.GateJobs == 0 && !res.Dynamic {
-		// Distinct from finding jobs whose steps did not classify: nothing in
-		// the config runs on this branch at all. Naming the branch is what
-		// makes a wrong guess about it visible.
-		notes = append(notes, fmt.Sprintf("no job in the config runs on %s",
-			strings.Join(res.Branches, " or ")))
+		// Distinct from finding jobs whose steps did not classify: every job in
+		// the config is pinned to branches a developer does not work on, so
+		// none of them gates a pull request.
+		notes = append(notes, "every job in the config is limited to specific branches")
 	}
 	return notes
 }

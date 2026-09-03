@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -799,10 +798,9 @@ func TestClassifySkipsArtifactShipping(t *testing.T) {
 	}
 }
 
-func TestCommandsFromCINamesTheBranchWhenNoJobGatesIt(t *testing.T) {
-	// A develop-default repo used to get "no runnable checks were found", which
-	// reads as "your config holds nothing" rather than "nothing in it runs on
-	// the branch I looked at".
+func TestCommandsFromCISaysWhenEveryJobIsBranchPinned(t *testing.T) {
+	// Distinct from "no runnable checks were found", which reads as "your
+	// config holds nothing" rather than "nothing in it runs where you work".
 	dir := t.TempDir()
 	writeCI(t, dir, `
 version: 2.1
@@ -820,44 +818,5 @@ workflows:
 `)
 	det := commandsFromCI(dir)
 	assert.Equal(t, len(det.Commands), 0)
-	assert.DeepEqual(t, det.Notes, []string{"no job in the config runs on main or master"})
-}
-
-func TestCommandsFromCIUsesTheRepoDefaultBranch(t *testing.T) {
-	// The same config, in a repo that really does default to develop.
-	dir := t.TempDir()
-	writeCI(t, dir, `
-version: 2.1
-jobs:
-  test:
-    steps:
-      - run: pytest
-workflows:
-  main:
-    jobs:
-      - test:
-          filters:
-            branches:
-              only: [develop]
-`)
-	initRepoWithDefaultBranch(t, dir, "develop")
-
-	det := commandsFromCI(dir)
-	assert.DeepEqual(t, runs(det.Commands), []string{"test=pytest"})
-	assert.Equal(t, len(det.Notes), 0)
-}
-
-// initRepoWithDefaultBranch makes dir a git repo whose origin/HEAD points at
-// branch, which is what DefaultBranchIn reads.
-func initRepoWithDefaultBranch(t *testing.T, dir, branch string) {
-	t.Helper()
-	for _, args := range [][]string{
-		{"init", "--initial-branch=" + branch},
-		{"remote", "add", "origin", "https://example.com/x/y.git"},
-		{"symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/" + branch},
-	} {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		out, err := cmd.CombinedOutput()
-		assert.NilError(t, err, string(out))
-	}
+	assert.DeepEqual(t, det.Notes, []string{"every job in the config is limited to specific branches"})
 }

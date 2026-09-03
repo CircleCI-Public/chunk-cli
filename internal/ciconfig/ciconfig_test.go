@@ -30,7 +30,7 @@ func commands(r *Result) []string {
 }
 
 func TestExtractMissingConfig(t *testing.T) {
-	_, err := Extract(t.TempDir(), Options{})
+	_, err := Extract(t.TempDir())
 	assert.Assert(t, errors.Is(err, ErrNotFound), "got: %v", err)
 }
 
@@ -46,7 +46,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"go test ./..."})
 }
@@ -73,7 +73,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	assert.DeepEqual(t, commands(res), []string{
@@ -101,7 +101,7 @@ workflows:
     jobs:
       - setup
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	assert.Assert(t, res.Dynamic)
@@ -148,38 +148,59 @@ workflows:
             branches:
               ignore: main
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
-	// deploy survives: it is filtered *to* main, which is a default branch.
-	assert.DeepEqual(t, commands(res), []string{"pytest", "./deploy.sh"})
+	// deploy and release are pinned to branches a developer does not work on;
+	// nightly's ignore: main is the same unfiltered work stated the long way.
+	assert.DeepEqual(t, commands(res), []string{"pytest", "./nightly.sh"})
 }
 
-func TestExtractBranchFilterLists(t *testing.T) {
-	dir := writeConfig(t, "config.yml", `
+func TestExtractSelectsJobsThatRunOnAWorkingBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		filters string
+		kept    bool
+	}{
+		{name: "no filter", kept: true},
+		{name: "only default branch", filters: "only: main"},
+		{name: "only a list of named branches", filters: "only: [main, develop]"},
+		{name: "only a release convention", filters: `only: /release-.*/`},
+		{name: "only anything", filters: `only: /.*/`, kept: true},
+		// A repo that requires namespaced branches writes its filters that
+		// way, and those branches are where the work happens.
+		{name: "only a namespace", filters: `only: /^[a-z-]+\/.*/`, kept: true},
+		{name: "a list holding one permissive pattern", filters: `only: [main, /.*/]`, kept: true},
+		{name: "ignore the default branch", filters: "ignore: main", kept: true},
+		{name: "ignore a release convention", filters: `ignore: /release-.*/`, kept: true},
+		{name: "ignore everything", filters: `ignore: /.*/`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := "      - test\n"
+			if tc.filters != "" {
+				job = "      - test:\n          filters:\n            branches:\n              " + tc.filters + "\n"
+			}
+			dir := writeConfig(t, "config.yml", `
 version: 2.1
 jobs:
-  a:
+  test:
     steps:
-      - run: echo a
-  b:
-    steps:
-      - run: echo b
+      - run: go test ./...
 workflows:
   main:
     jobs:
-      - a:
-          filters:
-            branches:
-              only: [develop, master]
-      - b:
-          filters:
-            branches:
-              only: [develop, staging]
-`)
-	res, err := Extract(dir, Options{})
-	assert.NilError(t, err)
-	assert.DeepEqual(t, commands(res), []string{"echo a"})
+`+job)
+			res, err := Extract(dir)
+			assert.NilError(t, err)
+
+			want := 0
+			if tc.kept {
+				want = 1
+			}
+			assert.Equal(t, res.GateJobs, want)
+			assert.Equal(t, len(res.Candidates), want)
+		})
+	}
 }
 
 func TestExtractExpandsCustomCommands(t *testing.T) {
@@ -212,7 +233,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	assert.DeepEqual(t, commands(res), []string{
@@ -244,7 +265,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	// A non-scalar parameter cannot be substituted, so the step is reported
@@ -253,13 +274,19 @@ workflows:
 	assert.Equal(t, res.Unresolved, 1)
 }
 
-func TestExtractKeepsJobsWithAMalformedBranchFilter(t *testing.T) {
+func TestExtractReadsAMalformedBranchFilterAsMatchingNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		filters string
+		kept    int
 	}{
-		{"ignore", `ignore: ["/release-[/"]`},
-		{"only", `only: ["/release-[/"]`},
+		// A job carrying an ignore: is normally pinned away from main rather
+		// than away from a developer's branch, so an unreadable one keeps it.
+		{"ignore", `ignore: ["/release-[/"]`, 1},
+		// An only: that cannot be read still says the job is pinned somewhere.
+		// Dropping it costs a fallback to filename detection; keeping it can
+		// hand a developer a deploy to run locally.
+		{"only", `only: ["/release-[/"]`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := writeConfig(t, "config.yml", `
@@ -276,12 +303,9 @@ workflows:
             branches:
               `+tc.filters+`
 `)
-			res, err := Extract(dir, Options{})
+			res, err := Extract(dir)
 			assert.NilError(t, err)
-
-			// An unparseable filter says nothing about the default branch, so
-			// it must not be the reason detection finds nothing.
-			assert.Equal(t, len(res.Candidates), 1)
+			assert.Equal(t, len(res.Candidates), tc.kept)
 		})
 	}
 }
@@ -306,7 +330,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	// The log dumper runs only on red and the uploader is cleanup; neither
@@ -334,7 +358,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	// Only CircleCI resolves pipeline, git and matrix references. Emitting one
@@ -361,7 +385,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	// A real heredoc delimiter is not an interpolation.
@@ -389,7 +413,7 @@ workflows:
       - test
       - node/test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	assert.DeepEqual(t, commands(res), []string{"yarn test"})
@@ -427,7 +451,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	assert.DeepEqual(t, commands(res), []string{
@@ -461,7 +485,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"./setup.sh", "pytest"})
 }
@@ -485,7 +509,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{
 		"golangci-lint run ./...",
@@ -508,7 +532,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"make test", "make lint"})
 }
@@ -530,7 +554,7 @@ workflows:
       - test
       - test-again
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	// `workflows: version: 2` is a scalar, not a workflow, and the repeated
 	// command collapses to one candidate.
@@ -558,7 +582,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"echo a", "echo b"})
 }
@@ -586,7 +610,7 @@ workflows:
           suite: integration
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	// The override wins for the first entry; the bare entry falls back to
@@ -627,7 +651,7 @@ workflows:
           suite: integration
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{
 		"pytest tests/integration",
@@ -661,7 +685,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	// A cron workflow does not gate a push, so its jobs are not candidates.
@@ -686,7 +710,7 @@ workflows:
     jobs:
       - second
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	// Callers keep the first candidate per role, so the order has to follow
@@ -710,7 +734,7 @@ workflows:
           post-steps:
             - run: ./upload-coverage.sh
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{
 		"go mod download",
@@ -736,7 +760,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	// Same command, different directories — two distinct pieces of work, so
@@ -764,7 +788,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 
 	assert.DeepEqual(t, commands(res), []string{
@@ -782,7 +806,7 @@ jobs:
     steps:
       - run: make test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	// CircleCI 2.0 runs the "build" job implicitly when there is no workflow.
 	assert.DeepEqual(t, commands(res), []string{"make test"})
@@ -796,7 +820,7 @@ jobs:
     steps:
       - run: make test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.Equal(t, len(res.Candidates), 0)
 }
@@ -809,7 +833,7 @@ func TestExtractTruncatesRunawayConfig(t *testing.T) {
 	}
 	sb.WriteString("workflows:\n  main:\n    jobs:\n      - test\n")
 
-	res, err := Extract(writeConfig(t, "config.yml", sb.String()), Options{})
+	res, err := Extract(writeConfig(t, "config.yml", sb.String()))
 	assert.NilError(t, err)
 
 	assert.Equal(t, len(res.Candidates), maxCandidates)
@@ -818,123 +842,49 @@ func TestExtractTruncatesRunawayConfig(t *testing.T) {
 
 func TestExtractMalformedYAML(t *testing.T) {
 	dir := writeConfig(t, "config.yml", "jobs:\n  test:\n   - bad\n  indent\n")
-	_, err := Extract(dir, Options{})
+	_, err := Extract(dir)
 	assert.ErrorContains(t, err, "parse")
 }
 
 func TestExtractEmptyConfig(t *testing.T) {
 	dir := writeConfig(t, "config.yml", "version: 2.1\n")
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.Equal(t, len(res.Candidates), 0)
 }
 
-func TestExtractBranchFilterRegexKeepsItsDelimitersOnly(t *testing.T) {
-	// strings.Trim strips every leading and trailing slash, not just the two
-	// delimiters, so a pattern whose last character is an escaped slash lost the
-	// backslash's operand and stopped compiling — and an only: that will not
-	// compile fails open, promoting a feature-branch-only job to a gate.
-	dir := writeConfig(t, "config.yml", `
-version: 2.1
-jobs:
-  preview:
-    steps:
-      - run: ./scripts/deploy-preview.sh
-workflows:
-  main:
-    jobs:
-      - preview:
-          filters:
-            branches:
-              only: /^(feature|hotfix)\//
-`)
-	res, err := Extract(dir, Options{})
-	assert.NilError(t, err)
-	assert.Equal(t, res.GateJobs, 0)
-	assert.Equal(t, len(res.Candidates), 0)
-}
-
-func TestExtractAnchorsBranchFilterRegexes(t *testing.T) {
-	// CircleCI matches a filter regex against the whole branch name, so /^ma/
-	// runs on no branch at all. Unanchored it matched main and master and the
-	// job's steps were lifted as gates.
-	dir := writeConfig(t, "config.yml", `
-version: 2.1
-jobs:
-  partial:
-    steps:
-      - run: go test ./partial/...
-  whole:
-    steps:
-      - run: go test ./...
-workflows:
-  main:
-    jobs:
-      - partial:
-          filters:
-            branches:
-              only: /^ma/
-      - whole:
-          filters:
-            branches:
-              only: /ma.*/
-`)
-	res, err := Extract(dir, Options{})
-	assert.NilError(t, err)
-	assert.DeepEqual(t, commands(res), []string{"go test ./..."})
-}
-
-func TestExtractAnchoringDoesNotDropJobsOnAnIgnoreFilter(t *testing.T) {
-	// The mirror of the above: an ignore: pattern that CircleCI matches against
-	// nothing must not exclude the job either.
-	dir := writeConfig(t, "config.yml", `
-version: 2.1
-jobs:
-  test:
-    steps:
-      - run: go test ./...
-workflows:
-  main:
-    jobs:
-      - test:
-          filters:
-            branches:
-              ignore: /^ma/
-`)
-	res, err := Extract(dir, Options{})
-	assert.NilError(t, err)
-	assert.DeepEqual(t, commands(res), []string{"go test ./..."})
-}
-
-func TestExtractUsesTheDefaultBranchItIsGiven(t *testing.T) {
-	// A develop-default repo: every job looks filtered away against main and
-	// master, and the config reads as holding no checks at all.
-	body := `
-version: 2.1
-jobs:
-  test:
-    steps:
-      - run: pytest
-workflows:
-  main:
-    jobs:
-      - test:
-          filters:
-            branches:
-              only: [develop]
-`
-	dir := writeConfig(t, "config.yml", body)
-
-	assumed, err := Extract(dir, Options{})
-	assert.NilError(t, err)
-	assert.Equal(t, assumed.GateJobs, 0)
-	assert.DeepEqual(t, assumed.Branches, []string{"main", "master"})
-
-	named, err := Extract(dir, Options{DefaultBranch: "develop"})
-	assert.NilError(t, err)
-	assert.Equal(t, named.GateJobs, 1)
-	assert.DeepEqual(t, commands(named), []string{"pytest"})
-	assert.DeepEqual(t, named.Branches, []string{"develop"})
+func TestAdmitsBranchPattern(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		branch  string
+		want    bool
+	}{
+		{"main", "main", true},
+		{"main", "develop", false},
+		// Only the two delimiters come off. strings.Trim stripped every
+		// leading and trailing slash, so a pattern whose last character is an
+		// escaped slash lost the backslash's operand and stopped compiling.
+		// Whole-string matching is why the trailing `.*` earns its keep: the
+		// bare form matches the literal "feature/" and nothing under it.
+		{`/^(feature|hotfix)\/.*/`, "feature/login", true},
+		{`/^(feature|hotfix)\//`, "feature/login", false},
+		{`/^(feature|hotfix)\//`, "feature/", true},
+		{`/^release//`, "release/", true},
+		// CircleCI matches a filter regex against the whole branch name, so
+		// /^ma/ runs on no branch at all. Unanchored it matched main.
+		{`/^ma/`, "main", false},
+		{`/ma.*/`, "main", true},
+		{`/.*/`, "anything", true},
+		// A pattern that will not compile matches nothing; see
+		// runsOnWorkingBranch for why that is the safe answer either way.
+		{`/release-[/`, "release-1", false},
+		// A lone slash is a branch named "/", not an empty regex.
+		{"/", "/", true},
+	} {
+		t.Run(tc.pattern+" vs "+tc.branch, func(t *testing.T) {
+			assert.Equal(t, admits(tc.pattern, tc.branch), tc.want)
+		})
+	}
 }
 
 func TestExtractSkipsWorkflowsOffByDefault(t *testing.T) {
@@ -967,7 +917,7 @@ workflows:
     jobs:
       - unit
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"go test ./..."})
 }
@@ -999,7 +949,7 @@ workflows:
     jobs:
       - c
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"echo c"})
 }
@@ -1029,7 +979,7 @@ workflows:
     jobs:
       - undeclared
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{
 		"go test ./logic/...",
@@ -1055,7 +1005,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.Equal(t, len(res.Candidates), 0)
 	assert.Equal(t, res.Unresolved, 1)
@@ -1081,12 +1031,12 @@ workflows:
     jobs:
       - test
 `
-	res, err := Extract(writeConfig(t, "config.yml", fmt.Sprintf(config, "false")), Options{})
+	res, err := Extract(writeConfig(t, "config.yml", fmt.Sprintf(config, "false")))
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"npm test"})
 	assert.Equal(t, res.Unresolved, 0)
 
-	res, err = Extract(writeConfig(t, "config.yml", fmt.Sprintf(config, "true")), Options{})
+	res, err = Extract(writeConfig(t, "config.yml", fmt.Sprintf(config, "true")))
 	assert.NilError(t, err)
 	assert.Equal(t, len(res.Candidates), 0)
 	assert.Equal(t, res.Unresolved, 0)
@@ -1107,7 +1057,7 @@ workflows:
     jobs:
       - test
 `)
-	res, err := Extract(dir, Options{})
+	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"go test ./..."})
 }
