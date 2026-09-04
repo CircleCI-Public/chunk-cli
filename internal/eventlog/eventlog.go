@@ -44,6 +44,11 @@ type Event struct {
 	Final  bool `json:"final,omitempty"`
 	Passed int  `json:"passed,omitempty"`
 	Total  int  `json:"total,omitempty"`
+
+	// CommandID is the sandbox-provisioner ID of the remote exec that produced
+	// this event, set on pass/fail events for commands that ran on the sidecar.
+	// Use GET /api/v3/sidecar/commands/{id}/output to replay the run's output.
+	CommandID string `json:"command_id,omitempty"`
 }
 
 // Outcome reports whether e is the event that closes an operation, and the
@@ -155,9 +160,10 @@ func (l *Log) Append(e Event) error {
 // every event with the operation it belongs to. Status records an ordinary
 // event; Final records the one that closes the operation.
 type Recorder struct {
-	log   *Log
-	inner iostream.StatusFunc
-	tag   Event
+	log              *Log
+	inner            iostream.StatusFunc
+	tag              Event
+	pendingCommandID string
 }
 
 // Recorder returns a Recorder that reports through inner and appends each call
@@ -186,6 +192,14 @@ func Record(dataDir string, fn iostream.StatusFunc, op Op, sidecarID, sidecarNam
 	return el.Recorder(fn, op, sidecarID, sidecarName, branch)
 }
 
+// SetCommandID records the sandbox-provisioner command ID of the exec that just
+// finished. The next pass/fail event for that command will carry this ID.
+// Pass "" when an exec failed without reporting an ID so a stale one from a
+// prior exec is not attributed to it.
+func (r *Recorder) SetCommandID(id string) {
+	r.pendingCommandID = id
+}
+
 // Status reports an ordinary event, one that leaves the operation open.
 func (r *Recorder) Status(level iostream.Level, msg string) {
 	r.record(level, msg, false, 0, 0)
@@ -210,6 +224,12 @@ func (r *Recorder) record(level iostream.Level, msg string, final bool, passed, 
 	e.Level = levelStr(level)
 	e.Msg = msg
 	e.Final, e.Passed, e.Total = final, passed, total
+	// Attach the pending command ID to the per-command pass/fail event. Final
+	// events are run-wide summaries that belong to no single command.
+	if !final && (level == iostream.LevelDone || level == iostream.LevelError) {
+		e.CommandID = r.pendingCommandID
+		r.pendingCommandID = ""
+	}
 	_ = r.log.Append(e)
 }
 
