@@ -117,7 +117,7 @@ func TestResolveSidecarUsesActiveSidecar(t *testing.T) {
 	var sidecarID string
 	created, err := resolveSidecar(
 		context.Background(), fallbackClient(t, cci), &sidecarID,
-		"org-1", "", workDir, "", &sidecar.ActiveSidecar{SidecarID: "sc-existing"},
+		"org-1", "", workDir, "", &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-existing"}},
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 

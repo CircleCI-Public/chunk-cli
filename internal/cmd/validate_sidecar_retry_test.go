@@ -33,7 +33,7 @@ func syncErrEnv(t *testing.T) string {
 func seedState(t *testing.T, id string) string {
 	t.Helper()
 	ctx := context.Background()
-	assert.NilError(t, sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: id}))
+	assert.NilError(t, sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: []string{id}}))
 	stateDir, err := sidecar.StateDir()
 	assert.NilError(t, err)
 	return filepath.Join(stateDir, "sidecar.json")

@@ -27,14 +27,14 @@ func TestSaveActiveWritesToXDGDataPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarID: "sb-1"}))
+	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarIDs: []string{"sb-1"}}))
 
 	// Must not appear inside the project's .chunk directory.
 	_, err := os.Stat(filepath.Join(dir, ".chunk", "sidecar.json"))
 	assert.Assert(t, os.IsNotExist(err), "sidecar.json must not be written inside .chunk/")
 
 	// Must appear at the deterministic XDG data path.
-	expected, err := config.ProjectDataDir(dir)
+	expected, err := saveDir()
 	assert.NilError(t, err)
 	_, err = os.Stat(filepath.Join(expected, "sidecar.json"))
 	assert.NilError(t, err)
@@ -63,15 +63,34 @@ func TestSaveAndLoadActive(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	want := ActiveSidecar{SidecarID: "sb-abc", Name: "my-box"}
+	want := ActiveSidecar{SidecarIDs: []string{"sb-abc"}, Name: "my-box"}
 	err := SaveActive(ctx, want)
 	assert.NilError(t, err)
 
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil, "expected non-nil ActiveSidecar")
-	assert.Equal(t, got.SidecarID, want.SidecarID)
+	assert.Equal(t, got.ID(), want.ID())
 	assert.Equal(t, got.Name, want.Name)
+}
+
+func TestLoadActiveReadsLegacySidecarID(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	setupXDGData(t)
+
+	dataDir, err := saveDir()
+	assert.NilError(t, err)
+	assert.NilError(t, os.MkdirAll(dataDir, 0o755))
+	legacy := `{"sidecar_id":"sb-legacy","name":"old-box"}`
+	assert.NilError(t, os.WriteFile(filepath.Join(dataDir, "sidecar.json"), []byte(legacy), 0o644))
+
+	got, err := LoadActive(context.Background())
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil, "expected non-nil ActiveSidecar")
+	assert.DeepEqual(t, got.SidecarIDs, []string{"sb-legacy"})
+	assert.Equal(t, got.ID(), "sb-legacy")
+	assert.Equal(t, got.Name, "old-box")
 }
 
 func TestLoadActiveReturnsNilWhenMissing(t *testing.T) {
@@ -96,20 +115,20 @@ func TestLoadActiveUsesGitRootAsKey(t *testing.T) {
 
 	// Save from child — keyed to parent (git root).
 	t.Chdir(child)
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-git-root"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-git-root"}}))
 
 	// Load from child — should find it.
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-git-root")
+	assert.Equal(t, got.ID(), "sb-git-root")
 
 	// Load from parent (the git root) — same project, same file.
 	t.Chdir(parent)
 	got, err = LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-git-root")
+	assert.Equal(t, got.ID(), "sb-git-root")
 }
 
 func TestLoadActiveUsesCwdWhenNoGitRepo(t *testing.T) {
@@ -118,12 +137,12 @@ func TestLoadActiveUsesCwdWhenNoGitRepo(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-cwd"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-cwd"}}))
 
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-cwd")
+	assert.Equal(t, got.ID(), "sb-cwd")
 }
 
 func TestClearActive(t *testing.T) {
@@ -132,7 +151,7 @@ func TestClearActive(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-xyz"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-xyz"}}))
 
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
@@ -154,7 +173,7 @@ func TestSessionKeyedSidecar(t *testing.T) {
 	sessCtx := session.WithID(ctx, "sess-abc")
 
 	// Save without a session — generic file.
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-generic"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-generic"}}))
 
 	// Session-keyed load should not see the generic file.
 	got, err := LoadActive(sessCtx)
@@ -162,18 +181,18 @@ func TestSessionKeyedSidecar(t *testing.T) {
 	assert.Assert(t, got == nil, "session-keyed load should not see generic file")
 
 	// Save under the session.
-	assert.NilError(t, SaveActive(sessCtx, ActiveSidecar{SidecarID: "sb-session"}))
+	assert.NilError(t, SaveActive(sessCtx, ActiveSidecar{SidecarIDs: []string{"sb-session"}}))
 
 	got, err = LoadActive(sessCtx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-session")
+	assert.Equal(t, got.ID(), "sb-session")
 
 	// Without the session, the original generic file is still intact.
 	got, err = LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
-	assert.Equal(t, got.SidecarID, "sb-generic")
+	assert.Equal(t, got.ID(), "sb-generic")
 }
 
 func TestClearActiveNoopWhenMissing(t *testing.T) {
@@ -190,14 +209,14 @@ func TestWorkspaceFieldRoundTrip(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	want := ActiveSidecar{SidecarID: "sb-1", Name: "test", Workspace: "/workspace/myrepo"}
+	want := ActiveSidecar{SidecarIDs: []string{"sb-1"}, Name: "test", Workspace: "/workspace/myrepo"}
 	assert.NilError(t, SaveActive(ctx, want))
 
 	got, err := LoadActive(ctx)
 	assert.NilError(t, err)
 	assert.Assert(t, got != nil)
 	assert.Equal(t, got.Workspace, want.Workspace)
-	assert.Equal(t, got.SidecarID, want.SidecarID)
+	assert.Equal(t, got.ID(), want.ID())
 }
 
 func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
@@ -206,7 +225,7 @@ func TestWorkspaceOmittedWhenEmpty(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-1"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-1"}}))
 
 	stateDir, err := saveDir()
 	assert.NilError(t, err)
@@ -221,7 +240,7 @@ func TestResolveWorkspaceCLIFlagWins(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-1", Workspace: "/workspace/saved"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-1"}, Workspace: "/workspace/saved"}))
 
 	got, err := ResolveWorkspace(ctx, "/workspace/override", "myrepo")
 	assert.NilError(t, err)
@@ -234,7 +253,7 @@ func TestResolveWorkspaceSidecarFallback(t *testing.T) {
 	setupXDGData(t)
 
 	ctx := context.Background()
-	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarID: "sb-1", Workspace: "/workspace/saved"}))
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-1"}, Workspace: "/workspace/saved"}))
 
 	got, err := ResolveWorkspace(ctx, "", "myrepo")
 	assert.NilError(t, err)
@@ -300,7 +319,7 @@ func TestSaveActivePrunesRekeyedStateFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	stateDir, err := config.ProjectDataDir(dir)
+	stateDir, err := saveDir()
 	assert.NilError(t, err)
 	assert.NilError(t, os.MkdirAll(stateDir, 0o755))
 
@@ -311,7 +330,7 @@ func TestSaveActivePrunesRekeyedStateFiles(t *testing.T) {
 	keep := filepath.Join(stateDir, "sidecar.unrelated.json")
 	assert.NilError(t, os.WriteFile(keep, []byte(`{"sidecar_id":"sb-2"}`), 0o644))
 
-	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarID: "sb-1"}))
+	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarIDs: []string{"sb-1"}}))
 
 	_, err = os.Stat(stale)
 	assert.Assert(t, os.IsNotExist(err), "state file re-keyed to a new name must be removed")
@@ -319,6 +338,28 @@ func TestSaveActivePrunesRekeyedStateFiles(t *testing.T) {
 	assert.NilError(t, err, "state for a different sidecar must survive")
 	_, err = os.Stat(filepath.Join(stateDir, "sidecar.json"))
 	assert.NilError(t, err)
+}
+
+func TestSaveActivePrunesRekeyedStateFilesForAnyGroupMember(t *testing.T) {
+	setupXDGData(t)
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	stateDir, err := saveDir()
+	assert.NilError(t, err)
+	assert.NilError(t, os.MkdirAll(stateDir, 0o755))
+
+	stale := filepath.Join(stateDir, "sidecar.other-session.json")
+	assert.NilError(t, os.WriteFile(stale, []byte(`{"sidecar_ids":["sb-2","sb-9"],"last_synced_ref":"oldref"}`), 0o644))
+	keep := filepath.Join(stateDir, "sidecar.unrelated.json")
+	assert.NilError(t, os.WriteFile(keep, []byte(`{"sidecar_ids":["sb-8"]}`), 0o644))
+
+	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{SidecarIDs: []string{"sb-1", "sb-2"}}))
+
+	_, err = os.Stat(stale)
+	assert.Assert(t, os.IsNotExist(err), "state file sharing any pooled sidecar ID must be removed")
+	_, err = os.Stat(keep)
+	assert.NilError(t, err, "state for a different sidecar must survive")
 }
 
 func TestClearActiveByOrgRemovesOnlyMatchingOrg(t *testing.T) {
@@ -389,4 +430,45 @@ func TestClearActiveByOrgReportsRemovalFailures(t *testing.T) {
 	removed, err := ClearActiveByOrg("org-1")
 	assert.Assert(t, err != nil, "failure to remove state must surface as an error")
 	assert.Equal(t, removed, 1, "the sweep must continue past a failing project")
+}
+func TestRemoveActiveSidecar_PreservesRemainingGroup(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	setupXDGData(t)
+
+	ctx := context.Background()
+	want := ActiveSidecar{
+		SidecarIDs: []string{"sb-1", "sb-2", "sb-3"},
+		Name:       "pool",
+		Workspace:  "/workspace/repo",
+	}
+	assert.NilError(t, SaveActive(ctx, want))
+
+	changed, err := RemoveActiveSidecar(ctx, "sb-2")
+	assert.NilError(t, err)
+	assert.Assert(t, changed)
+
+	got, err := LoadActive(ctx)
+	assert.NilError(t, err)
+	assert.Assert(t, got != nil)
+	assert.DeepEqual(t, got.SidecarIDs, []string{"sb-1", "sb-3"})
+	assert.Equal(t, got.Name, want.Name)
+	assert.Equal(t, got.Workspace, want.Workspace)
+}
+
+func TestRemoveActiveSidecar_ClearsWhenLastMemberRemoved(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	setupXDGData(t)
+
+	ctx := context.Background()
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{SidecarIDs: []string{"sb-1"}}))
+
+	changed, err := RemoveActiveSidecar(ctx, "sb-1")
+	assert.NilError(t, err)
+	assert.Assert(t, changed)
+
+	got, err := LoadActive(ctx)
+	assert.NilError(t, err)
+	assert.Assert(t, got == nil)
 }

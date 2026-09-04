@@ -42,19 +42,20 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 			continue
 		}
 		var as sidecar.ActiveSidecar
-		if json.Unmarshal(data, &as) != nil || as.SidecarID == "" {
+		if json.Unmarshal(data, &as) != nil || as.ID() == "" {
 			continue
 		}
 		var mtime time.Time
 		if fi, err := os.Stat(path); err == nil {
 			mtime = fi.ModTime()
 		}
-		at, dup := idx[as.SidecarID]
+		id := as.ID()
+		at, dup := idx[id]
 		if dup && !mtime.After(result[at].FileMtime) {
 			continue
 		}
 		ss := SidecarState{
-			ID:           as.SidecarID,
+			ID:           id,
 			Name:         as.Name,
 			SessionID:    as.SessionID,
 			ProjectName:  projectName,
@@ -66,7 +67,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 			result[at] = ss
 			continue
 		}
-		idx[as.SidecarID] = len(result)
+		idx[id] = len(result)
 		result = append(result, ss)
 	}
 	return result
