@@ -97,21 +97,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 		return fmt.Errorf("rsync: parse proxy addr: %w", err)
 	}
 
-	sshArgs := []string{"ssh", "-p", port,
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "IdentitiesOnly=yes", // prevent agent key flood before explicit key is tried
-		"-q",
-	}
-	if sess.IdentityFile != "" {
-		// Pass path directly — rsync tokenizes -e by whitespace and calls execve,
-		// so shell quoting (ShellEscape) would embed literal quote characters in
-		// the filename and cause ssh to fall through to agent keys.
-		sshArgs = append(sshArgs, "-i", sess.IdentityFile)
-	} else if sess.UseAgent && sess.AuthSock != "" {
-		sshArgs = append(sshArgs, "-o", "IdentitiesOnly=no")
-	}
-	sshCmd := strings.Join(sshArgs, " ")
+	sshCmd := sshCommand(sess, port)
 
 	src := strings.TrimRight(cwd, "/") + "/"
 	dst := fmt.Sprintf("%s@127.0.0.1:%s", defaultSSHUser, repoPath)
@@ -135,6 +121,32 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 
 	status(iostream.LevelDone, "Synced")
 	return nil
+}
+
+// sshCommand builds the command rsync passes to -e in order to reach the
+// sidecar through the local proxy listening on port.
+//
+// IdentitiesOnly=yes is set only alongside an explicit -i. OpenSSH honours the
+// first occurrence of an option, so setting it unconditionally cannot be undone
+// later: an IdentitiesOnly=no appended for agent sessions is silently ignored,
+// leaving ssh unable to offer the agent key OpenSession registered. With no -i
+// to restrict, IdentitiesOnly=yes also does not mean "no keys" — ssh falls back
+// to the default ~/.ssh/id_* filenames, so it offers unrelated keys instead.
+//
+// -q is deliberately absent so ssh diagnostics reach the rsync error instead of
+// being swallowed.
+func sshCommand(sess *Session, port string) string {
+	args := []string{"ssh", "-p", port,
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+	}
+	if sess.IdentityFile != "" {
+		// Pass path directly — rsync tokenizes -e by whitespace and calls execve,
+		// so shell quoting (ShellEscape) would embed literal quote characters in
+		// the filename and cause ssh to fall through to agent keys.
+		args = append(args, "-o", "IdentitiesOnly=yes", "-i", sess.IdentityFile)
+	}
+	return strings.Join(args, " ")
 }
 
 // startSSHProxy starts a local TCP listener on a random port and bridges each
