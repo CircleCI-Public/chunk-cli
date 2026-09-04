@@ -193,6 +193,82 @@ func TestRecorderNilInner(t *testing.T) {
 	rec.Status(iostream.LevelInfo, "should not panic")
 }
 
+func TestSetCommandIDStampsTerminalEvent(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := l.Recorder(nil, OpValidate, "sc-id", "my-sc", "main")
+
+	rec.Status(iostream.LevelInfo, "$ go test ./...")
+	rec.SetCommandID("cmd-abc123")
+	rec.Status(iostream.LevelError, "test  12s (remote)") // per-command fail event
+	rec.Status(iostream.LevelError, "0/1 passed  12s")    // run-wide summary, no command
+
+	got, err := l.Recent(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 events, got %d", len(got))
+	}
+	if got[0].CommandID != "" {
+		t.Errorf("info event CommandID = %q, want empty", got[0].CommandID)
+	}
+	if got[1].CommandID != "cmd-abc123" {
+		t.Errorf("terminal event CommandID = %q, want %q", got[1].CommandID, "cmd-abc123")
+	}
+	if got[2].CommandID != "" {
+		t.Errorf("summary event CommandID = %q, want empty (ID already consumed)", got[2].CommandID)
+	}
+}
+
+func TestSetCommandIDConsumedOnce(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := l.Recorder(nil, OpValidate, "sc-id", "my-sc", "main")
+	rec.SetCommandID("cmd-1")
+	rec.Status(iostream.LevelDone, "test  3s (remote)")
+	rec.Status(iostream.LevelDone, "lint  1s (remote)") // second command: no ID set yet
+
+	got, err := l.Recent(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].CommandID != "cmd-1" {
+		t.Errorf("first event CommandID = %q, want %q", got[0].CommandID, "cmd-1")
+	}
+	if got[1].CommandID != "" {
+		t.Errorf("second event CommandID = %q, want empty", got[1].CommandID)
+	}
+}
+
+func TestSetCommandIDNotOnFinalEvent(t *testing.T) {
+	dir := t.TempDir()
+	l, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := l.Recorder(nil, OpValidate, "sc-id", "my-sc", "main")
+	rec.SetCommandID("cmd-abc")
+	rec.Final(iostream.LevelDone, "1/1 passed  3s", 1, 1)
+
+	got, err := l.Recent(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].CommandID != "" {
+		t.Errorf("Final event CommandID = %q, want empty", got[0].CommandID)
+	}
+}
+
 func TestLevelStr(t *testing.T) {
 	tests := []struct {
 		in   iostream.Level
