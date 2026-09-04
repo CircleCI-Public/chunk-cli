@@ -132,6 +132,40 @@ func stopDaemon(pid int, sockPath string) error {
 	return fmt.Errorf("watch daemon pid %d did not exit within 3s", pid)
 }
 
+// StopForCredentialChange stops a running watch daemon so that the next launch
+// picks up newly stored credentials.
+//
+// The daemon resolves its CircleCI client once, at startup, so one that started
+// before a login holds a nil client for the rest of its life and streams no
+// output however many times the developer retries. Stopping it here is what
+// makes `chunk auth login` take effect: a `chunk watch` already on screen
+// relaunches it through EnsureLaunched on its next poll, and otherwise the next
+// `chunk watch` starts a daemon that can authenticate.
+//
+// Best-effort and silent, like RegisterCommand. Failing to stop the daemon must
+// not fail a login that has otherwise succeeded, and the cost of not stopping it
+// is the buffered output of a daemon that was not streaming anything anyway.
+func StopForCredentialChange() {
+	pidPath, err := PIDPath()
+	if err != nil {
+		return
+	}
+	sockPath, err := SocketPath()
+	if err != nil {
+		return
+	}
+	running, pid, err := IsRunning(pidPath)
+	if err != nil || !running {
+		return
+	}
+	// Only stop something that is actually answering: a stale pid file is the
+	// launcher's problem to clean up, not ours.
+	if reachable, _ := ping(sockPath); !reachable {
+		return
+	}
+	_ = stopDaemon(pid, sockPath)
+}
+
 // EnsureRunning checks whether the watch daemon is running and serving, and
 // launches it if not. subArgs are the CLI arguments used to invoke the daemon
 // (e.g. ["watch", "_daemon"]).

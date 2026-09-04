@@ -129,3 +129,27 @@ func TestEnsureLaunched_leavesAReachableDaemonAlone(t *testing.T) {
 		t.Fatal("daemon did not shut down")
 	}
 }
+
+// A daemon resolves its CircleCI client once at startup, so a login has no
+// effect on one that is already running. Stopping it is what makes the next
+// launch pick the new credentials up.
+func TestStopForCredentialChangeStopsARunningDaemon(t *testing.T) {
+	startTestDaemon(t)
+
+	sockPath, err := SocketPath()
+	assert.NilError(t, err)
+	reachable, _ := ping(sockPath)
+	assert.Assert(t, reachable, "daemon should be answering before the stop")
+
+	StopForCredentialChange()
+
+	reachable, _ = ping(sockPath)
+	assert.Check(t, !reachable, "daemon still answering after StopForCredentialChange")
+}
+
+// Best-effort: with nothing running there is nothing to stop, and a login must
+// not fail because of it.
+func TestStopForCredentialChangeIsANoopWithNoDaemon(t *testing.T) {
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+	StopForCredentialChange()
+}
