@@ -262,19 +262,19 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 	return nil
 }
 
-func installSkillsStep(workDir string, streams iostream.Streams) {
-	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, "chunk-sidecar", "chunk-sidecar-setup") {
+func installSkillsStep(streams iostream.Streams) {
+	for _, r := range skills.Install(skills.ScopeProject) {
 		if r.Skipped {
 			continue
 		}
 		for _, name := range r.Installed {
-			streams.ErrPrintln(ui.Success(fmt.Sprintf("Installed %s skill for %s", name, r.Agent)))
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("Installed %s plugin for %s", name, r.Agent)))
 		}
 		for _, name := range r.Updated {
-			streams.ErrPrintln(ui.Success(fmt.Sprintf("Updated %s skill for %s", name, r.Agent)))
+			streams.ErrPrintln(ui.Success(fmt.Sprintf("%s plugin already installed for %s", name, r.Agent)))
 		}
 		for _, msg := range r.Errors {
-			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not install skill for %s: %s", r.Agent, msg)))
+			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not install plugin for %s: %s", r.Agent, msg)))
 		}
 	}
 }
@@ -589,7 +589,7 @@ hook config files.`,
 
 			// Step 7: Agent skills
 			if !skipSkills {
-				installSkillsStep(workDir, streams)
+				installSkillsStep(streams)
 			}
 
 			streams.ErrPrintln(ui.Success("Project initialized"))
