@@ -63,7 +63,7 @@ func TestSidecarSnapshotCreateUsesActiveSidecar(t *testing.T) {
 	env.CircleCIURL = srv.URL
 	workDir := t.TempDir()
 
-	// create sidecar → sets active sidecar to "sidecar-new-123"
+	// create sidecar → sets active sidecar to "sidecar-new-1"
 	result := binary.RunCLI(t, []string{
 		"sidecar", "create",
 		"--org-id", "org-aaa",
@@ -85,7 +85,7 @@ func TestSidecarSnapshotCreateUsesActiveSidecar(t *testing.T) {
 	var body map[string]interface{}
 	err := json.Unmarshal(snapReqs[0].Body, &body)
 	assert.NilError(t, err)
-	assert.Equal(t, body["data"].(map[string]any)["references"].(map[string]any)["sidecar_instance"].(map[string]any)["id"], "sidecar-new-123",
+	assert.Equal(t, body["data"].(map[string]any)["references"].(map[string]any)["sidecar_instance"].(map[string]any)["id"], "sidecar-new-1",
 		"expected active sidecar ID in request body")
 
 	// After a successful snapshot, the source sidecar should have been deleted

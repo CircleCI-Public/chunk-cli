@@ -77,6 +77,7 @@ type FakeCircleCI struct {
 	mu              sync.RWMutex
 	snapshotCounter int
 	orgCounter      int
+	sidecarCounter  int
 	Collaborations  []Collaboration
 	Projects        []Project
 	Sidecars        []Sidecar
@@ -91,6 +92,7 @@ type FakeCircleCI struct {
 	CollaborationsStatusCode int    // override for GET /me/collaborations
 	ListStatusCode           int    // override for GET /sidecar/instances
 	CreateStatusCode         int    // override for POST /sidecar/instances
+	CreateErrorAfter         int    // if > 0, fail creates after this many successes
 	DeleteStatusCode         int    // override for DELETE /sidecar/instances/:id
 	PruneStatusCode          int    // override for POST /sidecar/instances/prune
 	ExecStatusCode           int    // override for POST /sidecar/instances/:id/exec
@@ -105,12 +107,13 @@ type FakeCircleCI struct {
 	// interrupted connection where no SSE frames arrive at all, which the client
 	// must treat as a resume trigger rather than a failure.
 	EmptyStreamsBeforeExit   int
-	AddKeyStatusCode         int // override for POST /sidecar/instances/:id/ssh/add-key
-	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
-	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
-	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
-	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
-	CreateOrgStatusCode      int // override for POST /api/v2/organization
+	AddKeyStatusCode         int             // override for POST /sidecar/instances/:id/ssh/add-key
+	StaleIDs                 map[string]bool // IDs that return 404 from the add-key endpoint
+	CreateSnapshotStatusCode int             // override for POST /sidecar/snapshots
+	GetSnapshotStatusCode    int             // override for GET /sidecar/snapshots/:id
+	ListSnapshotsStatusCode  int             // override for GET /sidecar/snapshots
+	GetCommandStatusCode     int             // override for GET /sidecar/commands/:id
+	CreateOrgStatusCode      int             // override for POST /api/v2/organization
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
@@ -245,9 +248,14 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 		return
 	}
 
-	f.mu.RLock()
+	f.mu.Lock()
+	f.sidecarCounter++
+	counter := f.sidecarCounter
 	statusCode := f.CreateStatusCode
-	f.mu.RUnlock()
+	if f.CreateErrorAfter > 0 && counter > f.CreateErrorAfter {
+		statusCode = http.StatusInternalServerError
+	}
+	f.mu.Unlock()
 	if statusCode != 0 {
 		c.JSON(statusCode, gin.H{"message": "API error"})
 		return
@@ -272,7 +280,7 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 	}
 
 	sidecar := Sidecar{
-		ID:    "sidecar-new-123",
+		ID:    fmt.Sprintf("sidecar-new-%d", counter),
 		Name:  body.Data.Attributes.Name,
 		OrgID: body.Data.References.Org.ID,
 		Image: body.Data.Attributes.Image,
@@ -358,6 +366,10 @@ func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {
 	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
+	if f.StaleIDs[c.Param("id")] {
+		c.JSON(http.StatusNotFound, gin.H{"message": "sidecar not found"})
+		return
+	}
 	if f.AddKeyStatusCode != 0 {
 		c.JSON(f.AddKeyStatusCode, gin.H{"message": "API error"})
 		return

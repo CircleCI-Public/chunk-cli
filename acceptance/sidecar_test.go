@@ -127,7 +127,7 @@ func TestSidecarsCreateHappyPath(t *testing.T) {
 	}, env, env.HomeDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "sidecar-new-123"),
+	assert.Assert(t, strings.Contains(result.Stderr, "sidecar-new-1"),
 		"expected sidecar ID in stderr, got: %s", result.Stderr)
 	assert.Assert(t, strings.Contains(result.Stderr, "my-new-sidecar"),
 		"expected sidecar name in stderr, got: %s", result.Stderr)
@@ -535,14 +535,14 @@ func TestSidecarsCreateSetsActiveSidecar(t *testing.T) {
 	}, env, workDir)
 
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "Set sidecar-new-123 as active sidecar"),
+	assert.Assert(t, strings.Contains(result.Stderr, "Set sidecar-new-1 as active sidecar"),
 		"expected active sidecar message, got: %s", result.Stderr)
 
 	// current should show the sidecar set by create
 	result = binary.RunCLI(t, []string{"sidecar", "current"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "sidecar-new-123"),
+	assert.Assert(t, strings.Contains(combined, "sidecar-new-1"),
 		"expected sidecar ID from current, got: %s", combined)
 }
 

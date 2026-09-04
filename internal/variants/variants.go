@@ -176,7 +176,7 @@ func runVariant(ctx context.Context, client *circleci.Client, v Variant, opts Op
 		return base
 	}
 
-	session, err := sidecar.OpenSession(ctx, client, sc.ID, opts.IdentityFile, opts.AuthSock)
+	session, err := sidecar.OpenSession(ctx, client, sc.ID, opts.IdentityFile, opts.AuthSock, false)
 	if err != nil {
 		base.Error = fmt.Sprintf("open session: %v", err)
 		return base
