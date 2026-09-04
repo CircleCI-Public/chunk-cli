@@ -100,14 +100,14 @@ func TestGroupEvents_doneFollowedByNewOp(t *testing.T) {
 	}
 }
 
-// groupByInvocation / isSummaryEvent tests
+// groupByInvocation / closesRun tests
 
 func TestGroupByInvocation_singleRun(t *testing.T) {
 	events := []eventlog.Event{
 		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
 		{Op: eventlog.OpValidate, Level: "done", Msg: "test    1.0s (remote)"},
 		{Op: eventlog.OpValidate, Level: "done", Msg: "lint    0.2s (remote)"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "2/2 passed  1.5s"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "2/2 passed  1.5s", Final: true, Passed: 2, Total: 2},
 	}
 	groups := groupByInvocation(events)
 	if len(groups) != 1 {
@@ -122,11 +122,11 @@ func TestGroupByInvocation_twoRuns(t *testing.T) {
 	events := []eventlog.Event{
 		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
 		{Op: eventlog.OpValidate, Level: "done", Msg: "test    1.0s (remote)"},
-		{Op: eventlog.OpValidate, Level: "error", Msg: "0/1 passed  1.0s"},
+		{Op: eventlog.OpValidate, Level: "error", Msg: "0/1 passed  1.0s", Final: true, Total: 1},
 		// second run
 		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
 		{Op: eventlog.OpValidate, Level: "done", Msg: "test    0.8s (remote)"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "1/1 passed  0.9s"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "1/1 passed  0.9s", Final: true, Passed: 1, Total: 1},
 	}
 	groups := groupByInvocation(events)
 	if len(groups) != 2 {
@@ -145,22 +145,20 @@ func TestGroupByInvocation_inProgress(t *testing.T) {
 	}
 }
 
-func TestIsSummaryEvent(t *testing.T) {
+func TestClosesRun(t *testing.T) {
 	cases := []struct {
-		msg  string
+		name string
+		e    eventlog.Event
 		want bool
 	}{
-		{"3/3 passed  5.2s", true},
-		{"0/4 passed  13.7s", true},
-		{"test    8.0s (remote)", false},
-		{"lint    0.4s (local)", false},
-		{"synced", false},
-		{"", false},
+		{"final event", eventlog.Event{Op: eventlog.OpValidate, Level: "done", Final: true, Passed: 3, Total: 3}, true},
+		{"per-command done", eventlog.Event{Op: eventlog.OpValidate, Level: "done", Msg: "test    8.0s (remote)"}, false},
+		{"sync done", eventlog.Event{Op: eventlog.OpSync, Level: "done", Msg: "Synced"}, false},
+		{"in flight", eventlog.Event{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace..."}, false},
 	}
 	for _, c := range cases {
-		e := eventlog.Event{Op: eventlog.OpValidate, Level: "done", Msg: c.msg}
-		if got := isSummaryEvent(e); got != c.want {
-			t.Errorf("isSummaryEvent(%q) = %v, want %v", c.msg, got, c.want)
+		if got := closesRun(c.e); got != c.want {
+			t.Errorf("closesRun(%s) = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
@@ -992,4 +990,57 @@ func TestConvertSnapshot_localRowStaysSeparateWhenSessionsShareAWorktree(t *test
 	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
 	assert.Assert(t, strings.Contains(pane, "this session"), pane)
+}
+
+// outcomeOf tests
+
+func TestOutcomeOf(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		events    []eventlog.Event
+		wantIcon  string
+		wantLabel string
+		wantLevel string
+	}{
+		{
+			name:      "running while recent",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace...", Ts: now.Add(-time.Minute)}},
+			wantIcon:  "●",
+			wantLabel: "running",
+			wantLevel: "",
+		},
+		{
+			name:      "abandoned once past the running timeout",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace...", Ts: now.Add(-8 * time.Hour)}},
+			wantIcon:  "⊘",
+			wantLabel: "abandoned",
+			wantLevel: levelAbandoned,
+		},
+		{
+			name: "passed",
+			events: []eventlog.Event{
+				{Op: eventlog.OpValidate, Level: "info", Msg: "$ task test", Ts: now.Add(-8 * time.Hour)},
+				{Op: eventlog.OpValidate, Level: "done", Msg: "4/4 passed  32.4s", Final: true, Passed: 4, Total: 4, Ts: now.Add(-8 * time.Hour)},
+			},
+			wantIcon:  "✓",
+			wantLabel: "4/4",
+			wantLevel: levelDone,
+		},
+		{
+			name:      "setup failure closes the invocation",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "error", Msg: "setup failed  3.1s: agent: failed to sign challenge", Final: true, Ts: now.Add(-8 * time.Hour)}},
+			wantIcon:  "✗",
+			wantLabel: "0/0",
+			wantLevel: levelError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			icon, label, level := outcomeOf(invocationGroup{events: tt.events})
+			if icon != tt.wantIcon || label != tt.wantLabel || level != tt.wantLevel {
+				t.Errorf("outcomeOf() = (%q, %q, %q), want (%q, %q, %q)", icon, label, level, tt.wantIcon, tt.wantLabel, tt.wantLevel)
+			}
+		})
+	}
 }

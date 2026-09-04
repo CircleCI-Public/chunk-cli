@@ -14,11 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -834,4 +836,30 @@ func TestValidateListShowsRoutingAndRole(t *testing.T) {
 	for _, want := range []string{"test [remote, gate]", "format [local, autofix]", "bare [local]"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q in:\n%s", want, out)
 	}
+}
+
+func TestFailBeforeRunClosesTheRun(t *testing.T) {
+	dir := t.TempDir()
+	log, err := eventlog.Open(dir)
+	assert.NilError(t, err)
+
+	var reported string
+	rec := log.Recorder(func(_ iostream.Level, msg string) { reported = msg }, eventlog.OpValidate, "", "", "")
+
+	inErr := errors.New("bundle sync: agent: failed to sign challenge")
+	assert.Equal(t, failBeforeRun(rec, time.Now(), inErr), inErr)
+
+	events, err := log.Recent(10)
+	assert.NilError(t, err)
+	assert.Equal(t, len(events), 1)
+	assert.Equal(t, events[0].Level, "error")
+	assert.Assert(t, strings.Contains(events[0].Msg, "setup failed"), "got %q", events[0].Msg)
+	assert.Assert(t, strings.Contains(events[0].Msg, inErr.Error()), "got %q", events[0].Msg)
+	assert.Equal(t, reported, events[0].Msg)
+
+	// Nothing ran, so the run closes on a 0/0 tally.
+	passed, total, ok := events[0].Outcome()
+	assert.Assert(t, ok)
+	assert.Equal(t, passed, 0)
+	assert.Equal(t, total, 0)
 }

@@ -424,7 +424,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			// does rather than repeating that bookkeeping here: clearing the failure
 			// counter, and whatever else the success branch grows later.
 			n := len(cfg.Commands)
-			return finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, wrapEventLogStatusFn(statusFn, "", nil, workDir, hook), streams, notifyFunc(rc.Notifications))
+			return finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, newValidateRecorder(statusFn, "", nil, workDir, hook), streams, notifyFunc(rc.Notifications))
 		}
 	}
 
@@ -457,26 +457,28 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// Wire event log for all runs (both local and remote). The wrap goes here —
-	// after setupRemote fills opts.sidecarID but before loadSidecarEnvVars — so
-	// that sync and env-resolve status events are captured.
-	// Kept unwrapped so a replacement sidecar can be rewrapped against its own ID
-	// rather than logging its events under the sidecar it replaced.
-	baseStatusFn := statusFn
-	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
+	// Wire the event log for all runs (both local and remote). The recorder is
+	// built here — after setupRemote fills opts.sidecarID but before
+	// loadSidecarEnvVars — so that sync and env-resolve events are captured.
+	// statusFn is kept so a replacement sidecar can get its own recorder rather
+	// than logging its events under the sidecar it replaced.
+	rec := newValidateRecorder(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 
-	envVars, statusFn, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
+	// Only load env vars and resolve secrets when a sidecar is actually
+	// being used — avoids parsing .env.local or hitting secrets APIs on
+	// purely local runs.
+	envVars, rec, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, freshlyCreated, statusFn, rec, workDir, hook, streams)
 	if err != nil {
-		return err
+		return failBeforeRun(rec, start, err)
 	}
 
-	result, execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	result, execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, opts.workdir, allRemote, envVars, cfg, rec.Status, streams)
 	if execErr == nil && resultCache != nil {
 		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
 			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
 		}
 	}
-	return finishValidate(cmd, hook, execErr, start, cfg, result, statusFn, streams, notifyFunc(rc.Notifications))
+	return finishValidate(cmd, hook, execErr, start, cfg, result, rec, streams, notifyFunc(rc.Notifications))
 }
 
 // loadEnvVarsWithRetry loads sidecar env vars, and if the sidecar is unusable
@@ -487,49 +489,47 @@ func loadEnvVarsWithRetry(
 	opts *validateOpts,
 	image, tokenSource string,
 	freshlyCreated bool,
-	baseStatusFn, statusFn iostream.StatusFunc,
+	statusFn iostream.StatusFunc,
+	rec *eventlog.Recorder,
 	workDir string,
 	hook *hookContext,
 	streams iostream.Streams,
-) (map[string]string, iostream.StatusFunc, bool, error) {
-	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+) (map[string]string, *eventlog.Recorder, bool, error) {
+	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, rec.Status, streams)
 	if errors.Is(err, errSidecarUnusable) {
 		// The sidecar could not be used and its state has been dropped, so replace
 		// it here rather than failing and asking for the same command again. The
 		// reap cannot prevent this on its own: a sidecar can go away between the
 		// listing and the sync, and one the API rejects as out of date is listed
 		// like any other.
-		statusFn(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
+		rec.Status(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
 		opts.sidecarID = ""
 		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, streams); createErr != nil {
-			return nil, statusFn, freshlyCreated, createErr
+			return nil, rec, freshlyCreated, createErr
 		}
 		// A replacement has none of the setup the old one had, so exec failures on
 		// it are real failures rather than grounds for falling back to local.
 		freshlyCreated = true
-		statusFn = wrapEventLogStatusFn(baseStatusFn, opts.sidecarID, nil, workDir, hook)
-		envVars, err = loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+		rec = newValidateRecorder(statusFn, opts.sidecarID, nil, workDir, hook)
+		envVars, err = loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, rec.Status, streams)
 	}
 	if err != nil {
 		if errors.Is(err, errSidecarUnusable) {
 			// Twice in one run is not a stale sidecar, so stop rather than churn.
-			return nil, statusFn, freshlyCreated, newUserError("Could not get a usable sidecar.").
+			return nil, rec, freshlyCreated, newUserError("Could not get a usable sidecar.").
 				withCode("sidecar.unusable").
 				withSuggestion("Create one explicitly with: chunk sidecar create").
 				wrap(err)
 		}
-		return nil, statusFn, freshlyCreated, err
+		return nil, rec, freshlyCreated, err
 	}
-	return envVars, statusFn, freshlyCreated, nil
+	return envVars, rec, freshlyCreated, nil
 }
 
-// wrapEventLogStatusFn wraps statusFn with event log recording for all runs,
-// both remote (sidecarID set) and local (sidecarID empty).
-func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) iostream.StatusFunc {
-	dataDir, err := config.ProjectDataDir(workDir)
-	if err != nil {
-		return statusFn
-	}
+// newValidateRecorder returns the recorder that reports validate progress and
+// records it in the event log, for all runs both remote (sidecarID set) and
+// local (sidecarID empty).
+func newValidateRecorder(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) *eventlog.Recorder {
 	scName := ""
 	if activeSidecar != nil && activeSidecar.SidecarID == sidecarID {
 		scName = activeSidecar.Name
@@ -538,7 +538,19 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	if hook != nil && hook.stopHookActive {
 		op = eventlog.OpHook
 	}
-	return eventlog.WrapFromDir(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
+	// A missing data dir leaves the recorder reporting without recording.
+	dataDir, _ := config.ProjectDataDir(workDir)
+	return eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
+}
+
+// failBeforeRun closes the run after a failure that happened once the recorder
+// was wired but before any command ran — a sync, secrets or env resolve
+// failure. finishValidate reports the only other closing event and is
+// unreachable from these paths, so without this the run stays open in the event
+// log and chunk watch reads it as still running.
+func failBeforeRun(rec *eventlog.Recorder, start time.Time, err error) error {
+	rec.Final(iostream.LevelError, fmt.Sprintf("setup failed  %s: %s", ui.FormatDuration(time.Since(start)), err), 0, 0)
+	return err
 }
 
 // notifyFunc returns notify.Send when enabled is true, or nil to skip notifications.
@@ -552,7 +564,7 @@ func notifyFunc(enabled bool) func(title, body string) {
 // finishValidate reports the validate outcome and handles hook exit codes.
 // notifyFn, when non-nil, is called with the notification title and body;
 // pass notify.Send for real desktop notifications, or a capturing closure in tests.
-func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, statusFn iostream.StatusFunc, streams iostream.Streams, notifyFn func(title, body string)) error {
+func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, rec *eventlog.Recorder, streams iostream.Streams, notifyFn func(title, body string)) error {
 	maxAttempts := validate.DefaultMaxAttempts
 	if hook != nil {
 		if ma := cfg.StopHookMaxAttempts; ma > 0 {
@@ -562,15 +574,14 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 
 	elapsed := ui.FormatDuration(time.Since(start))
 	summary := fmt.Sprintf("%d/%d passed", result.Passed, result.Total)
-	if execErr != nil {
-		if hook != nil {
-			attempt := validate.ReadAttempts(hook.sessionID) + 1
-			statusFn(iostream.LevelError, fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts))
-		} else {
-			statusFn(iostream.LevelError, fmt.Sprintf("%s  %s", summary, elapsed))
-		}
-	} else {
-		statusFn(iostream.LevelDone, fmt.Sprintf("%s  %s", summary, elapsed))
+	switch {
+	case execErr != nil && hook != nil:
+		attempt := validate.ReadAttempts(hook.sessionID) + 1
+		rec.Final(iostream.LevelError, fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts), result.Passed, result.Total)
+	case execErr != nil:
+		rec.Final(iostream.LevelError, fmt.Sprintf("%s  %s", summary, elapsed), result.Passed, result.Total)
+	default:
+		rec.Final(iostream.LevelDone, fmt.Sprintf("%s  %s", summary, elapsed), result.Passed, result.Total)
 	}
 	if notifyFn != nil {
 		if execErr != nil {
