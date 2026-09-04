@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
@@ -14,16 +15,39 @@ import (
 // defaultTestCommand is used by the Node.js case when no lock file narrows the package manager.
 const defaultTestCommand = "npm test"
 
+// Sources a detection can come from, for display in `chunk init`.
+const (
+	sourceLayout = "the repository layout"
+	sourceClaude = "Claude"
+)
+
 // PackageManager holds the name and CI-safe install command for a detected package manager.
 type PackageManager struct {
 	Name           string
 	InstallCommand string
 }
 
+// Detection is the outcome of validate-command detection: the commands, where
+// they came from, and anything detection could not resolve. Provenance matters
+// to the user — commands lifted from a CircleCI config can look nothing like
+// the toolchain defaults, and a bare list gives no way to tell why.
+type Detection struct {
+	Commands []config.Command
+	Source   string   // human-readable origin, empty when nothing was detected
+	Notes    []string // what detection could not resolve
+}
+
 // DetectCommands returns the full set of validate commands for the repo with metadata.
-// For known toolchains it returns richer commands without calling Claude. Claude is
-// only used as a fallback for unknown toolchains, and only when a client is provided.
-func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir string) ([]config.Command, error) {
+//
+// A checked-in CircleCI config is preferred over everything else: it names the
+// checks that actually gate the branch, where root filenames only suggest a
+// toolchain. Repos whose real build system is outranked by a stray manifest —
+// a bazel monorepo containing a package.json, say — are misdetected otherwise.
+//
+// Failing that, known toolchains return richer commands without calling Claude.
+// Claude is only used as a fallback for unknown toolchains, and only when a
+// client is provided.
+func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir string) (Detection, error) {
 	entries, _ := os.ReadDir(workDir)
 	files := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -35,90 +59,20 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 		has[f] = true
 	}
 
-	isGo := has["go.mod"]
-
-	switch {
-	case has["Taskfile.yml"] || has["Taskfile.yaml"]:
-		if isGo {
-			return []config.Command{
-				{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
-				{Name: "lint", Run: "task lint", Role: config.RoleGate, Timeout: 60},
-				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Timeout: 30},
-			}, nil
-		}
-		return []config.Command{
-			{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
-		}, nil
-
-	case has["Makefile"]:
-		if isGo {
-			return []config.Command{
-				{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
-				{Name: "lint", Run: "make lint", Role: config.RoleGate, Timeout: 60},
-			}, nil
-		}
-		return []config.Command{
-			{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
-		}, nil
-
-	case isGo:
-		return []config.Command{
-			{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: 300},
-			{Name: "lint", Run: "golangci-lint run ./...", Role: config.RoleGate, Timeout: 60},
-			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Timeout: 30},
-		}, nil
-
-	case has["Cargo.toml"]:
-		return []config.Command{
-			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: 300},
-		}, nil
-
-	case has["pyproject.toml"], has["requirements.txt"], has["setup.py"], has["Pipfile"]:
-		return []config.Command{
-			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: 300},
-		}, nil
-
-	case has["Gemfile"]:
-		// Assumes Rake-based test task (Rails default). RSpec/Minitest-only stacks may need manual adjustment.
-		return []config.Command{
-			{Name: "test", Run: "bundle exec rake test", Role: config.RoleGate, Timeout: 300},
-		}, nil
-
-	case has["pom.xml"]:
-		return []config.Command{
-			{Name: "test", Run: "mvn test", Role: config.RoleGate, Timeout: 300},
-		}, nil
-
-	case has["build.gradle"], has["build.gradle.kts"]:
-		gradleCmd := "gradle test"
-		if has["gradlew"] {
-			gradleCmd = "./gradlew test"
-		}
-		return []config.Command{
-			{Name: "test", Run: gradleCmd, Role: config.RoleGate, Timeout: 300},
-		}, nil
-
-	case has["package.json"]:
-		pm := DetectPackageManager(workDir)
-		testCmd := defaultTestCommand
-		if pm != nil {
-			testCmd = pm.Name + " test"
-		}
-		return []config.Command{
-			{Name: "test", Run: testCmd, Role: config.RoleGate, Timeout: 300},
-		}, nil
+	ci := commandsFromCI(workDir)
+	if len(ci.Commands) > 0 {
+		return withDefaults(ci, commandsFromFilenames(workDir, has)), nil
 	}
 
-	// Monorepo with no root package.json but a detectable package manager in subdirs.
-	if pm := DetectPackageManager(workDir); pm != nil {
-		return []config.Command{
-			{Name: "test", Run: pm.Name + " test", Role: config.RoleGate, Timeout: 300},
-		}, nil
+	if cmds := commandsFromFilenames(workDir, has); len(cmds) > 0 {
+		return Detection{Commands: cmds, Source: sourceLayout, Notes: fallbackNotes(ci)}, nil
 	}
 
-	// Unknown toolchain — ask Claude
+	// Unknown toolchain — ask Claude. With no client there is nothing left to
+	// try, but an unusable CircleCI config still needs explaining: this is the
+	// case where the user ends up with no commands at all.
 	if claude == nil {
-		return nil, nil
+		return Detection{Notes: fallbackNotes(ci)}, nil
 	}
 
 	pm := DetectPackageManager(workDir)
@@ -138,14 +92,178 @@ func DetectCommands(ctx context.Context, claude *anthropic.Client, workDir strin
 	resp, err := claude.Ask(ctx, config.ValidationModel, 64, prompt,
 		"Respond with ONLY a shell command string. No explanation, no reasoning, no markdown, no preamble. Output the command and nothing else.")
 	if err != nil {
-		return nil, fmt.Errorf("detect test command: %w", err)
+		return Detection{}, fmt.Errorf("detect test command: %w", err)
 	}
 
 	result := strings.TrimSpace(resp)
 	if result == "" {
-		return nil, nil
+		return Detection{Notes: fallbackNotes(ci)}, nil
 	}
-	return []config.Command{{Name: "test", Run: result, Role: config.RoleGate}}, nil
+	return Detection{
+		Commands: []config.Command{{Name: "test", Run: result, Role: config.RoleGate}},
+		Source:   sourceClaude,
+		Notes:    fallbackNotes(ci),
+	}, nil
+}
+
+// withDefaults fills the roles a CircleCI config left unnamed from the
+// toolchain defaults, leaving every command CI did name untouched.
+//
+// CI is authoritative for the gates it names, with two exceptions. Formatting
+// is an autofix rather than a gate: a config usually checks formatting by
+// diffing the tree, never by naming a command that rewrites it, so taking CI
+// literally there would leave the user with no formatter at all. A check-only
+// formatter from CI is emitted as "format-check", so it does not match the
+// default's "format" name and the real fixer is still added alongside it.
+//
+// The test gate is filled too, because losing it is not deference to CI — it is
+// a config that validates nothing. A suite can reach CI through a multi-line
+// script, an orb-provided job, or a step whose wording trips a skip marker, and
+// none of those classify, so a config naming only lint and format would
+// otherwise be written out test-less. Gates other than test stay unnamed when
+// CI does not name them: a lint gate the repo never runs is a tool that may not
+// even be installed, and it would fail every validate run.
+func withDefaults(ci Detection, defaults []config.Command) Detection {
+	names := func(cmds []config.Command, name string) bool {
+		return slices.ContainsFunc(cmds, func(c config.Command) bool { return c.Name == name })
+	}
+	for _, d := range defaults {
+		if d.Role != config.RoleAutofix && d.Name != roleTest {
+			continue
+		}
+		if names(ci.Commands, d.Name) {
+			continue
+		}
+		if d.Name == roleTest {
+			ci.Notes = append(ci.Notes, fmt.Sprintf(
+				"no test command was found in %s, so `%s` comes from the repository layout", ci.Source, d.Run))
+		}
+		ci.Commands = append(ci.Commands, d)
+	}
+	// Neither source named a test. Nothing can be filled in, but the user is
+	// about to get a config that gates on lint alone, and should hear it here
+	// rather than discover it the first time validate passes on a broken tree.
+	if !names(ci.Commands, roleTest) {
+		ci.Notes = append(ci.Notes, fmt.Sprintf(
+			"no test command was found in %s, and the repository layout does not suggest one", ci.Source))
+	}
+	sortByEmitOrder(ci.Commands)
+	return ci
+}
+
+// sortByEmitOrder puts a backfilled command where CI's own would have gone:
+// install before the gates it installs for, and the formatter last.
+func sortByEmitOrder(cmds []config.Command) {
+	index := func(name string) int {
+		for i, role := range emitOrder {
+			if roleSpec[role].name == name {
+				return i
+			}
+		}
+		return len(emitOrder)
+	}
+	slices.SortStableFunc(cmds, func(a, b config.Command) int {
+		return index(a.Name) - index(b.Name)
+	})
+}
+
+// fallbackNotes explains why a CircleCI config that exists was not used, so a
+// user who expected their CI gates is not left guessing. ci is the unusable
+// result detection already produced; an empty Source means there was no config
+// at all and nothing needs explaining.
+func fallbackNotes(ci Detection) []string {
+	if ci.Source == "" {
+		return nil
+	}
+	return append(ci.Notes, fmt.Sprintf("no runnable checks were found in %s", ci.Source))
+}
+
+// commandsFromFilenames guesses commands from the repo's root filenames. It is
+// the fallback for repos with no usable CircleCI config, and the source of
+// autofix commands CI configs do not name.
+func commandsFromFilenames(workDir string, has map[string]bool) []config.Command {
+	isGo := has["go.mod"]
+
+	switch {
+	case has["Taskfile.yml"] || has["Taskfile.yaml"]:
+		if isGo {
+			return []config.Command{
+				{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
+				{Name: "lint", Run: "task lint", Role: config.RoleGate, Timeout: 60},
+				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Timeout: 30},
+			}
+		}
+		return []config.Command{
+			{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
+		}
+
+	case has["Makefile"]:
+		if isGo {
+			return []config.Command{
+				{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
+				{Name: "lint", Run: "make lint", Role: config.RoleGate, Timeout: 60},
+			}
+		}
+		return []config.Command{
+			{Name: "test", Run: "make test", Role: config.RoleGate, Timeout: 300},
+		}
+
+	case isGo:
+		return []config.Command{
+			{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: 300},
+			{Name: "lint", Run: "golangci-lint run ./...", Role: config.RoleGate, Timeout: 60},
+			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Timeout: 30},
+		}
+
+	case has["Cargo.toml"]:
+		return []config.Command{
+			{Name: "test", Run: "cargo test", Role: config.RoleGate, Timeout: 300},
+		}
+
+	case has["pyproject.toml"], has["requirements.txt"], has["setup.py"], has["Pipfile"]:
+		return []config.Command{
+			{Name: "test", Run: "pytest", Role: config.RoleGate, Timeout: 300},
+		}
+
+	case has["Gemfile"]:
+		// Assumes Rake-based test task (Rails default). RSpec/Minitest-only stacks may need manual adjustment.
+		return []config.Command{
+			{Name: "test", Run: "bundle exec rake test", Role: config.RoleGate, Timeout: 300},
+		}
+
+	case has["pom.xml"]:
+		return []config.Command{
+			{Name: "test", Run: "mvn test", Role: config.RoleGate, Timeout: 300},
+		}
+
+	case has["build.gradle"], has["build.gradle.kts"]:
+		gradleCmd := "gradle test"
+		if has["gradlew"] {
+			gradleCmd = "./gradlew test"
+		}
+		return []config.Command{
+			{Name: "test", Run: gradleCmd, Role: config.RoleGate, Timeout: 300},
+		}
+
+	case has["package.json"]:
+		pm := DetectPackageManager(workDir)
+		testCmd := defaultTestCommand
+		if pm != nil {
+			testCmd = pm.Name + " test"
+		}
+		return []config.Command{
+			{Name: "test", Run: testCmd, Role: config.RoleGate, Timeout: 300},
+		}
+	}
+
+	// Monorepo with no root package.json but a detectable package manager in subdirs.
+	if pm := DetectPackageManager(workDir); pm != nil {
+		return []config.Command{
+			{Name: "test", Run: pm.Name + " test", Role: config.RoleGate, Timeout: 300},
+		}
+	}
+
+	return nil
 }
 
 // DetectPackageManager returns the detected package manager and its CI-safe install command, or nil.
