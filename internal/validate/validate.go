@@ -196,7 +196,7 @@ func RunRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		}
 		if exitCode != 0 {
 			if commandID != "" {
-				status(iostream.LevelInfo, "command_id: "+commandID)
+				_, _ = fmt.Fprintf(streams.Err, "command_id: %s\n", commandID)
 			}
 			status(iostream.LevelError, fmt.Sprintf("%-*s  %s (remote)", maxWidth, c.Name, formatElapsed(elapsed)))
 			skipRemaining(status, commands[i+1:], maxWidth)
@@ -227,7 +227,7 @@ func RunRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 	}
 	if exitCode != 0 {
 		if commandID != "" {
-			status(iostream.LevelInfo, "command_id: "+commandID)
+			_, _ = fmt.Fprintf(streams.Err, "command_id: %s\n", commandID)
 		}
 		status(iostream.LevelError, fmt.Sprintf("%s  %s (remote)", name, formatElapsed(elapsed)))
 		return Result{Total: 1}, fmt.Errorf("remote %s failed with exit code %d", name, exitCode)

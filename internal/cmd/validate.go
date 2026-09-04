@@ -842,9 +842,11 @@ func newExecFn(
 	execFn := func(ctx context.Context, script string) (string, string, int, string, error) {
 		result, err := client.Exec(ctx, sidecarID, "sh", []string{"-c", script}, merged, onOutput)
 		if err != nil {
-			// The ID of the exec that failed is not reported, so clear the carrier
-			// rather than let the previous command's ID be recorded against this one.
-			cmdIDs.Set("")
+			if result != nil {
+				cmdIDs.Set(result.CommandID)
+			} else {
+				cmdIDs.Set("")
+			}
 			return "", "", 0, "", err
 		}
 		// The event log records this on the command's terminal pass/fail event. An
@@ -893,7 +895,9 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 		if err != nil {
 			return validate.Result{}, unreachableSidecar(sidecarID, commandNames(remoteCfg.Commands), err)
 		}
-		if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
+		wsErr := validate.WorkspaceExists(ctx, execFn, dest)
+		cmdIDs.Take()
+		if wsErr != nil {
 			return validate.Result{}, missingWorkspace(sidecarID, dest, commandNames(remoteCfg.Commands), wsErr)
 		}
 		r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)

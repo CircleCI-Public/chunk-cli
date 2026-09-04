@@ -320,7 +320,7 @@ func (c *Client) streamCommandOutput(
 		// reporting it as a stalled stream would send someone hunting a network
 		// fault that does not exist.
 		if err == nil && outcome.frames > 0 && outcome.known == 0 {
-			return nil, ErrOutputFormatUnsupported
+			return result, ErrOutputFormatUnsupported
 		}
 
 		if outcome.cursor != "" {
@@ -332,14 +332,14 @@ func (c *Client) streamCommandOutput(
 			return result, nil
 		case outcome.failed != nil:
 			if !outcome.failed.Retryable {
-				return nil, fmt.Errorf("remote command: %s", outcome.failed.Message)
+				return result, fmt.Errorf("remote command: %s", outcome.failed.Message)
 			}
 		case err != nil:
 			if ctx.Err() != nil {
-				return nil, ctx.Err()
+				return result, ctx.Err()
 			}
 			if !isRetryable(err) {
-				return nil, mapErr("stream command output", err)
+				return result, mapErr("stream command output", err)
 			}
 		}
 
@@ -353,13 +353,13 @@ func (c *Client) streamCommandOutput(
 		} else if err != nil {
 			stalls++
 			if stalls > maxStreamStalls {
-				return nil, fmt.Errorf(
+				return result, fmt.Errorf(
 					"stream command output: gave up after %d attempts that returned nothing", stalls-1)
 			}
 		}
 
 		if attempts >= maxStreamAttempts {
-			return nil, fmt.Errorf(
+			return result, fmt.Errorf(
 				"stream command output: gave up after %d reconnects without the command finishing", attempts)
 		}
 
@@ -371,7 +371,7 @@ func (c *Client) streamCommandOutput(
 		delay := min(time.Duration(stalls)*streamRetryBase, 10*streamRetryBase)
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return result, ctx.Err()
 		case <-time.After(delay):
 		}
 	}
