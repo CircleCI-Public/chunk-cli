@@ -127,6 +127,8 @@ type sidecarInfo struct {
 	lastActivity time.Time
 	lastOp       eventlog.Op
 	lastLevel    string // level of the most recent event ("done", "error", etc.)
+	// resources is the latest resource sample, nil when the daemon has none.
+	resources *watchd.Resources
 }
 
 // pane identifies which side of the split layout has keyboard focus.
@@ -602,6 +604,10 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 		}
 
 		addRow("  " + m.rowStatus(st, sc))
+
+		if line := renderResources(st, sc.resources); line != "" {
+			addRow("  " + line)
+		}
 
 		if !sc.lastActivity.IsZero() {
 			addRow("  " + st.vdim(ago(sc.lastActivity)))

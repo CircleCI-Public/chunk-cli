@@ -45,6 +45,8 @@ type daemon struct {
 	// never execute on the poll path, so a hung stream cannot stall the
 	// dashboard for every other project.
 	out *outputStore
+	// res samples resource usage, only while a dashboard is attached.
+	res *resourceSampler
 }
 
 // authMessage renders a credential-resolution failure for the dashboard. An
@@ -104,11 +106,13 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authErr error) erro
 		client:    client,
 		authError: authMessage(authErr),
 		out:       newOutputStore(ctx),
+		res:       newResourceSampler(client),
 	}
 	// Still cancelled explicitly: this returns before the process exits in tests
 	// and any embedded caller, and it is what stops streamers promptly rather
 	// than whenever the parent context happens to be torn down.
 	defer d.out.stopAll()
+	defer d.res.stopAll()
 
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
@@ -182,6 +186,23 @@ func (d *daemon) poll() {
 	for _, ps := range work {
 		d.updateProject(ps)
 	}
+
+	// Reconcile samplers once per poll, across every project. Doing it inside
+	// updateProject would hand reconcile one project's sidecars at a time, and it
+	// stops any sampler absent from what it is given — so each project's turn
+	// would tear down every other project's samplers.
+	d.res.reconcile(d.allSidecars())
+}
+
+// allSidecars returns every known sidecar across all projects.
+func (d *daemon) allSidecars() []SidecarState {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var all []SidecarState
+	for _, ps := range d.projects {
+		all = append(all, ps.snap.Sidecars...)
+	}
+	return all
 }
 
 // initProject opens the event log for root and returns a new projectState.
@@ -217,6 +238,7 @@ func (d *daemon) updateProject(ps *projectState) {
 
 	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
 	annotateActivity(sidecars, ps.events)
+	d.res.annotate(sidecars)
 
 	snap := ProjectSnapshot{
 		Root:     ps.root,
@@ -235,6 +257,11 @@ func (d *daemon) updateProject(ps *projectState) {
 // snapshot returns a Snapshot filtered to the requested roots.
 // If roots is empty all known projects are returned.
 func (d *daemon) snapshot(roots []string) Snapshot {
+	// A snapshot request is the daemon's signal that a dashboard is attached, and
+	// resource sampling is gated on that: a persistent SSH connection per sidecar
+	// is only worth holding while someone is looking at it.
+	d.res.touch()
+
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 

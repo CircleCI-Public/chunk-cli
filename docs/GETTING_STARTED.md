@@ -275,7 +275,7 @@ chunk watch  1 sidecar  main@a3f9e12                      15:04:32
                        │
 ── chunk-cli           │ 14:58:01  sync      ✓  done
 ▶ my-sidecar           │ 14:55:12  validate  ✓  done
-  ✓ in sync            │ 14:52:44  sync      ✓  done
+  synced via rsync     │ 14:52:44  sync      ✓  done
   6m ago               │
 ──────────────────────────────────────────────────────────────────
   ↑/↓ j/k  select  ·  q  quit
@@ -290,6 +290,61 @@ chunk watch /path/to/other    # add another project
 ```
 
 `watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).
+
+#### Reading a command's output
+
+An invocation marked `▤` in the activity pane has output the watch daemon still
+holds. Press `Enter` on it to open a scrollback view: a command that is still
+running tails live, and one that has already finished is replayed from the
+buffer. This is the answer to "the hook ran validate, it failed, and the output
+is gone" — the daemon keeps a copy even though the process that ran the command
+has exited.
+
+```
+output  go test ./...  ✗ exit 1
+──────────────────────────────────────────────────────────────────
+ --- FAIL: TestSyncSkipsIgnoredFiles (0.03s)
+     sync_test.go:112: expected 3 files, got 4
+ FAIL
+──────────────────────────────────────────────────────────────────
+ esc back  ↑/↓ scroll  g/G top/follow  ctrl-c quit
+```
+
+Scrolling up detaches from the bottom so arriving output does not yank the view
+away from what you are reading; scroll back to the end (or press `G`) to follow
+again. `Esc` closes the pane and returns to the dashboard.
+
+Output is capped at 256 KiB per command and 20 commands per project, keeping the
+most recent of each — the pane says `(earlier output dropped)` rather than
+presenting a partial run as if it were whole. Buffers live in memory, so
+restarting the daemon clears them.
+
+For scripts and for agents with no terminal, the same output is available without
+the TUI:
+
+```bash
+chunk sidecar logs <command-id>        # command IDs appear in the dashboard
+chunk sidecar logs <command-id> -f     # keep printing until the command exits
+```
+
+Output goes to stdout so it can be piped; a non-zero remote status is reported on
+stderr as `exit status N`. `logs` itself fails only when *reading* failed.
+
+#### Live resource usage
+
+While the dashboard is open, each sidecar row also shows CPU, memory and disk,
+sampled every 2 seconds:
+
+```
+▶ my-sidecar           │ 14:55:12  validate  ⣟  running
+  ⣟ validate...        │
+  cpu  87%  mem  41%  disk  12%
+```
+
+Sampling runs only while `watch` is attached — close the dashboard and it stops.
+A reading older than a few intervals is dimmed and marked `(stale)` rather than
+disappearing, so a sampler that has stalled looks stalled instead of looking like
+an idle sidecar.
 
 ### Snapshots
 
