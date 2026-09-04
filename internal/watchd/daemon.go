@@ -27,12 +27,15 @@ type projectState struct {
 }
 
 type daemon struct {
-	mu       sync.RWMutex
-	projects map[string]*projectState // keyed by project root
+	mu         sync.RWMutex
+	projects   map[string]*projectState // keyed by project root
+	validateMu sync.Mutex               // serializes concurrent /validate requests
+	runner     ValidateRunner
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
-func RunDaemon(ctx context.Context) error {
+// runner is called in-process to execute validate commands received over the socket.
+func RunDaemon(ctx context.Context, runner ValidateRunner) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -59,7 +62,7 @@ func RunDaemon(ctx context.Context) error {
 	defer func() { _ = ln.Close() }()
 	defer func() { _ = os.Remove(sockPath) }()
 
-	d := &daemon{projects: make(map[string]*projectState)}
+	d := &daemon{projects: make(map[string]*projectState), runner: runner}
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()

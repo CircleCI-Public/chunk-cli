@@ -3,6 +3,7 @@ package watchd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,11 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrDaemonUnavailable is returned by RunValidate when the daemon socket is
+// unreachable, so callers can distinguish a transient connectivity failure from
+// a real validation error and fall back to inline execution.
+var ErrDaemonUnavailable = errors.New("daemon unavailable")
 
 // FetchSnapshot connects to the running watch daemon and returns the current
 // snapshot for the given project roots. If roots is empty all known projects
@@ -73,6 +79,43 @@ func stopDaemon(pid int, sockPath string) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("watch daemon pid %d did not exit within 3s", pid)
+}
+
+// IsDaemonRunning reports whether the watch daemon is reachable.
+func IsDaemonRunning() bool {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return false
+	}
+	ok, _ := ping(sockPath)
+	return ok
+}
+
+// RunValidate delegates a validate run to the daemon. args is os.Args[1:];
+// circleCIToken is forwarded to the subprocess as CIRCLE_TOKEN.
+func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return ValidateResponse{}, err
+	}
+	body, err := json.Marshal(ValidateRequest{Args: args, CircleCIToken: circleCIToken, Env: os.Environ()})
+	if err != nil {
+		return ValidateResponse{}, fmt.Errorf("marshal validate request: %w", err)
+	}
+	resp, err := longUnixClient(sockPath).Post("http://watchd/validate", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return ValidateResponse{}, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return ValidateResponse{}, fmt.Errorf("watch daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+	}
+	var result ValidateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ValidateResponse{}, fmt.Errorf("decode validate response: %w", err)
+	}
+	return result, nil
 }
 
 // EnsureRunning checks whether the watch daemon is running and serving, and

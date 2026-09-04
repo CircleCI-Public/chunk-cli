@@ -19,6 +19,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/filecache"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
@@ -29,6 +30,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
@@ -149,21 +151,24 @@ func reportSkippedAutofix(skipped []string, streams iostream.Streams) {
 }
 
 type validateOpts struct {
-	sidecarID    string
-	identityFile string
-	workdir      string
-	orgID        string
-	dryRun       bool
-	list         bool
-	save         bool
-	remote       bool
-	local        bool
-	markRemote   bool
-	jsonOut      bool
-	inlineCmd    string
-	projectDir   string
-	envVarsFlag  []string
-	envFile      string
+	sidecarID      string
+	identityFile   string
+	workdir        string
+	orgID          string
+	dryRun         bool
+	list           bool
+	save           bool
+	remote         bool
+	local          bool
+	markRemote     bool
+	jsonOut        bool
+	inlineCmd      string
+	projectDir     string
+	envVarsFlag    []string
+	envFile        string
+	noDaemon       bool   // bypasses daemon delegation; set by the daemon when calling in-process
+	hookSessionID  string // hook session ID forwarded from client to daemon subprocess
+	stopHookActive bool   // stop_hook_active forwarded from client to daemon subprocess
 }
 
 func newValidateCmd() *cobra.Command {
@@ -202,6 +207,12 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.projectDir, "project", "", "Override project directory")
 	cmd.Flags().StringArrayVarP(&opts.envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
+	cmd.Flags().BoolVar(&opts.noDaemon, "no-daemon", false, "")
+	_ = cmd.Flags().MarkHidden("no-daemon")
+	cmd.Flags().StringVar(&opts.hookSessionID, "hook-session-id", "", "")
+	_ = cmd.Flags().MarkHidden("hook-session-id")
+	cmd.Flags().BoolVar(&opts.stopHookActive, "stop-hook-active", false, "")
+	_ = cmd.Flags().MarkHidden("stop-hook-active")
 
 	cmd.AddCommand(newValidateVariantsCmd())
 
@@ -235,7 +246,7 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	} else {
 		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate [%s]", sessionLabel)))
 	}
-	if validate.HooksDisabled(workDir, os.Getenv(config.EnvChunkHooksDisabled) != "") {
+	if validate.HooksDisabled(workDir, envctx.Getenv(ctx, config.EnvChunkHooksDisabled) != "") {
 		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)
 	}
@@ -313,23 +324,44 @@ func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc confi
 	return ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 }
 
+func resolveWorkDir(opts *validateOpts) (string, error) {
+	if opts.projectDir != "" {
+		return opts.projectDir, nil
+	}
+	return os.Getwd()
+}
+
+// shouldUseDaemon reports whether this validate run should be delegated to the
+// watch daemon. Hook runs always run inline (stdin consumed, per-session attempt
+// tracking). --no-daemon skips this to avoid re-delegation when the daemon calls
+// us in-process.
+func shouldUseDaemon(hook *hookContext, noDaemon bool) bool {
+	return hook == nil && !noDaemon && watchd.IsDaemonRunning()
+}
+
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
 	streams := iostream.FromCmd(cmd)
 
 	// Record before git-status check so total captures setup overhead too.
 	start := time.Now()
 
-	workDir := opts.projectDir
-	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			return err
-		}
+	workDir, err := resolveWorkDir(opts)
+	if err != nil {
+		return err
 	}
 
 	hook := detectHook(cmd.InOrStdin())
+	// When running as a daemon subprocess, hook context arrives via flags.
+	if opts.hookSessionID != "" && hook == nil {
+		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive}
+	}
 	ctx := cmd.Context()
+
+	// Delegate hook runs to the daemon before initHook so the subprocess prints
+	// the session header (not the client, which would cause it to appear twice).
+	if done, err := tryHookDelegate(cmd, hook, opts.noDaemon, streams); done {
+		return err
+	}
 
 	// The working-tree fingerprint answers both hook-only questions about the
 	// tree: whether there is anything to validate at all, and whether this exact
@@ -360,39 +392,9 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		name = args[0]
 	}
 
-	// --list: show configured commands
-	if opts.list {
-		return runValidateList(workDir, opts.jsonOut, streams, statusFn)
-	}
-	if opts.jsonOut {
-		return fmt.Errorf("--json requires --list")
-	}
-
-	// --mark-remote edits the config and stops; it never runs anything, so it
-	// takes its own read-modify-write path ahead of the run setup below.
-	if opts.markRemote {
-		return runMarkRemote(workDir, name, streams)
-	}
-
-	cfg, err := config.LoadProjectConfig(workDir)
-	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
-		if hook != nil {
-			return nil // no config in hook context: skip silently
-		}
-		return &userError{
-			msg:        msgValidateNotConfigured,
-			suggestion: suggestionValidateNotConfigured,
-			errMsg:     "no validate commands configured",
-			hideDetail: true,
-		}
-	}
-
-	if err := validateEnvFlag(opts.envVarsFlag); err != nil {
+	cfg, done, err := validateEarlyExits(hook, opts, name, workDir, streams, statusFn)
+	if done {
 		return err
-	}
-
-	if opts.dryRun {
-		return runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
 	}
 
 	// Remote is the default; --local is the only opt-out.
@@ -426,6 +428,15 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			n := len(cfg.Commands)
 			return finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, wrapEventLogStatusFn(statusFn, "", nil, workDir, hook), streams, notifyFunc(rc.Notifications))
 		}
+	}
+
+	if shouldUseDaemon(hook, opts.noDaemon) {
+		err := runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, nil, streams)
+		if !errors.Is(err, watchd.ErrDaemonUnavailable) {
+			return err
+		}
+		// daemon disappeared between the IsDaemonRunning check and the POST;
+		// fall through to inline execution.
 	}
 
 	// allRemote is true unless --local is passed explicitly. opts.remote is
@@ -597,6 +608,86 @@ func validateEnvFlag(envVarsFlag []string) error {
 	return nil
 }
 
+// runValidateViaDaemon delegates a validate run to the watch daemon and writes
+// its captured output to streams. When hook is non-nil its context is forwarded
+// to the subprocess via hidden flags so it runs as a hook invocation.
+func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext, streams iostream.Streams) error {
+	reqArgs := args
+	if hook != nil {
+		reqArgs = append(append([]string(nil), args...), "--hook-session-id", hook.sessionID)
+		if hook.stopHookActive {
+			reqArgs = append(reqArgs, "--stop-hook-active")
+		}
+	}
+	resp, err := watchd.RunValidate(reqArgs, circleCIToken)
+	if err != nil {
+		return fmt.Errorf("daemon validate: %w", err)
+	}
+	_, _ = streams.Out.Write([]byte(resp.Stdout))
+	_, _ = streams.Err.Write([]byte(resp.Stderr))
+	if resp.ExitCode != 0 {
+		return &silentExitError{code: resp.ExitCode}
+	}
+	return nil
+}
+
+// tryHookDelegate delegates a hook-invoked validate run to the daemon before
+// initHook runs, so the subprocess prints the session header (not the client).
+// Returns (true, err) when the call was delegated, (false, nil) to run inline.
+func tryHookDelegate(cmd *cobra.Command, hook *hookContext, noDaemon bool, streams iostream.Streams) (bool, error) {
+	if hook == nil || noDaemon || !watchd.IsDaemonRunning() {
+		return false, nil
+	}
+	// If hooks are disabled in this environment, don't delegate — the daemon
+	// subprocess won't inherit this process's env var, so initHook must handle it.
+	if os.Getenv(config.EnvChunkHooksDisabled) != "" {
+		return false, nil
+	}
+	insecureStorage := insecureStorageFlag(cmd)
+	rc, err := config.ResolveCircleCI(insecureStorage)
+	if err != nil {
+		return false, nil // fall back to inline; inline path handles auth
+	}
+	err = runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, hook, streams)
+	if errors.Is(err, watchd.ErrDaemonUnavailable) {
+		return false, nil // daemon disappeared between check and POST; run inline
+	}
+	return true, err
+}
+
+// validateEarlyExits handles --list, --mark-remote, missing config, --dry-run.
+// Returns (cfg, done=true, err) to stop, or (cfg, false, nil) to continue.
+func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+	if opts.list {
+		return nil, true, runValidateList(workDir, opts.jsonOut, streams, statusFn)
+	}
+	if opts.jsonOut {
+		return nil, true, fmt.Errorf("--json requires --list")
+	}
+	if opts.markRemote {
+		return nil, true, runMarkRemote(workDir, name, streams)
+	}
+	cfg, err := config.LoadProjectConfig(workDir)
+	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
+		if hook != nil {
+			return nil, true, nil // no config in hook context: skip silently
+		}
+		return nil, true, &userError{
+			msg:        msgValidateNotConfigured,
+			suggestion: suggestionValidateNotConfigured,
+			errMsg:     "no validate commands configured",
+			hideDetail: true,
+		}
+	}
+	if err := validateEnvFlag(opts.envVarsFlag); err != nil {
+		return nil, true, err
+	}
+	if opts.dryRun {
+		return nil, true, runValidateDryRun(name, opts.inlineCmd, cfg, statusFn)
+	}
+	return cfg, false, nil
+}
+
 func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc) error {
 	if inlineCmd != "" {
 		cmdName := name
@@ -725,7 +816,7 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 }
 
 func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc, streams iostream.Streams) error {
-	authSock := os.Getenv(config.EnvSSHAuthSock)
+	authSock := envctx.Getenv(ctx, config.EnvSSHAuthSock)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return &userError{msg: "Could not sync to sidecar.", err: err}
