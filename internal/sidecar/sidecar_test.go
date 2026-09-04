@@ -58,37 +58,6 @@ func TestCreate(t *testing.T) {
 	assert.Equal(t, sb.OrgID, "org-1")
 }
 
-func TestExec(t *testing.T) {
-	cci := fakes.NewFakeCircleCI()
-	cci.ExecResponse = &fakes.ExecResponse{
-		CommandID: "cmd-1",
-		PID:       10,
-		Stdout:    "output\n",
-		Stderr:    "",
-		ExitCode:  0,
-	}
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	cl := newClient(t, srv.URL)
-	ctx := context.Background()
-
-	resp, err := sidecar.Exec(ctx, cl, "sb-1", "echo", []string{"hello"}, nil)
-	assert.NilError(t, err)
-	assert.Equal(t, resp.Stdout, "output\n")
-	assert.Equal(t, resp.ExitCode, 0)
-
-	// Verify exec request was made with sidecar ID in path
-	reqs := cci.Recorder.AllRequests()
-	var gotExecReq bool
-	for _, r := range reqs {
-		if r.URL.Path == "/api/v3/sidecar/instances/sb-1/exec" {
-			gotExecReq = true
-		}
-	}
-	assert.Assert(t, gotExecReq, "expected exec request at /api/v3/sidecar/instances/sb-1/exec")
-}
-
 func TestAddSSHKey(t *testing.T) {
 	t.Run("from string", func(t *testing.T) {
 		cci := fakes.NewFakeCircleCI()

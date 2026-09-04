@@ -22,6 +22,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func randomSidecarName() string {
@@ -392,7 +393,19 @@ or via the repeatable --args flag. Positional arguments are appended after any
 				}
 				_, _ = w.Write(data)
 			}
-			resp, err := sidecar.Exec(cmd.Context(), client, sidecarID, command, allArgs, onOutput)
+			// Registered like a validate run, so a command run by hand is as
+			// readable afterwards as one a hook fired. The project root is only an
+			// attribution key for the dashboard; cwd is the right answer even when
+			// it is not a repo, and an empty one simply groups under no project.
+			projectRoot, _ := os.Getwd()
+			resp, err := submitAndStream(cmd.Context(), client,
+				watchd.CommandReg{
+					SidecarID:   sidecarID,
+					ProjectRoot: projectRoot,
+					Op:          string(eventlog.OpExec),
+					Name:        execCommandLabel(command, allArgs),
+				},
+				command, allArgs, nil, onOutput)
 			if err != nil {
 				if err := notAuthorized("execute commands", rc.CircleCITokenSource, err); err != nil {
 					return err

@@ -26,6 +26,20 @@ type SidecarState struct {
 	Running      bool        `json:"running"`
 }
 
+// CommandState describes one remote command the daemon is buffering output for.
+type CommandState struct {
+	CommandID   string     `json:"command_id"`
+	SidecarID   string     `json:"sidecar_id"`
+	Op          string     `json:"op"`
+	Name        string     `json:"name"`
+	SubmittedAt time.Time  `json:"submitted_at"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
+	ExitCode    *int       `json:"exit_code,omitempty"`
+	Running     bool       `json:"running"`
+	Bytes       int64      `json:"bytes"`
+	Truncated   bool       `json:"truncated"`
+}
+
 // ProjectSnapshot is the daemon's view of one project at a point in time.
 type ProjectSnapshot struct {
 	Root     string           `json:"root"`
@@ -34,9 +48,14 @@ type ProjectSnapshot struct {
 	RepoName string           `json:"repo_name"`
 	Sidecars []SidecarState   `json:"sidecars"`
 	Events   []eventlog.Event `json:"events"`
+	Commands []CommandState   `json:"commands,omitempty"`
 }
 
 // Snapshot is a point-in-time view of all watched projects.
 type Snapshot struct {
 	Projects []ProjectSnapshot `json:"projects"`
+	// AuthError explains why output streaming is unavailable, when it is. An
+	// empty logs pane with no explanation sends people hunting the wrong fault,
+	// so the daemon reports this rather than silently serving nothing.
+	AuthError string `json:"auth_error,omitempty"`
 }

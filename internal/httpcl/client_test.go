@@ -3,9 +3,12 @@ package httpcl_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -466,5 +469,191 @@ func TestRetries504Exhausted(t *testing.T) {
 	}
 	if n := attempts.Load(); n != 4 {
 		t.Fatalf("expected 4 attempts (1 + 3 retries), got %d", n)
+	}
+}
+
+// A 401 is the only signal that a long-lived client's token has gone stale.
+// Reloading and retrying is what lets a process that outlives a login — the
+// watch daemon holds one client for its whole life — pick the new token up.
+func TestReloadToken_RetriesOnceWithTheNewToken(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok := r.Header.Get("Circle-Token")
+		seen = append(seen, tok)
+		if tok != "fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	var reloads atomic.Int32
+	cl := hc.New(hc.Config{
+		BaseURL:    srv.URL,
+		AuthToken:  "stale",
+		AuthHeader: "Circle-Token",
+		ReloadToken: func() (string, error) {
+			reloads.Add(1)
+			return "fresh", nil
+		},
+	})
+
+	status, err := cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want 200", status)
+	}
+	if got := []string{"stale", "fresh"}; len(seen) != 2 || seen[0] != got[0] || seen[1] != got[1] {
+		t.Errorf("tokens sent = %v, want %v", seen, got)
+	}
+	if n := reloads.Load(); n != 1 {
+		t.Errorf("reloads = %d, want 1", n)
+	}
+}
+
+// Retrying with the same token would only buy a second 401, and looping on
+// reload would turn a revoked token into a keychain read per request.
+func TestReloadToken_NoRetryWhenTokenIsUnchanged(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cl := hc.New(hc.Config{
+		BaseURL:     srv.URL,
+		AuthToken:   "stale",
+		AuthHeader:  "Circle-Token",
+		ReloadToken: func() (string, error) { return "stale", nil },
+	})
+
+	status, err := cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	if status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", status)
+	}
+	if err == nil {
+		t.Error("expected the 401 to surface as an error")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("server calls = %d, want 1 (no retry)", n)
+	}
+}
+
+// A failed reload must not mask the 401, which is the more useful of the two.
+func TestReloadToken_ReloadFailureSurfacesTheOriginal401(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cl := hc.New(hc.Config{
+		BaseURL:     srv.URL,
+		AuthToken:   "stale",
+		AuthHeader:  "Circle-Token",
+		ReloadToken: func() (string, error) { return "", errors.New("keychain unavailable") },
+	})
+
+	status, err := cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	if status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", status)
+	}
+	if err == nil || !hc.HasStatusCode(err, http.StatusUnauthorized) {
+		t.Errorf("err = %v, want the original 401", err)
+	}
+}
+
+// Without a ReloadToken the client behaves exactly as before.
+func TestReloadToken_AbsentMeansNoRetry(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cl := hc.New(hc.Config{BaseURL: srv.URL, AuthToken: "stale", AuthHeader: "Circle-Token"})
+	_, _ = cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	if n := calls.Load(); n != 1 {
+		t.Errorf("server calls = %d, want 1", n)
+	}
+}
+
+// The first attempt drains the request body, so the retry has to send its own
+// copy — otherwise a reloaded token would resend an empty POST.
+func TestReloadToken_RetryResendsTheBody(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, strings.TrimSpace(string(b)))
+		if r.Header.Get("Circle-Token") != "fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	cl := hc.New(hc.Config{
+		BaseURL:     srv.URL,
+		AuthToken:   "stale",
+		AuthHeader:  "Circle-Token",
+		ReloadToken: func() (string, error) { return "fresh", nil },
+	})
+
+	_, err := cl.Call(context.Background(),
+		hc.NewRequest(http.MethodPost, "/x", hc.Body(map[string]string{"name": "chunk"})))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("got %d requests, want 2", len(bodies))
+	}
+	if bodies[0] != bodies[1] {
+		t.Errorf("retry body = %q, want the original %q", bodies[1], bodies[0])
+	}
+}
+
+// Concurrent 401s must not each trigger a read: on a daemon streaming several
+// commands this is a keychain round trip per goroutine.
+func TestReloadToken_Concurrent401sReloadOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Circle-Token") != "fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	var reloads atomic.Int32
+	cl := hc.New(hc.Config{
+		BaseURL:    srv.URL,
+		AuthToken:  "stale",
+		AuthHeader: "Circle-Token",
+		ReloadToken: func() (string, error) {
+			reloads.Add(1)
+			return "fresh", nil
+		},
+	})
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+		}()
+	}
+	wg.Wait()
+
+	if n := reloads.Load(); n != 1 {
+		t.Errorf("reloads = %d, want 1", n)
 	}
 }
