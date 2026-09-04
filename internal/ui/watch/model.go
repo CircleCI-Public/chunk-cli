@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 const (
@@ -148,6 +149,8 @@ type dataMsg struct {
 	offsets  []int64
 	branches []string
 	headRefs []string
+	commands [][]watchd.CommandState
+	authErr  string
 }
 
 // Model is the BubbleTea model for the watch dashboard.
@@ -193,6 +196,20 @@ type Model struct {
 	// is labelled as the viewer's own, which is the fastest way to answer "which
 	// of these is mine" without reading UUIDs.
 	ownSession string
+
+	// commands is every command the daemon is buffering output for, per project;
+	// index matches projects. Used to resolve an invocation to a command ID.
+	commands [][]watchd.CommandState
+
+	// output is the open scrollback pane, nil when none is open.
+	output *outputPane
+	// outputSeq increments on every pane opening, so a tick chain from a closed
+	// pane can be told apart from the current one and dropped.
+	outputSeq int
+
+	// authErr explains why command output is unavailable, when it is. An empty
+	// logs pane with no explanation sends people hunting the wrong fault.
+	authErr string
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -232,6 +249,57 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(m.loadData, doSpin(), checkUpdateCmd())
 }
 
+// updateDashboardKey handles keys for the two-pane dashboard, when no output
+// pane is open. Split out of Update so neither grows past the complexity limit.
+func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Code {
+	case 'q', tea.KeyEscape:
+		return m, tea.Quit
+	case tea.KeyRight, 'l':
+		m.focusedPane = paneRight
+	case tea.KeyLeft, 'h':
+		m.focusedPane = paneLeft
+	case 's', tea.KeyDown:
+		if m.focusedPane == paneLeft {
+			if m.selectedIdx < len(m.sidecars)-1 {
+				m.selectedIdx++
+			}
+			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
+			m.rightSelectedIdx = 0
+		} else {
+			m.rightSelectedIdx++
+		}
+	case 'w', tea.KeyUp:
+		if m.focusedPane == paneLeft {
+			if m.selectedIdx > 0 {
+				m.selectedIdx--
+			}
+			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
+			m.rightSelectedIdx = 0
+		} else if m.rightSelectedIdx > 0 {
+			m.rightSelectedIdx--
+		}
+	case tea.KeyEnter:
+		if m.focusedPane == paneRight {
+			// Enter opens output when the invocation has any; otherwise it falls
+			// back to expand/collapse, so the key never feels dead.
+			if opened, cmd := m.openSelectedOutput(); opened != nil {
+				return *opened, cmd
+			}
+			m = m.toggleSelectedInvoc()
+		}
+	case tea.KeySpace:
+		if m.focusedPane == paneRight {
+			m = m.toggleSelectedInvoc()
+		}
+	case 'c':
+		if msg.Mod == tea.ModCtrl {
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
@@ -244,45 +312,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
-		switch msg.Code {
-		case 'q', tea.KeyEscape:
-			return m, tea.Quit
-		case tea.KeyRight, 'l':
-			m.focusedPane = paneRight
-		case tea.KeyLeft, 'h':
-			m.focusedPane = paneLeft
-		case 's', tea.KeyDown:
-			if m.focusedPane == paneLeft {
-				if m.selectedIdx < len(m.sidecars)-1 {
-					m.selectedIdx++
-				}
-				m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-				m.rightSelectedIdx = 0
-			} else {
-				m.rightSelectedIdx++
-			}
-		case 'w', tea.KeyUp:
-			if m.focusedPane == paneLeft {
-				if m.selectedIdx > 0 {
-					m.selectedIdx--
-				}
-				m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-				m.rightSelectedIdx = 0
-			} else if m.rightSelectedIdx > 0 {
-				m.rightSelectedIdx--
-			}
-		case tea.KeyEnter, tea.KeySpace:
-			if m.focusedPane == paneRight {
-				m = m.toggleSelectedInvoc()
-			}
-		case 'c':
-			if msg.Mod == tea.ModCtrl {
-				return m, tea.Quit
-			}
+		// An open output pane owns the keyboard: it is a full-height reading view,
+		// and leaving the underlying list navigable would scroll two things at
+		// once. Esc closes it rather than quitting the dashboard.
+		if m.output != nil {
+			return m.updateOutputKey(msg)
 		}
-		return m, nil
+		return m.updateDashboardKey(msg)
 
 	case tea.MouseClickMsg:
+		// The output pane covers the dashboard, so a click here would move a
+		// selection and toggle invocations the reader cannot even see.
+		if m.output != nil {
+			return m, nil
+		}
 		if msg.Button == tea.MouseLeft {
 			m = m.withMouseClick(msg.X, msg.Y)
 		}
@@ -292,6 +335,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.daemonErr = msg.err
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 
+	case outputMsg:
+		return m.withOutputChunk(msg)
+
+	case outputTickMsg:
+		// Only the current pane's tick chain may continue. Without the sequence
+		// check, closing and reopening the pane leaves the old chain alive to
+		// find a non-nil pane and schedule alongside the new one, so every
+		// reopen would add another poller.
+		if m.output == nil || msg.seq != m.outputSeq {
+			return m, nil
+		}
+		return m, tea.Batch(fetchOutput(m.output.commandID, m.output.offset), outputTick(msg.seq))
+
 	case dataMsg:
 		m.daemonErr = nil
 		m.projects = msg.projects
@@ -300,6 +356,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.offsets = msg.offsets
 		m.branches = msg.branches
 		m.headRefs = msg.headRefs
+		m.commands = msg.commands
+		m.authErr = msg.authErr
 		// Sidecars are re-sorted by recency each poll, so track the selection
 		// by id. An unknown id (first poll, or the sidecar aged out) falls back
 		// to index 0, the most recently active sidecar.
@@ -343,6 +401,9 @@ func (m Model) render() string {
 		return "loading...\n"
 	}
 	st := m.styles()
+	if m.output != nil {
+		return m.renderHeader(st) + m.renderSeparator(st) + m.renderOutputPane(st)
+	}
 	return m.renderHeader(st) +
 		m.renderSeparator(st) +
 		m.renderBody(st) +
@@ -417,9 +478,34 @@ func (m Model) renderBody(st watchStyles) string {
 		if m.focusedPane == paneRight {
 			div = st.muted("│")
 		}
-		b.WriteString(" " + lPad + " " + div + " " + r + "\n")
+		// Clip rather than let a long line wrap: the two panes are drawn as one
+		// fixed-height block, so a line that wraps shifts everything below it and
+		// the layout no longer matches the height it was built for.
+		b.WriteString(" " + lPad + " " + div + " " + clip(r, m.width-leftPaneWidth-4) + "\n")
 	}
 	return b.String()
+}
+
+// rowStatus is the one-line state a sidecar row reports: what it is doing now,
+// or how its tree compares to the sidecar's. Split out of renderSidecarPane so
+// neither grows past the complexity limit.
+func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
+	switch {
+	case sc.running:
+		frame := spinFrames[m.spinIdx%len(spinFrames)]
+		return st.running(frame + " " + string(sc.lastOp) + "...")
+	case sc.id == "": // local runner — no sync state
+		switch sc.lastLevel {
+		case levelDone:
+			return st.success(ui.IconOK + " passed")
+		case levelError:
+			return st.err(ui.IconFail + " failed")
+		default:
+			return st.muted("no runs yet")
+		}
+	default:
+		return st.muted("synced via rsync")
+	}
 }
 
 func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
@@ -515,22 +601,7 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 			addRow("   " + st.vdim("◈ "+truncate(sc.snapshotName, leftPaneWidth-6)))
 		}
 
-		switch {
-		case sc.running:
-			frame := spinFrames[m.spinIdx%len(spinFrames)]
-			addRow("  " + st.running(frame+" "+string(sc.lastOp)+"..."))
-		case sc.id == "": // local runner — no sync state
-			switch sc.lastLevel {
-			case levelDone:
-				addRow("  " + st.success(ui.IconOK+" passed"))
-			case levelError:
-				addRow("  " + st.err(ui.IconFail+" failed"))
-			default:
-				addRow("  " + st.muted("no runs yet"))
-			}
-		default:
-			addRow("  " + st.muted("synced via rsync"))
-		}
+		addRow("  " + m.rowStatus(st, sc))
 
 		if !sc.lastActivity.IsZero() {
 			addRow("  " + st.vdim(ago(sc.lastActivity)))
@@ -666,7 +737,7 @@ func (m Model) buildCollapsibleLines(st watchStyles, groups []invocationGroup, r
 		if ri > 0 {
 			add("")
 		}
-		add(renderInvocationHeader(st, groups[gi], expanded, selected))
+		add(renderInvocationHeader(st, groups[gi], expanded, selected, m.commandForInvocation(groups[gi]) != nil))
 		if expanded {
 			g := groups[gi]
 			for ei := len(g.events) - 1; ei >= 0 && len(rendered) < maxLines; ei-- {
@@ -825,7 +896,7 @@ func outcomeOf(g invocationGroup) (icon, label, level string) {
 }
 
 // renderInvocationHeader renders a one-line summary for an invocation group.
-func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selected bool) string {
+func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selected, hasOutput bool) string {
 	var arrow string
 	if expanded {
 		arrow = "▼ "
@@ -865,9 +936,19 @@ func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selecte
 		}
 	}
 
-	label2 := "validate" + "  " + outcomeStr + "  " + tsStr + durStr
+	// Marks an invocation whose output the daemon still holds, so "which of these
+	// can I actually read" is answerable without pressing Enter on each one.
+	outMark := ""
+	if hasOutput {
+		outMark = "  " + st.teal("▤")
+		if selected {
+			outMark = "  " + st.teal("▤ enter")
+		}
+	}
+
+	label2 := "validate" + "  " + outcomeStr + "  " + tsStr + durStr + outMark
 	if selected {
-		label2 = st.emphasis("validate") + "  " + outcomeStr + "  " + tsStr + durStr
+		label2 = st.emphasis("validate") + "  " + outcomeStr + "  " + tsStr + durStr + outMark
 	}
 	return arrow + label2
 }
@@ -979,7 +1060,8 @@ func (m Model) renderFooter(st watchStyles) string {
 	} else {
 		keys = []struct{ key, action string }{
 			{"↑/↓ w/s", "navigate"},
-			{"Enter/Space", "toggle"},
+			{"Enter", "output"},
+			{"Space", "toggle"},
 			{"←", "sidecars"},
 			{"q", "quit"},
 		}
@@ -988,13 +1070,29 @@ func (m Model) renderFooter(st watchStyles) string {
 	for _, k := range keys {
 		parts = append(parts, st.vdim(k.key)+" "+st.dim(k.action))
 	}
-	bar := strings.Join(parts, "  "+st.vdim("·")+"  ")
+	sep := "  " + st.vdim("·") + "  "
+	bar := strings.Join(parts, sep)
+	// Drop hints from the end until the bar fits. The same fixed-height reasoning
+	// as the notice below: a wrapped footer costs a line the layout did not budget
+	// for, which is worse than a hint the reader can find by pressing the key.
+	for len(parts) > 1 && lipgloss.Width(bar) > m.width-2 {
+		parts = parts[:len(parts)-1]
+		bar = strings.Join(parts, sep)
+	}
+	bar = clip(bar, m.width-2)
 
-	// Right-align the update notice, but drop it entirely when it does not
-	// fit: padding it onto an over-long bar would wrap the footer and break
-	// the fixed-height layout.
-	if m.updateAvailable != "" {
-		notice := "↑ " + m.updateAvailable + "  " + st.dim(m.upgradeCmd)
+	// Right-align one notice, dropping it entirely when it does not fit: padding
+	// it onto an over-long bar would wrap the footer and break the fixed-height
+	// layout. An auth failure wins the slot over the update hint — a logs pane
+	// that will never fill is more immediate than a version.
+	notice := ""
+	switch {
+	case m.authErr != "":
+		notice = st.warning(ui.IconWarn + " " + m.authErr)
+	case m.updateAvailable != "":
+		notice = "↑ " + m.updateAvailable + "  " + st.dim(m.upgradeCmd)
+	}
+	if notice != "" {
 		if gap := m.width - 2 - lipgloss.Width(bar) - lipgloss.Width(notice); gap >= 2 {
 			bar += strings.Repeat(" ", gap) + notice
 		}
