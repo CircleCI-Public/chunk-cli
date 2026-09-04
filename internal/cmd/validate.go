@@ -472,7 +472,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return failBeforeRun(rec, start, err)
 	}
 
-	result, execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, opts.workdir, allRemote, envVars, cfg, rec.Status, rec, streams)
+	result, execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, opts.workdir, allRemote, envVars, cfg, rec, streams)
 	if execErr == nil && resultCache != nil {
 		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
 			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
@@ -625,7 +625,7 @@ func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, status
 // provided options. It is shared by both direct and hook invocations.
 // allRemote is true when --remote is passed explicitly (all commands run on the
 // sidecar); false means only commands with Remote:true are routed to the sidecar.
-func runValidate(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, workDir, name, inlineCmd string, save bool, sidecarID string, workdir string, allRemote bool, envVars map[string]string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, rec *eventlog.Recorder, streams iostream.Streams) (validate.Result, error) {
+func runValidate(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, workDir, name, inlineCmd string, save bool, sidecarID string, workdir string, allRemote bool, envVars map[string]string, cfg *config.ProjectConfig, rec *eventlog.Recorder, streams iostream.Streams) (validate.Result, error) {
 	// --cmd: inline command (always local in per-command mode)
 	if inlineCmd != "" {
 		cmdName := name
@@ -643,9 +643,9 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			if err != nil {
 				return validate.Result{}, err
 			}
-			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, statusFn, streams)
+			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, rec.Status, streams)
 		}
-		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, envVars, statusFn, streams)
+		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, envVars, rec.Status, streams)
 	}
 
 	// All-remote execution (--remote flag): send everything to the sidecar.
@@ -654,7 +654,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 		if err != nil {
 			return validate.Result{}, err
 		}
-		return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, statusFn, streams)
+		return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, rec.Status, streams)
 	}
 
 	// Per-command remote routing: commands with Remote:true go to the sidecar,
@@ -667,12 +667,12 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 				if err != nil {
 					return validate.Result{}, err
 				}
-				return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, statusFn, streams)
+				return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, rec.Status, streams)
 			}
-			statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
+			rec.Status(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
 			// Named command is not marked remote; fall through to local execution.
 		} else {
-			return runSplitCommands(ctx, client, sidecarID, workdir, workDir, envVars, rc, cfg, statusFn, rec, streams)
+			return runSplitCommands(ctx, client, sidecarID, workdir, workDir, envVars, rc, cfg, rec, streams)
 		}
 	}
 
@@ -708,11 +708,11 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 				return validate.Result{}, err
 			}
 		}
-		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, envVars, statusFn, streams))
+		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, envVars, rec.Status, streams))
 	}
 
 	// Run all
-	return mapValidateError(validate.RunAll(ctx, workDir, cfg, envVars, statusFn, streams))
+	return mapValidateError(validate.RunAll(ctx, workDir, cfg, envVars, rec.Status, streams))
 }
 
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
@@ -881,13 +881,13 @@ func hostForwardEnv(token string) map[string]string {
 // question they were written to answer, so running them here reports a pass the
 // sidecar never gave — the same false green as a failed creation, arrived at one
 // step later.
-func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, rec *eventlog.Recorder, streams iostream.Streams) (validate.Result, error) {
+func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, rec *eventlog.Recorder, streams iostream.Streams) (validate.Result, error) {
 	remoteCfg, localCfg := splitByRemote(cfg)
 	if len(remoteCfg.Commands) > 0 {
-		statusFn(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, commandNames(remoteCfg.Commands)))
+		rec.Status(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, commandNames(remoteCfg.Commands)))
 	}
 	if len(localCfg.Commands) > 0 {
-		statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCfg.Commands)))
+		rec.Status(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCfg.Commands)))
 	}
 	var combined validate.Result
 	var runErr error
@@ -901,13 +901,13 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 		if wsErr != nil {
 			return validate.Result{}, missingWorkspace(sidecarID, dest, commandNames(remoteCfg.Commands), wsErr)
 		}
-		r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
+		r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, rec.Status, streams)
 		combined.Passed += r.Passed
 		combined.Total += r.Total
 		runErr = err
 	}
 	if len(localCfg.Commands) > 0 {
-		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, envVars, statusFn, streams))
+		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, envVars, rec.Status, streams))
 		combined.Passed += r.Passed
 		combined.Total += r.Total
 		if err != nil {
