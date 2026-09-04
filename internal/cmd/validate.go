@@ -27,7 +27,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/notify"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
@@ -311,7 +310,7 @@ func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc confi
 	if !needsSidecar {
 		return nil, nil
 	}
-	return ensureCircleCIClient(ctx, cmd, rc, streams, tui.PromptHidden)
+	return ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 }
 
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {

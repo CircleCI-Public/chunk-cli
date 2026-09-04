@@ -13,8 +13,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	internaltui "github.com/CircleCI-Public/chunk-cli/internal/tui"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui/watch"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
@@ -35,7 +35,7 @@ func newWatchCmd() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := internaltui.RequireStdoutTTY(); err != nil {
+			if err := ui.RequireStdoutTTY(); err != nil {
 				return fmt.Errorf("watch requires a TTY")
 			}
 

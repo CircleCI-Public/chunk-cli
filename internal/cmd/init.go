@@ -19,12 +19,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/settings"
 	"github.com/CircleCI-Public/chunk-cli/internal/skills"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
-// confirmFunc asks the user a yes/no question. Matches tui.Confirm signature.
+// confirmFunc asks the user a yes/no question. Matches ui.Confirm signature.
 type confirmFunc func(label string, defaultYes bool) (bool, error)
 
 // withTrailingNewline returns a copy of data with a trailing newline appended.
@@ -324,13 +323,13 @@ func printTestSuitesHint(workDir string, streams iostream.Streams) {
 // Codex hooks are only written when Codex is installed or the project already
 // has a .codex directory.
 func writeAllHookFiles(workDir string, commands []config.Command, streams iostream.Streams) error {
-	if err := writeSettings(workDir, commands, streams, tui.Confirm); err != nil {
+	if err := writeSettings(workDir, commands, streams, ui.Confirm); err != nil {
 		return err
 	}
 	homeDir := os.Getenv(config.EnvHome)
 	_, codexDirErr := os.Stat(filepath.Join(workDir, ".codex"))
 	if codexInstalled(homeDir) || codexDirErr == nil {
-		if err := writeCodexHooks(workDir, commands, streams, tui.Confirm); err != nil {
+		if err := writeCodexHooks(workDir, commands, streams, ui.Confirm); err != nil {
 			return err
 		}
 	}
@@ -443,7 +442,7 @@ func detectOrgID(ctx context.Context, rc config.ResolvedConfig, streams iostream
 	}
 	orgID, err := orgPicker(ctx, client, rc.CircleCITokenSource)()
 	if err != nil {
-		if !errors.Is(err, tui.ErrNoTTY) && !errors.Is(err, tui.ErrCancelled) {
+		if !errors.Is(err, ui.ErrNoTTY) && !errors.Is(err, ui.ErrCancelled) {
 			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect org ID: %v", err)))
 		}
 		return

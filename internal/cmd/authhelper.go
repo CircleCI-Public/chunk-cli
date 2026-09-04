@@ -18,7 +18,6 @@ import (
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -72,12 +71,12 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 	printSaveHint(streams, "Token", insecureStorage)
 	streams.ErrPrintln("")
 
-	choice, selectErr := tui.SelectFromList("How would you like to authenticate?", []string{
+	choice, selectErr := ui.SelectFromList("How would you like to authenticate?", []string{
 		"Log in via browser (recommended)",
 		"Enter a token manually",
 	})
 	if selectErr != nil {
-		if errors.Is(selectErr, tui.ErrNoTTY) {
+		if errors.Is(selectErr, ui.ErrNoTTY) {
 			return nil, newUserError("CircleCI token required.").
 				withCode("auth.circleci_token_required").
 				withSuggestion(suggestionCircleCIAuth).
@@ -101,7 +100,7 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 		streams.ErrPrintln("")
 		token, err = prompter("CircleCI Token")
 		if err != nil {
-			if errors.Is(err, tui.ErrNoTTY) {
+			if errors.Is(err, ui.ErrNoTTY) {
 				return nil, newUserError("CircleCI token required.").
 					withCode("auth.circleci_token_required").
 					withSuggestion(suggestionCircleCIAuth).
@@ -167,7 +166,7 @@ func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, rc config.Re
 
 	key, err := prompter("API Key")
 	if err != nil {
-		if errors.Is(err, tui.ErrNoTTY) {
+		if errors.Is(err, ui.ErrNoTTY) {
 			return nil, newUserError("Anthropic API key required.").
 				withCode("auth.anthropic_key_required").
 				withSuggestion(suggestionAnthropicAuth).
@@ -230,7 +229,7 @@ func ensureGitHubClient(ctx context.Context, cmd *cobra.Command, rc config.Resol
 
 	token, err := prompter("GitHub Token")
 	if err != nil {
-		if errors.Is(err, tui.ErrNoTTY) {
+		if errors.Is(err, ui.ErrNoTTY) {
 			return nil, newUserError("GitHub token required.").
 				withCode("auth.github_token_required").
 				withSuggestion(suggestionGitHubAuth).

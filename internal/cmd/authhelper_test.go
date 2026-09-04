@@ -18,7 +18,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func isolateConfig(t *testing.T) {
@@ -41,7 +41,7 @@ func discardStreams() iostream.Streams {
 }
 
 func noTTYPrompter(_ string) (string, error) {
-	return "", tui.ErrNoTTY
+	return "", ui.ErrNoTTY
 }
 
 func testCmd() *cobra.Command {
@@ -60,7 +60,7 @@ func TestEnsureCircleCIClient_NoTTY(t *testing.T) {
 	rc, _ := config.Resolve("", "", true)
 	_, err := ensureCircleCIClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY))
 
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
@@ -74,7 +74,7 @@ func TestEnsureAnthropicClient_NoTTY(t *testing.T) {
 	rc, _ := config.Resolve("", "", true)
 	_, err := ensureAnthropicClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY))
 
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
@@ -88,7 +88,7 @@ func TestEnsureGitHubClient_NoTTY(t *testing.T) {
 	rc, _ := config.Resolve("", "", true)
 	_, err := ensureGitHubClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY))
 
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))

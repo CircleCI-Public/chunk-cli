@@ -178,7 +178,7 @@ func TestWriteSettingsExistingNoTTYFallback(t *testing.T) {
 		{Name: "test", Run: "go test ./...", Timeout: 60},
 	}
 
-	// Simulates tui.ErrNoTTY — confirm returns an error.
+	// Simulates ui.ErrNoTTY — confirm returns an error.
 	err := writeSettings(dir, commands, streams, fakeConfirmErr)
 	assert.NilError(t, err)
 
