@@ -133,10 +133,11 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 // to restrict, IdentitiesOnly=yes also does not mean "no keys" — ssh falls back
 // to the default ~/.ssh/id_* filenames, so it offers unrelated keys instead.
 //
-// -q is deliberately absent so ssh diagnostics reach the rsync error instead of
-// being swallowed.
+// -F /dev/null keeps a user ssh_config from redirecting the 127.0.0.1 hop, and
+// -q is deliberately absent so ssh diagnostics reach the rsync error.
 func sshCommand(sess *Session, port string) string {
 	args := []string{"ssh", "-p", port,
+		"-F", "/dev/null",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 	}

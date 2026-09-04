@@ -20,6 +20,7 @@ func TestSSHCommand(t *testing.T) {
 			sess: &Session{UseAgent: true, AuthSock: "/tmp/agent.sock"},
 			want: []string{
 				"ssh -p 2222",
+				"-F /dev/null",
 				"-o StrictHostKeyChecking=no",
 				"-o UserKnownHostsFile=/dev/null",
 			},
@@ -31,6 +32,7 @@ func TestSSHCommand(t *testing.T) {
 			sess: &Session{IdentityFile: "/home/dev/.ssh/chunk_ai"},
 			want: []string{
 				"ssh -p 2222",
+				"-F /dev/null",
 				"-o IdentitiesOnly=yes",
 				"-i /home/dev/.ssh/chunk_ai",
 			},
@@ -46,7 +48,7 @@ func TestSSHCommand(t *testing.T) {
 		{
 			name:    "empty session behaves like the agent path",
 			sess:    &Session{},
-			want:    []string{"ssh -p 2222"},
+			want:    []string{"-F /dev/null"},
 			notWant: []string{"IdentitiesOnly"},
 		},
 	}
