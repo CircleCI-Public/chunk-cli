@@ -129,16 +129,22 @@ func TestValidateNeedsSidecarSidecarImage(t *testing.T) {
 	assert.Assert(t, got, "expected validateNeedsSidecar=true with sidecarImage configured")
 }
 
-func TestHostForwardEnv(t *testing.T) {
+func TestRemoteExecEnv(t *testing.T) {
 	t.Run("returns nil when token is empty", func(t *testing.T) {
-		assert.Assert(t, hostForwardEnv("") == nil)
+		assert.Assert(t, remoteExecEnv("", nil) == nil)
 	})
 
 	t.Run("forwards token as CIRCLE_TOKEN", func(t *testing.T) {
-		env := hostForwardEnv("abc123")
+		env := remoteExecEnv("abc123", nil)
 		assert.Equal(t, env[config.EnvCircleToken], "abc123")
 		_, hasAlias := env[config.EnvCircleCIToken]
 		assert.Assert(t, !hasAlias)
+	})
+
+	t.Run("merges explicit env vars", func(t *testing.T) {
+		env := remoteExecEnv("abc123", map[string]string{"FOO": "bar"})
+		assert.Equal(t, env[config.EnvCircleToken], "abc123")
+		assert.Equal(t, env["FOO"], "bar")
 	})
 }
 
@@ -154,7 +160,8 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
-	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", envVars, config.ResolvedConfig{}, streams)
+	target := sidecar.Target{Client: client, SidecarID: "sidecar-123", Workdir: "/workspace"}
+	execFn, _, err := target.ExecRunner(context.Background(), ".", remoteExecEnv("", envVars), streams)
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")

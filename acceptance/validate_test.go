@@ -410,7 +410,7 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 
 	// AddSSHKey must be called — proves SSH path was taken.
 	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-123/ssh/add-key")
-	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request; got: %v", reqs)
+	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request (from BundleSync); got: %v", reqs)
 
 	// HTTP exec must NOT be called — SSH is used instead.
 	execReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-123/exec")
@@ -616,7 +616,7 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure; stderr: %s", result.Stderr)
 	// Sync status messages must reach stderr — proves setup output is not silently dropped.
-	assert.Assert(t, strings.Contains(result.Stderr, "Syncing workspace"),
+	assert.Assert(t, strings.Contains(result.Stderr, "Bundle ready"),
 		"expected sync attempt in stderr; got: %s", result.Stderr)
 }
 
