@@ -231,19 +231,7 @@ func RegisterProjectRoot(dataDir, root string) error {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dataDir, projectRootFile), []byte(canonicalRoot(root)), 0o644)
-}
-
-// canonicalRoot resolves symlinks in root, leaving it as given when it cannot be
-// resolved (a root that no longer exists, most often) so callers always get a
-// usable path. This matches how ProjectDataDir keys its directories, which is
-// what makes the two agree on what one project is.
-func canonicalRoot(root string) string {
-	resolved, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return root
-	}
-	return resolved
+	return os.WriteFile(filepath.Join(dataDir, projectRootFile), []byte(config.CanonicalProjectRoot(root)), 0o644)
 }
 
 // AllProjectRoots returns the roots of all projects chunk has recorded state
@@ -273,7 +261,7 @@ func AllProjectRoots() ([]string, error) {
 		if readErr != nil {
 			continue
 		}
-		root := canonicalRoot(strings.TrimSpace(string(data)))
+		root := config.CanonicalProjectRoot(strings.TrimSpace(string(data)))
 		if root == "" || seen[root] {
 			continue
 		}

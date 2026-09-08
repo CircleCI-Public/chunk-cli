@@ -61,7 +61,11 @@ func newWatchCmd() *cobra.Command {
 					return fmt.Errorf("watch: invalid path %q: %w", root, err)
 				}
 				if gitRoot := gitutil.TopLevelCtx(cmd.Context(), abs); gitRoot != "" {
-					abs = gitRoot
+					// Canonicalised because --focus sends these roots to the daemon as a
+					// filter, and the daemon keys projects by the canonical spelling. Git
+					// happens to answer with a resolved path on darwin, so a mismatch here
+					// would be invisible on one platform and an empty dashboard on another.
+					abs = config.CanonicalProjectRoot(gitRoot)
 				} else {
 					// Skip non-git paths: nothing to watch and no sidecar to find.
 					continue

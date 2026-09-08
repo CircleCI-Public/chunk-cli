@@ -45,6 +45,27 @@ func AppData() (string, error) {
 	return filepath.Join(dh, appName), nil
 }
 
+// CanonicalProjectRoot returns projectRoot in the spelling everything that keys
+// state by a project agrees on: cleaned, with symlinks resolved, falling back to
+// the cleaned path when it cannot be resolved (a root that no longer exists,
+// most often) so callers always get a usable path.
+//
+// It exists because a project has more than one name. The same repo is
+// /tmp/x to a shell and /private/tmp/x to git on darwin, and the two used to be
+// filed apart: ProjectDataDir hashed the resolved path while the project
+// breadcrumb and registered commands carried whatever the caller was handed. One
+// project then read as two — duplicate rows over a single log — or, for a
+// command registered under the unresolved name, as output belonging to no
+// project at all. Anything that keys by project root must run it through here.
+func CanonicalProjectRoot(projectRoot string) string {
+	clean := filepath.Clean(projectRoot)
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return clean
+	}
+	return resolved
+}
+
 // ProjectDataDir returns the per-project data directory keyed by projectRoot.
 // The directory name is the hex-encoded SHA-256 of the real absolute path
 // (symlinks resolved via EvalSymlinks, falling back to filepath.Clean), which
@@ -61,10 +82,7 @@ func ProjectDataDir(projectRoot string) (string, error) {
 		return "", err
 	}
 	clean := filepath.Clean(projectRoot)
-	resolved := clean
-	if r, err := filepath.EvalSymlinks(clean); err == nil {
-		resolved = r
-	}
+	resolved := CanonicalProjectRoot(projectRoot)
 	newDir := filepath.Join(base, fmt.Sprintf("%x", sha256.Sum256([]byte(resolved))))
 
 	// Only attempt migration when the symlink actually changed the path.

@@ -250,3 +250,33 @@ func TestPollListsOneProjectPerRootHoweverItIsSpelled(t *testing.T) {
 	// The log is not read twice into one project either.
 	assert.Equal(t, len(snap.Projects[0].Events), 1)
 }
+
+// A registered command is filed under the project root its client sent, and
+// listed under the root the daemon discovered — so the two have to be the same
+// spelling. The clients send an unresolved working directory while discovery
+// canonicalises, which for any repo reached through a symlink files a command's
+// output where the dashboard will never look for it.
+func TestPollListsCommandsRegisteredUnderAnUnresolvedRoot(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	base := t.TempDir()
+	target := filepath.Join(base, "project")
+	assert.NilError(t, os.MkdirAll(target, 0o755))
+	link := filepath.Join(base, "link")
+	assert.NilError(t, os.Symlink(target, link))
+
+	dataDir, err := config.ProjectDataDir(target)
+	assert.NilError(t, err)
+	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, target))
+
+	d := &daemon{projects: make(map[string]*projectState), out: newOutputStore(context.Background())}
+	// What a validate run on a repo reached through the symlink registers.
+	d.out.register(reg("cmd-1", link), immediateStream([]string{"output\n"}, 0))
+	waitForFinish(t, d.out, "cmd-1")
+	d.poll()
+
+	snap := d.snapshot(nil)
+	assert.Equal(t, len(snap.Projects), 1)
+	assert.Equal(t, len(snap.Projects[0].Commands), 1,
+		"a command registered through a symlinked root must still be listed")
+}
