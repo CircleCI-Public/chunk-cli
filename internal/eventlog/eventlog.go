@@ -163,6 +163,7 @@ type Recorder struct {
 	log              *Log
 	inner            iostream.StatusFunc
 	tag              Event
+	mu               sync.Mutex
 	pendingCommandID string
 }
 
@@ -197,6 +198,8 @@ func Record(dataDir string, fn iostream.StatusFunc, op Op, sidecarID, sidecarNam
 // Pass "" when an exec failed without reporting an ID so a stale one from a
 // prior exec is not attributed to it.
 func (r *Recorder) SetCommandID(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.pendingCommandID = id
 }
 
@@ -227,8 +230,10 @@ func (r *Recorder) record(level iostream.Level, msg string, final bool, passed, 
 	// Attach the pending command ID to the per-command pass/fail event. Final
 	// events are run-wide summaries that belong to no single command.
 	if !final && (level == iostream.LevelDone || level == iostream.LevelError) {
+		r.mu.Lock()
 		e.CommandID = r.pendingCommandID
 		r.pendingCommandID = ""
+		r.mu.Unlock()
 	}
 	_ = r.log.Append(e)
 }
