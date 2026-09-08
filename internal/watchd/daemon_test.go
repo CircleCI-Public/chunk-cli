@@ -72,7 +72,9 @@ func TestPollReplaysResultsRecordedWhileTheDaemonWasDown(t *testing.T) {
 	rec.Status(iostream.LevelInfo, "$ echo hi")
 	rec.Final(iostream.LevelDone, "1/1 passed  113ms", 1, 1)
 
-	d := &daemon{projects: make(map[string]*projectState)}
+	// Built like RunDaemon builds it, output store included: poll reads the store
+	// for every project, so a daemon assembled by hand without one panics there.
+	d := &daemon{projects: make(map[string]*projectState), out: newOutputStore(context.Background())}
 	d.poll()
 
 	snap := d.snapshot(nil)
