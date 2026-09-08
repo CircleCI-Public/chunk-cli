@@ -270,6 +270,15 @@ type resourceSampler struct {
 	// tests can drive the lifecycle — reconnects, give-up, cancellation — without
 	// reaching the API.
 	sample func(ctx context.Context, sc SidecarState, s *sidecarSampler) error
+	// logf reports a sampling failure, and is a field for much the same reason.
+	//
+	// These cannot be returned: run is a detached goroutine with no caller. Nor
+	// should they be dropped — a sidecar quietly losing its figures for two
+	// minutes is precisely what someone looking at a blank column needs told.
+	// So they are reported, but to an injected logger rather than the package
+	// global, which keeps the choice of where daemon output goes with the daemon
+	// and lets a test read what was said.
+	logf func(format string, args ...any)
 
 	mu       sync.Mutex
 	samplers map[string]*sidecarSampler // keyed by sidecar ID
@@ -279,6 +288,7 @@ type resourceSampler struct {
 func newResourceSampler(client *circleci.Client) *resourceSampler {
 	r := &resourceSampler{
 		client:   client,
+		logf:     log.Printf,
 		samplers: make(map[string]*sidecarSampler),
 	}
 	r.sample = r.sampleOnce
@@ -430,12 +440,12 @@ func (r *resourceSampler) run(ctx context.Context, sc SidecarState, s *sidecarSa
 
 		failures++
 		if failures >= maxSamplerFailures {
-			log.Printf("watchd: pausing sampling of %s for %s after %d failures: %v",
+			r.logf("watchd: pausing sampling of %s for %s after %d failures: %v",
 				sc.ID, sampleCooloff, failures, err)
 			s.giveUp(sampleCooloff)
 			return
 		}
-		log.Printf("watchd: resource sampler for %s: %v", sc.ID, err)
+		r.logf("watchd: resource sampler for %s: %v", sc.ID, err)
 
 		select {
 		case <-ctx.Done():

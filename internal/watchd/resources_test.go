@@ -3,9 +3,12 @@ package watchd
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -398,12 +401,64 @@ func TestSamplerGoroutineDoesNotWaitOnReconcile(t *testing.T) {
 // sidecarSampler holds no reference to resourceSampler, so nothing reachable
 // while s.mu is held can reach r.mu. This fails to compile if that ever changes.
 func TestSidecarSamplerHoldsNoBackReference(t *testing.T) {
-	var s sidecarSampler
-	typ := reflect.TypeOf(s)
+	// TypeFor, not TypeOf on a value: sidecarSampler holds a mutex, and copying
+	// one to inspect it is exactly what vet objects to.
+	typ := reflect.TypeFor[sidecarSampler]()
 	for i := range typ.NumField() {
 		f := typ.Field(i)
 		assert.Check(t, !strings.Contains(f.Type.String(), "resourceSampler"),
 			"sidecarSampler.%s reaches back to resourceSampler, which would make the "+
 				"r.mu -> s.mu ordering in reconcile a real deadlock risk", f.Name)
 	}
+}
+
+// Sampling failures have nowhere to be returned to — run is detached — so the
+// report is the only signal that a sidecar has stopped producing figures.
+// Pinning it here also pins that it goes somewhere injectable rather than
+// straight to the process log.
+func TestSamplerReportsWhyItGaveUp(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+
+	r := newResourceSampler(nil)
+	r.logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	gaveUp := make(chan struct{})
+	var attempts int
+	r.sample = func(_ context.Context, _ SidecarState, s *sidecarSampler) error {
+		attempts++
+		if attempts == maxSamplerFailures {
+			defer close(gaveUp)
+		}
+		return errors.New("ssh: connection refused")
+	}
+	r.touch()
+	r.reconcile([]SidecarState{{ID: "sc-1"}})
+
+	select {
+	case <-gaveUp:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sampler never reached its failure ceiling")
+	}
+	r.stopAll()
+
+	mu.Lock()
+	defer mu.Unlock()
+	joined := strings.Join(lines, "\n")
+	assert.Check(t, strings.Contains(joined, "sc-1"),
+		"the report must name the sidecar that stopped: %q", joined)
+	assert.Check(t, strings.Contains(joined, "pausing sampling"),
+		"giving up is the part worth saying out loud: %q", joined)
+	assert.Check(t, strings.Contains(joined, "connection refused"),
+		"the cause has to survive into the report: %q", joined)
+}
+
+// Nothing in the package may reach for the process logger directly: the daemon
+// decides where its output goes, and a test cannot read stderr.
+func TestResourceSamplerLogsThroughTheInjectedLogger(t *testing.T) {
+	r := newResourceSampler(nil)
+	assert.Assert(t, r.logf != nil, "a nil logger would panic on the first failure")
 }
