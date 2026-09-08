@@ -2,6 +2,7 @@ package watch
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -387,4 +388,56 @@ func TestOutputTickStopsWhenTheBufferWasEvicted(t *testing.T) {
 
 	_, done := nm.Update(outputTickMsg{seq: 1})
 	assert.Check(t, cmp.Nil(done), "an evicted buffer must not keep being polled")
+}
+
+// The render path must not scale with the scrollback. It runs on every 200ms
+// tick and every keypress, and the pane holds up to maxPaneLines, so building
+// the whole thing to show forty rows was the difference between a fixed cost
+// and a per-frame copy of the entire buffer.
+func TestVisibleLinesDoesNotCopyTheWholeScrollback(t *testing.T) {
+	p := &outputPane{pending: "still typing", pinned: true}
+	for i := range maxPaneLines {
+		p.lines = append(p.lines, fmt.Sprintf("line %d", i))
+	}
+
+	const height = 40
+
+	// Bytes, not allocation count: the old implementation was also a couple of
+	// allocations, they were just the size of the whole scrollback. Counting
+	// events would have called this fixed when it was not.
+	res := testing.Benchmark(func(b *testing.B) {
+		for range b.N {
+			p.visibleLines(height)
+		}
+	})
+	perRender := res.AllocedBytesPerOp()
+
+	// A window of `height` string headers, with room to spare. The whole
+	// scrollback would be maxPaneLines headers, two orders of magnitude more.
+	assert.Check(t, perRender < 4096,
+		"visibleLines allocated %d bytes per render for a %d-row window of %d lines",
+		perRender, height, len(p.lines))
+
+	got, atEnd := p.visibleLines(height)
+	assert.Check(t, cmp.Len(got, height))
+	assert.Check(t, atEnd)
+	assert.Check(t, cmp.Equal(got[height-1], "still typing"), "the pending line stays last")
+}
+
+// The pending line must not be written into the scrollback's spare capacity:
+// feed and trim both leave room behind len(p.lines), so an in-place append
+// would be overwritten by the next feed under a slice the renderer still holds.
+func TestVisibleLinesDoesNotWriteIntoTheScrollback(t *testing.T) {
+	p := &outputPane{pinned: true}
+	p.lines = make([]string, 2, 8) // spare capacity, as feed leaves behind
+	p.lines[0], p.lines[1] = "one", "two"
+	p.pending = "three"
+
+	got, _ := p.visibleLines(10)
+	assert.Check(t, cmp.Equal(strings.Join(got, "|"), "one|two|three"))
+
+	// Reading the window must not have extended the scrollback itself.
+	assert.Check(t, cmp.Len(p.lines, 2))
+	assert.Check(t, cmp.Equal(p.lines[:cap(p.lines)][2], ""),
+		"the pending line leaked into the backing array")
 }

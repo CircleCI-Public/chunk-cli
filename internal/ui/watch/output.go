@@ -132,27 +132,50 @@ func resolveCR(line string) string {
 // visibleLines returns the slice of scrollback to draw, plus whether the view is
 // showing the end of the output.
 func (p *outputPane) visibleLines(height int) ([]string, bool) {
-	all := p.lines
+	// n counts the pending line without building the slice that would hold it.
+	// The window is at most `height` rows, so there is no reason for the cost
+	// here to scale with the scrollback: this runs on every 200ms tick and every
+	// keypress, and materialising all of p.lines meant copying up to
+	// maxPaneLines strings each time.
+	n := len(p.lines)
 	if p.pending != "" {
-		all = append(append([]string(nil), all...), resolveCR(p.pending))
+		n++
 	}
-	if height <= 0 || len(all) == 0 {
+	if height <= 0 || n == 0 {
 		return nil, true
 	}
-	if len(all) <= height {
-		return all, true
+
+	start, end, atEnd := 0, n, true
+	switch {
+	case n <= height:
+	case p.pinned:
+		start = n - height
+	default:
+		start = p.scroll
+		if start > n-height {
+			start = n - height
+		}
+		if start < 0 {
+			start = 0
+		}
+		end = start + height
+		atEnd = end >= n
 	}
-	if p.pinned {
-		return all[len(all)-height:], true
+
+	// Reaching past the committed lines is the only case that needs a slice of
+	// its own, and then it holds the window rather than the scrollback.
+	//
+	// Appending to p.lines directly would be cheaper still and wrong: feed and
+	// trim both leave it with spare capacity, so the pending line would land in
+	// the backing array and the next feed would overwrite it underneath a slice
+	// the renderer is still holding.
+	if end <= len(p.lines) {
+		return p.lines[start:end], atEnd
 	}
-	start := p.scroll
-	if start > len(all)-height {
-		start = len(all) - height
-	}
-	if start < 0 {
-		start = 0
-	}
-	return all[start : start+height], start+height >= len(all)
+	out := make([]string, 0, end-start)
+	out = append(out, p.lines[start:]...)
+	out = append(out, resolveCR(p.pending))
+	return out, atEnd
 }
 
 // scrollBy moves the view, unpinning it from the bottom. Scrolling back to the
