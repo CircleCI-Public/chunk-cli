@@ -223,7 +223,6 @@ func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) 
 			return ValidateResponse{}, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
 		}
 		return ValidateResponse{}, err
-		return ValidateResponse{}, fmt.Errorf("watch daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
 	}
 	var result ValidateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

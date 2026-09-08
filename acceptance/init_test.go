@@ -67,6 +67,7 @@ func TestInitWritesVCSConfig(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = "" // skip claude
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks", "--skip-validate",
@@ -92,6 +93,7 @@ func TestInitSkipAllWritesOnlyVCS(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks", "--skip-validate",
@@ -139,6 +141,7 @@ func TestInitExistingConfigWithForce(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--force", "--skip-hooks", "--skip-validate",
@@ -158,6 +161,7 @@ func TestInitForcePreservesSkippedSections(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	// --force re-runs init; --skip-validate skips validate command detection.
 	result := binary.RunCLI(t, []string{
@@ -208,6 +212,7 @@ func TestInitDetectsTaskfileGoCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -241,6 +246,7 @@ func TestInitDetectsMakefileGoCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -264,6 +270,7 @@ func TestInitDetectsGoModOnlyCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -291,6 +298,7 @@ func TestInitDetectsCargoCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -310,6 +318,7 @@ func TestInitDetectsPyprojectCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -329,6 +338,7 @@ func TestInitDetectsRequirementsTxtCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -348,6 +358,7 @@ func TestInitDetectsSetupPyCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -367,6 +378,7 @@ func TestInitDetectsPipfileCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -386,6 +398,7 @@ func TestInitDetectsGemfileCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -405,6 +418,7 @@ func TestInitDetectsPomXmlCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -425,6 +439,7 @@ func TestInitDetectsGradleCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -444,6 +459,7 @@ func TestInitDetectsGradleWithoutWrapper(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -464,6 +480,7 @@ func TestInitDetectsGradleKtsCommands(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -484,6 +501,7 @@ func TestInitDetectsPackageJsonWithYarnLock(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -510,6 +528,7 @@ func TestInitDetectsPackageJsonWithPnpmLock(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -534,6 +553,7 @@ func TestInitDetectsUnknownToolchainNoClaude(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = "" // no Claude fallback
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
@@ -554,6 +574,7 @@ func TestInitCreatesHookFiles(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init",
@@ -581,6 +602,7 @@ func TestInitWritesFiringStopHook(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{"init"}, env, workDir)
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
@@ -639,6 +661,7 @@ func TestInitHookExistingSettingsForceWritesExample(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--force",
@@ -670,6 +693,7 @@ func TestInitHookExistingSettingsWritesExample(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	// Without --force on config, but config doesn't exist yet so init proceeds.
 	// However settings.json already exists, so hook setup writes .example.
@@ -705,8 +729,8 @@ func TestInitNoCircleCINoToken(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 
 	env := testenv.NewTestEnv(t)
-	env.CircleToken = "" // no token
 	env.AnthropicKey = ""
+	env.CircleToken = "" // no token
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks", "--skip-validate",
@@ -726,6 +750,7 @@ func TestInitNoCircleCIWithToken(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks", "--skip-validate",
@@ -746,6 +771,7 @@ func TestInitProjectDir(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	// Run from a different directory but point --project-dir at the git repo
 	result := binary.RunCLI(t, []string{
@@ -771,6 +797,7 @@ func TestInitWritesTestSuitesForGoWhenCircleDirExists(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks", "--skip-test-suites=false",
@@ -791,6 +818,7 @@ func TestInitCreatesCircleDirAndWritesTestSuites(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks", "--skip-test-suites=false",
@@ -814,6 +842,7 @@ func TestInitDoesNotOverwriteExistingTestSuites(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks", "--skip-test-suites=false",
@@ -833,6 +862,7 @@ func TestInitSkipsTestSuitesByDefault(t *testing.T) {
 
 	env := testenv.NewTestEnv(t)
 	env.AnthropicKey = ""
+	env.CircleToken = ""
 
 	result := binary.RunCLI(t, []string{
 		"init", "--skip-hooks",
