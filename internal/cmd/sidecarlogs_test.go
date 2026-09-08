@@ -73,8 +73,11 @@ func TestReportExitCode(t *testing.T) {
 	// Reading succeeded in every one of these cases, so none of them is an error:
 	// making `logs` fail because the command it reports on failed would leave the
 	// exit status meaning nothing.
-	var errOut strings.Builder
-	io := iostream.Streams{Out: &errOut, Err: &errOut}
+	// Separate buffers, per review: pointed at one, this could not tell stderr
+	// from stdout, and the whole point of the status going to stderr is that
+	// stdout stays clean enough to pipe.
+	var out, errOut strings.Builder
+	io := iostream.Streams{Out: &out, Err: &errOut}
 
 	err := reportExitCode(nil, io)
 	assert.Check(t, cmp.Nil(err), "an unterminated command is not a failure")
@@ -87,8 +90,9 @@ func TestReportExitCode(t *testing.T) {
 	two := 2
 	err = reportExitCode(&two, io)
 	assert.Check(t, cmp.Nil(err), "logs must not fail because the logged command did")
-	// The status still has to be visible, just on stderr so stdout stays pipeable.
 	assert.Check(t, cmp.Contains(errOut.String(), "exit status 2"))
+	assert.Check(t, cmp.Equal(out.String(), ""),
+		"the status belongs on stderr: stdout carries the command's own output")
 }
 
 func TestSidecarLogsRequiresExactlyOneArg(t *testing.T) {

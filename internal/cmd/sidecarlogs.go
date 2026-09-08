@@ -67,6 +67,12 @@ func newSidecarLogsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// --follow is not consulted here because it cannot change anything:
+			// StreamOutput reconnects until a terminal exit event arrives, so it
+			// already runs to completion. For a finished command that is a bounded
+			// replay; for a running one it follows whether asked to or not. The
+			// flag is therefore redundant on this path rather than ignored — the
+			// API exposes no way to read only what has arrived so far.
 			result, err := client.StreamOutput(cmd.Context(), commandID, "", func(_ string, data []byte) {
 				_, _ = io.Out.Write(data)
 			})
