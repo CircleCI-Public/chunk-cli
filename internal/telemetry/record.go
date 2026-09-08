@@ -44,8 +44,8 @@ func IsTelemetryDisabled(cmd *cobra.Command) bool {
 }
 
 // RecordForSubcommands wraps every descendant command's RunE so it reports a
-// chunk_command_invocation event after running, without requiring
-// per-command changes.
+// command_invocation event after running, without requiring per-command
+// changes.
 func RecordForSubcommands(cmd *cobra.Command) {
 	for _, c := range cmd.Commands() {
 		record(c)
@@ -67,16 +67,12 @@ func record(cmd *cobra.Command) {
 	}
 }
 
-// RecordNow reports a chunk_command_invocation event immediately: the full
-// command path, the sorted comma-joined names (never values) of flags the
-// user set, the outcome ("success" or "failure"), the wall-clock duration in
+// RecordNow reports a command_invocation event immediately: the full command
+// path, the sorted comma-joined names (never values) of flags the user set,
+// the outcome ("success" or "failure"), the wall-clock duration in
 // milliseconds, and — on failure — the Go type and message of the error.
-//
-// The event name is prefixed with "chunk_" (rather than the more generic
-// "command_invocation" that circleci-cli's own telemetry package uses)
-// because both tools currently send to the same Segment write key/workspace;
-// the prefix keeps chunk-cli's events unambiguous in the event stream
-// without requiring anyone to inspect the nested Context.App.Name field.
+// chunk-cli events are distinguished from circleci-cli events via
+// Context.App.Name ("chunk-cli").
 func RecordNow(cmd *cobra.Command, err error, duration time.Duration) {
 	tc := FromContext(cmd.Context())
 	if tc == nil {
@@ -105,5 +101,5 @@ func RecordNow(cmd *cobra.Command, err error, duration time.Duration) {
 		props["error_message"] = err.Error()
 	}
 
-	_ = tc.Track("chunk_command_invocation", props)
+	_ = tc.Track("command_invocation", props)
 }

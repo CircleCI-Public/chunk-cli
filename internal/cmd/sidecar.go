@@ -18,12 +18,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func randomSidecarName() string {
@@ -74,8 +73,15 @@ func resolveSidecarID(ctx context.Context, sidecarID *string) error {
 			errMsg:     "no active sidecar and --sidecar-id not provided",
 		}
 	}
-	*sidecarID = active.SidecarID
+	*sidecarID = active.ID()
 	return nil
+}
+
+func shortSessionID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // resolveOrgID returns orgID from the flag, then delegates to
@@ -91,11 +97,23 @@ func resolveOrgID(orgID, workDir string, pickOrg func() (string, error)) (string
 	return pickOrg()
 }
 
-func orgPicker(ctx context.Context, client *circleci.Client) func() (string, error) {
+// orgSource names where resolveOrgID would have taken the org ID from, for use
+// in error messages. It mirrors resolveOrgID's precedence and must be kept in
+// step with it. An empty result means the picker supplied the value, which for
+// a single-collaboration account happens without prompting.
+func orgSource(orgID, workDir string) string {
+	if orgID != "" {
+		return "--org-id"
+	}
+	_, source := config.ResolveOrgID(workDir)
+	return source
+}
+
+func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string) func() (string, error) {
 	return func() (string, error) {
 		collabs, err := client.ListCollaborations(ctx)
 		if err != nil {
-			if err := notAuthorized("list organizations", err); err != nil {
+			if err := notAuthorized("list organizations", tokenSource, err); err != nil {
 				return "", err
 			}
 			return "", &userError{
@@ -114,17 +132,27 @@ func orgPicker(ctx context.Context, client *circleci.Client) func() (string, err
 		if len(collabs) == 1 {
 			return collabs[0].ID, nil
 		}
+		if nonInteractive() {
+			return "", &userError{
+				msg:        "No interactive terminal available to select an organization.",
+				suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
+				err:        ui.ErrNoTTY,
+			}
+		}
 		labels := make([]string, len(collabs))
 		for i, c := range collabs {
 			labels[i] = fmt.Sprintf("%s/%s", c.VcsType, c.Name)
 		}
-		idx, err := tui.SelectFromList("Select an organization:", labels)
+		idx, err := ui.SelectFromList("Select an organization:", labels)
 		if err != nil {
-			if errors.Is(err, tui.ErrNoTTY) {
+			if errors.Is(err, ui.ErrNoTTY) {
+				// hideDetail: the wrapped error is "no interactive terminal
+				// available", which the message already says in full.
 				return "", &userError{
 					msg:        "No interactive terminal available to select an organization.",
 					suggestion: "Run 'chunk org list' to find your org ID, then set it with 'chunk config set orgID <id>' or pass --org-id.",
 					err:        err,
+					hideDetail: true,
 				}
 			}
 			return "", &userError{msg: "Could not select an organization.", suggestion: "Pass --org-id instead.", err: err}
@@ -145,7 +173,7 @@ func newSidecarListCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -153,7 +181,7 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
 			if err != nil {
 				return err
 			}
@@ -161,17 +189,14 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				if errors.Is(err, circleci.ErrNotAuthorized) {
 					if all {
-						return &userError{
-							msg:        "Not authorized to list all sidecars.",
-							suggestion: "Listing all sidecars requires org admin privileges.",
-							err:        err,
-						}
+						return newUserError("Not authorized to list all sidecars.").
+							withCode("auth.not_authorized").
+							withDetail(tokenSourceDetail(rc.CircleCITokenSource)).
+							withSuggestion("Listing all sidecars requires org admin privileges.").
+							withExitCode(ExitAuthError).
+							wrap(err)
 					}
-					return &userError{
-						msg:        "Not authorized to list sidecars.",
-						suggestion: suggestionReauth,
-						err:        err,
-					}
+					return notAuthorized("list sidecars", rc.CircleCITokenSource, err)
 				}
 				return &userError{
 					msg:        "Could not list sidecars.",
@@ -211,7 +236,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -222,7 +247,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
 			if err != nil {
 				return err
 			}
@@ -245,7 +270,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			}
 			sb, err := sidecar.Create(cmd.Context(), client, resolvedOrgID, name, image)
 			if err != nil {
-				if err := notAuthorized("create sidecars", err); err != nil {
+				if err := notAuthorized("create sidecars", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				var se *circleci.StatusError
@@ -261,7 +286,7 @@ func newSidecarCreateCmd() *cobra.Command {
 				}
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sidecar %s (%s)", sb.Name, sb.ID)))
-			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarID: sb.ID, Name: sb.Name, OrgID: resolvedOrgID}); err != nil {
+			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarIDs: []string{sb.ID}, Name: sb.Name, OrgID: resolvedOrgID}); err != nil {
 				io.ErrPrintf("warning: could not save active sidecar: %v\n", err)
 			} else {
 				io.ErrPrintf("Set %s as active sidecar\n", sb.ID)
@@ -290,12 +315,12 @@ func newSidecarDeleteCmd() *cobra.Command {
 			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
 			if err := client.DeleteSidecar(cmd.Context(), sidecarID); err != nil {
-				if err := notAuthorized("delete sidecars", err); err != nil {
+				if err := notAuthorized("delete sidecars", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -309,12 +334,10 @@ func newSidecarDeleteCmd() *cobra.Command {
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted sidecar %s", sidecarID)))
 
-			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.SidecarID == sidecarID {
-				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
-					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
-				} else {
-					io.ErrPrintln("Active sidecar cleared")
-				}
+			if cleared, cerr := sidecar.RemoveActiveSidecar(cmd.Context(), sidecarID); cerr != nil {
+				io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
+			} else if cleared {
+				io.ErrPrintln("Active sidecar cleared")
 			}
 			return nil
 		},
@@ -350,7 +373,7 @@ or via the repeatable --args flag. Positional arguments are appended after any
 			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -368,9 +391,21 @@ or via the repeatable --args flag. Positional arguments are appended after any
 				}
 				_, _ = w.Write(data)
 			}
-			resp, err := sidecar.Exec(cmd.Context(), client, sidecarID, command, allArgs, onOutput)
+			// Registered like a validate run, so a command run by hand is as
+			// readable afterwards as one a hook fired. The project root is only an
+			// attribution key for the dashboard; cwd is the right answer even when
+			// it is not a repo, and an empty one simply groups under no project.
+			projectRoot, _ := os.Getwd()
+			resp, err := submitAndStream(cmd.Context(), client, sidecarID,
+				&watchd.CommandReg{
+					SidecarID:   sidecarID,
+					ProjectRoot: projectRoot,
+					Op:          string(eventlog.OpExec),
+					Name:        execCommandLabel(command, allArgs),
+				},
+				command, allArgs, nil, onOutput)
 			if err != nil {
-				if err := notAuthorized("execute commands", err); err != nil {
+				if err := notAuthorized("execute commands", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -415,13 +450,13 @@ func newSidecarAddSSHKeyCmd() *cobra.Command {
 			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
 			resp, err := sidecar.AddSSHKey(cmd.Context(), client, sidecarID, publicKey, publicKeyFile)
 			if err != nil {
-				if err := notAuthorized("add SSH keys", err); err != nil {
+				if err := notAuthorized("add SSH keys", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -476,7 +511,7 @@ func newSidecarSSHCmd() *cobra.Command {
 			authSock := os.Getenv(config.EnvSSHAuthSock)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -497,7 +532,7 @@ func newSidecarSSHCmd() *cobra.Command {
 				if err := sshSessionError(err); err != nil {
 					return err
 				}
-				if err := notAuthorized("connect via SSH", err); err != nil {
+				if err := notAuthorized("connect via SSH", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -519,7 +554,6 @@ func newSidecarSSHCmd() *cobra.Command {
 
 func newSidecarSyncCmd() *cobra.Command {
 	var sidecarID, identityFile, workdir string
-	var checkout bool
 
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -532,7 +566,7 @@ func newSidecarSyncCmd() *cobra.Command {
 			authSock := os.Getenv(config.EnvSSHAuthSock)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -543,40 +577,17 @@ func newSidecarSyncCmd() *cobra.Command {
 			syncFn := newStatusFunc(io)
 			if dataDir, dirErr := sidecar.StateDir(); dirErr == nil {
 				scName := ""
-				if as, _ := sidecar.LoadActive(cmd.Context()); as != nil && as.SidecarID == sidecarID {
+				if as, _ := sidecar.LoadActive(cmd.Context()); as != nil && as.ID() == sidecarID {
 					scName = as.Name
 				}
-				syncFn = eventlog.WrapFromDir(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd))
+				syncFn = eventlog.Record(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd)).Status
 			}
-			useBundle := !checkout
-			if useBundle {
-				err = sidecar.BundleSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, syncFn)
-			} else {
-				err = sidecar.Sync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, syncFn)
-			}
+			err = sidecar.RsyncSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, syncFn)
 			if err != nil {
-				if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
-					return &userError{
-						msg:        "Git remote \"origin\" is required for sidecar sync.",
-						suggestion: "Run: git remote add origin <url>",
-						err:        err,
-					}
-				}
-				if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
-					suggestion := "Push your branch to the remote before syncing."
-					if errors.Is(err, gitutil.ErrNoOriginHEAD) {
-						suggestion = "Run: git fetch origin && git remote set-head origin -a"
-					}
-					return &userError{
-						msg:        "Could not resolve remote base.",
-						suggestion: suggestion,
-						err:        err,
-					}
-				}
 				if err := sshSessionError(err); err != nil {
 					return err
 				}
-				if err := notAuthorized("sync files", err); err != nil {
+				if err := notAuthorized("sync files", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
 				if err := sidecarUnavailable(sidecarID, err); err != nil {
@@ -593,8 +604,7 @@ func newSidecarSyncCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (defaults to /home/user/<repo> when omitted)")
-	cmd.Flags().BoolVar(&checkout, "checkout", false, "Sync via git checkout/patch instead of bundle (requires branch pushed to GitHub)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (defaults to /home/user/<basename> when omitted)")
 
 	return cmd
 }
@@ -606,7 +616,7 @@ func newSidecarUseCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
-			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarID: args[0]}); err != nil {
+			if err := sidecar.SaveActive(cmd.Context(), sidecar.ActiveSidecar{SidecarIDs: []string{args[0]}}); err != nil {
 				return &userError{msg: "Could not save the active sidecar.", suggestion: configFilePermHint, err: err}
 			}
 			io.ErrPrintf("Set %s as active sidecar\n", args[0])
@@ -637,11 +647,14 @@ func newSidecarCurrentCmd() *cobra.Command {
 			if jsonOut {
 				return iostream.PrintJSON(io.Out, active)
 			}
+			line := active.ID()
 			if active.Name != "" {
-				io.Printf("%s  %s\n", active.Name, active.SidecarID)
-			} else {
-				io.Printf("%s\n", active.SidecarID)
+				line = active.Name + "  " + active.ID()
 			}
+			if active.SessionID != "" {
+				line += "  session " + shortSessionID(active.SessionID)
+			}
+			io.Printf("%s\n", line)
 			return nil
 		},
 	}
@@ -855,7 +868,7 @@ snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 			}
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -875,10 +888,8 @@ snapshot with 'chunk sidecar create --image <snapshot-id>'.`,
 			}
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted sidecar %s", sidecarID)))
 
-			if active, lerr := sidecar.LoadActive(cmd.Context()); lerr == nil && active != nil && active.SidecarID == sidecarID {
-				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
-					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
-				}
+			if _, cerr := sidecar.RemoveActiveSidecar(cmd.Context(), sidecarID); cerr != nil {
+				io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
 			}
 			return nil
 		},
@@ -902,7 +913,7 @@ func newSidecarSnapshotGetCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -938,7 +949,7 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -946,7 +957,7 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
 			if err != nil {
 				return err
 			}
@@ -1007,7 +1018,7 @@ Example:
 
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, streams, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -1049,7 +1060,7 @@ Example:
 				// Step 2: Resolve or create sidecar.
 				if sidecarID == "" {
 					var resolveErr error
-					sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, status, streams)
+					sidecarID, _, resolveErr = sidecarSetupResolveSidecar(cmd.Context(), client, orgID, name, dir, rc.CircleCITokenSource, status, streams)
 					if resolveErr != nil {
 						return resolveErr
 					}
@@ -1062,7 +1073,7 @@ Example:
 
 				// Step 4: Sync files to sidecar.
 				if !skipSync {
-					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, true, dir, status); err != nil {
+					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, dir, rc.CircleCITokenSource, status); err != nil {
 						return err
 					}
 				}
@@ -1143,6 +1154,7 @@ func sidecarSetupResolveSidecar(
 	ctx context.Context,
 	client *circleci.Client,
 	orgID, name, workDir string,
+	tokenSource string,
 	status iostream.StatusFunc,
 	streams iostream.Streams,
 ) (id, displayName string, err error) {
@@ -1151,20 +1163,20 @@ func sidecarSetupResolveSidecar(
 		return "", "", &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: err}
 	}
 	if active != nil {
-		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.SidecarID))
-		return active.SidecarID, active.Name, nil
+		status(iostream.LevelInfo, fmt.Sprintf("using active sidecar %s", active.ID()))
+		return active.ID(), active.Name, nil
 	}
 	if name == "" {
 		name = randomSidecarName()
 	}
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
 	if err != nil {
 		return "", "", err
 	}
 	status(iostream.LevelStep, fmt.Sprintf("Creating sidecar %q...", name))
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, name, "")
 	if err != nil {
-		if authErr := notAuthorized("create sidecars", err); authErr != nil {
+		if authErr := notAuthorized("create sidecars", tokenSource, err); authErr != nil {
 			return "", "", authErr
 		}
 		return "", "", &userError{
@@ -1173,7 +1185,7 @@ func sidecarSetupResolveSidecar(
 			err:        err,
 		}
 	}
-	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: []string{sc.ID}, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID))
@@ -1202,42 +1214,19 @@ func sidecarSetupSync(
 	ctx context.Context,
 	client *circleci.Client,
 	sidecarID, identityFile, authSock string,
-	useBundle bool,
 	cwd string,
+	tokenSource string,
 	status iostream.StatusFunc,
 ) error {
 	status(iostream.LevelStep, "Syncing files to sidecar...")
-	var err error
-	if useBundle {
-		err = sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, "", cwd, status)
-	} else {
-		err = sidecar.Sync(ctx, client, sidecarID, identityFile, authSock, "", status)
-	}
+	err := sidecar.RsyncSync(ctx, client, sidecarID, identityFile, authSock, "", cwd, status)
 	if err == nil {
 		return nil
-	}
-	if _, ok := errors.AsType[*sidecar.NoOriginRemoteError](err); ok {
-		return &userError{
-			msg:        "Git remote \"origin\" is required for sidecar sync.",
-			suggestion: "Run: git remote add origin <url>",
-			err:        err,
-		}
-	}
-	if _, ok := errors.AsType[*sidecar.RemoteBaseError](err); ok {
-		suggestion := "Push your branch to the remote before syncing."
-		if errors.Is(err, gitutil.ErrNoOriginHEAD) {
-			suggestion = "Run: git fetch origin && git remote set-head origin -a"
-		}
-		return &userError{
-			msg:        "Could not resolve remote base.",
-			suggestion: suggestion,
-			err:        err,
-		}
 	}
 	if authErr := sshSessionError(err); authErr != nil {
 		return authErr
 	}
-	if authErr := notAuthorized("sync files", err); authErr != nil {
+	if authErr := notAuthorized("sync files", tokenSource, err); authErr != nil {
 		return authErr
 	}
 	return err
@@ -1275,7 +1264,7 @@ func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
 			continue
 		}
 		opts.status(iostream.LevelStep, fmt.Sprintf("Running setup step %q: %s", step.Name, step.Command))
-		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, opts.identityFile, opts.authSock)
+		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, opts.identityFile, opts.authSock, false)
 		if err != nil {
 			if sessErr := sshSessionError(err); sessErr != nil {
 				return sessErr

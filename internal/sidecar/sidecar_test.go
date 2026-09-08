@@ -35,7 +35,7 @@ func TestOpenSessionDefaultKeyFallback(t *testing.T) {
 	ctx := context.Background()
 
 	// Both identityFile and authSock are empty — should attempt default key path.
-	_, err := sidecar.OpenSession(ctx, cl, "sb-1", "", "")
+	_, err := sidecar.OpenSession(ctx, cl, "sb-1", "", "", false)
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(err.Error(), "chunk_ai"),
 		"expected default key name in error, got: %v", err)
@@ -53,40 +53,9 @@ func TestCreate(t *testing.T) {
 
 	sb, err := sidecar.Create(ctx, cl, "org-1", "my-sidecar", "ubuntu:22.04")
 	assert.NilError(t, err)
-	assert.Equal(t, sb.ID, "sidecar-new-123")
+	assert.Equal(t, sb.ID, "sidecar-new-1")
 	assert.Equal(t, sb.Name, "my-sidecar")
 	assert.Equal(t, sb.OrgID, "org-1")
-}
-
-func TestExec(t *testing.T) {
-	cci := fakes.NewFakeCircleCI()
-	cci.ExecResponse = &fakes.ExecResponse{
-		CommandID: "cmd-1",
-		PID:       10,
-		Stdout:    "output\n",
-		Stderr:    "",
-		ExitCode:  0,
-	}
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	cl := newClient(t, srv.URL)
-	ctx := context.Background()
-
-	resp, err := sidecar.Exec(ctx, cl, "sb-1", "echo", []string{"hello"}, nil)
-	assert.NilError(t, err)
-	assert.Equal(t, resp.Stdout, "output\n")
-	assert.Equal(t, resp.ExitCode, 0)
-
-	// Verify exec request was made with sidecar ID in path
-	reqs := cci.Recorder.AllRequests()
-	var gotExecReq bool
-	for _, r := range reqs {
-		if r.URL.Path == "/api/v3/sidecar/instances/sb-1/exec" {
-			gotExecReq = true
-		}
-	}
-	assert.Assert(t, gotExecReq, "expected exec request at /api/v3/sidecar/instances/sb-1/exec")
 }
 
 func TestAddSSHKey(t *testing.T) {

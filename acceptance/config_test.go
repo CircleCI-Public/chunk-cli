@@ -71,8 +71,8 @@ func TestConfigShowFromConfigFile(t *testing.T) {
 	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 
 	combined := result.Stdout + result.Stderr
-	assert.Check(t, cmp.Contains(combined, "user config"),
-		"expected apiKey source to be 'user config'")
+	assert.Check(t, cmp.Contains(combined, "Config file ("),
+		"expected apiKey source to include config file path")
 	assert.Check(t, cmp.Contains(combined, "ZZZZ"),
 		"expected last 4 chars of stored key visible")
 }
@@ -217,8 +217,8 @@ func TestConfigShowCircleCITokenFromFile(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Check(t, cmp.Contains(combined, "FTOK"),
 		"expected file token last 4 chars")
-	assert.Check(t, cmp.Contains(combined, "user config"),
-		"expected config file source")
+	assert.Check(t, cmp.Contains(combined, "Config file ("),
+		"expected config file source to include path")
 }
 
 func TestConfigShowCircleTokenEnvPrecedenceOverCircleCIToken(t *testing.T) {
@@ -275,8 +275,8 @@ func TestConfigShowGitHubTokenFromFile(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Check(t, cmp.Contains(combined, "GHTK"),
 		"expected file token last 4 chars")
-	assert.Check(t, cmp.Contains(combined, "user config"),
-		"expected config file source")
+	assert.Check(t, cmp.Contains(combined, "Config file ("),
+		"expected config file source to include path")
 }
 
 func TestConfigShowModelFileOverDefault(t *testing.T) {

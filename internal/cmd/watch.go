@@ -13,10 +13,15 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	internaltui "github.com/CircleCI-Public/chunk-cli/internal/tui"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui/watch"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
+
+// watchCmdName is the name of the watch command. It is referenced by the
+// daemon re-exec argv and by the update-check skip list, so it lives here
+// next to the command it names.
+const watchCmdName = "watch"
 
 func newWatchCmd() *cobra.Command {
 	var (
@@ -30,11 +35,12 @@ func newWatchCmd() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := internaltui.RequireStdoutTTY(); err != nil {
+			if err := ui.RequireStdoutTTY(); err != nil {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			if err := watchd.EnsureRunning([]string{"watch", "_daemon"}); err != nil {
+			daemonArgs := []string{watchCmdName, "_daemon"}
+			if err := watchd.EnsureRunning(daemonArgs); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 
@@ -87,7 +93,7 @@ func newWatchCmd() *cobra.Command {
 				})
 			}
 
-			m := watch.New(entries, !focus)
+			m := watch.New(entries, !focus).WithDaemonArgs(daemonArgs)
 			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
 			_, err = p.Run()
 			return err

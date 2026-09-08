@@ -12,7 +12,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -76,12 +75,12 @@ func newBuildPromptCmd() *cobra.Command {
 
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			ghClient, err := ensureGitHubClient(cmd.Context(), cmd, rc, streams, tui.PromptHidden)
+			ghClient, err := ensureGitHubClient(cmd.Context(), cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
 
-			anthropicClient, err := ensureAnthropicClient(cmd.Context(), cmd, rc, streams, tui.PromptHidden)
+			anthropicClient, err := ensureAnthropicClient(cmd.Context(), cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
 				return err
 			}

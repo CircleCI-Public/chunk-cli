@@ -25,7 +25,7 @@ func TestOrgCreateHappyPath(t *testing.T) {
 	t.Setenv(config.EnvCircleToken, "test-token")
 	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
 
-	cmd := newOrgCreateCmd()
+	cmd := insecureStorageCmd(newOrgCreateCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 
@@ -55,7 +55,7 @@ func TestOrgCreateAPIError(t *testing.T) {
 	t.Setenv(config.EnvCircleToken, "test-token")
 	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
 
-	cmd := newOrgCreateCmd()
+	cmd := insecureStorageCmd(newOrgCreateCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 
@@ -78,7 +78,7 @@ func TestOrgCreateRequiresAuth(t *testing.T) {
 	t.Setenv(config.EnvCircleToken, "")
 	t.Setenv(config.EnvCircleCIToken, "")
 
-	cmd := newOrgCreateCmd()
+	cmd := insecureStorageCmd(newOrgCreateCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 
@@ -97,7 +97,7 @@ func TestOrgCreateRequiresAuth(t *testing.T) {
 }
 
 func TestOrgCreateRequiresName(t *testing.T) {
-	cmd := newOrgCreateCmd()
+	cmd := insecureStorageCmd(newOrgCreateCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 
@@ -123,8 +123,7 @@ func TestOrgListTableOutput(t *testing.T) {
 		{ID: "org-def", Name: "otherorg", VCSType: "circleci"},
 	}
 
-	cmd := newOrgListCmd()
-	cmd.Flags().Bool("insecure-storage", false, "")
+	cmd := insecureStorageCmd(newOrgListCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 
@@ -145,8 +144,7 @@ func TestOrgListJSONOutput(t *testing.T) {
 		{ID: "org-abc", Name: "myorg", VCSType: "github"},
 	}
 
-	cmd := newOrgListCmd()
-	cmd.Flags().Bool("insecure-storage", false, "")
+	cmd := insecureStorageCmd(newOrgListCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 	cmd.SetArgs([]string{"--json"})
@@ -167,8 +165,7 @@ func TestOrgListJSONOutput(t *testing.T) {
 func TestOrgListJSONEmpty(t *testing.T) {
 	setupOrgListFake(t)
 
-	cmd := newOrgListCmd()
-	cmd.Flags().Bool("insecure-storage", false, "")
+	cmd := insecureStorageCmd(newOrgListCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 	cmd.SetArgs([]string{"--json"})
@@ -188,8 +185,7 @@ func TestOrgListJSONEmpty(t *testing.T) {
 func TestOrgListEmpty(t *testing.T) {
 	setupOrgListFake(t)
 
-	cmd := newOrgListCmd()
-	cmd.Flags().Bool("insecure-storage", false, "")
+	cmd := insecureStorageCmd(newOrgListCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 
@@ -208,8 +204,7 @@ func TestOrgListRequiresAuth(t *testing.T) {
 	t.Setenv(config.EnvCircleToken, "")
 	t.Setenv(config.EnvCircleCIToken, "")
 
-	cmd := newOrgListCmd()
-	cmd.Flags().Bool("insecure-storage", false, "")
+	cmd := insecureStorageCmd(newOrgListCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 

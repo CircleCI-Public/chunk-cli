@@ -63,7 +63,7 @@ func (e *reapEnv) writeState(name string, active ActiveSidecar, age time.Duratio
 
 	if live {
 		e.fake.Sidecars = append(e.fake.Sidecars, fakes.Sidecar{
-			ID: active.SidecarID, Name: active.Name, OrgID: testOrg,
+			ID: active.ID(), Name: active.Name, OrgID: testOrg,
 		})
 	}
 	return path
@@ -86,13 +86,13 @@ func exists(t *testing.T, path string) bool {
 
 // TestReapDropsStateForVanishedSidecar covers the resurrection bug: a state file
 // naming a sidecar that no longer exists must go, even when it is the file for
-// the current session, since that is exactly the file LoadAnyActive promotes.
+// the current session.
 func TestReapDropsStateForVanishedSidecar(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
 	// Written under the no-session name, which is also the current session's name,
 	// and recent enough that the age sweep would never touch it.
-	path := e.writeState("sidecar.json", ActiveSidecar{SidecarID: "sb-dead"}, time.Minute, false)
+	path := e.writeState("sidecar.json", ActiveSidecar{SidecarIDs: []string{"sb-dead"}}, time.Minute, false)
 
 	res, err := Reap(ctx, e.client, testOrg)
 	assert.NilError(t, err)
@@ -108,7 +108,7 @@ func TestReapDeletesAbandonedSidecar(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := session.WithID(context.Background(), "sess-current")
 	path := e.writeState("sidecar.sess-old-deadbeef.json",
-		ActiveSidecar{SidecarID: "sb-old", OrgID: testOrg}, StaleAfter+time.Hour, true)
+		ActiveSidecar{SidecarIDs: []string{"sb-old"}, OrgID: testOrg}, StaleAfter+time.Hour, true)
 
 	res, err := Reap(ctx, e.client, testOrg)
 	assert.NilError(t, err)
@@ -125,7 +125,7 @@ func TestReapKeepsRecentlyUsedSidecar(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := session.WithID(context.Background(), "sess-current")
 	path := e.writeState("sidecar.sess-other-deadbeef.json",
-		ActiveSidecar{SidecarID: "sb-busy", OrgID: testOrg}, time.Hour, true)
+		ActiveSidecar{SidecarIDs: []string{"sb-busy"}, OrgID: testOrg}, time.Hour, true)
 
 	res, err := Reap(ctx, e.client, testOrg)
 	assert.NilError(t, err)
@@ -143,7 +143,7 @@ func TestReapSparesCurrentSessionFromAgeSweep(t *testing.T) {
 	ctx := session.WithID(context.Background(), "sess-current")
 	// No git repo under the temp dir, so the current state file carries no branch.
 	path := e.writeState(StateFileName("sess-current", ""),
-		ActiveSidecar{SidecarID: "sb-mine", OrgID: testOrg}, StaleAfter+time.Hour, true)
+		ActiveSidecar{SidecarIDs: []string{"sb-mine"}, OrgID: testOrg}, StaleAfter+time.Hour, true)
 
 	res, err := Reap(ctx, e.client, testOrg)
 	assert.NilError(t, err)
@@ -159,7 +159,7 @@ func TestReapFailsOpenWhenListFails(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
 	path := e.writeState("sidecar.sess-a-deadbeef.json",
-		ActiveSidecar{SidecarID: "sb-1", OrgID: testOrg}, StaleAfter+time.Hour, true)
+		ActiveSidecar{SidecarIDs: []string{"sb-1"}, OrgID: testOrg}, StaleAfter+time.Hour, true)
 	e.fake.ListStatusCode = 500
 
 	res, err := Reap(ctx, e.client, testOrg)
@@ -176,7 +176,7 @@ func TestReapIgnoresOtherOrgs(t *testing.T) {
 	ctx := context.Background()
 	// Absent from the listing, but only because it belongs to another org.
 	path := e.writeState("sidecar.sess-a-deadbeef.json",
-		ActiveSidecar{SidecarID: "sb-elsewhere", OrgID: "org-2"}, StaleAfter+time.Hour, false)
+		ActiveSidecar{SidecarIDs: []string{"sb-elsewhere"}, OrgID: "org-2"}, StaleAfter+time.Hour, false)
 
 	res, err := Reap(ctx, e.client, testOrg)
 	assert.NilError(t, err)
@@ -188,7 +188,7 @@ func TestReapIgnoresOtherOrgs(t *testing.T) {
 func TestReapSkipsWithoutOrgOrClient(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
-	path := e.writeState("sidecar.json", ActiveSidecar{SidecarID: "sb-dead"}, time.Minute, false)
+	path := e.writeState("sidecar.json", ActiveSidecar{SidecarIDs: []string{"sb-dead"}}, time.Minute, false)
 
 	res, err := Reap(ctx, e.client, "")
 	assert.NilError(t, err)
@@ -206,9 +206,9 @@ func TestReapSkipsWithoutOrgOrClient(t *testing.T) {
 func TestPruneIDRemovesEveryDuplicate(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
-	dup1 := e.writeState("sidecar.json", ActiveSidecar{SidecarID: "sb-dead"}, time.Minute, false)
-	dup2 := e.writeState("sidecar.sess-a-deadbeef.json", ActiveSidecar{SidecarID: "sb-dead"}, time.Hour, false)
-	other := e.writeState("sidecar.sess-b-cafebabe.json", ActiveSidecar{SidecarID: "sb-live"}, time.Hour, true)
+	dup1 := e.writeState("sidecar.json", ActiveSidecar{SidecarIDs: []string{"sb-dead"}}, time.Minute, false)
+	dup2 := e.writeState("sidecar.sess-a-deadbeef.json", ActiveSidecar{SidecarIDs: []string{"sb-dead"}}, time.Hour, false)
+	other := e.writeState("sidecar.sess-b-cafebabe.json", ActiveSidecar{SidecarIDs: []string{"sb-live"}}, time.Hour, true)
 
 	assert.NilError(t, PruneID(ctx, e.client, "sb-dead", false))
 
@@ -224,7 +224,7 @@ func TestPruneIDRemovesEveryDuplicate(t *testing.T) {
 func TestPruneIDDeletesRemoteWhenAsked(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
-	path := e.writeState("sidecar.json", ActiveSidecar{SidecarID: "sb-stale"}, time.Minute, true)
+	path := e.writeState("sidecar.json", ActiveSidecar{SidecarIDs: []string{"sb-stale"}}, time.Minute, true)
 
 	assert.NilError(t, PruneID(ctx, e.client, "sb-stale", true))
 
@@ -238,34 +238,12 @@ func TestPruneIDDeletesRemoteWhenAsked(t *testing.T) {
 func TestPruneIDDropsStateWhenRemoteDeleteFails(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
-	path := e.writeState("sidecar.json", ActiveSidecar{SidecarID: "sb-stale"}, time.Minute, true)
+	path := e.writeState("sidecar.json", ActiveSidecar{SidecarIDs: []string{"sb-stale"}}, time.Minute, true)
 	e.fake.DeleteStatusCode = 500
 
 	err := PruneID(ctx, e.client, "sb-stale", true)
 	assert.Assert(t, err != nil, "a failed delete must be reported")
 	assert.Assert(t, !exists(t, path), "state must be dropped even when the delete fails")
-}
-
-// TestReapStopsResurrection is the end-to-end shape of the original bug: a dead
-// ID duplicated across files came back through LoadAnyActive on every run.
-func TestReapStopsResurrection(t *testing.T) {
-	e := newReapEnv(t)
-	ctx := context.Background()
-	e.writeState("sidecar.json", ActiveSidecar{SidecarID: "sb-dead"}, time.Minute, false)
-	e.writeState("sidecar.sess-old-deadbeef.json", ActiveSidecar{SidecarID: "sb-dead"}, 20*24*time.Hour, false)
-
-	// Before the reap, the dead sidecar is still promotable.
-	before, err := LoadAnyActive(ctx)
-	assert.NilError(t, err)
-	assert.Assert(t, before != nil)
-	assert.Equal(t, before.SidecarID, "sb-dead")
-
-	_, err = Reap(ctx, e.client, testOrg)
-	assert.NilError(t, err)
-
-	after, err := LoadAnyActive(ctx)
-	assert.NilError(t, err)
-	assert.Assert(t, after == nil, "a reaped sidecar must not be promotable again")
 }
 
 // TestReapDropsStateWhenDeleteReturnsGone covers a sidecar the listing still
@@ -275,7 +253,7 @@ func TestReapDropsStateWhenDeleteReturnsGone(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
 	path := e.writeState("sidecar.sess-a-deadbeef.json",
-		ActiveSidecar{SidecarID: "sb-ghost", OrgID: testOrg}, StaleAfter+time.Hour, true)
+		ActiveSidecar{SidecarIDs: []string{"sb-ghost"}, OrgID: testOrg}, StaleAfter+time.Hour, true)
 	e.fake.DeleteStatusCode = 404
 
 	res, err := Reap(ctx, e.client, testOrg)
@@ -293,19 +271,14 @@ func TestReapDropsStateWhenDeleteFails(t *testing.T) {
 	e := newReapEnv(t)
 	ctx := context.Background()
 	path := e.writeState("sidecar.sess-a-deadbeef.json",
-		ActiveSidecar{SidecarID: "sb-stuck", OrgID: testOrg}, StaleAfter+time.Hour, true)
+		ActiveSidecar{SidecarIDs: []string{"sb-stuck"}, OrgID: testOrg}, StaleAfter+time.Hour, true)
 	e.fake.DeleteStatusCode = 500
 
 	res, err := Reap(ctx, e.client, testOrg)
 	assert.NilError(t, err)
 
 	assert.DeepEqual(t, res.Failed, []string{"sb-stuck"})
-	assert.Assert(t, !exists(t, path), "a failed delete must not leave promotable state")
-
-	// The whole point: it cannot come back as the active sidecar.
-	after, err := LoadAnyActive(ctx)
-	assert.NilError(t, err)
-	assert.Assert(t, after == nil, "an undeletable sidecar must not be promotable")
+	assert.Assert(t, !exists(t, path), "a failed delete must not leave state files behind")
 	assert.Assert(t, strings.Contains(res.Summary(), "may still be running"),
 		"the leak must be reported, got: %s", res.Summary())
 }

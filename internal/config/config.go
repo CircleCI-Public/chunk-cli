@@ -38,7 +38,8 @@ const (
 	dirPermission   = 0o700
 	filePermission  = 0o600
 
-	// SourceConfigFile is the source label used when a value comes from the user config file.
+	// SourceConfigFile is the fallback source label used when a value comes from the user config file
+	// and the path cannot be resolved. Callers should prefer configFileSource() for user-facing messages.
 	SourceConfigFile = "Config file (user config)"
 
 	// SourceProjectConfig is the source label for values from .chunk/config.json.
@@ -60,6 +61,7 @@ const (
 	EnvCircleCIOrgID      = "CIRCLECI_ORG_ID"
 	EnvChunkHooksDisabled = "CHUNK_HOOKS_DISABLED"
 	EnvChunkNoTelemetry   = "CHUNK_NO_TELEMETRY"
+	EnvChunkSessionID     = "CHUNK_SESSION_ID"
 )
 
 // System/standard environment variable names.
@@ -115,6 +117,7 @@ func LoadEnv(ctx context.Context) (EnvVars, error) {
 type UserConfig struct {
 	AnthropicAPIKey    string `json:"anthropicAPIKey,omitempty"`
 	CircleCIToken      string `json:"circleCIToken,omitempty"`
+	CircleCIUserID     string `json:"circleCIUserID,omitempty"`
 	GitHubToken        string `json:"gitHubToken,omitempty"`
 	Model              string `json:"model,omitempty"`
 	UseSSHIdentityFile bool   `json:"useSSHIdentityFile,omitempty"`
@@ -124,6 +127,10 @@ type UserConfig struct {
 	// false disables it. nil means no preference has been set, in which
 	// case telemetry defaults to enabled (it is opt-out).
 	Telemetry *bool `json:"telemetry,omitempty"`
+
+	// Notifications enables OS desktop notifications after validate completes.
+	// false (zero value) means disabled; true means enabled (opt-in).
+	Notifications bool `json:"notifications,omitempty"`
 
 	// LegacyAPIKey reads the pre-rename "apiKey" field so existing users don't
 	// silently lose their stored Anthropic key on upgrade. Migrated into
@@ -147,16 +154,29 @@ type ResolvedConfig struct {
 	AnalyzeModel          string
 	PromptModel           string
 	UseSSHIdentityFile    bool
+	Notifications         bool
 }
 
-func resolveCircleCIToken(env EnvVars, cfg UserConfig) (string, string) {
+// configFileSource returns a source label that includes the actual config file
+// path, e.g. "Config file (~/.config/chunk/config.json)". Falls back to
+// SourceConfigFile if the path cannot be resolved.
+func configFileSource() string {
+	if p, err := Path(); err == nil {
+		return "Config file (" + p + ")"
+	}
+	return SourceConfigFile
+}
+
+func resolveCircleCIToken(env EnvVars, cfg UserConfig, insecureStorage bool) (string, string) {
 	switch {
 	case env.CircleToken != "":
 		return env.CircleToken, "Environment variable (" + EnvCircleToken + ")"
 	case env.CircleCIToken != "":
 		return env.CircleCIToken, "Environment variable (" + EnvCircleCIToken + ")"
 	case cfg.CircleCIToken != "":
-		return cfg.CircleCIToken, SourceConfigFile
+		return cfg.CircleCIToken, configFileSource()
+	case insecureStorage:
+		return "", ""
 	default:
 		if token, err := keyring.Get(keyring.ServiceCircleCI(env.CircleCIBaseURL)); err == nil {
 			return token, keyring.SourceKeychain
@@ -165,14 +185,16 @@ func resolveCircleCIToken(env EnvVars, cfg UserConfig) (string, string) {
 	return "", ""
 }
 
-func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig) (string, string) {
+func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig, insecureStorage bool) (string, string) {
 	switch {
 	case flagAPIKey != "":
 		return flagAPIKey, "Flag"
 	case env.AnthropicAPIKey != "":
 		return env.AnthropicAPIKey, "Environment variable"
 	case cfg.AnthropicAPIKey != "":
-		return cfg.AnthropicAPIKey, SourceConfigFile
+		return cfg.AnthropicAPIKey, configFileSource()
+	case insecureStorage:
+		return "", ""
 	default:
 		if apiKey, err := keyring.Get(keyring.ServiceAnthropic(env.AnthropicBaseURL)); err == nil {
 			return apiKey, keyring.SourceKeychain
@@ -181,12 +203,14 @@ func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig) (str
 	return "", ""
 }
 
-func resolveGitHubToken(env EnvVars, cfg UserConfig) (string, string) {
+func resolveGitHubToken(env EnvVars, cfg UserConfig, insecureStorage bool) (string, string) {
 	switch {
 	case env.GitHubToken != "":
 		return env.GitHubToken, "Environment variable (" + EnvGitHubToken + ")"
 	case cfg.GitHubToken != "":
-		return cfg.GitHubToken, SourceConfigFile
+		return cfg.GitHubToken, configFileSource()
+	case insecureStorage:
+		return "", ""
 	default:
 		if token, err := keyring.Get(keyring.ServiceGitHub(env.GitHubAPIURL)); err == nil {
 			return token, keyring.SourceKeychain
@@ -296,12 +320,45 @@ func EnsureInstanceID() (uuid.UUID, error) {
 	return id, nil
 }
 
+// SaveUserID persists the CircleCI user UUID for the current user so it can
+// be attached to telemetry events as the real UserId.
+//
+// Note: like EnsureInstanceID, this does a Load→Save cycle without a file
+// lock, so concurrent writes from two processes can race. In practice the
+// only caller is the auth flow, which runs once interactively, making the
+// race window negligible.
+func SaveUserID(id uuid.UUID) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	cfg.CircleCIUserID = id.String()
+	return Save(cfg)
+}
+
+// GetUserID returns the persisted CircleCI user UUID, or uuid.Nil if none has
+// been saved yet (e.g. the user has not authenticated) or the config cannot
+// be read. Errors are silently swallowed because this is a best-effort
+// telemetry helper — a missing user ID degrades gracefully to anonymous
+// attribution rather than blocking the command.
+func GetUserID() uuid.UUID {
+	cfg, err := Load()
+	if err != nil {
+		return uuid.Nil
+	}
+	id, err := uuid.Parse(cfg.CircleCIUserID)
+	if err != nil {
+		return uuid.Nil
+	}
+	return id
+}
+
 // Resolve computes the final config from flags, env, file, and keychain.
 // Priority for API key: flag > env > config file > keychain > (none).
 // Priority for model: flag > env > config file > default.
-// insecureStorage affects credential writes elsewhere, but reads always use the
-// same precedence order.
-func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error) {
+// insecureStorage excludes the keychain from the read path, so callers that
+// opted out of secure storage never touch it.
+func Resolve(flagAPIKey, flagModel string, insecureStorage bool) (ResolvedConfig, error) {
 	cfg, err := Load()
 
 	env, envErr := LoadEnv(context.Background())
@@ -313,9 +370,9 @@ func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error) {
 		AnalyzeModel: AnalyzeModel,
 		PromptModel:  PromptModel,
 	}
-	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg)
-	rc.AnthropicAPIKey, rc.AnthropicAPIKeySource = resolveAnthropicAPIKey(flagAPIKey, env, cfg)
-	rc.GitHubToken, rc.GitHubTokenSource = resolveGitHubToken(env, cfg)
+	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg, insecureStorage)
+	rc.AnthropicAPIKey, rc.AnthropicAPIKeySource = resolveAnthropicAPIKey(flagAPIKey, env, cfg, insecureStorage)
+	rc.GitHubToken, rc.GitHubTokenSource = resolveGitHubToken(env, cfg, insecureStorage)
 
 	switch {
 	case flagModel != "":
@@ -336,6 +393,7 @@ func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error) {
 	rc.AnthropicBaseURL = env.AnthropicBaseURL
 	rc.GitHubAPIURL = env.GitHubAPIURL
 	rc.UseSSHIdentityFile = cfg.UseSSHIdentityFile
+	rc.Notifications = cfg.Notifications
 
 	return rc, err
 }
@@ -343,7 +401,7 @@ func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error) {
 // ResolveCircleCI returns only the CircleCI-related config needed by sidecar
 // commands. It intentionally skips Anthropic and GitHub resolution so callers
 // that only need CircleCI auth avoid unrelated keyring work.
-func ResolveCircleCI(_ bool) (ResolvedConfig, error) {
+func ResolveCircleCI(insecureStorage bool) (ResolvedConfig, error) {
 	cfg, err := Load()
 	if err != nil {
 		return ResolvedConfig{}, err
@@ -361,8 +419,9 @@ func ResolveCircleCI(_ bool) (ResolvedConfig, error) {
 		AnthropicBaseURL:   env.AnthropicBaseURL,
 		GitHubAPIURL:       env.GitHubAPIURL,
 		UseSSHIdentityFile: cfg.UseSSHIdentityFile,
+		Notifications:      cfg.Notifications,
 	}
-	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg)
+	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg, insecureStorage)
 	return rc, nil
 }
 
@@ -395,6 +454,7 @@ var ValidConfigKeys = map[string]bool{
 	"model":              true,
 	"useSSHIdentityFile": true,
 	"telemetry":          true,
+	"notifications":      true,
 }
 
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to

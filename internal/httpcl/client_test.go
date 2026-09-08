@@ -3,12 +3,18 @@ package httpcl_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
@@ -22,17 +28,13 @@ func TestCallJSONRoundTrip(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "application/json; charset=utf-8" {
-			t.Errorf("expected JSON content-type, got %q", r.Header.Get("Content-Type"))
-		}
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			t.Errorf("expected bearer auth, got %q", r.Header.Get("Authorization"))
-		}
+		assert.Check(t, cmp.Equal(r.Header.Get("Content-Type"), "application/json; charset=utf-8"))
+		assert.Check(t, cmp.Equal(r.Header.Get("Authorization"), "Bearer test-token"))
 
+		// Check rather than a fatal assertion throughout this handler: it runs on
+		// the server's goroutine, where FailNow is not allowed.
 		var body reqBody
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
+		assert.Check(t, cmp.Nil(json.NewDecoder(r.Body).Decode(&body)))
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(respBody{Greeting: "hello " + body.Name})
@@ -49,15 +51,9 @@ func TestCallJSONRoundTrip(t *testing.T) {
 		hc.Body(reqBody{Name: "world"}),
 		hc.JSONDecoder(&resp),
 	))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status != 200 {
-		t.Fatalf("expected 200, got %d", status)
-	}
-	if resp.Greeting != "hello world" {
-		t.Fatalf("expected 'hello world', got %q", resp.Greeting)
-	}
+	assert.NilError(t, err)
+	assert.Equal(t, status, 200)
+	assert.Equal(t, resp.Greeting, "hello world")
 }
 
 func TestCallHTTPError(t *testing.T) {
@@ -70,12 +66,8 @@ func TestCallHTTPError(t *testing.T) {
 	c := hc.New(hc.Config{BaseURL: srv.URL})
 
 	status, err := c.Call(context.Background(), hc.NewRequest("GET", "/missing"))
-	if status != 404 {
-		t.Fatalf("expected 404, got %d", status)
-	}
-	if !hc.HasStatusCode(err, http.StatusNotFound) {
-		t.Fatalf("expected HTTPError with 404, got %v", err)
-	}
+	assert.Equal(t, status, 404)
+	assert.Assert(t, hc.HasStatusCode(err, http.StatusNotFound), "want an HTTPError with 404, got %v", err)
 }
 
 func TestDisableRetries(t *testing.T) {
@@ -93,19 +85,13 @@ func TestDisableRetries(t *testing.T) {
 	})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err == nil {
-		t.Fatal("expected error for 503 response")
-	}
-	if n := attempts.Load(); n != 1 {
-		t.Fatalf("expected exactly 1 attempt with retries disabled, got %d", n)
-	}
+	assert.Assert(t, err != nil, "expected an error for the 503")
+	assert.Equal(t, attempts.Load(), int32(1), "retries are disabled")
 }
 
 func TestCallCustomAuthHeader(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("x-api-key") != "my-key" {
-			t.Errorf("expected x-api-key header, got %q", r.Header.Get("x-api-key"))
-		}
+		assert.Check(t, cmp.Equal(r.Header.Get("x-api-key"), "my-key"))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -117,21 +103,15 @@ func TestCallCustomAuthHeader(t *testing.T) {
 	})
 
 	status, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status != 200 {
-		t.Fatalf("expected 200, got %d", status)
-	}
+	assert.NilError(t, err)
+	assert.Equal(t, status, 200)
 }
 
 func TestHeaderOverridesDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Client defaults to "application/json"; a per-request Header must
 		// replace it, not append, or Header.Get on the server still sees JSON.
-		if got := r.Header.Values("Accept"); len(got) != 1 || got[0] != "text/event-stream" {
-			t.Errorf("expected exactly one Accept of text/event-stream, got %q", got)
-		}
+		assert.Check(t, cmp.DeepEqual(r.Header.Values("Accept"), []string{"text/event-stream"}))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -141,19 +121,13 @@ func TestHeaderOverridesDefault(t *testing.T) {
 	status, err := c.Call(context.Background(), hc.NewRequest("GET", "/",
 		hc.Header("Accept", "text/event-stream"),
 	))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status != 200 {
-		t.Fatalf("expected 200, got %d", status)
-	}
+	assert.NilError(t, err)
+	assert.Equal(t, status, 200)
 }
 
 func TestRouteParams(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v2/sidecar/instances/sb-42/exec" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
+		assert.Check(t, cmp.Equal(r.URL.Path, "/api/v2/sidecar/instances/sb-42/exec"))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -164,12 +138,8 @@ func TestRouteParams(t *testing.T) {
 		"/api/v2/sidecar/instances/%s/exec",
 		hc.RouteParams("sb-42"),
 	))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status != 200 {
-		t.Fatalf("expected 200, got %d", status)
-	}
+	assert.NilError(t, err)
+	assert.Equal(t, status, 200)
 }
 
 func TestRetryOn429_RetriesWithinBudget(t *testing.T) {
@@ -192,15 +162,9 @@ func TestRetryOn429_RetriesWithinBudget(t *testing.T) {
 	})
 
 	status, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err != nil {
-		t.Fatalf("expected success after retry, got: %v", err)
-	}
-	if status != 200 {
-		t.Fatalf("expected 200, got %d", status)
-	}
-	if n := attempts.Load(); n != 2 {
-		t.Fatalf("expected 2 attempts, got %d", n)
-	}
+	assert.NilError(t, err, "the retry must recover the call")
+	assert.Equal(t, status, 200)
+	assert.Equal(t, attempts.Load(), int32(2))
 }
 
 func TestRetryOn429_BailsWhenRetryAfterExceedsBudget(t *testing.T) {
@@ -216,12 +180,8 @@ func TestRetryOn429_BailsWhenRetryAfterExceedsBudget(t *testing.T) {
 	})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !hc.IsRateLimitError(err) {
-		t.Fatalf("expected RateLimitError, got: %v", err)
-	}
+	assert.Assert(t, err != nil)
+	assert.Assert(t, hc.IsRateLimitError(err), "want a RateLimitError, got %v", err)
 }
 
 func TestRetryOn429_MessageContainsBackoffHint(t *testing.T) {
@@ -237,16 +197,10 @@ func TestRetryOn429_MessageContainsBackoffHint(t *testing.T) {
 	})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
+	assert.Assert(t, err != nil)
 	msg := err.Error()
-	if !strings.Contains(msg, "rate limited") {
-		t.Errorf("error message should mention rate limiting: %q", msg)
-	}
-	if !strings.Contains(msg, "try again later") {
-		t.Errorf("error message should hint to retry later: %q", msg)
-	}
+	assert.Check(t, cmp.Contains(msg, "rate limited"))
+	assert.Check(t, cmp.Contains(msg, "try again later"))
 }
 
 func TestRetryOn429_DisabledByDefault(t *testing.T) {
@@ -267,15 +221,9 @@ func TestRetryOn429_DisabledByDefault(t *testing.T) {
 	})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err == nil {
-		t.Fatal("expected error for 429")
-	}
-	if hc.IsRateLimitError(err) {
-		t.Fatal("expected plain HTTPError (no budget configured), got RateLimitError")
-	}
-	if n := attempts.Load(); n != 1 {
-		t.Fatalf("expected 1 attempt with retries disabled, got %d", n)
-	}
+	assert.Assert(t, err != nil, "expected an error for the 429")
+	assert.Assert(t, !hc.IsRateLimitError(err), "no budget configured, so this must stay a plain HTTPError")
+	assert.Equal(t, attempts.Load(), int32(1), "retries are disabled")
 }
 
 func TestRetryOn429_5xxStillCapsAtThreeWithBudgetSet(t *testing.T) {
@@ -293,15 +241,9 @@ func TestRetryOn429_5xxStillCapsAtThreeWithBudgetSet(t *testing.T) {
 	})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err == nil {
-		t.Fatal("expected error for 500")
-	}
-	if hc.IsRateLimitError(err) {
-		t.Fatalf("expected plain HTTPError for 500, got RateLimitError")
-	}
-	if n := attempts.Load(); n != 4 {
-		t.Fatalf("expected 4 attempts (1 + 3 retries), got %d", n)
-	}
+	assert.Assert(t, err != nil, "expected an error for the 500")
+	assert.Assert(t, !hc.IsRateLimitError(err), "a 500 must stay a plain HTTPError")
+	assert.Equal(t, attempts.Load(), int32(4), "1 attempt + 3 retries")
 }
 
 func TestDeprecationWarning_SunsetHeader(t *testing.T) {
@@ -316,18 +258,10 @@ func TestDeprecationWarning_SunsetHeader(t *testing.T) {
 	c := hc.New(hc.Config{BaseURL: srv.URL, OnWarn: func(msg string) { msgs = append(msgs, msg) }})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(msgs) == 0 {
-		t.Fatal("expected deprecation warning, got none")
-	}
-	if !strings.Contains(msgs[0], "deprecated") {
-		t.Errorf("expected deprecation warning, got %q", msgs[0])
-	}
-	if !strings.Contains(msgs[0], "days") {
-		t.Errorf("expected days-remaining in warning, got %q", msgs[0])
-	}
+	assert.NilError(t, err)
+	assert.Assert(t, len(msgs) > 0, "expected a deprecation warning, got none")
+	assert.Check(t, cmp.Contains(msgs[0], "deprecated"))
+	assert.Check(t, cmp.Contains(msgs[0], "days"), "the warning must say how long is left")
 }
 
 func TestDeprecationWarning_DeprecationOnly(t *testing.T) {
@@ -341,12 +275,9 @@ func TestDeprecationWarning_DeprecationOnly(t *testing.T) {
 	c := hc.New(hc.Config{BaseURL: srv.URL, OnWarn: func(msg string) { msgs = append(msgs, msg) }})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(msgs) == 0 || !strings.Contains(msgs[0], "deprecated") {
-		t.Errorf("expected deprecation warning, got %v", msgs)
-	}
+	assert.NilError(t, err)
+	assert.Assert(t, len(msgs) > 0, "expected a deprecation warning, got none")
+	assert.Check(t, cmp.Contains(msgs[0], "deprecated"))
 }
 
 func TestDeprecationWarning_NoCallback(t *testing.T) {
@@ -360,9 +291,7 @@ func TestDeprecationWarning_NoCallback(t *testing.T) {
 	// no OnWarn — must not panic
 	c := hc.New(hc.Config{BaseURL: srv.URL})
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	assert.NilError(t, err)
 }
 
 func TestDeprecationWarning_NoHeadersNoCallback(t *testing.T) {
@@ -375,19 +304,13 @@ func TestDeprecationWarning_NoHeadersNoCallback(t *testing.T) {
 	c := hc.New(hc.Config{BaseURL: srv.URL, OnWarn: func(msg string) { called = true }})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if called {
-		t.Error("OnWarn should not be called without deprecation headers")
-	}
+	assert.NilError(t, err)
+	assert.Check(t, !called, "OnWarn must not fire without deprecation headers")
 }
 
 func TestRouteParamsMultiple(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v2/agents/org/org-1/project/proj-2/runs" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
+		assert.Check(t, cmp.Equal(r.URL.Path, "/api/v2/agents/org/org-1/project/proj-2/runs"))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -398,12 +321,8 @@ func TestRouteParamsMultiple(t *testing.T) {
 		"/api/v2/agents/org/%s/project/%s/runs",
 		hc.RouteParams("org-1", "proj-2"),
 	))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status != 200 {
-		t.Fatalf("expected 200, got %d", status)
-	}
+	assert.NilError(t, err)
+	assert.Equal(t, status, 200)
 }
 
 // TestRetries504ThenSucceeds pins that a Gateway Timeout is retried and recovered
@@ -435,15 +354,9 @@ func TestRetries504ThenSucceeds(t *testing.T) {
 		OK bool `json:"ok"`
 	}
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/", hc.JSONDecoder(&body)))
-	if err != nil {
-		t.Fatalf("a retried 504 must not reach the caller: %v", err)
-	}
-	if !body.OK {
-		t.Fatal("expected the second attempt's body to be decoded")
-	}
-	if n := attempts.Load(); n != 2 {
-		t.Fatalf("expected 2 attempts (1 + 1 retry), got %d", n)
-	}
+	assert.NilError(t, err, "a retried 504 must not reach the caller")
+	assert.Assert(t, body.OK, "the second attempt's body must be decoded")
+	assert.Equal(t, attempts.Load(), int32(2), "1 attempt + 1 retry")
 }
 
 // TestRetries504Exhausted pins the attempt count when every attempt times out, so
@@ -461,10 +374,231 @@ func TestRetries504Exhausted(t *testing.T) {
 	c := hc.New(hc.Config{BaseURL: srv.URL, RetryOn429Budget: 30 * time.Second})
 
 	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
-	if err == nil {
-		t.Fatal("expected an error once the retries are spent")
+	assert.Assert(t, err != nil, "expected an error once the retries are spent")
+	assert.Equal(t, attempts.Load(), int32(4), "1 attempt + 3 retries")
+}
+
+// A 401 is the only signal that a long-lived client's token has gone stale.
+// Reloading and retrying is what lets a process that outlives a login — the
+// watch daemon holds one client for its whole life — pick the new token up.
+func TestReloadToken_RetriesOnceWithTheNewToken(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok := r.Header.Get("Circle-Token")
+		seen = append(seen, tok)
+		if tok != "fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	var reloads atomic.Int32
+	cl := hc.New(hc.Config{
+		BaseURL:    srv.URL,
+		AuthToken:  "stale",
+		AuthHeader: "Circle-Token",
+		ReloadToken: func() (string, error) {
+			reloads.Add(1)
+			return "fresh", nil
+		},
+	})
+
+	status, err := cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(status, http.StatusOK))
+	assert.Check(t, cmp.DeepEqual(seen, []string{"stale", "fresh"}),
+		"the retry must carry the reloaded token")
+	assert.Check(t, cmp.Equal(reloads.Load(), int32(1)))
+}
+
+// Retrying with the same token would only buy a second 401, and looping on
+// reload would turn a revoked token into a keychain read per request.
+func TestReloadToken_NoRetryWhenTokenIsUnchanged(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cl := hc.New(hc.Config{
+		BaseURL:     srv.URL,
+		AuthToken:   "stale",
+		AuthHeader:  "Circle-Token",
+		ReloadToken: func() (string, error) { return "stale", nil },
+	})
+
+	status, err := cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	assert.Check(t, cmp.Equal(status, http.StatusUnauthorized))
+	assert.Check(t, err != nil, "expected the 401 to surface as an error")
+	assert.Check(t, cmp.Equal(calls.Load(), int32(1)), "an unchanged token must not be retried")
+}
+
+// A failed reload must not mask the 401, which is the more useful of the two.
+func TestReloadToken_ReloadFailureSurfacesTheOriginal401(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cl := hc.New(hc.Config{
+		BaseURL:     srv.URL,
+		AuthToken:   "stale",
+		AuthHeader:  "Circle-Token",
+		ReloadToken: func() (string, error) { return "", errors.New("keychain unavailable") },
+	})
+
+	status, err := cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	assert.Check(t, cmp.Equal(status, http.StatusUnauthorized))
+	assert.Check(t, hc.HasStatusCode(err, http.StatusUnauthorized),
+		"want the original 401, got %v", err)
+}
+
+// Without a ReloadToken the client behaves exactly as before.
+func TestReloadToken_AbsentMeansNoRetry(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cl := hc.New(hc.Config{BaseURL: srv.URL, AuthToken: "stale", AuthHeader: "Circle-Token"})
+	_, _ = cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	assert.Check(t, cmp.Equal(calls.Load(), int32(1)))
+}
+
+// The first attempt drains the request body, so the retry has to send its own
+// copy — otherwise a reloaded token would resend an empty POST.
+func TestReloadToken_RetryResendsTheBody(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, strings.TrimSpace(string(b)))
+		if r.Header.Get("Circle-Token") != "fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	cl := hc.New(hc.Config{
+		BaseURL:     srv.URL,
+		AuthToken:   "stale",
+		AuthHeader:  "Circle-Token",
+		ReloadToken: func() (string, error) { return "fresh", nil },
+	})
+
+	_, err := cl.Call(context.Background(),
+		hc.NewRequest(http.MethodPost, "/x", hc.Body(map[string]string{"name": "chunk"})))
+	assert.NilError(t, err)
+	assert.Assert(t, cmp.Len(bodies, 2))
+	assert.Check(t, cmp.Equal(bodies[1], bodies[0]), "the retry must resend the original body")
+}
+
+// Concurrent 401s must not each trigger a read: on a daemon streaming several
+// commands this is a keychain round trip per goroutine.
+func TestReloadToken_Concurrent401sReloadOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Circle-Token") != "fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	var reloads atomic.Int32
+	cl := hc.New(hc.Config{
+		BaseURL:    srv.URL,
+		AuthToken:  "stale",
+		AuthHeader: "Circle-Token",
+		ReloadToken: func() (string, error) {
+			reloads.Add(1)
+			return "fresh", nil
+		},
+	})
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+		}()
 	}
-	if n := attempts.Load(); n != 4 {
-		t.Fatalf("expected 4 attempts (1 + 3 retries), got %d", n)
+	wg.Wait()
+
+	assert.Check(t, cmp.Equal(reloads.Load(), int32(1)),
+		"concurrent 401s must collapse into a single read")
+}
+
+// The reload must not be performed under the token lock. Holding it there would
+// stall every other in-flight request on a keychain read — the same
+// mutex-around-slow-IO problem that moving credential resolution out of the
+// daemon was meant to remove.
+//
+// The discriminating signal is whether a second request reaches the server at
+// all while a reload is parked. It cannot, if reading the token requires a lock
+// the reload is holding.
+func TestReloadToken_DoesNotBlockReadersDuringReload(t *testing.T) {
+	var hits atomic.Int32
+	reachedServer := make(chan struct{}, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) > 1 {
+			reachedServer <- struct{}{}
+		}
+		if r.Header.Get("Circle-Token") != "fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	reloading := make(chan struct{})
+	release := make(chan struct{})
+	cl := hc.New(hc.Config{
+		BaseURL:    srv.URL,
+		AuthToken:  "stale",
+		AuthHeader: "Circle-Token",
+		ReloadToken: func() (string, error) {
+			close(reloading)
+			<-release // stand in for a slow keychain read
+			return "fresh", nil
+		},
+	})
+
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		_, _ = cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	}()
+
+	<-reloading // a reload is now in flight and parked
+
+	second := make(chan struct{})
+	go func() {
+		defer close(second)
+		_, _ = cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	}()
+
+	select {
+	case <-reachedServer:
+		// Read the token and made its request while the reload was parked.
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("second request never reached the server: readers are blocked on the reload")
 	}
+
+	close(release)
+	<-first
+	<-second
 }

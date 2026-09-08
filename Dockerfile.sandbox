@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6-dev \
     ca-certificates \
     curl \
+    rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Go, then strip files not needed at runtime.

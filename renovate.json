@@ -10,4 +10,12 @@
   "vulnerabilityAlerts": {
     "enabled": true
   },
+  "enabledManagers": ["gomod", "pep621"],
+  "packageRules": [
+    {
+      "matchManagers": ["pep621"],
+      "matchFileNames": ["harness/**"],
+      "groupName": "harness python deps"
+    }
+  ]
 }

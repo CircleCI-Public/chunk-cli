@@ -24,11 +24,12 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/notify"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
@@ -225,6 +226,16 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	// Route stdout to stderr so all output appears in the Stop
 	// hook feedback block that Claude Code shows the agent.
 	streams = iostream.Streams{Out: streams.Err, Err: streams.Err}
+	// Print a header so concurrent stop-hook runs are distinguishable.
+	sessionLabel := hook.sessionID
+	if len(sessionLabel) > 8 {
+		sessionLabel = sessionLabel[:8]
+	}
+	if branch, err := gitutil.CurrentBranchIn(workDir); err == nil && branch != "" {
+		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate · %s [%s]", branch, sessionLabel)))
+	} else {
+		streams.ErrPrintln(ui.ErrBold(fmt.Sprintf("── validate [%s]", sessionLabel)))
+	}
 	if validate.HooksDisabled(workDir, os.Getenv(config.EnvChunkHooksDisabled) != "") {
 		streams.ErrPrintln("chunk validate: hooks are disabled — skipping validation")
 		return ctx, streams, false, validate.NewHookExitError(1)
@@ -283,12 +294,12 @@ func validateNeedsSidecar(explicitRemote bool, cfg *config.ProjectConfig) bool {
 }
 
 func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *validateOpts, workDir string, statusFn iostream.StatusFunc, streams iostream.Streams) (map[string]string, error) {
-	if opts.sidecarID == "" {
-		return nil, nil
-	}
 	envVars, err := resolveEnvVars(ctx, workDir, opts.envFile, opts.envVarsFlag)
 	if err != nil {
 		return nil, err
+	}
+	if opts.sidecarID == "" {
+		return envVars, nil
 	}
 	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn, streams); err != nil {
 		return nil, err
@@ -300,7 +311,7 @@ func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc confi
 	if !needsSidecar {
 		return nil, nil
 	}
-	return ensureCircleCIClient(ctx, cmd, rc, streams, tui.PromptHidden)
+	return ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 }
 
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
@@ -414,7 +425,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			// does rather than repeating that bookkeeping here: clearing the failure
 			// counter, and whatever else the success branch grows later.
 			n := len(cfg.Commands)
-			return finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, wrapEventLogStatusFn(statusFn, "", nil, workDir, hook), streams)
+			return finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, newValidateRecorder(statusFn, "", nil, workDir, hook), streams, notifyFunc(rc.Notifications))
 		}
 	}
 
@@ -442,34 +453,33 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 	activeSidecar, _ = sidecar.LoadActive(ctx)
 
-	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, cfg, activeSidecar, statusFn, workDir, streams)
+	freshlyCreated, err := setupRemote(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, cfg, activeSidecar, statusFn, workDir, streams)
 	if err != nil {
 		return err
 	}
 
-	// Wire event log for all runs (both local and remote). The wrap goes here —
-	// after setupRemote fills opts.sidecarID but before loadSidecarEnvVars — so
-	// that sync and env-resolve status events are captured.
-	// Kept unwrapped so a replacement sidecar can be rewrapped against its own ID
-	// rather than logging its events under the sidecar it replaced.
-	baseStatusFn := statusFn
-	statusFn = wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
+	// Wire the event log for all runs (both local and remote). The recorder is
+	// built here — after setupRemote fills opts.sidecarID but before
+	// loadSidecarEnvVars — so that sync and env-resolve events are captured.
+	// statusFn is kept so a replacement sidecar can get its own recorder rather
+	// than logging its events under the sidecar it replaced.
+	rec := newValidateRecorder(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 
 	// Only load env vars and resolve secrets when a sidecar is actually
 	// being used — avoids parsing .env.local or hitting secrets APIs on
 	// purely local runs.
-	envVars, statusFn, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, freshlyCreated, baseStatusFn, statusFn, workDir, hook, streams)
+	envVars, rec, _, err := loadEnvVarsWithRetry(ctx, circleCIClient, opts, image, rc.CircleCITokenSource, freshlyCreated, statusFn, rec, workDir, hook, streams)
 	if err != nil {
-		return err
+		return failBeforeRun(rec, start, err)
 	}
 
-	result, execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, opts.workdir, allRemote, envVars, cfg, statusFn, streams)
+	result, execErr := runValidate(ctx, circleCIClient, rc, workDir, name, opts.inlineCmd, opts.save, opts.sidecarID, opts.workdir, allRemote, envVars, cfg, rec, streams)
 	if execErr == nil && resultCache != nil {
 		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
 			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
 		}
 	}
-	return finishValidate(cmd, hook, execErr, start, cfg, result, statusFn, streams)
+	return finishValidate(cmd, hook, execErr, start, cfg, result, rec, streams, notifyFunc(rc.Notifications))
 }
 
 // loadEnvVarsWithRetry loads sidecar env vars, and if the sidecar is unusable
@@ -478,64 +488,84 @@ func loadEnvVarsWithRetry(
 	ctx context.Context,
 	circleCIClient *circleci.Client,
 	opts *validateOpts,
-	image string,
+	image, tokenSource string,
 	freshlyCreated bool,
-	baseStatusFn, statusFn iostream.StatusFunc,
+	statusFn iostream.StatusFunc,
+	rec *eventlog.Recorder,
 	workDir string,
 	hook *hookContext,
 	streams iostream.Streams,
-) (map[string]string, iostream.StatusFunc, bool, error) {
-	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+) (map[string]string, *eventlog.Recorder, bool, error) {
+	envVars, err := loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, rec.Status, streams)
 	if errors.Is(err, errSidecarUnusable) {
 		// The sidecar could not be used and its state has been dropped, so replace
 		// it here rather than failing and asking for the same command again. The
 		// reap cannot prevent this on its own: a sidecar can go away between the
 		// listing and the sync, and one the API rejects as out of date is listed
 		// like any other.
-		statusFn(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
+		rec.Status(iostream.LevelWarn, "sidecar was unusable, provisioning a replacement")
 		opts.sidecarID = ""
-		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, streams); createErr != nil {
-			return nil, statusFn, freshlyCreated, createErr
+		if _, createErr := resolveOrCreateSidecarID(ctx, circleCIClient, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, streams); createErr != nil {
+			return nil, rec, freshlyCreated, createErr
 		}
 		// A replacement has none of the setup the old one had, so exec failures on
 		// it are real failures rather than grounds for falling back to local.
 		freshlyCreated = true
-		statusFn = wrapEventLogStatusFn(baseStatusFn, opts.sidecarID, nil, workDir, hook)
-		envVars, err = loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, statusFn, streams)
+		rec = newValidateRecorder(statusFn, opts.sidecarID, nil, workDir, hook)
+		envVars, err = loadSidecarEnvVars(ctx, circleCIClient, opts, workDir, rec.Status, streams)
 	}
 	if err != nil {
 		if errors.Is(err, errSidecarUnusable) {
 			// Twice in one run is not a stale sidecar, so stop rather than churn.
-			return nil, statusFn, freshlyCreated, newUserError("Could not get a usable sidecar.").
+			return nil, rec, freshlyCreated, newUserError("Could not get a usable sidecar.").
 				withCode("sidecar.unusable").
 				withSuggestion("Create one explicitly with: chunk sidecar create").
 				wrap(err)
 		}
-		return nil, statusFn, freshlyCreated, err
+		return nil, rec, freshlyCreated, err
 	}
-	return envVars, statusFn, freshlyCreated, nil
+	return envVars, rec, freshlyCreated, nil
 }
 
-// wrapEventLogStatusFn wraps statusFn with event log recording for all runs,
-// both remote (sidecarID set) and local (sidecarID empty).
-func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) iostream.StatusFunc {
-	dataDir, err := config.ProjectDataDir(workDir)
-	if err != nil {
-		return statusFn
-	}
+// newValidateRecorder returns the recorder that reports validate progress and
+// records it in the event log, for all runs both remote (sidecarID set) and
+// local (sidecarID empty).
+func newValidateRecorder(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) *eventlog.Recorder {
 	scName := ""
-	if activeSidecar != nil && activeSidecar.SidecarID == sidecarID {
+	if activeSidecar != nil && activeSidecar.ID() == sidecarID {
 		scName = activeSidecar.Name
 	}
 	op := eventlog.OpValidate
 	if hook != nil && hook.stopHookActive {
 		op = eventlog.OpHook
 	}
-	return eventlog.WrapFromDir(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
+	// A missing data dir leaves the recorder reporting without recording.
+	dataDir, _ := config.ProjectDataDir(workDir)
+	return eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
+}
+
+// failBeforeRun closes the run after a failure that happened once the recorder
+// was wired but before any command ran — a sync, secrets or env resolve
+// failure. finishValidate reports the only other closing event and is
+// unreachable from these paths, so without this the run stays open in the event
+// log and chunk watch reads it as still running.
+func failBeforeRun(rec *eventlog.Recorder, start time.Time, err error) error {
+	rec.Final(iostream.LevelError, fmt.Sprintf("setup failed  %s: %s", ui.FormatDuration(time.Since(start)), err), 0, 0)
+	return err
+}
+
+// notifyFunc returns notify.Send when enabled is true, or nil to skip notifications.
+func notifyFunc(enabled bool) func(title, body string) {
+	if enabled {
+		return notify.Send
+	}
+	return nil
 }
 
 // finishValidate reports the validate outcome and handles hook exit codes.
-func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, statusFn iostream.StatusFunc, streams iostream.Streams) error {
+// notifyFn, when non-nil, is called with the notification title and body;
+// pass notify.Send for real desktop notifications, or a capturing closure in tests.
+func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, rec *eventlog.Recorder, streams iostream.Streams, notifyFn func(title, body string)) error {
 	maxAttempts := validate.DefaultMaxAttempts
 	if hook != nil {
 		if ma := cfg.StopHookMaxAttempts; ma > 0 {
@@ -545,15 +575,21 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 
 	elapsed := ui.FormatDuration(time.Since(start))
 	summary := fmt.Sprintf("%d/%d passed", result.Passed, result.Total)
-	if execErr != nil {
-		if hook != nil {
-			attempt := validate.ReadAttempts(hook.sessionID) + 1
-			statusFn(iostream.LevelError, fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts))
+	switch {
+	case execErr != nil && hook != nil:
+		attempt := validate.ReadAttempts(hook.sessionID) + 1
+		rec.Final(iostream.LevelError, fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts), result.Passed, result.Total)
+	case execErr != nil:
+		rec.Final(iostream.LevelError, fmt.Sprintf("%s  %s", summary, elapsed), result.Passed, result.Total)
+	default:
+		rec.Final(iostream.LevelDone, fmt.Sprintf("%s  %s", summary, elapsed), result.Passed, result.Total)
+	}
+	if notifyFn != nil {
+		if execErr != nil {
+			notifyFn("chunk validate failed", fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
 		} else {
-			statusFn(iostream.LevelError, fmt.Sprintf("%s  %s", summary, elapsed))
+			notifyFn("chunk validate passed", fmt.Sprintf("%d/%d checks passed · %s", result.Passed, result.Total, elapsed))
 		}
-	} else {
-		statusFn(iostream.LevelDone, fmt.Sprintf("%s  %s", summary, elapsed))
 	}
 	if hook == nil {
 		return execErr
@@ -590,7 +626,7 @@ func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, status
 // provided options. It is shared by both direct and hook invocations.
 // allRemote is true when --remote is passed explicitly (all commands run on the
 // sidecar); false means only commands with Remote:true are routed to the sidecar.
-func runValidate(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, workDir, name, inlineCmd string, save bool, sidecarID string, workdir string, allRemote bool, envVars map[string]string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (validate.Result, error) {
+func runValidate(ctx context.Context, client *circleci.Client, rc config.ResolvedConfig, workDir, name, inlineCmd string, save bool, sidecarID string, workdir string, allRemote bool, envVars map[string]string, cfg *config.ProjectConfig, rec *eventlog.Recorder, streams iostream.Streams) (validate.Result, error) {
 	// --cmd: inline command (always local in per-command mode)
 	if inlineCmd != "" {
 		cmdName := name
@@ -604,22 +640,22 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 		}
 		if sidecarID != "" && allRemote {
-			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
+			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, rec.SetCommandID, streams)
 			if err != nil {
 				return validate.Result{}, err
 			}
-			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, statusFn, streams)
+			return validate.RunRemoteInline(ctx, execFn, cmdName, inlineCmd, dest, rec.Status, streams)
 		}
-		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, statusFn, streams)
+		return validate.RunInline(ctx, workDir, cmdName, inlineCmd, envVars, rec.Status, streams)
 	}
 
 	// All-remote execution (--remote flag): send everything to the sidecar.
 	if sidecarID != "" && allRemote {
-		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
+		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, rec.SetCommandID, streams)
 		if err != nil {
 			return validate.Result{}, err
 		}
-		return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, statusFn, streams)
+		return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, rec.Status, streams)
 	}
 
 	// Per-command remote routing: commands with Remote:true go to the sidecar,
@@ -627,17 +663,17 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 	if sidecarID != "" {
 		if name != "" {
 			if cmd := cfg.FindCommand(name); cmd != nil && cmd.Remote {
-				statusFn(iostream.LevelInfo, fmt.Sprintf("running %s on sidecar %s", name, sidecarID))
-				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
+				rec.Status(iostream.LevelInfo, fmt.Sprintf("running %s on sidecar %s", name, sidecarID))
+				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, rec.SetCommandID, streams)
 				if err != nil {
 					return validate.Result{}, err
 				}
-				return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, statusFn, streams)
+				return validate.RunRemote(ctx, execFn, cfg, name, dest, workDir, rec.Status, streams)
 			}
-			statusFn(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
+			rec.Status(iostream.LevelInfo, fmt.Sprintf("running %s locally (not marked remote)", name))
 			// Named command is not marked remote; fall through to local execution.
 		} else {
-			return runSplitCommands(ctx, client, sidecarID, workdir, workDir, envVars, rc, cfg, statusFn, streams)
+			return runSplitCommands(ctx, client, sidecarID, workdir, workDir, envVars, rc, cfg, rec, streams)
 		}
 	}
 
@@ -673,29 +709,29 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 				return validate.Result{}, err
 			}
 		}
-		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, statusFn, streams))
+		return mapValidateError(validate.RunNamed(ctx, workDir, name, cfg, envVars, rec.Status, streams))
 	}
 
 	// Run all
-	return mapValidateError(validate.RunAll(ctx, workDir, cfg, statusFn, streams))
+	return mapValidateError(validate.RunAll(ctx, workDir, cfg, envVars, rec.Status, streams))
 }
 
 // setupRemote resolves (or creates) the sidecar ID based on the validate flags
 // and config, then returns whether a new sidecar was provisioned.
-func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image string, cfg *config.ProjectConfig, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
+func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpts, image, tokenSource string, cfg *config.ProjectConfig, activeSidecar *sidecar.ActiveSidecar, statusFn iostream.StatusFunc, workDir string, streams iostream.Streams) (bool, error) {
 	if opts.local {
 		return false, nil
 	}
 	if validateNeedsSidecar(opts.remote || opts.sidecarID != "", cfg) {
 		if opts.remote {
-			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, streams)
+			created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, streams)
 			if err != nil {
 				return false, err
 			}
 			statusFn(iostream.LevelInfo, fmt.Sprintf("running all commands on sidecar %s", opts.sidecarID))
 			return created, nil
 		}
-		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, activeSidecar, streams), nil
+		return resolveSidecar(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, activeSidecar, streams)
 	}
 	return false, nil
 }
@@ -706,7 +742,7 @@ func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, iden
 	if err != nil {
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
-	if err := sidecar.BundleSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
+	if err := sidecar.RsyncSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
 		return sidecarSyncError(ctx, client, sidecarID, err, streams)
 	}
 	return nil
@@ -728,6 +764,15 @@ func sidecarSyncError(ctx context.Context, client *circleci.Client, sidecarID st
 	case circleci.SidecarGone(err):
 		pruneSidecarState(ctx, client, sidecarID, false, streams)
 	default:
+		// Ask sshSessionError first. The SSH failures have specific, actionable
+		// phrasing — a missing key names the ssh-keygen command that creates it —
+		// and it is only reached by asking. Wrapping bare drops that suggestion and
+		// shows the cause alone, which is how "ssh key not found" reached a user
+		// with nothing saying how to fix it. Five call sites in sidecar.go already
+		// classify this way; the validate path was the one that did not.
+		if sshErr := sshSessionError(err); sshErr != nil {
+			return sshErr
+		}
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
 	// Both wrapped, not replaced: the caller replaces the sidecar and retries, and
@@ -775,9 +820,16 @@ func reapAbandonedSidecars(ctx context.Context, client *circleci.Client, workDir
 // command shows progress instead of going silent for minutes. The returned
 // stdout and stderr are therefore always empty — callers print output only when
 // it was not already streamed, so there is nothing left for them to do.
+//
+// projectRoot is the local repository root, used only to attribute registered
+// commands to a project for the watch daemon.
+//
+// Pass rec.SetCommandID for setCommandID when each exec's command ID should be
+// recorded on the event log. Pass nil for probe-only use (e.g. WorkspaceExists)
+// where the exec result should not touch the recorder.
 func newExecFn(
-	ctx context.Context, client *circleci.Client, sidecarID, workdir string,
-	envVars map[string]string, rc config.ResolvedConfig, streams iostream.Streams,
+	ctx context.Context, client *circleci.Client, sidecarID, workdir, projectRoot string,
+	envVars map[string]string, rc config.ResolvedConfig, setCommandID func(string), streams iostream.Streams,
 ) (func(context.Context, string) (string, string, int, error), string, error) {
 	cwd, _ := os.Getwd()
 	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
@@ -802,13 +854,56 @@ func newExecFn(
 		_, _ = w.Write(data)
 	}
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
-		result, err := client.Exec(ctx, sidecarID, "sh", []string{"-c", script}, merged, onOutput)
+		// A nil setCommandID marks a probe: a command chunk issues on its own
+		// behalf, with no event log entry to attribute and nothing a developer
+		// would go looking for in the dashboard. Both omissions follow from that
+		// one fact, so they read off the same flag.
+		var reg *watchd.CommandReg
+		if setCommandID != nil {
+			// Registering before output is consumed is what lets the watch daemon
+			// tail this command while it runs, and keep its output after this
+			// process exits — which for a hook-driven run is immediately.
+			reg = &watchd.CommandReg{
+				SidecarID:   sidecarID,
+				ProjectRoot: projectRoot,
+				Op:          string(eventlog.OpValidate),
+				Name:        remoteCommandLabel(script),
+			}
+		}
+		result, err := submitAndStream(ctx, client, sidecarID, reg,
+			"sh", []string{"-c", script}, merged, onOutput)
 		if err != nil {
+			if setCommandID != nil {
+				// result is nil on all error paths; clear any stale pending ID.
+				setCommandID("")
+			}
 			return "", "", 0, err
+		}
+		if setCommandID != nil {
+			setCommandID(result.CommandID)
 		}
 		return "", "", result.ExitCode, nil
 	}
 	return execFn, dest, nil
+}
+
+// remoteCommandLabel recovers a human-readable label from a remote script, for
+// the watch dashboard to title a command's output with.
+//
+// Remote scripts are built as `cd <workspace> && <command>`, so dropping the cd
+// leaves the command the user actually configured. Deriving it here keeps the
+// command name out of the exec signature, which two other open branches are
+// currently changing; the label is cosmetic, so a script in some other shape
+// degrades to the whole string rather than failing.
+func remoteCommandLabel(script string) string {
+	const sep = " && "
+	label := script
+	if strings.HasPrefix(script, "cd ") {
+		if _, rest, found := strings.Cut(script, sep); found {
+			label = rest
+		}
+	}
+	return clampLabel(label)
 }
 
 // hostForwardEnv collects host environment variables that should be forwarded
@@ -826,41 +921,44 @@ func hostForwardEnv(token string) map[string]string {
 
 // runSplitCommands handles per-command remote routing when no specific command
 // name is given: remote-tagged commands go to the sidecar, the rest run locally.
-// Any error reaching or using the sidecar is returned immediately — there is no
-// local fallback.
-func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, statusFn iostream.StatusFunc, streams iostream.Streams) (validate.Result, error) {
+//
+// A sidecar that cannot be reached, or that has no workspace, is an error here
+// rather than grounds for running the remote-marked commands locally. Those
+// commands are marked remote because a local result does not answer the
+// question they were written to answer, so running them here reports a pass the
+// sidecar never gave — the same false green as a failed creation, arrived at one
+// step later.
+func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID string, workdir, workDir string, envVars map[string]string, rc config.ResolvedConfig, cfg *config.ProjectConfig, rec *eventlog.Recorder, streams iostream.Streams) (validate.Result, error) {
 	remoteCfg, localCfg := splitByRemote(cfg)
 	if len(remoteCfg.Commands) > 0 {
-		statusFn(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, commandNames(remoteCfg.Commands)))
+		rec.Status(iostream.LevelInfo, fmt.Sprintf("running on sidecar %s: %s", sidecarID, commandNames(remoteCfg.Commands)))
 	}
 	if len(localCfg.Commands) > 0 {
-		statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCfg.Commands)))
+		rec.Status(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCfg.Commands)))
 	}
 	var combined validate.Result
 	var runErr error
 	if len(remoteCfg.Commands) > 0 {
-		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, streams)
+		// Probe with a plain exec fn so the workspace check never touches the
+		// recorder — there is no real command to attribute the probe's ID to.
+		probeExecFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, nil, streams)
 		if err != nil {
-			return validate.Result{}, newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
-				withCode("sidecar.unreachable").
-				withSuggestion("The sidecar may still be starting. Try again in a moment.").
-				withExitCode(ExitAPIError).
-				wrap(err)
+			return validate.Result{}, unreachableSidecar(sidecarID, commandNames(remoteCfg.Commands), err)
 		}
-		if wsErr := validate.WorkspaceExists(ctx, execFn, dest); wsErr != nil {
-			return validate.Result{}, newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
-				withCode("sidecar.workspace_missing").
-				withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
-				withExitCode(ExitNotFound).
-				wrap(wsErr)
+		if wsErr := validate.WorkspaceExists(ctx, probeExecFn, dest); wsErr != nil {
+			return validate.Result{}, missingWorkspace(sidecarID, dest, commandNames(remoteCfg.Commands), wsErr)
 		}
-		r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, statusFn, streams)
+		execFn, _, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, rec.SetCommandID, streams)
+		if err != nil {
+			return validate.Result{}, unreachableSidecar(sidecarID, commandNames(remoteCfg.Commands), err)
+		}
+		r, err := validate.RunRemote(ctx, execFn, remoteCfg, "", dest, workDir, rec.Status, streams)
 		combined.Passed += r.Passed
 		combined.Total += r.Total
 		runErr = err
 	}
 	if len(localCfg.Commands) > 0 {
-		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, statusFn, streams))
+		r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, envVars, rec.Status, streams))
 		combined.Passed += r.Passed
 		combined.Total += r.Total
 		if err != nil {
@@ -913,24 +1011,29 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 // sidecarImage is configured). It uses the active sidecar when available,
 // and auto-creates one otherwise.
 // Returns true when a brand-new sidecar was provisioned in this call.
-func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, active *sidecar.ActiveSidecar, streams iostream.Streams) bool {
+//
+// A failure here is returned rather than downgraded to a local run. Commands
+// marked remote are marked that way because local results do not answer the
+// question they were written to answer, so quietly running them here reports a
+// pass the sidecar never gave. The three ways this fails in practice — no org
+// ID, no TTY to pick one, a token that cannot create sidecars — are all
+// configuration, so a retry without user action fails identically; falling
+// back only spends the full suite's runtime before saying so. This matches
+// --remote, which has always returned the error from this same call.
+func resolveSidecar(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir, tokenSource string, active *sidecar.ActiveSidecar, streams iostream.Streams) (bool, error) {
 	statusFn := newStatusFunc(streams)
 	if active != nil {
-		*sidecarID = active.SidecarID
+		*sidecarID = active.ID()
 		statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", *sidecarID))
-		return false
+		return false, nil
 	}
-	created, err := resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, streams)
-	if err != nil {
-		streams.ErrPrintf("warning: could not create sidecar (%v); running commands locally instead\n", err)
-	}
-	return created
+	return resolveOrCreateSidecarID(ctx, client, sidecarID, orgID, image, workDir, tokenSource, streams)
 }
 
 // resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
 // a new sidecar when none is configured. Returns true when a new sidecar was
 // provisioned (as opposed to loaded from the active state file).
-func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir string, streams iostream.Streams) (created bool, err error) {
+func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir, tokenSource string, streams iostream.Streams) (created bool, err error) {
 	if *sidecarID != "" {
 		return false, nil
 	}
@@ -939,20 +1042,15 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 		return false, &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: loadErr}
 	}
 	if active != nil {
-		*sidecarID = active.SidecarID
+		*sidecarID = active.ID()
 		return false, nil
 	}
-	// Fall back to any existing sidecar for this project before creating a new one.
-	// This prevents accumulation of one sidecar per Claude Code session.
-	if existing, err := sidecar.LoadAnyActive(ctx); err == nil && existing != nil {
-		if saveErr := sidecar.SaveActive(ctx, *existing); saveErr != nil {
-			streams.ErrPrintf("warning: could not promote active sidecar: %v\n", saveErr)
-		}
-		*sidecarID = existing.SidecarID
-		return false, nil
-	}
-	streams.ErrPrintf("No active sidecar found, creating a new sidecar...\n")
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
+	// A status line, not stderr prose: having no sidecar yet is the normal state
+	// of a first run, and printing it raw made it the headline of the hook's
+	// "Stop hook error:" banner even when everything then went fine.
+	statusFn := newStatusFunc(streams)
+	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
 	if err != nil {
 		return false, err
 	}
@@ -966,7 +1064,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	sandboxName := sidecarAutoName(ctx, workDir)
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {
-		if authErr := notAuthorized("create sidecars", err); authErr != nil {
+		if authErr := cannotCreateSidecar(resolvedOrgID, orgSource(orgID, workDir), err); authErr != nil {
 			return false, authErr
 		}
 		return false, &userError{
@@ -975,7 +1073,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 			err:        err,
 		}
 	}
-	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarID: sc.ID, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
+	if saveErr := sidecar.SaveActive(ctx, sidecar.ActiveSidecar{SidecarIDs: []string{sc.ID}, Name: sc.Name, OrgID: resolvedOrgID}); saveErr != nil {
 		streams.ErrPrintf("warning: could not save active sidecar: %v\n", saveErr)
 	}
 	// Persist the org ID so future sidecar creation skips the picker.
@@ -1001,9 +1099,14 @@ var branchSanitizer = regexp.MustCompile(`[^a-z0-9-]+`)
 // and the current git branch.
 //
 // When a session ID is present the branch is encoded as an 8-hex-char suffix
-// (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed:
-//   - Both present → "<base>-<sessionID>-<hash8>"
-//   - Session only → "<base>-<sessionID>"
+// (sha256(sessionID+":"+branch)[:4]) so the raw branch name is never exposed,
+// and the session ID is trimmed to its first 8 characters so a name stays
+// readable in `chunk sidecar list` — a session ID is a 36-character UUID, and
+// unlike the state file name this one only has to be recognisable, not unique
+// (two sessions sharing a prefix get two sidecars with one name and different
+// IDs):
+//   - Both present → "<base>-<sessionID8>-<hash8>"
+//   - Session only → "<base>-<sessionID8>"
 //
 // Without a session ID the branch is sanitised and included directly (legacy
 // fallback):
@@ -1015,12 +1118,13 @@ func sidecarAutoName(ctx context.Context, workDir string) string {
 	branch := sidecar.CurrentBranch(workDir)
 
 	if sessionID != "" {
+		short := shortSessionID(sessionID)
 		if branch != "" {
 			sum := sha256.Sum256([]byte(sessionID + ":" + branch))
 			hash8 := fmt.Sprintf("%x", sum[:4])
-			return base + "-" + sessionID + "-" + hash8
+			return base + "-" + short + "-" + hash8
 		}
-		return base + "-" + sessionID
+		return base + "-" + short
 	}
 
 	// No session ID: fall back to sanitised branch name for human readability.
@@ -1089,7 +1193,7 @@ func hookResultCache(hook *hookContext, inlineCmd, workDir string, tree gitutil.
 func execTarget(opts *validateOpts, cfg *config.ProjectConfig, active *sidecar.ActiveSidecar) string {
 	id := opts.sidecarID
 	if id == "" && active != nil {
-		id = active.SidecarID
+		id = active.ID()
 	}
 	var image string
 	if cfg.HasSidecarImage() {

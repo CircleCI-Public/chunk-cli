@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -20,9 +22,10 @@ import (
 // the user interactively.
 var ErrNeedsAuth = errors.New("authentication required")
 
-// ValidateCircleCIToken calls GET /api/v2/me to confirm the token is accepted.
-// A 429 response is treated as valid (rate-limited but authenticated).
-func ValidateCircleCIToken(ctx context.Context, token, baseURL string) error {
+// ValidateCircleCIToken calls GET /api/v2/me to confirm the token is accepted
+// and returns the authenticated user's UUID. A 429 response is treated as
+// valid (rate-limited but authenticated); uuid.Nil is returned in that case.
+func ValidateCircleCIToken(ctx context.Context, token, baseURL string) (uuid.UUID, error) {
 	if baseURL == "" {
 		baseURL = "https://circleci.com"
 	}
@@ -32,14 +35,21 @@ func ValidateCircleCIToken(ctx context.Context, token, baseURL string) error {
 		AuthHeader: "Circle-Token",
 		UserAgent:  version.UserAgent(),
 	})
-	_, err := cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/me"))
+	var me struct {
+		ID string `json:"id"`
+	}
+	_, err := cl.Call(ctx, hc.NewRequest(http.MethodGet, "/api/v2/me", hc.JSONDecoder(&me)))
 	if err != nil {
 		if hc.HasStatusCode(err, http.StatusTooManyRequests) {
-			return nil
+			return uuid.Nil, nil
 		}
-		return err
+		return uuid.Nil, err
 	}
-	return nil
+	id, parseErr := uuid.Parse(me.ID)
+	if parseErr != nil {
+		return uuid.Nil, nil
+	}
+	return id, nil
 }
 
 // ValidateAPIKey calls POST /v1/messages/count_tokens to confirm the Anthropic
@@ -90,6 +100,17 @@ func ResolveCircleCIClient(rc config.ResolvedConfig, onWarn func(string)) (*circ
 		Token:   rc.CircleCIToken,
 		BaseURL: rc.CircleCIBaseURL,
 		OnWarn:  onWarn,
+		// A 401 is the only signal that the token in hand has gone stale, and
+		// re-resolving is the only way it can improve — there is no refresh
+		// grant. This matters for processes that outlive a login: the watch
+		// daemon builds one client at startup and keeps it for its whole life.
+		ReloadToken: func() (string, error) {
+			reloaded, err := config.ResolveCircleCI(false)
+			if err != nil {
+				return "", err
+			}
+			return reloaded.CircleCIToken, nil
+		},
 	})
 }
 

@@ -12,7 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func setupSidecarCreateFake(t *testing.T) *fakes.FakeCircleCI {
@@ -36,9 +36,7 @@ func TestSidecarCreateUsesImageFromConfig(t *testing.T) {
 		Validation: &config.ValidationConfig{SidecarImage: "snap-from-config"},
 	}))
 
-	cmd := newSidecarCreateCmd()
-	cmd.Flags().Bool("insecure-storage", false, "")
-	_ = cmd.Flags().Set("insecure-storage", "true")
+	cmd := insecureStorageCmd(newSidecarCreateCmd())
 	cmd.SetArgs([]string{"--org-id", "org-abc"})
 	assert.NilError(t, cmd.Execute())
 
@@ -128,7 +126,7 @@ func TestOrgPicker_APIError(t *testing.T) {
 	cci.CollaborationsStatusCode = 500
 	client := newOrgPickerClient(t, cci)
 
-	_, err := orgPicker(context.Background(), client)()
+	_, err := orgPicker(context.Background(), client, "")()
 	assert.Assert(t, err != nil)
 }
 
@@ -136,7 +134,7 @@ func TestOrgPicker_NoOrgs(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	client := newOrgPickerClient(t, cci)
 
-	_, err := orgPicker(context.Background(), client)()
+	_, err := orgPicker(context.Background(), client, "")()
 	assert.ErrorContains(t, err, "no organizations found")
 }
 
@@ -145,7 +143,7 @@ func TestOrgPicker_SingleOrg(t *testing.T) {
 	cci.Collaborations = []fakes.Collaboration{{ID: "org-abc", Name: "myorg"}}
 	client := newOrgPickerClient(t, cci)
 
-	got, err := orgPicker(context.Background(), client)()
+	got, err := orgPicker(context.Background(), client, "")()
 	assert.NilError(t, err)
 	assert.Equal(t, got, "org-abc")
 }
@@ -158,8 +156,22 @@ func TestOrgPicker_MultipleOrgs_NoTTY(t *testing.T) {
 	}
 	client := newOrgPickerClient(t, cci)
 
-	_, err := orgPicker(context.Background(), client)()
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY), "expected ErrNoTTY, got: %v", err)
+	_, err := orgPicker(context.Background(), client, "")()
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY), "expected ErrNoTTY, got: %v", err)
+}
+
+func TestOrgPicker_MultipleOrgs_NonInteractive(t *testing.T) {
+	t.Setenv("CI", "true")
+
+	cci := fakes.NewFakeCircleCI()
+	cci.Collaborations = []fakes.Collaboration{
+		{ID: "org-1", Name: "first"},
+		{ID: "org-2", Name: "second"},
+	}
+	client := newOrgPickerClient(t, cci)
+
+	_, err := orgPicker(context.Background(), client, "")()
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY), "expected ErrNoTTY in non-interactive mode, got: %v", err)
 }
 
 func TestSnapshotCreateNameAtLimit(t *testing.T) {

@@ -154,6 +154,11 @@ func TestIsBrewManaged(t *testing.T) {
 	}{
 		{"/opt/homebrew/bin/chunk", true},
 		{"/opt/homebrew/bin/something-else", true},
+		// Callers resolve symlinks first, so the Cellar paths that
+		// <prefix>/bin/chunk points at have to match too.
+		{"/opt/homebrew/Cellar/chunk/1.2.3/bin/chunk", true},
+		{"/usr/local/Cellar/chunk/1.2.3/bin/chunk", true},
+		{"/home/linuxbrew/.linuxbrew/Cellar/chunk/1.2.3/bin/chunk", true},
 		{"/usr/local/bin/chunk", false},
 		{"/home/user/.local/bin/chunk", false},
 		{"/tmp/chunk", false},
@@ -184,5 +189,18 @@ func TestPlatformAssetName(t *testing.T) {
 		if !strings.Contains(name, "arm64") {
 			t.Errorf("expected arm64, got %q", name)
 		}
+	}
+}
+
+func TestRunRefusesBrewInstall(t *testing.T) {
+	var out strings.Builder
+	err := Run(&out, http.DefaultClient, "https://example.invalid", "/opt/homebrew/Cellar/chunk/1.2.3/bin/chunk")
+	if err == nil {
+		t.Fatal("expected Run to refuse to replace a Homebrew-managed binary")
+	}
+	// The formula is named "chunk" in .goreleaser.yaml; "brew upgrade
+	// chunk-cli" (the repo name) fails with "No available formula".
+	if !strings.Contains(err.Error(), "brew upgrade chunk") || strings.Contains(err.Error(), "chunk-cli") {
+		t.Errorf("expected suggestion of %q, got %q", "brew upgrade chunk", err.Error())
 	}
 }

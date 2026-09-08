@@ -85,20 +85,20 @@ func commandTags(c config.Command) string {
 }
 
 // RunInline runs an inline command string.
-func RunInline(ctx context.Context, workDir, name, command string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
-	if err := runCommand(ctx, workDir, name, command, 0, 0, status, streams); err != nil {
+func RunInline(ctx context.Context, workDir, name, command string, envVars map[string]string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
+	if err := runCommand(ctx, workDir, name, command, 0, 0, envVars, status, streams); err != nil {
 		return Result{Total: 1}, err
 	}
 	return Result{Passed: 1, Total: 1}, nil
 }
 
 // RunNamed runs a single named command from config.
-func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
+func RunNamed(ctx context.Context, workDir, name string, cfg *config.ProjectConfig, envVars map[string]string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	c := cfg.FindCommand(name)
 	if c == nil {
 		return Result{}, fmt.Errorf("command %q not configured", name)
 	}
-	if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, 0, status, streams); err != nil {
+	if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, 0, envVars, status, streams); err != nil {
 		return Result{Total: 1}, err
 	}
 	return Result{Passed: 1, Total: 1}, nil
@@ -121,7 +121,7 @@ func nameWidth(commands []config.Command) int {
 }
 
 // RunAll runs all configured commands, stopping at the first failure.
-func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
+func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, envVars map[string]string, status iostream.StatusFunc, streams iostream.Streams) (Result, error) {
 	if !cfg.HasCommands() {
 		return Result{}, ErrNotConfigured
 	}
@@ -129,7 +129,7 @@ func RunAll(ctx context.Context, workDir string, cfg *config.ProjectConfig, stat
 	maxWidth := nameWidth(cfg.Commands)
 	total := len(cfg.Commands)
 	for i, c := range cfg.Commands {
-		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, maxWidth, status, streams); err != nil {
+		if err := runCommand(ctx, workDir, c.Name, c.Run, c.Timeout, maxWidth, envVars, status, streams); err != nil {
 			skipRemaining(status, cfg.Commands[i+1:], maxWidth)
 			return Result{Passed: i, Total: total}, err
 		}
@@ -269,7 +269,7 @@ func ExpandCommand(workDir, command string) string {
 	return strings.ReplaceAll(command, "{{CHANGED_PACKAGES}}", expanded)
 }
 
-func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, nameWidth int, status iostream.StatusFunc, streams iostream.Streams) error {
+func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, nameWidth int, envVars map[string]string, status iostream.StatusFunc, streams iostream.Streams) error {
 	command = ExpandCommand(workDir, command)
 	status(iostream.LevelInfo, "$ "+command)
 
@@ -281,6 +281,13 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
+	if len(envVars) > 0 {
+		env := os.Environ()
+		for k, v := range envVars {
+			env = append(env, k+"="+v)
+		}
+		cmd.Env = env
+	}
 	cmd.Stdout = streams.Out
 	cmd.Stderr = streams.Err
 

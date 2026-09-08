@@ -12,7 +12,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -30,7 +29,7 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -38,7 +37,7 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
 			if err != nil {
 				return err
 			}
@@ -80,13 +79,12 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 
 			io.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Deleted %d sidecar(s)", deleted)))
 
-			active, _ := sidecar.LoadActive(cmd.Context())
-			if active != nil {
-				if cerr := sidecar.ClearActive(cmd.Context()); cerr != nil {
-					io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
-				} else {
-					io.ErrPrintln("Active sidecar cleared")
-				}
+			cleared, cerr := sidecar.ClearActiveByOrg(resolvedOrgID)
+			if cerr != nil {
+				io.ErrPrintf("Warning: could not clear active sidecar state: %v\n", cerr)
+			}
+			if cleared > 0 {
+				io.ErrPrintln("Active sidecar cleared")
 			}
 
 			return nil

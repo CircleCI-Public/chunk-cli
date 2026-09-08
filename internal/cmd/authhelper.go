@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
@@ -17,8 +18,8 @@ import (
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 const (
@@ -71,12 +72,12 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 	printSaveHint(streams, "Token", insecureStorage)
 	streams.ErrPrintln("")
 
-	choice, selectErr := tui.SelectFromList("How would you like to authenticate?", []string{
+	choice, selectErr := ui.SelectFromList("How would you like to authenticate?", []string{
 		"Log in via browser (recommended)",
 		"Enter a token manually",
 	})
 	if selectErr != nil {
-		if errors.Is(selectErr, tui.ErrNoTTY) {
+		if errors.Is(selectErr, ui.ErrNoTTY) {
 			return nil, newUserError("CircleCI token required.").
 				withCode("auth.circleci_token_required").
 				withSuggestion(suggestionCircleCIAuth).
@@ -100,7 +101,7 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 		streams.ErrPrintln("")
 		token, err = prompter("CircleCI Token")
 		if err != nil {
-			if errors.Is(err, tui.ErrNoTTY) {
+			if errors.Is(err, ui.ErrNoTTY) {
 				return nil, newUserError("CircleCI token required.").
 					withCode("auth.circleci_token_required").
 					withSuggestion(suggestionCircleCIAuth).
@@ -120,7 +121,8 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 	}
 
 	streams.ErrPrintln(ui.Dim("Validating CircleCI token..."))
-	if err := authprompt.ValidateCircleCIToken(ctx, token, rc.CircleCIBaseURL); err != nil {
+	userID, err := authprompt.ValidateCircleCIToken(ctx, token, rc.CircleCIBaseURL)
+	if err != nil {
 		if hc.HasStatusCode(err, http.StatusUnauthorized) {
 			return nil, fmt.Errorf("invalid CircleCI token: %w", err)
 		}
@@ -129,6 +131,16 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 
 	if err := authprompt.SaveCircleCIToken(token, rc.CircleCIBaseURL, insecureStorage); err != nil {
 		return nil, err
+	}
+	// The watch daemon resolves its client once at startup, so one running from
+	// before this login cannot see the new token.
+	watchd.StopForCredentialChange()
+	if userID != uuid.Nil {
+		// Intentionally overwrites any previously saved user ID — account
+		// switching should reflect the newly authenticated user.
+		if err := config.SaveUserID(userID); err != nil {
+			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
+		}
 	}
 	printSaved(streams, "CircleCI token", insecureStorage)
 	return circleci.NewClient(circleci.Config{
@@ -158,7 +170,7 @@ func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, rc config.Re
 
 	key, err := prompter("API Key")
 	if err != nil {
-		if errors.Is(err, tui.ErrNoTTY) {
+		if errors.Is(err, ui.ErrNoTTY) {
 			return nil, newUserError("Anthropic API key required.").
 				withCode("auth.anthropic_key_required").
 				withSuggestion(suggestionAnthropicAuth).
@@ -221,7 +233,7 @@ func ensureGitHubClient(ctx context.Context, cmd *cobra.Command, rc config.Resol
 
 	token, err := prompter("GitHub Token")
 	if err != nil {
-		if errors.Is(err, tui.ErrNoTTY) {
+		if errors.Is(err, ui.ErrNoTTY) {
 			return nil, newUserError("GitHub token required.").
 				withCode("auth.github_token_required").
 				withSuggestion(suggestionGitHubAuth).

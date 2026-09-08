@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -37,14 +40,130 @@ func FetchSnapshot(roots []string) (Snapshot, error) {
 	return snap, nil
 }
 
-// ping returns true if the daemon at sockPath is reachable.
-func ping(sockPath string) bool {
+// registerTimeout bounds a command registration. It is deliberately short: this
+// call sits on the hook path, in front of a command the developer is waiting for,
+// and a logs pane is never worth delaying that.
+const registerTimeout = 2 * time.Second
+
+// RegisterCommand tells the running watch daemon to stream and buffer a command's
+// output.
+//
+// It is best-effort by design and reports no error. If the daemon is not running,
+// the command still runs and still streams to the caller's own stdout; the only
+// thing lost is the buffered copy. Notably this does not start the daemon:
+// spawning a background process as a side effect of a hook firing is intrusive,
+// and a hook that hangs waiting for a daemon launch is a far worse failure than a
+// missing logs pane.
+func RegisterCommand(reg CommandReg) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return
+	}
+	body, err := json.Marshal(reg)
+	if err != nil {
+		return
+	}
+	client := unixClient(sockPath)
+	client.Timeout = registerTimeout
+	resp, err := client.Post("http://watchd/command", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+}
+
+// FetchOutput reads buffered output for a command starting at offset.
+func FetchOutput(commandID string, offset int64) (OutputChunk, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return OutputChunk{}, err
+	}
+	reqURL := fmt.Sprintf("http://watchd/output?command_id=%s&offset=%d",
+		neturl.QueryEscape(commandID), offset)
+	resp, err := unixClient(sockPath).Get(reqURL)
+	if err != nil {
+		return OutputChunk{}, fmt.Errorf("connect to watch daemon: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return OutputChunk{}, fmt.Errorf("watch daemon returned %s", resp.Status)
+	}
+	var chunk OutputChunk
+	if err := json.NewDecoder(resp.Body).Decode(&chunk); err != nil {
+		return OutputChunk{}, fmt.Errorf("decode output: %w", err)
+	}
+	return chunk, nil
+}
+
+// ping reports whether the daemon at sockPath is reachable, along with the build
+// identity it names. A daemon older than that identity reports "".
+func ping(sockPath string) (bool, string) {
 	resp, err := unixClient(sockPath).Get("http://watchd/ping")
 	if err != nil {
-		return false
+		return false, ""
 	}
-	_ = resp.Body.Close()
-	return resp.StatusCode == 200
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, ""
+	}
+	// Bounded: the identity is short, and a body this side cannot recognise is
+	// no reason to read an unbounded amount of it.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if err != nil {
+		return true, ""
+	}
+	return true, strings.TrimSpace(string(body))
+}
+
+// stopDaemon asks the daemon to exit and waits until it stops answering, so the
+// replacement does not race it for the socket.
+func stopDaemon(pid int, sockPath string) error {
+	if err := terminate(pid); err != nil {
+		return fmt.Errorf("signal pid %d: %w", pid, err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if reachable, _ := ping(sockPath); !reachable {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("watch daemon pid %d did not exit within 3s", pid)
+}
+
+// StopForCredentialChange stops a running watch daemon so that the next launch
+// picks up newly stored credentials.
+//
+// The daemon resolves its CircleCI client once, at startup, so one that started
+// before a login holds a nil client for the rest of its life and streams no
+// output however many times the developer retries. Stopping it here is what
+// makes `chunk auth login` take effect: a `chunk watch` already on screen
+// relaunches it through EnsureLaunched on its next poll, and otherwise the next
+// `chunk watch` starts a daemon that can authenticate.
+//
+// Best-effort and silent, like RegisterCommand. Failing to stop the daemon must
+// not fail a login that has otherwise succeeded, and the cost of not stopping it
+// is the buffered output of a daemon that was not streaming anything anyway.
+func StopForCredentialChange() {
+	pidPath, err := PIDPath()
+	if err != nil {
+		return
+	}
+	sockPath, err := SocketPath()
+	if err != nil {
+		return
+	}
+	running, pid, err := IsRunning(pidPath)
+	if err != nil || !running {
+		return
+	}
+	// Only stop something that is actually answering: a stale pid file is the
+	// launcher's problem to clean up, not ours.
+	if reachable, _ := ping(sockPath); !reachable {
+		return
+	}
+	_ = stopDaemon(pid, sockPath)
 }
 
 // EnsureRunning checks whether the watch daemon is running and serving, and
@@ -59,12 +178,51 @@ func EnsureRunning(subArgs []string) error {
 	if err != nil {
 		return err
 	}
+	running, pid, err := IsRunning(pidPath)
+	if err != nil {
+		return fmt.Errorf("check running: %w", err)
+	}
+	if running {
+		reachable, build := ping(sockPath)
+		if reachable {
+			if build == BuildID() {
+				return nil
+			}
+			// A daemon from another build is replaced rather than reused: see
+			// BuildID for why reusing it degrades silently.
+			if stopErr := stopDaemon(pid, sockPath); stopErr != nil {
+				return fmt.Errorf("replace stale watch daemon: %w", stopErr)
+			}
+		}
+	}
+	return launchDaemon(subArgs)
+}
+
+// EnsureLaunched starts the daemon when nothing is answering and otherwise
+// leaves whatever is there alone.
+//
+// Unlike EnsureRunning it never replaces a daemon from another build. It is
+// called when a poll fails mid-session, and a dashboard that has been open for a
+// while has no business restarting a daemon another one is using: the build
+// check is a startup decision, made once, where the cost of being wrong is one
+// restart rather than a restart per poll for as long as two dashboards are open.
+func EnsureLaunched(subArgs []string) error {
+	pidPath, err := PIDPath()
+	if err != nil {
+		return err
+	}
+	sockPath, err := SocketPath()
+	if err != nil {
+		return err
+	}
 	running, _, err := IsRunning(pidPath)
 	if err != nil {
 		return fmt.Errorf("check running: %w", err)
 	}
-	if running && ping(sockPath) {
-		return nil
+	if running {
+		if reachable, _ := ping(sockPath); reachable {
+			return nil
+		}
 	}
 	return launchDaemon(subArgs)
 }
@@ -108,7 +266,7 @@ func launchDaemon(subArgs []string) error {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		ok, _, _ := IsRunning(pidPath)
-		if ok && ping(sockPath) {
+		if reachable, _ := ping(sockPath); ok && reachable {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)

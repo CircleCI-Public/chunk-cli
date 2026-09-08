@@ -285,39 +285,8 @@ func TestValidateVariantsImageFromConfig(t *testing.T) {
 		"expected a variant-prefixed sidecar name, got %q", body.Data.Attributes.Name)
 }
 
-// TestValidateVariantsUnresolvableWorkspace pins the pre-flight failure. With no
-// origin remote and no active sidecar there is no way to know where the snapshot
-// prepared its dependencies, and guessing a path means every command fails for
-// environmental reasons and every mutant reads as caught. Failing before any
-// sidecar is booted is the only safe answer.
-func TestValidateVariantsUnresolvableWorkspace(t *testing.T) {
-	cci := fakes.NewFakeCircleCI()
-	srv := httptest.NewServer(cci)
-	defer srv.Close()
-
-	env := testenv.NewTestEnv(t)
-	env.CircleCIURL = srv.URL
-
-	// Not a git repo, so no org/repo can be detected.
-	workDir := t.TempDir()
-	writeChunkConfig(t, workDir, nil)
-	path := writeVariantsFile(t, workDir, []variants.Variant{
-		{ID: "MUT-001"},
-	})
-
-	result := binary.RunCLI(t, []string{
-		"validate", "variants", path,
-		"--org-id", "org-aaa",
-		"--image", "snap-abc",
-	}, env, workDir)
-
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	creates := filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")
-	assert.Equal(t, len(creates), 0, "no sidecar may be booted when the workspace is unknown")
-}
-
-// TestValidateVariantsWorkdirFlagOverridesDetection confirms --workdir still
-// works without a git remote, which is the escape hatch the error above suggests.
+// TestValidateVariantsWorkdirFlagOverridesDetection confirms --workdir overrides
+// the default workspace derived from the directory basename.
 func TestValidateVariantsWorkdirFlagOverridesDetection(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)

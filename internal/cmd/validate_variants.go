@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 	"github.com/CircleCI-Public/chunk-cli/internal/variants"
 )
@@ -89,7 +89,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			}
 
 			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
-			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, tui.PromptHidden)
+			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -97,7 +97,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			if orgID == "" && cfg.OrgID != "" {
 				orgID = cfg.OrgID
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client))
+			resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, rc.CircleCITokenSource))
 			if err != nil {
 				return err
 			}
@@ -130,6 +130,7 @@ func newValidateVariantsCmd() *cobra.Command {
 				IdentityFile: identityFile,
 				AuthSock:     authSock,
 				Workspace:    workspace,
+				CWD:          workDir,
 				Parallel:     parallel,
 				Commands:     variantCommands(cmds, workDir, timeout),
 				StatusFn:     statusFn,
@@ -232,17 +233,14 @@ func reportVariantSummary(results []variants.Result, statusFn iostream.StatusFun
 // sync into any other path gets a tree the snapshot never prepared, every
 // command fails for environmental reasons, and every mutant reads as caught.
 //
-// The error is deliberate: SyncEphemeral has no shared state to fall back on, so
+// The error is deliberate: RsyncSyncEphemeral has no shared state to fall back on, so
 // an unresolvable workspace has to stop the run rather than pick a guess.
 func resolveVariantsWorkspace(ctx context.Context, workdirFlag, projectDir string) (string, error) {
 	if workdirFlag != "" {
 		return workdirFlag, nil
 	}
-	// A missing origin remote is not fatal on its own — an active sidecar may
-	// still name a workspace — so let ResolveWorkspace decide.
-	_, repo, err := gitremote.DetectOrgAndRepo(projectDir)
-	if err != nil {
-		repo = ""
-	}
+	// Use the local directory name as a fallback — an active sidecar may still
+	// name a workspace, so let ResolveWorkspace decide.
+	repo := filepath.Base(projectDir)
 	return sidecar.ResolveWorkspace(ctx, "", repo)
 }

@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"runtime"
 	"testing"
@@ -9,8 +11,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
+	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 )
+
+type updateCheckKey struct{}
 
 // writeKey is the Segment write key for chunk-cli's anonymous usage
 // telemetry. Segment write keys are not secret — they only allow sending
@@ -33,9 +39,17 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			return setupTelemetry(cmd, version)
+			if id := session.IDFromEnv(); id != "" {
+				cmd.SetContext(session.WithID(cmd.Context(), id))
+			}
+			if err := setupTelemetry(cmd, version); err != nil {
+				return err
+			}
+			startUpdateCheck(cmd)
+			return nil
 		},
 		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
+			printUpdateNotice(cmd)
 			return telemetry.FromContext(cmd.Context()).Close()
 		},
 	}
@@ -60,6 +74,8 @@ Environment Variables:
   ANTHROPIC_BASE_URL              Anthropic API URL [default: https://api.anthropic.com]
   GITHUB_API_URL                  GitHub API URL [default: https://api.github.com]
   SSH_AUTH_SOCK                   SSH agent socket for sidecar key auth
+  CHUNK_SESSION_ID                Agent session identity; keeps parallel sessions on separate sidecars
+                                  (read from CLAUDE_CODE_SESSION_ID when unset)
   NO_COLOR                        Disable colored output
   CI                              Disable interactive prompts (set by most CI systems); also disables telemetry
   CHUNK_NO_TELEMETRY               Disable anonymous usage telemetry (any non-empty value)
@@ -100,7 +116,7 @@ Configuration:
 
 // setupTelemetry resolves the user's telemetry preference and attaches a
 // telemetry.Sender to cmd's context so RecordNow can report a
-// chunk_command_invocation event once the command finishes.
+// command_invocation event once the command finishes.
 func setupTelemetry(cmd *cobra.Command, version string) error {
 	if telemetry.IsTelemetryDisabled(cmd) {
 		return nil
@@ -140,6 +156,7 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		Metadata: telemetry.Meta{
 			Version:     version,
 			InstanceID:  instanceID,
+			UserID:      config.GetUserID(),
 			OS:          runtime.GOOS,
 			CodingAgent: telemetry.DetectCodingAgent(),
 		},
@@ -150,4 +167,66 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 
 	cmd.SetContext(telemetry.WithSender(cmd.Context(), tc))
 	return nil
+}
+
+// noUpdateCheckCommands are commands that must not run the update check.
+// Completion helpers run on every TAB press and receive-telemetry is re-execed
+// by every chunk invocation, so checking there would burn through GitHub's
+// unauthenticated rate limit; upgrade would compare against the version it is
+// replacing; and watch renders its own notice in the TUI footer.
+var noUpdateCheckCommands = map[string]bool{
+	cobra.ShellCompRequestCmd:       true,
+	cobra.ShellCompNoDescRequestCmd: true,
+	"completion":                    true,
+	"receive-telemetry":             true,
+	"upgrade":                       true,
+	watchCmdName:                    true,
+}
+
+// skipUpdateCheck reports whether cmd, or any command it is nested under, is
+// in noUpdateCheckCommands.
+func skipUpdateCheck(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		if noUpdateCheckCommands[c.Name()] {
+			return true
+		}
+	}
+	return false
+}
+
+// startUpdateCheck launches a background goroutine to check for a newer
+// version. The result is sent on a buffered channel stored in the context so
+// printUpdateNotice can read it after the command completes.
+func startUpdateCheck(cmd *cobra.Command) {
+	if skipUpdateCheck(cmd) {
+		return
+	}
+	ch := make(chan string, 1)
+	cmd.SetContext(context.WithValue(cmd.Context(), updateCheckKey{}, ch))
+
+	go func() { ch <- upgrade.Check() }()
+}
+
+// printUpdateNotice prints a notice to stderr if the background check has
+// already found a newer version. It never waits: with a warm cache the check is
+// a single file read and has long since finished, and on the once-a-day fetch
+// the notice is worth less than the delay it would cost every command. A fetch
+// still in flight is simply dropped — it claims the cache window before making
+// its request, so the notice lands on a later invocation instead.
+func printUpdateNotice(cmd *cobra.Command) {
+	ch, ok := cmd.Context().Value(updateCheckKey{}).(chan string)
+	if !ok {
+		return
+	}
+	var latest string
+	select {
+	case latest = <-ch:
+	default:
+		return
+	}
+	if latest == "" {
+		return
+	}
+
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s\nRun: %s\n", latest, upgrade.SelfUpgradeCommand())
 }

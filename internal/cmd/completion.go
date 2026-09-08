@@ -14,7 +14,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -139,7 +138,7 @@ func maybeInstallCompletions(streams iostream.Streams) {
 	if installed {
 		return
 	}
-	yes, confirmErr := tui.Confirm("Install shell completions?", true)
+	yes, confirmErr := ui.Confirm("Install shell completions?", true)
 	if confirmErr != nil {
 		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not confirm: %v", confirmErr)))
 		return

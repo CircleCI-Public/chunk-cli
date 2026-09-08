@@ -30,7 +30,7 @@ const (
 // SidecarState per unique sidecar ID. When multiple files share the same ID
 // the entry with the newest mtime wins, so a stale state file never masks a
 // more recent sync.
-func loadSidecars(dataDir, root, snapshotName, head string) []SidecarState {
+func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	projectName := filepath.Base(root)
 	repoName := projectRepoName(root)
@@ -42,32 +42,32 @@ func loadSidecars(dataDir, root, snapshotName, head string) []SidecarState {
 			continue
 		}
 		var as sidecar.ActiveSidecar
-		if json.Unmarshal(data, &as) != nil || as.SidecarID == "" {
+		if json.Unmarshal(data, &as) != nil || as.ID() == "" {
 			continue
 		}
 		var mtime time.Time
 		if fi, err := os.Stat(path); err == nil {
 			mtime = fi.ModTime()
 		}
-		at, dup := idx[as.SidecarID]
+		id := as.ID()
+		at, dup := idx[id]
 		if dup && !mtime.After(result[at].FileMtime) {
 			continue
 		}
 		ss := SidecarState{
-			ID:            as.SidecarID,
-			Name:          as.Name,
-			ProjectName:   projectName,
-			RepoName:      repoName,
-			SnapshotName:  snapshotName,
-			FileMtime:     mtime,
-			LastSyncedRef: as.LastSyncedRef,
-			InSync:        head != "" && as.LastSyncedRef != "" && head == as.LastSyncedRef,
+			ID:           id,
+			Name:         as.Name,
+			SessionID:    as.SessionID,
+			ProjectName:  projectName,
+			RepoName:     repoName,
+			SnapshotName: snapshotName,
+			FileMtime:    mtime,
 		}
 		if dup {
 			result[at] = ss
 			continue
 		}
-		idx[as.SidecarID] = len(result)
+		idx[id] = len(result)
 		result = append(result, ss)
 	}
 	return result

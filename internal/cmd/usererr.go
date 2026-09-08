@@ -36,14 +36,82 @@ func (e *silentExitError) ExitCode() int { return e.code }
 
 var errSilentExit error = &silentExitError{code: 1}
 
-func notAuthorized(action string, err error) error {
+func notAuthorized(action, tokenSource string, err error) error {
 	if !errors.Is(err, circleci.ErrNotAuthorized) {
 		return nil
 	}
 	return newUserError(fmt.Sprintf("Not authorized to %s.", action)).
 		withCode("auth.not_authorized").
+		withDetail(tokenSourceDetail(tokenSource)).
 		withSuggestion(suggestionReauth).
 		withExitCode(ExitAuthError).
+		wrap(err)
+}
+
+// tokenSourceDetail formats a token source string for use as an error detail.
+// Returns "" when source is empty, which leaves the detail field unset.
+func tokenSourceDetail(source string) string {
+	if source == "" {
+		return ""
+	}
+	return "Token from: " + source + "."
+}
+
+// cannotCreateSidecar phrases a rejected sidecar creation, or returns nil when
+// err is not an authorization failure.
+//
+// The generic notAuthorized() says to check the token, which is the wrong lead
+// here: the token is usually fine and the org is the problem. An org ID reaches
+// Create from four places — a flag, an env var, .chunk/config.json, or a silent
+// auto-pick when the account has exactly one collaboration — and nothing on
+// screen says which one was used. Naming the org and its source makes "chunk
+// tried the wrong org" a visible possibility rather than a guess.
+func cannotCreateSidecar(orgID, source string, err error) error {
+	if !errors.Is(err, circleci.ErrNotAuthorized) {
+		return nil
+	}
+	detail := fmt.Sprintf("Org %s rejected the request", orgID)
+	if source != "" {
+		detail += " (org ID from " + source + ")"
+	}
+	return newUserError("Not authorized to create sidecars in this organization.").
+		withCode("sidecar.not_authorized").
+		withDetail(detail + ".").
+		withSuggestion("Confirm this is the right org: 'chunk org list' shows the ones you belong to, and " +
+			"'chunk config set orgID <id>' records the one this repo should use.\n" +
+			"If the org is correct, it may not have sidecars enabled yet, or your token may lack access to it.").
+		withExitCode(ExitAuthError).
+		wrap(err)
+}
+
+// unreachableSidecar and missingWorkspace phrase the two ways a sidecar that
+// already exists can fail to run the commands routed to it. Both return an
+// error rather than letting those commands run locally: a command is marked
+// remote because a local result does not answer the question it was written to
+// answer, so running it here reports a pass the sidecar never gave. That is the
+// same false green as a refused creation, reached one step later — and it costs
+// the full suite's runtime before saying so. Naming the commands that did not
+// run keeps the skipped work visible rather than implied.
+//
+// The advice does not distinguish a sidecar this run provisioned from a
+// pre-existing one. Inspecting or replacing it is sound either way, and
+// "chunk sidecar list" shows a still-starting sidecar as such, so the caller
+// does not have to thread that state down here to word the error.
+func unreachableSidecar(sidecarID, cmds string, err error) error {
+	return newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
+		withCode("sidecar.unreachable").
+		withDetail(fmt.Sprintf("Did not run: %s. Commands marked remote are not run locally.", cmds)).
+		withSuggestion("Check its state with 'chunk sidecar list', or provision a replacement with 'chunk sidecar create'.").
+		withExitCode(ExitAPIError).
+		wrap(err)
+}
+
+func missingWorkspace(sidecarID, dest, cmds string, err error) error {
+	return newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
+		withCode("sidecar.workspace_missing").
+		withDetail(fmt.Sprintf("Expected it at %q. Did not run: %s. Commands marked remote are not run locally.", dest, cmds)).
+		withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+		withExitCode(ExitNotFound).
 		wrap(err)
 }
 
