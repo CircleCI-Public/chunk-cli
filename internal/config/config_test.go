@@ -377,14 +377,39 @@ func TestResolveCircleCI_ConfigFile(t *testing.T) {
 	assert.Equal(t, rc.GitHubToken, "")
 }
 
-func TestResolve_ReadsKeychainWhenInsecureStorageTrue(t *testing.T) {
+func TestResolve_ReadsKeychainWhenSecureStorage(t *testing.T) {
 	setupTempConfig(t)
 	assert.NilError(t, keyring.Set(keyring.ServiceCircleCI("https://circleci.com"), "cci-from-keychain"))
 
-	rc, err := ResolveCircleCI(true)
+	rc, err := ResolveCircleCI(false)
 	assert.NilError(t, err)
 	assert.Equal(t, rc.CircleCIToken, "cci-from-keychain")
 	assert.Equal(t, rc.CircleCITokenSource, keyring.SourceKeychain)
+}
+
+// insecureStorage opts out of the keychain for reads as well as writes, so a
+// stored credential must be invisible to Resolve. Without this the keychain is
+// consulted on every resolve, which makes tests reach the developer's real
+// keychain whenever no env var or config file supplies a credential.
+func TestResolve_SkipsKeychainWhenInsecureStorage(t *testing.T) {
+	setupTempConfig(t)
+	assert.NilError(t, keyring.Set(keyring.ServiceCircleCI("https://circleci.com"), "cci-from-keychain"))
+	assert.NilError(t, keyring.Set(keyring.ServiceAnthropic("https://api.anthropic.com"), "ant-from-keychain"))
+	assert.NilError(t, keyring.Set(keyring.ServiceGitHub("https://api.github.com"), "gh-from-keychain"))
+
+	rc, err := ResolveCircleCI(true)
+	assert.NilError(t, err)
+	assert.Equal(t, rc.CircleCIToken, "")
+	assert.Equal(t, rc.CircleCITokenSource, "")
+
+	full, err := Resolve("", "", true)
+	assert.NilError(t, err)
+	assert.Equal(t, full.CircleCIToken, "")
+	assert.Equal(t, full.CircleCITokenSource, "")
+	assert.Equal(t, full.AnthropicAPIKey, "")
+	assert.Equal(t, full.AnthropicAPIKeySource, "")
+	assert.Equal(t, full.GitHubToken, "")
+	assert.Equal(t, full.GitHubTokenSource, "")
 }
 
 // --- ValidConfigKeys ---
