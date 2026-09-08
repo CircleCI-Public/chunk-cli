@@ -341,14 +341,24 @@ func (r *resourceSampler) reconcile(sidecars []SidecarState) {
 			delete(r.samplers, id)
 		}
 	}
-	// Started under the lock: a goroutine whose sampler was stopped between being
-	// recorded and adopting its cancel function could never be cancelled at all.
+	// setCancel stays under the lock: a sampler stopped between being recorded
+	// and adopting its cancel function could never be cancelled at all. The
+	// goroutines themselves do not — spawning under r.mu would put every call
+	// r.run makes inside this lock's ordering, so a future sampling path that
+	// touched r.mu would deadlock against a hold it never mentions. A sampler
+	// stopped in the gap below simply starts on an already-cancelled context,
+	// and run returns without sampling.
+	starts := make([]func(), 0, len(toStart))
 	for _, req := range toStart {
 		ctx, cancel := context.WithCancel(context.Background())
 		req.sampler.setCancel(cancel)
-		go r.run(ctx, req.sidecar, req.sampler)
+		starts = append(starts, func() { r.run(ctx, req.sidecar, req.sampler) })
 	}
 	r.mu.Unlock()
+
+	for _, start := range starts {
+		go start()
+	}
 
 	for _, s := range toStop {
 		s.stop()
@@ -482,6 +492,16 @@ func (r *resourceSampler) sampleOnce(ctx context.Context, sc SidecarState, s *si
 		close(frames)
 	}()
 
+	// The write is synchronous — io.Pipe hands each write straight to the reader
+	// — so a slow parser applies backpressure to the stream rather than letting
+	// output pile up unbounded in memory. StreamOutput calls this inline while
+	// scanning, so the stall reaches the HTTP read, which is the intent.
+	//
+	// It cannot stall for good: readFrames closes the read side on every exit
+	// path, so a parser that stops early turns the next write into an immediate
+	// ErrClosedPipe instead of a block with nobody left to read. The error is
+	// dropped because the frame reader's own error is the one worth reporting,
+	// and it is collected from frameErr below.
 	_, streamErr := client.StreamOutput(ctx, commandID, "", func(_ string, data []byte) {
 		_, _ = pw.Write(data)
 	})

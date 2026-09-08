@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -363,5 +364,46 @@ func TestReadFramesUnblocksWriterWhenScannerGivesUp(t *testing.T) {
 		assert.Assert(t, err != nil, "write should fail once the reader has closed the pipe")
 	case <-time.After(5 * time.Second):
 		t.Fatal("write blocked: the sampler goroutine would hang here forever")
+	}
+}
+
+// Sampling must be able to touch the sampler's own state without waiting on
+// reconcile. This passed before the spawn moved out from under r.mu — reconcile
+// released it immediately after the loop, so the goroutine only ever blocked
+// briefly — but it pins the property that made that safe, which was incidental
+// then and is deliberate now.
+func TestSamplerGoroutineDoesNotWaitOnReconcile(t *testing.T) {
+	r := newResourceSampler(nil)
+	reached := make(chan struct{})
+	r.sample = func(ctx context.Context, sc SidecarState, _ *sidecarSampler) error {
+		// annotate takes r.mu, standing in for any sampling path that ever does.
+		r.annotate([]SidecarState{{ID: sc.ID}})
+		close(reached)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	r.touch()
+	r.reconcile([]SidecarState{{ID: "sc-1"}})
+
+	select {
+	case <-reached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the sampler goroutine could not take r.mu while reconcile ran")
+	}
+	r.stopAll()
+}
+
+// The lock ordering review asked about is r.mu -> s.mu, via setCancel. It is
+// only a hazard if some path takes them the other way round, and none can:
+// sidecarSampler holds no reference to resourceSampler, so nothing reachable
+// while s.mu is held can reach r.mu. This fails to compile if that ever changes.
+func TestSidecarSamplerHoldsNoBackReference(t *testing.T) {
+	var s sidecarSampler
+	typ := reflect.TypeOf(s)
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		assert.Check(t, !strings.Contains(f.Type.String(), "resourceSampler"),
+			"sidecarSampler.%s reaches back to resourceSampler, which would make the "+
+				"r.mu -> s.mu ordering in reconcile a real deadlock risk", f.Name)
 	}
 }
