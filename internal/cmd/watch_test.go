@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -9,16 +8,21 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // registerProject writes the project-root breadcrumb chunk drops for every
-// project it has seen, so AllProjectRoots discovers root.
-func registerProject(t *testing.T, root string) {
+// project it has seen, so AllProjectRoots discovers root. It returns the root as
+// AllProjectRoots reports it — canonical, symlinks resolved — which is not the
+// string passed in when the path runs through one (every darwin temp dir does).
+func registerProject(t *testing.T, root string) string {
 	t.Helper()
 	dataDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)
-	assert.NilError(t, os.MkdirAll(dataDir, 0o755))
-	assert.NilError(t, os.WriteFile(filepath.Join(dataDir, "project-root"), []byte(root), 0o644))
+	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, root))
+	canonical, err := filepath.EvalSymlinks(root)
+	assert.NilError(t, err)
+	return canonical
 }
 
 func TestWatchRootsDefaultsToAllKnownProjects(t *testing.T) {
@@ -26,12 +30,12 @@ func TestWatchRootsDefaultsToAllKnownProjects(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 
 	cwd, other := t.TempDir(), t.TempDir()
-	registerProject(t, other)
+	knownRoot := registerProject(t, other)
 
 	roots, err := watchRoots(cwd, false, nil)
 	assert.NilError(t, err)
 	assert.Assert(t, slices.Contains(roots, cwd), "cwd should always be watched: %v", roots)
-	assert.Assert(t, slices.Contains(roots, other), "known project should be watched by default: %v", roots)
+	assert.Assert(t, slices.Contains(roots, knownRoot), "known project should be watched by default: %v", roots)
 }
 
 func TestWatchRootsFocusLimitsToCwdAndArgs(t *testing.T) {
@@ -39,7 +43,7 @@ func TestWatchRootsFocusLimitsToCwdAndArgs(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 
 	cwd, other, explicit := t.TempDir(), t.TempDir(), t.TempDir()
-	registerProject(t, other)
+	_ = registerProject(t, other)
 
 	roots, err := watchRoots(cwd, true, []string{explicit})
 	assert.NilError(t, err)

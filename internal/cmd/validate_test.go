@@ -308,9 +308,13 @@ func TestValidateLocalRunRegistersProjectForTheDaemon(t *testing.T) {
 	root.SetArgs([]string{"validate", "--local", "--project", dir})
 	assert.NilError(t, root.Execute())
 
+	// Canonical, because that is what registration writes and the daemon keys on:
+	// a darwin temp dir arrives here as /var/... and resolves to /private/var/...
+	canonical, err := filepath.EvalSymlinks(dir)
+	assert.NilError(t, err)
 	roots, err := sidecar.AllProjectRoots()
 	assert.NilError(t, err)
-	assert.Assert(t, slices.Contains(roots, dir),
+	assert.Assert(t, slices.Contains(roots, canonical),
 		"a local run must register the project it logged to, got: %v", roots)
 
 	// And the run it recorded there closes with a tally, so a daemon that starts

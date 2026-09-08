@@ -217,6 +217,13 @@ const projectRootFile = "project-root"
 // Every write of project state should call this, not just sidecar state: a
 // project whose only activity is a local validate run has results worth showing
 // and, without the breadcrumb, no way to be found.
+//
+// The root is canonicalised before it is written, because the callers disagree
+// about how to spell one: a validate run passes the working directory it was
+// given, while chunk watch passes git's top-level, which on macOS comes back
+// through /private. Both hash to the same data directory, so the breadcrumb
+// would flip between spellings as each wrote it, and a reader that keys on the
+// string sees one project as two sharing a single log.
 func RegisterProjectRoot(dataDir, root string) error {
 	if dataDir == "" || root == "" {
 		return nil
@@ -224,11 +231,25 @@ func RegisterProjectRoot(dataDir, root string) error {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dataDir, projectRootFile), []byte(root), 0o644)
+	return os.WriteFile(filepath.Join(dataDir, projectRootFile), []byte(canonicalRoot(root)), 0o644)
+}
+
+// canonicalRoot resolves symlinks in root, leaving it as given when it cannot be
+// resolved (a root that no longer exists, most often) so callers always get a
+// usable path. This matches how ProjectDataDir keys its directories, which is
+// what makes the two agree on what one project is.
+func canonicalRoot(root string) string {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return root
+	}
+	return resolved
 }
 
 // AllProjectRoots returns the roots of all projects chunk has recorded state
-// for, by reading the breadcrumb files written by RegisterProjectRoot.
+// for, by reading the breadcrumb files written by RegisterProjectRoot. Roots are
+// canonicalised and de-duplicated on the way out, so breadcrumbs written before
+// RegisterProjectRoot canonicalised them cannot list one project twice.
 func AllProjectRoots() ([]string, error) {
 	base, err := config.AppData()
 	if err != nil {
@@ -252,7 +273,7 @@ func AllProjectRoots() ([]string, error) {
 		if readErr != nil {
 			continue
 		}
-		root := strings.TrimSpace(string(data))
+		root := canonicalRoot(strings.TrimSpace(string(data)))
 		if root == "" || seen[root] {
 			continue
 		}

@@ -3,6 +3,7 @@ package watchd
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -65,6 +66,9 @@ func TestPollReplaysResultsRecordedWhileTheDaemonWasDown(t *testing.T) {
 	dataDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)
 	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, root))
+	// Registration canonicalises, so this is the spelling the daemon reports.
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	assert.NilError(t, err)
 
 	log, err := eventlog.Open(dataDir)
 	assert.NilError(t, err)
@@ -80,7 +84,7 @@ func TestPollReplaysResultsRecordedWhileTheDaemonWasDown(t *testing.T) {
 	snap := d.snapshot(nil)
 	assert.Equal(t, len(snap.Projects), 1, "the registered project was not discovered")
 	p := snap.Projects[0]
-	assert.Equal(t, p.Root, root)
+	assert.Equal(t, p.Root, canonicalRoot)
 	assert.Equal(t, len(p.Events), 2, "events predating the daemon were dropped")
 	passed, total, ok := p.Events[1].Outcome()
 	assert.Assert(t, ok, "the closing event did not survive the round trip")
