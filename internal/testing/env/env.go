@@ -41,6 +41,9 @@ func (e *TestEnv) Environ() []string {
 		fmt.Sprintf("HOME=%s", e.HomeDir),
 		fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir),
 		fmt.Sprintf("XDG_DATA_HOME=%s", dataDir),
+		// CLI subprocesses must not query the developer's DBus keyring when a
+		// test intentionally omits a credential.
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent",
 		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
 		"SHELL=/bin/zsh",
 		"NO_COLOR=1",

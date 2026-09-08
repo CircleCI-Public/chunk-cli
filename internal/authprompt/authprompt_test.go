@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
+	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
@@ -16,7 +18,12 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
-const insecureStorage = true // skip keychain in unit tests; use config file only
+const insecureStorage = true // write credentials to the config file in unit tests
+
+func TestMain(m *testing.M) {
+	gokeyring.MockInit()
+	os.Exit(m.Run())
+}
 
 func isolateConfig(t *testing.T) {
 	t.Helper()

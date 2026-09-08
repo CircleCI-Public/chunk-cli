@@ -7,11 +7,13 @@ import (
 	"errors"
 	"io"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -20,6 +22,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
+
+func TestMain(m *testing.M) {
+	gokeyring.MockInit()
+	os.Exit(m.Run())
+}
 
 func isolateConfig(t *testing.T) {
 	t.Helper()
@@ -47,7 +54,7 @@ func noTTYPrompter(_ string) (string, error) {
 func testCmd() *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Flags().Bool("insecure-storage", false, "")
-	// Use insecure (config file) storage in tests to avoid hitting the system keychain.
+	// Use config-file storage for credentials written by tests.
 	_ = cmd.Flags().Set("insecure-storage", "true")
 	return cmd
 }
