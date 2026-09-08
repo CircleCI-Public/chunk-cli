@@ -295,6 +295,55 @@ workflows:
 	})
 }
 
+// Per review: the same failure as the skipTools case above, one list over.
+// "notify", "slack" and "publish" as plain substrings dropped ordinary test
+// commands whose paths happened to contain them — a direct regression of what
+// this package is for, since a package named notify is not a notification.
+func TestCommandsFromCIKeepsSkipMarkersInsidePaths(t *testing.T) {
+	dir := t.TempDir()
+	writeCI(t, dir, `
+version: 2.1
+jobs:
+  build:
+    steps:
+      - run: go test ./internal/notify/... ./cmd/publish/...
+      - run: go vet ./pkg/deployment/...
+      - run: make deploy
+      - run: npm run upload-coverage
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	// The first two name packages; the last two name the work.
+	assert.DeepEqual(t, runs(commandsFromCI(dir).Commands), []string{
+		"test=go test ./internal/notify/... ./cmd/publish/...",
+		"lint=go vet ./pkg/deployment/...",
+	})
+}
+
+// The hyphen is a word boundary, so a marker still catches the compound task
+// names CI uses for this work even though it will not reach into a path.
+func TestNamesSkippedWorkSplitsOnPunctuationButNotIntoPaths(t *testing.T) {
+	drop := []string{"make deploy", "npm run upload-coverage", "sonar-scanner", "notify_slack"}
+	for _, cmd := range drop {
+		assert.Equal(t, classify(ciconfig.Candidate{Command: cmd}), roleNone, "should drop %q", cmd)
+	}
+	keep := map[string]string{
+		"go test ./internal/notify/...":           roleTest,
+		"pytest tests/slack_client.py":            roleTest,
+		"golangci-lint run ./internal/upload/...": roleLint,
+		// A flag's value is an argument, not the work: these name a package
+		// and a test function, neither of which publishes anything.
+		"cargo test -p sonar-parser":           roleTest,
+		"cargo test --package publish-service": roleTest,
+		"go test -run TestPublish ./...":       roleTest,
+	}
+	for cmd, want := range keep {
+		assert.Equal(t, classify(ciconfig.Candidate{Command: cmd}), want, "should keep %q", cmd)
+	}
+}
+
 func TestCommandsFromCIReportsWhatItCouldNotRead(t *testing.T) {
 	dir := t.TempDir()
 	writeCI(t, dir, `

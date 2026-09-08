@@ -27,9 +27,15 @@ const (
 )
 
 // skipMarkers mark a step that runs in CI but has no business in a developer's
-// inner loop: deploys, uploads, and reporting. Matched case-folded as a
-// substring, because the work is named rather than invoked by a fixed tool —
-// `make deploy`, `npm run upload-coverage`.
+// inner loop: deploys, uploads, and reporting. The work here is named rather
+// than invoked by a fixed tool — `make deploy`, `npm run upload-coverage` — so
+// these cannot be matched against the leading word the way skipTools are.
+//
+// They are matched case-folded by namesSkippedWork, which reads a bare word as
+// a word of the work itself and not as text inside a path. A plain substring
+// dropped `go test ./internal/notify/...` and `pytest tests/slack_client.py`,
+// which is the exact failure this package exists to prevent: those are gates,
+// and the marker matched somebody's package name.
 var skipMarkers = []string{
 	"deploy", "publish", "notify", "slack", "upload",
 	"codecov", "coveralls", "sonar",
@@ -275,10 +281,8 @@ func classify(c ciconfig.Candidate) string {
 			return roleNone
 		}
 	}
-	for _, m := range skipMarkers {
-		if strings.Contains(cmd, m) {
-			return roleNone
-		}
+	if slices.ContainsFunc(skipMarkers, func(m string) bool { return namesSkippedWork(cmd, m) }) {
+		return roleNone
 	}
 	for _, m := range toolInstallMarkers {
 		if strings.Contains(cmd, m) {
@@ -337,6 +341,47 @@ func usableWorkingDir(dir string) bool {
 	}
 	return !slices.Contains(strings.Split(dir, "/"), "..")
 }
+
+// namesSkippedWork reports whether cmd describes the work named by marker.
+//
+// A marker carrying a space, slash or dot — `docker push`, `./release`,
+// `release.sh` — is specific enough to match as a plain substring: nothing else
+// reads that way by accident.
+//
+// A bare word is not. It matches only as a whole word of a token that names
+// the work rather than an argument to it, because that is the difference
+// between doing the thing and mentioning it: `make deploy` and `npm run
+// upload-coverage` are a deploy and an upload, while `./internal/notify/...`,
+// `tests/slack_client.py` and the `sonar-parser` in `cargo test -p
+// sonar-parser` are names that happen to be spelled that way. Splitting on the
+// hyphen is what keeps `upload-coverage`, which the list is meant to catch.
+func namesSkippedWork(cmd, marker string) bool {
+	if strings.ContainsAny(marker, " /.") {
+		return strings.Contains(cmd, marker)
+	}
+	afterFlag := false
+	for _, tok := range strings.Fields(cmd) {
+		isFlag := strings.HasPrefix(tok, "-")
+		switch {
+		case strings.ContainsAny(tok, "/\\"):
+			// A path: the marker is part of a name, not the work.
+		case isFlag:
+			// An option, not the work.
+		case afterFlag:
+			// The value of an option, so an argument: `cargo test -p
+			// sonar-parser` names a package, and `go test -run TestPublish`
+			// names a function. Neither is the step publishing anything.
+		case slices.Contains(markerWords.Split(tok, -1), marker):
+			return true
+		}
+		afterFlag = isFlag
+	}
+	return false
+}
+
+// markerWords splits an argument into the words a skipMarker can match, so
+// `upload-coverage` is an upload and `release_notes` is not a release.
+var markerWords = regexp.MustCompile(`[^a-z0-9]+`)
 
 // leadingWords returns the first word of each command in a shell one-liner, so
 // a tool can be recognized where it is invoked rather than wherever its name
