@@ -200,3 +200,53 @@ func TestStopForCredentialChangeIsANoopWithNoDaemon(t *testing.T) {
 	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
 	StopForCredentialChange()
 }
+
+// The duplicate rows this guards against were found by hand: one project drawn
+// twice, the two rows sharing a single event log. The daemon keys projects by
+// the breadcrumb string while ProjectDataDir keys the directory by the resolved
+// path, so two spellings of one root share a log but count as two projects. It
+// took a symlinked path to see it, which on darwin is every temp directory and
+// on linux is none — so the symlink here is built rather than assumed, and the
+// spelling is flipped between polls the way a validate run and chunk watch used
+// to flip it.
+func TestPollListsOneProjectPerRootHoweverItIsSpelled(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	base := t.TempDir()
+	target := filepath.Join(base, "project")
+	assert.NilError(t, os.MkdirAll(target, 0o755))
+	link := filepath.Join(base, "link")
+	assert.NilError(t, os.Symlink(target, link))
+
+	canonical, err := filepath.EvalSymlinks(target)
+	assert.NilError(t, err)
+
+	// One data directory, reached through either spelling.
+	dataDir, err := config.ProjectDataDir(link)
+	assert.NilError(t, err)
+	viaTarget, err := config.ProjectDataDir(target)
+	assert.NilError(t, err)
+	assert.Equal(t, dataDir, viaTarget, "both spellings must share one data directory")
+
+	log, err := eventlog.Open(dataDir)
+	assert.NilError(t, err)
+	log.Recorder(nil, eventlog.OpValidate, "", "", "").Final(iostream.LevelDone, "1/1 passed", 1, 1)
+
+	crumb := filepath.Join(dataDir, "project-root")
+	d := &daemon{projects: make(map[string]*projectState), out: newOutputStore(context.Background())}
+
+	// Registered through the symlink, then rewritten as the resolved path — the
+	// two writers' spellings, in the order a developer hits them.
+	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, link))
+	d.poll()
+	assert.NilError(t, os.WriteFile(crumb, []byte(target), 0o644))
+	d.poll()
+	assert.NilError(t, os.WriteFile(crumb, []byte(link), 0o644))
+	d.poll()
+
+	snap := d.snapshot(nil)
+	assert.Equal(t, len(snap.Projects), 1, "one project listed once, got %d", len(snap.Projects))
+	assert.Equal(t, snap.Projects[0].Root, canonical)
+	// The log is not read twice into one project either.
+	assert.Equal(t, len(snap.Projects[0].Events), 1)
+}
