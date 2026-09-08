@@ -7,6 +7,11 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // TestDaemonRoundTrip starts the daemon in-process, waits for it to accept
@@ -47,6 +52,42 @@ func TestDaemonRoundTrip(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("daemon did not shut down within 5s after context cancel")
 	}
+}
+
+// Results recorded while no daemon was running are the reason the log is on
+// disk at all. A daemon starting afterwards has only the breadcrumb to go on —
+// no sidecar state, no connection to the run that wrote it — and must replay
+// what is already in the log rather than only what arrives after it starts.
+func TestPollReplaysResultsRecordedWhileTheDaemonWasDown(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	root := t.TempDir()
+	dataDir, err := config.ProjectDataDir(root)
+	assert.NilError(t, err)
+	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, root))
+
+	log, err := eventlog.Open(dataDir)
+	assert.NilError(t, err)
+	rec := log.Recorder(nil, eventlog.OpValidate, "", "", "main")
+	rec.Status(iostream.LevelInfo, "$ echo hi")
+	rec.Final(iostream.LevelDone, "1/1 passed  113ms", 1, 1)
+
+	d := &daemon{projects: make(map[string]*projectState)}
+	d.poll()
+
+	snap := d.snapshot(nil)
+	assert.Equal(t, len(snap.Projects), 1, "the registered project was not discovered")
+	p := snap.Projects[0]
+	assert.Equal(t, p.Root, root)
+	assert.Equal(t, len(p.Events), 2, "events predating the daemon were dropped")
+	passed, total, ok := p.Events[1].Outcome()
+	assert.Assert(t, ok, "the closing event did not survive the round trip")
+	assert.Equal(t, passed, 1)
+	assert.Equal(t, total, 1)
+
+	// The run had no sidecar, so it is the synthesised local row in the dashboard
+	// that carries it — there must be no sidecar state invented for it here.
+	assert.Equal(t, len(p.Sidecars), 0)
 }
 
 func TestBuildID_distinguishesBuildsTheVersionCannot(t *testing.T) {

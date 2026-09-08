@@ -168,7 +168,7 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	}
 	pruneRekeyedState(dir, path, a.SidecarIDs)
 	// Write a breadcrumb so chunk watch can discover this project.
-	_ = os.WriteFile(filepath.Join(dir, "project-root"), []byte(root), 0o644)
+	_ = RegisterProjectRoot(dir, root)
 	return nil
 }
 
@@ -204,8 +204,31 @@ func pruneRekeyedState(dir, keep string, sidecarIDs []string) {
 	}
 }
 
-// AllProjectRoots returns the roots of all projects that have ever saved a
-// sidecar state, by reading the breadcrumb files written by SaveActiveTo.
+// projectRootFile names the breadcrumb that maps a project data directory back
+// to the project it holds state for. It is the only way the watch daemon
+// discovers projects, so a data directory without one is invisible to it
+// however much it holds.
+const projectRootFile = "project-root"
+
+// RegisterProjectRoot writes the breadcrumb that makes root discoverable by
+// AllProjectRoots, and so by the watch daemon and its dashboard. dataDir must be
+// the data directory for root, since the daemon derives one from the other.
+//
+// Every write of project state should call this, not just sidecar state: a
+// project whose only activity is a local validate run has results worth showing
+// and, without the breadcrumb, no way to be found.
+func RegisterProjectRoot(dataDir, root string) error {
+	if dataDir == "" || root == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dataDir, projectRootFile), []byte(root), 0o644)
+}
+
+// AllProjectRoots returns the roots of all projects chunk has recorded state
+// for, by reading the breadcrumb files written by RegisterProjectRoot.
 func AllProjectRoots() ([]string, error) {
 	base, err := config.AppData()
 	if err != nil {
@@ -224,7 +247,7 @@ func AllProjectRoots() ([]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		crumb := filepath.Join(base, e.Name(), "project-root")
+		crumb := filepath.Join(base, e.Name(), projectRootFile)
 		data, readErr := os.ReadFile(crumb)
 		if readErr != nil {
 			continue

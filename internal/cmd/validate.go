@@ -540,6 +540,13 @@ func newValidateRecorder(statusFn iostream.StatusFunc, sidecarID string, activeS
 	}
 	// A missing data dir leaves the recorder reporting without recording.
 	dataDir, _ := config.ProjectDataDir(workDir)
+	// Register the project alongside the log about to be written to it. Nothing
+	// is streamed to the watch daemon — it reads these same files — and only
+	// saving sidecar state used to register a project, so a run with no sidecar
+	// (--local, or a repo with no remote commands) logged its results where no
+	// daemon would ever look for them. Best-effort: a run still records without
+	// the breadcrumb, and still reports without the log.
+	_ = sidecar.RegisterProjectRoot(dataDir, workDir)
 	return eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
 }
 

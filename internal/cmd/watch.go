@@ -77,9 +77,7 @@ func newWatchCmd() *cobra.Command {
 				}
 
 				// Register this project so future runs discover it.
-				if err := os.MkdirAll(dataDir, 0o755); err == nil {
-					_ = os.WriteFile(filepath.Join(dataDir, "project-root"), []byte(abs), 0o644)
-				}
+				_ = sidecar.RegisterProjectRoot(dataDir, abs)
 
 				el, err := eventlog.Open(dataDir)
 				if err != nil {

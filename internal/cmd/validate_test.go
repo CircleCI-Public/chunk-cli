@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -278,6 +279,48 @@ func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
 	combined := outBuf.String() + errBuf.String()
 	assert.Assert(t, strings.Contains(combined, "ran-locally"),
 		"--local must execute commands locally even when Remote:true, got: %q", combined)
+}
+
+// A run with no sidecar is the only record of itself: nothing is streamed to the
+// watch daemon, which reads this same on-disk log. Registering the project is
+// what tells the daemon the log exists at all, so a run that skips it leaves
+// results nothing will ever show.
+func TestValidateLocalRunRegistersProjectForTheDaemon(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "echo ran-locally"}},
+	}))
+
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--local", "--project", dir})
+	assert.NilError(t, root.Execute())
+
+	roots, err := sidecar.AllProjectRoots()
+	assert.NilError(t, err)
+	assert.Assert(t, slices.Contains(roots, dir),
+		"a local run must register the project it logged to, got: %v", roots)
+
+	// And the run it recorded there closes with a tally, so a daemon that starts
+	// afterwards has a result to show rather than an open-ended run.
+	dataDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	log, err := eventlog.Open(dataDir)
+	assert.NilError(t, err)
+	events, err := log.Recent(10)
+	assert.NilError(t, err)
+	assert.Assert(t, len(events) > 0, "the run recorded no events")
+	passed, total, ok := events[len(events)-1].Outcome()
+	assert.Assert(t, ok, "last event does not close the run: %+v", events[len(events)-1])
+	assert.Equal(t, passed, 1)
+	assert.Equal(t, total, 1)
 }
 
 func TestValidateEnvFlagBadValue(t *testing.T) {
