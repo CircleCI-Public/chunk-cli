@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
@@ -81,18 +82,88 @@ type Config struct {
 	// server signals endpoint removal via Deprecation or Sunset response headers.
 	// The caller is responsible for formatting (prefix, newline, colour).
 	OnWarn func(msg string)
+	// ReloadToken, when non-nil, re-reads the caller's stored credential after a
+	// 401. When it returns a token different from the one that was just
+	// rejected, the request is retried once with the new token; otherwise the
+	// 401 is returned as-is.
+	//
+	// This is deliberately a reload and not a refresh: there is no refresh grant
+	// to call, so the only way a token can improve is if something else stored a
+	// new one. It exists for long-lived processes — a watch daemon holds one
+	// client for its whole life, and without this a `chunk auth login` in
+	// another terminal never reaches it.
+	ReloadToken func() (string, error)
 }
 
 // Client is a simple HTTP client with JSON defaults and automatic retries.
 type Client struct {
-	baseURL          string
-	authToken        string
+	baseURL string
+	// mu guards authToken, which ReloadToken can replace mid-life. Everything
+	// else here is immutable after New.
+	mu        sync.RWMutex
+	authToken string
+	// reloadMu serializes reloads so concurrent 401s cause one read rather than
+	// one each. It is deliberately separate from mu and is never held with it:
+	// a reload can mean a keychain subprocess, and no request should wait on
+	// that just to read the token it already has.
+	reloadMu         sync.Mutex
+	reloadToken      func() (string, error)
 	authHeader       string
 	userAgent        string
 	timeout          time.Duration
 	retryOn429Budget time.Duration
 	onWarn           func(string)
 	http             *retryablehttp.Client
+}
+
+// token returns the credential to send on the next attempt.
+func (c *Client) token() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.authToken
+}
+
+// reload re-reads the stored credential after used was rejected, and reports
+// whether the client now holds a different one — i.e. whether a retry is worth
+// making.
+//
+// Two properties, and they pull against each other. Concurrent 401s must cause
+// one read rather than one each, because reading can mean a keychain
+// subprocess and a daemon streaming several commands hits this from several
+// goroutines at once. But the read must not happen under mu, or every other
+// request would block in token() waiting on that same keychain — the very
+// problem moving credential resolution out of the daemon was meant to remove.
+//
+// So reloadMu serializes the reload while mu is taken only to swap the result
+// in. A caller that arrives during a reload waits on reloadMu, then sees the
+// token has already moved and retries without reading again.
+func (c *Client) reload(used string) bool {
+	if c.reloadToken == nil {
+		return false
+	}
+	if c.token() != used {
+		return true
+	}
+
+	c.reloadMu.Lock()
+	defer c.reloadMu.Unlock()
+	// Re-checked after waiting: whoever held reloadMu may have already replaced
+	// the token this caller was rejected with.
+	if c.token() != used {
+		return true
+	}
+
+	tok, err := c.reloadToken()
+	// A failed reload is not worth surfacing: the caller already has a 401,
+	// which is the more useful error of the two.
+	if err != nil || tok == "" || tok == used {
+		return false
+	}
+
+	c.mu.Lock()
+	c.authToken = tok
+	c.mu.Unlock()
+	return true
 }
 
 // New creates a Client from the given config.
@@ -152,6 +223,7 @@ func New(cfg Config) *Client {
 	return &Client{
 		baseURL:          cfg.BaseURL,
 		authToken:        cfg.AuthToken,
+		reloadToken:      cfg.ReloadToken,
 		authHeader:       cfg.AuthHeader,
 		userAgent:        cfg.UserAgent,
 		timeout:          timeout,
@@ -193,13 +265,15 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 		u.RawQuery = r.query.Encode()
 	}
 
-	var bodyReader io.Reader
+	var bodyBytes []byte
 	if r.body != nil {
 		b, err := json.Marshal(r.body)
 		if err != nil {
 			return 0, fmt.Errorf("httpcl: marshal body: %w", err)
 		}
-		bodyReader = bytes.NewReader(b)
+		// Retained rather than wrapped in a reader once: a 401 retry needs to
+		// send the same body again, and the first attempt will have drained it.
+		bodyBytes = b
 	}
 
 	cancel := func() {}
@@ -215,9 +289,27 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 	}
 	defer cancel()
 
+	status, tok, err := c.attempt(ctx, r, u, bodyBytes)
+	// One retry, and only when the credential actually changed. Retrying with
+	// the same token would just buy a second 401, and looping on reload would
+	// turn a revoked token into a keychain read per request.
+	if status == http.StatusUnauthorized && c.reload(tok) {
+		status, _, err = c.attempt(ctx, r, u, bodyBytes)
+	}
+	return status, err
+}
+
+// attempt performs one request and reports the token it authenticated with, so
+// the caller can tell whether a reload has since superseded it.
+func (c *Client) attempt(ctx context.Context, r Request, u *url.URL, bodyBytes []byte) (int, string, error) {
+	var bodyReader io.Reader
+	if bodyBytes != nil {
+		bodyReader = bytes.NewReader(bodyBytes)
+	}
+
 	req, err := retryablehttp.NewRequestWithContext(ctx, r.method, u.String(), bodyReader)
 	if err != nil {
-		return 0, fmt.Errorf("httpcl: new request: %w", err)
+		return 0, "", fmt.Errorf("httpcl: new request: %w", err)
 	}
 
 	// Set headers
@@ -226,11 +318,12 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 	}
 	req.Header.Set("Accept", "application/json")
 
-	if c.authToken != "" {
+	tok := c.token()
+	if tok != "" {
 		if c.authHeader != "" {
-			req.Header.Set(c.authHeader, c.authToken)
+			req.Header.Set(c.authHeader, tok)
 		} else {
-			req.Header.Set("Authorization", "Bearer "+c.authToken)
+			req.Header.Set("Authorization", "Bearer "+tok)
 		}
 	}
 	if c.userAgent != "" {
@@ -254,7 +347,7 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 		}()
 	}
 	if err != nil {
-		return 0, err
+		return 0, tok, err
 	}
 
 	status := resp.StatusCode
@@ -265,14 +358,14 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 		}
 		if r.decoder != nil {
 			if err := r.decoder(resp.Body); err != nil {
-				return status, fmt.Errorf("httpcl: decode response: %w", err)
+				return status, tok, fmt.Errorf("httpcl: decode response: %w", err)
 			}
 		}
-		return status, nil
+		return status, tok, nil
 	}
 
 	body, _ := io.ReadAll(resp.Body)
-	return status, &HTTPError{
+	return status, tok, &HTTPError{
 		Method:     r.method,
 		Route:      r.route,
 		StatusCode: status,
