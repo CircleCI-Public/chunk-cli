@@ -57,6 +57,11 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx = envctx.WithEnv(ctx, req.Env)
 
+	if d.runner == nil {
+		http.Error(w, "no validate runner configured", http.StatusServiceUnavailable)
+		return
+	}
+
 	var stdout, stderr bytes.Buffer
 	exitCode := d.runner(ctx, req.Args, req.Env, &stdout, &stderr)
 

@@ -21,7 +21,8 @@ func WithEnv(ctx context.Context, env []string) context.Context {
 }
 
 // Getenv returns the value of key from the env slice stored in ctx.
-// Falls back to os.Getenv when ctx carries no slice or the key is absent.
+// Falls back to os.Getenv only when ctx carries no slice; an absent key
+// returns "" without consulting os.Getenv.
 func Getenv(ctx context.Context, key string) string {
 	if env, ok := ctx.Value(envKey{}).([]string); ok {
 		prefix := key + "="
