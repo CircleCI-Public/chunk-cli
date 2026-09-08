@@ -453,7 +453,7 @@ func TestRunRemoteSSH(t *testing.T) {
 
 		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "", false)
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -481,7 +481,7 @@ func TestRunRemoteSSH(t *testing.T) {
 
 		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "", false)
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -505,7 +505,7 @@ func TestRunRemoteSSH(t *testing.T) {
 
 		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "")
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "", false)
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{

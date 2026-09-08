@@ -35,11 +35,14 @@ const hookPayload = `{"session_id":"test-session-001","stop_hook_active":false}`
 func runValidateHook(t *testing.T, workDir string) (stdout, stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetIn(strings.NewReader(hookPayload))
-	root.SetArgs([]string{"validate", "--project", workDir})
+	// Prepend --insecure-storage so the hook resolves credentials from the
+	// config file, never the developer's keychain. This goes through the real
+	// root command, so the flag has to arrive as an argument.
+	root.SetArgs([]string{"--insecure-storage", "validate", "--project", workDir})
 	err = root.Execute()
 	return outBuf.String(), errBuf.String(), err
 }
@@ -159,7 +162,7 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
-	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", t.TempDir(), envVars, config.ResolvedConfig{}, streams)
+	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", t.TempDir(), envVars, config.ResolvedConfig{}, nil, streams)
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")
@@ -184,7 +187,7 @@ func TestValidateNoConfigShowsSkillHint(t *testing.T) {
 	dir := t.TempDir()
 
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--project", dir})
@@ -216,7 +219,7 @@ func TestValidateDefaultsToRemote(t *testing.T) {
 	}))
 
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--project", dir})
@@ -243,7 +246,7 @@ func TestValidateLocalFlagRunsLocally(t *testing.T) {
 	}))
 
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--local", "--project", dir})
@@ -270,7 +273,7 @@ func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
 	}))
 
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--local", "--project", dir})
@@ -295,7 +298,7 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 		0o644,
 	))
 
-	cmd := newValidateCmd()
+	cmd := insecureStorageCmd(newValidateCmd())
 	cmd.SetOut(os.Stderr)
 	cmd.SetErr(os.Stderr)
 	cmd.SetArgs([]string{"--project", dir, "--env", "BADVALUE"})
@@ -321,7 +324,7 @@ const skipMsg = "skipped (no changes since last successful run)"
 func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetIn(strings.NewReader(activeStopHookPayload))
@@ -517,14 +520,14 @@ func TestExecTarget(t *testing.T) {
 			name:   "active sidecar",
 			opts:   &validateOpts{},
 			cfg:    &config.ProjectConfig{},
-			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
 			want:   "sc-2\x00",
 		},
 		{
 			name:   "explicit id wins over active",
 			opts:   &validateOpts{sidecarID: "sc-1"},
 			cfg:    &config.ProjectConfig{},
-			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
 			want:   "sc-1\x00",
 		},
 		{
@@ -537,7 +540,7 @@ func TestExecTarget(t *testing.T) {
 			name:   "image and active sidecar",
 			opts:   &validateOpts{},
 			cfg:    withImage,
-			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
 			want:   "sc-2\x00snap-1",
 		},
 		{name: "nil config", opts: &validateOpts{}, cfg: nil, want: ""},
@@ -685,7 +688,7 @@ func TestSidecarAutoNameNoSessionLongBranch(t *testing.T) {
 func runValidateListCLI(t *testing.T, workDir string) (stdout, stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--list", "--project", workDir})
@@ -696,7 +699,7 @@ func runValidateListCLI(t *testing.T, workDir string) (stdout, stderr string, er
 func runMarkRemoteCLI(t *testing.T, workDir string, extraArgs ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs(append([]string{"validate", "--mark-remote", "--project", workDir}, extraArgs...))

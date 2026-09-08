@@ -10,16 +10,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
-// ActiveSidecar holds the currently active sidecar for a project.
+// ActiveSidecar holds the currently active sidecar(s) for a project. A single
+// sidecar is just a group of length one, so every consumer works with the same
+// SidecarIDs slice regardless of how many sidecars are in play.
 type ActiveSidecar struct {
-	SidecarID string `json:"sidecar_id"`
-	Name      string `json:"name,omitempty"`
+	SidecarIDs []string `json:"sidecar_ids,omitempty"`
+	Name       string   `json:"name,omitempty"`
 	// OrgID records which org the sidecar belongs to, so Reap can tell a sidecar
 	// that has been deleted from one that simply lives in an org it is not
 	// listing. Empty on state written before this field existed.
@@ -28,23 +31,51 @@ type ActiveSidecar struct {
 	Workspace string `json:"workspace,omitempty"`
 }
 
+// ID returns the primary sidecar ID (the first in the group), or "" when no
+// sidecar is set.
+func (a *ActiveSidecar) ID() string {
+	if a == nil || len(a.SidecarIDs) == 0 {
+		return ""
+	}
+	return a.SidecarIDs[0]
+}
+
+// UnmarshalJSON reads active-sidecar state, folding the legacy single-valued
+// "sidecar_id" field into SidecarIDs so state files written by older versions
+// keep working.
+func (a *ActiveSidecar) UnmarshalJSON(data []byte) error {
+	type alias ActiveSidecar
+	aux := struct {
+		LegacyID string `json:"sidecar_id"`
+		*alias
+	}{alias: (*alias)(a)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if len(a.SidecarIDs) == 0 && aux.LegacyID != "" {
+		a.SidecarIDs = []string{aux.LegacyID}
+	}
+	return nil
+}
+
 // CurrentBranch returns the current git branch for the repo rooted at root.
 // Returns "" on any error (no git, detached HEAD, etc.).
 func CurrentBranch(root string) string {
 	var out bytes.Buffer
-	cmd := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", gitHeadRef)
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
 		return ""
 	}
 	b := strings.TrimSpace(out.String())
-	if b == "HEAD" {
+	if b == gitHeadRef {
 		return "" // detached HEAD
 	}
 	return b
 }
 
 const defaultSidecarFile = "sidecar.json"
+const gitHeadRef = "HEAD"
 
 // sidecarFileName returns the name of the sidecar state file.
 //   - Both empty → "sidecar.json" (legacy fallback)
@@ -135,13 +166,14 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
 	}
-	pruneRekeyedState(dir, path, a.SidecarID)
+	pruneRekeyedState(dir, path, a.SidecarIDs)
 	// Write a breadcrumb so chunk watch can discover this project.
 	_ = os.WriteFile(filepath.Join(dir, "project-root"), []byte(root), 0o644)
 	return nil
 }
 
-// pruneRekeyedState removes state files other than keep that name sidecarID.
+// pruneRekeyedState removes state files other than keep that name any of the
+// sidecarIDs in the active group.
 //
 // A sidecar is re-keyed under the current session and branch when it is adopted,
 // or when the same session switches branch. Without this the file it came from
@@ -154,8 +186,8 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 // Dropping it costs that session a re-sync onto a sidecar of its own, which is
 // the outcome we want, where keeping it would leave both sessions sharing.
 // Best-effort: a file that cannot be removed is left for Reap to clean up.
-func pruneRekeyedState(dir, keep, sidecarID string) {
-	if sidecarID == "" {
+func pruneRekeyedState(dir, keep string, sidecarIDs []string) {
+	if len(sidecarIDs) == 0 {
 		return
 	}
 	entries, err := loadStateEntries(dir)
@@ -163,7 +195,9 @@ func pruneRekeyedState(dir, keep, sidecarID string) {
 		return
 	}
 	for _, e := range entries {
-		if e.path == keep || e.active.SidecarID != sidecarID {
+		if e.path == keep || !slices.ContainsFunc(e.ids(), func(id string) bool {
+			return slices.Contains(sidecarIDs, id)
+		}) {
 			continue
 		}
 		_ = removeState(e.path)
@@ -296,6 +330,29 @@ func ClearActiveByOrg(orgID string) (int, error) {
 		}
 	}
 	return removed, errors.Join(errs...)
+}
+
+// RemoveActiveSidecar removes sidecarID from the active sidecar group. If the
+// removed sidecar was the last remaining member, the active state file is
+// cleared entirely. Returns true when the active state changed.
+func RemoveActiveSidecar(ctx context.Context, sidecarID string) (bool, error) {
+	active, err := LoadActive(ctx)
+	if err != nil {
+		return false, err
+	}
+	if active == nil || !slices.Contains(active.SidecarIDs, sidecarID) {
+		return false, nil
+	}
+
+	filtered := slices.DeleteFunc(slices.Clone(active.SidecarIDs), func(id string) bool {
+		return id == sidecarID
+	})
+	if len(filtered) == 0 {
+		return true, ClearActive(ctx)
+	}
+
+	active.SidecarIDs = filtered
+	return true, SaveActive(ctx, *active)
 }
 
 // ClearActiveFrom removes the active sidecar state file in dir.

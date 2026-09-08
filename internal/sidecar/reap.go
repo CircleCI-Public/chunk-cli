@@ -97,13 +97,13 @@ type stateEntry struct {
 }
 
 // ids returns the sidecar IDs recorded in a state file. It is the only place
-// that knows the state holds a single ID, so widening the state to a group of
-// sidecars changes this function and nothing else in this file.
+// that knows how to extract the recorded IDs from state, so widening the state
+// shape only changes this function.
 func (e stateEntry) ids() []string {
-	if e.active.SidecarID == "" {
+	if len(e.active.SidecarIDs) == 0 {
 		return nil
 	}
-	return []string{e.active.SidecarID}
+	return e.active.SidecarIDs
 }
 
 // Reap deletes abandoned sidecars for the current project and removes their

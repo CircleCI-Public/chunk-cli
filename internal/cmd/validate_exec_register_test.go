@@ -40,7 +40,7 @@ func TestExecFnWithoutDaemonBehavesIdentically(t *testing.T) {
 	streams := iostream.Streams{Out: &out, Err: &errOut}
 	execFn, _, err := newExecFn(
 		context.Background(), client, "sidecar-123", "", t.TempDir(),
-		nil, config.ResolvedConfig{}, streams,
+		nil, config.ResolvedConfig{}, nil, streams,
 	)
 	assert.NilError(t, err)
 
@@ -79,7 +79,7 @@ func TestExecFnSubmitFailureIsReported(t *testing.T) {
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
 	execFn, _, err := newExecFn(
 		context.Background(), client, "sidecar-123", "", t.TempDir(),
-		nil, config.ResolvedConfig{}, streams,
+		nil, config.ResolvedConfig{}, nil, streams,
 	)
 	assert.NilError(t, err)
 

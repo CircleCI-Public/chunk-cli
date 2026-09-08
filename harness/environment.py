@@ -2,7 +2,7 @@
 """
 environment: harness for `chunk sidecar env` + the sidecar build acceptance test.
 Runs against target repos and uses the Claude Code SDK to improve
-internal/envbuilder when tests fail.
+envbuilder when tests fail.
 
 Usage:
     task env-harness [-- --repo flask --repo serde --timeout SECONDS]
@@ -53,8 +53,20 @@ class _Tee:
 REPO_ROOT = Path(__file__).parent.parent
 BINARY = REPO_ROOT / "dist" / "chunk"
 
+def resolve_envbuilder_source() -> Path:
+    """Locate the envbuilder source file across repo layout changes."""
+    candidates = [
+        REPO_ROOT / "envbuilder" / "envbuilder.go",
+        REPO_ROOT / "internal" / "envbuilder" / "envbuilder.go",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 # Primary source Claude should edit when env detection or Dockerfile generation is wrong.
-ENVBUILDER_SOURCE = REPO_ROOT / "internal" / "envbuilder" / "envbuilder.go"
+ENVBUILDER_SOURCE = resolve_envbuilder_source()
 
 MAX_ITERATIONS = 5
 MAX_OUTPUT_CHARS = 40_000
@@ -244,7 +256,7 @@ def update_envbuilder(
     previous_iterations: list[IterationRecord],
     session_id: str | None = None,
 ) -> tuple[bool, str | None]:
-    """Ask Claude Code to fix internal/envbuilder and rebuild.
+    """Ask Claude Code to fix envbuilder and rebuild.
 
     Returns (source_changed, session_id) so the caller can resume the same
     conversation on subsequent iterations, preserving full context.
