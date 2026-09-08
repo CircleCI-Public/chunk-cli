@@ -13,6 +13,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
@@ -175,6 +176,7 @@ func newCompletionZshCmd() *cobra.Command {
 			return cmd.Root().GenZshCompletion(w)
 		},
 	}
+	telemetry.DisableTelemetry(cmd)
 	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Write completion script to this file instead of stdout")
 	return cmd
 }
@@ -194,6 +196,7 @@ func newCompletionBashCmd() *cobra.Command {
 			return cmd.Root().GenBashCompletion(w)
 		},
 	}
+	telemetry.DisableTelemetry(cmd)
 	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Write completion script to this file instead of stdout")
 	return cmd
 }
