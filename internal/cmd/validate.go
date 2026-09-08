@@ -300,7 +300,7 @@ func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *vali
 	if opts.sidecarID == "" {
 		return envVars, nil
 	}
-	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn, streams); err != nil {
+	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.workdir, statusFn, streams); err != nil {
 		return nil, err
 	}
 	return envVars, nil
@@ -735,13 +735,12 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 	return false, nil
 }
 
-func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc, streams iostream.Streams) error {
-	authSock := os.Getenv(config.EnvSSHAuthSock)
+func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, workdir string, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
-	if err := sidecar.RsyncSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
+	if err := sidecar.RsyncSync(ctx, client, sidecarID, workdir, cwd, statusFn); err != nil {
 		return sidecarSyncError(ctx, client, sidecarID, err, streams)
 	}
 	return nil

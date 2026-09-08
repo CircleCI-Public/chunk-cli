@@ -171,7 +171,7 @@ func runVariant(ctx context.Context, client *circleci.Client, v Variant, opts Op
 	}()
 
 	opts.StatusFn(iostream.LevelInfo, fmt.Sprintf("[%s] syncing", v.ID))
-	if err := sidecar.RsyncSyncEphemeral(ctx, client, sc.ID, opts.IdentityFile, opts.AuthSock, opts.Workspace, opts.CWD, opts.StatusFn); err != nil {
+	if err := sidecar.RsyncSyncEphemeral(ctx, client, sc.ID, opts.Workspace, opts.CWD, opts.StatusFn); err != nil {
 		base.Error = fmt.Sprintf("sync: %v", err)
 		return base
 	}

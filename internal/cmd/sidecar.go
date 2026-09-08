@@ -540,7 +540,7 @@ func newSidecarSSHCmd() *cobra.Command {
 }
 
 func newSidecarSyncCmd() *cobra.Command {
-	var sidecarID, identityFile, workdir string
+	var sidecarID, workdir string
 
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -550,7 +550,6 @@ func newSidecarSyncCmd() *cobra.Command {
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
 			}
-			authSock := os.Getenv(config.EnvSSHAuthSock)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
 			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
@@ -569,7 +568,7 @@ func newSidecarSyncCmd() *cobra.Command {
 				}
 				syncFn = eventlog.Record(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd)).Status
 			}
-			err = sidecar.RsyncSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, syncFn)
+			err = sidecar.RsyncSync(cmd.Context(), client, sidecarID, workdir, cwd, syncFn)
 			if err != nil {
 				if err := sshSessionError(err); err != nil {
 					return err
@@ -590,7 +589,6 @@ func newSidecarSyncCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
-	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (defaults to /home/user/<basename> when omitted)")
 
 	return cmd
@@ -1060,7 +1058,7 @@ Example:
 
 				// Step 4: Sync files to sidecar.
 				if !skipSync {
-					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, dir, rc.CircleCITokenSource, status); err != nil {
+					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, dir, rc.CircleCITokenSource, status); err != nil {
 						return err
 					}
 				}
@@ -1200,13 +1198,13 @@ func sidecarSetupEnsureSSHKey(identityFile string, status iostream.StatusFunc) e
 func sidecarSetupSync(
 	ctx context.Context,
 	client *circleci.Client,
-	sidecarID, identityFile, authSock string,
+	sidecarID string,
 	cwd string,
 	tokenSource string,
 	status iostream.StatusFunc,
 ) error {
 	status(iostream.LevelStep, "Syncing files to sidecar...")
-	err := sidecar.RsyncSync(ctx, client, sidecarID, identityFile, authSock, "", cwd, status)
+	err := sidecar.RsyncSync(ctx, client, sidecarID, "", cwd, status)
 	if err == nil {
 		return nil
 	}

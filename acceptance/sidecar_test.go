@@ -376,35 +376,23 @@ func TestSidecarsSyncCheckoutFlagRemoved(t *testing.T) {
 		"--checkout must be an unknown flag; got: %s", combined)
 }
 
-// TestSidecarsSshSyncFlags verifies that SSH/sync flags are accepted and
+// TestSidecarsSshFlags verifies that SSH --identity-file is accepted and
 // code progresses past flag parsing (fails at SSH step, not at parsing).
-func TestSidecarsSshSyncFlags(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{"ssh identity-file", []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync identity-file", []string{"sidecar", "sync", "--sidecar-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-	}
+func TestSidecarsSshFlags(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cci := fakes.NewFakeCircleCI()
-			srv := httptest.NewServer(cci)
-			defer srv.Close()
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
 
-			env := testenv.NewTestEnv(t)
-			env.CircleCIURL = srv.URL
+	result := binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "--identity-file", "/tmp/fake-key"}, env, env.HomeDir)
 
-			result := binary.RunCLI(t, tt.args, env, env.HomeDir)
-
-			// Commands should fail at SSH key step, not at flag parsing
-			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
-			combined := result.Stdout + result.Stderr
-			assert.Assert(t, strings.Contains(combined, "SSH key not found"),
-				"expected SSH key error (proves flags accepted), got: %s", combined)
-		})
-	}
+	// Should fail at SSH key step, not at flag parsing
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "SSH key not found"),
+		"expected SSH key error (proves flags accepted), got: %s", combined)
 }
 
 func TestSidecarsExecWithArgs(t *testing.T) {
