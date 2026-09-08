@@ -2,7 +2,6 @@ package watchd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -13,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
@@ -47,26 +45,19 @@ type daemon struct {
 	out *outputStore
 }
 
-// authMessage renders a credential-resolution failure for the dashboard. An
-// empty logs pane with no explanation sends people hunting the wrong fault.
-func authMessage(err error) string {
-	if err == nil {
-		return ""
-	}
-	if errors.Is(err, authprompt.ErrNeedsAuth) {
-		return "not authenticated to CircleCI — command output unavailable (run: chunk auth login)"
-	}
-	return "could not authenticate to CircleCI — command output unavailable: " + err.Error()
-}
-
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
 //
 // The client is resolved by the caller and may be nil: the daemon records
-// commands either way, and authErr is what tells the user why output is
+// commands either way, and authMessage is what tells the user why output is
 // missing. Resolution belongs to the caller because it can read the OS keychain,
 // and the daemon must not hold a lock over that on the command-registration path
 // — a hook is waiting on it.
-func RunDaemon(ctx context.Context, client *circleci.Client, authErr error) error {
+//
+// The message arrives already rendered, empty when there is nothing to explain.
+// Only the caller that resolved the credentials knows which failures mean "log
+// in" and which are something else, and asking the daemon to classify them
+// would make this package depend on the auth flow it deliberately sits below.
+func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -102,7 +93,7 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authErr error) erro
 	d := &daemon{
 		projects:  make(map[string]*projectState),
 		client:    client,
-		authError: authMessage(authErr),
+		authError: authMessage,
 		out:       newOutputStore(ctx),
 	}
 	// Still cancelled explicitly: this returns before the process exits in tests

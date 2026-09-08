@@ -11,8 +11,6 @@ import (
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
-
-	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 )
 
 // startTestDaemon runs a real daemon over a real Unix socket in a temp dir and
@@ -20,13 +18,18 @@ import (
 // the socket, the routes and the JSON shapes are the whole point.
 func startTestDaemon(t *testing.T) {
 	t.Helper()
-	startTestDaemonWithAuth(t, nil)
+	startTestDaemonWithAuth(t, "")
 }
 
 // startTestDaemonWithAuth is startTestDaemon with an explicit credential
 // failure. Both run the daemon with a nil client: resolution is the caller's
 // job now, so no test touches the developer's real keychain.
-func startTestDaemonWithAuth(t *testing.T, authErr error) {
+// What the cmd layer renders for a missing credential. Duplicated as a literal
+// rather than imported: watchd must not depend on the auth flow, and pinning
+// the daemon's own behaviour does not need the real message, only a message.
+const testAuthMessage = "not authenticated to CircleCI — command output unavailable (run: chunk auth login)"
+
+func startTestDaemonWithAuth(t *testing.T, authMessage string) {
 	t.Helper()
 	// Not t.TempDir(): it embeds the test name, and a unix socket path is capped
 	// at 104 bytes on darwin, so a descriptive name silently breaks listen.
@@ -40,7 +43,7 @@ func startTestDaemonWithAuth(t *testing.T, authErr error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, authErr) }()
+	go func() { errCh <- RunDaemon(ctx, nil, authMessage) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -196,7 +199,7 @@ func TestSnapshotReportsNoAuthErrorWhenResolutionSucceeded(t *testing.T) {
 }
 
 func TestSnapshotReportsAuthErrorWhenCredentialsAreMissing(t *testing.T) {
-	startTestDaemonWithAuth(t, authprompt.ErrNeedsAuth)
+	startTestDaemonWithAuth(t, testAuthMessage)
 
 	snap, err := FetchSnapshot(nil)
 	assert.NilError(t, err)
@@ -207,7 +210,7 @@ func TestSnapshotReportsAuthErrorWhenCredentialsAreMissing(t *testing.T) {
 // still say the command ran. Losing the registration too would leave the
 // dashboard blank with nothing to explain it.
 func TestCommandIsRecordedWithoutCredentials(t *testing.T) {
-	startTestDaemonWithAuth(t, authprompt.ErrNeedsAuth)
+	startTestDaemonWithAuth(t, testAuthMessage)
 
 	body, err := json.Marshal(CommandReg{
 		CommandID:   "cmd-no-creds",

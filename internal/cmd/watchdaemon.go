@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
@@ -31,7 +33,23 @@ func newWatchDaemonCmd() *cobra.Command {
 			if err == nil {
 				client, err = authprompt.ResolveCircleCIClient(rc, nil)
 			}
-			return watchd.RunDaemon(cmd.Context(), client, err)
+			return watchd.RunDaemon(cmd.Context(), client, authMessage(err))
 		},
 	}
+}
+
+// authMessage renders a credential-resolution failure for the dashboard. An
+// empty logs pane with no explanation sends people hunting the wrong fault.
+//
+// It lives here rather than in watchd because ErrNeedsAuth is authprompt's, and
+// the daemon has no business importing the auth flow to tell one failure from
+// another — this is the layer that already holds the error.
+func authMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, authprompt.ErrNeedsAuth) {
+		return "not authenticated to CircleCI — command output unavailable (run: chunk auth login)"
+	}
+	return "could not authenticate to CircleCI — command output unavailable: " + err.Error()
 }
