@@ -508,14 +508,14 @@ func TestClassifyFormatCheckDoesNotFireOnRewritingFormatters(t *testing.T) {
 		"prettier --write .", "ruff format .", "rustfmt src/main.rs",
 		"go test -ldflags=-s ./... && task fmt",
 	} {
-		assert.Equal(t, refineFormat(roleFormat, cmd), roleFormat, cmd)
+		assert.Equal(t, refineFormat(roleFormat, cmd, formatCheckFlags), roleFormat, cmd)
 	}
 	for _, cmd := range []string{
 		"prettier --check .", "cargo fmt --check", "gofmt -l .",
 		"ruff format --diff", "prettier --list-different .",
 		"task format:check", "npm run check-format", "gofmt -d .",
 	} {
-		assert.Equal(t, refineFormat(roleFormat, cmd), roleFormatCheck, cmd)
+		assert.Equal(t, refineFormat(roleFormat, cmd, formatCheckFlags), roleFormatCheck, cmd)
 	}
 }
 
@@ -868,4 +868,31 @@ workflows:
 	det := commandsFromCI(dir)
 	assert.Equal(t, len(det.Commands), 0)
 	assert.DeepEqual(t, det.Notes, []string{"every job in the config is limited to specific branches"})
+}
+
+// Per review: the label fallback passed the whole command into the flag
+// detection, so an unrelated -l or -d demoted a real autofix to a gate. A
+// command reaching that path matched no formatter, so its short flags mean
+// nothing in particular — only the long ones are evidence there.
+func TestClassifyLabelFallbackIgnoresAmbiguousShortFlags(t *testing.T) {
+	// Opaque command, no formatter in it, label supplies the role.
+	fmtStep := func(cmd string) ciconfig.Candidate {
+		return ciconfig.Candidate{Command: cmd, Step: "Format"}
+	}
+	assert.Equal(t, classify(fmtStep("./ci/style.sh -d")), roleFormat,
+		"-d in an unrecognised command is not evidence of a check")
+	assert.Equal(t, classify(fmtStep("docker run -d styler")), roleFormat,
+		"docker's detach flag must not demote the autofix")
+	assert.Equal(t, classify(fmtStep("./ci/style.sh -l src")), roleFormat)
+
+	// The long flags still carry, because nothing else spells them.
+	assert.Equal(t, classify(fmtStep("./ci/style.sh --check")), roleFormatCheck,
+		"an opaque script is exactly where the flag is the only evidence")
+	assert.Equal(t, classify(fmtStep("./ci/style.sh --diff")), roleFormatCheck)
+
+	// A command that names a formatter keeps the full set: there, -l and -d
+	// mean what gofmt means by them.
+	assert.Equal(t, classify(ciconfig.Candidate{Command: "gofmt -l ."}), roleFormatCheck)
+	assert.Equal(t, classify(ciconfig.Candidate{Command: "gofmt -d ."}), roleFormatCheck)
+	assert.Equal(t, classify(ciconfig.Candidate{Command: "gofmt -w ."}), roleFormat)
 }

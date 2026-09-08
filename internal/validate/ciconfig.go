@@ -225,6 +225,10 @@ func ciNotes(res *ciconfig.Result) []string {
 	if res.Unresolved > 0 {
 		notes = append(notes, fmt.Sprintf("%d step(s) referenced values that could not be resolved", res.Unresolved))
 	}
+	if res.TooDeep > 0 {
+		notes = append(notes, fmt.Sprintf(
+			"%d command(s) nested deeper than %d levels were not expanded", res.TooDeep, ciconfig.MaxDepth))
+	}
 	if res.Truncated > 0 {
 		notes = append(notes, fmt.Sprintf("%d step(s) past the scan limit were not read", res.Truncated))
 	}
@@ -299,19 +303,30 @@ func classify(c ciconfig.Candidate) string {
 	}
 
 	if role := matchRole(cmd); role != roleNone {
-		return refineFormat(role, cmd)
+		return refineFormat(role, cmd, formatCheckFlags)
 	}
 	// Fall back to the step's own label: "Run tests" around an opaque script.
+	//
+	// The command still gets read for the check-vs-rewrite distinction, because
+	// an opaque script is exactly where the flag is the only evidence there is:
+	// `./ci/style.sh --check` says so and its label does not. But only the long
+	// flags, per review — reaching this line means the command matched no
+	// formatter, so a bare -l or -d in it is as likely to be docker's detach or
+	// somebody's debug switch as it is gofmt's.
 	label := strings.ToLower(c.Step)
-	// The label is what classified the step, so it is also the only place the
-	// check-vs-rewrite distinction can be read from.
-	return refineFormat(matchRole(label), cmd+" "+label)
+	return refineFormat(matchRole(label), cmd+" "+label, formatCheckLongFlags)
 }
 
 // formatCheckFlags mark a formatter told to report rather than rewrite:
 // `prettier --check .`, `cargo fmt --check`, `gofmt -l .`, `ruff format --diff`.
 // Short flags are matched as whole words so -l does not fire on -ldflags.
 var formatCheckFlags = regexp.MustCompile(`(^|\s)(-l|-d|--check|--diff|--dry-run|--list-different)(\s|=|$)`)
+
+// formatCheckLongFlags is the same set without the short flags, for reading a
+// command that was not itself recognised as a formatter. -l and -d only mean
+// "report" next to a tool known to format; anywhere else they are ordinary
+// short flags, and firing on one demotes a real autofix to a gate.
+var formatCheckLongFlags = regexp.MustCompile(`(^|\s)(--check|--diff|--dry-run|--list-different)(\s|=|$)`)
 
 // formatCheckNames catch a check-only formatter behind a task or script name,
 // where there is no flag to read: `task ci:fmt-check`, `npm run format:check`.
@@ -321,11 +336,13 @@ var formatCheckNames = regexp.MustCompile(`check[_:.-]?(fmt|format)|(fmt|format)
 // or only reports on it. Only a rewriting formatter can serve as an autofix; a
 // check-only one is a gate, and classifying it as format would both give the
 // user an autofix that cannot fix and suppress the toolchain default that can.
-func refineFormat(role, text string) string {
+// flags is which flag set counts as evidence: the full one when the command
+// itself named a formatter, the long-only one when it did not.
+func refineFormat(role, text string, flags *regexp.Regexp) string {
 	if role != roleFormat {
 		return role
 	}
-	if formatCheckFlags.MatchString(text) || formatCheckNames.MatchString(text) {
+	if flags.MatchString(text) || formatCheckNames.MatchString(text) {
 		return roleFormatCheck
 	}
 	return role

@@ -52,6 +52,10 @@ const (
 	// blow up a downstream prompt. Overflow is counted in Result.Truncated.
 	maxCandidates = 200
 
+	// MaxDepth is exported so a caller reporting what went unexpanded can say
+	// how deep the walk goes rather than repeat the number.
+	MaxDepth = maxDepth
+
 	// maxDepth bounds custom-command expansion. Commands may invoke commands;
 	// a cycle would otherwise recurse forever.
 	maxDepth = 4
@@ -109,6 +113,14 @@ type Result struct {
 	// interpolation we could not substitute — an unbound parameter, or a
 	// pipeline-time reference such as << pipeline.parameters.x >>.
 	Unresolved int
+
+	// TooDeep counts custom-command invocations left unexpanded at maxDepth.
+	// Separate from Unresolved because the reason differs and so does the
+	// remedy: nothing here failed to resolve, the nesting simply ran deeper
+	// than this package follows. Counting it at all is the point — dropping
+	// the subtree silently let a config with legitimate deep nesting report
+	// full coverage while missing every check underneath.
+	TooDeep int
 
 	// GateJobs counts the workflow entries that qualified as gates. Zero from a
 	// non-dynamic config means every job in it is pinned to branches a
@@ -384,6 +396,10 @@ func (e *extractor) walk(jc jobCtx, steps []step, args map[string]string, depth 
 
 		case e.isCustomCommand(s.Kind):
 			if depth >= maxDepth {
+				// Recorded, not just skipped: everything this command would
+				// have contributed goes unseen, and a silent drop would let
+				// the notes claim the config was read in full.
+				e.res.TooDeep++
 				continue
 			}
 			cmd := e.commands[s.Kind]

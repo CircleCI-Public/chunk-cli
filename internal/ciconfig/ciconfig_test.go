@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
 // writeConfig writes body to .circleci/<name> in a fresh temp dir.
@@ -1060,4 +1061,61 @@ workflows:
 	res, err := Extract(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, commands(res), []string{"go test ./..."})
+}
+
+// Per review: hitting the expansion limit dropped the whole subtree with no
+// record, so Unresolved stayed zero and a config with legitimate deep nesting
+// reported full coverage while missing every check underneath it.
+func TestExtractCountsCommandsLeftUnexpandedAtMaxDepth(t *testing.T) {
+	// A chain of custom commands one level deeper than the walk follows.
+	var b strings.Builder
+	b.WriteString("version: 2.1\ncommands:\n")
+	for i := range MaxDepth + 1 {
+		fmt.Fprintf(&b, "  c%d:\n    steps:\n", i)
+		if i == MaxDepth {
+			b.WriteString("      - run: go test ./...\n")
+		} else {
+			fmt.Fprintf(&b, "      - c%d\n", i+1)
+		}
+	}
+	b.WriteString(`jobs:
+  build:
+    steps:
+      - c0
+workflows:
+  main:
+    jobs:
+      - build
+`)
+	res, err := Extract(writeConfig(t, "config.yml", b.String()))
+	assert.NilError(t, err)
+	assert.Check(t, res.TooDeep > 0,
+		"a command left unexpanded at the depth limit has to be counted")
+	assert.Check(t, cmp.Equal(res.Unresolved, 0),
+		"nothing failed to resolve here: the nesting simply ran deeper than the walk")
+}
+
+// The ordinary case must not report a limit it never reached.
+func TestExtractDoesNotReportDepthForShallowNesting(t *testing.T) {
+	res, err := Extract(writeConfig(t, "config.yml", `
+version: 2.1
+commands:
+  outer:
+    steps:
+      - inner
+  inner:
+    steps:
+      - run: go test ./...
+jobs:
+  build:
+    steps:
+      - outer
+workflows:
+  main:
+    jobs:
+      - build
+`))
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(res.TooDeep, 0))
+	assert.Check(t, cmp.Len(res.Candidates, 1))
 }
