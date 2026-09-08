@@ -346,6 +346,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.output == nil || msg.seq != m.outputSeq {
 			return m, nil
 		}
+		// A finished command's buffer is final: the daemon appends everything the
+		// stream produced before marking it done, and serves data and Running
+		// under one lock, so a chunk that reported Running:false was already
+		// complete. Polling past it is a socket round trip every 200ms for output
+		// that cannot change — and the pane can sit open on a finished command
+		// indefinitely.
+		if !m.output.running {
+			return m, nil
+		}
 		return m, tea.Batch(fetchOutput(m.output.commandID, m.output.offset), outputTick(msg.seq))
 
 	case dataMsg:

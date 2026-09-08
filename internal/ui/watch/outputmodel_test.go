@@ -150,7 +150,9 @@ func TestClosingOutputPaneDoesNotStartASecondPollChain(t *testing.T) {
 // alongside the current one.
 func TestStaleOutputTickIsDropped(t *testing.T) {
 	m := modelWithInvocation(t, nil)
-	m.output = &outputPane{commandID: "cmd-2"}
+	// Running, so that the reschedule turns on the sequence check alone — a
+	// finished pane stops for its own reason and would not test this.
+	m.output = &outputPane{commandID: "cmd-2", running: true}
 	m.outputSeq = 2
 
 	_, cmd := m.Update(outputTickMsg{seq: 1})
@@ -338,4 +340,51 @@ func TestOutputPaneRendersAtDegenerateHeights(t *testing.T) {
 		// line tall is a terminal being resized, not a state worth a layout.
 		assert.Check(t, m.render() != "", "height %d", height)
 	}
+}
+
+// A finished command's buffer never changes again, so the fast tail must stop
+// rather than keep asking. The pane can sit open on a finished command for as
+// long as someone is reading it, and at 200ms that is a socket round trip five
+// times a second for output that cannot move.
+func TestOutputTickStopsOnceTheCommandFinishes(t *testing.T) {
+	m := modelWithInvocation(t, nil)
+	m.output = &outputPane{commandID: "cmd-1", running: true}
+	m.outputSeq = 1
+
+	_, live := m.Update(outputTickMsg{seq: 1})
+	assert.Assert(t, live != nil, "a running command must keep tailing")
+
+	// The chunk that reports the exit is complete by construction: the daemon
+	// appends everything before marking the command done.
+	code := 0
+	next, _ := m.Update(outputMsg{
+		commandID: "cmd-1",
+		chunk:     watchd.OutputChunk{Found: true, Running: false, ExitCode: &code},
+	})
+	nm, ok := next.(Model)
+	assert.Assert(t, ok)
+	assert.Check(t, !nm.output.running)
+
+	_, done := nm.Update(outputTickMsg{seq: 1})
+	assert.Check(t, cmp.Nil(done), "a finished command must not reschedule the tail")
+}
+
+// An evicted buffer is not coming back, so the tail has nothing to wait for.
+// Without this the chain polls forever for a command the daemon has forgotten.
+func TestOutputTickStopsWhenTheBufferWasEvicted(t *testing.T) {
+	m := modelWithInvocation(t, nil)
+	m.output = &outputPane{commandID: "cmd-1", running: true}
+	m.outputSeq = 1
+
+	next, _ := m.Update(outputMsg{
+		commandID: "cmd-1",
+		chunk:     watchd.OutputChunk{Found: false},
+	})
+	nm, ok := next.(Model)
+	assert.Assert(t, ok)
+	assert.Check(t, nm.output.err != nil, "the pane must say why it is empty")
+	assert.Check(t, !nm.output.running)
+
+	_, done := nm.Update(outputTickMsg{seq: 1})
+	assert.Check(t, cmp.Nil(done), "an evicted buffer must not keep being polled")
 }

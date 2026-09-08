@@ -152,6 +152,10 @@ func (m Model) withOutputChunk(msg outputMsg) (tea.Model, tea.Cmd) {
 	}
 	if !msg.chunk.Found {
 		m.output.err = fmt.Errorf("the watch daemon has no output for this command")
+		// Evicted buffers do not come back, so the tail has nothing left to wait
+		// for. Leaving running set would keep the chain polling for a command the
+		// daemon has already forgotten.
+		m.output.running = false
 		return m, nil
 	}
 	m.output.feed(msg.chunk.Data)
