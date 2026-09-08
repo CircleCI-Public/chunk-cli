@@ -100,8 +100,13 @@ type Client struct {
 	baseURL string
 	// mu guards authToken, which ReloadToken can replace mid-life. Everything
 	// else here is immutable after New.
-	mu               sync.RWMutex
-	authToken        string
+	mu        sync.RWMutex
+	authToken string
+	// reloadMu serializes reloads so concurrent 401s cause one read rather than
+	// one each. It is deliberately separate from mu and is never held with it:
+	// a reload can mean a keychain subprocess, and no request should wait on
+	// that just to read the token it already has.
+	reloadMu         sync.Mutex
 	reloadToken      func() (string, error)
 	authHeader       string
 	userAgent        string
@@ -122,27 +127,42 @@ func (c *Client) token() string {
 // whether the client now holds a different one — i.e. whether a retry is worth
 // making.
 //
-// The lock is held across the reload so that concurrent 401s produce one read
-// rather than one per caller: reading can mean a keychain round trip, and a
-// daemon streaming several commands can hit this from several goroutines at
-// once. Whoever arrives second sees the token has already moved and retries
-// without reading again.
+// Two properties, and they pull against each other. Concurrent 401s must cause
+// one read rather than one each, because reading can mean a keychain
+// subprocess and a daemon streaming several commands hits this from several
+// goroutines at once. But the read must not happen under mu, or every other
+// request would block in token() waiting on that same keychain — the very
+// problem moving credential resolution out of the daemon was meant to remove.
+//
+// So reloadMu serializes the reload while mu is taken only to swap the result
+// in. A caller that arrives during a reload waits on reloadMu, then sees the
+// token has already moved and retries without reading again.
 func (c *Client) reload(used string) bool {
 	if c.reloadToken == nil {
 		return false
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.authToken != used {
+	if c.token() != used {
 		return true
 	}
+
+	c.reloadMu.Lock()
+	defer c.reloadMu.Unlock()
+	// Re-checked after waiting: whoever held reloadMu may have already replaced
+	// the token this caller was rejected with.
+	if c.token() != used {
+		return true
+	}
+
 	tok, err := c.reloadToken()
 	// A failed reload is not worth surfacing: the caller already has a 401,
 	// which is the more useful error of the two.
 	if err != nil || tok == "" || tok == used {
 		return false
 	}
+
+	c.mu.Lock()
 	c.authToken = tok
+	c.mu.Unlock()
 	return true
 }
 

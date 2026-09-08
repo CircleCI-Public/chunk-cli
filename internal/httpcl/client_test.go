@@ -657,3 +657,67 @@ func TestReloadToken_Concurrent401sReloadOnce(t *testing.T) {
 		t.Errorf("reloads = %d, want 1", n)
 	}
 }
+
+// The reload must not be performed under the token lock. Holding it there would
+// stall every other in-flight request on a keychain read — the same
+// mutex-around-slow-IO problem that moving credential resolution out of the
+// daemon was meant to remove.
+//
+// The discriminating signal is whether a second request reaches the server at
+// all while a reload is parked. It cannot, if reading the token requires a lock
+// the reload is holding.
+func TestReloadToken_DoesNotBlockReadersDuringReload(t *testing.T) {
+	var hits atomic.Int32
+	reachedServer := make(chan struct{}, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) > 1 {
+			reachedServer <- struct{}{}
+		}
+		if r.Header.Get("Circle-Token") != "fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	reloading := make(chan struct{})
+	release := make(chan struct{})
+	cl := hc.New(hc.Config{
+		BaseURL:    srv.URL,
+		AuthToken:  "stale",
+		AuthHeader: "Circle-Token",
+		ReloadToken: func() (string, error) {
+			close(reloading)
+			<-release // stand in for a slow keychain read
+			return "fresh", nil
+		},
+	})
+
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		_, _ = cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	}()
+
+	<-reloading // a reload is now in flight and parked
+
+	second := make(chan struct{})
+	go func() {
+		defer close(second)
+		_, _ = cl.Call(context.Background(), hc.NewRequest(http.MethodGet, "/x"))
+	}()
+
+	select {
+	case <-reachedServer:
+		// Read the token and made its request while the reload was parked.
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("second request never reached the server: readers are blocked on the reload")
+	}
+
+	close(release)
+	<-first
+	<-second
+}
