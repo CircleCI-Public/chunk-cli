@@ -37,12 +37,14 @@ func clip(s string, width int) string {
 // Recording the command ID on the events themselves would make this exact rather
 // than probable; that is what the event log's command_id field is for once it
 // lands.
-func (m Model) commandForInvocation(g invocationGroup) *watchd.CommandState {
-	if len(g.events) == 0 || m.selectedIdx >= len(m.sidecars) {
-		return nil
-	}
-	sc := m.sidecars[m.selectedIdx]
-	if sc.projectIdx >= len(m.commands) {
+//
+// The sidecar is a parameter rather than read from m.selectedIdx: resolving it
+// here while taking g from the caller let the two disagree, so a call for any
+// invocation other than the selected one would have matched against the wrong
+// sidecar and returned a confidently wrong command. Both callers pass the row
+// the group came from, and now they cannot do otherwise.
+func (m Model) commandForInvocation(sc sidecarInfo, g invocationGroup) *watchd.CommandState {
+	if len(g.events) == 0 || sc.projectIdx >= len(m.commands) {
 		return nil
 	}
 	start := g.events[0].Ts
@@ -75,7 +77,11 @@ func (m Model) openSelectedOutput() (*Model, tea.Cmd) {
 	if gi < 0 || gi >= len(groups) {
 		return nil, nil
 	}
-	cs := m.commandForInvocation(groups[gi])
+	sc := m.selectedSidecar()
+	if sc == nil {
+		return nil, nil
+	}
+	cs := m.commandForInvocation(*sc, groups[gi])
 	if cs == nil {
 		return nil, nil
 	}

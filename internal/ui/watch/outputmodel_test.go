@@ -48,7 +48,7 @@ func TestCommandForInvocationMatchesOnSidecarAndTime(t *testing.T) {
 
 	groups := m.currentInvocGroups()
 	assert.Assert(t, cmp.Len(groups, 1))
-	got := m.commandForInvocation(groups[0])
+	got := m.commandForInvocation(*m.selectedSidecar(), groups[0])
 	assert.Assert(t, got != nil)
 	assert.Check(t, cmp.Equal(got.CommandID, "cmd-1"))
 }
@@ -62,7 +62,7 @@ func TestCommandForInvocationIgnoresOtherSidecar(t *testing.T) {
 	}})
 
 	groups := m.currentInvocGroups()
-	got := m.commandForInvocation(groups[0])
+	got := m.commandForInvocation(*m.selectedSidecar(), groups[0])
 	assert.Check(t, cmp.Nil(got), "a command from another sidecar must not be offered")
 }
 
@@ -74,7 +74,7 @@ func TestCommandForInvocationIgnoresCommandOutsideSpan(t *testing.T) {
 	}})
 
 	groups := m.currentInvocGroups()
-	got := m.commandForInvocation(groups[0])
+	got := m.commandForInvocation(*m.selectedSidecar(), groups[0])
 	assert.Check(t, cmp.Nil(got), "a command from a different run must not be joined to this one")
 }
 
@@ -86,7 +86,7 @@ func TestCommandForInvocationPrefersLatestMatch(t *testing.T) {
 	})
 
 	groups := m.currentInvocGroups()
-	got := m.commandForInvocation(groups[0])
+	got := m.commandForInvocation(*m.selectedSidecar(), groups[0])
 	assert.Assert(t, got != nil)
 	assert.Check(t, cmp.Equal(got.CommandID, "cmd-second"), "a re-run inside one group resolves to the newer command")
 }
@@ -440,4 +440,32 @@ func TestVisibleLinesDoesNotWriteIntoTheScrollback(t *testing.T) {
 	assert.Check(t, cmp.Len(p.lines, 2))
 	assert.Check(t, cmp.Equal(p.lines[:cap(p.lines)][2], ""),
 		"the pending line leaked into the backing array")
+}
+
+// The join must follow the sidecar it is handed, not whichever row happens to
+// be selected. Before the sidecar became a parameter these two came from
+// different places, so a call for a non-selected invocation matched against the
+// wrong row and returned a command that never produced that output.
+func TestCommandForInvocationUsesTheSidecarItIsGiven(t *testing.T) {
+	submitted := time.Now().Add(-time.Minute).Add(time.Second)
+	m := modelWithInvocation(t, []watchd.CommandState{{
+		CommandID:   "cmd-1",
+		SidecarID:   "sc-1",
+		SubmittedAt: submitted,
+	}})
+	groups := m.currentInvocGroups()
+	assert.Assert(t, cmp.Len(groups, 1))
+
+	// The selected row still matches, as before.
+	sel := m.selectedSidecar()
+	assert.Assert(t, sel != nil)
+	got := m.commandForInvocation(*sel, groups[0])
+	assert.Assert(t, got != nil)
+	assert.Check(t, cmp.Equal(got.CommandID, "cmd-1"))
+
+	// A row holding a different sidecar matches nothing, whatever is selected.
+	other := *sel
+	other.sidecarIDs = []string{"sc-elsewhere"}
+	assert.Check(t, cmp.Nil(m.commandForInvocation(other, groups[0])),
+		"the answer must follow the row passed in, not m.selectedIdx")
 }

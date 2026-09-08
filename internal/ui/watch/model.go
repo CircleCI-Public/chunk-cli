@@ -736,17 +736,22 @@ func (m Model) buildCollapsibleLines(st watchStyles, groups []invocationGroup, r
 	rendered := make([]string, 0, maxLines)
 	add := func(s string) { rendered = append(rendered, s) }
 
+	// Hoisted: the groups all belong to this one row, and resolving it per
+	// header would repeat the lookup for every line drawn.
+	selected := m.selectedSidecar()
+
 	lastGI := -1
 	for gi := len(groups) - 1; gi >= 0 && len(rendered) < maxLines; gi-- {
 		ri := len(groups) - 1 - gi // right-pane index: 0 = most recent
 		isMostRecent := gi == len(groups)-1
 		expanded := m.invocExpanded(groups[gi], isMostRecent)
-		selected := m.focusedPane == paneRight && ri == rightSel
+		isSel := m.focusedPane == paneRight && ri == rightSel
 
 		if ri > 0 {
 			add("")
 		}
-		add(renderInvocationHeader(st, groups[gi], expanded, selected, m.commandForInvocation(groups[gi]) != nil))
+		hasOutput := selected != nil && m.commandForInvocation(*selected, groups[gi]) != nil
+		add(renderInvocationHeader(st, groups[gi], expanded, isSel, hasOutput))
 		if expanded {
 			g := groups[gi]
 			for ei := len(g.events) - 1; ei >= 0 && len(rendered) < maxLines; ei-- {
@@ -785,6 +790,16 @@ func invocEndTime(g invocationGroup) time.Time {
 }
 
 // currentInvocGroups returns the invocation groups for the currently selected sidecar.
+// selectedSidecar is the row the dashboard is showing, or nil when the selection
+// is out of range. Callers that also need the row's invocations take it from
+// here so the two cannot come from different sidecars.
+func (m Model) selectedSidecar() *sidecarInfo {
+	if m.selectedIdx < 0 || m.selectedIdx >= len(m.sidecars) {
+		return nil
+	}
+	return &m.sidecars[m.selectedIdx]
+}
+
 func (m Model) currentInvocGroups() []invocationGroup {
 	if m.selectedIdx < 0 || m.selectedIdx >= len(m.sidecars) {
 		return nil
