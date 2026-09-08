@@ -854,16 +854,23 @@ func newExecFn(
 		_, _ = w.Write(data)
 	}
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
-		// Registering before output is consumed is what lets the watch daemon tail
-		// this command while it runs, and keep its output after this process exits
-		// — which for a hook-driven run is immediately.
-		result, err := submitAndStream(ctx, client,
-			watchd.CommandReg{
+		// A nil setCommandID marks a probe: a command chunk issues on its own
+		// behalf, with no event log entry to attribute and nothing a developer
+		// would go looking for in the dashboard. Both omissions follow from that
+		// one fact, so they read off the same flag.
+		var reg *watchd.CommandReg
+		if setCommandID != nil {
+			// Registering before output is consumed is what lets the watch daemon
+			// tail this command while it runs, and keep its output after this
+			// process exits — which for a hook-driven run is immediately.
+			reg = &watchd.CommandReg{
 				SidecarID:   sidecarID,
 				ProjectRoot: projectRoot,
 				Op:          string(eventlog.OpValidate),
 				Name:        remoteCommandLabel(script),
-			},
+			}
+		}
+		result, err := submitAndStream(ctx, client, sidecarID, reg,
 			"sh", []string{"-c", script}, merged, onOutput)
 		if err != nil {
 			if setCommandID != nil {

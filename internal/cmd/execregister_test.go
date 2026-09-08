@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,9 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
@@ -73,8 +76,8 @@ func TestSubmitAndStreamRegistersBeforeStreaming(t *testing.T) {
 	regs := captureRegistrations(t)
 	client := newFakeSidecarClient(t)
 
-	_, err := submitAndStream(context.Background(), client,
-		watchd.CommandReg{
+	_, err := submitAndStream(context.Background(), client, "sb-1",
+		&watchd.CommandReg{
 			SidecarID:   "sb-1",
 			ProjectRoot: "/tmp/proj",
 			Op:          string(eventlog.OpExec),
@@ -102,8 +105,8 @@ func TestSidecarExecRegistersWithTheDaemon(t *testing.T) {
 	regs := captureRegistrations(t)
 	client := newFakeSidecarClient(t)
 
-	_, err := submitAndStream(context.Background(), client,
-		watchd.CommandReg{
+	_, err := submitAndStream(context.Background(), client, "sb-2",
+		&watchd.CommandReg{
 			SidecarID:   "sb-2",
 			ProjectRoot: t.TempDir(),
 			Op:          string(eventlog.OpExec),
@@ -133,8 +136,8 @@ func TestSubmitAndStreamReportsSubmitFailure(t *testing.T) {
 	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	assert.NilError(t, err)
 
-	_, err = submitAndStream(context.Background(), client,
-		watchd.CommandReg{SidecarID: "sb-3", Op: string(eventlog.OpExec)},
+	_, err = submitAndStream(context.Background(), client, "sb-3",
+		&watchd.CommandReg{SidecarID: "sb-3", Op: string(eventlog.OpExec)},
 		"echo", nil, nil, func(string, []byte) {})
 	assert.Check(t, err != nil, "a rejected submission must return an error")
 
@@ -167,8 +170,8 @@ func TestSubmitAndStreamWrappingPreservesErrorMatching(t *testing.T) {
 	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	assert.NilError(t, err)
 
-	_, err = submitAndStream(context.Background(), client,
-		watchd.CommandReg{SidecarID: "sb-1", Op: string(eventlog.OpExec)},
+	_, err = submitAndStream(context.Background(), client, "sb-1",
+		&watchd.CommandReg{SidecarID: "sb-1", Op: string(eventlog.OpExec)},
 		"echo", nil, nil, func(string, []byte) {})
 
 	assert.Assert(t, err != nil)
@@ -176,4 +179,47 @@ func TestSubmitAndStreamWrappingPreservesErrorMatching(t *testing.T) {
 		"the phase must be named so a submit failure is distinguishable from a stream one: %v", err)
 	assert.Check(t, errors.Is(err, circleci.ErrNotAuthorized),
 		"wrapping must not break the errors.Is dispatch in sidecar.go: %v", err)
+}
+
+// The workspace probe runs through the same exec path as a real command but is
+// nobody's command: it exists so validate can say "the workspace is missing"
+// instead of failing every check. Listing it would put a `test -d` in the
+// dashboard above the run the developer actually started.
+func TestProbeRunsWithoutRegistering(t *testing.T) {
+	regs := captureRegistrations(t)
+	client := newFakeSidecarClient(t)
+
+	resp, err := submitAndStream(context.Background(), client, "sb-1", nil,
+		"sh", []string{"-c", "test -d /workspace"}, nil, func(string, []byte) {})
+	assert.NilError(t, err, "a probe must still run and report its exit code")
+	assert.Check(t, resp != nil)
+
+	select {
+	case reg := <-regs:
+		t.Fatalf("probe was registered with the daemon: %+v", reg)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// The probe exec fn validate builds for WorkspaceExists is the one that must
+// carry nil through — the wiring, not just the helper it calls.
+func TestProbeExecFnDoesNotRegister(t *testing.T) {
+	regs := captureRegistrations(t)
+	client := newFakeSidecarClient(t)
+
+	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
+	probeExecFn, _, err := newExecFn(
+		context.Background(), client, "sb-1", "", t.TempDir(),
+		nil, config.ResolvedConfig{}, nil, streams,
+	)
+	assert.NilError(t, err)
+
+	_, _, _, err = probeExecFn(context.Background(), "test -d '/home/user/repo'")
+	assert.NilError(t, err)
+
+	select {
+	case reg := <-regs:
+		t.Fatalf("workspace probe reached the dashboard: %+v", reg)
+	case <-time.After(200 * time.Millisecond):
+	}
 }

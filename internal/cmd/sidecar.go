@@ -396,8 +396,8 @@ or via the repeatable --args flag. Positional arguments are appended after any
 			// attribution key for the dashboard; cwd is the right answer even when
 			// it is not a repo, and an empty one simply groups under no project.
 			projectRoot, _ := os.Getwd()
-			resp, err := submitAndStream(cmd.Context(), client,
-				watchd.CommandReg{
+			resp, err := submitAndStream(cmd.Context(), client, sidecarID,
+				&watchd.CommandReg{
 					SidecarID:   sidecarID,
 					ProjectRoot: projectRoot,
 					Op:          string(eventlog.OpExec),

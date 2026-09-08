@@ -22,9 +22,15 @@ import (
 // through here. A command submitted any other way still runs, but it is
 // invisible to both `chunk watch` and `chunk sidecar logs` — which reads as
 // output being lost rather than never captured.
+//
+// reg may be nil for internal probes — commands the tool issues on its own
+// behalf, which no developer asked for and none would look for in the
+// dashboard. They still submit and stream; they just do not get listed. The
+// sidecar to run on is a separate parameter for that reason: it is needed
+// either way, where the registration is not.
 func submitAndStream(
-	ctx context.Context, client *circleci.Client,
-	reg watchd.CommandReg, command string, args []string,
+	ctx context.Context, client *circleci.Client, sidecarID string,
+	reg *watchd.CommandReg, command string, args []string,
 	env map[string]string, onOutput circleci.OutputFn,
 ) (*circleci.ExecResponse, error) {
 	// Both phases are wrapped so a failure says which one it was. They fail for
@@ -32,15 +38,17 @@ func submitAndStream(
 	// the command never ran, while a broken stream means it may well be running
 	// still. The API op ("exec") is already in the wrapped error, so the phase
 	// alone is enough here.
-	commandID, err := client.SubmitExec(ctx, reg.SidecarID, command, args, env)
+	commandID, err := client.SubmitExec(ctx, sidecarID, command, args, env)
 	if err != nil {
 		return nil, fmt.Errorf("submit: %w", err)
 	}
-	reg.CommandID = commandID
-	if reg.SubmittedAt.IsZero() {
-		reg.SubmittedAt = time.Now()
+	if reg != nil {
+		reg.CommandID = commandID
+		if reg.SubmittedAt.IsZero() {
+			reg.SubmittedAt = time.Now()
+		}
+		watchd.RegisterCommand(*reg)
 	}
-	watchd.RegisterCommand(reg)
 	resp, err := client.StreamOutput(ctx, commandID, "", onOutput)
 	if err != nil {
 		return nil, fmt.Errorf("stream output: %w", err)
