@@ -8,7 +8,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -36,7 +35,7 @@ func newOrgListCmd() *cobra.Command {
 			rc, _ := config.Resolve("", "", insecureStorage)
 			io := iostream.FromCmd(cmd)
 
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -86,7 +85,7 @@ func newOrgCreateCmd() *cobra.Command {
 			rc, _ := config.Resolve("", "", insecureStorage)
 			io := iostream.FromCmd(cmd)
 
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return &userError{
 					msg:        "CircleCI authentication required.",

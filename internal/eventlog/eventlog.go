@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +37,47 @@ type Event struct {
 	Op          Op        `json:"op"`
 	Level       string    `json:"level"` // "step", "info", "warn", "done", "error"
 	Msg         string    `json:"msg"`
+
+	// Final marks the one event that closes an operation, with Passed and Total
+	// carrying its tally. A reader tells a finished operation from one still in
+	// flight by this, never by reading Msg.
+	Final  bool `json:"final,omitempty"`
+	Passed int  `json:"passed,omitempty"`
+	Total  int  `json:"total,omitempty"`
+
+	// CommandID is the sandbox-provisioner ID of the remote exec that produced
+	// this event, set on pass/fail events for commands that ran on the sidecar.
+	// Use GET /api/v3/sidecar/commands/{id}/output to replay the run's output.
+	CommandID string `json:"command_id,omitempty"`
+}
+
+// Outcome reports whether e is the event that closes an operation, and the
+// tally to show for it.
+func (e Event) Outcome() (passed, total int, ok bool) {
+	if e.Final {
+		return e.Passed, e.Total, true
+	}
+	return legacyOutcome(e)
+}
+
+// legacyOutcome recognises the closing events written before Final existed,
+// which carried the tally in the message as "N/M passed  Xs". Logs are trimmed
+// as they grow, so this can go once the existing ones have rolled over.
+func legacyOutcome(e Event) (int, int, bool) {
+	if e.Op != OpValidate || (e.Level != levelDone && e.Level != levelError) {
+		return 0, 0, false
+	}
+	first, _, _ := strings.Cut(e.Msg, " ")
+	p, t, found := strings.Cut(first, "/")
+	if !found {
+		return 0, 0, false
+	}
+	passed, passedErr := strconv.Atoi(p)
+	total, totalErr := strconv.Atoi(t)
+	if passedErr != nil || totalErr != nil {
+		return 0, 0, false
+	}
+	return passed, total, true
 }
 
 const logFile = "events.jsonl"
@@ -113,33 +156,86 @@ func (l *Log) Append(e Event) error {
 	return errors.Join(encErr, f.Close())
 }
 
-// Wrap returns a StatusFunc that calls inner and also appends each call to the
-// log. All events will be tagged with op, sidecarID, sidecarName, and branch.
-func (l *Log) Wrap(inner iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string) iostream.StatusFunc {
-	return func(level iostream.Level, msg string) {
-		if inner != nil {
-			inner(level, msg)
-		}
-		_ = l.Append(Event{
-			Ts:          time.Now(),
+// Recorder reports status through inner and records it in the log, tagging
+// every event with the operation it belongs to. Status records an ordinary
+// event; Final records the one that closes the operation.
+type Recorder struct {
+	log              *Log
+	inner            iostream.StatusFunc
+	tag              Event
+	mu               sync.Mutex
+	pendingCommandID string
+}
+
+// Recorder returns a Recorder that reports through inner and appends each call
+// to the log, tagged with op, sidecarID, sidecarName, and branch.
+func (l *Log) Recorder(inner iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string) *Recorder {
+	return &Recorder{
+		log:   l,
+		inner: inner,
+		tag: Event{
 			SidecarID:   sidecarID,
 			SidecarName: sidecarName,
 			Branch:      branch,
 			Op:          op,
-			Level:       levelStr(level),
-			Msg:         msg,
-		})
+		},
 	}
 }
 
-// WrapFromDir wraps fn with event-log appending using the log in dataDir.
-// Errors opening the log are silently ignored (best-effort; never blocks).
-func WrapFromDir(dataDir string, fn iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string) iostream.StatusFunc {
+// Record returns a Recorder writing to the log in dataDir. Errors opening the
+// log are silently ignored (best-effort; never blocks) and the Recorder then
+// only reports through fn.
+func Record(dataDir string, fn iostream.StatusFunc, op Op, sidecarID, sidecarName, branch string) *Recorder {
 	el, err := Open(dataDir)
 	if err != nil {
-		return fn
+		return &Recorder{inner: fn, tag: Event{Op: op}}
 	}
-	return el.Wrap(fn, op, sidecarID, sidecarName, branch)
+	return el.Recorder(fn, op, sidecarID, sidecarName, branch)
+}
+
+// SetCommandID records the sandbox-provisioner command ID of the exec that just
+// finished. The next pass/fail event for that command will carry this ID.
+// Pass "" when an exec failed without reporting an ID so a stale one from a
+// prior exec is not attributed to it.
+func (r *Recorder) SetCommandID(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pendingCommandID = id
+}
+
+// Status reports an ordinary event, one that leaves the operation open.
+func (r *Recorder) Status(level iostream.Level, msg string) {
+	r.record(level, msg, false, 0, 0)
+}
+
+// Final reports the event that closes the operation, tallying the commands that
+// passed out of those attempted. Both are zero when the operation failed before
+// running anything.
+func (r *Recorder) Final(level iostream.Level, msg string, passed, total int) {
+	r.record(level, msg, true, passed, total)
+}
+
+func (r *Recorder) record(level iostream.Level, msg string, final bool, passed, total int) {
+	if r.inner != nil {
+		r.inner(level, msg)
+	}
+	if r.log == nil {
+		return
+	}
+	e := r.tag
+	e.Ts = time.Now()
+	e.Level = levelStr(level)
+	e.Msg = msg
+	e.Final, e.Passed, e.Total = final, passed, total
+	// Attach the pending command ID to the per-command pass/fail event. Final
+	// events are run-wide summaries that belong to no single command.
+	if !final && (level == iostream.LevelDone || level == iostream.LevelError) {
+		r.mu.Lock()
+		e.CommandID = r.pendingCommandID
+		r.pendingCommandID = ""
+		r.mu.Unlock()
+	}
+	_ = r.log.Append(e)
 }
 
 // Recent returns up to n most recent events from the log.

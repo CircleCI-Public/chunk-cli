@@ -18,7 +18,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func isolateConfig(t *testing.T) {
@@ -28,6 +28,38 @@ func isolateConfig(t *testing.T) {
 	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
 	t.Setenv(config.EnvChunkSessionID, "")
 	t.Setenv(session.EnvClaudeSessionID, "")
+	// Keychain service keys are derived from these base URLs, which otherwise
+	// default to production. Point them at an unroutable host so a test that
+	// reaches the keychain cannot read the developer's own credentials. Tests
+	// needing a real endpoint override these after calling isolateConfig.
+	t.Setenv(config.EnvCircleCIBaseURL, unroutableBaseURL)
+	t.Setenv(config.EnvAnthropicBaseURL, unroutableBaseURL)
+	t.Setenv(config.EnvGitHubAPIURL, unroutableBaseURL)
+}
+
+// unroutableBaseURL is in the RFC 5737 TEST-NET-1 range: never a real service,
+// and never a keychain service key holding a real credential.
+const unroutableBaseURL = "http://192.0.2.1"
+
+// insecureStorageCmd registers the root's --insecure-storage flag on a detached
+// subcommand and turns it on. Tests construct subcommands without a root, so
+// the persistent flag does not exist and insecureStorageFlag would report
+// false, sending credential resolution to the real keychain.
+func insecureStorageCmd(cmd *cobra.Command) *cobra.Command {
+	cmd.Flags().Bool("insecure-storage", false, "")
+	_ = cmd.Flags().Set("insecure-storage", "true")
+	return cmd
+}
+
+// newTestRootCmd builds the real root command with --insecure-storage turned
+// on, so credential resolution uses the config file rather than the developer's
+// keychain. Set it rather than prepending to each test's args: the flag then
+// cannot be forgotten at a call site, and every test keeps the args it means to
+// exercise. Tests must use this in place of NewRootCmd.
+func newTestRootCmd() *cobra.Command {
+	root := NewRootCmd("test")
+	_ = root.PersistentFlags().Set("insecure-storage", "true")
+	return root
 }
 
 func randToken(prefix string) string {
@@ -41,15 +73,11 @@ func discardStreams() iostream.Streams {
 }
 
 func noTTYPrompter(_ string) (string, error) {
-	return "", tui.ErrNoTTY
+	return "", ui.ErrNoTTY
 }
 
 func testCmd() *cobra.Command {
-	cmd := &cobra.Command{}
-	cmd.Flags().Bool("insecure-storage", false, "")
-	// Use insecure (config file) storage in tests to avoid hitting the system keychain.
-	_ = cmd.Flags().Set("insecure-storage", "true")
-	return cmd
+	return insecureStorageCmd(&cobra.Command{})
 }
 
 func TestEnsureCircleCIClient_NoTTY(t *testing.T) {
@@ -60,7 +88,7 @@ func TestEnsureCircleCIClient_NoTTY(t *testing.T) {
 	rc, _ := config.Resolve("", "", true)
 	_, err := ensureCircleCIClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY))
 
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
@@ -74,7 +102,7 @@ func TestEnsureAnthropicClient_NoTTY(t *testing.T) {
 	rc, _ := config.Resolve("", "", true)
 	_, err := ensureAnthropicClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY))
 
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
@@ -88,7 +116,7 @@ func TestEnsureGitHubClient_NoTTY(t *testing.T) {
 	rc, _ := config.Resolve("", "", true)
 	_, err := ensureGitHubClient(context.Background(), testCmd(), rc, discardStreams(), noTTYPrompter)
 	assert.Assert(t, err != nil)
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY))
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY))
 
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
@@ -170,4 +198,20 @@ func TestEnsureCircleCIClient_EmptyToken(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "CIRCLE_TOKEN"), "expected suggestion about CIRCLE_TOKEN, got: %s", ue.Suggestion())
+}
+
+// A subcommand built without a root has no --insecure-storage flag, so
+// insecureStorageFlag reports false and credential resolution falls through to
+// the keychain. insecureStorageCmd is what keeps tests off it.
+func TestInsecureStorageFlagRequiresRegistration(t *testing.T) {
+	assert.Equal(t, insecureStorageFlag(&cobra.Command{}), false)
+	assert.Equal(t, insecureStorageFlag(insecureStorageCmd(&cobra.Command{})), true)
+}
+
+// Registering the flag without turning it on is the trap org_test.go fell into:
+// the flag exists, cobra accepts it, and resolution still uses the keychain.
+func TestInsecureStorageFlagRegisteredButUnsetIsFalse(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("insecure-storage", false, "")
+	assert.Equal(t, insecureStorageFlag(cmd), false)
 }

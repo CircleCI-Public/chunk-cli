@@ -167,7 +167,7 @@ func configFileSource() string {
 	return SourceConfigFile
 }
 
-func resolveCircleCIToken(env EnvVars, cfg UserConfig) (string, string) {
+func resolveCircleCIToken(env EnvVars, cfg UserConfig, insecureStorage bool) (string, string) {
 	switch {
 	case env.CircleToken != "":
 		return env.CircleToken, "Environment variable (" + EnvCircleToken + ")"
@@ -175,6 +175,8 @@ func resolveCircleCIToken(env EnvVars, cfg UserConfig) (string, string) {
 		return env.CircleCIToken, "Environment variable (" + EnvCircleCIToken + ")"
 	case cfg.CircleCIToken != "":
 		return cfg.CircleCIToken, configFileSource()
+	case insecureStorage:
+		return "", ""
 	default:
 		if token, err := keyring.Get(keyring.ServiceCircleCI(env.CircleCIBaseURL)); err == nil {
 			return token, keyring.SourceKeychain
@@ -183,7 +185,7 @@ func resolveCircleCIToken(env EnvVars, cfg UserConfig) (string, string) {
 	return "", ""
 }
 
-func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig) (string, string) {
+func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig, insecureStorage bool) (string, string) {
 	switch {
 	case flagAPIKey != "":
 		return flagAPIKey, "Flag"
@@ -191,6 +193,8 @@ func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig) (str
 		return env.AnthropicAPIKey, "Environment variable"
 	case cfg.AnthropicAPIKey != "":
 		return cfg.AnthropicAPIKey, configFileSource()
+	case insecureStorage:
+		return "", ""
 	default:
 		if apiKey, err := keyring.Get(keyring.ServiceAnthropic(env.AnthropicBaseURL)); err == nil {
 			return apiKey, keyring.SourceKeychain
@@ -199,12 +203,14 @@ func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig) (str
 	return "", ""
 }
 
-func resolveGitHubToken(env EnvVars, cfg UserConfig) (string, string) {
+func resolveGitHubToken(env EnvVars, cfg UserConfig, insecureStorage bool) (string, string) {
 	switch {
 	case env.GitHubToken != "":
 		return env.GitHubToken, "Environment variable (" + EnvGitHubToken + ")"
 	case cfg.GitHubToken != "":
 		return cfg.GitHubToken, configFileSource()
+	case insecureStorage:
+		return "", ""
 	default:
 		if token, err := keyring.Get(keyring.ServiceGitHub(env.GitHubAPIURL)); err == nil {
 			return token, keyring.SourceKeychain
@@ -350,9 +356,9 @@ func GetUserID() uuid.UUID {
 // Resolve computes the final config from flags, env, file, and keychain.
 // Priority for API key: flag > env > config file > keychain > (none).
 // Priority for model: flag > env > config file > default.
-// insecureStorage affects credential writes elsewhere, but reads always use the
-// same precedence order.
-func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error) {
+// insecureStorage excludes the keychain from the read path, so callers that
+// opted out of secure storage never touch it.
+func Resolve(flagAPIKey, flagModel string, insecureStorage bool) (ResolvedConfig, error) {
 	cfg, err := Load()
 
 	env, envErr := LoadEnv(context.Background())
@@ -364,9 +370,9 @@ func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error) {
 		AnalyzeModel: AnalyzeModel,
 		PromptModel:  PromptModel,
 	}
-	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg)
-	rc.AnthropicAPIKey, rc.AnthropicAPIKeySource = resolveAnthropicAPIKey(flagAPIKey, env, cfg)
-	rc.GitHubToken, rc.GitHubTokenSource = resolveGitHubToken(env, cfg)
+	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg, insecureStorage)
+	rc.AnthropicAPIKey, rc.AnthropicAPIKeySource = resolveAnthropicAPIKey(flagAPIKey, env, cfg, insecureStorage)
+	rc.GitHubToken, rc.GitHubTokenSource = resolveGitHubToken(env, cfg, insecureStorage)
 
 	switch {
 	case flagModel != "":
@@ -395,7 +401,7 @@ func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error) {
 // ResolveCircleCI returns only the CircleCI-related config needed by sidecar
 // commands. It intentionally skips Anthropic and GitHub resolution so callers
 // that only need CircleCI auth avoid unrelated keyring work.
-func ResolveCircleCI(_ bool) (ResolvedConfig, error) {
+func ResolveCircleCI(insecureStorage bool) (ResolvedConfig, error) {
 	cfg, err := Load()
 	if err != nil {
 		return ResolvedConfig{}, err
@@ -415,7 +421,7 @@ func ResolveCircleCI(_ bool) (ResolvedConfig, error) {
 		UseSSHIdentityFile: cfg.UseSSHIdentityFile,
 		Notifications:      cfg.Notifications,
 	}
-	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg)
+	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg, insecureStorage)
 	return rc, nil
 }
 

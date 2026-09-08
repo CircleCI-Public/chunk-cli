@@ -100,14 +100,14 @@ func TestGroupEvents_doneFollowedByNewOp(t *testing.T) {
 	}
 }
 
-// groupByInvocation / isSummaryEvent tests
+// groupByInvocation / closesRun tests
 
 func TestGroupByInvocation_singleRun(t *testing.T) {
 	events := []eventlog.Event{
 		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
 		{Op: eventlog.OpValidate, Level: "done", Msg: "test    1.0s (remote)"},
 		{Op: eventlog.OpValidate, Level: "done", Msg: "lint    0.2s (remote)"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "2/2 passed  1.5s"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "2/2 passed  1.5s", Final: true, Passed: 2, Total: 2},
 	}
 	groups := groupByInvocation(events)
 	if len(groups) != 1 {
@@ -122,11 +122,11 @@ func TestGroupByInvocation_twoRuns(t *testing.T) {
 	events := []eventlog.Event{
 		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
 		{Op: eventlog.OpValidate, Level: "done", Msg: "test    1.0s (remote)"},
-		{Op: eventlog.OpValidate, Level: "error", Msg: "0/1 passed  1.0s"},
+		{Op: eventlog.OpValidate, Level: "error", Msg: "0/1 passed  1.0s", Final: true, Total: 1},
 		// second run
 		{Op: eventlog.OpSync, Level: "done", Msg: "synced"},
 		{Op: eventlog.OpValidate, Level: "done", Msg: "test    0.8s (remote)"},
-		{Op: eventlog.OpValidate, Level: "done", Msg: "1/1 passed  0.9s"},
+		{Op: eventlog.OpValidate, Level: "done", Msg: "1/1 passed  0.9s", Final: true, Passed: 1, Total: 1},
 	}
 	groups := groupByInvocation(events)
 	if len(groups) != 2 {
@@ -145,22 +145,20 @@ func TestGroupByInvocation_inProgress(t *testing.T) {
 	}
 }
 
-func TestIsSummaryEvent(t *testing.T) {
+func TestClosesRun(t *testing.T) {
 	cases := []struct {
-		msg  string
+		name string
+		e    eventlog.Event
 		want bool
 	}{
-		{"3/3 passed  5.2s", true},
-		{"0/4 passed  13.7s", true},
-		{"test    8.0s (remote)", false},
-		{"lint    0.4s (local)", false},
-		{"synced", false},
-		{"", false},
+		{"final event", eventlog.Event{Op: eventlog.OpValidate, Level: "done", Final: true, Passed: 3, Total: 3}, true},
+		{"per-command done", eventlog.Event{Op: eventlog.OpValidate, Level: "done", Msg: "test    8.0s (remote)"}, false},
+		{"sync done", eventlog.Event{Op: eventlog.OpSync, Level: "done", Msg: "Synced"}, false},
+		{"in flight", eventlog.Event{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace..."}, false},
 	}
 	for _, c := range cases {
-		e := eventlog.Event{Op: eventlog.OpValidate, Level: "done", Msg: c.msg}
-		if got := isSummaryEvent(e); got != c.want {
-			t.Errorf("isSummaryEvent(%q) = %v, want %v", c.msg, got, c.want)
+		if got := closesRun(c.e); got != c.want {
+			t.Errorf("closesRun(%s) = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
@@ -504,11 +502,11 @@ func TestRenderFooter_updateNoticeNeverWidensFooter(t *testing.T) {
 
 			// The key bar alone can already exceed a narrow terminal;
 			// only the notice's contribution is under test here.
-			limit := max(width, footerWidth(m.renderFooter()))
+			limit := max(width, footerWidth(m.renderFooter(m.styles())))
 
 			m.updateAvailable = "v1.2.3"
 			m.upgradeCmd = "chunk upgrade"
-			if got := footerWidth(m.renderFooter()); got > limit {
+			if got := footerWidth(m.renderFooter(m.styles())); got > limit {
 				t.Errorf("width %d, pane %v: update notice widened footer to %d (limit %d)", width, focus, got, limit)
 			}
 		}
@@ -530,7 +528,7 @@ func TestRenderFooter_updateNoticeShownWhenItFits(t *testing.T) {
 	m.updateAvailable = "v1.2.3"
 	m.upgradeCmd = "chunk upgrade"
 
-	footer := m.renderFooter()
+	footer := m.renderFooter(m.styles())
 	if !strings.Contains(footer, "v1.2.3") || !strings.Contains(footer, "chunk upgrade") {
 		t.Errorf("expected update notice in footer, got %q", footer)
 	}
@@ -554,7 +552,7 @@ func TestRenderSidecarPane_singleSessionKeepsBranchLabel(t *testing.T) {
 			repoName: "chunk-cli", branch: "main", lastActivity: time.Now()},
 	})
 
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
 	// One session in the worktree: nothing to disambiguate, so the row reads
 	// exactly as it did before sessions existed.
@@ -572,7 +570,7 @@ func TestRenderSidecarPane_twoSessionsAreNamed(t *testing.T) {
 			repoName: "chunk-cli", branch: "main", lastActivity: now.Add(-5 * time.Minute)},
 	})
 
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
 	// The branch is named once for the group, and each row by its session.
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
@@ -589,7 +587,7 @@ func TestRenderSidecarPane_groupHeaderPrintedOncePerWorktree(t *testing.T) {
 		{id: "id2", sessionID: "sessB", repoName: "chunk-cli", branch: "main", lastActivity: now},
 	})
 
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
 	assert.Equal(t, strings.Count(pane, "2 sessions"), 1, pane)
 }
@@ -605,7 +603,7 @@ func TestRenderSidecarPane_detachedHeadNamesTheDirectory(t *testing.T) {
 
 	// With no branch to name the group, the header must still say something the
 	// reader can act on rather than rendering blank.
-	lines := m.renderSidecarPane(40)
+	lines := m.renderSidecarPane(newWatchStyles(false), 40)
 	countAt := -1
 	for i, l := range lines {
 		if strings.Contains(l, "2 sessions") {
@@ -628,7 +626,7 @@ func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
 	// Room for the title, the blank under it, and the first row only. The second
 	// row would previously have been started and then clipped by renderBody,
 	// losing its sync badge and age.
-	pane := strings.Join(m.renderSidecarPane(9), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 9), "\n")
 
 	// A complete row ends in an age line, so one age line per sync badge means
 	// no row was cut part-way through.
@@ -645,7 +643,7 @@ func TestRenderSidecarPane_noOverflowHintWhenEverythingFits(t *testing.T) {
 			lastActivity: now.Add(-time.Minute)},
 	})
 
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
 	assert.Assert(t, !strings.Contains(pane, "more"), pane)
 }
@@ -663,7 +661,7 @@ func TestRenderSidecarPane_sameBranchInTwoCheckoutsNamesTheDirectory(t *testing.
 			lastActivity: now.Add(-1 * time.Minute)},
 	})
 
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
 	assert.Assert(t, strings.Contains(pane, "work/chunk-cli"), pane)
 	assert.Assert(t, strings.Contains(pane, "tmp/chunk-cli"), pane)
@@ -681,7 +679,7 @@ func TestRenderSidecarPane_distinctBranchesKeepTheirBranchLabels(t *testing.T) {
 			lastActivity: now.Add(-1 * time.Minute)},
 	})
 
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
 	assert.Assert(t, strings.Contains(pane, "main"), pane)
 	assert.Assert(t, strings.Contains(pane, "feature"), pane)
@@ -703,7 +701,7 @@ func TestRenderSidecarPane_ambiguousBranchNamesTheDirectoryInTheGroupHeader(t *t
 			lastActivity: now.Add(-2 * time.Minute)},
 	})
 
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
 	assert.Assert(t, strings.Contains(pane, "work/chunk-cli"), pane)
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
@@ -783,7 +781,7 @@ func TestRenderSidecarPane_localRunnerIsNotCountedAsASession(t *testing.T) {
 		{id: "", name: localRunnerName, repoName: "r", branch: "main", lastActivity: now.Add(-2 * time.Minute)},
 	})
 
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 
 	// Three rows, but only two of them are sessions.
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
@@ -845,7 +843,7 @@ func TestRenderActivityPane_namesTheSelectedSession(t *testing.T) {
 	m.selectedIdx = 0
 	m.width = 120
 
-	pane := strings.Join(m.renderActivityPane(20), "\n")
+	pane := strings.Join(m.renderActivityPane(newWatchStyles(false), 20), "\n")
 
 	// The left pane can be scrolled away from the selection, so the activity
 	// header has to say whose events these are on its own.
@@ -928,7 +926,7 @@ func TestConvertSnapshot_twoSessionsSurviveTheMerge(t *testing.T) {
 	assert.Equal(t, sharedWorktrees(msg.sidecars)[groupOf(msg.sidecars[0])], 2)
 
 	m := sessionModel("sessA", msg.sidecars)
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
 	assert.Assert(t, strings.Contains(pane, "this session"), pane)
 	assert.Assert(t, strings.Contains(pane, "sessB"), pane)
@@ -967,7 +965,7 @@ func TestConvertSnapshot_promotionKeepsTheSession(t *testing.T) {
 	m := sessionModel("sessA", msg.sidecars)
 	m.selectedIdx = 0
 	m.width = 120
-	pane := strings.Join(m.renderActivityPane(20), "\n")
+	pane := strings.Join(m.renderActivityPane(newWatchStyles(false), 20), "\n")
 	assert.Assert(t, strings.Contains(pane, "this session"), pane)
 }
 
@@ -989,7 +987,60 @@ func TestConvertSnapshot_localRowStaysSeparateWhenSessionsShareAWorktree(t *test
 	assert.Equal(t, sessions["idB"], "sessB")
 
 	m := sessionModel("sessA", msg.sidecars)
-	pane := strings.Join(m.renderSidecarPane(40), "\n")
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
 	assert.Assert(t, strings.Contains(pane, "this session"), pane)
+}
+
+// outcomeOf tests
+
+func TestOutcomeOf(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name      string
+		events    []eventlog.Event
+		wantIcon  string
+		wantLabel string
+		wantLevel string
+	}{
+		{
+			name:      "running while recent",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace...", Ts: now.Add(-time.Minute)}},
+			wantIcon:  "●",
+			wantLabel: "running",
+			wantLevel: "",
+		},
+		{
+			name:      "abandoned once past the running timeout",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "info", Msg: "Syncing workspace...", Ts: now.Add(-8 * time.Hour)}},
+			wantIcon:  "⊘",
+			wantLabel: "abandoned",
+			wantLevel: levelAbandoned,
+		},
+		{
+			name: "passed",
+			events: []eventlog.Event{
+				{Op: eventlog.OpValidate, Level: "info", Msg: "$ task test", Ts: now.Add(-8 * time.Hour)},
+				{Op: eventlog.OpValidate, Level: "done", Msg: "4/4 passed  32.4s", Final: true, Passed: 4, Total: 4, Ts: now.Add(-8 * time.Hour)},
+			},
+			wantIcon:  "✓",
+			wantLabel: "4/4",
+			wantLevel: levelDone,
+		},
+		{
+			name:      "setup failure closes the invocation",
+			events:    []eventlog.Event{{Op: eventlog.OpValidate, Level: "error", Msg: "setup failed  3.1s: agent: failed to sign challenge", Final: true, Ts: now.Add(-8 * time.Hour)}},
+			wantIcon:  "✗",
+			wantLabel: "0/0",
+			wantLevel: levelError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			icon, label, level := outcomeOf(invocationGroup{events: tt.events})
+			if icon != tt.wantIcon || label != tt.wantLabel || level != tt.wantLevel {
+				t.Errorf("outcomeOf() = (%q, %q, %q), want (%q, %q, %q)", icon, label, level, tt.wantIcon, tt.wantLabel, tt.wantLevel)
+			}
+		})
+	}
 }

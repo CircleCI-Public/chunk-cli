@@ -49,7 +49,7 @@ func AddSSHKey(ctx context.Context, client *circleci.Client, sidecarID, publicKe
 // stdin is forwarded to the remote command when non-nil; callers should pass
 // os.Stdin when the process stdin is a pipe, nil otherwise.
 func SSH(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, args []string, envVars map[string]string, streams iostream.Streams, stdin io.Reader) error {
-	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock)
+	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock, false)
 	if err != nil {
 		return err
 	}

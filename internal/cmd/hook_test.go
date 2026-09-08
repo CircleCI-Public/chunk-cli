@@ -14,7 +14,7 @@ import (
 
 func runHooksCmd(t *testing.T, dir string, args ...string) (string, string, error) {
 	t.Helper()
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	var out, errOut bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errOut)
@@ -75,7 +75,7 @@ func TestValidateHookPath_HooksDisabled(t *testing.T) {
 	t.Setenv(config.EnvChunkHooksDisabled, "1")
 
 	dir := t.TempDir()
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	var errOut bytes.Buffer
 	root.SetErr(&errOut)
 	root.SetArgs([]string{"validate", "--project", dir})

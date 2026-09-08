@@ -535,7 +535,7 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	assert.Equal(t, org["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
 
 	// AddSSHKey must be called on the newly created sidecar — proves it was used.
-	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-new-123/ssh/add-key")
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-new-1/ssh/add-key")
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
 }
 

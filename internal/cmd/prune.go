@@ -12,7 +12,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -30,7 +29,7 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}

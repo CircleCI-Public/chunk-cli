@@ -12,7 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func setupSidecarCreateFake(t *testing.T) *fakes.FakeCircleCI {
@@ -36,9 +36,7 @@ func TestSidecarCreateUsesImageFromConfig(t *testing.T) {
 		Validation: &config.ValidationConfig{SidecarImage: "snap-from-config"},
 	}))
 
-	cmd := newSidecarCreateCmd()
-	cmd.Flags().Bool("insecure-storage", false, "")
-	_ = cmd.Flags().Set("insecure-storage", "true")
+	cmd := insecureStorageCmd(newSidecarCreateCmd())
 	cmd.SetArgs([]string{"--org-id", "org-abc"})
 	assert.NilError(t, cmd.Execute())
 
@@ -159,7 +157,7 @@ func TestOrgPicker_MultipleOrgs_NoTTY(t *testing.T) {
 	client := newOrgPickerClient(t, cci)
 
 	_, err := orgPicker(context.Background(), client, "")()
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY), "expected ErrNoTTY, got: %v", err)
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY), "expected ErrNoTTY, got: %v", err)
 }
 
 func TestOrgPicker_MultipleOrgs_NonInteractive(t *testing.T) {
@@ -173,7 +171,7 @@ func TestOrgPicker_MultipleOrgs_NonInteractive(t *testing.T) {
 	client := newOrgPickerClient(t, cci)
 
 	_, err := orgPicker(context.Background(), client, "")()
-	assert.Assert(t, errors.Is(err, tui.ErrNoTTY), "expected ErrNoTTY in non-interactive mode, got: %v", err)
+	assert.Assert(t, errors.Is(err, ui.ErrNoTTY), "expected ErrNoTTY in non-interactive mode, got: %v", err)
 }
 
 func TestSnapshotCreateNameAtLimit(t *testing.T) {

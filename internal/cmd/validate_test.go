@@ -14,11 +14,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -33,11 +35,14 @@ const hookPayload = `{"session_id":"test-session-001","stop_hook_active":false}`
 func runValidateHook(t *testing.T, workDir string) (stdout, stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetIn(strings.NewReader(hookPayload))
-	root.SetArgs([]string{"validate", "--project", workDir})
+	// Prepend --insecure-storage so the hook resolves credentials from the
+	// config file, never the developer's keychain. This goes through the real
+	// root command, so the flag has to arrive as an argument.
+	root.SetArgs([]string{"--insecure-storage", "validate", "--project", workDir})
 	err = root.Execute()
 	return outBuf.String(), errBuf.String(), err
 }
@@ -152,7 +157,7 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
-	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", envVars, config.ResolvedConfig{}, streams)
+	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", envVars, config.ResolvedConfig{}, nil, streams)
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")
@@ -177,7 +182,7 @@ func TestValidateNoConfigShowsSkillHint(t *testing.T) {
 	dir := t.TempDir()
 
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--project", dir})
@@ -209,7 +214,7 @@ func TestValidateDefaultsToRemote(t *testing.T) {
 	}))
 
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--project", dir})
@@ -236,7 +241,7 @@ func TestValidateLocalFlagRunsLocally(t *testing.T) {
 	}))
 
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--local", "--project", dir})
@@ -263,7 +268,7 @@ func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
 	}))
 
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--local", "--project", dir})
@@ -288,7 +293,7 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 		0o644,
 	))
 
-	cmd := newValidateCmd()
+	cmd := insecureStorageCmd(newValidateCmd())
 	cmd.SetOut(os.Stderr)
 	cmd.SetErr(os.Stderr)
 	cmd.SetArgs([]string{"--project", dir, "--env", "BADVALUE"})
@@ -314,7 +319,7 @@ const skipMsg = "skipped (no changes since last successful run)"
 func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetIn(strings.NewReader(activeStopHookPayload))
@@ -510,14 +515,14 @@ func TestExecTarget(t *testing.T) {
 			name:   "active sidecar",
 			opts:   &validateOpts{},
 			cfg:    &config.ProjectConfig{},
-			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
 			want:   "sc-2\x00",
 		},
 		{
 			name:   "explicit id wins over active",
 			opts:   &validateOpts{sidecarID: "sc-1"},
 			cfg:    &config.ProjectConfig{},
-			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
 			want:   "sc-1\x00",
 		},
 		{
@@ -530,7 +535,7 @@ func TestExecTarget(t *testing.T) {
 			name:   "image and active sidecar",
 			opts:   &validateOpts{},
 			cfg:    withImage,
-			active: &sidecar.ActiveSidecar{SidecarID: "sc-2"},
+			active: &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-2"}},
 			want:   "sc-2\x00snap-1",
 		},
 		{name: "nil config", opts: &validateOpts{}, cfg: nil, want: ""},
@@ -678,7 +683,7 @@ func TestSidecarAutoNameNoSessionLongBranch(t *testing.T) {
 func runValidateListCLI(t *testing.T, workDir string) (stdout, stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs([]string{"validate", "--list", "--project", workDir})
@@ -689,7 +694,7 @@ func runValidateListCLI(t *testing.T, workDir string) (stdout, stderr string, er
 func runMarkRemoteCLI(t *testing.T, workDir string, extraArgs ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
-	root := NewRootCmd("test")
+	root := newTestRootCmd()
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetArgs(append([]string{"validate", "--mark-remote", "--project", workDir}, extraArgs...))
@@ -834,4 +839,30 @@ func TestValidateListShowsRoutingAndRole(t *testing.T) {
 	for _, want := range []string{"test [remote, gate]", "format [local, autofix]", "bare [local]"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q in:\n%s", want, out)
 	}
+}
+
+func TestFailBeforeRunClosesTheRun(t *testing.T) {
+	dir := t.TempDir()
+	log, err := eventlog.Open(dir)
+	assert.NilError(t, err)
+
+	var reported string
+	rec := log.Recorder(func(_ iostream.Level, msg string) { reported = msg }, eventlog.OpValidate, "", "", "")
+
+	inErr := errors.New("bundle sync: agent: failed to sign challenge")
+	assert.Equal(t, failBeforeRun(rec, time.Now(), inErr), inErr)
+
+	events, err := log.Recent(10)
+	assert.NilError(t, err)
+	assert.Equal(t, len(events), 1)
+	assert.Equal(t, events[0].Level, "error")
+	assert.Assert(t, strings.Contains(events[0].Msg, "setup failed"), "got %q", events[0].Msg)
+	assert.Assert(t, strings.Contains(events[0].Msg, inErr.Error()), "got %q", events[0].Msg)
+	assert.Equal(t, reported, events[0].Msg)
+
+	// Nothing ran, so the run closes on a 0/0 tally.
+	passed, total, ok := events[0].Outcome()
+	assert.Assert(t, ok)
+	assert.Equal(t, passed, 0)
+	assert.Equal(t, total, 0)
 }

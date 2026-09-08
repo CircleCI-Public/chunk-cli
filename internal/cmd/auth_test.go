@@ -14,7 +14,7 @@ func TestAuthSignupAlreadyAuthenticated(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "test-token-abc")
 
-	cmd := newAuthSignupCmd()
+	cmd := insecureStorageCmd(newAuthSignupCmd())
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 

@@ -14,7 +14,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -164,8 +163,8 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, e
 			if nonInteractive() {
 				return errNoForce("replace CircleCI token")
 			}
-			replace, err := tui.Confirm("Do you want to replace it?", false)
-			if errors.Is(err, tui.ErrNoTTY) {
+			replace, err := ui.Confirm("Do you want to replace it?", false)
+			if errors.Is(err, ui.ErrNoTTY) {
 				return errNoForce("replace CircleCI token")
 			}
 			if err != nil || !replace {
@@ -175,8 +174,8 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, e
 		}
 	}
 
-	token, err := tui.PromptHidden("CircleCI Token")
-	if errors.Is(err, tui.ErrNoTTY) {
+	token, err := ui.PromptHidden("CircleCI Token")
+	if errors.Is(err, ui.ErrNoTTY) {
 		return newUserError("Cannot prompt for CircleCI token without an interactive terminal.").
 			withCode("auth.circleci_token_required").
 			withSuggestion("Set " + config.EnvCircleToken + " to configure credentials non-interactively.").
@@ -222,8 +221,8 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 			if nonInteractive() {
 				return errNoForce("replace Anthropic API key")
 			}
-			replace, err := tui.Confirm("Do you want to replace it?", false)
-			if errors.Is(err, tui.ErrNoTTY) {
+			replace, err := ui.Confirm("Do you want to replace it?", false)
+			if errors.Is(err, ui.ErrNoTTY) {
 				return errNoForce("replace Anthropic API key")
 			}
 			if err != nil || !replace {
@@ -233,8 +232,8 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 		}
 	}
 
-	key, err := tui.PromptHidden("API Key")
-	if errors.Is(err, tui.ErrNoTTY) {
+	key, err := ui.PromptHidden("API Key")
+	if errors.Is(err, ui.ErrNoTTY) {
 		return newUserError("Cannot prompt for Anthropic API key without an interactive terminal.").
 			withCode("auth.anthropic_key_required").
 			withSuggestion("Set " + config.EnvAnthropicAPIKey + " to configure credentials non-interactively.").
@@ -497,8 +496,8 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 		if nonInteractive() {
 			return errNoForce("remove CircleCI token")
 		}
-		confirmed, err := tui.Confirm("Are you sure?", false)
-		if errors.Is(err, tui.ErrNoTTY) {
+		confirmed, err := ui.Confirm("Are you sure?", false)
+		if errors.Is(err, ui.ErrNoTTY) {
 			return errNoForce("remove CircleCI token")
 		}
 		if err != nil || !confirmed {
@@ -560,8 +559,8 @@ func authRemoveAnthropic(io iostream.Streams, envSet, force, insecureStorage boo
 		if nonInteractive() {
 			return errNoForce("remove Anthropic API key")
 		}
-		confirmed, err := tui.Confirm("Are you sure?", false)
-		if errors.Is(err, tui.ErrNoTTY) {
+		confirmed, err := ui.Confirm("Are you sure?", false)
+		if errors.Is(err, ui.ErrNoTTY) {
 			return errNoForce("remove Anthropic API key")
 		}
 		if !confirmed || err != nil {
@@ -620,8 +619,8 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 			if nonInteractive() {
 				return errNoForce("replace GitHub token")
 			}
-			replace, err := tui.Confirm("Do you want to replace it?", false)
-			if errors.Is(err, tui.ErrNoTTY) {
+			replace, err := ui.Confirm("Do you want to replace it?", false)
+			if errors.Is(err, ui.ErrNoTTY) {
 				return errNoForce("replace GitHub token")
 			}
 			if err != nil || !replace {
@@ -631,8 +630,8 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 		}
 	}
 
-	token, err := tui.PromptHidden("GitHub Token")
-	if errors.Is(err, tui.ErrNoTTY) {
+	token, err := ui.PromptHidden("GitHub Token")
+	if errors.Is(err, ui.ErrNoTTY) {
 		return newUserError("Cannot prompt for GitHub token without an interactive terminal.").
 			withCode("auth.github_token_required").
 			withSuggestion("Set " + config.EnvGitHubToken + " to configure credentials non-interactively.").
@@ -697,8 +696,8 @@ func authRemoveGitHub(io iostream.Streams, envSet, force, insecureStorage bool) 
 		if nonInteractive() {
 			return errNoForce("remove GitHub token")
 		}
-		confirmed, err := tui.Confirm("Are you sure?", false)
-		if errors.Is(err, tui.ErrNoTTY) {
+		confirmed, err := ui.Confirm("Are you sure?", false)
+		if errors.Is(err, ui.ErrNoTTY) {
 			return errNoForce("remove GitHub token")
 		}
 		if err != nil || !confirmed {

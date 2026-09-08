@@ -12,7 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 	"github.com/CircleCI-Public/chunk-cli/internal/variants"
 )
@@ -89,7 +89,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			}
 
 			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
-			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, tui.PromptHidden)
+			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 			if err != nil {
 				return err
 			}

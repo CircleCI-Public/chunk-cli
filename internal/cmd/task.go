@@ -14,7 +14,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/task"
-	"github.com/CircleCI-Public/chunk-cli/internal/tui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -62,7 +61,7 @@ func newTaskRunCmd() *cobra.Command {
 			io := iostream.FromCmd(cmd)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -132,8 +131,8 @@ func newTaskConfigCmd() *cobra.Command {
 				if nonInteractive() {
 					return errNoForce("overwrite task configuration")
 				}
-				overwrite, err := tui.Confirm("Overwrite the existing configuration?", false)
-				if errors.Is(err, tui.ErrNoTTY) {
+				overwrite, err := ui.Confirm("Overwrite the existing configuration?", false)
+				if errors.Is(err, ui.ErrNoTTY) {
 					return errNoForce("overwrite task configuration")
 				}
 				if err != nil || !overwrite {
@@ -149,7 +148,7 @@ func newTaskConfigCmd() *cobra.Command {
 
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
-			client, err := ensureCircleCIClient(ctx, cmd, rc, io, tui.PromptHidden)
+			client, err := ensureCircleCIClient(ctx, cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
 			}
@@ -162,9 +161,9 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			prompts := task.Prompts{
-				Confirm:    tui.Confirm,
-				SelectFrom: tui.SelectFromList,
-				PromptText: tui.PromptText,
+				Confirm:    ui.Confirm,
+				SelectFrom: ui.SelectFromList,
+				PromptText: ui.PromptText,
 				Warn:       func(msg string) { io.ErrPrintln(ui.Yellow(msg)) },
 			}
 
@@ -174,7 +173,7 @@ func newTaskConfigCmd() *cobra.Command {
 			}
 
 			runCfg, err := task.CollectRunConfig(ctx, prompts, projects, collabs, fetchDetail, os.Getenv(config.EnvCircleCIOrgID))
-			if errors.Is(err, tui.ErrCancelled) {
+			if errors.Is(err, ui.ErrCancelled) {
 				return nil
 			}
 			if err != nil {

@@ -8,27 +8,27 @@ import (
 
 // Success formats a green checkmark success message.
 func Success(msg string) string {
-	return Green("✓ " + msg)
+	return Green(IconOK + " " + msg)
 }
 
 // Warning formats a yellow warning message.
 func Warning(msg string) string {
-	return Yellow("⚠ " + msg)
+	return Yellow(IconWarn + " " + msg)
 }
 
 // ErrSuccess formats a success message using stderr color detection.
 func ErrSuccess(msg string) string {
-	return ErrGreen("✓ " + msg)
+	return ErrGreen(IconOK + " " + msg)
 }
 
 // ErrWarning formats a warning message using stderr color detection.
 func ErrWarning(msg string) string {
-	return ErrYellow("⚠ " + msg)
+	return ErrYellow(IconWarn + " " + msg)
 }
 
 // ErrError formats a failure message using stderr color detection.
 func ErrError(msg string) string {
-	return ErrRed("✗ " + msg)
+	return ErrRed(IconFail + " " + msg)
 }
 
 // FormatDuration formats a duration for display in status messages.
@@ -45,7 +45,7 @@ func FormatDuration(d time.Duration) string {
 // FormatError formats a red error with optional detail and suggestion.
 func FormatError(brief string, detail string, suggestion string) string {
 	var b strings.Builder
-	fmt.Fprintln(&b, Red("✗ Error: "+brief))
+	fmt.Fprintln(&b, Red(IconFail+" Error: "+brief))
 	if detail != "" {
 		fmt.Fprintln(&b)
 		fmt.Fprintln(&b, detail)
