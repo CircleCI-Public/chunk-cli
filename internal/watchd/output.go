@@ -81,6 +81,15 @@ func newBuffer() *buffer {
 func (b *buffer) append(p []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// A write at or over the cap evicts everything already buffered, so keep its
+	// tail directly. Appending first would size the array to len(b.data)+len(p)
+	// before trimming back, letting a single large write spike allocation past
+	// the cap that exists to bound exactly that.
+	if len(p) >= MaxCommandBytes {
+		b.dropped += int64(len(b.data)) + int64(len(p)-MaxCommandBytes)
+		b.data = append(b.data[:0], p[len(p)-MaxCommandBytes:]...)
+		return
+	}
 	b.data = append(b.data, p...)
 	if excess := len(b.data) - MaxCommandBytes; excess > 0 {
 		// Copy the tail down rather than reslicing, so the underlying array is

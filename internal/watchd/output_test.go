@@ -332,3 +332,44 @@ func TestStreamersStopWhenTheDaemonContextIsCancelled(t *testing.T) {
 		t.Fatal("streamer outlived the daemon context")
 	}
 }
+
+// A single write larger than the cap is the case that used to allocate
+// len(data)+len(p) before trimming. The offsets are the observable part of
+// getting it right: whatever the allocation strategy, the reader's view of how
+// much was dropped has to stay exact.
+func TestBufferAppendLargerThanCapKeepsTail(t *testing.T) {
+	b := newBuffer()
+	b.append([]byte(strings.Repeat("a", 1000)))
+	// Two caps' worth in one write, so both the existing data and the head of
+	// this write are evicted.
+	b.append([]byte(strings.Repeat("b", MaxCommandBytes) + strings.Repeat("c", MaxCommandBytes)))
+
+	chunk := b.read(0)
+	assert.Check(t, chunk.Truncated)
+	assert.Check(t, cmp.Len(chunk.Data, MaxCommandBytes))
+	assert.Check(t, cmp.Equal(string(chunk.Data), strings.Repeat("c", MaxCommandBytes)),
+		"only the tail of the oversized write survives")
+	// 1000 + 2*MaxCommandBytes written, MaxCommandBytes retained.
+	assert.Check(t, cmp.Equal(chunk.NextOffset, int64(1000+2*MaxCommandBytes)))
+
+	// The point of the change, and the only part the offsets above do not pin:
+	// the backing array never sized itself to hold the whole write. Appending
+	// first would have grown it past 2*MaxCommandBytes before trimming back.
+	b.mu.Lock()
+	capacity := cap(b.data)
+	b.mu.Unlock()
+	assert.Check(t, capacity <= 2*MaxCommandBytes,
+		"oversized write grew the buffer to %d bytes, cap is %d", capacity, MaxCommandBytes)
+}
+
+// The boundary between the two paths: a write of exactly the cap keeps all of
+// itself and drops everything before it.
+func TestBufferAppendExactlyCapDropsOnlyPrior(t *testing.T) {
+	b := newBuffer()
+	b.append([]byte(strings.Repeat("a", 10)))
+	b.append([]byte(strings.Repeat("b", MaxCommandBytes)))
+
+	chunk := b.read(0)
+	assert.Check(t, cmp.Equal(string(chunk.Data), strings.Repeat("b", MaxCommandBytes)))
+	assert.Check(t, cmp.Equal(chunk.NextOffset, int64(10+MaxCommandBytes)))
+}
