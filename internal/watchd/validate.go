@@ -45,9 +45,10 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Seed the context with the caller's env and session ID so the in-process
-	// validate run behaves as if launched in the caller's environment.
-	ctx := r.Context()
+	// Use WithoutCancel so the validate run completes even if the HTTP client
+	// disconnects mid-run. The result is buffered; partial runs under
+	// validateMu are worse than completing after the client is gone.
+	ctx := context.WithoutCancel(r.Context())
 	if id := session.IDFromSlice(req.Env); id != "" {
 		ctx = session.WithID(ctx, id)
 	}
