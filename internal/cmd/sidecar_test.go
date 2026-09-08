@@ -36,9 +36,7 @@ func TestSidecarCreateUsesImageFromConfig(t *testing.T) {
 		Validation: &config.ValidationConfig{SidecarImage: "snap-from-config"},
 	}))
 
-	cmd := newSidecarCreateCmd()
-	cmd.Flags().Bool("insecure-storage", false, "")
-	_ = cmd.Flags().Set("insecure-storage", "true")
+	cmd := insecureStorageCmd(newSidecarCreateCmd())
 	cmd.SetArgs([]string{"--org-id", "org-abc"})
 	assert.NilError(t, cmd.Execute())
 
