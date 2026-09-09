@@ -22,7 +22,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
@@ -207,7 +206,6 @@ func TestProbeRunsWithoutRegistering(t *testing.T) {
 func TestProbeExecFnDoesNotRegister(t *testing.T) {
 	regs := captureRegistrations(t)
 	client := newFakeSidecarClient(t)
-	t.Chdir(gitrepo.SetupGitRepo(t, "test-org", "test-repo"))
 
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
 	probeExecFn, _, err := newExecFn(

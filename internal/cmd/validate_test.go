@@ -26,7 +26,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
@@ -148,7 +147,6 @@ func TestHostForwardEnv(t *testing.T) {
 
 func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	isolateConfig(t)
-	t.Chdir(gitrepo.SetupGitRepo(t, "test-org", "test-repo"))
 
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)

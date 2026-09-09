@@ -17,7 +17,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
-	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 // The remote exec path now submits, registers the command with the watch daemon,
@@ -29,7 +28,6 @@ import (
 func TestExecFnWithoutDaemonBehavesIdentically(t *testing.T) {
 	// An empty watchd dir: no socket, so every registration fails to connect.
 	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
-	t.Chdir(gitrepo.SetupGitRepo(t, "test-org", "test-repo"))
 
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
@@ -68,7 +66,6 @@ func TestExecFnWithoutDaemonBehavesIdentically(t *testing.T) {
 // registration that follows it.
 func TestExecFnSubmitFailureIsReported(t *testing.T) {
 	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
-	t.Chdir(gitrepo.SetupGitRepo(t, "test-org", "test-repo"))
 
 	// A server that rejects everything, so SubmitExec fails.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
