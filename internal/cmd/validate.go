@@ -55,6 +55,30 @@ type hookContext struct {
 	stopHookActive bool
 }
 
+type hookResponse struct {
+	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type hookSpecificOutput struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext"`
+}
+
+// writeStopHookResponse writes the Claude Code hook response format also
+// understood by Codex and Cursor. Hook stdout must contain JSON only; progress
+// and command output continue to use stderr.
+func writeStopHookResponse(w io.Writer, message string) error {
+	if err := json.NewEncoder(w).Encode(hookResponse{
+		HookSpecificOutput: hookSpecificOutput{
+			HookEventName:     "Stop",
+			AdditionalContext: message,
+		},
+	}); err != nil {
+		return fmt.Errorf("write Stop hook response: %w", err)
+	}
+	return nil
+}
+
 // detectHook reads the Claude Code hook JSON payload from r when r is not a
 // terminal. Returns nil if not running as a Stop hook.
 func detectHook(r io.Reader) *hookContext {
@@ -596,8 +620,7 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", elapsed)))
-		return nil
+		return writeStopHookResponse(cmd.OutOrStdout(), fmt.Sprintf("chunk validate passed (%s)", elapsed))
 	}
 	return hookErr
 }

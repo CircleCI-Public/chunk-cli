@@ -47,6 +47,16 @@ func runValidateHook(t *testing.T, workDir string) (stdout, stderr string, err e
 	return outBuf.String(), errBuf.String(), err
 }
 
+func TestWriteStopHookResponse(t *testing.T) {
+	var out bytes.Buffer
+	assert.NilError(t, writeStopHookResponse(&out, "validation completed: 2/2 passed"))
+
+	var response hookResponse
+	assert.NilError(t, json.Unmarshal(out.Bytes(), &response))
+	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
+	assert.Equal(t, response.HookSpecificOutput.AdditionalContext, "validation completed: 2/2 passed")
+}
+
 func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")
