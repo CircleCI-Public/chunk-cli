@@ -399,7 +399,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return hookErr
 	}
 	if skip {
-		return nil
+		return writeStopHookResponse(cmd.OutOrStdout(), "chunk validate skipped (working tree is clean)")
 	}
 	statusFn := newStatusFunc(streams)
 	insecureStorage := insecureStorageFlag(cmd)
@@ -605,14 +605,14 @@ func checkHookAuth(hook *hookContext, needsSidecar bool, token string, streams i
 	return nil
 }
 
-func prepareValidateConfig(workDir string, hook *hookContext, opts *validateOpts, name string, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+func prepareValidateConfig(w io.Writer, workDir string, hook *hookContext, opts *validateOpts, name string, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
 	cfg, err := config.LoadProjectConfig(workDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, false, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 	}
 	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
 		if hook != nil {
-			return nil, true, nil // no config in hook context: skip silently
+			return nil, true, writeStopHookResponse(w, "chunk validate skipped (no validation commands configured)")
 		}
 		return nil, false, &userError{
 			msg:        msgValidateNotConfigured,
@@ -822,7 +822,7 @@ func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir str
 	if opts.markRemote {
 		return nil, true, runMarkRemote(workDir, name, streams)
 	}
-	return prepareValidateConfig(workDir, hook, opts, name, statusFn)
+	return prepareValidateConfig(streams.Out, workDir, hook, opts, name, statusFn)
 }
 
 func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc) error {
