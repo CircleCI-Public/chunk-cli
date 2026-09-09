@@ -100,6 +100,17 @@ func ResolveCircleCIClient(rc config.ResolvedConfig, onWarn func(string)) (*circ
 		Token:   rc.CircleCIToken,
 		BaseURL: rc.CircleCIBaseURL,
 		OnWarn:  onWarn,
+		// A 401 is the only signal that the token in hand has gone stale, and
+		// re-resolving is the only way it can improve — there is no refresh
+		// grant. This matters for processes that outlive a login: the watch
+		// daemon builds one client at startup and keeps it for its whole life.
+		ReloadToken: func() (string, error) {
+			reloaded, err := config.ResolveCircleCI(false)
+			if err != nil {
+				return "", err
+			}
+			return reloaded.CircleCIToken, nil
+		},
 	})
 }
 
