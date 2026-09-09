@@ -15,6 +15,24 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
+// newTestDaemon builds a daemon the way RunDaemon does, minus the socket and
+// the poll loop, for tests that drive poll and snapshot by hand.
+//
+// It exists because poll reaches through every collaborator the real daemon is
+// assembled with — the output store for each project's commands, the sampler to
+// annotate its sidecars — so a daemon put together field by field panics on
+// whichever one the last person left out. Build it here and a new collaborator
+// is one edit, not one per test.
+func newTestDaemon() *daemon {
+	return &daemon{
+		projects: make(map[string]*projectState),
+		out:      newOutputStore(context.Background()),
+		// No client: these tests never attach a dashboard, so nothing is sampled
+		// and the sampler only has to be non-nil to annotate.
+		res: newResourceSampler(nil),
+	}
+}
+
 // TestDaemonRoundTrip starts the daemon in-process, waits for it to accept
 // connections, issues a FetchSnapshot, then cancels the context and verifies
 // clean shutdown. Uses CHUNK_WATCHD_DIR to avoid touching ~/.chunk/watchd.
@@ -25,7 +43,7 @@ func TestDaemonRoundTrip(t *testing.T) {
 	defer cancel()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, "") }()
+	go func() { errCh <- RunDaemon(ctx, nil, "", nil) }()
 
 	sockPath, err := SocketPath()
 	assert.NilError(t, err)
@@ -76,9 +94,7 @@ func TestPollReplaysResultsRecordedWhileTheDaemonWasDown(t *testing.T) {
 	rec.Status(iostream.LevelInfo, "$ echo hi")
 	rec.Final(iostream.LevelDone, "1/1 passed  113ms", 1, 1)
 
-	// Built like RunDaemon builds it, output store included: poll reads the store
-	// for every project, so a daemon assembled by hand without one panics there.
-	d := &daemon{projects: make(map[string]*projectState), out: newOutputStore(context.Background())}
+	d := newTestDaemon()
 	d.poll()
 
 	snap := d.snapshot(nil)
@@ -142,7 +158,7 @@ func TestEnsureLaunched_leavesAReachableDaemonAlone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, "") }()
+	go func() { errCh <- RunDaemon(ctx, nil, "", nil) }()
 
 	sockPath, err := SocketPath()
 	assert.NilError(t, err)
@@ -233,7 +249,7 @@ func TestPollListsOneProjectPerRootHoweverItIsSpelled(t *testing.T) {
 	log.Recorder(nil, eventlog.OpValidate, "", "", "").Final(iostream.LevelDone, "1/1 passed", 1, 1)
 
 	crumb := filepath.Join(dataDir, "project-root")
-	d := &daemon{projects: make(map[string]*projectState), out: newOutputStore(context.Background())}
+	d := newTestDaemon()
 
 	// Registered through the symlink, then rewritten as the resolved path — the
 	// two writers' spellings, in the order a developer hits them.
@@ -269,7 +285,7 @@ func TestPollListsCommandsRegisteredUnderAnUnresolvedRoot(t *testing.T) {
 	assert.NilError(t, err)
 	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, target))
 
-	d := &daemon{projects: make(map[string]*projectState), out: newOutputStore(context.Background())}
+	d := newTestDaemon()
 	// What a validate run on a repo reached through the symlink registers.
 	d.out.register(reg("cmd-1", link), immediateStream([]string{"output\n"}, 0))
 	waitForFinish(t, d.out, "cmd-1")

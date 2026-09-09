@@ -37,6 +37,22 @@ func IDFromCtx(ctx context.Context) string {
 	return id
 }
 
+// IDFromSlice returns the session ID from a KEY=VALUE env slice, applying the
+// same precedence and sanitisation as IDFromEnv.
+func IDFromSlice(env []string) string {
+	for _, name := range []string{config.EnvChunkSessionID, EnvClaudeSessionID} {
+		prefix := name + "="
+		for _, e := range env {
+			if strings.HasPrefix(e, prefix) {
+				if id := sanitize(e[len(prefix):]); id != "" {
+					return id
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // IDFromEnv returns the session ID advertised by the environment, or "" when
 // nothing in it names a session.
 //
