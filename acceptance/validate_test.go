@@ -388,19 +388,16 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	writeProjectConfig(t, workDir, "echo install", "echo test")
 
-	// Write a temporary SSH keypair so OpenSession can register a key.
-	sshDir := filepath.Join(t.TempDir(), ".ssh")
-	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	identityFile := filepath.Join(sshDir, "chunk_ai")
-	assert.NilError(t, generateTestSSHKey(t, identityFile))
-
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
+
+	sshDir := filepath.Join(env.HomeDir, ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
 
 	result := binary.RunCLI(t, []string{
 		"validate",
 		"--sidecar-id", "sidecar-123",
-		"--identity-file", identityFile,
 	}, env, workDir)
 
 	// SSH connection to 127.0.0.1:2222 will fail — that's expected.
@@ -441,16 +438,15 @@ func TestValidateSidecarImageNoActiveSidecarAutoCreates(t *testing.T) {
 	assert.NilError(t, err)
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
 
-	sshDir := filepath.Join(t.TempDir(), ".ssh")
-	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	identityFile := filepath.Join(sshDir, "chunk_ai")
-	assert.NilError(t, generateTestSSHKey(t, identityFile))
-
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
 
-	result := binary.RunCLI(t, []string{"validate", "--identity-file", identityFile}, env, workDir)
+	sshDir := filepath.Join(env.HomeDir, ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+
+	result := binary.RunCLI(t, []string{"validate"}, env, workDir)
 
 	// No real SSH server is running so sync will fail — that's expected.
 	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
@@ -499,18 +495,16 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	assert.NilError(t, err)
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), data, 0o644))
 
-	sshDir := filepath.Join(t.TempDir(), ".ssh")
-	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	identityFile := filepath.Join(sshDir, "chunk_ai")
-	assert.NilError(t, generateTestSSHKey(t, identityFile))
-
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
 
+	sshDir := filepath.Join(env.HomeDir, ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+
 	result := binary.RunCLIWithStdin(t, []string{
 		"validate",
-		"--identity-file", identityFile,
 	}, env, workDir, hookStdin(t, "test-session-sidecar-image", false))
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
@@ -601,17 +595,16 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 	// Dirty tree ensures the hook actually runs.
 	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("x"), 0o644))
 
-	sshDir := filepath.Join(t.TempDir(), ".ssh")
-	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	identityFile := filepath.Join(sshDir, "chunk_ai")
-	assert.NilError(t, generateTestSSHKey(t, identityFile))
-
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
 
+	sshDir := filepath.Join(env.HomeDir, ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+
 	result := binary.RunCLIWithStdin(t, []string{
-		"validate", "--identity-file", identityFile,
+		"validate",
 	}, env, workDir, hookStdin(t, "test-session-setup-err", false))
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure; stderr: %s", result.Stderr)

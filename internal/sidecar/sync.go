@@ -74,8 +74,8 @@ func persistWorkspace(ctx context.Context, workspace string) error {
 // then resets to the remote base and applies a patch of local changes.
 // workdir overrides the destination path; defaults to /home/user/<repo>.
 func Sync(ctx context.Context,
-	client *circleci.Client, sidecarID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
-	return syncTo(ctx, client, sidecarID, identityFile, authSock, workdir, true, status)
+	client *circleci.Client, sidecarID, workdir string, status iostream.StatusFunc) error {
+	return syncTo(ctx, client, sidecarID, workdir, true, status)
 }
 
 // SyncEphemeral synchronises like Sync but neither reads nor writes the active
@@ -84,19 +84,19 @@ func Sync(ctx context.Context,
 // workdir is required for the same reason: there is no shared state to fall
 // back on, so each caller must name its own destination.
 func SyncEphemeral(ctx context.Context,
-	client *circleci.Client, sidecarID, identityFile, authSock, workdir string, status iostream.StatusFunc) error {
+	client *circleci.Client, sidecarID, workdir string, status iostream.StatusFunc) error {
 	if workdir == "" {
 		return fmt.Errorf("sync: workdir is required for an ephemeral sync")
 	}
-	return syncTo(ctx, client, sidecarID, identityFile, authSock, workdir, false, status)
+	return syncTo(ctx, client, sidecarID, workdir, false, status)
 }
 
 // syncTo backs Sync and SyncEphemeral. persist controls whether the resolved
 // workspace is read from and written back to the active-sidecar file.
 func syncTo(ctx context.Context, client *circleci.Client,
-	sidecarID, identityFile, authSock, workdir string, persist bool, status iostream.StatusFunc) error {
+	sidecarID, workdir string, persist bool, status iostream.StatusFunc) error {
 
-	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock, false)
+	session, err := OpenSession(ctx, client, sidecarID, false)
 	if err != nil {
 		return err
 	}
@@ -151,12 +151,12 @@ func syncTo(ctx context.Context, client *circleci.Client,
 // BundleSync synchronises local commits and working-tree changes to a sidecar
 // using a git bundle, without requiring the branch to be pushed.
 func BundleSync(ctx context.Context,
-	client *circleci.Client, sidecarID, identityFile, authSock, workdir, cwd string, retryOn404 bool, status iostream.StatusFunc) error {
+	client *circleci.Client, sidecarID, workdir, cwd string, retryOn404 bool, status iostream.StatusFunc) error {
 	prepared, err := prepareBundleSync(workdir, cwd, "", 1, status)
 	if err != nil {
 		return err
 	}
-	if err := syncPreparedSidecar(ctx, client, sidecarID, identityFile, authSock, retryOn404, prepared); err != nil {
+	if err := syncPreparedSidecar(ctx, client, sidecarID, retryOn404, prepared); err != nil {
 		return err
 	}
 	if err := persistWorkspace(ctx, prepared.repoPath); err != nil {
@@ -168,8 +168,8 @@ func BundleSync(ctx context.Context,
 
 // BundleSyncFanOut synchronises a local working tree to multiple sidecars in
 // parallel using a full or incremental bundle.
-func BundleSyncFanOut(ctx context.Context, client *circleci.Client, sidecarIDs []string, identityFile, authSock, workdir, cwd string, retryOn404 bool, status iostream.StatusFunc) error {
-	_, err := bundleSyncFanOutSince(ctx, client, sidecarIDs, identityFile, authSock, workdir, cwd, "", retryOn404, status)
+func BundleSyncFanOut(ctx context.Context, client *circleci.Client, sidecarIDs []string, workdir, cwd string, retryOn404 bool, status iostream.StatusFunc) error {
+	_, err := bundleSyncFanOutSince(ctx, client, sidecarIDs, workdir, cwd, "", retryOn404, status)
 	return err
 }
 
@@ -185,7 +185,7 @@ type preparedBundleSync struct {
 // bundleSyncFanOutSince synchronises a local working tree to multiple sidecars
 // in parallel. It returns the local HEAD ref that all successful targets were
 // synced to.
-func bundleSyncFanOutSince(ctx context.Context, client *circleci.Client, sidecarIDs []string, identityFile, authSock, workdir, cwd, baseRef string, retryOn404 bool, status iostream.StatusFunc) (string, error) {
+func bundleSyncFanOutSince(ctx context.Context, client *circleci.Client, sidecarIDs []string, workdir, cwd, baseRef string, retryOn404 bool, status iostream.StatusFunc) (string, error) {
 	prepared, err := prepareBundleSync(workdir, cwd, baseRef, len(sidecarIDs), status)
 	if err != nil {
 		return "", err
@@ -206,7 +206,7 @@ func bundleSyncFanOutSince(ctx context.Context, client *circleci.Client, sidecar
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			if err := syncPreparedSidecar(ctx, client, id, identityFile, authSock, retryOn404, prepared); err != nil {
+			if err := syncPreparedSidecar(ctx, client, id, retryOn404, prepared); err != nil {
 				errs[i] = fmt.Errorf("sidecar %s: %w", id, err)
 			}
 		}(i, id)
@@ -268,8 +268,8 @@ func prepareBundleSync(workdir, cwd, baseRef string, sidecarCount int, status io
 	}, nil
 }
 
-func syncPreparedSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, retryOn404 bool, prepared *preparedBundleSync) error {
-	sess, err := OpenSession(ctx, client, sidecarID, identityFile, authSock, retryOn404)
+func syncPreparedSidecar(ctx context.Context, client *circleci.Client, sidecarID string, retryOn404 bool, prepared *preparedBundleSync) error {
+	sess, err := OpenSession(ctx, client, sidecarID, retryOn404)
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)
 	}

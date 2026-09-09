@@ -14,12 +14,10 @@ import (
 // Target represents operations against one sidecar.
 // It is the base unit that higher-level coordination, including pools, builds on.
 type Target struct {
-	Client       *circleci.Client
-	SidecarID    string
-	IdentityFile string
-	AuthSock     string
-	Workdir      string
-	RetryOn404   bool
+	Client     *circleci.Client
+	SidecarID  string
+	Workdir    string
+	RetryOn404 bool
 }
 
 type WorkspaceNotFoundError struct {
@@ -54,9 +52,9 @@ func (t Target) ResolveWorkspace(ctx context.Context, cwd string) (string, error
 
 func (t Target) Sync(ctx context.Context, cwd string, useBundle bool, status iostream.StatusFunc) error {
 	if useBundle {
-		return BundleSync(ctx, t.Client, t.SidecarID, t.IdentityFile, t.AuthSock, t.Workdir, cwd, t.RetryOn404, status)
+		return BundleSync(ctx, t.Client, t.SidecarID, t.Workdir, cwd, t.RetryOn404, status)
 	}
-	return syncCheckout(ctx, t.Client, t.SidecarID, t.IdentityFile, t.AuthSock, t.Workdir, cwd, status)
+	return syncCheckout(ctx, t.Client, t.SidecarID, t.Workdir, cwd, status)
 }
 
 func (t Target) ExecRunner(ctx context.Context, cwd string, envVars map[string]string, streams iostream.Streams) (func(context.Context, string) (string, string, int, error), string, error) {
@@ -100,8 +98,8 @@ func (t Target) ReadyExecRunner(ctx context.Context, cwd string, envVars map[str
 	return execFn, dest, nil
 }
 
-func syncCheckout(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock, workdir, cwd string, status iostream.StatusFunc) error {
-	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock, false)
+func syncCheckout(ctx context.Context, client *circleci.Client, sidecarID, workdir, cwd string, status iostream.StatusFunc) error {
+	session, err := OpenSession(ctx, client, sidecarID, false)
 	if err != nil {
 		return err
 	}

@@ -442,7 +442,9 @@ func TestRunRemoteSSH(t *testing.T) {
 	}
 
 	t.Run("success", func(t *testing.T) {
-		keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+		homeDir := t.TempDir()
+		t.Setenv(config.EnvHome, homeDir)
+		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
 		sshSrv := fakes.NewSSHServer(t, pubKey)
 		sshSrv.SetResult("hello from remote\n", 0)
 
@@ -451,9 +453,8 @@ func TestRunRemoteSSH(t *testing.T) {
 		cciSrv := httptest.NewServer(cci)
 		defer cciSrv.Close()
 
-		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "", false)
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", false)
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -470,7 +471,9 @@ func TestRunRemoteSSH(t *testing.T) {
 	})
 
 	t.Run("non-zero exit code", func(t *testing.T) {
-		keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+		homeDir := t.TempDir()
+		t.Setenv(config.EnvHome, homeDir)
+		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
 		sshSrv := fakes.NewSSHServer(t, pubKey)
 		sshSrv.SetResult("", 1)
 
@@ -479,9 +482,8 @@ func TestRunRemoteSSH(t *testing.T) {
 		cciSrv := httptest.NewServer(cci)
 		defer cciSrv.Close()
 
-		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "", false)
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", false)
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{
@@ -494,7 +496,9 @@ func TestRunRemoteSSH(t *testing.T) {
 	})
 
 	t.Run("multiple commands stop on first failure", func(t *testing.T) {
-		keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+		homeDir := t.TempDir()
+		t.Setenv(config.EnvHome, homeDir)
+		pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
 		sshSrv := fakes.NewSSHServer(t, pubKey)
 		sshSrv.SetResult("", 1)
 
@@ -503,9 +507,8 @@ func TestRunRemoteSSH(t *testing.T) {
 		cciSrv := httptest.NewServer(cci)
 		defer cciSrv.Close()
 
-		t.Setenv(config.EnvHome, t.TempDir())
 		client := newCCIClient(t, cciSrv.URL)
-		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", keyFile, "", false)
+		session, err := sidecar.OpenSession(context.Background(), client, "sidecar-123", false)
 		assert.NilError(t, err)
 
 		cfg := &config.ProjectConfig{Commands: []config.Command{

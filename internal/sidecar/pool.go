@@ -24,17 +24,15 @@ type PoolEntry struct {
 
 // Pool manages a fixed set of sidecars as a work queue for parallel tasks.
 type Pool struct {
-	free         chan *PoolEntry
-	updates      chan struct{}
-	ids          []string
-	entries      []*PoolEntry
-	client       *circleci.Client
-	workDir      string
-	orgID        string
-	image        string
-	name         string
-	identityFile string
-	authSock     string
+	free    chan *PoolEntry
+	updates chan struct{}
+	ids     []string
+	entries []*PoolEntry
+	client  *circleci.Client
+	workDir string
+	orgID   string
+	image   string
+	name    string
 
 	mu           sync.Mutex
 	pendingSyncs int
@@ -84,7 +82,7 @@ func NewPool(
 	ctx context.Context,
 	client *circleci.Client,
 	n int,
-	name, orgID, image, identityFile, authSock, workDir string,
+	name, orgID, image, workDir string,
 	status iostream.StatusFunc,
 ) (*Pool, error) {
 	_, repo, err := gitremote.DetectOrgAndRepo(workDir)
@@ -104,14 +102,14 @@ func NewPool(
 		lastSyncedRef = state.LastSyncedRef
 	}
 
-	return assemblePool(ctx, client, n, name, orgID, image, identityFile, authSock, repoPath, workDir, existingIDs, lastSyncedRef, status)
+	return assemblePool(ctx, client, n, name, orgID, image, repoPath, workDir, existingIDs, lastSyncedRef, status)
 }
 
 func assemblePool(
 	ctx context.Context,
 	client *circleci.Client,
 	n int,
-	name, orgID, image, identityFile, authSock, repoPath, workDir string,
+	name, orgID, image, repoPath, workDir string,
 	existingIDs []string,
 	lastSyncedRef string,
 	status iostream.StatusFunc,
@@ -124,7 +122,7 @@ func assemblePool(
 			swg.Add(1)
 			go func(i int, id string) {
 				defer swg.Done()
-				staleFlags[i] = IsDefinitelyStale(ctx, client, id, identityFile, authSock)
+				staleFlags[i] = IsDefinitelyStale(ctx, client, id)
 			}(i, id)
 		}
 		swg.Wait()
@@ -163,7 +161,7 @@ func assemblePool(
 		}
 		status(iostream.LevelInfo, fmt.Sprintf("created sidecar %d (%s)", seedIdx, seed.ID))
 
-		headRef, err := bundleSyncFanOutSince(ctx, client, []string{seed.ID}, identityFile, authSock, repoPath, workDir, "", true, status)
+		headRef, err := bundleSyncFanOutSince(ctx, client, []string{seed.ID}, repoPath, workDir, "", true, status)
 		if err != nil {
 			cleanCtx := context.Background()
 			_ = client.DeleteSidecar(cleanCtx, seed.ID)
@@ -247,8 +245,6 @@ func assemblePool(
 		orgID:        orgID,
 		image:        image,
 		name:         name,
-		identityFile: identityFile,
-		authSock:     authSock,
 		pendingSyncs: len(aliveExisting),
 	}
 
@@ -292,7 +288,7 @@ func (p *Pool) Rebuild(ctx context.Context, dead *PoolEntry, status iostream.Sta
 		return nil, fmt.Errorf("rebuild: create sidecar: %w", err)
 	}
 
-	if err := BundleSyncFanOut(ctx, p.client, []string{sc.ID}, p.identityFile, p.authSock, dead.RepoPath, p.workDir, true, status); err != nil {
+	if err := BundleSyncFanOut(ctx, p.client, []string{sc.ID}, dead.RepoPath, p.workDir, true, status); err != nil {
 		_ = p.client.DeleteSidecar(ctx, sc.ID)
 		return nil, fmt.Errorf("rebuild: sync: %w", err)
 	}
@@ -360,7 +356,7 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, pre
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			err := syncPreparedSidecar(ctx, p.client, id, p.identityFile, p.authSock, false, prepared)
+			err := syncPreparedSidecar(ctx, p.client, id, false, prepared)
 			p.finishSync(entry, err)
 		}(id, entry)
 	}

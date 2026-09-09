@@ -18,7 +18,7 @@ import (
 )
 
 func newValidateVariantsCmd() *cobra.Command {
-	var name, orgID, image, identityFile, workdir string
+	var name, orgID, image, workdir string
 	var parallel, timeout int
 
 	cmd := &cobra.Command{
@@ -123,17 +123,14 @@ func newValidateVariantsCmd() *cobra.Command {
 				statusFn(iostream.LevelInfo, fmt.Sprintf("swept %d orphaned variant sidecar(s) from a previous run", swept))
 			}
 
-			authSock := os.Getenv(config.EnvSSHAuthSock)
 			results, err := variants.Run(ctx, client, vs, variants.Options{
-				OrgID:        resolvedOrgID,
-				Image:        image,
-				IdentityFile: identityFile,
-				AuthSock:     authSock,
-				Workspace:    workspace,
-				CWD:          workDir,
-				Parallel:     parallel,
-				Commands:     variantCommands(cmds, workDir, timeout),
-				StatusFn:     statusFn,
+				OrgID:     resolvedOrgID,
+				Image:     image,
+				Workspace: workspace,
+				CWD:       workDir,
+				Parallel:  parallel,
+				Commands:  variantCommands(cmds, workDir, timeout),
+				StatusFn:  statusFn,
 			})
 			if err != nil {
 				return &userError{msg: "Variants run failed.", err: err}
@@ -155,7 +152,6 @@ func newValidateVariantsCmd() *cobra.Command {
 		"Per-command timeout in seconds, used when the command sets none (0 for no limit)")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
-	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Remote working directory")
 
 	return cmd

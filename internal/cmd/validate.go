@@ -150,21 +150,20 @@ func reportSkippedAutofix(skipped []string, streams iostream.Streams) {
 }
 
 type validateOpts struct {
-	sidecarID    string
-	identityFile string
-	workdir      string
-	orgID        string
-	dryRun       bool
-	list         bool
-	save         bool
-	remote       bool
-	local        bool
-	markRemote   bool
-	jsonOut      bool
-	inlineCmd    string
-	projectDir   string
-	envVarsFlag  []string
-	envFile      string
+	sidecarID   string
+	workdir     string
+	orgID       string
+	dryRun      bool
+	list        bool
+	save        bool
+	remote      bool
+	local       bool
+	markRemote  bool
+	jsonOut     bool
+	inlineCmd   string
+	projectDir  string
+	envVarsFlag []string
+	envFile     string
 }
 
 func newValidateCmd() *cobra.Command {
@@ -192,7 +191,6 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.local, "local", false, "Run commands locally instead of on sidecar")
 	cmd.Flags().StringVar(&opts.sidecarID, "sidecar-id", "", "Sidecar ID for remote execution")
 	cmd.Flags().StringVar(&opts.orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
-	cmd.Flags().StringVar(&opts.identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
 	cmd.Flags().StringVar(&opts.workdir, "workdir", "", "Working directory on sidecar (reads from sidecar.json, defaults to /home/user/<repo>)")
 	cmd.Flags().BoolVar(&opts.markRemote, "mark-remote", false, "Mark [name] (or every command) as remote in .chunk/config.json and exit")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show commands without executing")
@@ -301,7 +299,7 @@ func loadSidecarEnvVars(ctx context.Context, client *circleci.Client, opts *vali
 	if opts.sidecarID == "" {
 		return envVars, nil
 	}
-	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.identityFile, opts.workdir, statusFn, streams); err != nil {
+	if err := syncToSidecar(ctx, client, opts.sidecarID, opts.workdir, statusFn, streams); err != nil {
 		return nil, err
 	}
 	return envVars, nil
@@ -736,13 +734,12 @@ func setupRemote(ctx context.Context, client *circleci.Client, opts *validateOpt
 	return false, nil
 }
 
-func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, identityFile, workdir string, statusFn iostream.StatusFunc, streams iostream.Streams) error {
-	authSock := os.Getenv(config.EnvSSHAuthSock)
+func syncToSidecar(ctx context.Context, client *circleci.Client, sidecarID, workdir string, statusFn iostream.StatusFunc, streams iostream.Streams) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return &userError{msg: "Could not sync to sidecar.", err: err}
 	}
-	if err := sidecar.RsyncSync(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, statusFn); err != nil {
+	if err := sidecar.RsyncSync(ctx, client, sidecarID, workdir, cwd, statusFn); err != nil {
 		return sidecarSyncError(ctx, client, sidecarID, err, streams)
 	}
 	return nil

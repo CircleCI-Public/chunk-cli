@@ -88,15 +88,13 @@ type Result struct {
 
 // Options holds all configuration for running variants.
 type Options struct {
-	OrgID        string
-	Image        string
-	IdentityFile string
-	AuthSock     string
-	Workspace    string // remote working directory, must be non-empty
-	CWD          string // local source directory to sync from
-	Parallel     int    // max concurrent sidecars (default 5)
-	Commands     []Command
-	StatusFn     iostream.StatusFunc
+	OrgID     string
+	Image     string
+	Workspace string // remote working directory, must be non-empty
+	CWD       string // local source directory to sync from
+	Parallel  int    // max concurrent sidecars (default 5)
+	Commands  []Command
+	StatusFn  iostream.StatusFunc
 }
 
 // Run executes all variants in parallel and returns results in input order.
@@ -171,12 +169,12 @@ func runVariant(ctx context.Context, client *circleci.Client, v Variant, opts Op
 	}()
 
 	opts.StatusFn(iostream.LevelInfo, fmt.Sprintf("[%s] syncing", v.ID))
-	if err := sidecar.RsyncSyncEphemeral(ctx, client, sc.ID, opts.IdentityFile, opts.AuthSock, opts.Workspace, opts.CWD, opts.StatusFn); err != nil {
+	if err := sidecar.RsyncSyncEphemeral(ctx, client, sc.ID, opts.Workspace, opts.CWD, opts.StatusFn); err != nil {
 		base.Error = fmt.Sprintf("sync: %v", err)
 		return base
 	}
 
-	session, err := sidecar.OpenSession(ctx, client, sc.ID, opts.IdentityFile, opts.AuthSock, false)
+	session, err := sidecar.OpenSession(ctx, client, sc.ID, false)
 	if err != nil {
 		base.Error = fmt.Sprintf("open session: %v", err)
 		return base

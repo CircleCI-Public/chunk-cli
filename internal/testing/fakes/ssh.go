@@ -72,6 +72,39 @@ func GenerateSSHKeypair(t *testing.T) (keyFile string, pubKey ssh.PublicKey) {
 	return keyPath, sshPub
 }
 
+// GenerateSSHKeypairAt generates an ed25519 keypair at the given path (private
+// key at path, public key at path+".pub") and returns the parsed public key.
+// The destination directory is created if it does not exist.
+func GenerateSSHKeypairAt(t *testing.T, path string) ssh.PublicKey {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+	if err := os.WriteFile(path, privPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pubLine := ssh.MarshalAuthorizedKey(sshPub)
+	if err := os.WriteFile(path+".pub", pubLine, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return sshPub
+}
+
 // NewSSHServer starts a WebSocket+SSH server that accepts connections
 // authenticated with authorizedKey. The server is shut down automatically
 // when the test ends.

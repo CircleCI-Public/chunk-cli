@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,10 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/closer"
 )
 
 const (
@@ -75,43 +72,26 @@ func GenerateKeyPair(path string) error {
 // Each call to ExecOverSSH opens and closes its own SSH connection.
 type Session struct {
 	URL          string // WebSocket tunnel URL (ws:// or wss://)
-	IdentityFile string // path to SSH private key (empty when using agent)
+	IdentityFile string // path to SSH private key (~/.ssh/chunk_ai)
 	KnownHosts   string // path to known_hosts file
-	UseAgent     bool   // true when authenticating via ssh-agent
-	AuthSock     string // SSH_AUTH_SOCK path (only used when UseAgent is true)
-}
-
-// readProbeKey resolves the SSH public key to use for a staleness probe.
-func readProbeKey(ctx context.Context, authSock, identityFile string) (string, error) {
-	if identityFile == "" && authSock != "" {
-		if pubKey, err := agentPublicKey(ctx, authSock); err == nil {
-			return pubKey, nil
-		}
-	}
-	if identityFile == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		identityFile = filepath.Join(home, ".ssh", defaultKeyName)
-	}
-	data, err := os.ReadFile(identityFile + ".pub")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
 }
 
 // IsDefinitelyStale probes sidecarID with a single AddSSHKey attempt under a
 // short timeout. It returns true only when the provisioner responds 404.
-func IsDefinitelyStale(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string) bool {
+func IsDefinitelyStale(ctx context.Context, client *circleci.Client, sidecarID string) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	pubKey, err := readProbeKey(probeCtx, authSock, identityFile)
+	keyPath, err := DefaultKeyPath()
 	if err != nil {
 		return false
 	}
+	data, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		return false
+	}
+	pubKey := strings.TrimSpace(string(data))
+
 	_, err = client.AddSSHKey(probeCtx, sidecarID, pubKey)
 	if err == nil {
 		return false
@@ -146,36 +126,16 @@ func addSSHKey(ctx context.Context, client *circleci.Client, sidecarID, pubKey s
 	return nil, lastErr
 }
 
-// OpenSession registers an SSH key with the sidecar and returns session info.
-// authSock is the SSH_AUTH_SOCK path; when non-empty and no identityFile is
-// given, the agent is tried first. retryOn404 should be true only for freshly
-// created sidecars where a 404 can be transient.
-func OpenSession(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock string, retryOn404 bool) (*Session, error) {
+// OpenSession registers the default SSH key (~/.ssh/chunk_ai) with the sidecar
+// and returns session info. retryOn404 should be true only for freshly created
+// sidecars where a 404 can be transient.
+func OpenSession(ctx context.Context, client *circleci.Client, sidecarID string, retryOn404 bool) (*Session, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home directory: %w", err)
 	}
 	sshDir := filepath.Join(home, ".ssh")
-
-	if identityFile == "" && authSock != "" {
-		pubKey, err := agentPublicKey(ctx, authSock)
-		if err == nil {
-			resp, err := addSSHKey(ctx, client, sidecarID, pubKey, retryOn404)
-			if err != nil {
-				return nil, fmt.Errorf("register SSH key: %w", err)
-			}
-			return &Session{
-				URL:        resp.URL,
-				UseAgent:   true,
-				AuthSock:   authSock,
-				KnownHosts: filepath.Join(sshDir, knownHostsFile),
-			}, nil
-		}
-	}
-
-	if identityFile == "" {
-		identityFile = filepath.Join(sshDir, defaultKeyName)
-	}
+	identityFile := filepath.Join(sshDir, defaultKeyName)
 
 	if _, err := os.Stat(identityFile); err != nil {
 		return nil, &KeyNotFoundError{Path: identityFile}
@@ -201,37 +161,4 @@ func OpenSession(ctx context.Context, client *circleci.Client, sidecarID, identi
 		IdentityFile: identityFile,
 		KnownHosts:   filepath.Join(sshDir, knownHostsFile),
 	}, nil
-}
-
-// agentPublicKey returns the first public key from the running ssh-agent
-// in authorized_keys format, or an error if the agent is unavailable.
-func agentPublicKey(ctx context.Context, authSock string) (_ string, err error) {
-	ag, conn, err := dialAgent(ctx, authSock)
-	if err != nil {
-		return "", err
-	}
-	defer closer.ErrorHandler(conn, &err)
-
-	keys, err := ag.List()
-	if err != nil {
-		return "", fmt.Errorf("list agent keys: %w", err)
-	}
-	if len(keys) == 0 {
-		return "", fmt.Errorf("ssh-agent has no keys")
-	}
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(keys[0]))), nil
-}
-
-// dialAgent connects to the ssh-agent at the given socket path and returns
-// the agent client and the underlying connection. The caller must close conn.
-func dialAgent(ctx context.Context, authSock string) (agent.ExtendedAgent, net.Conn, error) {
-	if authSock == "" {
-		return nil, nil, ErrAuthSockNotSet
-	}
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", authSock)
-	if err != nil {
-		return nil, nil, fmt.Errorf("connect to ssh-agent: %w", err)
-	}
-	return agent.NewClient(conn), conn, nil
 }
