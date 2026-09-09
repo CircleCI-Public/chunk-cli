@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
@@ -282,7 +283,7 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = workDir
 	if len(envVars) > 0 {
-		env := os.Environ()
+		env := envctx.Environ(ctx)
 		for k, v := range envVars {
 			env = append(env, k+"="+v)
 		}
