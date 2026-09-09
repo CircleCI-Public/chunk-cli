@@ -91,7 +91,7 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		runner:    runner,
 		client:    client,
 		authError: authMessage,
-		out:       newOutputStore(ctx),
+		out:       newOutputStore(ctx, outputBufferCap()),
 	}
 	// Still cancelled explicitly: this returns before the process exits in tests
 	// and any embedded caller, and it is what stops streamers promptly rather
