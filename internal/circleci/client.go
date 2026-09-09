@@ -40,6 +40,10 @@ type Config struct {
 	// OnWarn, when non-nil, is called with a plain-text deprecation warning.
 	// See httpcl.Config.OnWarn for details.
 	OnWarn func(msg string)
+	// ReloadToken, when non-nil, re-reads the stored CircleCI token after a 401
+	// so a long-lived client can pick up a token stored after it was built.
+	// See httpcl.Config.ReloadToken for why this is a reload and not a refresh.
+	ReloadToken func() (string, error)
 }
 
 type Client struct {
@@ -57,6 +61,7 @@ func NewClient(cfg Config) (*Client, error) {
 		UserAgent:        version.UserAgent(),
 		RetryOn429Budget: 30 * time.Second,
 		OnWarn:           cfg.OnWarn,
+		ReloadToken:      cfg.ReloadToken,
 	})
 	return &Client{cl: cl}, nil
 }

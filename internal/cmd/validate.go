@@ -29,6 +29,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
@@ -637,7 +638,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 			streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Saved %s to .chunk/config.json", cmdName)))
 		}
 		if sidecarID != "" && allRemote {
-			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, rec.SetCommandID, streams)
+			execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, rec.SetCommandID, streams)
 			if err != nil {
 				return validate.Result{}, err
 			}
@@ -648,7 +649,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 
 	// All-remote execution (--remote flag): send everything to the sidecar.
 	if sidecarID != "" && allRemote {
-		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, rec.SetCommandID, streams)
+		execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, rec.SetCommandID, streams)
 		if err != nil {
 			return validate.Result{}, err
 		}
@@ -661,7 +662,7 @@ func runValidate(ctx context.Context, client *circleci.Client, rc config.Resolve
 		if name != "" {
 			if cmd := cfg.FindCommand(name); cmd != nil && cmd.Remote {
 				rec.Status(iostream.LevelInfo, fmt.Sprintf("running %s on sidecar %s", name, sidecarID))
-				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, rec.SetCommandID, streams)
+				execFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, rec.SetCommandID, streams)
 				if err != nil {
 					return validate.Result{}, err
 				}
@@ -817,11 +818,14 @@ func reapAbandonedSidecars(ctx context.Context, client *circleci.Client, workDir
 // stdout and stderr are therefore always empty — callers print output only when
 // it was not already streamed, so there is nothing left for them to do.
 //
+// projectRoot is the local repository root, used only to attribute registered
+// commands to a project for the watch daemon.
+//
 // Pass rec.SetCommandID for setCommandID when each exec's command ID should be
 // recorded on the event log. Pass nil for probe-only use (e.g. WorkspaceExists)
 // where the exec result should not touch the recorder.
 func newExecFn(
-	ctx context.Context, client *circleci.Client, sidecarID, workdir string,
+	ctx context.Context, client *circleci.Client, sidecarID, workdir, projectRoot string,
 	envVars map[string]string, rc config.ResolvedConfig, setCommandID func(string), streams iostream.Streams,
 ) (func(context.Context, string) (string, string, int, error), string, error) {
 	cwd, _ := os.Getwd()
@@ -847,7 +851,24 @@ func newExecFn(
 		_, _ = w.Write(data)
 	}
 	execFn := func(ctx context.Context, script string) (string, string, int, error) {
-		result, err := client.Exec(ctx, sidecarID, "sh", []string{"-c", script}, merged, onOutput)
+		// A nil setCommandID marks a probe: a command chunk issues on its own
+		// behalf, with no event log entry to attribute and nothing a developer
+		// would go looking for in the dashboard. Both omissions follow from that
+		// one fact, so they read off the same flag.
+		var reg *watchd.CommandReg
+		if setCommandID != nil {
+			// Registering before output is consumed is what lets the watch daemon
+			// tail this command while it runs, and keep its output after this
+			// process exits — which for a hook-driven run is immediately.
+			reg = &watchd.CommandReg{
+				SidecarID:   sidecarID,
+				ProjectRoot: projectRoot,
+				Op:          string(eventlog.OpValidate),
+				Name:        remoteCommandLabel(script),
+			}
+		}
+		result, err := submitAndStream(ctx, client, sidecarID, reg,
+			"sh", []string{"-c", script}, merged, onOutput)
 		if err != nil {
 			if setCommandID != nil {
 				// result is nil on all error paths; clear any stale pending ID.
@@ -861,6 +882,25 @@ func newExecFn(
 		return "", "", result.ExitCode, nil
 	}
 	return execFn, dest, nil
+}
+
+// remoteCommandLabel recovers a human-readable label from a remote script, for
+// the watch dashboard to title a command's output with.
+//
+// Remote scripts are built as `cd <workspace> && <command>`, so dropping the cd
+// leaves the command the user actually configured. Deriving it here keeps the
+// command name out of the exec signature, which two other open branches are
+// currently changing; the label is cosmetic, so a script in some other shape
+// degrades to the whole string rather than failing.
+func remoteCommandLabel(script string) string {
+	const sep = " && "
+	label := script
+	if strings.HasPrefix(script, "cd ") {
+		if _, rest, found := strings.Cut(script, sep); found {
+			label = rest
+		}
+	}
+	return clampLabel(label)
 }
 
 // hostForwardEnv collects host environment variables that should be forwarded
@@ -898,14 +938,14 @@ func runSplitCommands(ctx context.Context, client *circleci.Client, sidecarID st
 	if len(remoteCfg.Commands) > 0 {
 		// Probe with a plain exec fn so the workspace check never touches the
 		// recorder — there is no real command to attribute the probe's ID to.
-		probeExecFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, nil, streams)
+		probeExecFn, dest, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, nil, streams)
 		if err != nil {
 			return validate.Result{}, unreachableSidecar(sidecarID, commandNames(remoteCfg.Commands), err)
 		}
 		if wsErr := validate.WorkspaceExists(ctx, probeExecFn, dest); wsErr != nil {
 			return validate.Result{}, missingWorkspace(sidecarID, dest, commandNames(remoteCfg.Commands), wsErr)
 		}
-		execFn, _, err := newExecFn(ctx, client, sidecarID, workdir, envVars, rc, rec.SetCommandID, streams)
+		execFn, _, err := newExecFn(ctx, client, sidecarID, workdir, workDir, envVars, rc, rec.SetCommandID, streams)
 		if err != nil {
 			return validate.Result{}, unreachableSidecar(sidecarID, commandNames(remoteCfg.Commands), err)
 		}

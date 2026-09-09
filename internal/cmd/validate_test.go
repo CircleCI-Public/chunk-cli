@@ -26,6 +26,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
 
@@ -147,6 +148,7 @@ func TestHostForwardEnv(t *testing.T) {
 
 func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	isolateConfig(t)
+	t.Chdir(gitrepo.SetupGitRepo(t, "test-org", "test-repo"))
 
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
@@ -155,9 +157,14 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	assert.NilError(t, err)
 
+	// Point the daemon socket at an empty dir. Without this the command
+	// registration would reach a watch daemon actually running on the developer's
+	// machine, which is neither hermetic nor polite.
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
-	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "/home/user/test-repo", envVars, config.ResolvedConfig{}, nil, streams)
+	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", t.TempDir(), envVars, config.ResolvedConfig{}, nil, streams)
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")
