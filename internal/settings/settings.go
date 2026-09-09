@@ -7,6 +7,12 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
+// conflictsTimeout bounds the advisory conflict notice. It reads a precomputed
+// answer over a Unix socket, so anything beyond a couple of seconds means the
+// daemon is not answering — in which case the command prints nothing and the
+// commit proceeds either way.
+const conflictsTimeout = 5
+
 // hookEntry is one hook command within a hook group.
 type hookEntry struct {
 	Type    string `json:"type"`
@@ -40,7 +46,16 @@ type codexHooksJSON struct {
 //   - A PreToolUse hook matching "Bash(git commit*)" that runs each command before commits.
 //   - A Stop hook that runs "chunk validate" after every session.
 func Build(commands []config.Command) ([]byte, error) {
-	hooks := make([]hookEntry, 0, len(commands))
+	hooks := make([]hookEntry, 0, len(commands)+1)
+	// The advisory notice goes first, so the agent has it before any gate can
+	// stop the commit. Its timeout is short because it only reads an answer the
+	// daemon computed earlier — it never previews a merge itself.
+	hooks = append(hooks, hookEntry{
+		Type:    "command",
+		If:      CommitIfFilter,
+		Command: ConflictsCommand,
+		Timeout: conflictsTimeout,
+	})
 	for _, cmd := range commands {
 		timeout := cmd.Timeout
 		if timeout == 0 {

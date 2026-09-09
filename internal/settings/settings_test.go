@@ -2,12 +2,33 @@ package settings
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
+
+// entryFor returns the generated hook entry that runs the given command text.
+// Looked up rather than indexed because the commit group also holds chunk's
+// advisory conflict notice, and a positional assertion would break every time
+// that list gains an entry — which says nothing about the timeout under test.
+func entryFor(t *testing.T, entries []interface{}, contains string) map[string]interface{} {
+	t.Helper()
+	for _, e := range entries {
+		entry, ok := e.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		cmd, _ := entry["command"].(string)
+		if strings.Contains(cmd, contains) {
+			return entry
+		}
+	}
+	t.Fatalf("no hook entry running %q in %d entries", contains, len(entries))
+	return nil
+}
 
 func TestBuildHookTimeoutDefaultsToSixty(t *testing.T) {
 	// A command with Timeout: 0 must produce a non-zero timeout in the generated
@@ -28,7 +49,7 @@ func TestBuildHookTimeoutDefaultsToSixty(t *testing.T) {
 	group := preToolUse[0].(map[string]interface{})
 	assert.Equal(t, group["matcher"], "Bash", "group matcher must be tool name only")
 	entries := group["hooks"].([]interface{})
-	entry := entries[0].(map[string]interface{})
+	entry := entryFor(t, entries, "go test ./...")
 	assert.Equal(t, entry["if"], CommitIfFilter, "entry must carry if filter for git commit")
 
 	timeout, _ := entry["timeout"].(float64)
@@ -54,7 +75,7 @@ func TestBuildHookMatcherIsToolName(t *testing.T) {
 	assert.Equal(t, group["matcher"], CommitMatcher)
 
 	entries := group["hooks"].([]interface{})
-	entry := entries[0].(map[string]interface{})
+	entry := entryFor(t, entries, "task test")
 	assert.Equal(t, entry["if"], CommitIfFilter)
 }
 
@@ -72,7 +93,7 @@ func TestBuildHookTimeoutRespectsExplicitValue(t *testing.T) {
 	preToolUse := hooks["PreToolUse"].([]interface{})
 	group := preToolUse[0].(map[string]interface{})
 	entries := group["hooks"].([]interface{})
-	entry := entries[0].(map[string]interface{})
+	entry := entryFor(t, entries, "golangci-lint run")
 
 	timeout, _ := entry["timeout"].(float64)
 	assert.Assert(t, timeout == 120, "expected explicit timeout of 120, got: %v", timeout)

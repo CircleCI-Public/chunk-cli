@@ -19,12 +19,24 @@ import (
 )
 
 type projectState struct {
-	root    string
-	dataDir string
-	log     *eventlog.Log
-	offset  int64
-	events  []eventlog.Event
-	snap    ProjectSnapshot
+	root string
+	// canonRoot is root with symlinks resolved, so a caller that discovered the
+	// same project by another route — git's --show-toplevel, a shell's $PWD
+	// through a symlinked home — still matches it. Computed once at init,
+	// outside the lock, because resolving it touches the filesystem.
+	canonRoot string
+	dataDir   string
+	log       *eventlog.Log
+	offset    int64
+	events    []eventlog.Event
+	snap      ProjectSnapshot
+
+	// conflict and lastFetch are written by the conflict loop and read by the
+	// poll loop when it builds snap, so unlike the fields above — which only
+	// the poll loop touches — both are guarded by daemon.mu. nil conflict means
+	// no check has completed yet.
+	conflict  *ConflictState
+	lastFetch time.Time
 }
 
 type daemon struct {
@@ -107,6 +119,7 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string)
 	log.Printf("watch daemon started pid=%d socket=%s", os.Getpid(), sockPath)
 
 	go d.pollLoop(ctx)
+	go d.checkConflictsLoop(ctx)
 
 	srv := newServer(d)
 	go func() {
@@ -188,7 +201,27 @@ func (d *daemon) initProject(root string) *projectState {
 		log.Printf("watchd: event log for %s: %v", root, err)
 		return nil
 	}
-	return &projectState{root: root, dataDir: dataDir, log: el}
+	return &projectState{root: root, canonRoot: canonicalRoot(root), dataDir: dataDir, log: el}
+}
+
+// conflictReport answers a conflict query for one project root.
+//
+// It reads ps.conflict directly rather than the published snapshot: the
+// snapshot is only as fresh as the last poll, and this sits in front of a hook
+// that is about to tell an agent something. A root the daemon does not know
+// yields Known false — distinct from a known project with nothing to report,
+// which is the difference between "no answer" and "no conflicts".
+func (d *daemon) conflictReport(root string) ConflictReport {
+	want := canonicalRoot(root)
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, ps := range d.projects {
+		if ps.root != root && ps.canonRoot != want {
+			continue
+		}
+		return ConflictReport{Root: ps.root, Conflict: ps.conflict, Known: true}
+	}
+	return ConflictReport{Root: root}
 }
 
 // updateProject refreshes sidecar files, new log events, and git state for ps.
@@ -219,6 +252,9 @@ func (d *daemon) updateProject(ps *projectState) {
 		Commands: d.out.commandsFor(ps.root),
 	}
 	d.mu.Lock()
+	// Read under the same lock that publishes snap, because the conflict loop
+	// writes it from another goroutine on its own schedule.
+	snap.Conflict = ps.conflict
 	ps.snap = snap
 	d.mu.Unlock()
 }
