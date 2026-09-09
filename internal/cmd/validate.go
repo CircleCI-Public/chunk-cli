@@ -375,7 +375,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return hookErr
 	}
 	if skip {
-		return nil
+		return writeStopHookResponse(cmd.OutOrStdout(), "chunk validate skipped (working tree is clean)")
 	}
 	statusFn := newStatusFunc(streams)
 	insecureStorage := insecureStorageFlag(cmd)
@@ -402,7 +402,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	cfg, err := config.LoadProjectConfig(workDir)
 	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
 		if hook != nil {
-			return nil // no config in hook context: skip silently
+			return writeStopHookResponse(cmd.OutOrStdout(), "chunk validate skipped (no validation commands configured)")
 		}
 		return &userError{
 			msg:        msgValidateNotConfigured,
