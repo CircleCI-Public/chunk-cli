@@ -12,8 +12,6 @@ var (
 	ErrPublicKeyRequired = errors.New("public key is required")
 	// ErrPrivateKeyProvided indicates a private key was given where a public key was expected.
 	ErrPrivateKeyProvided = errors.New("provided key is a private key")
-	// ErrAuthSockNotSet indicates the SSH agent socket is not configured.
-	ErrAuthSockNotSet = errors.New("ssh auth socket not set")
 )
 
 // KeyNotFoundError indicates the SSH private key file does not exist.

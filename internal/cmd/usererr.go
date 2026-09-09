@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -163,7 +162,7 @@ func sshSessionError(err error) error {
 	if e, ok := errors.AsType[*sidecar.KeyNotFoundError](err); ok {
 		return newUserError(fmt.Sprintf("SSH key not found: %s", e.Path)).
 			withCode("ssh.key_not_found").
-			withSuggestion(fmt.Sprintf("Generate one with: ssh-keygen -t ed25519 -f %s\nOr pass --identity-file to use an existing key.", e.Path)).
+			withSuggestion(fmt.Sprintf("Generate one with: ssh-keygen -t ed25519 -f %s", e.Path)).
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
@@ -171,13 +170,6 @@ func sshSessionError(err error) error {
 		return newUserError(fmt.Sprintf("SSH public key not found: %s", e.KeyPath)).
 			withCode("ssh.public_key_not_found").
 			withSuggestion(fmt.Sprintf("Generate a new keypair with: ssh-keygen -t ed25519 -f %s", e.IdentityFile)).
-			withExitCode(ExitBadArgs).
-			wrap(err)
-	}
-	if errors.Is(err, sidecar.ErrAuthSockNotSet) {
-		return newUserError("SSH agent not available.").
-			withCode("ssh.auth_sock_not_set").
-			withSuggestion("Set " + config.EnvSSHAuthSock + " or pass --identity-file.").
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}

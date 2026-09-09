@@ -416,7 +416,6 @@ func TestResolve_SkipsKeychainWhenInsecureStorage(t *testing.T) {
 
 func TestValidConfigKeys(t *testing.T) {
 	assert.Assert(t, ValidConfigKeys["model"])
-	assert.Assert(t, ValidConfigKeys["useSSHIdentityFile"])
 	assert.Assert(t, ValidConfigKeys["telemetry"])
 	assert.Assert(t, !ValidConfigKeys["anthropicAPIKey"])
 	assert.Assert(t, !ValidConfigKeys["badkey"])

@@ -376,9 +376,9 @@ func TestSidecarsSyncCheckoutFlagRemoved(t *testing.T) {
 		"--checkout must be an unknown flag; got: %s", combined)
 }
 
-// TestSidecarsSshFlags verifies that SSH --identity-file is accepted and
-// code progresses past flag parsing (fails at SSH step, not at parsing).
-func TestSidecarsSshFlags(t *testing.T) {
+// TestSidecarsSshNoKey verifies that `sidecar ssh` fails with a clear error
+// when no default key exists at ~/.ssh/chunk_ai.
+func TestSidecarsSshNoKey(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
@@ -386,13 +386,13 @@ func TestSidecarsSshFlags(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 
-	result := binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "--identity-file", "/tmp/fake-key"}, env, env.HomeDir)
+	// No key at env.HomeDir/.ssh/chunk_ai — the default path.
+	result := binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111"}, env, env.HomeDir)
 
-	// Should fail at SSH key step, not at flag parsing
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH key missing)")
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "SSH key not found"),
-		"expected SSH key error (proves flags accepted), got: %s", combined)
+		"expected SSH key not found error, got: %s", combined)
 }
 
 func TestSidecarsExecWithArgs(t *testing.T) {

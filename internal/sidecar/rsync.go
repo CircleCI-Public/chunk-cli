@@ -51,13 +51,16 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	if err != nil {
 		return fmt.Errorf("rsync: resolve key path: %w", err)
 	}
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+	if _, err := os.Stat(keyPath); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("rsync: stat SSH key: %w", err)
+		}
 		if err := GenerateKeyPair(keyPath); err != nil {
 			return fmt.Errorf("rsync: generate SSH key: %w", err)
 		}
 	}
 
-	sess, err := OpenSession(ctx, client, sidecarID, keyPath, "", false)
+	sess, err := OpenSession(ctx, client, sidecarID, false)
 	if err != nil {
 		return fmt.Errorf("rsync: open session: %w", err)
 	}

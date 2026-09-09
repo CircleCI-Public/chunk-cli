@@ -34,8 +34,8 @@ func TestOpenSessionDefaultKeyFallback(t *testing.T) {
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	// Both identityFile and authSock are empty — should attempt default key path.
-	_, err := sidecar.OpenSession(ctx, cl, "sb-1", "", "", false)
+	// Should attempt default key path (~/.ssh/chunk_ai).
+	_, err := sidecar.OpenSession(ctx, cl, "sb-1", false)
 	assert.Assert(t, err != nil)
 	assert.Assert(t, strings.Contains(err.Error(), "chunk_ai"),
 		"expected default key name in error, got: %v", err)
