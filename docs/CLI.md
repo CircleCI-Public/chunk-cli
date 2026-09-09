@@ -70,7 +70,6 @@ chunk
 │   --mark-remote                   # Mark [name] (or all commands) remote in config, then exit
 │   --sidecar-id <id>               # Remote execution in specific sidecar
 │   --org-id <id>                   # Organization ID (used when creating a new sidecar)
-│   --identity-file <path>          # SSH identity file for sidecar
 │   --workdir <path>                # Working directory on sidecar
 │   --project <path>                # Override project directory
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
@@ -82,7 +81,6 @@ chunk
 │       --timeout <seconds>         # Per-command timeout when the command sets none (0 for no limit)
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
-│       --identity-file <path>      # SSH identity file
 │       --workdir <path>            # Remote working directory
 │
 ├── sidecar
@@ -108,12 +106,10 @@ chunk
 │   │   --public-key-file <path>    # Path to public key file
 │   ├── ssh                         # SSH into sidecar (stdin forwarded when piped)
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
-│   │   --identity-file <path>      # SSH identity file
 │   │   -e / --env KEY=VALUE        # Set env var in remote session (repeatable)
 │   │   --env-file <path>           # Env file to load (default: .env.local; pass a path to override)
 │   ├── sync                        # Sync files to sidecar
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
-│   │   --identity-file <path>      # SSH identity file
 │   │   --workdir <path>            # Destination path on sidecar (auto-detected when omitted)
 │   │   --checkout                  # Sync via git checkout/patch instead of bundle (requires branch pushed to GitHub)
 │   ├── env                         # Detect tech stack and print environment spec as JSON
@@ -127,7 +123,6 @@ chunk
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --org-id <id>               # Organization ID (used when creating a new sidecar)
 │   │   --name <name>               # Sidecar name (used when creating a new sidecar)
-│   │   --identity-file <path>      # SSH identity file
 │   │   --skip-sync                 # Skip syncing files to the sidecar
 │   │   --force                     # Re-detect environment even if cached
 │   │   -e / --env KEY=VALUE        # Set env var in remote sidecar session (repeatable)
