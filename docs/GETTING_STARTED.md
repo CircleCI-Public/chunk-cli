@@ -230,6 +230,18 @@ To fall back to the git checkout/patch approach (requires the branch to be pushe
 chunk sidecar sync --checkout
 ```
 
+### SSH key management
+
+chunk generates and manages its own SSH keypair at `~/.ssh/chunk_ai`. The public key is registered with each sidecar automatically when you first sync or SSH in — you do not need to create keys, run `ssh-add`, or pass an identity file.
+
+If sync or SSH fails with `permission denied (publickey)`, re-register the key:
+
+```bash
+chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub
+```
+
+If the key is missing or corrupted, delete `~/.ssh/chunk_ai*` and chunk will regenerate the pair on next use.
+
 ### Environment setup
 
 Auto-detect your tech stack and save it to config:
