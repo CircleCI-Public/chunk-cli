@@ -35,6 +35,104 @@ type ValidateResponse struct {
 	Stderr   string `json:"stderr"`
 }
 
+// AsyncValidateRequest starts a validate run the caller will not wait for.
+type AsyncValidateRequest struct {
+	ValidateRequest
+	// ProjectRoot is the repo the run validates. The daemon files the task under
+	// it and fingerprints it, so it is required — an async result that cannot be
+	// attributed to a project can never be collected.
+	ProjectRoot string `json:"project_root"`
+}
+
+// AsyncValidateResponse acknowledges an accepted async run.
+type AsyncValidateResponse struct {
+	TaskID string `json:"task_id"`
+}
+
+// CollectResponse carries the finished results for a project.
+type CollectResponse struct {
+	Tasks []TaskState `json:"tasks"`
+}
+
+// handleAsyncValidate starts a validate run in the background and returns its
+// task ID immediately.
+//
+// Unlike handleValidate this does not hold validateMu across the run — that is
+// the point, since the caller is released rather than waiting. The run itself
+// still takes the lock, so two async runs queue behind each other exactly as
+// two synchronous ones do; what changes is who waits, not how many run at once.
+func (d *daemon) handleAsyncValidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req AsyncValidateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ProjectRoot == "" {
+		http.Error(w, "project_root required", http.StatusBadRequest)
+		return
+	}
+	if d.runner == nil {
+		http.Error(w, "no validate runner configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Detached from the request: the caller is about to disconnect, and an async
+	// run that died with the connection that started it would be pointless.
+	// The store's parent context bounds it instead, so it ends with the daemon.
+	env := req.Env
+	if req.CircleCIToken != "" {
+		env = append(append([]string(nil), env...), "CIRCLE_TOKEN="+req.CircleCIToken)
+	}
+	sessionID := session.IDFromSlice(req.Env)
+	args := req.Args
+
+	taskID, err := d.tasks.start(req.ProjectRoot, func(ctx context.Context) (int, string) {
+		// Serialised against every other validate run, async or not: two runs of
+		// the same commands in one tree would race over whatever they build.
+		d.validateMu.Lock()
+		defer d.validateMu.Unlock()
+
+		if sessionID != "" {
+			ctx = session.WithID(ctx, sessionID)
+		}
+		ctx = envctx.WithEnv(ctx, env)
+
+		var stdout, stderr bytes.Buffer
+		exitCode := d.runner(ctx, args, env, &stdout, &stderr)
+		// stderr carries the progress lines and the tally; stdout is usually
+		// empty for a validate run. Both are kept so whoever collects the result
+		// sees what the developer would have seen.
+		return exitCode, stdout.String() + stderr.String()
+	})
+	if err != nil {
+		// The tree could not be fingerprinted, so staleness would be undetectable.
+		// Reported as a conflict rather than a server error: nothing is broken,
+		// this tree just cannot be validated asynchronously, and the caller is
+		// expected to run inline instead.
+		http.Error(w, "cannot validate asynchronously: "+err.Error(), http.StatusConflict)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(AsyncValidateResponse{TaskID: taskID})
+}
+
+// handleCollect returns the finished results for a project and forgets them.
+func (d *daemon) handleCollect(w http.ResponseWriter, r *http.Request) {
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		http.Error(w, "root required", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(CollectResponse{Tasks: d.tasks.collect(root)})
+}
+
 func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	d.validateMu.Lock()
 	defer d.validateMu.Unlock()

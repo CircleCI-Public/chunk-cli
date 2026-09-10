@@ -166,6 +166,8 @@ type validateOpts struct {
 	projectDir     string
 	envVarsFlag    []string
 	envFile        string
+	async          bool   // run via the daemon without waiting for the result
+	collect        bool   // print finished background results and exit
 	noDaemon       bool   // bypasses daemon delegation; set by the daemon when calling in-process
 	hookSessionID  string // hook session ID forwarded from client to daemon subprocess
 	stopHookActive bool   // stop_hook_active forwarded from client to daemon subprocess
@@ -207,6 +209,8 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.projectDir, "project", "", "Override project directory")
 	cmd.Flags().StringArrayVarP(&opts.envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
+	cmd.Flags().BoolVar(&opts.async, "async", false, "Run in the background via the watch daemon and report on a later run")
+	cmd.Flags().BoolVar(&opts.collect, "collect", false, "Print results of finished background runs and exit")
 	cmd.Flags().BoolVar(&opts.noDaemon, "no-daemon", false, "")
 	_ = cmd.Flags().MarkHidden("no-daemon")
 	cmd.Flags().StringVar(&opts.hookSessionID, "hook-session-id", "", "")
@@ -359,6 +363,12 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
+	// Collect runs nothing. It reports what earlier background runs concluded and
+	// exits, so it is safe to reach before any of the setup below.
+	if opts.collect {
+		return runCollect(workDir, streams)
+	}
+
 	hook := detectHook(cmd.InOrStdin())
 	// When running as a daemon subprocess, hook context arrives via flags.
 	if opts.hookSessionID != "" && hook == nil {
@@ -439,17 +449,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		}
 	}
 
-	if shouldUseDaemon(hook, opts.noDaemon) {
-		err := runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, nil, streams)
-		if !errors.Is(err, watchd.ErrDaemonUnavailable) {
-			return err
-		}
-		// ErrDaemonUnavailable covers two cases: the daemon disappeared between
-		// the IsDaemonCompatible check and the POST (connection refused), and the
-		// daemon lacks the /validate endpoint because it is from an older build
-		// (404). Both fall through to inline execution.
-		// daemon disappeared between the IsDaemonRunning check and the POST;
-		// fall through to inline execution.
+	if done, err := delegateToDaemon(opts, hook, workDir, rc.CircleCIToken, streams); done {
+		return err
 	}
 
 	// allRemote is true unless --local is passed explicitly. opts.remote is
@@ -677,6 +678,101 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, noDaemon bool, strea
 		return false, nil // daemon disappeared between check and POST; run inline
 	}
 	return true, err
+}
+
+// delegateToDaemon hands the run to the watch daemon when it should be, and
+// reports whether it did. A caller told false runs the commands inline.
+//
+// Async and synchronous delegation are decided together because they are the
+// same decision: both give the run to the daemon, and the only difference is
+// whether this process waits for the answer. Either can decline — an
+// unfingerprintable tree, an old daemon, no daemon at all — and every decline
+// means the same thing, which is to run the commands here instead.
+func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCIToken string, streams iostream.Streams) (bool, error) {
+	if opts.async && !opts.noDaemon {
+		// A refusal falls through to inline: slower than the caller asked for,
+		// but it always tells them the truth about the tree in front of them.
+		return tryAsyncDelegate(workDir, circleCIToken, streams)
+	}
+	if shouldUseDaemon(hook, opts.noDaemon) {
+		err := runValidateViaDaemon(os.Args[1:], circleCIToken, nil, streams)
+		// ErrDaemonUnavailable covers two cases: the daemon disappeared between
+		// the IsDaemonCompatible check and the POST (connection refused), and the
+		// daemon lacks the /validate endpoint because it is from an older build
+		// (404). Both fall through to inline execution.
+		if !errors.Is(err, watchd.ErrDaemonUnavailable) {
+			return true, err
+		}
+	}
+	return false, nil
+}
+
+// tryAsyncDelegate hands the run to the daemon without waiting for it. The
+// bool reports whether the run was accepted, so a caller that gets false runs
+// the commands inline instead.
+//
+// A refusal is not a failure: the daemon declines a tree it cannot fingerprint,
+// because it could not then tell whether the result still described that tree by
+// the time it finished. Running inline is the honest fallback — the answer is
+// slower to arrive but reaches the caller while it is still true.
+func tryAsyncDelegate(workDir, circleCIToken string, streams iostream.Streams) (bool, error) {
+	if !watchd.IsDaemonCompatible() {
+		streams.ErrPrintln(ui.ErrDim("chunk validate: no watch daemon, running inline"))
+		return false, nil
+	}
+	taskID, err := watchd.StartAsyncValidate(workDir, os.Args[1:], circleCIToken)
+	switch {
+	case errors.Is(err, watchd.ErrAsyncRefused):
+		streams.ErrPrintln(ui.ErrDim("chunk validate: tree cannot be fingerprinted, running inline"))
+		return false, nil
+	case errors.Is(err, watchd.ErrDaemonUnavailable):
+		streams.ErrPrintln(ui.ErrDim("chunk validate: watch daemon unavailable, running inline"))
+		return false, nil
+	case err != nil:
+		return true, err
+	}
+	streams.ErrPrintf("  %s\n", ui.ErrDim("validating in the background: "+shortTaskID(taskID)))
+	return true, nil
+}
+
+// shortTaskID trims a task ID for display. The full UUID is only needed to
+// correlate with the daemon; a developer reading a line of output is not.
+func shortTaskID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+// runCollect prints the results of finished background runs for workDir and
+// clears them, so a result is reported once rather than on every later run.
+//
+// Output goes to stdout and nothing else does. This is what a turn-start hook
+// calls, and on those hooks Claude Code adds stdout to the agent's context — so
+// stdout is the channel by which a background result reaches the agent that
+// caused it. Progress and warnings stay on stderr.
+func runCollect(workDir string, streams iostream.Streams) error {
+	tasks, err := watchd.CollectValidateResults(workDir)
+	if err != nil {
+		// Nothing to collect is the common case, not a failure: no daemon means
+		// no background runs. Reporting it as an error on a hook path would put
+		// noise in front of the agent on every turn.
+		if errors.Is(err, watchd.ErrDaemonUnavailable) {
+			return nil
+		}
+		return err
+	}
+	for _, t := range tasks {
+		if t.Passed() {
+			streams.Printf("chunk validate passed in the background (%s)\n", shortTaskID(t.ID))
+			continue
+		}
+		streams.Printf("chunk validate FAILED in the background (%s), exit status %d\n", shortTaskID(t.ID), t.ExitCode)
+		if t.Output != "" {
+			streams.Printf("%s\n", strings.TrimRight(t.Output, "\n"))
+		}
+	}
+	return nil
 }
 
 // validateEarlyExits handles --list, --mark-remote, missing config, --dry-run.
