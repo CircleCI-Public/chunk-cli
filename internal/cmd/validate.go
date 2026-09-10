@@ -334,13 +334,22 @@ func resolveWorkDir(opts *validateOpts) (string, error) {
 // shouldUseDaemon reports whether this validate run should be delegated to the
 // watch daemon. Hook runs always run inline (stdin consumed, per-session attempt
 // tracking). --no-daemon skips this to avoid re-delegation when the daemon calls
-// us in-process.
+// us in-process. Delegation is skipped for daemons from a different build since
+// they may not support the /validate endpoint.
 func shouldUseDaemon(hook *hookContext, noDaemon bool) bool {
-	return hook == nil && !noDaemon && watchd.IsDaemonRunning()
+	return hook == nil && !noDaemon && watchd.IsDaemonCompatible()
 }
 
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
 	streams := iostream.FromCmd(cmd)
+
+	// --no-daemon is a persistent root flag; read it here so the rest of the
+	// function can use opts.noDaemon uniformly regardless of where the flag
+	// was defined. When the flag isn't in the set (e.g. the daemon calling
+	// in-process sets opts.noDaemon directly), leave the existing value alone.
+	if v, err := cmd.Flags().GetBool("no-daemon"); err == nil {
+		opts.noDaemon = v
+	}
 
 	// Record before git-status check so total captures setup overhead too.
 	start := time.Now()
@@ -435,6 +444,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		if !errors.Is(err, watchd.ErrDaemonUnavailable) {
 			return err
 		}
+		// ErrDaemonUnavailable covers two cases: the daemon disappeared between
+		// the IsDaemonCompatible check and the POST (connection refused), and the
+		// daemon lacks the /validate endpoint because it is from an older build
+		// (404). Both fall through to inline execution.
 		// daemon disappeared between the IsDaemonRunning check and the POST;
 		// fall through to inline execution.
 	}

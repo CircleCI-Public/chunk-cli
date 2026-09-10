@@ -180,6 +180,19 @@ func IsDaemonRunning() bool {
 	if err != nil {
 		return false
 	}
+	ok, _ := ping(sockPath)
+	return ok
+}
+
+// IsDaemonCompatible reports whether the watch daemon is reachable and running
+// the same build as the current process. A daemon from a different build may
+// not support all API endpoints (e.g. /validate), so delegation should be
+// skipped and the operation run inline instead.
+func IsDaemonCompatible() bool {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return false
+	}
 	ok, build := ping(sockPath)
 	return ok && build == BuildID()
 }
@@ -202,7 +215,14 @@ func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return ValidateResponse{}, fmt.Errorf("watch daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+		err := fmt.Errorf("watch daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+		// 404 means the daemon is running but does not have the /validate
+		// endpoint — it is from an older build. Treat it as unavailable so
+		// callers fall back to inline execution instead of surfacing the error.
+		if resp.StatusCode == http.StatusNotFound {
+			return ValidateResponse{}, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
+		}
+		return ValidateResponse{}, err
 	}
 	var result ValidateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

@@ -15,23 +15,40 @@ import (
 	"testing"
 )
 
-// makeTarGz returns a .tar.gz containing a single file named "chunk" with the given content.
+// makeTarGz returns a .tar.gz laid out like a release archive, with the binary
+// last. It deliberately includes a nested file whose base name is also "chunk":
+// packaging no longer ships one, but the reader must not depend on that, so
+// this pins it against regressing to base-name matching.
 func makeTarGz(t *testing.T, content []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 
-	hdr := &tar.Header{
-		Name: "chunk",
-		Mode: 0o755,
-		Size: int64(len(content)),
+	entries := []struct {
+		name string
+		body []byte
+	}{
+		{"LICENSE", []byte("MIT\n")},
+		{"README.md", []byte("# chunk\n")},
+		{"share/bash-completion/completions/chunk", []byte("# bash completion for chunk\n")},
+		{"share/zsh/site-functions/_chunk", []byte("#compdef chunk\n")},
+		{"docs/chunk", []byte("not the binary either\n")},
+		{"chunk", content},
 	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(content); err != nil {
-		t.Fatal(err)
+	for _, e := range entries {
+		hdr := &tar.Header{
+			Name:     e.name,
+			Typeflag: tar.TypeReg,
+			Mode:     0o755,
+			Size:     int64(len(e.body)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(e.body); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
