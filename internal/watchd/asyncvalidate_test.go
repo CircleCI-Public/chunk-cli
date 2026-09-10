@@ -1,8 +1,16 @@
 package watchd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -325,4 +333,126 @@ func TestFingerprintIsReadOncePerEndOfRun(t *testing.T) {
 	assert.Equal(t, before, 2, "expected one fingerprint at start and one at finish")
 	s.collect("/repo")
 	assert.Equal(t, fake.calls(), before, "collect re-read the tree")
+}
+
+// gitRepo returns a temp git repo with one commit, for handler tests that need a
+// tree the daemon can actually fingerprint.
+func gitRepo(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "asyncrepo")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "test"},
+		{"commit", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, "git %v: %s", args, out)
+	}
+	return dir
+}
+
+// serve runs one request against the daemon's real mux, so the routes are
+// covered rather than only the handler functions.
+func serve(d *daemon, req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	newServer(d).Handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func asyncReq(t *testing.T, root string) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(AsyncValidateRequest{ProjectRoot: root})
+	assert.NilError(t, err)
+	return httptest.NewRequest(http.MethodPost, "/validate/async", bytes.NewReader(body))
+}
+
+// The whole round trip over the daemon's API: a run is accepted, the caller is
+// released before it finishes, and the result is there to be collected after.
+func TestAsyncValidateEndpointAcceptsAndCollects(t *testing.T) {
+	root := gitRepo(t)
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+
+	release := make(chan struct{})
+	d.runner = func(context.Context, []string, []string, io.Writer, io.Writer) int {
+		<-release
+		return 0
+	}
+
+	rec := serve(d, asyncReq(t, root))
+	assert.Equal(t, rec.Code, http.StatusAccepted)
+	var started AsyncValidateResponse
+	assert.NilError(t, json.Unmarshal(rec.Body.Bytes(), &started))
+	assert.Assert(t, started.TaskID != "", "no task ID was returned")
+
+	// Released while the run is still going: that is the point of the endpoint.
+	assert.Equal(t, len(d.tasks.inFlight(root)), 1)
+
+	close(release)
+	waitFor(t, func() bool { return len(d.tasks.inFlight(root)) == 0 }, "run never finished")
+
+	rec = serve(d, httptest.NewRequest(http.MethodGet, "/validate/collect?root="+url.QueryEscape(root), nil))
+	assert.Equal(t, rec.Code, http.StatusOK)
+	var collected CollectResponse
+	assert.NilError(t, json.Unmarshal(rec.Body.Bytes(), &collected))
+	assert.Equal(t, len(collected.Tasks), 1)
+	assert.Equal(t, collected.Tasks[0].ID, started.TaskID)
+	assert.Assert(t, collected.Tasks[0].Passed())
+}
+
+// A tree with no fingerprint is refused with 409 rather than 500: nothing is
+// broken, this tree just cannot be validated asynchronously, and the caller is
+// meant to read that as "run it inline" instead of as a daemon failure.
+func TestAsyncValidateEndpointRefusesAnUnfingerprintableTree(t *testing.T) {
+	dir, err := os.MkdirTemp("", "notarepo")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+	var ran bool
+	d.runner = func(context.Context, []string, []string, io.Writer, io.Writer) int {
+		ran = true
+		return 0
+	}
+
+	rec := serve(d, asyncReq(t, dir))
+	assert.Equal(t, rec.Code, http.StatusConflict)
+	assert.Equal(t, ran, false, "a run started against a tree with no baseline")
+}
+
+// A result that cannot be attributed to a project could never be collected, so
+// the request is rejected rather than accepted and lost.
+func TestAsyncValidateEndpointRequiresAProjectRoot(t *testing.T) {
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+	d.runner = func(context.Context, []string, []string, io.Writer, io.Writer) int { return 0 }
+
+	rec := serve(d, asyncReq(t, ""))
+	assert.Equal(t, rec.Code, http.StatusBadRequest)
+}
+
+// Without a runner there is nothing to run, and accepting the request would
+// promise a result that never arrives.
+func TestAsyncValidateEndpointNeedsARunner(t *testing.T) {
+	root := gitRepo(t)
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+
+	rec := serve(d, asyncReq(t, root))
+	assert.Equal(t, rec.Code, http.StatusServiceUnavailable)
+}
+
+func TestCollectEndpointRequiresARoot(t *testing.T) {
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+
+	rec := serve(d, httptest.NewRequest(http.MethodGet, "/validate/collect", nil))
+	assert.Equal(t, rec.Code, http.StatusBadRequest)
 }

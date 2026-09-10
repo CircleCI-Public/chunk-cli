@@ -29,7 +29,8 @@ func newTestDaemon() *daemon {
 		out:      newOutputStore(context.Background()),
 		// No client: these tests never attach a dashboard, so nothing is sampled
 		// and the sampler only has to be non-nil to annotate.
-		res: newResourceSampler(nil),
+		res:   newResourceSampler(nil),
+		tasks: newTaskStore(context.Background()),
 	}
 }
 

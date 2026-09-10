@@ -231,6 +231,84 @@ func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) 
 	return result, nil
 }
 
+// ErrAsyncRefused is returned by StartAsyncValidate when the daemon will not
+// run this tree asynchronously — it could not be fingerprinted, so a stale
+// result would be undetectable. Callers fall back to running inline, where the
+// answer reaches whoever asked for it while it is still true.
+var ErrAsyncRefused = errors.New("async validation refused")
+
+// StartAsyncValidate asks the daemon to validate projectRoot in the background
+// and returns the new task's ID without waiting for the run.
+func StartAsyncValidate(projectRoot string, args []string, circleCIToken string) (string, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(AsyncValidateRequest{
+		ValidateRequest: ValidateRequest{Args: args, CircleCIToken: circleCIToken, Env: os.Environ()},
+		ProjectRoot:     projectRoot,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal async validate request: %w", err)
+	}
+	// The short client is right here: this call returns as soon as the run is
+	// accepted, so it must not inherit the no-timeout client /validate needs.
+	resp, err := unixClient(sockPath).Post("http://watchd/validate/async", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusAccepted:
+		var result AsyncValidateResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return "", fmt.Errorf("decode async validate response: %w", err)
+		}
+		return result.TaskID, nil
+	case http.StatusConflict:
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("%w: %s", ErrAsyncRefused, bytes.TrimSpace(msg))
+	case http.StatusNotFound:
+		// A daemon from a build without this endpoint. Unavailable, so the caller
+		// runs inline rather than surfacing an error.
+		return "", fmt.Errorf("%w: daemon has no /validate/async endpoint", ErrDaemonUnavailable)
+	default:
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("watch daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+	}
+}
+
+// CollectValidateResults returns the finished async results for projectRoot and
+// clears them from the daemon, so a result is reported once and not repeated.
+//
+// Best-effort: with no daemon running there is nothing to collect and nothing to
+// report, which is not an error worth surfacing on a hook path.
+func CollectValidateResults(projectRoot string) ([]TaskState, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return nil, err
+	}
+	url := "http://watchd/validate/collect?root=" + neturl.QueryEscape(projectRoot)
+	resp, err := unixClient(sockPath).Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: daemon has no /validate/collect endpoint", ErrDaemonUnavailable)
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("watch daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+	}
+	var result CollectResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode collect response: %w", err)
+	}
+	return result.Tasks, nil
+}
+
 // EnsureRunning checks whether the watch daemon is running and serving, and
 // launches it if not. subArgs are the CLI arguments used to invoke the daemon
 // (e.g. ["watch", "_daemon"]).
