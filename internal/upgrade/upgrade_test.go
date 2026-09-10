@@ -15,23 +15,38 @@ import (
 	"testing"
 )
 
-// makeTarGz returns a .tar.gz containing a single file named "chunk" with the given content.
+// makeTarGz returns a .tar.gz laid out like a real release archive: the
+// binary is the last entry, and an unrelated file whose base name is also
+// "chunk" (the bash completion script) precedes it.
 func makeTarGz(t *testing.T, content []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 
-	hdr := &tar.Header{
-		Name: "chunk",
-		Mode: 0o755,
-		Size: int64(len(content)),
+	entries := []struct {
+		name string
+		body []byte
+	}{
+		{"LICENSE", []byte("MIT\n")},
+		{"README.md", []byte("# chunk\n")},
+		{"share/bash-completion/completions/chunk", []byte("# bash completion for chunk\n")},
+		{"share/zsh/site-functions/_chunk", []byte("#compdef chunk\n")},
+		{"chunk", content},
 	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(content); err != nil {
-		t.Fatal(err)
+	for _, e := range entries {
+		hdr := &tar.Header{
+			Name:     e.name,
+			Typeflag: tar.TypeReg,
+			Mode:     0o755,
+			Size:     int64(len(e.body)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(e.body); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)

@@ -140,6 +140,17 @@ func PlatformAssetName() string {
 	return fmt.Sprintf("chunk-cli_%s_%s.tar.gz", osName, archName)
 }
 
+// isBinaryEntry reports whether a tar entry is the chunk executable at the
+// root of the archive. Matching on filepath.Base alone is not enough: release
+// archives also ship share/bash-completion/completions/chunk, which sorts
+// ahead of the binary and would otherwise be installed in its place.
+func isBinaryEntry(hdr *tar.Header) bool {
+	if hdr.Typeflag != tar.TypeReg {
+		return false
+	}
+	return filepath.Clean(hdr.Name) == "chunk"
+}
+
 func downloadAndReplace(client *http.Client, url, installPath string) error {
 	resp, err := client.Get(url) //nolint:gosec // URL comes from GitHub release API response for a known repo
 	if err != nil {
@@ -166,7 +177,7 @@ func downloadAndReplace(client *http.Client, url, installPath string) error {
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
 		}
-		if filepath.Base(hdr.Name) != "chunk" {
+		if !isBinaryEntry(hdr) {
 			continue
 		}
 
