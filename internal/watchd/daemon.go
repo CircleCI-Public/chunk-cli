@@ -50,6 +50,9 @@ type daemon struct {
 	// tasks tracks validation runs started asynchronously, whose callers have
 	// already been released and so are not waiting for the answer.
 	tasks *taskStore
+	// risk remembers which projects owe a blocking run, and is consulted before
+	// releasing a caller.
+	risk *riskMemory
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -99,7 +102,11 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		out:       newOutputStore(ctx),
 		res:       newResourceSampler(client),
 		tasks:     newTaskStore(ctx),
+		risk:      newRiskMemory(),
 	}
+	// A background run is the one run with nobody to report a failure to, so what
+	// it concluded is remembered here and blocks the run after it.
+	d.tasks.onFinish = d.risk.record
 	// Still cancelled explicitly: this returns before the process exits in tests
 	// and any embedded caller, and it is what stops streamers promptly rather
 	// than whenever the parent context happens to be torn down.

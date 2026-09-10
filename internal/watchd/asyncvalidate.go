@@ -81,6 +81,12 @@ type taskStore struct {
 	// without a git tree or a clock.
 	fingerprint func(dir string) (gitutil.Worktree, error)
 	now         func() time.Time
+
+	// onFinish is told how each run ended, project root and pass/fail. It is a
+	// hook rather than a direct call so the store keeps knowing only about
+	// tracking runs, and the daemon decides what a result means for the next one.
+	// Called without the store's lock held, and may be nil.
+	onFinish func(root string, passed bool)
 }
 
 func newTaskStore(parent context.Context) *taskStore {
@@ -161,16 +167,26 @@ func (s *taskStore) finish(id string, exitCode int, output string) {
 	stale := err != nil || after.Head != before.Head || after.Digest != before.Digest
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	entry, ok = s.tasks[id]
+	if ok {
+		entry.state.Running = false
+		entry.state.FinishedAt = s.now()
+		entry.state.ExitCode = exitCode
+		entry.state.Output = output
+		entry.state.Stale = stale
+	}
+	s.mu.Unlock()
 	if !ok {
 		return
 	}
-	entry.state.Running = false
-	entry.state.FinishedAt = s.now()
-	entry.state.ExitCode = exitCode
-	entry.state.Output = output
-	entry.state.Stale = stale
+
+	// Reported even when the result is stale, and even though a stale result is
+	// never handed to a caller. A failure that went out of date is still the last
+	// thing known about this project, and the run that replaces it should be one
+	// somebody is waiting for.
+	if s.onFinish != nil {
+		s.onFinish(root, exitCode == 0)
+	}
 }
 
 // collect returns the finished tasks for root and forgets them, so a result
