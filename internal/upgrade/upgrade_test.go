@@ -15,9 +15,10 @@ import (
 	"testing"
 )
 
-// makeTarGz returns a .tar.gz laid out like a real release archive: the
-// binary is the last entry, and an unrelated file whose base name is also
-// "chunk" (the bash completion script) precedes it.
+// makeTarGz returns a .tar.gz laid out like a release archive, with the binary
+// last. It deliberately includes a nested file whose base name is also "chunk":
+// packaging no longer ships one, but the reader must not depend on that, so
+// this pins it against regressing to base-name matching.
 func makeTarGz(t *testing.T, content []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -32,6 +33,7 @@ func makeTarGz(t *testing.T, content []byte) []byte {
 		{"README.md", []byte("# chunk\n")},
 		{"share/bash-completion/completions/chunk", []byte("# bash completion for chunk\n")},
 		{"share/zsh/site-functions/_chunk", []byte("#compdef chunk\n")},
+		{"docs/chunk", []byte("not the binary either\n")},
 		{"chunk", content},
 	}
 	for _, e := range entries {
