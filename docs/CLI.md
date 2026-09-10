@@ -75,6 +75,8 @@ chunk
 │   --project <path>                # Override project directory
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
+│   --async                         # Run in the background via the watch daemon, report on a later run
+│   --collect                       # Print results of finished background runs and exit
 │   │
 │   └── variants <variants-file>    # Run code variants on parallel throwaway sidecars
 │       --name <command>            # Validate command to run (default: all remote commands)
@@ -337,6 +339,17 @@ chunk
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
 - `chunk hook disable` creates a `.chunk/hooks-disabled` sentinel file inspected by the `chunk validate` Stop hook; `hook enable` removes it. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
+- **Hook runs may be validated in the background.** When the watch daemon is
+  running, a Stop-hook `chunk validate` offers the daemon the choice of running
+  the checks after the hook has exited. The daemon takes the offer for a change
+  under 500 lines, or one confined to docs and text files, and holds the caller
+  for anything larger, anything it cannot measure, and any project whose last
+  run failed. Results of a background run reach the agent on its next turn, via
+  the `chunk validate --collect` hook. Only hook runs are ever released — a
+  `chunk validate` typed at a terminal always waits. Set `asyncValidate` in
+  `.chunk/config.json` to `never` or `always` to override the judgement, and
+  `asyncValidateMaxLines` to move the threshold. See
+  [HOOKS.md](HOOKS.md#background-validation).
 - `chunk validate` caches successful runs in hook mode only, keyed by
   `.chunk/config.json`, the execution target, the HEAD SHA, and the contents of
   all changed files; a repeat hook invocation with nothing changed prints
@@ -368,6 +381,8 @@ chunk
 | `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
+| `asyncValidate` | `.chunk/config.json` | Whether hook runs may be validated in the background: `auto` (default), `always`, `never` |
+| `asyncValidateMaxLines` | `.chunk/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |
 
 `chunk config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project

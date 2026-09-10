@@ -197,14 +197,26 @@ func IsDaemonCompatible() bool {
 	return ok && build == BuildID()
 }
 
-// RunValidate delegates a validate run to the daemon. args is os.Args[1:];
-// circleCIToken is forwarded to the subprocess as CIRCLE_TOKEN.
-func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) {
+// RunValidate delegates a validate run to the daemon.
+//
+// req.Env is filled from the caller's environment when it is empty, since the
+// point of forwarding it is to carry this process's identity into the run. Set
+// req.AllowAsync to offer the daemon the option of releasing this caller and
+// reporting later; a response carrying a TaskID is that offer taken, and means
+// nothing has run yet.
+//
+// It takes the request type rather than a list of arguments because what the
+// daemon needs to know about a run keeps growing, and every addition would
+// otherwise be another positional parameter at two call sites.
+func RunValidate(req ValidateRequest) (ValidateResponse, error) {
 	sockPath, err := SocketPath()
 	if err != nil {
 		return ValidateResponse{}, err
 	}
-	body, err := json.Marshal(ValidateRequest{Args: args, CircleCIToken: circleCIToken, Env: os.Environ()})
+	if req.Env == nil {
+		req.Env = os.Environ()
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return ValidateResponse{}, fmt.Errorf("marshal validate request: %w", err)
 	}
@@ -245,8 +257,12 @@ func StartAsyncValidate(projectRoot string, args []string, circleCIToken string)
 		return "", err
 	}
 	body, err := json.Marshal(AsyncValidateRequest{
-		ValidateRequest: ValidateRequest{Args: args, CircleCIToken: circleCIToken, Env: os.Environ()},
-		ProjectRoot:     projectRoot,
+		ValidateRequest: ValidateRequest{
+			Args:          args,
+			CircleCIToken: circleCIToken,
+			Env:           os.Environ(),
+			ProjectRoot:   projectRoot,
+		},
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal async validate request: %w", err)

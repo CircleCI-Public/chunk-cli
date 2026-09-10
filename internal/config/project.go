@@ -21,6 +21,21 @@ const (
 // no role of its own but sidecar setup treats it like a gate command.
 const CmdInstall = "install"
 
+// Async validation modes, the values ProjectConfig.AsyncValidate accepts.
+//
+// They exist because the judgement of which changes are safe to validate in the
+// background is a judgement, and a repo whose checks it reads wrongly needs a
+// way to say so without waiting for a new release.
+const (
+	// AsyncValidateAuto lets the daemon decide per change. The default.
+	AsyncValidateAuto = "auto"
+	// AsyncValidateAlways backgrounds every hook-driven run, however large.
+	AsyncValidateAlways = "always"
+	// AsyncValidateNever keeps every run blocking, as it was before background
+	// validation existed.
+	AsyncValidateNever = "never"
+)
+
 // Command is a single validation command.
 type Command struct {
 	Name         string `json:"name"`
@@ -50,6 +65,11 @@ type ProjectConfig struct {
 	OrgID               string               `json:"orgID,omitempty"`
 	StopHookMaxAttempts int                  `json:"stopHookMaxAttempts,omitempty"`
 	Environment         *envspec.Environment `json:"environment,omitempty"`
+	// AsyncValidate is one of the AsyncValidate* modes. Empty means auto.
+	AsyncValidate string `json:"asyncValidate,omitempty"`
+	// AsyncValidateMaxLines overrides how large a change may be and still be
+	// validated in the background. Zero means the built-in default.
+	AsyncValidateMaxLines int `json:"asyncValidateMaxLines,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.

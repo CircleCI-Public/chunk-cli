@@ -50,14 +50,22 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 	}
 }
 
-// hookContext holds the Claude Code Stop hook payload fields.
+// hookEventStop is the hook_event_name of the end-of-turn hook, the one run
+// whose answer may arrive after it has exited.
+const hookEventStop = "Stop"
+
+// hookContext holds the Claude Code hook payload fields.
 type hookContext struct {
 	sessionID      string
 	stopHookActive bool
+	// event is the payload's hook_event_name — "Stop", "PreToolUse", and so on.
+	// Empty when the payload does not carry one, as an older Claude Code or
+	// another agent's hook runner may not.
+	event string
 }
 
 // detectHook reads the Claude Code hook JSON payload from r when r is not a
-// terminal. Returns nil if not running as a Stop hook.
+// terminal. Returns nil if not running as a hook.
 func detectHook(r io.Reader) *hookContext {
 	if f, ok := r.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		return nil
@@ -65,12 +73,29 @@ func detectHook(r io.Reader) *hookContext {
 	var p struct {
 		SessionID      string `json:"session_id"`
 		StopHookActive bool   `json:"stop_hook_active"`
+		HookEventName  string `json:"hook_event_name"`
 	}
 	_ = json.NewDecoder(r).Decode(&p)
 	if p.SessionID == "" {
 		return nil
 	}
-	return &hookContext{sessionID: p.SessionID, stopHookActive: p.StopHookActive}
+	return &hookContext{sessionID: p.SessionID, stopHookActive: p.StopHookActive, event: p.HookEventName}
+}
+
+// mayRunInBackground reports whether this run may be handed to the daemon and
+// left to finish after the caller has exited.
+//
+// Only the Stop hook may. Every hook payload looks alike from here — a session
+// ID and little else — but they are not alike in what a release would mean. A
+// Stop hook has a next turn to hear the answer on. The commit gate on
+// PreToolUse does not: releasing it would let the commit it exists to hold back
+// go through unvalidated, which is the one outcome the gate has to prevent.
+//
+// A payload with no hook_event_name is not released either. It is what an older
+// Claude Code or another agent's runner sends, and an unrecognised hook is not
+// evidence of a hook that can wait.
+func mayRunInBackground(hook *hookContext) bool {
+	return hook != nil && hook.event == hookEventStop
 }
 
 func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, statusFn iostream.StatusFunc) error {
@@ -378,7 +403,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	// Delegate hook runs to the daemon before initHook so the subprocess prints
 	// the session header (not the client, which would cause it to appear twice).
-	if done, err := tryHookDelegate(cmd, hook, opts.noDaemon, streams); done {
+	if done, err := tryHookDelegate(cmd, hook, workDir, opts.noDaemon, streams); done {
 		return err
 	}
 
@@ -646,7 +671,12 @@ func validateEnvFlag(envVarsFlag []string) error {
 // runValidateViaDaemon delegates a validate run to the watch daemon and writes
 // its captured output to streams. When hook is non-nil its context is forwarded
 // to the subprocess via hidden flags so it runs as a hook invocation.
-func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext, streams iostream.Streams) error {
+//
+// A Stop hook run also offers the daemon the option of taking the run into the
+// background — see mayRunInBackground for why only that one. A developer
+// waiting at a terminal has no next turn, and releasing them would send the
+// run's output somewhere they are not looking.
+func runValidateViaDaemon(args []string, projectRoot, circleCIToken string, hook *hookContext, streams iostream.Streams) error {
 	reqArgs := args
 	if hook != nil {
 		reqArgs = append(append([]string(nil), args...), "--hook-session-id", hook.sessionID)
@@ -654,9 +684,35 @@ func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext
 			reqArgs = append(reqArgs, "--stop-hook-active")
 		}
 	}
-	resp, err := watchd.RunValidate(reqArgs, circleCIToken)
+	resp, err := watchd.RunValidate(watchd.ValidateRequest{
+		Args:          reqArgs,
+		CircleCIToken: circleCIToken,
+		ProjectRoot:   projectRoot,
+		AllowAsync:    mayRunInBackground(hook),
+	})
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
+	}
+	return reportDelegatedValidate(resp, streams)
+}
+
+// reportDelegatedValidate writes what the daemon made of a delegated run and
+// returns its outcome.
+//
+// Three shapes arrive here. A task ID means the run was taken into the
+// background and nothing has happened yet, so there is no output and no verdict
+// to pass on — the answer reaches the agent on its next turn, through the
+// collect hook. A reason with no task ID means the run was offered to the
+// background and held here instead, and the reason says why. Neither means the
+// caller never offered, and there was no decision to explain.
+func reportDelegatedValidate(resp watchd.ValidateResponse, streams iostream.Streams) error {
+	if resp.TaskID != "" {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf(
+			"validating in the background: %s (%s)", shortTaskID(resp.TaskID), resp.Reason)))
+		return nil
+	}
+	if resp.Reason != "" {
+		streams.ErrPrintf("  %s\n", ui.ErrDim("validating now: "+resp.Reason))
 	}
 	_, _ = streams.Out.Write([]byte(resp.Stdout))
 	_, _ = streams.Err.Write([]byte(resp.Stderr))
@@ -669,7 +725,7 @@ func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext
 // tryHookDelegate delegates a hook-invoked validate run to the daemon before
 // initHook runs, so the subprocess prints the session header (not the client).
 // Returns (true, err) when the call was delegated, (false, nil) to run inline.
-func tryHookDelegate(cmd *cobra.Command, hook *hookContext, noDaemon bool, streams iostream.Streams) (bool, error) {
+func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDaemon bool, streams iostream.Streams) (bool, error) {
 	if hook == nil || noDaemon || !watchd.IsDaemonRunning() {
 		return false, nil
 	}
@@ -683,7 +739,7 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, noDaemon bool, strea
 	if err != nil {
 		return false, nil // fall back to inline; inline path handles auth
 	}
-	err = runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, hook, streams)
+	err = runValidateViaDaemon(os.Args[1:], workDir, rc.CircleCIToken, hook, streams)
 	if errors.Is(err, watchd.ErrDaemonUnavailable) {
 		return false, nil // daemon disappeared between check and POST; run inline
 	}
@@ -705,7 +761,7 @@ func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCITo
 		return tryAsyncDelegate(workDir, circleCIToken, streams)
 	}
 	if shouldUseDaemon(hook, opts.noDaemon) {
-		err := runValidateViaDaemon(os.Args[1:], circleCIToken, nil, streams)
+		err := runValidateViaDaemon(os.Args[1:], workDir, circleCIToken, nil, streams)
 		// ErrDaemonUnavailable covers two cases: the daemon disappeared between
 		// the IsDaemonCompatible check and the POST (connection refused), and the
 		// daemon lacks the /validate endpoint because it is from an older build

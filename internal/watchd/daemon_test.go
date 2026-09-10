@@ -24,14 +24,17 @@ import (
 // whichever one the last person left out. Build it here and a new collaborator
 // is one edit, not one per test.
 func newTestDaemon() *daemon {
-	return &daemon{
+	d := &daemon{
 		projects: make(map[string]*projectState),
 		out:      newOutputStore(context.Background()),
 		// No client: these tests never attach a dashboard, so nothing is sampled
 		// and the sampler only has to be non-nil to annotate.
 		res:   newResourceSampler(nil),
 		tasks: newTaskStore(context.Background()),
+		risk:  newRiskMemory(),
 	}
+	d.tasks.onFinish = d.risk.record
+	return d
 }
 
 // TestDaemonRoundTrip starts the daemon in-process, waits for it to accept
