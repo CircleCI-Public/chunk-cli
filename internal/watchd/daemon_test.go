@@ -78,7 +78,7 @@ func TestDaemonRoundTrip(t *testing.T) {
 // no sidecar state, no connection to the run that wrote it — and must replay
 // what is already in the log rather than only what arrives after it starts.
 func TestPollReplaysResultsRecordedWhileTheDaemonWasDown(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 
 	root := t.TempDir()
 	dataDir, err := config.ProjectDataDir(root)
@@ -153,7 +153,7 @@ func TestEnsureLaunched_leavesAReachableDaemonAlone(t *testing.T) {
 	// The daemon polls every known project before it serves, and every project
 	// costs a git call. Pointed at the developer's real data directory that first
 	// poll can outlast the wait below, so keep it hermetic.
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -226,7 +226,7 @@ func TestStopForCredentialChangeIsANoopWithNoDaemon(t *testing.T) {
 // spelling is flipped between polls the way a validate run and chunk watch used
 // to flip it.
 func TestPollListsOneProjectPerRootHoweverItIsSpelled(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 
 	base := t.TempDir()
 	target := filepath.Join(base, "project")
@@ -273,7 +273,7 @@ func TestPollListsOneProjectPerRootHoweverItIsSpelled(t *testing.T) {
 // canonicalises, which for any repo reached through a symlink files a command's
 // output where the dashboard will never look for it.
 func TestPollListsCommandsRegisteredUnderAnUnresolvedRoot(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 
 	base := t.TempDir()
 	target := filepath.Join(base, "project")

@@ -448,8 +448,6 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		// the IsDaemonCompatible check and the POST (connection refused), and the
 		// daemon lacks the /validate endpoint because it is from an older build
 		// (404). Both fall through to inline execution.
-		// daemon disappeared between the IsDaemonRunning check and the POST;
-		// fall through to inline execution.
 	}
 
 	// allRemote is true unless --local is passed explicitly. opts.remote is
