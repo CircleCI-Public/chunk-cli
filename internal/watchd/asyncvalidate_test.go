@@ -320,19 +320,63 @@ func TestStopAllCancelsRunsInFlight(t *testing.T) {
 	}
 }
 
-// The fingerprint is read twice per run — once to record the baseline, once to
-// check it — and not on the hot path of a collect.
-func TestFingerprintIsReadOncePerEndOfRun(t *testing.T) {
+// An edit after the run ended but before anyone read the result is the common
+// shape, and the one a completion-time check alone misses: the run finishes in
+// seconds, the developer keeps typing, and the result is read a minute later.
+// It was true when recorded and is not true when read.
+func TestAnEditAfterTheRunFinishedDiscardsTheResult(t *testing.T) {
 	s, fake := newFakeStore(t, tree("abc", "d1"))
 
 	_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
 	assert.NilError(t, err)
 	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 
+	// The run has already concluded against an unchanged tree. The edit lands
+	// only now, between finishing and being read.
+	fake.set(tree("abc", "d2"), nil)
+
+	assert.Equal(t, len(s.collect("/repo")), 0, "a result about replaced code was reported")
+}
+
+// Likewise a commit landing after the run ended.
+func TestACommitAfterTheRunFinishedDiscardsTheResult(t *testing.T) {
+	s, fake := newFakeStore(t, tree("abc", "d1"))
+
+	_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+	assert.NilError(t, err)
+	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
+
+	fake.set(tree("def", "d1"), nil)
+	assert.Equal(t, len(s.collect("/repo")), 0)
+}
+
+// A tree that cannot be fingerprinted at read time cannot be shown to match the
+// tree the run validated, so nothing is reported for it.
+func TestATreeThatCannotBeFingerprintedAtCollectReportsNothing(t *testing.T) {
+	s, fake := newFakeStore(t, tree("abc", "d1"))
+
+	_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+	assert.NilError(t, err)
+	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
+
+	fake.set(gitutil.Worktree{}, errors.New("dirty submodule"))
+	assert.Equal(t, len(s.collect("/repo")), 0, "an unverifiable result was reported as current")
+}
+
+// The tree is read once per collect rather than once per task, so a project
+// holding several finished runs still costs one git call to report them.
+func TestCollectReadsTheTreeOncePerCall(t *testing.T) {
+	s, fake := newFakeStore(t, tree("abc", "d1"))
+
+	for i := 0; i < 3; i++ {
+		_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+		assert.NilError(t, err)
+		waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
+	}
+
 	before := fake.calls()
-	assert.Equal(t, before, 2, "expected one fingerprint at start and one at finish")
-	s.collect("/repo")
-	assert.Equal(t, fake.calls(), before, "collect re-read the tree")
+	assert.Equal(t, len(s.collect("/repo")), 3)
+	assert.Equal(t, fake.calls(), before+1, "collect read the tree more than once")
 }
 
 // gitRepo returns a temp git repo with one commit, for handler tests that need a

@@ -42,9 +42,10 @@ func (t TaskState) Passed() bool {
 type taskEntry struct {
 	state TaskState
 	// start fingerprints the tree the run was launched on. Comparing it against
-	// a fresh fingerprint when the run ends is the whole of the staleness check:
-	// two Worktrees with equal Head and Digest describe identical content, so an
-	// inequality means an edit landed mid-run.
+	// a fresh fingerprint is the whole of the staleness check: two Worktrees with
+	// equal Head and Digest describe identical content, so an inequality means
+	// the tree moved. It is compared when the run ends and again when the result
+	// is read, because an edit can land in either window.
 	start  gitutil.Worktree
 	cancel context.CancelFunc
 }
@@ -175,11 +176,26 @@ func (s *taskStore) finish(id string, exitCode int, output string) {
 // collect returns the finished tasks for root and forgets them, so a result
 // reaches a caller once and is not repeated on the following turn.
 //
+// Staleness is decided here rather than only when a run finished, because this
+// is where the question is actually asked: a caller wants to know whether the
+// answer describes the code in front of it now. Checking only at completion
+// misses the common shape — a run that finished seconds ago, an edit since, and
+// a result that was true when it was recorded and is not true when it is read.
+//
 // Stale tasks are dropped rather than returned: the current policy is to discard
 // an answer about code that has since changed. They are still removed, because a
 // task nobody will ever be told about is only taking up room.
 func (s *taskStore) collect(root string) []TaskState {
 	root = config.CanonicalProjectRoot(root)
+
+	// Read before the lock: fingerprinting shells out to git, and holding the
+	// mutex across it would stall every other caller. Read once for the whole
+	// project rather than per task, since they all compare against one tree.
+	now, err := s.fingerprint(root)
+	// A tree that cannot be fingerprinted now cannot be shown to match anything,
+	// so nothing is reported for it. The alternative is claiming a result is
+	// current without evidence, which is the outcome this store exists to avoid.
+	unverifiable := err != nil
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,7 +212,11 @@ func (s *taskStore) collect(root string) []TaskState {
 			kept = append(kept, id)
 			continue
 		}
-		if !entry.state.Stale {
+		// Stale either because the tree moved while the run was in flight, or
+		// because it has moved since the run ended. Both mean the same thing to
+		// whoever is about to read the result.
+		movedSince := unverifiable || now.Head != entry.start.Head || now.Digest != entry.start.Digest
+		if !entry.state.Stale && !movedSince {
 			out = append(out, entry.state)
 		}
 		delete(s.tasks, id)
