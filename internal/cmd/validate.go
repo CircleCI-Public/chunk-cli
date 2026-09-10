@@ -56,6 +56,30 @@ type hookContext struct {
 	stopHookActive bool
 }
 
+type hookResponse struct {
+	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type hookSpecificOutput struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext"`
+}
+
+// writeStopHookResponse writes the Claude Code hook response format also
+// understood by Codex and Cursor. Hook stdout must contain JSON only; progress
+// and command output continue to use stderr.
+func writeStopHookResponse(w io.Writer, message string) error {
+	if err := json.NewEncoder(w).Encode(hookResponse{
+		HookSpecificOutput: hookSpecificOutput{
+			HookEventName:     "Stop",
+			AdditionalContext: message,
+		},
+	}); err != nil {
+		return fmt.Errorf("write Stop hook response: %w", err)
+	}
+	return nil
+}
+
 // detectHook reads the Claude Code hook JSON payload from r when r is not a
 // terminal. Returns nil if not running as a Stop hook.
 func detectHook(r io.Reader) *hookContext {
@@ -382,7 +406,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return hookErr
 	}
 	if skip {
-		return nil
+		return writeStopHookResponse(cmd.OutOrStdout(), "chunk validate skipped (working tree is clean)")
 	}
 	statusFn := newStatusFunc(streams)
 	insecureStorage := insecureStorageFlag(cmd)
@@ -392,7 +416,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		name = args[0]
 	}
 
-	cfg, done, err := validateEarlyExits(hook, opts, name, workDir, streams, statusFn)
+	cfg, done, err := validateEarlyExits(hook, opts, name, workDir, cmd.OutOrStdout(), streams, statusFn)
 	if done {
 		return err
 	}
@@ -606,8 +630,7 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\n", ui.Success(fmt.Sprintf("chunk validate passed (%s)", elapsed)))
-		return nil
+		return writeStopHookResponse(cmd.OutOrStdout(), fmt.Sprintf("chunk validate passed (%s)", elapsed))
 	}
 	return hookErr
 }
@@ -668,7 +691,7 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, noDaemon bool, strea
 
 // validateEarlyExits handles --list, --mark-remote, missing config, --dry-run.
 // Returns (cfg, done=true, err) to stop, or (cfg, false, nil) to continue.
-func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir string, hookOut io.Writer, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
 	if opts.list {
 		return nil, true, runValidateList(workDir, opts.jsonOut, streams, statusFn)
 	}
@@ -681,7 +704,7 @@ func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir str
 	cfg, err := config.LoadProjectConfig(workDir)
 	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
 		if hook != nil {
-			return nil, true, nil // no config in hook context: skip silently
+			return nil, true, writeStopHookResponse(hookOut, "chunk validate skipped (no validation commands configured)")
 		}
 		return nil, true, &userError{
 			msg:        msgValidateNotConfigured,

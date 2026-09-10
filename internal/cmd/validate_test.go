@@ -47,6 +47,27 @@ func runValidateHook(t *testing.T, workDir string) (stdout, stderr string, err e
 	return outBuf.String(), errBuf.String(), err
 }
 
+func TestWriteStopHookResponse(t *testing.T) {
+	var out bytes.Buffer
+	assert.NilError(t, writeStopHookResponse(&out, "validation completed: 2/2 passed"))
+
+	var response hookResponse
+	assert.NilError(t, json.Unmarshal(out.Bytes(), &response))
+	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
+	assert.Equal(t, response.HookSpecificOutput.AdditionalContext, "validation completed: 2/2 passed")
+}
+
+func TestValidateHookNoConfigWritesResponse(t *testing.T) {
+	isolateConfig(t)
+	stdout, _, err := runValidateHook(t, t.TempDir())
+	assert.NilError(t, err)
+
+	var response hookResponse
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
+	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
+	assert.Equal(t, response.HookSpecificOutput.AdditionalContext, "chunk validate skipped (no validation commands configured)")
+}
+
 func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")
@@ -321,7 +342,7 @@ const skipMsg = "skipped (no changes since last successful run)"
 // not assert on the error, so failing runs can be exercised too.
 // --local is passed so the tests focus on hook caching semantics rather than
 // remote routing — caching is orthogonal to where commands run.
-func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
+func runActiveStopHookOutput(t *testing.T, dir string) (stdout, stderr string, err error) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
 	root := newTestRootCmd()
@@ -330,7 +351,13 @@ func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
 	root.SetIn(strings.NewReader(activeStopHookPayload))
 	root.SetArgs([]string{"validate", "--local", "--project", dir})
 	err = root.Execute()
-	return errBuf.String(), err
+	return outBuf.String(), errBuf.String(), err
+}
+
+func runActiveStopHook(t *testing.T, dir string) (stderr string, err error) {
+	t.Helper()
+	_, stderr, err = runActiveStopHookOutput(t, dir)
+	return stderr, err
 }
 
 // countingCommand returns a command that appends a line to a marker file each
@@ -390,8 +417,13 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 	// A failure at some other tree state leaves a count of 1 behind.
 	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
 
-	second := run()
+	stdout, second, err := runActiveStopHookOutput(t, dir)
+	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
+	var response hookResponse
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
+	assert.Assert(t, strings.Contains(response.HookSpecificOutput.AdditionalContext, "chunk validate passed"),
+		"cache hit must return a successful hook response, got: %q", stdout)
 
 	// The hit cleared the counter, so the next failure is attempt 1 again.
 	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)

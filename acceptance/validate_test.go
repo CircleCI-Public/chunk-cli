@@ -62,6 +62,20 @@ func hookStdin(t *testing.T, sessionID string, stopHookActive bool) []byte {
 	return data
 }
 
+func hookAdditionalContext(t *testing.T, stdout string) string {
+	t.Helper()
+	var response struct {
+		HookSpecificOutput struct {
+			HookEventName     string `json:"hookEventName"`
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &response),
+		"stdout must be one valid JSON hook response; got: %s", stdout)
+	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
+	return response.HookSpecificOutput.AdditionalContext
+}
+
 // commitAll stages and commits all files in dir.
 func commitAll(t *testing.T, dir, message string) {
 	t.Helper()
@@ -106,6 +120,20 @@ func TestValidateHookMode_CleanTree(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0,
 		"expected exit 0 (skipped) for clean tree; stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(hookAdditionalContext(t, result.Stdout), "working tree is clean"),
+		"expected clean-tree context; got stdout: %s", result.Stdout)
+}
+
+func TestValidateHookMode_NoConfig(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, "dirty.txt"), []byte("changed"), 0o644))
+	env := testenv.NewTestEnv(t)
+	result := binary.RunCLIWithStdin(t, []string{"validate"}, env, workDir,
+		hookStdin(t, "test-session-no-config", false))
+
+	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for unconfigured hook; stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(hookAdditionalContext(t, result.Stdout), "no validation commands configured"),
+		"expected unconfigured context; got stdout: %s", result.Stdout)
 }
 
 func TestValidateRunDryRun(t *testing.T) {
@@ -568,20 +596,24 @@ func writeSidecarState(t *testing.T, e *testenv.TestEnv, projectRoot, sessionID,
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, filename), data, 0o644))
 }
 
-// TestValidateHookMode_SuccessLine verifies that the "chunk validate passed"
-// success line is written to stderr after a clean hook run.
-func TestValidateHookMode_SuccessLine(t *testing.T) {
+// TestValidateHookMode_SuccessResponse verifies that a successful hook run
+// reports completion using Claude Code's structured JSON response format.
+func TestValidateHookMode_SuccessResponse(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 	// writeProjectConfig leaves an untracked file → dirty tree → hook runs.
-	writeProjectConfig(t, workDir, "", "true")
+	writeProjectConfig(t, workDir, "", "echo validation-command-output")
 
 	env := testenv.NewTestEnv(t)
 	result := binary.RunCLIWithStdin(t, []string{"validate", "--local"}, env, workDir,
 		hookStdin(t, "test-session-success-line", false))
 
 	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for passing hook; stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stdout, "chunk validate passed"),
-		"expected 'chunk validate passed' in stdout; got stdout: %s stderr: %s", result.Stdout, result.Stderr)
+	assert.Assert(t, strings.Contains(hookAdditionalContext(t, result.Stdout), "chunk validate passed"),
+		"expected completion context; got stdout: %s stderr: %s", result.Stdout, result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stdout, "validation-command-output"),
+		"command output must not contaminate hook JSON; got stdout: %s", result.Stdout)
+	assert.Assert(t, strings.Contains(result.Stderr, "validation-command-output"),
+		"command output must be written to stderr; got stderr: %s", result.Stderr)
 }
 
 // TestValidateHookMode_SetupErrorFlushedToStderr verifies that when setup fails
