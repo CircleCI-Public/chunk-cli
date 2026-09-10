@@ -97,11 +97,35 @@ func Build(commands []config.Command) ([]byte, error) {
 					},
 				},
 			},
+			// UserPromptSubmit hook: reports what background runs concluded.
+			//
+			// A background run's answer arrives after the agent has stopped, so
+			// there is no one left to hand it to; this is the next moment the
+			// agent can be told. It reads a result the daemon already holds
+			// rather than running any commands, so the timeout is small — it
+			// sits in front of every prompt, and nothing here is worth making a
+			// developer wait on.
+			"UserPromptSubmit": {
+				{
+					Hooks: []hookEntry{
+						{
+							Type:    "command",
+							Command: CollectCommand,
+							Timeout: collectTimeout,
+						},
+					},
+				},
+			},
 		}
 	}
 
 	return json.MarshalIndent(s, "", "  ")
 }
+
+// collectTimeout bounds the UserPromptSubmit hook. Collecting reads results the
+// daemon is already holding and never runs a command, so this only has to cover
+// one socket round trip and one git fingerprint of the working tree.
+const collectTimeout = 10
 
 // BuildCodex generates .codex/hooks.json content from commands.
 // Produces the same hook structure as Build but without Claude Code-specific

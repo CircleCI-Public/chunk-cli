@@ -180,3 +180,41 @@ func TestBuildCodexNoCommandsProducesEmptyHooks(t *testing.T) {
 	_, hasHooks := s["hooks"]
 	assert.Assert(t, !hasHooks, "BuildCodex with no commands must produce empty hooks")
 }
+
+// A background result arrives after the agent has stopped, so chunk init has to
+// install the hook that reports it. Without this entry --collect is never
+// called and an async run's answer is never delivered to anyone.
+func TestBuildInstallsTheCollectHookOnUserPromptSubmit(t *testing.T) {
+	data, err := Build([]config.Command{{Name: "test", Run: "go test ./..."}})
+	assert.NilError(t, err)
+
+	var s map[string]interface{}
+	assert.NilError(t, json.Unmarshal(data, &s))
+	hooks := s["hooks"].(map[string]interface{})
+
+	// Stop is where validation runs; UserPromptSubmit is where a deferred result
+	// is read. They are different moments and both must be present.
+	assert.Assert(t, hooks["Stop"] != nil, "the Stop hook must survive")
+	groups, ok := hooks["UserPromptSubmit"].([]interface{})
+	assert.Assert(t, ok, "no UserPromptSubmit hook was written, so results are never collected")
+	assert.Equal(t, len(groups), 1)
+
+	entries := groups[0].(map[string]interface{})["hooks"].([]interface{})
+	assert.Equal(t, len(entries), 1)
+	entry := entries[0].(map[string]interface{})
+	assert.Equal(t, entry["command"], CollectCommand)
+	// Small on purpose: this sits in front of every prompt and only reads a
+	// result the daemon already holds.
+	assert.Equal(t, entry["timeout"], float64(collectTimeout))
+}
+
+// With no commands there is nothing to validate, so there is nothing to collect
+// either and chunk writes no hooks at all.
+func TestBuildWritesNoCollectHookWithoutCommands(t *testing.T) {
+	data, err := Build(nil)
+	assert.NilError(t, err)
+
+	var s map[string]interface{}
+	assert.NilError(t, json.Unmarshal(data, &s))
+	assert.Assert(t, s["hooks"] == nil, "hooks were written for a project with no commands")
+}
