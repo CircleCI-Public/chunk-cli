@@ -334,7 +334,9 @@ chunk
   the checks after the hook has exited. The daemon takes the offer for a change
   under 500 lines, or one confined to docs and text files, and holds the caller
   for anything larger, anything it cannot measure, and any project whose last
-  run failed. Results of a background run reach the agent on its next turn, via
+  run failed. Size is measured against the last state that passed its checks
+  rather than against `HEAD`, so consecutive small changes do not accumulate
+  into a large one and a commit neither hides a change nor resets the count. Results of a background run reach the agent on its next turn, via
   the `chunk validate --collect` hook. Only hook runs are ever released — a
   `chunk validate` typed at a terminal always waits. Set `asyncValidate` in
   `.chunk/config.json` to `never` or `always` to override the judgement, and

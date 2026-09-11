@@ -412,6 +412,19 @@ GET  /validate/collect?root=<path>                 → {tasks}
 - **Judgement lives in one place**, next to the git read it depends on. Splitting
   it between the client and the daemon would mean two `git status` walks that can
   disagree about the same tree.
+- **Size is measured from the last passing state, not from `HEAD`.** Every run
+  takes a `gitutil.SnapshotTree` before validating, and a pass records it as the
+  baseline (`riskMemory.recordGreen`); the next change is a
+  `gitutil.ChangesBetween` from there. Against `HEAD` the number only grows
+  until something commits — five 100-line turns read as 500 by the fifth — and
+  resets to nothing when anything does, validated or not. A snapshot is content,
+  so neither happens.
+- **The snapshot never touches the developer's repository state.** It stages into
+  a throwaway index (`GIT_INDEX_FILE` in a temp file, seeded from the real index
+  for its stat cache, without which every file is re-hashed per call). The
+  objects it writes are unreferenced, so git's `gc` may collect a baseline;
+  `ChangesBetween` then errors and the assessment falls back to `HEAD`, which
+  reads larger and so errs towards blocking.
 
 ## HTTP Client (`internal/httpcl/`)
 

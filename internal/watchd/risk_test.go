@@ -311,6 +311,10 @@ func TestAPassingRunClearsTheDebt(t *testing.T) {
 	assert.Equal(t, held.TaskID, "", "a project that owes a blocking run was released")
 	assert.Equal(t, d.risk.owesBlockingRun(root), false, "a passing run left the debt in place")
 
+	// A further edit, because the run above has just validated this tree: with
+	// nothing changed since, the next request is decided as "no changes" and
+	// correctly runs nothing.
+	writeSource(t, root, 20)
 	released := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
 		Args: []string{"validate"}, ProjectRoot: root, AllowAsync: true,
 	})))
@@ -327,4 +331,62 @@ func TestValidateWithoutAProjectRootIsRun(t *testing.T) {
 	})))
 	assert.Equal(t, resp.TaskID, "")
 	assert.Equal(t, runs(), 1)
+}
+
+// The accumulation problem, and the whole reason the baseline exists: six
+// turns of 100 lines each are six small changes, not one 600-line change.
+// Measured against HEAD the fifth turn onwards would be held, having been
+// released four turns running for work of exactly the same size.
+func TestSmallTurnsDoNotAccumulateIntoALargeChange(t *testing.T) {
+	d, root, _ := riskDaemon(t, 0)
+
+	var last ValidateResponse
+	for turn := 1; turn <= 6; turn++ {
+		writeSource(t, root, turn*100)
+		last = decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
+			Args: []string{"validate"}, ProjectRoot: root, AllowAsync: true,
+		})))
+		assert.Assert(t, last.TaskID != "", "turn %d was held: %s", turn, last.Reason)
+		// Wait for the run to finish, so the state it validated is the baseline
+		// the next turn measures from — which is what the next hook firing would
+		// find in a real session.
+		waitFor(t, func() bool { return len(d.tasks.inFlight(root)) == 0 }, "run never finished")
+		d.tasks.collect(root)
+	}
+
+	// The sixth turn is measured from the fifth, not from the commit six turns
+	// back: 100 lines, not 600.
+	assert.Assert(t, strings.Contains(last.Reason, "100 lines"), "reason was %q", last.Reason)
+	assert.Assert(t, strings.Contains(last.Reason, "since the last passing run"), "reason was %q", last.Reason)
+}
+
+// A failing run leaves the last known-good state alone. It is still the last
+// state that passed, and the next measurement is still from there.
+func TestAFailedRunDoesNotMoveTheBaseline(t *testing.T) {
+	m := newRiskMemory()
+	root := t.TempDir()
+
+	m.recordGreen(root, "tree-a")
+	m.record(root, false)
+	assert.Equal(t, m.baseline(root), "tree-a")
+}
+
+func TestRiskMemoryHasNoBaselineUntilARunPasses(t *testing.T) {
+	m := newRiskMemory()
+	assert.Equal(t, m.baseline(t.TempDir()), "")
+}
+
+// A tree git has since collected is not a measurement error, just a worse
+// baseline: the assessment falls back to HEAD and carries on.
+func TestAnUnknownBaselineFallsBackToHead(t *testing.T) {
+	d, root, _ := riskDaemon(t, 0)
+	writeSource(t, root, 10)
+	d.risk.recordGreen(root, "0000000000000000000000000000000000000000")
+
+	resp := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
+		Args: []string{"validate"}, ProjectRoot: root, AllowAsync: true,
+	})))
+	assert.Assert(t, resp.TaskID != "", "a collected baseline stopped the assessment")
+	assert.Assert(t, !strings.Contains(resp.Reason, "since the last passing run"),
+		"the fallback claimed a baseline it could not read: %q", resp.Reason)
 }
