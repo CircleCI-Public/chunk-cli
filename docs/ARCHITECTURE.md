@@ -284,7 +284,7 @@ tailing each project's `events.jsonl` by byte offset, and serves snapshots as
 JSON over a Unix socket at `~/.chunk/watchd/watchd.sock`
 (`CHUNK_WATCHD_DIR` overrides the directory).
 
-Beyond that it owns two things that outlive the processes they came from.
+Beyond that it owns three things that outlive the processes they came from.
 
 ### Command output buffering
 
@@ -373,6 +373,65 @@ connection for the daemon to supervise.
 Parsing is separated from transport (`parseSampleFrame`, `cpuPercent`,
 `splitFrames`, `consumeSamples`) so it is testable against captured fixtures with
 no SSH involved.
+
+### Background validation
+
+A hook run delegated to the daemon (`POST /validate`) can set `allow_async`,
+offering to be released before the answer exists. The daemon weighs the change
+(`risk.go`) and either runs it while the caller waits or starts a tracked task
+(`asyncvalidate.go`) and answers with its ID. `chunk validate --collect` reads
+finished results back on the next turn.
+
+```
+POST /validate         {args, env, project_root, allow_async}
+    → {exit_code, stdout, stderr}          # ran here
+    → {task_id, reason}                    # released; nothing has run yet
+POST /validate/async   {args, env, project_root}   → {task_id}
+GET  /validate/collect?root=<path>                 → {tasks}
+```
+
+- **The decision is made before `validateMu` is taken.** A caller offering to be
+  released must not first queue behind whatever run is already in flight, since
+  that wait is the whole thing being avoided. The run itself still takes the
+  lock, so background runs serialise with synchronous ones exactly as before —
+  what changes is who waits, not how many run at once.
+- **Async breaks the assumption every other validate path rests on**: that
+  somebody is waiting. `taskStore` holds which project a run was for, whether it
+  is still going, and what it concluded, until a later turn collects it.
+- **A result is only reported if it still describes the tree.** Each task
+  records a `gitutil.Fingerprint` at the start, compared again when the run ends
+  and when the result is read. Any difference discards it: a pass describing code
+  that is no longer on disk reads as a green light for work already changed.
+- **A failure leaves a debt, so a discarded result is not a lost one.**
+  `riskMemory` remembers a project whose last run failed — including one whose
+  failure went stale — and the next run is held rather than released, where a
+  hook can act on it. Any passing run clears it.
+- **Both stores are in memory.** A daemon restart loses in-flight tasks and
+  forgets the debt. A lost task reports nothing rather than reporting wrongly,
+  and a forgotten debt costs one turn's delay before the failure is found again.
+- **Judgement lives in one place**, next to the git read it depends on. Splitting
+  it between the client and the daemon would mean two `git status` walks that can
+  disagree about the same tree.
+- **Size is measured from the last passing state, not from `HEAD`.** Every run
+  takes a `gitutil.SnapshotTree` before validating, and a pass records it as the
+  baseline (`riskMemory.recordGreen`); the next change is a
+  `gitutil.ChangesBetween` from there. Against `HEAD` the number only grows
+  until something commits — five 100-line turns read as 500 by the fifth — and
+  resets to nothing when anything does, validated or not. A snapshot is content,
+  so neither happens.
+- **History tightens, never loosens.** `riskHistory` keeps each project's
+  finished runs (`risk-history.jsonl`: sizes and verdicts, no paths, no content)
+  and answers what an absolute threshold cannot — is this change large *for this
+  repo*, and do changes this size fail here. It can hold a run the rules would
+  have released and raise a score; it can never release one or lower a score. A
+  codebase where every change is enormous must not teach the daemon that
+  enormous is fine.
+- **The snapshot never touches the developer's repository state.** It stages into
+  a throwaway index (`GIT_INDEX_FILE` in a temp file, seeded from the real index
+  for its stat cache, without which every file is re-hashed per call). The
+  objects it writes are unreferenced, so git's `gc` may collect a baseline;
+  `ChangesBetween` then errors and the assessment falls back to `HEAD`, which
+  reads larger and so errs towards blocking.
 
 ## HTTP Client (`internal/httpcl/`)
 

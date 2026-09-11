@@ -27,6 +27,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // hookPayload is the JSON Claude Code sends to Stop hooks via stdin.
@@ -870,4 +871,119 @@ func TestFailBeforeRunClosesTheRun(t *testing.T) {
 	assert.Assert(t, ok)
 	assert.Equal(t, passed, 0)
 	assert.Equal(t, total, 0)
+}
+
+// A released run reports where the answer will come from and nothing else:
+// there is no verdict yet, so claiming one either way would be a lie.
+func TestReportDelegatedValidateAnnouncesABackgroundRun(t *testing.T) {
+	var outBuf, errBuf bytes.Buffer
+	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
+
+	err := reportDelegatedValidate(watchd.ValidateResponse{
+		TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
+		Reason: "small change, 42 lines",
+		// Ignored: a released run has not produced these, and a daemon that
+		// sends them anyway must not have them read as a result.
+		ExitCode: 1,
+		Stderr:   "should not be shown",
+	}, streams)
+
+	assert.NilError(t, err)
+	assert.Equal(t, outBuf.String(), "")
+	assert.Assert(t, strings.Contains(errBuf.String(), "validating in the background"), "got %q", errBuf.String())
+	assert.Assert(t, strings.Contains(errBuf.String(), "0192cf6e"), "the task ID was not reported: %q", errBuf.String())
+	assert.Assert(t, strings.Contains(errBuf.String(), "small change, 42 lines"), "got %q", errBuf.String())
+	assert.Assert(t, !strings.Contains(errBuf.String(), "should not be shown"), "output of a run that never happened was printed")
+}
+
+// A run that was offered to the background and held says why, then behaves
+// exactly as a delegated run always has.
+func TestReportDelegatedValidateExplainsAHeldRun(t *testing.T) {
+	var outBuf, errBuf bytes.Buffer
+	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
+
+	err := reportDelegatedValidate(watchd.ValidateResponse{
+		Reason:   "large change, 912 lines, over the 500-line limit",
+		ExitCode: 2,
+		Stdout:   "on stdout",
+		Stderr:   "on stderr",
+	}, streams)
+
+	var silent *silentExitError
+	assert.Assert(t, errors.As(err, &silent), "a failing run must carry its exit code, got %v", err)
+	assert.Equal(t, silent.code, 2)
+	assert.Equal(t, outBuf.String(), "on stdout")
+	assert.Assert(t, strings.Contains(errBuf.String(), "validating now: large change"), "got %q", errBuf.String())
+	assert.Assert(t, strings.Contains(errBuf.String(), "on stderr"), "got %q", errBuf.String())
+}
+
+// A caller that never offered to be released is told nothing extra.
+func TestReportDelegatedValidateSaysNothingWhenThereWasNoDecision(t *testing.T) {
+	var outBuf, errBuf bytes.Buffer
+	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
+
+	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{Stderr: "1/1 passed"}, streams))
+	assert.Equal(t, errBuf.String(), "1/1 passed")
+}
+
+// The commit gate and the end-of-turn hook arrive here looking alike, and only
+// one of them can be released: a released commit gate is a commit that went
+// through without the checks it exists to run.
+func TestOnlyTheStopHookMayRunInBackground(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		want    bool
+	}{
+		{`{"session_id":"s","hook_event_name":"Stop"}`, true},
+		{`{"session_id":"s","hook_event_name":"PreToolUse"}`, false},
+		{`{"session_id":"s","hook_event_name":"UserPromptSubmit"}`, false},
+		// No event name: an older Claude Code, or another agent's hook runner.
+		// An unrecognised hook is not evidence of one that can wait.
+		{`{"session_id":"s"}`, false},
+	} {
+		hook := detectHook(strings.NewReader(tc.payload))
+		assert.Assert(t, hook != nil, "payload was not read as a hook: %s", tc.payload)
+		assert.Equal(t, mayRunInBackground(hook), tc.want, "payload: %s", tc.payload)
+	}
+
+	// Not a hook at all — a developer at a terminal, with no next turn to hear
+	// the answer on.
+	assert.Equal(t, mayRunInBackground(nil), false)
+}
+
+func TestDetectHookReadsTheEventName(t *testing.T) {
+	hook := detectHook(strings.NewReader(`{"session_id":"abc","stop_hook_active":true,"hook_event_name":"Stop"}`))
+	assert.Assert(t, hook != nil)
+	assert.Equal(t, hook.sessionID, "abc")
+	assert.Equal(t, hook.stopHookActive, true)
+	assert.Equal(t, hook.event, "Stop")
+}
+
+// A low-risk change gets no score line: it is the common case, and a number
+// printed every turn is a number nobody reads. Advice is printed whenever
+// there is any.
+func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
+	var quiet bytes.Buffer
+	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{
+		Risk: &watchd.RiskSummary{Score: 12, Band: watchd.BandLow, Parts: []string{"12 lines (1)"}},
+	}, iostream.Streams{Out: &quiet, Err: &quiet}))
+	assert.Equal(t, quiet.String(), "", "a low-risk change was narrated")
+
+	var loud bytes.Buffer
+	err := reportDelegatedValidate(watchd.ValidateResponse{
+		Reason:   "large change, 2000 lines, over the 500-line limit",
+		ExitCode: 1,
+		Risk: &watchd.RiskSummary{
+			Score:  92,
+			Band:   watchd.BandHigh,
+			Parts:  []string{"2000 lines (60)", "3 files (6)"},
+			Advice: "committing it in parts would get each piece checked sooner",
+		},
+	}, iostream.Streams{Out: &loud, Err: &loud})
+
+	assert.Assert(t, err != nil)
+	out := loud.String()
+	assert.Assert(t, strings.Contains(out, "risk 92/100 high"), "got %q", out)
+	assert.Assert(t, strings.Contains(out, "2000 lines (60)"), "got %q", out)
+	assert.Assert(t, strings.Contains(out, "committing it in parts"), "got %q", out)
 }

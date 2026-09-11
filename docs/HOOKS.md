@@ -4,13 +4,127 @@ Quality checks that run automatically as Claude Code works.
 
 ## How It Works
 
-`chunk init` generates `.claude/settings.json` with two hooks:
+`chunk init` generates `.claude/settings.json` with three hooks:
 
 **PreToolUse** — matches the `Bash` tool. Each hook entry carries an `if: "Bash(git commit*)"` filter so only git commit commands trigger validation. If any command fails, the commit is blocked.
 
 **Stop** — runs `chunk validate` after every session ends. Skips everything
 when the working tree is clean. When there are changes, it runs all configured
 commands so problems are surfaced before the agent stops working.
+
+**UserPromptSubmit** — runs `chunk validate --collect`, which reports what any
+background run concluded. It runs no commands of its own.
+
+## Background Validation
+
+A Stop hook that runs the full check suite is the right thing for a risky
+change and an expensive interruption for a typo. When the watch daemon is
+running, the Stop hook offers it the choice: run the checks now, while the hook
+waits, or take them into the background and answer on the next turn.
+
+The daemon takes the offer when the change is:
+
+- **under 500 lines**, or
+- **confined to docs and text** — `.md`, `.markdown`, `.txt`, `.rst`, `.adoc`,
+  and `LICENSE`/`NOTICE`/`AUTHORS`/`CHANGELOG`, at any size.
+
+### What "under 500 lines" is measured against
+
+The last state that passed its checks — not `HEAD`.
+
+Every run snapshots the working tree before validating it, and a run that
+passes leaves that snapshot behind as the mark to measure the next change from.
+So five turns of 100 lines are five small changes, not a 500-line one by the
+fifth. Measured against `HEAD` the number would only grow until something
+committed, and the agent would be made to wait for work it had been released
+for four turns running.
+
+The snapshot is content, not a commit, which keeps the measurement honest in
+both directions: a commit in the middle of a change no longer hides it, and a
+commit no longer resets the count to zero — which would otherwise call a large
+pile of unvalidated work "no change" the moment anything committed.
+
+Nothing about your repository moves. The snapshot stages into a throwaway index
+in a temp file, so your own staging area is untouched; it writes unreferenced
+objects into `.git/objects` that git's `gc` collects in its own time. Until
+a project's first passing run — a freshly started daemon, say — there is no mark
+yet and the change is measured against `HEAD`, which reads larger and so errs
+towards making you wait.
+
+It holds the caller — the blocking behaviour of every earlier version — when:
+
+- the change is larger than the limit,
+- the working tree cannot be measured, or cannot be fingerprinted,
+- **the project's last run failed.** A failure found in the background has
+  nobody left to report to, so it is remembered and the next run is made to
+  block, where the hook can act on what it finds. A passing run clears it. This
+  is also what keeps a discarded result from being a lost one: a run whose tree
+  changed while it was in flight is thrown away rather than reported, but if it
+  threw away a failure, the debt it left still forces the next run to block.
+
+Only the Stop hook is ever released. The commit gate on PreToolUse never is —
+releasing it would let the commit it exists to hold back go through
+unvalidated — and a `chunk validate` typed at a terminal has no later turn to
+hear the answer on, so it always waits too.
+
+A released hook prints where the answer will come from and exits 0:
+
+```
+  validating in the background: 0192cf6e (small change, 42 lines)
+```
+
+and the next turn begins with what it concluded:
+
+```
+chunk validate passed in the background (0192cf6e)
+```
+
+Failures arrive the same way, with the output of the run that failed. Because
+a failure also leaves the project owing a blocking run, the Stop hook after it
+blocks as it always did.
+
+With no daemon running nothing changes: every hook run is blocking.
+
+### The risk score
+
+Every judgement also produces a 0–100 score, the facts behind it, and any
+advice that follows. A low-risk change prints nothing — it is the common case,
+and a number printed every turn is a number nobody reads. Anything else says so:
+
+```
+  validating now: large change since the last passing run, 2100 lines, over the 500-line limit
+  risk 92/100 high — 2100 lines (60), 3 files (6), last run failed (25)
+  2100 lines across 3 files is past the point where checks can run in the background; committing it in parts would get each piece checked sooner
+```
+
+The score is a report, not the decision. Release still turns on the facts
+themselves, because a threshold on lines can be argued with and a threshold on
+a composite cannot — nobody can tell you whether 47 should have been 52. What
+the score is for is the questions one bit cannot answer: which of two changes
+is riskier, and whether there is anything worth advising about either.
+
+Advice is only given where there is something to do about it. "Commit in parts"
+is actionable for 2,000 lines across nine files and impossible for 2,000 lines
+in one generated file, so a single-file change is told nothing rather than
+something it cannot act on.
+
+### Relative to this repo
+
+Five hundred lines is a rewrite in one codebase and a Tuesday in another, so
+each project's finished runs are kept in `risk-history.jsonl` in its data
+directory — sizes and verdicts, no paths and no content — and used for the
+questions an absolute threshold cannot answer:
+
+- whether a change is large *for this repo* (it raises the score), and
+- whether changes this size usually fail here. Once a project has at least five
+  comparable runs and half of them failed, a change the rules would have
+  released is held instead.
+
+What history is allowed to do is deliberately one-directional: it can make the
+daemon more cautious, never less. A repo whose changes are all enormous must
+not thereby teach it that enormous is fine — that is how a heuristic learns its
+way into missing failures. And an explicit `asyncValidate: always` still wins,
+because history is a heuristic and that setting is an instruction.
 
 ## Result Caching
 
@@ -120,7 +234,9 @@ Commands are defined in the project config:
     {"name": "lint", "run": "task lint", "timeout": 60},
     {"name": "test", "run": "task test", "timeout": 300}
   ],
-  "stopHookMaxAttempts": 3
+  "stopHookMaxAttempts": 3,
+  "asyncValidate": "auto",
+  "asyncValidateMaxLines": 500
 }
 ```
 
@@ -128,6 +244,13 @@ Commands are defined in the project config:
 agent when validation keeps failing for the same uncommitted changes. After that
 many consecutive failures the hook exits 0 (ending the session) instead of
 non-zero (which would ask Claude to try again). Defaults to 3 if unset.
+
+`asyncValidate` decides whether hook runs may be validated in the background:
+`auto` (the default) applies the rules above, `never` keeps every run blocking,
+and `always` releases every hook run — including one for a project that owes a
+blocking run, since a project that asked for this has opted out of that safety
+net. `asyncValidateMaxLines` moves the size threshold `auto` uses; a project
+whose checks are fast enough to be worth waiting for can lower it.
 
 ### `.claude/settings.json`
 
@@ -150,6 +273,13 @@ Generated by `chunk init`:
       {
         "hooks": [
           {"type": "command", "command": "chunk validate", "timeout": 420}
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "command": "chunk validate --collect", "timeout": 10}
         ]
       }
     ]

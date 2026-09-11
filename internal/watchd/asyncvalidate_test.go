@@ -411,7 +411,7 @@ func serve(d *daemon, req *http.Request) *httptest.ResponseRecorder {
 
 func asyncReq(t *testing.T, root string) *http.Request {
 	t.Helper()
-	body, err := json.Marshal(AsyncValidateRequest{ProjectRoot: root})
+	body, err := json.Marshal(AsyncValidateRequest{ValidateRequest: ValidateRequest{ProjectRoot: root}})
 	assert.NilError(t, err)
 	return httptest.NewRequest(http.MethodPost, "/validate/async", bytes.NewReader(body))
 }
