@@ -3,6 +3,8 @@ package watchd
 import (
 	"context"
 	"log"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -10,16 +12,27 @@ import (
 )
 
 const (
-	// MaxCommandBytes caps retained output per command. Output is capped in bytes
-	// rather than lines because a verbose test suite emits megabytes in seconds
-	// and a line count says nothing about memory. The tail is what survives: the
-	// end of a failed run is the part anyone wants to read.
-	MaxCommandBytes = 256 << 10
+	// MaxCommandBytes is the default per-command output buffer cap in bytes.
+	// Override at runtime with CHUNK_OUTPUT_BUFFER_SIZE so the cap can be tuned
+	// via a sandbox-provisioner deploy without rebuilding images.
+	MaxCommandBytes = 10 << 20 // 10 MB
 
 	// MaxCommands caps retained commands per project. Only finished commands are
 	// evicted, so a project running more than this many at once keeps them all.
 	MaxCommands = 20
 )
+
+// outputBufferCap returns the per-command buffer cap. It reads
+// CHUNK_OUTPUT_BUFFER_SIZE when set; invalid or non-positive values are
+// silently ignored and the default is used instead.
+func outputBufferCap() int {
+	if v := os.Getenv("CHUNK_OUTPUT_BUFFER_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return MaxCommandBytes
+}
 
 // CommandReg is the registration a process sends after submitting a remote
 // command, so the daemon can stream and buffer that command's output. The
@@ -65,6 +78,7 @@ type OutputChunk struct {
 type buffer struct {
 	mu       sync.Mutex
 	data     []byte
+	maxBytes int
 	dropped  int64 // bytes evicted from the head
 	running  bool
 	exitCode *int
@@ -74,8 +88,8 @@ type buffer struct {
 	streamErr string
 }
 
-func newBuffer() *buffer {
-	return &buffer{running: true}
+func newBuffer(maxBytes int) *buffer {
+	return &buffer{maxBytes: maxBytes, running: true}
 }
 
 func (b *buffer) append(p []byte) {
@@ -85,13 +99,13 @@ func (b *buffer) append(p []byte) {
 	// tail directly. Appending first would size the array to len(b.data)+len(p)
 	// before trimming back, letting a single large write spike allocation past
 	// the cap that exists to bound exactly that.
-	if len(p) >= MaxCommandBytes {
-		b.dropped += int64(len(b.data)) + int64(len(p)-MaxCommandBytes)
-		b.data = append(b.data[:0], p[len(p)-MaxCommandBytes:]...)
+	if len(p) >= b.maxBytes {
+		b.dropped += int64(len(b.data)) + int64(len(p)-b.maxBytes)
+		b.data = append(b.data[:0], p[len(p)-b.maxBytes:]...)
 		return
 	}
 	b.data = append(b.data, p...)
-	if excess := len(b.data) - MaxCommandBytes; excess > 0 {
+	if excess := len(b.data) - b.maxBytes; excess > 0 {
 		// Copy the tail down rather than reslicing, so the underlying array is
 		// reused instead of growing without bound behind a moving window.
 		b.data = append(b.data[:0], b.data[excess:]...)
@@ -162,6 +176,7 @@ type outputStore struct {
 	// structurally, instead of leaving it to stopAll being deferred correctly —
 	// a guarantee that is invisible from register, where the goroutine starts.
 	parent context.Context
+	bufCap int // per-command output buffer cap in bytes
 
 	mu        sync.Mutex
 	cmds      map[string]*commandEntry
@@ -174,6 +189,7 @@ func newOutputStore(parent context.Context) *outputStore {
 	}
 	return &outputStore{
 		parent:    parent,
+		bufCap:    outputBufferCap(),
 		cmds:      make(map[string]*commandEntry),
 		byProject: make(map[string][]string),
 	}
@@ -214,7 +230,7 @@ func (s *outputStore) register(reg CommandReg, stream streamFn) {
 		return
 	}
 	ctx, cancel := context.WithCancel(s.parent)
-	entry := &commandEntry{reg: reg, buf: newBuffer(), cancel: cancel}
+	entry := &commandEntry{reg: reg, buf: newBuffer(s.bufCap), cancel: cancel}
 	s.cmds[reg.CommandID] = entry
 	s.byProject[reg.ProjectRoot] = append(s.byProject[reg.ProjectRoot], reg.CommandID)
 	s.evictLocked(reg.ProjectRoot)
