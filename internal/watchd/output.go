@@ -183,13 +183,13 @@ type outputStore struct {
 	byProject map[string][]string // project root → command IDs, oldest first
 }
 
-func newOutputStore(parent context.Context, bufCap int) *outputStore {
+func newOutputStore(parent context.Context) *outputStore {
 	if parent == nil {
 		parent = context.Background()
 	}
 	return &outputStore{
 		parent:    parent,
-		bufCap:    bufCap,
+		bufCap:    outputBufferCap(),
 		cmds:      make(map[string]*commandEntry),
 		byProject: make(map[string][]string),
 	}
