@@ -14,6 +14,11 @@ import (
 	"time"
 )
 
+// ErrDaemonUnavailable is returned by RunValidate when the daemon socket is
+// unreachable, so callers can distinguish a transient connectivity failure from
+// a real validation error and fall back to inline execution.
+var ErrDaemonUnavailable = errors.New("daemon unavailable")
+
 // FetchSnapshot connects to the running watch daemon and returns the current
 // snapshot for the given project roots. If roots is empty all known projects
 // are returned.
@@ -207,6 +212,65 @@ func StopForCredentialChange() {
 		return
 	}
 	_ = stopDaemon(pid, sockPath)
+}
+
+// IsDaemonRunning reports whether the watch daemon is reachable and was built
+// from the same binary as the caller. A daemon from an older build is treated
+// as absent: it may not serve routes added since it was compiled.
+func IsDaemonRunning() bool {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return false
+	}
+	ok, _ := ping(sockPath)
+	return ok
+}
+
+// IsDaemonCompatible reports whether the watch daemon is reachable and running
+// the same build as the current process. A daemon from a different build may
+// not support all API endpoints (e.g. /validate), so delegation should be
+// skipped and the operation run inline instead.
+func IsDaemonCompatible() bool {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return false
+	}
+	ok, build := ping(sockPath)
+	return ok && build == BuildID()
+}
+
+// RunValidate delegates a validate run to the daemon. args is os.Args[1:];
+// circleCIToken is forwarded to the subprocess as CIRCLE_TOKEN.
+func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return ValidateResponse{}, err
+	}
+	body, err := json.Marshal(ValidateRequest{Args: args, CircleCIToken: circleCIToken, Env: os.Environ()})
+	if err != nil {
+		return ValidateResponse{}, fmt.Errorf("marshal validate request: %w", err)
+	}
+	resp, err := longUnixClient(sockPath).Post("http://watchd/validate", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return ValidateResponse{}, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		err := fmt.Errorf("watch daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+		// 404 means the daemon is running but does not have the /validate
+		// endpoint — it is from an older build. Treat it as unavailable so
+		// callers fall back to inline execution instead of surfacing the error.
+		if resp.StatusCode == http.StatusNotFound {
+			return ValidateResponse{}, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
+		}
+		return ValidateResponse{}, err
+	}
+	var result ValidateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ValidateResponse{}, fmt.Errorf("decode validate response: %w", err)
+	}
+	return result, nil
 }
 
 // EnsureRunning checks whether the watch daemon is running and serving, and

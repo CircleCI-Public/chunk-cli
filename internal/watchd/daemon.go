@@ -40,8 +40,10 @@ type projectState struct {
 }
 
 type daemon struct {
-	mu       sync.RWMutex
-	projects map[string]*projectState // keyed by project root
+	mu         sync.RWMutex
+	projects   map[string]*projectState // keyed by project root
+	validateMu sync.Mutex               // serializes concurrent /validate requests
+	runner     ValidateRunner
 
 	// client streams command output. Nil when the daemon started without
 	// credentials, in which case commands are still recorded but no output is
@@ -55,21 +57,17 @@ type daemon struct {
 	// never execute on the poll path, so a hung stream cannot stall the
 	// dashboard for every other project.
 	out *outputStore
+	// res samples resource usage, only while a dashboard is attached.
+	res *resourceSampler
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
 //
-// The client is resolved by the caller and may be nil: the daemon records
-// commands either way, and authMessage is what tells the user why output is
-// missing. Resolution belongs to the caller because it can read the OS keychain,
-// and the daemon must not hold a lock over that on the command-registration path
-// — a hook is waiting on it.
-//
-// The message arrives already rendered, empty when there is nothing to explain.
-// Only the caller that resolved the credentials knows which failures mean "log
-// in" and which are something else, and asking the daemon to classify them
-// would make this package depend on the auth flow it deliberately sits below.
-func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string) error {
+// client and authMessage support the output-buffering feature; runner is called
+// in-process to handle /validate requests. Both client and runner may be nil
+// (the daemon still records commands without a client, and /validate returns an
+// error without a runner).
+func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -104,14 +102,17 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string)
 
 	d := &daemon{
 		projects:  make(map[string]*projectState),
+		runner:    runner,
 		client:    client,
 		authError: authMessage,
 		out:       newOutputStore(ctx),
+		res:       newResourceSampler(client),
 	}
 	// Still cancelled explicitly: this returns before the process exits in tests
 	// and any embedded caller, and it is what stops streamers promptly rather
 	// than whenever the parent context happens to be torn down.
 	defer d.out.stopAll()
+	defer d.res.stopAll()
 
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
@@ -186,6 +187,23 @@ func (d *daemon) poll() {
 	for _, ps := range work {
 		d.updateProject(ps)
 	}
+
+	// Reconcile samplers once per poll, across every project. Doing it inside
+	// updateProject would hand reconcile one project's sidecars at a time, and it
+	// stops any sampler absent from what it is given — so each project's turn
+	// would tear down every other project's samplers.
+	d.res.reconcile(d.allSidecars())
+}
+
+// allSidecars returns every known sidecar across all projects.
+func (d *daemon) allSidecars() []SidecarState {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var all []SidecarState
+	for _, ps := range d.projects {
+		all = append(all, ps.snap.Sidecars...)
+	}
+	return all
 }
 
 // initProject opens the event log for root and returns a new projectState.
@@ -241,6 +259,7 @@ func (d *daemon) updateProject(ps *projectState) {
 
 	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
 	annotateActivity(sidecars, ps.events)
+	d.res.annotate(sidecars)
 
 	snap := ProjectSnapshot{
 		Root:     ps.root,
@@ -262,6 +281,11 @@ func (d *daemon) updateProject(ps *projectState) {
 // snapshot returns a Snapshot filtered to the requested roots.
 // If roots is empty all known projects are returned.
 func (d *daemon) snapshot(roots []string) Snapshot {
+	// A snapshot request is the daemon's signal that a dashboard is attached, and
+	// resource sampling is gated on that: a persistent SSH connection per sidecar
+	// is only worth holding while someone is looking at it.
+	d.res.touch()
+
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
