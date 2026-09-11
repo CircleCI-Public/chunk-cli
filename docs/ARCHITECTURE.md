@@ -419,6 +419,13 @@ GET  /validate/collect?root=<path>                 → {tasks}
   until something commits — five 100-line turns read as 500 by the fifth — and
   resets to nothing when anything does, validated or not. A snapshot is content,
   so neither happens.
+- **A new run supersedes the live-tree run in flight.** A run is released because
+  the tree moved, so whatever is already running is validating code that is no
+  longer there and its result is headed for the bin; `taskStore.supersede`
+  cancels it rather than leaving two runs of the same commands queued behind each
+  other. A cancelled run records nothing — not a failure, not a known-good state
+  — because it concluded nothing. Snapshot-backed runs are exempt: their verdict
+  survives the tree moving, so they are the one thing here worth letting finish.
 - **A snapshot run is exempt from the clean-tree skip.** `gitutil.MaterializeTree`
   checks the snapshot out into a temp worktree (opt-in: `asyncValidateWorktree`),
   so the checks cannot be raced by an edit — and a result about a copy is

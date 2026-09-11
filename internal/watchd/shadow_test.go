@@ -169,3 +169,104 @@ func TestTheLiveTreeIsUsedUnlessTheProjectAsksOtherwise(t *testing.T) {
 	got := <-args
 	assert.Equal(t, slices.Contains(got, "--attribute-to"), false, "args were %v", got)
 }
+
+// Two runs of the same commands queued behind each other can only ever produce
+// one useful answer, and it is the later one. The earlier is validating a tree
+// that has already moved — that is what made the second hook fire.
+func TestReleasingARunSupersedesTheOneInFlight(t *testing.T) {
+	d, root, _ := riskDaemon(t, 0)
+	writeSource(t, root, 10)
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 2)
+	d.runner = func(ctx context.Context, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return 0
+		case <-ctx.Done():
+			return 1
+		}
+	}
+
+	first := releaseRun(t, d, root)
+	<-started
+
+	writeSource(t, root, 20)
+	second := releaseRun(t, d, root)
+	assert.Assert(t, second.TaskID != first.TaskID)
+
+	// The first run's context is cancelled, so it stops holding the validate
+	// lock and the second one gets to work.
+	<-started
+	close(release)
+	waitFor(t, func() bool { return len(d.tasks.inFlight(root)) == 0 }, "run never finished")
+
+	got := d.tasks.collect(root)
+	assert.Equal(t, len(got), 1, "both runs reported: %d", len(got))
+	assert.Equal(t, got[0].ID, second.TaskID, "the superseded run reported instead of the live one")
+}
+
+// A superseded run concluded nothing, so it must not leave a failure behind:
+// that would owe the project a blocking run it never earned.
+func TestASupersededRunOwesNothing(t *testing.T) {
+	d, root, _ := riskDaemon(t, 0)
+	writeSource(t, root, 10)
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 2)
+	d.runner = func(ctx context.Context, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return 0
+		case <-ctx.Done():
+			return 1
+		}
+	}
+
+	releaseRun(t, d, root)
+	<-started
+	writeSource(t, root, 20)
+	releaseRun(t, d, root)
+	<-started
+	close(release)
+	waitFor(t, func() bool { return len(d.tasks.inFlight(root)) == 0 }, "run never finished")
+
+	assert.Equal(t, d.risk.owesBlockingRun(root), false,
+		"a cancelled run was recorded as a failure")
+}
+
+// A snapshot-backed run is left alone: its verdict stays true about the state
+// it was handed, so it is the one piece of work here that will survive being
+// overtaken.
+func TestASnapshotRunIsNotSuperseded(t *testing.T) {
+	d, root := worktreeProject(t)
+	writeSource(t, root, 10)
+
+	release := make(chan struct{})
+	started := make(chan struct{}, 2)
+	d.runner = func(ctx context.Context, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return 0
+		case <-ctx.Done():
+			return 1
+		}
+	}
+
+	first := releaseRun(t, d, root)
+	<-started
+
+	writeSource(t, root, 20)
+	second := releaseRun(t, d, root)
+	close(release)
+	waitFor(t, func() bool { return len(d.tasks.inFlight(root)) == 0 }, "runs never finished")
+
+	got := d.tasks.collect(root)
+	assert.Equal(t, len(got), 2, "a snapshot-backed run was thrown away: %d results", len(got))
+	ids := []string{got[0].ID, got[1].ID}
+	assert.Assert(t, slices.Contains(ids, first.TaskID), "the first snapshot result was lost")
+	assert.Assert(t, slices.Contains(ids, second.TaskID), "the second result was lost")
+}

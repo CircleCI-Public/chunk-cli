@@ -277,6 +277,56 @@ func (s *taskStore) inFlight(root string) []TaskState {
 	return out
 }
 
+// supersede stops the runs in flight for root that a new run makes pointless,
+// and reports how many it stopped.
+//
+// A run is released because the tree has moved — that is what made a new hook
+// fire — so a live-tree run already in flight is validating code that is no
+// longer on disk, and its result is going to be discarded the moment it
+// finishes. Stopping it frees the validate lock the new run is about to want,
+// instead of leaving two runs of the same commands queued behind each other for
+// an answer only one of them can give.
+//
+// Snapshot-backed runs are left alone. Their verdict stays true about the state
+// they were handed whatever the tree does afterwards, so that one will be
+// reported rather than thrown away — cancelling it would discard the only work
+// here that was going to survive.
+func (s *taskStore) supersede(root string) int {
+	root = config.CanonicalProjectRoot(root)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := s.byProject[root]
+	kept := make([]string, 0, len(ids))
+	stopped := 0
+	for _, id := range ids {
+		entry, ok := s.tasks[id]
+		if !ok {
+			continue
+		}
+		if !entry.state.Running || entry.state.Snapshot {
+			kept = append(kept, id)
+			continue
+		}
+		if entry.cancel != nil {
+			entry.cancel()
+		}
+		// Dropped here rather than left to report a cancellation. finish finds no
+		// task and records nothing, which is right: a run that was stopped has
+		// concluded nothing, and reporting it as a failure would owe the project a
+		// blocking run it never earned.
+		delete(s.tasks, id)
+		stopped++
+	}
+	if len(kept) == 0 {
+		delete(s.byProject, root)
+	} else {
+		s.byProject[root] = kept
+	}
+	return stopped
+}
+
 // evictLocked drops finished tasks until root is under MaxTasksPerProject.
 // A running task is never evicted: cancelling a run to make room would lose
 // work that is about to produce an answer.

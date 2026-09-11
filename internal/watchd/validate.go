@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
@@ -157,6 +158,12 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 		}
 	}
 
+	// Whatever was already running for this project is validating a tree that
+	// has since moved, which is why this run exists at all.
+	if stopped := d.tasks.supersede(req.ProjectRoot); stopped > 0 {
+		log.Printf("watchd: superseded %d in-flight validate run(s) for %s", stopped, req.ProjectRoot)
+	}
+
 	taskID, err := d.tasks.start(req.ProjectRoot, shadow != "", func(ctx context.Context) (int, string) {
 		defer cleanup()
 		// Serialised against every other validate run, async or not: two runs of
@@ -171,6 +178,13 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 
 		var stdout, stderr bytes.Buffer
 		exitCode := d.runner(ctx, args, env, &stdout, &stderr)
+		if ctx.Err() != nil {
+			// Superseded, or the daemon is shutting down. The run concluded
+			// nothing, so nothing is recorded: a cancelled run is not a failed one,
+			// and filing it as either a failure or a known-good state would be a
+			// verdict on work that never finished.
+			return exitCode, stdout.String() + stderr.String()
+		}
 		if exitCode == 0 {
 			// Recorded even if the tree has moved on since. Staleness decides
 			// whether this *result* can be reported, which is a different
