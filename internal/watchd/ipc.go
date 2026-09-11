@@ -80,6 +80,8 @@ func newServer(d *daemon) *http.Server {
 		_ = json.NewEncoder(w).Encode(chunk)
 	})
 	mux.HandleFunc("/validate", d.handleValidate)
+	mux.HandleFunc("/validate/async", d.handleAsyncValidate)
+	mux.HandleFunc("/validate/collect", d.handleCollect)
 	return &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,

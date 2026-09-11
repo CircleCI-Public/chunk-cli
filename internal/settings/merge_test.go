@@ -818,3 +818,64 @@ func TestMergeCodexMalformedGenerated(t *testing.T) {
 	_, err := MergeCodex([]byte(`{}`), []byte(`not json`))
 	assert.ErrorContains(t, err, "parse generated hooks")
 }
+
+// A repo that already has a settings.json must still gain the collect hook, or
+// every existing project keeps running async validation whose results are never
+// reported — the same gap the Stop hook merge exists to close.
+func TestMergeAddsCollectHookToExistingSettings(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "old", "timeout": 60}]}]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "new", "timeout": 60}]}],
+			"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "chunk validate --collect", "timeout": 10}]}]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, result.Changed)
+	assert.Assert(t, strings.Contains(string(result.Merged), CollectCommand), "the collect hook was not installed")
+}
+
+// A user's own UserPromptSubmit hooks are theirs. Chunk owns one entry in that
+// list, identified by its command, and replacing the enclosing group would
+// silently delete whatever else they had running before their prompts.
+func TestMergePreservesUserUserPromptSubmitHooks(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "my-own-thing", "timeout": 5}]}]
+		}
+	}`)
+	generated := []byte(`{
+		"hooks": {
+			"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "chunk validate --collect", "timeout": 10}]}]
+		}
+	}`)
+
+	result, err := Merge(existing, generated)
+	assert.NilError(t, err)
+	merged := string(result.Merged)
+	assert.Assert(t, strings.Contains(merged, "my-own-thing"), "a user's own UserPromptSubmit hook was dropped")
+	assert.Assert(t, strings.Contains(merged, CollectCommand), "the collect hook was not installed")
+}
+
+// Re-running chunk init must not stack a second collect hook, or a developer
+// who runs it twice is told about every background result twice.
+func TestMergeCollectHookIsIdempotent(t *testing.T) {
+	generated := []byte(`{
+		"hooks": {
+			"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "chunk validate --collect", "timeout": 10}]}]
+		}
+	}`)
+
+	first, err := Merge([]byte(`{}`), generated)
+	assert.NilError(t, err)
+	second, err := Merge(first.Merged, generated)
+	assert.NilError(t, err)
+	assert.Assert(t, !second.Changed, "merging over already-merged settings changed them")
+	assert.Equal(t, strings.Count(string(second.Merged), CollectCommand), 1, "the collect hook was installed twice")
+}
