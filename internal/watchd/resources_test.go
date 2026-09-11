@@ -421,18 +421,19 @@ func TestSamplerReportsWhyItGaveUp(t *testing.T) {
 	var lines []string
 
 	r := newResourceSampler(nil)
+	gaveUp := make(chan struct{})
 	r.logf = func(format string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
-		lines = append(lines, fmt.Sprintf(format, args...))
-	}
-	gaveUp := make(chan struct{})
-	var attempts int
-	r.sample = func(_ context.Context, _ SidecarState, s *sidecarSampler) error {
-		attempts++
-		if attempts == maxSamplerFailures {
-			defer close(gaveUp)
+		msg := fmt.Sprintf(format, args...)
+		lines = append(lines, msg)
+		// Signal from inside logf so the "pausing sampling" message is
+		// guaranteed to be in lines before the test reads them.
+		if strings.Contains(msg, "pausing sampling") {
+			close(gaveUp)
 		}
+	}
+	r.sample = func(_ context.Context, _ SidecarState, s *sidecarSampler) error {
 		return errors.New("ssh: connection refused")
 	}
 	r.touch()

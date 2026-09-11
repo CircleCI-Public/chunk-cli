@@ -11,6 +11,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
+	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
@@ -38,7 +39,18 @@ func newWatchDaemonCmd() *cobra.Command {
 			if err == nil {
 				client, err = authprompt.ResolveCircleCIClient(rc, nil)
 			}
-			return watchd.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner())
+
+			// Resolve the GitHub client for PR monitoring. Failure is not fatal:
+			// PR monitoring is advisory and the daemon runs fine without it.
+			var ghClient *github.Client
+			if fullRC, rcErr := config.Resolve("", "", false); rcErr == nil && fullRC.GitHubToken != "" {
+				ghClient, _ = github.New(github.Config{
+					Token:   fullRC.GitHubToken,
+					BaseURL: fullRC.GitHubAPIURL,
+				})
+			}
+
+			return watchd.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner(), ghClient)
 		},
 	}
 }

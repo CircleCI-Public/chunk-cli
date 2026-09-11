@@ -15,6 +15,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/github"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -25,6 +27,9 @@ type projectState struct {
 	offset  int64
 	events  []eventlog.Event
 	snap    ProjectSnapshot
+	// org and repo are resolved once from the git remote and cached for PR monitoring.
+	org  string
+	repo string
 }
 
 type daemon struct {
@@ -47,6 +52,9 @@ type daemon struct {
 	out *outputStore
 	// res samples resource usage, only while a dashboard is attached.
 	res *resourceSampler
+	// prm monitors open PRs for each project's current branch. Nil when no
+	// GitHub credentials are available.
+	prm *prMonitor
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -54,8 +62,9 @@ type daemon struct {
 // client and authMessage support the output-buffering feature; runner is called
 // in-process to handle /validate requests. Both client and runner may be nil
 // (the daemon still records commands without a client, and /validate returns an
-// error without a runner).
-func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner) error {
+// error without a runner). ghClient may be nil; PR monitoring is skipped when
+// no GitHub credentials are available.
+func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -95,6 +104,7 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		authError: authMessage,
 		out:       newOutputStore(ctx),
 		res:       newResourceSampler(client),
+		prm:       newPRMonitor(ghClient),
 	}
 	// Still cancelled explicitly: this returns before the process exits in tests
 	// and any embedded caller, and it is what stops streamers promptly rather
@@ -206,7 +216,14 @@ func (d *daemon) initProject(root string) *projectState {
 		log.Printf("watchd: event log for %s: %v", root, err)
 		return nil
 	}
-	return &projectState{root: root, dataDir: dataDir, log: el}
+	ps := &projectState{root: root, dataDir: dataDir, log: el}
+	// Resolve org/repo once for PR monitoring. Failure is silently ignored:
+	// the project may not be on GitHub, or the remote may not be reachable.
+	if org, repo, err := gitremote.DetectOrgAndRepo(root); err == nil {
+		ps.org = org
+		ps.repo = repo
+	}
+	return ps
 }
 
 // updateProject refreshes sidecar files, new log events, and git state for ps.
@@ -228,6 +245,10 @@ func (d *daemon) updateProject(ps *projectState) {
 	annotateActivity(sidecars, ps.events)
 	d.res.annotate(sidecars)
 
+	// Kick off a background PR fetch if one is due. Uses a background context
+	// derived from the daemon's own: the fetch must survive this poll returning.
+	d.prm.maybeRefresh(context.Background(), ps.root, branch, ps.org, ps.repo)
+
 	snap := ProjectSnapshot{
 		Root:     ps.root,
 		Branch:   branch,
@@ -237,6 +258,8 @@ func (d *daemon) updateProject(ps *projectState) {
 		Events:   ps.events,
 		Commands: d.out.commandsFor(ps.root),
 	}
+	d.prm.annotate(&snap)
+
 	d.mu.Lock()
 	ps.snap = snap
 	d.mu.Unlock()

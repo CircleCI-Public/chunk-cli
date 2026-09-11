@@ -60,6 +60,35 @@ type CommandState struct {
 	Truncated   bool       `json:"truncated"`
 }
 
+// PRCheck is one CI check on a PR's latest commit.
+type PRCheck struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`     // QUEUED, IN_PROGRESS, COMPLETED
+	Conclusion string `json:"conclusion"` // SUCCESS, FAILURE, NEUTRAL, CANCELLED, etc.
+}
+
+// PRComment is one review thread comment on a PR.
+type PRComment struct {
+	Author    string    `json:"author"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+	Resolved  bool      `json:"resolved,omitempty"`
+}
+
+// PRState is the daemon's advisory view of the open PR for a project's current branch.
+// It is nil when no open PR exists for the branch or when GitHub credentials are absent.
+type PRState struct {
+	Number           int         `json:"number"`
+	Title            string      `json:"title"`
+	URL              string      `json:"url"`
+	UpdatedAt        time.Time   `json:"updated_at,omitempty"`
+	CheckState       string      `json:"check_state,omitempty"` // rollup: SUCCESS, FAILURE, PENDING, ERROR, EXPECTED
+	Checks           []PRCheck   `json:"checks,omitempty"`
+	Comments         []PRComment `json:"comments,omitempty"`
+	ChangesRequested bool        `json:"changes_requested,omitempty"`
+	FetchedAt        time.Time   `json:"fetched_at"`
+}
+
 // ProjectSnapshot is the daemon's view of one project at a point in time.
 type ProjectSnapshot struct {
 	Root     string           `json:"root"`
@@ -69,6 +98,9 @@ type ProjectSnapshot struct {
 	Sidecars []SidecarState   `json:"sidecars"`
 	Events   []eventlog.Event `json:"events"`
 	Commands []CommandState   `json:"commands,omitempty"`
+	// PR is the advisory PR state for the current branch. Nil when no open PR
+	// exists, or when GitHub credentials are not configured.
+	PR *PRState `json:"pr,omitempty"`
 }
 
 // Snapshot is a point-in-time view of all watched projects.
