@@ -108,6 +108,19 @@ is actionable for 2,000 lines across nine files and impossible for 2,000 lines
 in one generated file, so a single-file change is told nothing rather than
 something it cannot act on.
 
+### Trees git cannot answer for
+
+A repository with no commits has no `HEAD` to diff against, and a directory that
+was never a repository has nothing at all. Both used to be unmeasurable, which
+meant every run in them blocked. The daemon now walks and hashes such a tree
+itself, so a small change in a fresh repo reads as a small change.
+
+It is the fallback, not the default. Git knows what is ignored, and knows how
+much of a modified file an edit actually touched; hashing only knows that a file
+changed, so it counts the whole file — a one-line edit in a 900-line file reads
+as 900 lines. That over-measures, which makes you wait, rather than
+under-measuring, which would wave a change through.
+
 ### Relative to this repo
 
 Five hundred lines is a rewrite in one codebase and a Tuesday in another, so

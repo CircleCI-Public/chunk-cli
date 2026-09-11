@@ -426,12 +426,37 @@ GET  /validate/collect?root=<path>                 → {tasks}
   have released and raise a score; it can never release one or lower a score. A
   codebase where every change is enormous must not teach the daemon that
   enormous is fine.
+- **Where git cannot answer, the daemon measures the tree itself.** A repository
+  with no commits has no HEAD to diff against, and a directory that was never one
+  has nothing at all; both used to be unmeasurable, and so blocked every run.
+  `filestate` walks and hashes instead (`Index`, `Changes`, `Digest`), which also
+  gives the staleness check an identity to compare against — see
+  `fingerprintTree`. It is the fallback, not the default: git knows what is
+  ignored, and knows how much of a modified file an edit touched, where
+  `filestate` can only tell that it changed and so counts the whole file. That
+  over-measures, which errs towards blocking.
 - **The snapshot never touches the developer's repository state.** It stages into
   a throwaway index (`GIT_INDEX_FILE` in a temp file, seeded from the real index
   for its stat cache, without which every file is re-hashed per call). The
   objects it writes are unreferenced, so git's `gc` may collect a baseline;
   `ChangesBetween` then errors and the assessment falls back to `HEAD`, which
   reads larger and so errs towards blocking.
+
+## Change Measurement (`internal/changeset/`, `internal/gitutil/`, `internal/filestate/`)
+
+`changeset.Changes` is the shape of one answer — how far a working tree has
+moved from an earlier state — and lives in its own package because there is more
+than one way to find it and they have to agree on what the answer looks like.
+
+- `gitutil` measures with git: `WorkingChanges` against HEAD, `SnapshotTree` and
+  `ChangesBetween` against an earlier uncommitted state.
+- `filestate` measures by walking and hashing, for trees git cannot answer for.
+
+The two are not equivalent, and the difference is documented where it bites:
+git knows what is ignored and how much of a modified file changed; `filestate`
+only knows a file changed, so it counts the file. Both err in the same
+direction — over-measuring, which makes somebody wait — because the opposite
+error is a change that reads smaller than it is and gets waved through.
 
 ## HTTP Client (`internal/httpcl/`)
 

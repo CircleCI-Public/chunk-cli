@@ -8,7 +8,6 @@ import (
 	"net/http"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
@@ -137,9 +136,9 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 	sessionID := session.IDFromSlice(req.Env)
 	args := req.Args
 	// Taken before the run, because this is the state the run is about to
-	// validate. A tree that cannot be snapshotted just means the next change is
-	// measured against HEAD instead.
-	before, _ := gitutil.SnapshotTree(req.ProjectRoot)
+	// validate. A tree that cannot be captured at all just means the next change
+	// is measured against HEAD instead.
+	before := d.snapshotState(req.ProjectRoot)
 
 	return d.tasks.start(req.ProjectRoot, func(ctx context.Context) (int, string) {
 		// Serialised against every other validate run, async or not: two runs of
@@ -237,10 +236,7 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 
 // runValidateNow runs req to completion while the caller waits.
 func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *RiskSummary) ValidateResponse {
-	var before string
-	if req.ProjectRoot != "" {
-		before, _ = gitutil.SnapshotTree(req.ProjectRoot)
-	}
+	before := d.snapshotState(req.ProjectRoot)
 
 	d.validateMu.Lock()
 	defer d.validateMu.Unlock()

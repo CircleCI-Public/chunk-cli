@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -454,9 +455,11 @@ func TestAsyncValidateEndpointAcceptsAndCollects(t *testing.T) {
 // broken, this tree just cannot be validated asynchronously, and the caller is
 // meant to read that as "run it inline" instead of as a daemon failure.
 func TestAsyncValidateEndpointRefusesAnUnfingerprintableTree(t *testing.T) {
-	dir, err := os.MkdirTemp("", "notarepo")
-	assert.NilError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// A path with nothing at it. Git cannot identify it and neither can hashing
+	// it, so there is no baseline to detect staleness against — which is the
+	// only condition that refuses a run now that a tree git has no answer for
+	// can be identified by its contents instead. See fingerprintTree.
+	dir := filepath.Join(t.TempDir(), "gone")
 
 	d := newTestDaemon()
 	t.Cleanup(d.tasks.stopAll)
@@ -469,6 +472,23 @@ func TestAsyncValidateEndpointRefusesAnUnfingerprintableTree(t *testing.T) {
 	rec := serve(d, asyncReq(t, dir))
 	assert.Equal(t, rec.Code, http.StatusConflict)
 	assert.Equal(t, ran, false, "a run started against a tree with no baseline")
+}
+
+// A directory that is not a repository used to be refused, because git had no
+// identity to give it and staleness would have been undetectable. Hashing it
+// gives the same guarantee, so it is tracked like any other tree.
+func TestAsyncValidateEndpointAcceptsATreeThatIsNotARepository(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644))
+
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+	d.runner = func(context.Context, []string, []string, io.Writer, io.Writer) int { return 0 }
+
+	rec := serve(d, asyncReq(t, dir))
+	assert.Equal(t, rec.Code, http.StatusAccepted)
+	waitFor(t, func() bool { return len(d.tasks.inFlight(dir)) == 0 }, "run never finished")
+	assert.Equal(t, len(d.tasks.collect(dir)), 1, "the result was not kept")
 }
 
 // A result that cannot be attributed to a project could never be collected, so

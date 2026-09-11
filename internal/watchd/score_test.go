@@ -7,11 +7,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 )
 
-func change(lines int, paths ...string) gitutil.Changes {
-	return gitutil.Changes{Paths: paths, Lines: lines, Baseline: gitutil.BaselineHead}
+func change(lines int, paths ...string) changeset.Changes {
+	return changeset.Changes{Paths: paths, Lines: lines, Baseline: changeset.BaselineHead}
 }
 
 func TestScoreRisesWithSize(t *testing.T) {
@@ -59,13 +59,13 @@ func TestAFailedLastRunAddsToTheScore(t *testing.T) {
 // Nothing known means the top of the scale. It is the same direction the
 // release decision takes, for the same reason.
 func TestAnUnmeasurableChangeScoresHighest(t *testing.T) {
-	s := scoreChange(500, false, gitutil.Changes{}, errors.New("not a repo"), historyEvidence{})
+	s := scoreChange(500, false, changeset.Changes{}, errors.New("not a repo"), historyEvidence{})
 	assert.Equal(t, s.Score, 100)
 	assert.Equal(t, s.Band, BandHigh)
 }
 
 func TestAnEmptyChangeScoresZero(t *testing.T) {
-	s := scoreChange(500, false, gitutil.Changes{Baseline: gitutil.BaselineHead}, nil, historyEvidence{})
+	s := scoreChange(500, false, changeset.Changes{Baseline: changeset.BaselineHead}, nil, historyEvidence{})
 	assert.Equal(t, s.Score, 0)
 	assert.Equal(t, s.Band, BandLow)
 }
@@ -98,7 +98,7 @@ func TestAdviceOnlyWhereThereIsSomethingToDo(t *testing.T) {
 		"one file":      scoreChange(500, false, change(2000, "generated.go"), nil, historyEvidence{}),
 		"under limit":   scoreChange(500, false, change(100, "a.go", "b.go"), nil, historyEvidence{}),
 		"docs and text": scoreChange(500, false, change(5000, "a.md", "b.md"), nil, historyEvidence{}),
-		"unmeasurable":  scoreChange(500, false, gitutil.Changes{}, errors.New("nope"), historyEvidence{}),
+		"unmeasurable":  scoreChange(500, false, changeset.Changes{}, errors.New("nope"), historyEvidence{}),
 	} {
 		assert.Equal(t, s.Advice, "", "advice was given for %s", name)
 	}

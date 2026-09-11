@@ -97,7 +97,7 @@ func newTaskStore(parent context.Context) *taskStore {
 		parent:      parent,
 		tasks:       make(map[string]*taskEntry),
 		byProject:   make(map[string][]string),
-		fingerprint: gitutil.Fingerprint,
+		fingerprint: fingerprintTree,
 		now:         time.Now,
 	}
 }

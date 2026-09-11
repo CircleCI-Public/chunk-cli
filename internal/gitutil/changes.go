@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 )
 
 // maxCountBytes caps the total untracked content read to count lines. Untracked
@@ -22,35 +24,6 @@ var maxCountBytes int64 = 16 << 20
 // ErrCountBudget reports that the changed files hold more content than the line
 // count is willing to read.
 var ErrCountBudget = errors.New("changed files exceed the line count budget")
-
-// Changes summarises how far a working tree has moved from HEAD: which paths
-// changed, and how much of them.
-//
-// It answers a different question from Worktree. A fingerprint says whether the
-// tree is the same tree as before; this says how big the change is and what kind
-// of files it touched — which is what a caller deciding how much caution a
-// change deserves needs to know.
-type Changes struct {
-	// Paths is every path git reports as changed, relative to the repo root.
-	// Rename and copy entries name the destination only, since that is the file
-	// now on disk.
-	Paths []string
-	// Lines is how many lines the change touches: insertions plus deletions
-	// against the baseline for tracked files, and every line of an untracked
-	// file, all of which are new. Binary content contributes no lines — there
-	// are none to count — so a change can name paths and still report zero.
-	Lines int
-	// Baseline names what the change was measured against: "HEAD", or the SHA of
-	// an earlier snapshot. A caller reporting a number has to say what it is a
-	// number of, and the two answers mean different things — see ChangesBetween.
-	Baseline string
-}
-
-// BaselineHead is the Baseline of a change measured against the last commit.
-const BaselineHead = "HEAD"
-
-// Empty reports whether nothing has changed relative to the baseline.
-func (c Changes) Empty() bool { return len(c.Paths) == 0 }
 
 // WorkingChanges measures the working tree at dir against HEAD.
 //
@@ -65,10 +38,10 @@ func (c Changes) Empty() bool { return len(c.Paths) == 0 }
 // budget. The returned Changes is then the zero value, which reports no paths
 // and no lines — never mistake it for a small change, since it is the same
 // value a clean tree produces.
-func WorkingChanges(dir string) (Changes, error) {
+func WorkingChanges(dir string) (changeset.Changes, error) {
 	out, err := gitOut(dir, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return Changes{}, fmt.Errorf("resolve repo root: %w", err)
+		return changeset.Changes{}, fmt.Errorf("resolve repo root: %w", err)
 	}
 	root := strings.TrimSpace(out)
 
@@ -77,14 +50,14 @@ func WorkingChanges(dir string) (Changes, error) {
 	// rather than collapsing a directory into a single entry.
 	status, err := gitOut(dir, "status", "--porcelain", "-z", "-uall")
 	if err != nil {
-		return Changes{}, fmt.Errorf("read git status: %w", err)
+		return changeset.Changes{}, fmt.Errorf("read git status: %w", err)
 	}
 	entries := parseStatus(status)
 	if len(entries) == 0 {
-		return Changes{Baseline: BaselineHead}, nil
+		return changeset.Changes{Baseline: changeset.BaselineHead}, nil
 	}
 
-	ch := Changes{Paths: make([]string, 0, len(entries)), Baseline: BaselineHead}
+	ch := changeset.Changes{Paths: make([]string, 0, len(entries)), Baseline: changeset.BaselineHead}
 	remaining := maxCountBytes
 	for _, e := range entries {
 		ch.Paths = append(ch.Paths, e.Path)
@@ -93,7 +66,7 @@ func WorkingChanges(dir string) (Changes, error) {
 		}
 		lines, read, err := countLines(filepath.Join(root, e.Path), remaining)
 		if err != nil {
-			return Changes{}, fmt.Errorf("count %s: %w", e.Path, err)
+			return changeset.Changes{}, fmt.Errorf("count %s: %w", e.Path, err)
 		}
 		remaining -= read
 		ch.Lines += lines
@@ -101,7 +74,7 @@ func WorkingChanges(dir string) (Changes, error) {
 
 	tracked, err := trackedLines(dir)
 	if err != nil {
-		return Changes{}, err
+		return changeset.Changes{}, err
 	}
 	ch.Lines += tracked
 	return ch, nil
