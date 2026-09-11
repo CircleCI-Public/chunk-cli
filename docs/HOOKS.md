@@ -85,6 +85,29 @@ blocks as it always did.
 
 With no daemon running nothing changes: every hook run is blocking.
 
+### The risk score
+
+Every judgement also produces a 0–100 score, the facts behind it, and any
+advice that follows. A low-risk change prints nothing — it is the common case,
+and a number printed every turn is a number nobody reads. Anything else says so:
+
+```
+  validating now: large change since the last passing run, 2100 lines, over the 500-line limit
+  risk 92/100 high — 2100 lines (60), 3 files (6), last run failed (25)
+  2100 lines across 3 files is past the point where checks can run in the background; committing it in parts would get each piece checked sooner
+```
+
+The score is a report, not the decision. Release still turns on the facts
+themselves, because a threshold on lines can be argued with and a threshold on
+a composite cannot — nobody can tell you whether 47 should have been 52. What
+the score is for is the questions one bit cannot answer: which of two changes
+is riskier, and whether there is anything worth advising about either.
+
+Advice is only given where there is something to do about it. "Commit in parts"
+is actionable for 2,000 lines across nine files and impossible for 2,000 lines
+in one generated file, so a single-file change is told nothing rather than
+something it cannot act on.
+
 ## Result Caching
 
 In hook mode only, a successful `chunk validate` run is cached. If the hook

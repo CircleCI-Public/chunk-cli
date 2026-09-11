@@ -99,6 +99,9 @@ type riskDecision struct {
 	// output. It is filled either way: "why did that block" is asked at least as
 	// often as "why did that not".
 	reason string
+	// risk summarises the change the decision was made about. It travels with
+	// every decision, including the ones reached without consulting it.
+	risk RiskSummary
 }
 
 // decideRisk judges whether a validate run against a measured tree can be
@@ -119,42 +122,44 @@ func decideRisk(p asyncPolicy, owesBlockingRun bool, ch gitutil.Changes, chErr e
 		limit = DefaultAsyncMaxLines
 	}
 
+	risk := scoreChange(limit, owesBlockingRun, ch, chErr)
+
 	switch p.mode {
 	case config.AsyncValidateNever:
-		return riskDecision{reason: "background validation is off for this project"}
+		return riskDecision{reason: "background validation is off for this project", risk: risk}
 	case config.AsyncValidateAlways:
 		// Ahead of the failure debt below on purpose: a project that has asked for
 		// every run to be backgrounded has opted out of the blocking safety net,
 		// and quietly overriding that would make the setting a suggestion.
-		return riskDecision{async: true, reason: "background validation is always on for this project"}
+		return riskDecision{async: true, reason: "background validation is always on for this project", risk: risk}
 	}
 
 	// A failure the developer has not been shown the resolution of yet. The next
 	// run blocks so it lands where a hook can act on it, and the debt clears as
 	// soon as a run passes.
 	if owesBlockingRun {
-		return riskDecision{reason: "the last run failed, so this one blocks"}
+		return riskDecision{reason: "the last run failed, so this one blocks", risk: risk}
 	}
 
 	if chErr != nil {
 		// The tree could not be measured, so nothing is known about how large this
 		// change is. Guessing small is the one answer that could lose a failure.
-		return riskDecision{reason: fmt.Sprintf("change size unavailable: %v", chErr)}
+		return riskDecision{reason: fmt.Sprintf("change size unavailable: %v", chErr), risk: risk}
 	}
 	if ch.Empty() {
 		// Nothing to validate, so nothing to wait for: the run skips immediately,
 		// and backgrounding it would spend a task and a later report on a run that
 		// does no work. No reason either — nothing was held back that a developer
 		// would want explained, and a line on every clean turn is just noise.
-		return riskDecision{}
+		return riskDecision{risk: risk}
 	}
 	if allInert(ch.Paths) {
-		return riskDecision{async: true, reason: "only docs and text changed"}
+		return riskDecision{async: true, reason: "only docs and text changed", risk: risk}
 	}
 	if ch.Lines < limit {
-		return riskDecision{async: true, reason: fmt.Sprintf("small change%s, %s", since, lineCount(ch.Lines))}
+		return riskDecision{async: true, reason: fmt.Sprintf("small change%s, %s", since, lineCount(ch.Lines)), risk: risk}
 	}
-	return riskDecision{reason: fmt.Sprintf("large change%s, %s, over the %d-line limit", since, lineCount(ch.Lines), limit)}
+	return riskDecision{reason: fmt.Sprintf("large change%s, %s, over the %d-line limit", since, lineCount(ch.Lines), limit), risk: risk}
 }
 
 // lineCount renders a line total for a human, singular included.

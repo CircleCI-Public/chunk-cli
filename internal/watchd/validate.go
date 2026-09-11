@@ -52,6 +52,10 @@ type ValidateResponse struct {
 	// running it here. Nothing has run yet: ExitCode is zero because there is no
 	// exit code, and the result is collected on a later turn.
 	TaskID string `json:"task_id,omitempty"`
+	// Risk is what the daemon made of the change: a score, the facts behind it,
+	// and any advice. Nil when the caller never offered to be released, since
+	// then no change was judged.
+	Risk *RiskSummary `json:"risk,omitempty"`
 	// Reason says why the run was released or held, in words a caller can print
 	// as one line. Empty when the caller never offered to be released, since
 	// then there was no decision to explain.
@@ -189,12 +193,15 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	// offered to be released must not first queue behind whatever run is already
 	// in flight, since that wait is the whole thing being avoided.
 	reason := ""
+	var risk *RiskSummary
 	if req.AllowAsync && req.ProjectRoot != "" {
 		decision := d.assessRisk(req.ProjectRoot)
 		reason = decision.reason
+		summary := decision.risk
+		risk = &summary
 		if decision.async {
 			if taskID, err := d.startValidateTask(req); err == nil {
-				writeValidateJSON(w, ValidateResponse{TaskID: taskID, Reason: reason})
+				writeValidateJSON(w, ValidateResponse{TaskID: taskID, Reason: reason, Risk: risk})
 				return
 			}
 			// The tree cannot be fingerprinted, so a background result could not be
@@ -218,6 +225,7 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 
 	resp := d.runValidateNow(ctx, req)
 	resp.Reason = reason
+	resp.Risk = risk
 	writeValidateJSON(w, resp)
 }
 
