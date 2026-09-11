@@ -222,8 +222,8 @@ chunk
   the daemon is optional, and announcing its absence on every commit would be
   noise — while a manual run says why there is no answer.
 - **What `conflicts` compares.** The daemon previews merging each project's
-  branch into `origin/<default branch>` (falling back to `upstream`, as
-  `DefaultBranchIn` does), re-checking every 60s and refreshing the target's
+  branch into the default branch on `origin`, falling back to `upstream`
+  (`DefaultRemoteBranchIn`), re-checking every 60s and refreshing the target's
   remote-tracking ref every 3 minutes. The comparison covers **committed
   history only** — uncommitted work in the tree is invisible to it. A detached
   HEAD, a repo with no recorded default branch, and a branch that is itself the

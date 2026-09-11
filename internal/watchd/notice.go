@@ -64,8 +64,13 @@ func ConflictNotice(rep ConflictReport) string {
 // mid-task gains nothing from it.
 func ConflictStatus(rep ConflictReport) string {
 	if !rep.Known {
+		// "Tracked" is not the same as "has a sidecar right now": the daemon
+		// discovers projects from the breadcrumbs under the app data dir, which
+		// `chunk watch` writes and which outlive the sidecar that prompted
+		// them. Saying "active sidecar" would send someone looking for a
+		// sidecar when what they need is to point the daemon at the project.
 		return "No conflict information for this project.\n" +
-			"The watch daemon tracks projects that have an active sidecar — run `chunk watch` to start it.\n"
+			"The watch daemon only tracks projects it has been pointed at — run `chunk watch` here to register it.\n"
 	}
 	c := rep.Conflict
 	if c == nil {

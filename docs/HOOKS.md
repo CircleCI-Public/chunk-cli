@@ -132,8 +132,9 @@ returns immediately:
 - **Committed history only.** Uncommitted changes are invisible to the
   preview, so a conflict that exists solely in unstaged edits is not reported.
   The notice says so every time it fires.
-- **No daemon, no answer.** The daemon runs when `chunk watch` is open. Without
-  it the hook prints nothing and the commit proceeds untouched.
+- **No daemon, no answer.** `chunk watch` starts the daemon, which keeps
+  running after the dashboard is closed. Without it the hook prints nothing
+  and the commit proceeds untouched.
 - **Cases with nothing to compare** — a detached HEAD, a repository with no
   recorded default branch, a branch that is itself the merge target — produce no
   notice. Run `chunk conflicts` by hand to see which of these applies:
