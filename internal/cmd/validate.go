@@ -448,8 +448,6 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		// the IsDaemonCompatible check and the POST (connection refused), and the
 		// daemon lacks the /validate endpoint because it is from an older build
 		// (404). Both fall through to inline execution.
-		// daemon disappeared between the IsDaemonRunning check and the POST;
-		// fall through to inline execution.
 	}
 
 	// allRemote is true unless --local is passed explicitly. opts.remote is
@@ -564,6 +562,16 @@ func newValidateRecorder(statusFn iostream.StatusFunc, sidecarID string, activeS
 	}
 	// A missing data dir leaves the recorder reporting without recording.
 	dataDir, _ := config.ProjectDataDir(workDir)
+	// Register the project alongside the log about to be written to it. A run's
+	// results are never sent to the watch daemon — it reads this same log off
+	// disk — and only saving sidecar state used to register a project, so a run
+	// with no sidecar (--local, or a repo with no remote commands) logged its
+	// results where no daemon would ever look for them. Registered remote
+	// commands were reached the same way: the daemon buffers their output under a
+	// project root it lists only once it has discovered that project.
+	// Best-effort: a run still records without the breadcrumb, and still reports
+	// without the log.
+	_ = sidecar.RegisterProjectRoot(dataDir, workDir)
 	return eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
 }
 

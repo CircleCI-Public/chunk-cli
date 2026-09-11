@@ -209,6 +209,16 @@ chunk
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
+- **Run results are read from disk, not sent to the daemon.** Every `validate` run
+  writes its events to the project's event log and registers the project (a
+  `project-root` breadcrumb in the same data directory) whether or not a daemon
+  is running and whether or not a sidecar is involved. The daemon discovers
+  projects from those breadcrumbs and replays each log from the start, so a run
+  made with no dashboard open — a `--local` run, or one in a repo that has never
+  had a sidecar — is there in full the next time `watch` opens, under the
+  project's `local` row. (Remote command *output* is the exception: it is
+  registered with the daemon live and buffered in memory, keyed by the same
+  project root, so it too is only listed for a project that has been registered.)
 - **`watch` can show a command's output.** In the activity pane, an invocation
   marked `▤` has output the daemon still holds; `Enter` opens a scrollback view
   of it. A command that is still running tails live — the pane polls every 200 ms

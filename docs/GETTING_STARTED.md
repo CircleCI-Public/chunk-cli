@@ -281,13 +281,18 @@ chunk watch  1 sidecar  main@a3f9e12                      15:04:32
   ↑/↓ j/k  select  ·  q  quit
 ```
 
-`watch` shows every project you've watched before, not just the current one:
+`watch` shows every project you've watched or validated in before, not just the current one:
 
 ```bash
-chunk watch                   # all projects you've watched before
+chunk watch                   # all projects chunk has seen
 chunk watch --focus           # current directory only
 chunk watch /path/to/other    # add another project
 ```
+
+You don't have to have the dashboard open at the time. Every `chunk validate` run
+records its results to disk — including a purely local run, in a project that has
+never had a sidecar — so runs you made with no dashboard open are waiting for you
+the next time you open one, under a `local` row for the project.
 
 `watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).
 

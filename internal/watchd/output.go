@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 const (
@@ -208,6 +209,11 @@ func (s *outputStore) register(reg CommandReg, stream streamFn) {
 	if reg.CommandID == "" {
 		return
 	}
+	// Canonicalised here rather than at each client: the clients send the working
+	// directory they were handed, project discovery canonicalises, and a command
+	// filed under a spelling no project carries is output the dashboard cannot
+	// reach. Doing it on ingest also covers clients built before this.
+	reg.ProjectRoot = config.CanonicalProjectRoot(reg.ProjectRoot)
 	s.mu.Lock()
 	if _, exists := s.cmds[reg.CommandID]; exists {
 		s.mu.Unlock()

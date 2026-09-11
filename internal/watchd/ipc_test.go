@@ -11,6 +11,8 @@ import (
 
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 // startTestDaemon runs a real daemon over a real Unix socket in a temp dir and
@@ -39,7 +41,7 @@ func startTestDaemonWithAuth(t *testing.T, authMessage string) {
 	t.Setenv("CHUNK_WATCHD_DIR", dir)
 	// Keep the first poll hermetic: pointed at a real data dir it makes a git
 	// call per known project and can outlast the wait below.
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

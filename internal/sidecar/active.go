@@ -168,7 +168,7 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 	}
 	pruneRekeyedState(dir, path, a.SidecarIDs)
 	// Write a breadcrumb so chunk watch can discover this project.
-	_ = os.WriteFile(filepath.Join(dir, "project-root"), []byte(root), 0o644)
+	_ = RegisterProjectRoot(dir, root)
 	return nil
 }
 
@@ -204,8 +204,49 @@ func pruneRekeyedState(dir, keep string, sidecarIDs []string) {
 	}
 }
 
-// AllProjectRoots returns the roots of all projects that have ever saved a
-// sidecar state, by reading the breadcrumb files written by SaveActiveTo.
+// projectRootFile names the breadcrumb that maps a project data directory back
+// to the project it holds state for. It is the only way the watch daemon
+// discovers projects, so a data directory without one is invisible to it
+// however much it holds.
+const projectRootFile = "project-root"
+
+// ProjectRootPath returns the path of the breadcrumb RegisterProjectRoot writes
+// for the project whose data directory is dataDir. It is exported for tests in
+// other packages that have to write a breadcrumb RegisterProjectRoot will not —
+// an uncanonicalised spelling, most often — so that renaming the file breaks
+// them loudly instead of leaving them passing over a project no reader finds.
+func ProjectRootPath(dataDir string) string {
+	return filepath.Join(dataDir, projectRootFile)
+}
+
+// RegisterProjectRoot writes the breadcrumb that makes root discoverable by
+// AllProjectRoots, and so by the watch daemon and its dashboard. dataDir must be
+// the data directory for root, since the daemon derives one from the other.
+//
+// Every write of project state should call this, not just sidecar state: a
+// project whose only activity is a local validate run has results worth showing
+// and, without the breadcrumb, no way to be found.
+//
+// The root is canonicalised before it is written, because the callers disagree
+// about how to spell one: a validate run passes the working directory it was
+// given, while chunk watch passes git's top-level, which on macOS comes back
+// through /private. Both hash to the same data directory, so the breadcrumb
+// would flip between spellings as each wrote it, and a reader that keys on the
+// string sees one project as two sharing a single log.
+func RegisterProjectRoot(dataDir, root string) error {
+	if dataDir == "" || root == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(ProjectRootPath(dataDir), []byte(config.CanonicalProjectRoot(root)), 0o644)
+}
+
+// AllProjectRoots returns the roots of all projects chunk has recorded state
+// for, by reading the breadcrumb files written by RegisterProjectRoot. Roots are
+// canonicalised and de-duplicated on the way out, so breadcrumbs written before
+// RegisterProjectRoot canonicalised them cannot list one project twice.
 func AllProjectRoots() ([]string, error) {
 	base, err := config.AppData()
 	if err != nil {
@@ -224,12 +265,12 @@ func AllProjectRoots() ([]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		crumb := filepath.Join(base, e.Name(), "project-root")
+		crumb := ProjectRootPath(filepath.Join(base, e.Name()))
 		data, readErr := os.ReadFile(crumb)
 		if readErr != nil {
 			continue
 		}
-		root := strings.TrimSpace(string(data))
+		root := config.CanonicalProjectRoot(strings.TrimSpace(string(data)))
 		if root == "" || seen[root] {
 			continue
 		}
