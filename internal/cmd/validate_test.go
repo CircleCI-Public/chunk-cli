@@ -1005,3 +1005,32 @@ func TestDetectHookReadsTheEventName(t *testing.T) {
 	assert.Equal(t, hook.stopHookActive, true)
 	assert.Equal(t, hook.event, "Stop")
 }
+
+// A low-risk change gets no score line: it is the common case, and a number
+// printed every turn is a number nobody reads. Advice is printed whenever
+// there is any.
+func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
+	var quiet bytes.Buffer
+	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{
+		Risk: &watchd.RiskSummary{Score: 12, Band: watchd.BandLow, Parts: []string{"12 lines (1)"}},
+	}, iostream.Streams{Out: &quiet, Err: &quiet}))
+	assert.Equal(t, quiet.String(), "", "a low-risk change was narrated")
+
+	var loud bytes.Buffer
+	err := reportDelegatedValidate(watchd.ValidateResponse{
+		Reason:   "large change, 2000 lines, over the 500-line limit",
+		ExitCode: 1,
+		Risk: &watchd.RiskSummary{
+			Score:  92,
+			Band:   watchd.BandHigh,
+			Parts:  []string{"2000 lines (60)", "3 files (6)"},
+			Advice: "committing it in parts would get each piece checked sooner",
+		},
+	}, iostream.Streams{Out: &loud, Err: &loud})
+
+	assert.Assert(t, err != nil)
+	out := loud.String()
+	assert.Assert(t, strings.Contains(out, "risk 92/100 high"), "got %q", out)
+	assert.Assert(t, strings.Contains(out, "2000 lines (60)"), "got %q", out)
+	assert.Assert(t, strings.Contains(out, "committing it in parts"), "got %q", out)
+}

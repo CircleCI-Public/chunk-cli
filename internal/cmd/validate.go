@@ -709,17 +709,38 @@ func reportDelegatedValidate(resp watchd.ValidateResponse, streams iostream.Stre
 	if resp.TaskID != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf(
 			"validating in the background: %s (%s)", shortTaskID(resp.TaskID), resp.Reason)))
+		reportRisk(resp.Risk, streams)
 		return nil
 	}
 	if resp.Reason != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim("validating now: "+resp.Reason))
 	}
+	reportRisk(resp.Risk, streams)
 	_, _ = streams.Out.Write([]byte(resp.Stdout))
 	_, _ = streams.Err.Write([]byte(resp.Stderr))
 	if resp.ExitCode != 0 {
 		return &silentExitError{code: resp.ExitCode}
 	}
 	return nil
+}
+
+// reportRisk writes the daemon's judgement of the change, when it is worth
+// saying.
+//
+// A low-risk change gets no line. It is the common case, it is what everyone
+// expects, and a score printed on every turn is how a number stops being read
+// at all. Advice is printed whenever there is any, since advice exists only
+// where there is something to act on.
+func reportRisk(risk *watchd.RiskSummary, streams iostream.Streams) {
+	if risk == nil {
+		return
+	}
+	if risk.Band != watchd.BandLow {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(risk.String()))
+	}
+	if risk.Advice != "" {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(risk.Advice))
+	}
 }
 
 // tryHookDelegate delegates a hook-invoked validate run to the daemon before
