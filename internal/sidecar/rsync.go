@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -15,14 +16,17 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
 // RsyncSync syncs the local working tree (rooted at cwd) to a sidecar using
-// rsync over an SSH-over-WebSocket tunnel. The .git directory is included so
-// the remote has a fully functional git repo; files matching .gitignore rules
-// are excluded. workdir overrides the destination path; defaults to
-// /home/user/<basename of cwd>.
+// rsync over an SSH-over-WebSocket tunnel. Files matching .gitignore rules are
+// excluded. In a normal checkout, .git is copied so the remote has a fully
+// functional git repo. In a git worktree, .git is a local pointer file that
+// would be broken on the sidecar, so it is excluded and a fresh git repo is
+// initialised on the remote instead. workdir overrides the destination path;
+// defaults to /home/user/<repo name from git remote>.
 func RsyncSync(ctx context.Context,
 	client *circleci.Client, sidecarID, identityFile, authSock, workdir, cwd string,
 	status iostream.StatusFunc) error {
@@ -51,12 +55,40 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 		return fmt.Errorf("rsync: open session: %w", err)
 	}
 
+	// Detect a git worktree early: in a worktree .git is a file (not a dir)
+	// containing a gitdir pointer to an absolute local path. This affects both
+	// workspace resolution (use repo name, not directory name) and how the
+	// remote git repo is set up after the sync.
+	gitInfo, statErr := os.Stat(filepath.Join(cwd, ".git"))
+	isWorktree := statErr == nil && !gitInfo.IsDir()
+
+	// In a worktree, fetch the origin URL once; it is used for workspace
+	// resolution (to parse the repo name) and to configure the remote on the
+	// sidecar after init.
+	var worktreeOriginURL string
+	if isWorktree {
+		if out, execErr := exec.CommandContext(ctx, "git", "-C", cwd, "remote", "get-url", "origin").Output(); execErr == nil {
+			worktreeOriginURL = strings.TrimSpace(string(out))
+		}
+	}
+
 	repoPath := workdir
 	if persist {
-		repo := filepath.Base(cwd)
-		repoPath, err = ResolveWorkspace(ctx, workdir, repo)
-		if err != nil {
-			return fmt.Errorf("rsync: resolve workspace: %w", err)
+		if isWorktree && worktreeOriginURL != "" && workdir == "" {
+			// Skip the saved workspace in a worktree: it may have been recorded as
+			// the worktree directory name by older code. Derive from the repo name
+			// so the path matches what every other code path expects.
+			_, repo, _ := gitremote.ParseRemoteURL(worktreeOriginURL)
+			repoPath = DefaultWorkspace(repo)
+		} else {
+			_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+			if repoErr != nil {
+				repo = filepath.Base(cwd)
+			}
+			repoPath, err = ResolveWorkspace(ctx, workdir, repo)
+			if err != nil {
+				return fmt.Errorf("rsync: resolve workspace: %w", err)
+			}
 		}
 		if err := persistWorkspace(ctx, repoPath); err != nil {
 			status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
@@ -102,13 +134,20 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	src := strings.TrimRight(cwd, "/") + "/"
 	dst := fmt.Sprintf("%s@127.0.0.1:%s", defaultSSHUser, repoPath)
 
-	cmd := exec.CommandContext(ctx, "rsync",
+	rsyncArgs := []string{
 		"--archive",
 		"--delete",
 		"--filter=:- .gitignore",
-		"-e", sshCmd,
-		src, dst,
-	)
+	}
+	if isWorktree {
+		// Exclude the .git pointer file: rsync --delete does not remove excluded
+		// destination files, so a stale pointer from a previous run stays on the
+		// sidecar. We clean it up and rebuild a proper git repo after the sync.
+		rsyncArgs = append(rsyncArgs, "--exclude=.git")
+	}
+	rsyncArgs = append(rsyncArgs, "-e", sshCmd, src, dst)
+
+	cmd := exec.CommandContext(ctx, "rsync", rsyncArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -119,7 +158,43 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 		return fmt.Errorf("rsync: %w", err)
 	}
 
+	if isWorktree {
+		if err := initWorktreeGitRepo(ctx, sess, repoPath, worktreeOriginURL); err != nil {
+			return fmt.Errorf("rsync: %w", err)
+		}
+	}
+
 	status(iostream.LevelDone, "Synced")
+	return nil
+}
+
+// initWorktreeGitRepo sets up a minimal git repo in repoPath on the sidecar
+// after an rsync that excluded the .git pointer file. It removes any stale
+// .git entry, runs git init, and wires up the origin URL so that git remote
+// detection works inside the workspace.
+func initWorktreeGitRepo(ctx context.Context, sess *Session, repoPath, originURL string) error {
+	// Remove any stale .git entry left by a previous sync (broken worktree
+	// pointer file or directory from a prior git init).
+	if result, err := ExecOverSSH(ctx, sess, "rm -rf "+ShellEscape(repoPath+"/.git"), nil, nil); err != nil {
+		return fmt.Errorf("remove stale .git on sidecar: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("remove stale .git on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
+	}
+	if result, err := ExecOverSSH(ctx, sess, "git -C "+ShellEscape(repoPath)+" init -q", nil, nil); err != nil {
+		return fmt.Errorf("git init on sidecar: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("git init on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
+	}
+	if originURL == "" {
+		return nil
+	}
+	// git config remote.origin.url is idempotent: creates or updates the URL.
+	setURL := "git -C " + ShellEscape(repoPath) + " config remote.origin.url " + ShellEscape(originURL)
+	if result, err := ExecOverSSH(ctx, sess, setURL, nil, nil); err != nil {
+		return fmt.Errorf("set remote origin on sidecar: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("set remote origin on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
+	}
 	return nil
 }
 
