@@ -48,7 +48,7 @@ func TestDaemonRoundTrip(t *testing.T) {
 	defer cancel()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, "", nil) }()
+	go func() { errCh <- RunDaemon(ctx, nil, "", nil, nil) }()
 
 	sockPath, err := SocketPath()
 	assert.NilError(t, err)
@@ -163,7 +163,7 @@ func TestEnsureLaunched_leavesAReachableDaemonAlone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, "", nil) }()
+	go func() { errCh <- RunDaemon(ctx, nil, "", nil, nil) }()
 
 	sockPath, err := SocketPath()
 	assert.NilError(t, err)
