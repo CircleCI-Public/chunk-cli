@@ -53,6 +53,9 @@ type daemon struct {
 	// risk remembers which projects owe a blocking run, and is consulted before
 	// releasing a caller.
 	risk *riskMemory
+	// hist is what past runs say about each project, for the questions an
+	// absolute threshold cannot answer.
+	hist *riskHistory
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -103,6 +106,7 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		res:       newResourceSampler(client),
 		tasks:     newTaskStore(ctx),
 		risk:      newRiskMemory(),
+		hist:      newRiskHistory(),
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.

@@ -419,6 +419,13 @@ GET  /validate/collect?root=<path>                 → {tasks}
   until something commits — five 100-line turns read as 500 by the fifth — and
   resets to nothing when anything does, validated or not. A snapshot is content,
   so neither happens.
+- **History tightens, never loosens.** `riskHistory` keeps each project's
+  finished runs (`risk-history.jsonl`: sizes and verdicts, no paths, no content)
+  and answers what an absolute threshold cannot — is this change large *for this
+  repo*, and do changes this size fail here. It can hold a run the rules would
+  have released and raise a score; it can never release one or lower a score. A
+  codebase where every change is enormous must not teach the daemon that
+  enormous is fine.
 - **The snapshot never touches the developer's repository state.** It stages into
   a throwaway index (`GIT_INDEX_FILE` in a temp file, seeded from the real index
   for its stat cache, without which every file is re-hashed per call). The

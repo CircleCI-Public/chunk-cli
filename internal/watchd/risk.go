@@ -112,7 +112,7 @@ type riskDecision struct {
 // deliberately lopsided. Anything it cannot measure, and anything that has
 // recently failed, is made to block — the direction that costs a developer time
 // rather than the direction that costs them a missed failure.
-func decideRisk(p asyncPolicy, owesBlockingRun bool, ch gitutil.Changes, chErr error) riskDecision {
+func decideRisk(p asyncPolicy, owesBlockingRun bool, ch gitutil.Changes, chErr error, hist historyEvidence) riskDecision {
 	since := ""
 	if ch.Baseline != "" && ch.Baseline != gitutil.BaselineHead {
 		since = " since the last passing run"
@@ -122,7 +122,7 @@ func decideRisk(p asyncPolicy, owesBlockingRun bool, ch gitutil.Changes, chErr e
 		limit = DefaultAsyncMaxLines
 	}
 
-	risk := scoreChange(limit, owesBlockingRun, ch, chErr)
+	risk := scoreChange(limit, owesBlockingRun, ch, chErr, hist)
 
 	switch p.mode {
 	case config.AsyncValidateNever:
@@ -154,12 +154,30 @@ func decideRisk(p asyncPolicy, owesBlockingRun bool, ch gitutil.Changes, chErr e
 		return riskDecision{risk: risk}
 	}
 	if allInert(ch.Paths) {
-		return riskDecision{async: true, reason: "only docs and text changed", risk: risk}
+		return tighten(riskDecision{async: true, reason: "only docs and text changed", risk: risk}, hist)
 	}
 	if ch.Lines < limit {
-		return riskDecision{async: true, reason: fmt.Sprintf("small change%s, %s", since, lineCount(ch.Lines)), risk: risk}
+		return tighten(riskDecision{async: true, reason: fmt.Sprintf("small change%s, %s", since, lineCount(ch.Lines)), risk: risk}, hist)
 	}
 	return riskDecision{reason: fmt.Sprintf("large change%s, %s, over the %d-line limit", since, lineCount(ch.Lines), limit), risk: risk}
+}
+
+// tighten holds a run the rules would have released, when this repo's own
+// history says changes like it usually fail.
+//
+// Applied to the release paths only, and only under the auto mode, so history
+// is never able to loosen anything: a project whose changes are all enormous
+// cannot teach the daemon that enormous is fine, and a project that set
+// "always" is not quietly overridden. The worst a wrong tightening does is make
+// somebody wait for a run that was going to pass.
+func tighten(d riskDecision, hist historyEvidence) riskDecision {
+	if !d.async || !hist.suggestsCaution() {
+		return d
+	}
+	d.async = false
+	d.reason = fmt.Sprintf("%d of the last %d changes this size failed here, so this one blocks",
+		hist.Failed, hist.Similar)
+	return d
 }
 
 // lineCount renders a line total for a human, singular included.
@@ -262,24 +280,30 @@ func (m *riskMemory) baseline(root string) string {
 // assessRisk measures root and decides whether a run against it can be
 // released. Everything it needs comes from the project on disk and what the
 // daemon remembers, so a caller only has to name the project.
-//
-// The measurement is taken from the last tree that passed its checks when there
-// is one, and from HEAD when there is not — a daemon that has just started, or a
-// project whose runs have never passed. Falling back rather than refusing keeps
-// the first run after a restart working; it measures a larger change than the
-// incremental one, which errs towards making somebody wait.
 func (d *daemon) assessRisk(root string) riskDecision {
 	policy := policyFor(root)
 	owes := d.risk.owesBlockingRun(root)
 
+	ch, err := d.measure(root)
+	// The evidence lookup needs the size, and the size is what the measurement
+	// just produced, so the facts are read first and the judgement made once.
+	hist := d.hist.evidence(root, RiskSummary{Lines: ch.Lines, Files: len(ch.Paths)})
+	return decideRisk(policy, owes, ch, err, hist)
+}
+
+// measure reads how far root has moved from the last state that passed its
+// checks, or from HEAD when there is no such state — a daemon that has just
+// started, or a project whose runs have never passed. Falling back rather than
+// refusing keeps the first run after a restart working; it measures a larger
+// change than the incremental one, which errs towards making somebody wait.
+func (d *daemon) measure(root string) (gitutil.Changes, error) {
 	if base := d.risk.baseline(root); base != "" {
 		ch, err := gitutil.ChangesBetween(root, base)
 		if err == nil {
-			return decideRisk(policy, owes, ch, nil)
+			return ch, nil
 		}
 		// The snapshot is gone — collected by git's gc, or the repo has moved
 		// under it. Measuring against HEAD is worse but still true.
 	}
-	ch, err := gitutil.WorkingChanges(root)
-	return decideRisk(policy, owes, ch, err)
+	return gitutil.WorkingChanges(root)
 }
