@@ -421,23 +421,20 @@ func TestSamplerReportsWhyItGaveUp(t *testing.T) {
 	var lines []string
 
 	gaveUp := make(chan struct{})
-	var once sync.Once
 
 	r := newResourceSampler(nil)
 	r.logf = func(format string, args ...any) {
-		line := fmt.Sprintf(format, args...)
 		mu.Lock()
-		lines = append(lines, line)
-		mu.Unlock()
-		// Wake on the report itself rather than on the sample that triggers it:
-		// run logs the pause only after sample has returned, so counting samples
-		// here would let the assertions below read lines before the line under
-		// test was ever appended.
-		if strings.Contains(line, "pausing sampling") {
-			once.Do(func() { close(gaveUp) })
+		defer mu.Unlock()
+		msg := fmt.Sprintf(format, args...)
+		lines = append(lines, msg)
+		// Signal from inside logf so the "pausing sampling" message is
+		// guaranteed to be in lines before the test reads them.
+		if strings.Contains(msg, "pausing sampling") {
+			close(gaveUp)
 		}
 	}
-	r.sample = func(_ context.Context, _ SidecarState, _ *sidecarSampler) error {
+	r.sample = func(_ context.Context, _ SidecarState, s *sidecarSampler) error {
 		return errors.New("ssh: connection refused")
 	}
 	r.touch()
