@@ -110,6 +110,10 @@ type riskDecision struct {
 // recently failed, is made to block — the direction that costs a developer time
 // rather than the direction that costs them a missed failure.
 func decideRisk(p asyncPolicy, owesBlockingRun bool, ch gitutil.Changes, chErr error) riskDecision {
+	since := ""
+	if ch.Baseline != "" && ch.Baseline != gitutil.BaselineHead {
+		since = " since the last passing run"
+	}
 	limit := p.maxLines
 	if limit <= 0 {
 		limit = DefaultAsyncMaxLines
@@ -148,9 +152,9 @@ func decideRisk(p asyncPolicy, owesBlockingRun bool, ch gitutil.Changes, chErr e
 		return riskDecision{async: true, reason: "only docs and text changed"}
 	}
 	if ch.Lines < limit {
-		return riskDecision{async: true, reason: fmt.Sprintf("small change, %s", lineCount(ch.Lines))}
+		return riskDecision{async: true, reason: fmt.Sprintf("small change%s, %s", since, lineCount(ch.Lines))}
 	}
-	return riskDecision{reason: fmt.Sprintf("large change, %s, over the %d-line limit", lineCount(ch.Lines), limit)}
+	return riskDecision{reason: fmt.Sprintf("large change%s, %s, over the %d-line limit", since, lineCount(ch.Lines), limit)}
 }
 
 // lineCount renders a line total for a human, singular included.
@@ -180,10 +184,16 @@ func lineCount(n int) string {
 type riskMemory struct {
 	mu     sync.Mutex
 	failed map[string]bool // canonical project root → owes a blocking run
+	// green is the tree each project last passed its checks against, and what
+	// the next change is measured from. See recordGreen.
+	green map[string]string
 }
 
 func newRiskMemory() *riskMemory {
-	return &riskMemory{failed: make(map[string]bool)}
+	return &riskMemory{
+		failed: make(map[string]bool),
+		green:  make(map[string]string),
+	}
 }
 
 // record notes how a run for root ended.
@@ -206,10 +216,65 @@ func (m *riskMemory) owesBlockingRun(root string) bool {
 	return m.failed[root]
 }
 
+// recordGreen notes the tree a passing run validated, which becomes what the
+// next change for root is measured against.
+//
+// This is what stops small changes accumulating into a large one. Measured
+// against HEAD the number only grows until something commits: five separate
+// 100-line turns read as a 500-line change by the fifth, and the agent is made
+// to wait for work it was released for four turns running. Measured from the
+// last tree that passed, each of those turns is 100 lines, which is what they
+// each actually are.
+//
+// It also decouples the measurement from commits, in both directions. A commit
+// no longer resets the count to nothing — which would otherwise call a large
+// pile of unvalidated work "no change" the moment anything committed, validated
+// or not — and a commit in the middle of a change no longer hides it.
+//
+// The tree passed here is the one that was snapshotted *before* the run, since
+// that is the state the run actually validated. Whether the working tree has
+// moved on since is a separate question, and the one the next measurement is
+// about to answer.
+func (m *riskMemory) recordGreen(root, tree string) {
+	if tree == "" {
+		return
+	}
+	root = config.CanonicalProjectRoot(root)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.green[root] = tree
+}
+
+// baseline returns the tree root's changes should be measured against, or "" to
+// measure against HEAD.
+func (m *riskMemory) baseline(root string) string {
+	root = config.CanonicalProjectRoot(root)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.green[root]
+}
+
 // assessRisk measures root and decides whether a run against it can be
 // released. Everything it needs comes from the project on disk and what the
 // daemon remembers, so a caller only has to name the project.
+//
+// The measurement is taken from the last tree that passed its checks when there
+// is one, and from HEAD when there is not — a daemon that has just started, or a
+// project whose runs have never passed. Falling back rather than refusing keeps
+// the first run after a restart working; it measures a larger change than the
+// incremental one, which errs towards making somebody wait.
 func (d *daemon) assessRisk(root string) riskDecision {
+	policy := policyFor(root)
+	owes := d.risk.owesBlockingRun(root)
+
+	if base := d.risk.baseline(root); base != "" {
+		ch, err := gitutil.ChangesBetween(root, base)
+		if err == nil {
+			return decideRisk(policy, owes, ch, nil)
+		}
+		// The snapshot is gone — collected by git's gc, or the repo has moved
+		// under it. Measuring against HEAD is worse but still true.
+	}
 	ch, err := gitutil.WorkingChanges(root)
-	return decideRisk(policyFor(root), d.risk.owesBlockingRun(root), ch, err)
+	return decideRisk(policy, owes, ch, err)
 }

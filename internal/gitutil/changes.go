@@ -36,13 +36,20 @@ type Changes struct {
 	// now on disk.
 	Paths []string
 	// Lines is how many lines the change touches: insertions plus deletions
-	// against HEAD for tracked files, and every line of an untracked file, all
-	// of which are new. Binary content contributes no lines — there are none to
-	// count — so a change can name paths and still report zero.
+	// against the baseline for tracked files, and every line of an untracked
+	// file, all of which are new. Binary content contributes no lines — there
+	// are none to count — so a change can name paths and still report zero.
 	Lines int
+	// Baseline names what the change was measured against: "HEAD", or the SHA of
+	// an earlier snapshot. A caller reporting a number has to say what it is a
+	// number of, and the two answers mean different things — see ChangesBetween.
+	Baseline string
 }
 
-// Empty reports whether git sees no change at all relative to HEAD.
+// BaselineHead is the Baseline of a change measured against the last commit.
+const BaselineHead = "HEAD"
+
+// Empty reports whether nothing has changed relative to the baseline.
 func (c Changes) Empty() bool { return len(c.Paths) == 0 }
 
 // WorkingChanges measures the working tree at dir against HEAD.
@@ -74,10 +81,10 @@ func WorkingChanges(dir string) (Changes, error) {
 	}
 	entries := parseStatus(status)
 	if len(entries) == 0 {
-		return Changes{}, nil
+		return Changes{Baseline: BaselineHead}, nil
 	}
 
-	ch := Changes{Paths: make([]string, 0, len(entries))}
+	ch := Changes{Paths: make([]string, 0, len(entries)), Baseline: BaselineHead}
 	remaining := maxCountBytes
 	for _, e := range entries {
 		ch.Paths = append(ch.Paths, e.Path)
@@ -116,6 +123,11 @@ func trackedLines(dir string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read git diff: %w", err)
 	}
+	return countShortstat(out), nil
+}
+
+// countShortstat adds up the insertions and deletions in shortstat output.
+func countShortstat(out string) int {
 	total := 0
 	for _, m := range shortstatCounts.FindAllStringSubmatch(out, -1) {
 		n, err := strconv.Atoi(m[1])
@@ -126,7 +138,7 @@ func trackedLines(dir string) (int, error) {
 		}
 		total += n
 	}
-	return total, nil
+	return total
 }
 
 // countLines reports the number of lines in path and how many bytes it read to

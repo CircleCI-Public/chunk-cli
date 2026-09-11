@@ -24,10 +24,32 @@ waits, or take them into the background and answer on the next turn.
 
 The daemon takes the offer when the change is:
 
-- **under 500 lines** — insertions plus deletions against `HEAD` for tracked
-  files, plus every line of an untracked one, or
+- **under 500 lines**, or
 - **confined to docs and text** — `.md`, `.markdown`, `.txt`, `.rst`, `.adoc`,
   and `LICENSE`/`NOTICE`/`AUTHORS`/`CHANGELOG`, at any size.
+
+### What "under 500 lines" is measured against
+
+The last state that passed its checks — not `HEAD`.
+
+Every run snapshots the working tree before validating it, and a run that
+passes leaves that snapshot behind as the mark to measure the next change from.
+So five turns of 100 lines are five small changes, not a 500-line one by the
+fifth. Measured against `HEAD` the number would only grow until something
+committed, and the agent would be made to wait for work it had been released
+for four turns running.
+
+The snapshot is content, not a commit, which keeps the measurement honest in
+both directions: a commit in the middle of a change no longer hides it, and a
+commit no longer resets the count to zero — which would otherwise call a large
+pile of unvalidated work "no change" the moment anything committed.
+
+Nothing about your repository moves. The snapshot stages into a throwaway index
+in a temp file, so your own staging area is untouched; it writes unreferenced
+objects into `.git/objects` that git's `gc` collects in its own time. Until
+a project's first passing run — a freshly started daemon, say — there is no mark
+yet and the change is measured against `HEAD`, which reads larger and so errs
+towards making you wait.
 
 It holds the caller — the blocking behaviour of every earlier version — when:
 

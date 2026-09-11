@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
@@ -128,6 +129,10 @@ func (d *daemon) startValidateTask(req ValidateRequest) (string, error) {
 	}
 	sessionID := session.IDFromSlice(req.Env)
 	args := req.Args
+	// Taken before the run, because this is the state the run is about to
+	// validate. A tree that cannot be snapshotted just means the next change is
+	// measured against HEAD instead.
+	before, _ := gitutil.SnapshotTree(req.ProjectRoot)
 
 	return d.tasks.start(req.ProjectRoot, func(ctx context.Context) (int, string) {
 		// Serialised against every other validate run, async or not: two runs of
@@ -142,6 +147,12 @@ func (d *daemon) startValidateTask(req ValidateRequest) (string, error) {
 
 		var stdout, stderr bytes.Buffer
 		exitCode := d.runner(ctx, args, env, &stdout, &stderr)
+		if exitCode == 0 {
+			// Recorded even if the tree has moved on since. Staleness decides
+			// whether this *result* can be reported, which is a different
+			// question from which state is known to be good.
+			d.risk.recordGreen(req.ProjectRoot, before)
+		}
 		// stderr carries the progress lines and the tally; stdout is usually
 		// empty for a validate run. Both are kept so whoever collects the result
 		// sees what the developer would have seen.
@@ -212,6 +223,11 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 
 // runValidateNow runs req to completion while the caller waits.
 func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest) ValidateResponse {
+	var before string
+	if req.ProjectRoot != "" {
+		before, _ = gitutil.SnapshotTree(req.ProjectRoot)
+	}
+
 	d.validateMu.Lock()
 	defer d.validateMu.Unlock()
 
@@ -223,8 +239,16 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest) Valida
 	// it passes there is no longer anything to block for. Only the background
 	// path could set the debt, so only recording there would leave it set for the
 	// life of the daemon.
+	//
+	// The same goes for the baseline: a blocking run that passes is as good a
+	// known-good state as a background one, and the change after it should be
+	// measured from here rather than from whenever a run last happened to be
+	// released.
 	if req.ProjectRoot != "" {
 		d.risk.record(req.ProjectRoot, exitCode == 0)
+		if exitCode == 0 {
+			d.risk.recordGreen(req.ProjectRoot, before)
+		}
 	}
 
 	return ValidateResponse{
