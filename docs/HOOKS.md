@@ -108,6 +108,24 @@ is actionable for 2,000 lines across nine files and impossible for 2,000 lines
 in one generated file, so a single-file change is told nothing rather than
 something it cannot act on.
 
+### Relative to this repo
+
+Five hundred lines is a rewrite in one codebase and a Tuesday in another, so
+each project's finished runs are kept in `risk-history.jsonl` in its data
+directory — sizes and verdicts, no paths and no content — and used for the
+questions an absolute threshold cannot answer:
+
+- whether a change is large *for this repo* (it raises the score), and
+- whether changes this size usually fail here. Once a project has at least five
+  comparable runs and half of them failed, a change the rules would have
+  released is held instead.
+
+What history is allowed to do is deliberately one-directional: it can make the
+daemon more cautious, never less. A repo whose changes are all enormous must
+not thereby teach it that enormous is fine — that is how a heuristic learns its
+way into missing failures. And an explicit `asyncValidate: always` still wins,
+because history is a heuristic and that setting is an instruction.
+
 ## Result Caching
 
 In hook mode only, a successful `chunk validate` run is cached. If the hook

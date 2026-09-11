@@ -24,6 +24,10 @@ const (
 	debtWeight  = 25 // the last run failed
 	inertCeil   = 10 // the most a docs-and-text change can score
 	filesSpread = 10 // files at which breadth is maxed out
+	// Both of these come from the project's own history, and both only ever add
+	// — see riskHistory for why history is allowed to tighten and never loosen.
+	unusualWeight = 10 // large for this repo, whatever it measures in lines
+	historyWeight = 20 // changes this size usually fail here
 )
 
 // RiskSummary is what the daemon made of a change, as reported to a caller.
@@ -36,6 +40,12 @@ type RiskSummary struct {
 	// Score is 0–100. Higher means more caution: bigger, broader, or already
 	// failing. It does not decide anything on its own; see decideRisk.
 	Score int `json:"score"`
+	// Lines and Files are what was measured, kept apart from the score so a
+	// caller can compare two changes without unpicking one.
+	Lines int `json:"lines"`
+	Files int `json:"files"`
+	// Inert reports that every changed path was docs or text.
+	Inert bool `json:"inert,omitempty"`
 	// Band is Score bucketed into BandLow, BandMedium or BandHigh.
 	Band string `json:"band"`
 	// Parts are the facts behind the score, each with what it contributed.
@@ -53,7 +63,7 @@ type RiskSummary struct {
 // should have been 52. What the score is for is the questions one bit cannot
 // answer — which of two changes is riskier, whether a change is unusual for this
 // repo, and whether there is anything worth advising about it.
-func scoreChange(limit int, owesBlockingRun bool, ch gitutil.Changes, chErr error) RiskSummary {
+func scoreChange(limit int, owesBlockingRun bool, ch gitutil.Changes, chErr error, hist historyEvidence) RiskSummary {
 	if chErr != nil {
 		// Nothing is known about this change. The top of the scale is the only
 		// honest answer, and it is the same direction decideRisk takes.
@@ -71,6 +81,7 @@ func scoreChange(limit int, owesBlockingRun bool, ch gitutil.Changes, chErr erro
 		score int
 		parts []string
 	)
+	inert := allInert(ch.Paths)
 
 	size := ch.Lines * sizeWeight / max(limit, 1)
 	if size > sizeWeight {
@@ -89,7 +100,7 @@ func scoreChange(limit int, owesBlockingRun bool, ch gitutil.Changes, chErr erro
 	// Applied as a ceiling rather than a discount: a docs change is not a small
 	// source change, it is a change nothing should fail on, and a thousand lines
 	// of it should not out-score three lines of Go.
-	if allInert(ch.Paths) && score > inertCeil {
+	if inert && score > inertCeil {
 		score = inertCeil
 		parts = append(parts, fmt.Sprintf("docs and text only (ceiling %d)", inertCeil))
 	}
@@ -99,10 +110,30 @@ func scoreChange(limit int, owesBlockingRun bool, ch gitutil.Changes, chErr erro
 		parts = append(parts, fmt.Sprintf("last run failed (%d)", debtWeight))
 	}
 
+	// What this repo's own history says. It can only raise the score, never
+	// lower one: a codebase where every change is enormous must not thereby
+	// teach the daemon that enormous is fine.
+	if hist.unusual() {
+		score += unusualWeight
+		parts = append(parts, fmt.Sprintf("larger than %d%% of recent changes here (%d)", hist.Percentile, unusualWeight))
+	}
+	if hist.suggestsCaution() {
+		score += historyWeight
+		parts = append(parts, fmt.Sprintf("%d of the last %d changes this size failed here (%d)", hist.Failed, hist.Similar, historyWeight))
+	}
+
 	if score > 100 {
 		score = 100
 	}
-	return RiskSummary{Score: score, Band: band(score), Parts: parts, Advice: advise(limit, ch, chErr)}
+	return RiskSummary{
+		Score:  score,
+		Lines:  ch.Lines,
+		Files:  len(ch.Paths),
+		Inert:  inert,
+		Band:   band(score),
+		Parts:  parts,
+		Advice: advise(limit, ch, chErr),
+	}
 }
 
 func band(score int) string {

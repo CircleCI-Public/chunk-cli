@@ -28,28 +28,28 @@ func sourceChange(lines int) gitutil.Changes {
 }
 
 func TestASmallChangeIsBackgrounded(t *testing.T) {
-	d := decideRisk(auto, false, sourceChange(42), nil)
+	d := decideRisk(auto, false, sourceChange(42), nil, historyEvidence{})
 	assert.Equal(t, d.async, true)
 	assert.Assert(t, strings.Contains(d.reason, "42 lines"), "reason was %q", d.reason)
 }
 
 func TestALargeChangeBlocks(t *testing.T) {
-	d := decideRisk(auto, false, sourceChange(912), nil)
+	d := decideRisk(auto, false, sourceChange(912), nil, historyEvidence{})
 	assert.Equal(t, d.async, false)
 	assert.Assert(t, strings.Contains(d.reason, "912 lines"), "reason was %q", d.reason)
 }
 
 // The limit is a ceiling, not a target: a change exactly on it waits.
 func TestAChangeOnTheLimitBlocks(t *testing.T) {
-	assert.Equal(t, decideRisk(auto, false, sourceChange(DefaultAsyncMaxLines), nil).async, false)
-	assert.Equal(t, decideRisk(auto, false, sourceChange(DefaultAsyncMaxLines-1), nil).async, true)
+	assert.Equal(t, decideRisk(auto, false, sourceChange(DefaultAsyncMaxLines), nil, historyEvidence{}).async, false, historyEvidence{})
+	assert.Equal(t, decideRisk(auto, false, sourceChange(DefaultAsyncMaxLines-1), nil, historyEvidence{}).async, true, historyEvidence{})
 }
 
 // Size is only consulted for changes that could plausibly fail a check. A docs
 // rewrite is backgrounded however long it is.
 func TestADocsOnlyChangeIsBackgroundedAtAnySize(t *testing.T) {
 	ch := gitutil.Changes{Paths: []string{"README.md", "docs/CLI.md", "LICENSE"}, Lines: 5000}
-	d := decideRisk(auto, false, ch, nil)
+	d := decideRisk(auto, false, ch, nil, historyEvidence{})
 	assert.Equal(t, d.async, true)
 	assert.Equal(t, d.reason, "only docs and text changed")
 }
@@ -57,13 +57,13 @@ func TestADocsOnlyChangeIsBackgroundedAtAnySize(t *testing.T) {
 // One source file in among the docs is a source change.
 func TestOneSourceFileAmongTheDocsIsJudgedOnSize(t *testing.T) {
 	ch := gitutil.Changes{Paths: []string{"README.md", "internal/cmd/validate.go"}, Lines: 5000}
-	assert.Equal(t, decideRisk(auto, false, ch, nil).async, false)
+	assert.Equal(t, decideRisk(auto, false, ch, nil, historyEvidence{}).async, false, historyEvidence{})
 }
 
 // A tree that cannot be measured says nothing about how large the change is,
 // and guessing small is the one answer that could lose a failure.
 func TestAnUnmeasurableChangeBlocks(t *testing.T) {
-	d := decideRisk(auto, false, gitutil.Changes{}, errors.New("not a repo"))
+	d := decideRisk(auto, false, gitutil.Changes{}, errors.New("not a repo"), historyEvidence{})
 	assert.Equal(t, d.async, false)
 	assert.Assert(t, strings.Contains(d.reason, "not a repo"), "reason was %q", d.reason)
 }
@@ -72,7 +72,7 @@ func TestAnUnmeasurableChangeBlocks(t *testing.T) {
 // task and a later report on a run that does no work, so it stays here — and
 // says nothing, because there is nothing a developer would want told.
 func TestACleanTreeIsNotBackgrounded(t *testing.T) {
-	d := decideRisk(auto, false, gitutil.Changes{}, nil)
+	d := decideRisk(auto, false, gitutil.Changes{}, nil, historyEvidence{})
 	assert.Equal(t, d.async, false)
 	assert.Equal(t, d.reason, "")
 }
@@ -80,7 +80,7 @@ func TestACleanTreeIsNotBackgrounded(t *testing.T) {
 // The blocking safety net: a failure nobody was waiting for makes the next run
 // one somebody is waiting for, however small the change.
 func TestAProjectThatOwesABlockingRunGetsOne(t *testing.T) {
-	d := decideRisk(auto, true, sourceChange(1), nil)
+	d := decideRisk(auto, true, sourceChange(1), nil, historyEvidence{})
 	assert.Equal(t, d.async, false)
 	assert.Assert(t, strings.Contains(d.reason, "last run failed"), "reason was %q", d.reason)
 }
@@ -88,12 +88,12 @@ func TestAProjectThatOwesABlockingRunGetsOne(t *testing.T) {
 func TestModeNeverBlocksEvenADocsChange(t *testing.T) {
 	p := asyncPolicy{mode: config.AsyncValidateNever, maxLines: DefaultAsyncMaxLines}
 	ch := gitutil.Changes{Paths: []string{"README.md"}, Lines: 2}
-	assert.Equal(t, decideRisk(p, false, ch, nil).async, false)
+	assert.Equal(t, decideRisk(p, false, ch, nil, historyEvidence{}).async, false, historyEvidence{})
 }
 
 func TestModeAlwaysBackgroundsALargeChange(t *testing.T) {
 	p := asyncPolicy{mode: config.AsyncValidateAlways, maxLines: DefaultAsyncMaxLines}
-	assert.Equal(t, decideRisk(p, false, sourceChange(100000), nil).async, true)
+	assert.Equal(t, decideRisk(p, false, sourceChange(100000), nil, historyEvidence{}).async, true, historyEvidence{})
 }
 
 // An explicit setting beats the heuristic that would otherwise override it:
@@ -102,7 +102,7 @@ func TestModeAlwaysBackgroundsALargeChange(t *testing.T) {
 // suggestion.
 func TestModeAlwaysOutranksTheFailureDebt(t *testing.T) {
 	p := asyncPolicy{mode: config.AsyncValidateAlways, maxLines: DefaultAsyncMaxLines}
-	assert.Equal(t, decideRisk(p, true, sourceChange(1), nil).async, true)
+	assert.Equal(t, decideRisk(p, true, sourceChange(1), nil, historyEvidence{}).async, true, historyEvidence{})
 }
 
 // Always means always, including for a tree whose size could not be read: the
@@ -110,19 +110,19 @@ func TestModeAlwaysOutranksTheFailureDebt(t *testing.T) {
 // answer for a project that has already given one.
 func TestModeAlwaysBackgroundsAnUnmeasurableChange(t *testing.T) {
 	p := asyncPolicy{mode: config.AsyncValidateAlways, maxLines: DefaultAsyncMaxLines}
-	assert.Equal(t, decideRisk(p, false, gitutil.Changes{}, errors.New("nope")).async, true)
+	assert.Equal(t, decideRisk(p, false, gitutil.Changes{}, errors.New("nope"), historyEvidence{}).async, true, historyEvidence{})
 }
 
 func TestAProjectCanRaiseItsOwnLimit(t *testing.T) {
 	p := asyncPolicy{mode: config.AsyncValidateAuto, maxLines: 2000}
-	assert.Equal(t, decideRisk(p, false, sourceChange(912), nil).async, true)
+	assert.Equal(t, decideRisk(p, false, sourceChange(912), nil, historyEvidence{}).async, true, historyEvidence{})
 }
 
 // A nonsensical limit falls back to the default rather than backgrounding
 // nothing at all.
 func TestANonPositiveLimitFallsBackToTheDefault(t *testing.T) {
 	p := asyncPolicy{mode: config.AsyncValidateAuto, maxLines: -1}
-	assert.Equal(t, decideRisk(p, false, sourceChange(42), nil).async, true)
+	assert.Equal(t, decideRisk(p, false, sourceChange(42), nil, historyEvidence{}).async, true, historyEvidence{})
 }
 
 func TestAllInert(t *testing.T) {

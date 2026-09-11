@@ -101,7 +101,10 @@ func (d *daemon) handleAsyncValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskID, err := d.startValidateTask(req.ValidateRequest)
+	// No risk summary: this is the explicit --async path, where the caller has
+	// already decided and nothing was judged. Nothing is recorded in history
+	// either, which keeps that record to the runs the daemon actually judged.
+	taskID, err := d.startValidateTask(req.ValidateRequest, nil)
 	if err != nil {
 		// The tree could not be fingerprinted, so staleness would be undetectable.
 		// Reported as a conflict rather than a server error: nothing is broken,
@@ -123,7 +126,7 @@ func (d *daemon) handleAsyncValidate(w http.ResponseWriter, r *http.Request) {
 // still takes the lock, so two background runs queue behind each other exactly
 // as two synchronous ones do; what changes is who waits, not how many run at
 // once.
-func (d *daemon) startValidateTask(req ValidateRequest) (string, error) {
+func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (string, error) {
 	// Detached from the request: the caller is about to disconnect, and an async
 	// run that died with the connection that started it would be pointless. The
 	// store's parent context bounds it instead, so it ends with the daemon.
@@ -156,6 +159,9 @@ func (d *daemon) startValidateTask(req ValidateRequest) (string, error) {
 			// whether this *result* can be reported, which is a different
 			// question from which state is known to be good.
 			d.risk.recordGreen(req.ProjectRoot, before)
+		}
+		if risk != nil {
+			d.hist.record(req.ProjectRoot, *risk, exitCode == 0)
 		}
 		// stderr carries the progress lines and the tally; stdout is usually
 		// empty for a validate run. Both are kept so whoever collects the result
@@ -200,7 +206,7 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 		summary := decision.risk
 		risk = &summary
 		if decision.async {
-			if taskID, err := d.startValidateTask(req); err == nil {
+			if taskID, err := d.startValidateTask(req, risk); err == nil {
 				writeValidateJSON(w, ValidateResponse{TaskID: taskID, Reason: reason, Risk: risk})
 				return
 			}
@@ -223,14 +229,14 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx = envctx.WithEnv(ctx, req.Env)
 
-	resp := d.runValidateNow(ctx, req)
+	resp := d.runValidateNow(ctx, req, risk)
 	resp.Reason = reason
 	resp.Risk = risk
 	writeValidateJSON(w, resp)
 }
 
 // runValidateNow runs req to completion while the caller waits.
-func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest) ValidateResponse {
+func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *RiskSummary) ValidateResponse {
 	var before string
 	if req.ProjectRoot != "" {
 		before, _ = gitutil.SnapshotTree(req.ProjectRoot)
@@ -256,6 +262,9 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest) Valida
 		d.risk.record(req.ProjectRoot, exitCode == 0)
 		if exitCode == 0 {
 			d.risk.recordGreen(req.ProjectRoot, before)
+		}
+		if risk != nil {
+			d.hist.record(req.ProjectRoot, *risk, exitCode == 0)
 		}
 	}
 

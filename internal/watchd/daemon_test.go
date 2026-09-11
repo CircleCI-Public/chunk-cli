@@ -32,6 +32,7 @@ func newTestDaemon() *daemon {
 		res:   newResourceSampler(nil),
 		tasks: newTaskStore(context.Background()),
 		risk:  newRiskMemory(),
+		hist:  newRiskHistory(),
 	}
 	d.tasks.onFinish = d.risk.record
 	return d
