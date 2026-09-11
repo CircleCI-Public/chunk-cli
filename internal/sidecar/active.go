@@ -210,6 +210,15 @@ func pruneRekeyedState(dir, keep string, sidecarIDs []string) {
 // however much it holds.
 const projectRootFile = "project-root"
 
+// ProjectRootPath returns the path of the breadcrumb RegisterProjectRoot writes
+// for the project whose data directory is dataDir. It is exported for tests in
+// other packages that have to write a breadcrumb RegisterProjectRoot will not —
+// an uncanonicalised spelling, most often — so that renaming the file breaks
+// them loudly instead of leaving them passing over a project no reader finds.
+func ProjectRootPath(dataDir string) string {
+	return filepath.Join(dataDir, projectRootFile)
+}
+
 // RegisterProjectRoot writes the breadcrumb that makes root discoverable by
 // AllProjectRoots, and so by the watch daemon and its dashboard. dataDir must be
 // the data directory for root, since the daemon derives one from the other.
@@ -231,7 +240,7 @@ func RegisterProjectRoot(dataDir, root string) error {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dataDir, projectRootFile), []byte(config.CanonicalProjectRoot(root)), 0o644)
+	return os.WriteFile(ProjectRootPath(dataDir), []byte(config.CanonicalProjectRoot(root)), 0o644)
 }
 
 // AllProjectRoots returns the roots of all projects chunk has recorded state
@@ -256,7 +265,7 @@ func AllProjectRoots() ([]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		crumb := filepath.Join(base, e.Name(), projectRootFile)
+		crumb := ProjectRootPath(filepath.Join(base, e.Name()))
 		data, readErr := os.ReadFile(crumb)
 		if readErr != nil {
 			continue

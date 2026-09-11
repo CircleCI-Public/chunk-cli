@@ -48,7 +48,11 @@ func AppData() (string, error) {
 // CanonicalProjectRoot returns projectRoot in the spelling everything that keys
 // state by a project agrees on: cleaned, with symlinks resolved, falling back to
 // the cleaned path when it cannot be resolved (a root that no longer exists,
-// most often) so callers always get a usable path.
+// most often) so callers always get a usable path. The empty string is returned
+// unchanged: filepath.Clean would turn it into ".", a root that passes every
+// existence check by standing for whatever directory the process happens to be
+// running in, and so files state belonging to no project under one that reads
+// as real.
 //
 // It exists because a project has more than one name. The same repo is
 // /tmp/x to a shell and /private/tmp/x to git on darwin, and the two used to be
@@ -58,6 +62,9 @@ func AppData() (string, error) {
 // command registered under the unresolved name, as output belonging to no
 // project at all. Anything that keys by project root must run it through here.
 func CanonicalProjectRoot(projectRoot string) string {
+	if projectRoot == "" {
+		return ""
+	}
 	clean := filepath.Clean(projectRoot)
 	resolved, err := filepath.EvalSymlinks(clean)
 	if err != nil {

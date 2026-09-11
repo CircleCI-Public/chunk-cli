@@ -55,6 +55,34 @@ func TestProjectDataDir_CollisionFree(t *testing.T) {
 	assert.Assert(t, dSlash != dHyphen, "paths that differ only by separator vs hyphen must not collide: %s", dSlash)
 }
 
+// --- CanonicalProjectRoot ---
+
+// An empty root is not a project, and must not be canonicalised into one.
+// filepath.Clean("") is ".", which stats clean against the process's working
+// directory and so survives every check a reader makes before treating a root
+// as real — leaving state that belongs to no project filed under one that does.
+func TestCanonicalProjectRoot_EmptyStaysEmpty(t *testing.T) {
+	assert.Equal(t, CanonicalProjectRoot(""), "")
+}
+
+func TestCanonicalProjectRoot_ResolvesSymlinks(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "project")
+	assert.NilError(t, os.MkdirAll(target, 0o755))
+	link := filepath.Join(base, "link")
+	assert.NilError(t, os.Symlink(target, link))
+
+	resolved, err := filepath.EvalSymlinks(target)
+	assert.NilError(t, err)
+	assert.Equal(t, CanonicalProjectRoot(link), resolved)
+}
+
+// A root that no longer exists cannot be resolved, and the cleaned path is
+// still more useful to a caller than an error it has nowhere to put.
+func TestCanonicalProjectRoot_FallsBackToClean(t *testing.T) {
+	assert.Equal(t, CanonicalProjectRoot("/no/such/dir/../dir"), "/no/such/dir")
+}
+
 // --- Dir / Path ---
 
 func TestDir_XDGSet(t *testing.T) {

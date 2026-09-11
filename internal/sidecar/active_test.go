@@ -498,7 +498,7 @@ func TestProjectRootRegistrationCanonicalisesTheRoot(t *testing.T) {
 	assert.NilError(t, err)
 	assert.NilError(t, RegisterProjectRoot(dataDir, link))
 
-	crumb, err := os.ReadFile(filepath.Join(dataDir, projectRootFile))
+	crumb, err := os.ReadFile(ProjectRootPath(dataDir))
 	assert.NilError(t, err)
 	assert.Equal(t, string(crumb), want)
 
@@ -507,7 +507,7 @@ func TestProjectRootRegistrationCanonicalisesTheRoot(t *testing.T) {
 	assert.DeepEqual(t, roots, []string{want})
 
 	// A breadcrumb written before this canonicalised anything still lists once.
-	assert.NilError(t, os.WriteFile(filepath.Join(dataDir, projectRootFile), []byte(link), 0o644))
+	assert.NilError(t, os.WriteFile(ProjectRootPath(dataDir), []byte(link), 0o644))
 	roots, err = AllProjectRoots()
 	assert.NilError(t, err)
 	assert.DeepEqual(t, roots, []string{want})

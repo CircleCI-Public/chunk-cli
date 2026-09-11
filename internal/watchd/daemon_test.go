@@ -248,7 +248,7 @@ func TestPollListsOneProjectPerRootHoweverItIsSpelled(t *testing.T) {
 	assert.NilError(t, err)
 	log.Recorder(nil, eventlog.OpValidate, "", "", "").Final(iostream.LevelDone, "1/1 passed", 1, 1)
 
-	crumb := filepath.Join(dataDir, "project-root")
+	crumb := sidecar.ProjectRootPath(dataDir)
 	d := newTestDaemon()
 
 	// Registered through the symlink, then rewritten as the resolved path — the
