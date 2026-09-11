@@ -419,6 +419,15 @@ GET  /validate/collect?root=<path>                 → {tasks}
   until something commits — five 100-line turns read as 500 by the fifth — and
   resets to nothing when anything does, validated or not. A snapshot is content,
   so neither happens.
+- **A snapshot run is exempt from the clean-tree skip.** `gitutil.MaterializeTree`
+  checks the snapshot out into a temp worktree (opt-in: `asyncValidateWorktree`),
+  so the checks cannot be raced by an edit — and a result about a copy is
+  reported even when the live tree has moved, since it is still exactly true
+  about the state it ran against. The trap is that a fresh checkout is a *clean*
+  tree, and the Stop hook skips clean trees: without the exemption the run
+  executes nothing and reports a pass. `--attribute-to` is both the signal for
+  that exemption and what keeps the event log and the project breadcrumb under
+  the real repository rather than the copy.
 - **History tightens, never loosens.** `riskHistory` keeps each project's
   finished runs (`risk-history.jsonl`: sizes and verdicts, no paths, no content)
   and answers what an absolute threshold cannot — is this change large *for this

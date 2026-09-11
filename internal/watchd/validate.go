@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
@@ -140,7 +141,24 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 	// is measured against HEAD instead.
 	before := d.snapshotState(req.ProjectRoot)
 
-	return d.tasks.start(req.ProjectRoot, func(ctx context.Context) (int, string) {
+	// A project that has asked for it gets its checks run in a checked-out copy
+	// of that state, so editing while they run cannot make the answer describe
+	// code that has moved. Materialising can fail — no snapshot, no worktree
+	// support, no disk — and then the run happens in the live tree as usual,
+	// which is slower to be sure of but never wrong about what it ran.
+	shadow, cleanup := "", func() {}
+	if policyFor(req.ProjectRoot).worktree && before.tree != "" {
+		if path, remove, err := gitutil.MaterializeTree(req.ProjectRoot, before.tree); err == nil {
+			shadow, cleanup = path, remove
+			// The commands run in the copy; the results still belong to the real
+			// project, whose data directory and event log the developer is watching.
+			args = append(append([]string(nil), args...),
+				"--project", shadow, "--attribute-to", req.ProjectRoot)
+		}
+	}
+
+	taskID, err := d.tasks.start(req.ProjectRoot, shadow != "", func(ctx context.Context) (int, string) {
+		defer cleanup()
 		// Serialised against every other validate run, async or not: two runs of
 		// the same commands in one tree would race over whatever they build.
 		d.validateMu.Lock()
@@ -167,6 +185,14 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 		// sees what the developer would have seen.
 		return exitCode, stdout.String() + stderr.String()
 	})
+	if err != nil {
+		// The run never started, so nothing will ever reach the deferred cleanup
+		// above. A shadow left behind would be a temp directory and a worktree
+		// entry per refused run.
+		cleanup()
+		return "", err
+	}
+	return taskID, nil
 }
 
 // handleCollect returns the finished results for a project and forgets them.

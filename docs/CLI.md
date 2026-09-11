@@ -375,6 +375,7 @@ chunk
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
 | `asyncValidate` | `.chunk/config.json` | Whether hook runs may be validated in the background: `auto` (default), `always`, `never` |
 | `asyncValidateMaxLines` | `.chunk/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |
+| `asyncValidateWorktree` | `.chunk/config.json` | Run background checks in a checked-out snapshot so edits cannot make the result stale (`true`/`false`, default: `false` — a snapshot holds nothing gitignored) |
 
 `chunk config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project

@@ -30,6 +30,11 @@ type TaskState struct {
 	// Stale reports that the working tree changed while the run was in flight,
 	// so the result describes code that is no longer on disk.
 	Stale bool `json:"stale"`
+	// Snapshot reports that the run validated a checked-out copy of the tree
+	// rather than the tree itself. Such a result is exact about the state it
+	// ran against whatever happened afterwards, so it is reported even when
+	// stale — qualified rather than thrown away.
+	Snapshot bool `json:"snapshot,omitempty"`
 }
 
 // Passed reports whether a finished task validated the tree successfully.
@@ -110,7 +115,7 @@ func newTaskStore(parent context.Context) *taskStore {
 // reported as if it described the current tree. Callers are expected to fall
 // back to running synchronously, where the answer reaches whoever asked for it
 // while it is still true.
-func (s *taskStore) start(root string, run runFn) (string, error) {
+func (s *taskStore) start(root string, snapshot bool, run runFn) (string, error) {
 	root = config.CanonicalProjectRoot(root)
 	start, err := s.fingerprint(root)
 	if err != nil {
@@ -125,6 +130,7 @@ func (s *taskStore) start(root string, run runFn) (string, error) {
 			ProjectRoot: root,
 			StartedAt:   s.now(),
 			Running:     true,
+			Snapshot:    snapshot,
 		},
 		start:  start,
 		cancel: cancel,
@@ -232,7 +238,16 @@ func (s *taskStore) collect(root string) []TaskState {
 		// because it has moved since the run ended. Both mean the same thing to
 		// whoever is about to read the result.
 		movedSince := unverifiable || now.Head != entry.start.Head || now.Digest != entry.start.Digest
-		if !entry.state.Stale && !movedSince {
+		switch {
+		case !entry.state.Stale && !movedSince:
+			out = append(out, entry.state)
+		case entry.state.Snapshot:
+			// A snapshot-backed run validated a copy that cannot move, so its
+			// answer is still exactly true about the state it ran against. It is
+			// reported with that said rather than discarded — the work was done,
+			// and "your code passed as of the end of that turn" is worth more than
+			// silence.
+			entry.state.Stale = true
 			out = append(out, entry.state)
 		}
 		delete(s.tasks, id)

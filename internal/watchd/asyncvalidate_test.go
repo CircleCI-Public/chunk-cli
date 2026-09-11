@@ -81,7 +81,7 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 func TestCollectReturnsAResultForAnUnchangedTree(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
-	_, err := s.start("/repo", func(context.Context) (int, string) {
+	_, err := s.start("/repo", false, func(context.Context) (int, string) {
 		return 0, "1/1 passed"
 	})
 	assert.NilError(t, err)
@@ -103,7 +103,7 @@ func TestAnEditDuringTheRunDiscardsTheResult(t *testing.T) {
 	s, fake := newFakeStore(t, tree("abc", "d1"))
 
 	release := make(chan struct{})
-	_, err := s.start("/repo", func(context.Context) (int, string) {
+	_, err := s.start("/repo", false, func(context.Context) (int, string) {
 		<-release
 		return 0, "1/1 passed"
 	})
@@ -127,7 +127,7 @@ func TestACommitDuringTheRunDiscardsTheResult(t *testing.T) {
 	s, fake := newFakeStore(t, tree("abc", "d1"))
 
 	release := make(chan struct{})
-	_, err := s.start("/repo", func(context.Context) (int, string) {
+	_, err := s.start("/repo", false, func(context.Context) (int, string) {
 		<-release
 		return 0, "ok"
 	})
@@ -145,7 +145,7 @@ func TestACommitDuringTheRunDiscardsTheResult(t *testing.T) {
 func TestAFailureIsCollectedToo(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
-	_, err := s.start("/repo", func(context.Context) (int, string) {
+	_, err := s.start("/repo", false, func(context.Context) (int, string) {
 		return 1, "0/1 passed"
 	})
 	assert.NilError(t, err)
@@ -167,7 +167,7 @@ func TestStartRefusesATreeItCannotFingerprint(t *testing.T) {
 	fake.set(gitutil.Worktree{}, errors.New("not a git repository"))
 
 	var ran bool
-	_, err := s.start("/repo", func(context.Context) (int, string) {
+	_, err := s.start("/repo", false, func(context.Context) (int, string) {
 		ran = true
 		return 0, ""
 	})
@@ -183,7 +183,7 @@ func TestATreeThatCannotBeFingerprintedAtTheEndIsStale(t *testing.T) {
 	s, fake := newFakeStore(t, tree("abc", "d1"))
 
 	release := make(chan struct{})
-	_, err := s.start("/repo", func(context.Context) (int, string) {
+	_, err := s.start("/repo", false, func(context.Context) (int, string) {
 		<-release
 		return 0, "ok"
 	})
@@ -201,7 +201,7 @@ func TestATreeThatCannotBeFingerprintedAtTheEndIsStale(t *testing.T) {
 func TestCollectReportsAResultOnlyOnce(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
-	_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+	_, err := s.start("/repo", false, func(context.Context) (int, string) { return 0, "ok" })
 	assert.NilError(t, err)
 	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 
@@ -215,7 +215,7 @@ func TestCollectLeavesRunningTasksAlone(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
 	release := make(chan struct{})
-	_, err := s.start("/repo", func(context.Context) (int, string) {
+	_, err := s.start("/repo", false, func(context.Context) (int, string) {
 		<-release
 		return 0, "ok"
 	})
@@ -235,12 +235,12 @@ func TestTwoRunsInFlightAreTrackedSeparately(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
 	release := make(chan struct{})
-	first, err := s.start("/repo", func(context.Context) (int, string) {
+	first, err := s.start("/repo", false, func(context.Context) (int, string) {
 		<-release
 		return 0, "first"
 	})
 	assert.NilError(t, err)
-	second, err := s.start("/repo", func(context.Context) (int, string) {
+	second, err := s.start("/repo", false, func(context.Context) (int, string) {
 		<-release
 		return 1, "second"
 	})
@@ -257,7 +257,7 @@ func TestTwoRunsInFlightAreTrackedSeparately(t *testing.T) {
 func TestTasksAreKeptPerProject(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
-	_, err := s.start("/repo-a", func(context.Context) (int, string) { return 0, "a" })
+	_, err := s.start("/repo-a", false, func(context.Context) (int, string) { return 0, "a" })
 	assert.NilError(t, err)
 	waitFor(t, func() bool { return len(s.inFlight("/repo-a")) == 0 }, "run never finished")
 
@@ -274,7 +274,7 @@ func TestEvictionNeverDropsARunningTask(t *testing.T) {
 
 	release := make(chan struct{})
 	for i := 0; i < MaxTasksPerProject+5; i++ {
-		_, err := s.start("/repo", func(context.Context) (int, string) {
+		_, err := s.start("/repo", false, func(context.Context) (int, string) {
 			<-release
 			return 0, "ok"
 		})
@@ -293,7 +293,7 @@ func TestFinishedTasksAreEvictedOverTheCap(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
 	for i := 0; i < MaxTasksPerProject+5; i++ {
-		_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+		_, err := s.start("/repo", false, func(context.Context) (int, string) { return 0, "ok" })
 		assert.NilError(t, err)
 		waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 	}
@@ -306,7 +306,7 @@ func TestStopAllCancelsRunsInFlight(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
 	cancelled := make(chan struct{})
-	_, err := s.start("/repo", func(ctx context.Context) (int, string) {
+	_, err := s.start("/repo", false, func(ctx context.Context) (int, string) {
 		<-ctx.Done()
 		close(cancelled)
 		return 1, "cancelled"
@@ -328,7 +328,7 @@ func TestStopAllCancelsRunsInFlight(t *testing.T) {
 func TestAnEditAfterTheRunFinishedDiscardsTheResult(t *testing.T) {
 	s, fake := newFakeStore(t, tree("abc", "d1"))
 
-	_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+	_, err := s.start("/repo", false, func(context.Context) (int, string) { return 0, "ok" })
 	assert.NilError(t, err)
 	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 
@@ -343,7 +343,7 @@ func TestAnEditAfterTheRunFinishedDiscardsTheResult(t *testing.T) {
 func TestACommitAfterTheRunFinishedDiscardsTheResult(t *testing.T) {
 	s, fake := newFakeStore(t, tree("abc", "d1"))
 
-	_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+	_, err := s.start("/repo", false, func(context.Context) (int, string) { return 0, "ok" })
 	assert.NilError(t, err)
 	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 
@@ -356,7 +356,7 @@ func TestACommitAfterTheRunFinishedDiscardsTheResult(t *testing.T) {
 func TestATreeThatCannotBeFingerprintedAtCollectReportsNothing(t *testing.T) {
 	s, fake := newFakeStore(t, tree("abc", "d1"))
 
-	_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+	_, err := s.start("/repo", false, func(context.Context) (int, string) { return 0, "ok" })
 	assert.NilError(t, err)
 	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 
@@ -370,7 +370,7 @@ func TestCollectReadsTheTreeOncePerCall(t *testing.T) {
 	s, fake := newFakeStore(t, tree("abc", "d1"))
 
 	for i := 0; i < 3; i++ {
-		_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
+		_, err := s.start("/repo", false, func(context.Context) (int, string) { return 0, "ok" })
 		assert.NilError(t, err)
 		waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 	}

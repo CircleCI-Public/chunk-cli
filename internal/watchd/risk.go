@@ -72,6 +72,8 @@ func allInert(paths []string) bool {
 type asyncPolicy struct {
 	mode     string
 	maxLines int
+	// worktree runs background checks in a snapshot rather than the live tree.
+	worktree bool
 }
 
 // policyFor reads root's async validation policy. A project with no config, or
@@ -90,6 +92,7 @@ func policyFor(root string) asyncPolicy {
 	if cfg.AsyncValidateMaxLines > 0 {
 		p.maxLines = cfg.AsyncValidateMaxLines
 	}
+	p.worktree = cfg.AsyncValidateWorktree
 	return p
 }
 
