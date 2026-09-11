@@ -70,17 +70,17 @@ jobs:
                 name: Build binary
                 command: task build
             - run:
-                name: Verify skill content is embedded
+                name: Verify skill install delegates to claude plugin
                 command: |
-                  mkdir -p ~/.claude
-                  ./dist/chunk skill install --user
-                  echo "OK: user-scope skill content embedded correctly"
-                  head -5 ~/.claude/skills/chunk-review/SKILL.md
-                  tmpdir=$(mktemp -d)
-                  cd "$tmpdir"
-                  ~/project/dist/chunk skill install
-                  echo "OK: project-scope skill content embedded correctly"
-                  head -5 .claude/skills/chunk-review/SKILL.md
+                  # claude CLI is not present in CI; install should skip gracefully.
+                  out=$(./dist/chunk skill install --user 2>&1)
+                  echo "$out"
+                  echo "$out" | grep -q "skipped\|installed" || { echo "FAIL: expected skipped or installed in output"; exit 1; }
+                  echo "OK: user-scope skill install exited cleanly"
+                  out=$(./dist/chunk skill install 2>&1)
+                  echo "$out"
+                  echo "$out" | grep -q "skipped\|installed" || { echo "FAIL: expected skipped or installed in output"; exit 1; }
+                  echo "OK: project-scope skill install exited cleanly"
 
 workflows:
   ci:

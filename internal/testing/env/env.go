@@ -37,11 +37,17 @@ func (e *TestEnv) Environ() []string {
 	configDir := filepath.Join(e.HomeDir, ".config")
 	dataDir := filepath.Join(e.HomeDir, ".local", "share")
 
+	path := os.Getenv("PATH")
+	if override, ok := e.Extra["PATH"]; ok {
+		path = override
+		delete(e.Extra, "PATH")
+	}
+
 	env := []string{
 		fmt.Sprintf("HOME=%s", e.HomeDir),
 		fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir),
 		fmt.Sprintf("XDG_DATA_HOME=%s", dataDir),
-		fmt.Sprintf("PATH=%s", os.Getenv("PATH")),
+		fmt.Sprintf("PATH=%s", path),
 		"SHELL=/bin/zsh",
 		"NO_COLOR=1",
 		"TERM=dumb",

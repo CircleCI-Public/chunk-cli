@@ -452,43 +452,38 @@ func TestWriteGitHookAppendsToExisting(t *testing.T) {
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated .git/hooks/pre-commit")))
 }
 
-// TestInstallSkillsStepUsesProjectScope verifies that installSkillsStep writes
-// skills into the project's .claude/skills/ directory, not into the user's
-// home directory. Previously it called InstallByName(ScopeUser, homeDir, ...)
-// which diverged from the ScopeProject default used by the skills subcommand.
-func TestInstallSkillsStepUsesProjectScope(t *testing.T) {
-	workDir := t.TempDir()
-	home := t.TempDir()
-	t.Setenv(config.EnvHome, home)
+// TestInstallSkillsStepCallsPluginInstall verifies that installSkillsStep
+// invokes the claude plugin install command at project scope.
+func TestInstallSkillsStepCallsPluginInstall(t *testing.T) {
+	binDir := t.TempDir()
+	logFile := filepath.Join(binDir, "invocations.txt")
+	script := "#!/bin/sh\necho \"$*\" >> " + logFile + "\necho 'Successfully installed plugin: circleci@circleci-claude-marketplace (scope: project)'\nexit 0\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(binDir, "claude"), []byte(script), 0o755))
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
-	streams, _, _ := testStreams()
-	installSkillsStep(workDir, streams)
+	streams, _, errBuf := testStreams()
+	installSkillsStep(streams)
 
-	// Skills must appear in the project dir, not in $HOME.
-	skillPath := filepath.Join(workDir, ".claude", "skills", "chunk-sidecar", "SKILL.md")
-	_, err := os.Stat(skillPath)
-	assert.NilError(t, err, "expected skill installed at %s", skillPath)
+	// Verify the plugin install command was called.
+	invocations, err := os.ReadFile(logFile)
+	assert.NilError(t, err, "expected claude to have been invoked")
+	assert.Assert(t, strings.Contains(string(invocations), "plugin install circleci"),
+		"expected plugin install in invocation, got: %s", string(invocations))
 
-	homePath := filepath.Join(home, ".claude", "skills", "chunk-sidecar", "SKILL.md")
-	_, err = os.Stat(homePath)
-	assert.Assert(t, os.IsNotExist(err), "skill must not be installed under $HOME")
+	// Verify output message.
+	assert.Assert(t, strings.Contains(errBuf.String(), "circleci"),
+		"expected plugin name in output, got: %s", errBuf.String())
 }
 
-// TestInstallSkillsStepInstallsSidecarSetup verifies the onboarding wizard ships
-// alongside chunk-sidecar. Without it, chunk-sidecar's first-time setup path
-// routes to a skill that is not installed.
-func TestInstallSkillsStepInstallsSidecarSetup(t *testing.T) {
-	workDir := t.TempDir()
-	t.Setenv(config.EnvHome, t.TempDir())
+// TestInstallSkillsStepSkipsWhenCLIAbsent verifies that installSkillsStep
+// does not fail when the claude CLI is not found.
+func TestInstallSkillsStepSkipsWhenCLIAbsent(t *testing.T) {
+	emptyDir := t.TempDir()
+	t.Setenv("PATH", emptyDir+":"+os.Getenv("PATH"))
 
 	streams, _, _ := testStreams()
-	installSkillsStep(workDir, streams)
-
-	for _, name := range []string{"chunk-sidecar", "chunk-sidecar-setup"} {
-		skillPath := filepath.Join(workDir, ".claude", "skills", name, "SKILL.md")
-		_, err := os.Stat(skillPath)
-		assert.NilError(t, err, "expected skill installed at %s", skillPath)
-	}
+	// Should not panic or return an error — skips silently.
+	installSkillsStep(streams)
 }
 
 func TestPrintInitSummaryWithCommands(t *testing.T) {
