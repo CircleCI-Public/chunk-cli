@@ -30,6 +30,11 @@ type TaskState struct {
 	// Stale reports that the working tree changed while the run was in flight,
 	// so the result describes code that is no longer on disk.
 	Stale bool `json:"stale"`
+	// Snapshot reports that the run validated a checked-out copy of the tree
+	// rather than the tree itself. Such a result is exact about the state it
+	// ran against whatever happened afterwards, so it is reported even when
+	// stale — qualified rather than thrown away.
+	Snapshot bool `json:"snapshot,omitempty"`
 }
 
 // Passed reports whether a finished task validated the tree successfully.
@@ -97,7 +102,7 @@ func newTaskStore(parent context.Context) *taskStore {
 		parent:      parent,
 		tasks:       make(map[string]*taskEntry),
 		byProject:   make(map[string][]string),
-		fingerprint: gitutil.Fingerprint,
+		fingerprint: fingerprintTree,
 		now:         time.Now,
 	}
 }
@@ -110,7 +115,7 @@ func newTaskStore(parent context.Context) *taskStore {
 // reported as if it described the current tree. Callers are expected to fall
 // back to running synchronously, where the answer reaches whoever asked for it
 // while it is still true.
-func (s *taskStore) start(root string, run runFn) (string, error) {
+func (s *taskStore) start(root string, snapshot bool, run runFn) (string, error) {
 	root = config.CanonicalProjectRoot(root)
 	start, err := s.fingerprint(root)
 	if err != nil {
@@ -125,6 +130,7 @@ func (s *taskStore) start(root string, run runFn) (string, error) {
 			ProjectRoot: root,
 			StartedAt:   s.now(),
 			Running:     true,
+			Snapshot:    snapshot,
 		},
 		start:  start,
 		cancel: cancel,
@@ -232,7 +238,16 @@ func (s *taskStore) collect(root string) []TaskState {
 		// because it has moved since the run ended. Both mean the same thing to
 		// whoever is about to read the result.
 		movedSince := unverifiable || now.Head != entry.start.Head || now.Digest != entry.start.Digest
-		if !entry.state.Stale && !movedSince {
+		switch {
+		case !entry.state.Stale && !movedSince:
+			out = append(out, entry.state)
+		case entry.state.Snapshot:
+			// A snapshot-backed run validated a copy that cannot move, so its
+			// answer is still exactly true about the state it ran against. It is
+			// reported with that said rather than discarded — the work was done,
+			// and "your code passed as of the end of that turn" is worth more than
+			// silence.
+			entry.state.Stale = true
 			out = append(out, entry.state)
 		}
 		delete(s.tasks, id)
@@ -260,6 +275,56 @@ func (s *taskStore) inFlight(root string) []TaskState {
 		}
 	}
 	return out
+}
+
+// supersede stops the runs in flight for root that a new run makes pointless,
+// and reports how many it stopped.
+//
+// A run is released because the tree has moved — that is what made a new hook
+// fire — so a live-tree run already in flight is validating code that is no
+// longer on disk, and its result is going to be discarded the moment it
+// finishes. Stopping it frees the validate lock the new run is about to want,
+// instead of leaving two runs of the same commands queued behind each other for
+// an answer only one of them can give.
+//
+// Snapshot-backed runs are left alone. Their verdict stays true about the state
+// they were handed whatever the tree does afterwards, so that one will be
+// reported rather than thrown away — cancelling it would discard the only work
+// here that was going to survive.
+func (s *taskStore) supersede(root string) int {
+	root = config.CanonicalProjectRoot(root)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := s.byProject[root]
+	kept := make([]string, 0, len(ids))
+	stopped := 0
+	for _, id := range ids {
+		entry, ok := s.tasks[id]
+		if !ok {
+			continue
+		}
+		if !entry.state.Running || entry.state.Snapshot {
+			kept = append(kept, id)
+			continue
+		}
+		if entry.cancel != nil {
+			entry.cancel()
+		}
+		// Dropped here rather than left to report a cancellation. finish finds no
+		// task and records nothing, which is right: a run that was stopped has
+		// concluded nothing, and reporting it as a failure would owe the project a
+		// blocking run it never earned.
+		delete(s.tasks, id)
+		stopped++
+	}
+	if len(kept) == 0 {
+		delete(s.byProject, root)
+	} else {
+		s.byProject[root] = kept
+	}
+	return stopped
 }
 
 // evictLocked drops finished tasks until root is under MaxTasksPerProject.

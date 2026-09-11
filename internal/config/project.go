@@ -70,6 +70,13 @@ type ProjectConfig struct {
 	// AsyncValidateMaxLines overrides how large a change may be and still be
 	// validated in the background. Zero means the built-in default.
 	AsyncValidateMaxLines int `json:"asyncValidateMaxLines,omitempty"`
+	// AsyncValidateWorktree runs background checks in a checked-out snapshot
+	// instead of the live working tree, so editing while they run cannot make
+	// the answer describe code that has moved. Off by default: a snapshot holds
+	// nothing git was told to ignore, so a project whose checks need installed
+	// dependencies or a build cache would see environment failures reported as
+	// code failures.
+	AsyncValidateWorktree bool `json:"asyncValidateWorktree,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.

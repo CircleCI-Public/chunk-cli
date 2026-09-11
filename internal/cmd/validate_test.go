@@ -987,3 +987,55 @@ func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "2000 lines (60)"), "got %q", out)
 	assert.Assert(t, strings.Contains(out, "committing it in parts"), "got %q", out)
 }
+
+// A snapshot run validates a tree that was checked out from the state being
+// validated, so git sees nothing changed in it. The clean-tree skip must not
+// fire there: skipping would run no commands and report a pass, which is a
+// green light for code nothing looked at.
+//
+// This is the shape of a real bug. The unit tests around the daemon stub the
+// runner, so the skip lived below all of them and the first honest end-to-end
+// run reported "passed" having executed nothing.
+func TestASnapshotRunIsNotSkippedForBeingClean(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	// A clean repo: everything committed, exactly as a checked-out snapshot is.
+	dir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ran")
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "touch " + marker}},
+	}))
+	for _, args := range [][]string{
+		{"init"}, {"config", "user.email", "t@t.co"}, {"config", "user.name", "t"},
+		{"add", "-A"}, {"commit", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, "git %v: %s", args, out)
+	}
+
+	run := func(extra ...string) {
+		var outBuf, errBuf bytes.Buffer
+		root := newTestRootCmd()
+		root.SetOut(&outBuf)
+		root.SetErr(&errBuf)
+		root.SetIn(strings.NewReader(hookPayload))
+		root.SetArgs(append([]string{"--insecure-storage", "validate", "--local", "--project", dir}, extra...))
+		_ = root.Execute()
+	}
+
+	// Without the attribution, a clean tree is skipped — the behaviour every
+	// ordinary hook run relies on.
+	run()
+	_, err := os.Stat(marker)
+	assert.Assert(t, err != nil, "a clean ordinary run should have been skipped")
+
+	// With it, the commands run.
+	run("--attribute-to", dir)
+	_, err = os.Stat(marker)
+	assert.NilError(t, err, "a snapshot run was skipped and reported without running anything")
+}

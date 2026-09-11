@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 )
 
 // SnapshotTree captures the whole working state at dir as a git tree object and
@@ -74,18 +76,18 @@ func SnapshotTree(dir string) (string, error) {
 //
 // The error is non-nil when base cannot be diffed: it has been garbage collected,
 // or the tree cannot be snapshotted now. Callers fall back to WorkingChanges.
-func ChangesBetween(dir, base string) (Changes, error) {
+func ChangesBetween(dir, base string) (changeset.Changes, error) {
 	now, err := SnapshotTree(dir)
 	if err != nil {
-		return Changes{}, err
+		return changeset.Changes{}, err
 	}
 	if now == base {
-		return Changes{Baseline: base}, nil
+		return changeset.Changes{Baseline: base}, nil
 	}
 
 	names, err := gitOutEnv(dir, nil, "diff", "--name-only", "-z", base, now)
 	if err != nil {
-		return Changes{}, fmt.Errorf("diff %s: %w", base, err)
+		return changeset.Changes{}, fmt.Errorf("diff %s: %w", base, err)
 	}
 	var paths []string
 	for _, p := range strings.Split(names, "\x00") {
@@ -94,14 +96,14 @@ func ChangesBetween(dir, base string) (Changes, error) {
 		}
 	}
 	if len(paths) == 0 {
-		return Changes{Baseline: base}, nil
+		return changeset.Changes{Baseline: base}, nil
 	}
 
 	stat, err := gitOutEnv(dir, nil, "diff", "--shortstat", base, now)
 	if err != nil {
-		return Changes{}, fmt.Errorf("diff %s: %w", base, err)
+		return changeset.Changes{}, fmt.Errorf("diff %s: %w", base, err)
 	}
-	return Changes{Paths: paths, Lines: countShortstat(stat), Baseline: base}, nil
+	return changeset.Changes{Paths: paths, Lines: countShortstat(stat), Baseline: base}, nil
 }
 
 // gitOutEnv is gitOut with an explicit environment. A nil env inherits this

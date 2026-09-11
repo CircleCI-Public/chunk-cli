@@ -85,6 +85,34 @@ blocks as it always did.
 
 With no daemon running nothing changes: every hook run is blocking.
 
+### Running the checks in a snapshot
+
+Background checks run against the live working tree by default, which means
+they are racing whoever is editing it. If the tree moves while they run, the
+answer describes code that is no longer there and gets thrown away.
+
+Setting `asyncValidateWorktree: true` runs them in a checked-out copy of the
+state being validated instead. The copy cannot move, so the answer stays true
+about the state it ran against — the state the agent's turn actually produced —
+and it is reported with that said rather than discarded:
+
+```
+chunk validate passed in the background (0192cf6e) — for the code as it was when that turn ended; the tree has changed since
+```
+
+It is off by default, for one reason: **a snapshot holds nothing git was told to
+ignore.** No installed dependencies, no build cache, no `.env.local`. For a
+project whose checks need any of those, every background run would report an
+environment failure as a code failure, which is worse than a discarded result.
+Projects whose checks run against source alone lose nothing by turning it on.
+
+Two smaller things to know. The copy is a real git worktree, so tools that ask
+git about it get answers; it is removed when the run ends, and a daemon killed
+mid-run leaves an entry that the next cleanup prunes. And remote commands in a
+snapshot run register their output under the copy, so the `chunk watch` logs
+pane will not show it — the event log and the run itself are still filed under
+the real project.
+
 ### The risk score
 
 Every judgement also produces a 0–100 score, the facts behind it, and any
@@ -107,6 +135,19 @@ Advice is only given where there is something to do about it. "Commit in parts"
 is actionable for 2,000 lines across nine files and impossible for 2,000 lines
 in one generated file, so a single-file change is told nothing rather than
 something it cannot act on.
+
+### Trees git cannot answer for
+
+A repository with no commits has no `HEAD` to diff against, and a directory that
+was never a repository has nothing at all. Both used to be unmeasurable, which
+meant every run in them blocked. The daemon now walks and hashes such a tree
+itself, so a small change in a fresh repo reads as a small change.
+
+It is the fallback, not the default. Git knows what is ignored, and knows how
+much of a modified file an edit actually touched; hashing only knows that a file
+changed, so it counts the whole file — a one-line edit in a 900-line file reads
+as 900 lines. That over-measures, which makes you wait, rather than
+under-measuring, which would wave a change through.
 
 ### Relative to this repo
 

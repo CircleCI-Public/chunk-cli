@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 )
 
 func snapshot(t *testing.T, dir string) string {
@@ -17,7 +19,7 @@ func snapshot(t *testing.T, dir string) string {
 	return tree
 }
 
-func between(t *testing.T, dir, base string) Changes {
+func between(t *testing.T, dir, base string) changeset.Changes {
 	t.Helper()
 	ch, err := ChangesBetween(dir, base)
 	assert.NilError(t, err)

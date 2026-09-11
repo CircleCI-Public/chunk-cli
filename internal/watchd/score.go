@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
+	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 )
 
 // Risk score bands. They exist so a caller can act on the score without
@@ -63,7 +63,7 @@ type RiskSummary struct {
 // should have been 52. What the score is for is the questions one bit cannot
 // answer — which of two changes is riskier, whether a change is unusual for this
 // repo, and whether there is anything worth advising about it.
-func scoreChange(limit int, owesBlockingRun bool, ch gitutil.Changes, chErr error, hist historyEvidence) RiskSummary {
+func scoreChange(limit int, owesBlockingRun bool, ch changeset.Changes, chErr error, hist historyEvidence) RiskSummary {
 	if chErr != nil {
 		// Nothing is known about this change. The top of the scale is the only
 		// honest answer, and it is the same direction decideRisk takes.
@@ -154,7 +154,7 @@ func band(score int) string {
 // one generated file, so a single-file change gets no suggestion rather than an
 // impossible one. Nothing is advised about a failing run or an unmeasurable
 // tree either: the run itself is about to say more than any advice could.
-func advise(limit int, ch gitutil.Changes, chErr error) string {
+func advise(limit int, ch changeset.Changes, chErr error) string {
 	if chErr != nil || ch.Lines < limit || len(ch.Paths) < 2 || allInert(ch.Paths) {
 		return ""
 	}

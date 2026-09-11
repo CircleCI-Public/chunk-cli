@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,15 +17,15 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 )
 
 // auto is the policy a project with no configuration gets.
 var auto = asyncPolicy{mode: config.AsyncValidateAuto, maxLines: DefaultAsyncMaxLines}
 
-func sourceChange(lines int) gitutil.Changes {
-	return gitutil.Changes{Paths: []string{"internal/cmd/validate.go"}, Lines: lines}
+func sourceChange(lines int) changeset.Changes {
+	return changeset.Changes{Paths: []string{"internal/cmd/validate.go"}, Lines: lines}
 }
 
 func TestASmallChangeIsBackgrounded(t *testing.T) {
@@ -48,7 +49,7 @@ func TestAChangeOnTheLimitBlocks(t *testing.T) {
 // Size is only consulted for changes that could plausibly fail a check. A docs
 // rewrite is backgrounded however long it is.
 func TestADocsOnlyChangeIsBackgroundedAtAnySize(t *testing.T) {
-	ch := gitutil.Changes{Paths: []string{"README.md", "docs/CLI.md", "LICENSE"}, Lines: 5000}
+	ch := changeset.Changes{Paths: []string{"README.md", "docs/CLI.md", "LICENSE"}, Lines: 5000}
 	d := decideRisk(auto, false, ch, nil, historyEvidence{})
 	assert.Equal(t, d.async, true)
 	assert.Equal(t, d.reason, "only docs and text changed")
@@ -56,14 +57,14 @@ func TestADocsOnlyChangeIsBackgroundedAtAnySize(t *testing.T) {
 
 // One source file in among the docs is a source change.
 func TestOneSourceFileAmongTheDocsIsJudgedOnSize(t *testing.T) {
-	ch := gitutil.Changes{Paths: []string{"README.md", "internal/cmd/validate.go"}, Lines: 5000}
+	ch := changeset.Changes{Paths: []string{"README.md", "internal/cmd/validate.go"}, Lines: 5000}
 	assert.Equal(t, decideRisk(auto, false, ch, nil, historyEvidence{}).async, false, historyEvidence{})
 }
 
 // A tree that cannot be measured says nothing about how large the change is,
 // and guessing small is the one answer that could lose a failure.
 func TestAnUnmeasurableChangeBlocks(t *testing.T) {
-	d := decideRisk(auto, false, gitutil.Changes{}, errors.New("not a repo"), historyEvidence{})
+	d := decideRisk(auto, false, changeset.Changes{}, errors.New("not a repo"), historyEvidence{})
 	assert.Equal(t, d.async, false)
 	assert.Assert(t, strings.Contains(d.reason, "not a repo"), "reason was %q", d.reason)
 }
@@ -72,7 +73,7 @@ func TestAnUnmeasurableChangeBlocks(t *testing.T) {
 // task and a later report on a run that does no work, so it stays here — and
 // says nothing, because there is nothing a developer would want told.
 func TestACleanTreeIsNotBackgrounded(t *testing.T) {
-	d := decideRisk(auto, false, gitutil.Changes{}, nil, historyEvidence{})
+	d := decideRisk(auto, false, changeset.Changes{}, nil, historyEvidence{})
 	assert.Equal(t, d.async, false)
 	assert.Equal(t, d.reason, "")
 }
@@ -87,7 +88,7 @@ func TestAProjectThatOwesABlockingRunGetsOne(t *testing.T) {
 
 func TestModeNeverBlocksEvenADocsChange(t *testing.T) {
 	p := asyncPolicy{mode: config.AsyncValidateNever, maxLines: DefaultAsyncMaxLines}
-	ch := gitutil.Changes{Paths: []string{"README.md"}, Lines: 2}
+	ch := changeset.Changes{Paths: []string{"README.md"}, Lines: 2}
 	assert.Equal(t, decideRisk(p, false, ch, nil, historyEvidence{}).async, false, historyEvidence{})
 }
 
@@ -110,7 +111,7 @@ func TestModeAlwaysOutranksTheFailureDebt(t *testing.T) {
 // answer for a project that has already given one.
 func TestModeAlwaysBackgroundsAnUnmeasurableChange(t *testing.T) {
 	p := asyncPolicy{mode: config.AsyncValidateAlways, maxLines: DefaultAsyncMaxLines}
-	assert.Equal(t, decideRisk(p, false, gitutil.Changes{}, errors.New("nope"), historyEvidence{}).async, true, historyEvidence{})
+	assert.Equal(t, decideRisk(p, false, changeset.Changes{}, errors.New("nope"), historyEvidence{}).async, true, historyEvidence{})
 }
 
 func TestAProjectCanRaiseItsOwnLimit(t *testing.T) {
@@ -366,14 +367,14 @@ func TestAFailedRunDoesNotMoveTheBaseline(t *testing.T) {
 	m := newRiskMemory()
 	root := t.TempDir()
 
-	m.recordGreen(root, "tree-a")
+	m.recordGreen(root, treeState{tree: "tree-a"})
 	m.record(root, false)
-	assert.Equal(t, m.baseline(root), "tree-a")
+	assert.Equal(t, m.baseline(root).tree, "tree-a")
 }
 
 func TestRiskMemoryHasNoBaselineUntilARunPasses(t *testing.T) {
 	m := newRiskMemory()
-	assert.Equal(t, m.baseline(t.TempDir()), "")
+	assert.Equal(t, m.baseline(t.TempDir()).known(), false)
 }
 
 // A tree git has since collected is not a measurement error, just a worse
@@ -381,7 +382,7 @@ func TestRiskMemoryHasNoBaselineUntilARunPasses(t *testing.T) {
 func TestAnUnknownBaselineFallsBackToHead(t *testing.T) {
 	d, root, _ := riskDaemon(t, 0)
 	writeSource(t, root, 10)
-	d.risk.recordGreen(root, "0000000000000000000000000000000000000000")
+	d.risk.recordGreen(root, treeState{tree: "0000000000000000000000000000000000000000"})
 
 	resp := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
 		Args: []string{"validate"}, ProjectRoot: root, AllowAsync: true,
@@ -389,4 +390,65 @@ func TestAnUnknownBaselineFallsBackToHead(t *testing.T) {
 	assert.Assert(t, resp.TaskID != "", "a collected baseline stopped the assessment")
 	assert.Assert(t, !strings.Contains(resp.Reason, "since the last passing run"),
 		"the fallback claimed a baseline it could not read: %q", resp.Reason)
+}
+
+// A repository with no commits has no HEAD to diff against, and git cannot
+// answer for it at all. Before, that made every run unmeasurable and therefore
+// blocking, for as long as the repo stayed fresh.
+func TestAFreshRepoIsMeasuredWithoutGit(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+	d.runner = func(context.Context, []string, []string, io.Writer, io.Writer) int { return 0 }
+	writeSource(t, root, 10)
+
+	resp := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
+		Args: []string{"validate"}, ProjectRoot: root, AllowAsync: true,
+	})))
+	assert.Assert(t, resp.TaskID != "", "a repo with no commits was held: %s", resp.Reason)
+	assert.Assert(t, strings.Contains(resp.Reason, "10 lines"), "reason was %q", resp.Reason)
+}
+
+// And it is still measured incrementally: the state that passed is remembered
+// as a hashed walk rather than a git tree, and the next change is read from it.
+func TestAFreshRepoIsMeasuredIncrementally(t *testing.T) {
+	root := t.TempDir()
+	gitInit(t, root)
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+	d.runner = func(context.Context, []string, []string, io.Writer, io.Writer) int { return 0 }
+
+	writeSource(t, root, 400)
+	first := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
+		Args: []string{"validate"}, ProjectRoot: root, AllowAsync: true,
+	})))
+	assert.Assert(t, first.TaskID != "", "held: %s", first.Reason)
+	waitFor(t, func() bool { return len(d.tasks.inFlight(root)) == 0 }, "run never finished")
+	assert.Assert(t, d.risk.baseline(root).index != nil, "no hashed baseline was kept")
+
+	// 400 more lines in a second file. Against the whole tree that is 800 and
+	// would block; against the state that just passed it is 400.
+	writeSourceNamed(t, root, "more.go", 400)
+	second := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
+		Args: []string{"validate"}, ProjectRoot: root, AllowAsync: true,
+	})))
+	assert.Assert(t, second.TaskID != "", "held: %s", second.Reason)
+	assert.Assert(t, strings.Contains(second.Reason, "400 lines"), "reason was %q", second.Reason)
+}
+
+// gitInit makes dir a repository with no commits, which is the state git cannot
+// measure a change in.
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	assert.NilError(t, err, "git init: %s", out)
+}
+
+func writeSourceNamed(t *testing.T, dir, name string, n int) {
+	t.Helper()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, name),
+		[]byte(strings.Repeat("// line\n", n)), 0o644))
 }
