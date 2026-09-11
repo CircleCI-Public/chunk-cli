@@ -46,7 +46,8 @@ chunk-cli/
     ├── tui/                   # Terminal UI components (confirm, input, select)
     ├── ui/                    # Colors, formatting, spinner
     ├── upgrade/               # CLI self-upgrade
-    └── validate/              # Validation command logic
+    ├── validate/              # Validation command logic
+    └── watchd/                # chunk watch background daemon, its Unix-socket API, and client
 ```
 
 ## Layering Rules
@@ -373,6 +374,41 @@ connection for the daemon to supervise.
 Parsing is separated from transport (`parseSampleFrame`, `cpuPercent`,
 `splitFrames`, `consumeSamples`) so it is testable against captured fixtures with
 no SSH involved.
+
+## Data Flow: merge conflict advisories
+
+The `watchd` daemon answers "does this branch still merge cleanly?" out of band,
+so the hook that reports it never computes anything:
+
+```
+watchd daemon (one process, all projects)
+  pollLoop            every 5s   → sidecar state, event log, git HEAD
+  checkConflictsLoop  every 60s  → per project:
+                                   gitutil.FetchRemoteBranch  (every 3 min)
+                                   gitutil.RevParseCtx        (target + HEAD)
+                                   gitutil.PreviewMerge       (merge-tree)
+                                   → projectState.conflict
+
+chunk conflicts --hook
+  → GET /conflicts?root=…  (Unix socket)
+  → watchd.ConflictNotice  → hookSpecificOutput.additionalContext on stdout
+```
+
+Three properties the layering exists to hold:
+
+- **The conflict check never runs on the poll path.** A fetch reaches the
+  network and a merge preview reads the object database; neither may delay the
+  dashboard, or the snapshot read a hook is waiting on. It is a separate
+  goroutine with its own ticker, and every git call happens outside `daemon.mu`
+  — only the final state assignment takes the lock.
+- **Nothing mutates a developer's checkout.** `gitutil.PreviewMerge` uses
+  `git merge-tree --write-tree`, which resolves the merge in the object database
+  and touches no working tree, index, or HEAD. A background process must not be
+  able to disturb a tree somebody is editing.
+- **"No answer" is distinct from "no conflict".** `ConflictState.Unavailable`
+  and `ConflictReport.Known` keep a detached HEAD, an unfetched target, and an
+  absent daemon from being reported as a clean merge. Collapsing them would have
+  the hook tell an agent a branch is clean when nothing ever looked.
 
 ## HTTP Client (`internal/httpcl/`)
 

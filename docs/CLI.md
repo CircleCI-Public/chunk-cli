@@ -147,6 +147,11 @@ chunk
 ├── watch [dir...]                  # Live TUI dashboard for active sidecars and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
 │
+├── conflicts                       # Report whether this branch still merges cleanly into its merge target
+│   --project <path>                # Override project directory
+│   --hook                          # Emit Claude Code hook JSON so the notice reaches the agent
+│   --json                          # Print the raw conflict report as JSON
+│
 ├── hook                            # Manage chunk hook execution
 │   --project <path>                # Override project directory
 │   ├── disable                     # Disable chunk validate hooks
@@ -208,6 +213,21 @@ chunk
   env var → `orgID` in `.chunk/config.json` → interactive org picker (TTY only).
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
+- **`conflicts` is advisory and always exits 0.** It reports what the watch
+  daemon already computed and never previews a merge itself, so it returns
+  immediately. It is deliberately incapable of failing: it runs from the same
+  commit hook group as `chunk validate`, whose non-zero exit blocks a commit,
+  and a merge conflict with the default branch is information rather than a
+  reason to stop. With no daemon running, `--hook` prints nothing at all —
+  the daemon is optional, and announcing its absence on every commit would be
+  noise — while a manual run says why there is no answer.
+- **What `conflicts` compares.** The daemon previews merging each project's
+  branch into the default branch on `origin`, falling back to `upstream`
+  (`DefaultRemoteBranchIn`), re-checking every 60s and refreshing the target's
+  remote-tracking ref every 3 minutes. The comparison covers **committed
+  history only** — uncommitted work in the tree is invisible to it. A detached
+  HEAD, a repo with no recorded default branch, and a branch that is itself the
+  merge target all produce "no answer" rather than a clean bill of health.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **`watch` can show a command's output.** In the activity pane, an invocation
   marked `▤` has output the daemon still holds; `Enter` opens a scrollback view

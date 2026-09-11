@@ -166,3 +166,15 @@ func capEvents(prior, fresh []eventlog.Event, limit int) []eventlog.Event {
 func currentBranch(root string) string {
 	return sidecar.CurrentBranch(root)
 }
+
+// canonicalRoot resolves root to the path the per-project data directory is
+// keyed by, matching config.ProjectDataDir: symlinks resolved, falling back to
+// a lexical clean when they cannot be. Two callers naming the same project by
+// different paths have to agree here or the daemon reports it as unknown.
+func canonicalRoot(root string) string {
+	clean := filepath.Clean(root)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return resolved
+	}
+	return clean
+}
