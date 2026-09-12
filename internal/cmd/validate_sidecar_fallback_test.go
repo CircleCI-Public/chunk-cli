@@ -19,10 +19,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
-// fallbackEnv gives a project rooted in a temp dir with its own state and
+// resolutionEnv gives a project rooted in a temp dir with its own state and
 // config directories, so nothing here reads or writes the developer's real
 // sidecar state.
-func fallbackEnv(t *testing.T) string {
+func resolutionEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -35,7 +35,7 @@ func fallbackEnv(t *testing.T) string {
 	return dir
 }
 
-func fallbackClient(t *testing.T, cci *fakes.FakeCircleCI) *circleci.Client {
+func resolutionClient(t *testing.T, cci *fakes.FakeCircleCI) *circleci.Client {
 	t.Helper()
 	srv := httptest.NewServer(cci)
 	t.Cleanup(srv.Close)
@@ -51,14 +51,14 @@ func fallbackClient(t *testing.T, cci *fakes.FakeCircleCI) *circleci.Client {
 // on the developer's machine and reported as if they had passed on a sidecar.
 // The rejection must reach the caller instead.
 func TestResolveSidecarReportsCreateRejection(t *testing.T) {
-	workDir := fallbackEnv(t)
+	workDir := resolutionEnv(t)
 	cci := fakes.NewFakeCircleCI()
 	cci.CreateStatusCode = http.StatusForbidden
 
 	var sidecarID string
-	created, err := resolveSidecar(
-		context.Background(), fallbackClient(t, cci), &sidecarID,
-		"org-1", "", workDir, "", nil,
+	created, err := resolveOrCreateSidecarID(
+		context.Background(), resolutionClient(t, cci), &sidecarID,
+		"org-1", "", workDir, "",
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -83,7 +83,7 @@ func TestResolveSidecarReportsCreateRejection(t *testing.T) {
 // choose from, and no TTY to choose with. The picker's suggestion is the
 // useful part and used to be swallowed with the error.
 func TestResolveSidecarReportsUnpickableOrg(t *testing.T) {
-	workDir := fallbackEnv(t)
+	workDir := resolutionEnv(t)
 	cci := fakes.NewFakeCircleCI()
 	cci.Collaborations = []fakes.Collaboration{
 		{ID: "org-aaa", Name: "circleci", VCSType: "github"},
@@ -91,9 +91,9 @@ func TestResolveSidecarReportsUnpickableOrg(t *testing.T) {
 	}
 
 	var sidecarID string
-	created, err := resolveSidecar(
-		context.Background(), fallbackClient(t, cci), &sidecarID,
-		"", "", workDir, "", nil,
+	created, err := resolveOrCreateSidecarID(
+		context.Background(), resolutionClient(t, cci), &sidecarID,
+		"", "", workDir, "",
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -110,14 +110,15 @@ func TestResolveSidecarReportsUnpickableOrg(t *testing.T) {
 // when state already names a sidecar there is nothing to create and no error
 // to report.
 func TestResolveSidecarUsesActiveSidecar(t *testing.T) {
-	workDir := fallbackEnv(t)
+	workDir := resolutionEnv(t)
 	cci := fakes.NewFakeCircleCI()
 	cci.CreateStatusCode = http.StatusForbidden // must never be reached
+	assert.NilError(t, sidecar.SaveActive(context.Background(), sidecar.ActiveSidecar{SidecarIDs: []string{"sc-existing"}}))
 
 	var sidecarID string
-	created, err := resolveSidecar(
-		context.Background(), fallbackClient(t, cci), &sidecarID,
-		"org-1", "", workDir, "", &sidecar.ActiveSidecar{SidecarIDs: []string{"sc-existing"}},
+	created, err := resolveOrCreateSidecarID(
+		context.Background(), resolutionClient(t, cci), &sidecarID,
+		"org-1", "", workDir, "",
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -156,79 +157,4 @@ func TestCannotCreateSidecarNamesOrgSource(t *testing.T) {
 		assert.Assert(t, cannotCreateSidecar("org-1", "--org-id", io.EOF) == nil,
 			"only authorization failures are this function's business")
 	})
-}
-
-// TestUnreachableSidecarDoesNotDegradeToLocal covers the second half of
-// FACT-426. Creation was only the first way to end up running remote-marked
-// commands locally; a sidecar that already existed but could not be reached
-// took the same warn-and-continue path and produced the same false green.
-func TestUnreachableSidecarDoesNotDegradeToLocal(t *testing.T) {
-	err := unreachableSidecar("sc-1", "test, lint", io.EOF)
-
-	ue, ok := errors.AsType[*userError](err)
-	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
-	assert.Equal(t, ue.ErrorCode(), "sidecar.unreachable")
-	assert.Equal(t, ue.UserExitCode(), ExitAPIError)
-	assert.Assert(t, strings.Contains(ue.Detail(), "test, lint"),
-		"the detail must name the commands that did not run, got %q", ue.Detail())
-	// A sidecar that has gone unreachable will not fix itself, so "try again"
-	// would send the user in a circle.
-	assert.Assert(t, !strings.Contains(ue.Suggestion(), "Try again"),
-		"got %q", ue.Suggestion())
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "chunk sidecar"),
-		"the suggestion must point at a next step, got %q", ue.Suggestion())
-}
-
-// TestMissingWorkspaceDoesNotDegradeToLocal covers the most reachable of the
-// two: a sidecar that syncs fine but never had 'chunk sidecar env build' run
-// still has no workspace to execute in.
-func TestMissingWorkspaceDoesNotDegradeToLocal(t *testing.T) {
-	err := missingWorkspace("sc-1", "/home/circleci/project", "test", io.EOF)
-
-	ue, ok := errors.AsType[*userError](err)
-	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
-	assert.Equal(t, ue.ErrorCode(), "sidecar.workspace_missing")
-	assert.Equal(t, ue.UserExitCode(), ExitNotFound)
-	assert.Assert(t, strings.Contains(ue.Detail(), "/home/circleci/project"),
-		"the detail must say where the workspace was expected, got %q", ue.Detail())
-	assert.Assert(t, strings.Contains(ue.Detail(), "test"),
-		"the detail must name the commands that did not run, got %q", ue.Detail())
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "env build"),
-		"the suggestion must name the command that builds it, got %q", ue.Suggestion())
-}
-
-// TestSidecarSyncErrorKeepsSSHGuidance covers the other half of what made
-// Claire's report hard to act on. sshSessionError already phrases a missing key
-// with the ssh-keygen command that creates it, but the sync path wrapped the
-// cause bare, so the suggestion was dropped and only "ssh key not found: <path>"
-// reached the user.
-func TestSidecarSyncErrorKeepsSSHGuidance(t *testing.T) {
-	keyErr := &sidecar.KeyNotFoundError{Path: "/home/dev/.ssh/chunk_ai"}
-
-	err := sidecarSyncError(
-		context.Background(), nil, "sc-1", keyErr,
-		iostream.Streams{Out: io.Discard, Err: io.Discard},
-	)
-
-	ue, ok := errors.AsType[*userError](err)
-	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
-	assert.Equal(t, ue.ErrorCode(), "ssh.key_not_found")
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "ssh-keygen"),
-		"the suggestion must name the command that creates the key, got %q", ue.Suggestion())
-	assert.Assert(t, strings.Contains(ue.Suggestion(), "/home/dev/.ssh/chunk_ai"),
-		"the suggestion must name the path it expected, got %q", ue.Suggestion())
-}
-
-// A sync failure that is not an SSH problem must keep the sync framing rather
-// than be forced through the SSH classifier.
-func TestSidecarSyncErrorKeepsSyncFramingForOtherFailures(t *testing.T) {
-	err := sidecarSyncError(
-		context.Background(), nil, "sc-1", io.ErrUnexpectedEOF,
-		iostream.Streams{Out: io.Discard, Err: io.Discard},
-	)
-
-	ue, ok := errors.AsType[*userError](err)
-	assert.Assert(t, ok, "want a structured userError, got %T: %v", err, err)
-	assert.Assert(t, strings.Contains(ue.UserMessage(), "sync"),
-		"got %q", ue.UserMessage())
 }

@@ -104,7 +104,7 @@ Review the generated config and adjust commands if needed:
 ```json
 {
   "commands": [
-    {"name": "format", "run": "task fmt",  "timeout": 30},
+    {"name": "format", "run": "task fmt",  "timeout": 30, "local": true},
     {"name": "lint",   "run": "task lint", "timeout": 60},
     {"name": "test",   "run": "task test", "timeout": 300}
   ]
@@ -155,22 +155,20 @@ chunk sidecar create --name my-sidecar
 # Set it as active
 chunk sidecar use <id>
 
-# Mark which commands belong on the sidecar (once per project)
+# Inspect command placement
 chunk validate --list               # tags each command [local|remote, role]
-chunk validate --mark-remote        # all but autofix commands (formatters stay local)
-chunk validate --mark-remote test   # or just one, autofix included if you name it
 
 # Dev loop: sync then validate
 chunk sidecar sync           # push local changes to sidecar
-chunk validate               # marked commands run on the sidecar, the rest locally
-chunk validate --remote      # or force every command onto the sidecar
+chunk validate               # commands run remotely unless configured local
+chunk validate --local       # force every command to run locally
 
 # Inspect or clear the active sidecar
 chunk sidecar current        # show which sidecar is active
 chunk sidecar forget         # unset the active sidecar (does not delete it)
 ```
 
-Per-command routing only applies while `validation.sidecarImage` is unset. Once you record a snapshot ID there, `chunk validate` sends every command to the sidecar regardless of its `remote` flag — run formatters directly if you need them rewriting local files.
+Commands run remotely by default. Set `"local": true` on commands that must run in the local working tree, such as formatters whose edits need to be retained. `"remote": true` remains supported as an explicit annotation, but is equivalent to leaving both fields unset. A command cannot set both `local` and `remote`.
 
 With no `validation.sidecarImage` recorded, a sidecar that has to be created is started from whichever of your org's snapshots best fits the repo — one named after the repo first, then one built for the detected stack. The chosen snapshot and the reason are printed. If no snapshot fits, the default image is used, which has none of your dependencies on it; record a snapshot ID to pin the environment instead of relying on the match.
 
@@ -202,7 +200,7 @@ After installing, your agent gains these skills:
 |---|---|---|
 | `chunk-sidecar` | "validate on the sidecar" / "sidecar dev loop" | Syncs and validates changes on a sidecar |
 | `chunk-sidecar-setup` | "set up chunk sidecar" / "walk me through sidecar setup" | Interactive first-time onboarding: auth, orgID, create, install deps, snapshot |
-| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing on parallel sidecars to find undertested code |
+| `chunk-testing-gaps` | "find testing gaps" / "mutation test" | Runs mutation testing on a temporary sidecar pool to find undertested code |
 | `debug-ci-failures` | "debug CI" / "why is CI failing" | Analyzes CircleCI build failures and flaky tests |
 | `chunk-review` | "review my changes" / "chunk review" | Applies your team's review standards to the current diff |
 
@@ -229,6 +227,12 @@ To fall back to the git checkout/patch approach (requires the branch to be pushe
 ```bash
 chunk sidecar sync --checkout
 ```
+
+### Validation pools
+
+`chunk validate` currently uses a managed pool with capacity one. Remote commands are queued on that sidecar in configuration order, then commands explicitly configured with `local: true` run locally. Placement does not implicitly increase pool capacity.
+
+`chunk validate variants` uses a temporary pool sized by `--parallel`. Variants are queued onto the next available pool member, and the pool is deleted when the run finishes.
 
 ### Environment setup
 
@@ -357,7 +361,7 @@ chunk sidecar snapshot create --name checkpoint
 chunk sidecar create --image <snapshot-id>           # name auto-generated
 ```
 
-`snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it was the active sidecar, local active-sidecar state is cleared too — launch a new one from the snapshot to resume work.
+`snapshot list` prints each snapshot's name and ID for your org (from `--org-id`, project config, or the org picker). `snapshot create` deletes the source sidecar once the snapshot is captured to avoid leaking the build instance. If it belonged to the active pool, that member is removed from local active-pool state; the state is cleared only when the pool becomes empty. Launch a new pool member from the snapshot to resume work.
 
 ### Lock file regeneration
 
