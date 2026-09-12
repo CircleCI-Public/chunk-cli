@@ -355,7 +355,7 @@ func TestFilterSidecars_activeSetIgnoresCapacity(t *testing.T) {
 
 	// All eight are inside the hour, so none are dropped to fit the pane.
 	if got := filterSidecars(sidecars, 2); len(got) != 8 {
-		t.Fatalf("want all 8 active sidecars, got %d", len(got))
+		t.Fatalf("want all 8 active pool members, got %d", len(got))
 	}
 }
 

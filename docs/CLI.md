@@ -144,7 +144,7 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
-├── watch [dir...]                  # Live TUI dashboard for active sidecars and recent activity
+├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
 │
 ├── hook                            # Manage chunk hook execution

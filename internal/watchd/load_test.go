@@ -3,6 +3,7 @@ package watchd
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -51,6 +52,46 @@ func TestLoadSidecars_carriesSessionID(t *testing.T) {
 	assert.Equal(t, got["id2"], "sessB")
 	// State written outside a session stays unattributed rather than guessing.
 	assert.Equal(t, got["id3"], "")
+}
+
+func TestLoadSidecarsExpandsActivePoolMembers(t *testing.T) {
+	dir := t.TempDir()
+	root := t.TempDir()
+
+	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_ids":["id1","id2","id3"],"name":"validate"}`)
+
+	result := loadSidecars(dir, root, "")
+	assert.Equal(t, len(result), 3)
+	for i, want := range []string{"id1", "id2", "id3"} {
+		assert.Equal(t, result[i].ID, want)
+		assert.Equal(t, result[i].Name, "validate-"+strconv.Itoa(i+1))
+	}
+}
+
+func TestLoadSidecars_readsPoolState(t *testing.T) {
+	dataDir := t.TempDir()
+	root := t.TempDir()
+	chunkDir := filepath.Join(root, ".chunk")
+	assert.NilError(t, os.Mkdir(chunkDir, 0o755))
+	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["id1","id2"]}`)
+
+	result := loadSidecars(dataDir, root, "")
+	assert.Equal(t, len(result), 2)
+	assert.Equal(t, result[0].Name, "validate-1")
+	assert.Equal(t, result[1].Name, "validate-2")
+}
+
+func TestLoadSidecars_deduplicatesActiveAndPoolState(t *testing.T) {
+	dataDir := t.TempDir()
+	root := t.TempDir()
+	chunkDir := filepath.Join(root, ".chunk")
+	assert.NilError(t, os.Mkdir(chunkDir, 0o755))
+
+	writeSidecarJSON(t, dataDir, "sidecar.json", `{"sidecar_ids":["id1","id2"],"name":"active"}`)
+	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["id2","id3"]}`)
+
+	result := loadSidecars(dataDir, root, "")
+	assert.Equal(t, len(result), 3)
 }
 
 func TestLoadSidecars_emptyDir(t *testing.T) {

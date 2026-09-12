@@ -35,7 +35,7 @@ func newWatchCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "watch [dir...]",
-		Short:        "Live dashboard for active sidecars and recent activity",
+		Short:        "Live dashboard for active pools and recent activity",
 		SilenceUsage: true,
 		Args:         cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
