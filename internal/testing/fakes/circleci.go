@@ -109,11 +109,14 @@ type FakeCircleCI struct {
 	EmptyStreamsBeforeExit   int
 	AddKeyStatusCode         int             // override for POST /sidecar/instances/:id/ssh/add-key
 	StaleIDs                 map[string]bool // IDs that return 404 from the add-key endpoint
-	CreateSnapshotStatusCode int             // override for POST /sidecar/snapshots
-	GetSnapshotStatusCode    int             // override for GET /sidecar/snapshots/:id
-	ListSnapshotsStatusCode  int             // override for GET /sidecar/snapshots
-	GetCommandStatusCode     int             // override for GET /sidecar/commands/:id
-	CreateOrgStatusCode      int             // override for POST /api/v2/organization
+	OutdatedIDs              map[string]bool // IDs that return an out-of-date 410 from the add-key endpoint
+	StaleAfterAddKey         map[string]int  // successful add-key calls allowed before an ID returns 404
+	addKeyCalls              map[string]int
+	CreateSnapshotStatusCode int // override for POST /sidecar/snapshots
+	GetSnapshotStatusCode    int // override for GET /sidecar/snapshots/:id
+	ListSnapshotsStatusCode  int // override for GET /sidecar/snapshots
+	GetCommandStatusCode     int // override for GET /sidecar/commands/:id
+	CreateOrgStatusCode      int // override for POST /api/v2/organization
 
 	// ExtraHeaders are added to every response. Use to inject Deprecation/Sunset
 	// headers without changing individual handler logic.
@@ -364,10 +367,20 @@ func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {
 	if !f.requireToken(c) {
 		return
 	}
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	if f.StaleIDs[c.Param("id")] {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := c.Param("id")
+	if f.addKeyCalls == nil {
+		f.addKeyCalls = make(map[string]int)
+	}
+	call := f.addKeyCalls[id]
+	f.addKeyCalls[id] = call + 1
+	if f.StaleIDs[id] || (f.StaleAfterAddKey[id] > 0 && call >= f.StaleAfterAddKey[id]) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "sidecar not found"})
+		return
+	}
+	if f.OutdatedIDs[id] {
+		c.JSON(http.StatusGone, gin.H{"message": "This sidecar is out of date, recreate it"})
 		return
 	}
 	if f.AddKeyStatusCode != 0 {

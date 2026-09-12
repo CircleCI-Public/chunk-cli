@@ -92,7 +92,7 @@ func SyncEphemeral(ctx context.Context,
 }
 
 // syncTo backs Sync and SyncEphemeral. persist controls whether the resolved
-// workspace is read from and written back to the active-sidecar file.
+// workspace is read from and written back to active-pool state.
 func syncTo(ctx context.Context, client *circleci.Client,
 	sidecarID, identityFile, authSock, workdir string, persist bool, status iostream.StatusFunc) error {
 
