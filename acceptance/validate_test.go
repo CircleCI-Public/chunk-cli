@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -568,7 +569,26 @@ func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, string(data), "local")
 	execReqs := filterByPath(cci.Recorder.AllRequests(), "/api/v3/sidecar/instances/sidecar-new-1/exec")
-	assert.Equal(t, len(execReqs), 1, "only the unspecified remote command should use the sidecar")
+	assert.Equal(t, len(execReqs), 2, "expected a workspace probe and the unspecified remote command")
+
+	var probes, remoteCommands int
+	for _, req := range execReqs {
+		var body circleci.ExecRequest
+		assert.NilError(t, json.Unmarshal(req.Body, &body))
+		assert.Equal(t, body.Command, "sh")
+		assert.Equal(t, len(body.Args), 2)
+
+		script := body.Args[1]
+		assert.Assert(t, !strings.Contains(script, "printf local"), "local command submitted to sidecar: %s", script)
+		if strings.HasPrefix(script, "test -d ") {
+			probes++
+		}
+		if strings.HasSuffix(script, " && true") {
+			remoteCommands++
+		}
+	}
+	assert.Equal(t, probes, 1, "expected one workspace readiness probe")
+	assert.Equal(t, remoteCommands, 1, "expected one remote validation command")
 }
 
 // writeRemoteProjectConfig writes a config with a single remote command.
