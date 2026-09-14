@@ -340,7 +340,7 @@ func TestSaveActivePrunesRekeyedStateFiles(t *testing.T) {
 	assert.NilError(t, err)
 }
 
-func TestSaveActivePrunesRekeyedStateFilesForAnyGroupMember(t *testing.T) {
+func TestSaveActivePrunesRekeyedStateFilesForAnyPoolMember(t *testing.T) {
 	setupXDGData(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -431,7 +431,7 @@ func TestClearActiveByOrgReportsRemovalFailures(t *testing.T) {
 	assert.Assert(t, err != nil, "failure to remove state must surface as an error")
 	assert.Equal(t, removed, 1, "the sweep must continue past a failing project")
 }
-func TestRemoveActiveSidecar_PreservesRemainingGroup(t *testing.T) {
+func TestRemoveActiveSidecar_PreservesRemainingPool(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	setupXDGData(t)

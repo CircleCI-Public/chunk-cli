@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
@@ -408,9 +409,12 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 
 	reqs := cci.Recorder.AllRequests()
 
-	// AddSSHKey must be called — proves SSH path was taken.
+	// Pool setup probes the requested sidecar for staleness, then bundle sync
+	// opens the real SSH session. Both must target the explicit ID.
 	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-123/ssh/add-key")
-	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request; got: %v", reqs)
+	assert.Equal(t, len(addKeyReqs), 2, "expected a stale probe and BundleSync add-key request; got: %v", reqs)
+	createReqs := filterByPath(reqs, "/api/v3/sidecar/instances")
+	assert.Equal(t, len(createReqs), 0, "explicit target must not create another sidecar; got: %v", reqs)
 
 	// HTTP exec must NOT be called — SSH is used instead.
 	execReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-123/exec")
@@ -539,6 +543,54 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
 }
 
+func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	chunkDir := filepath.Join(workDir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	cfg := `{"commands":[{"name":"remote","run":"true"},{"name":"local","run":"printf local > local-result","local":true}]}`
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
+	result := binary.RunCLI(t, []string{"validate", "--identity-file", keyFile}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	data, err := os.ReadFile(filepath.Join(workDir, "local-result"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), "local")
+	execReqs := filterByPath(cci.Recorder.AllRequests(), "/api/v3/sidecar/instances/sidecar-new-1/exec")
+	assert.Equal(t, len(execReqs), 2, "expected a workspace probe and the unspecified remote command")
+
+	var probes, remoteCommands int
+	for _, req := range execReqs {
+		var body circleci.ExecRequest
+		assert.NilError(t, json.Unmarshal(req.Body, &body))
+		assert.Equal(t, body.Command, "sh")
+		assert.Equal(t, len(body.Args), 2)
+
+		script := body.Args[1]
+		assert.Assert(t, !strings.Contains(script, "printf local"), "local command submitted to sidecar: %s", script)
+		if strings.HasPrefix(script, "test -d ") {
+			probes++
+		}
+		if strings.HasSuffix(script, " && true") {
+			remoteCommands++
+		}
+	}
+	assert.Equal(t, probes, 1, "expected one workspace readiness probe")
+	assert.Equal(t, remoteCommands, 1, "expected one remote validation command")
+}
+
 // writeRemoteProjectConfig writes a config with a single remote command.
 func writeRemoteProjectConfig(t *testing.T, workDir string) {
 	t.Helper()
@@ -616,7 +668,7 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure; stderr: %s", result.Stderr)
 	// Sync status messages must reach stderr — proves setup output is not silently dropped.
-	assert.Assert(t, strings.Contains(result.Stderr, "Syncing workspace"),
+	assert.Assert(t, strings.Contains(result.Stderr, "Bundle ready"),
 		"expected sync attempt in stderr; got: %s", result.Stderr)
 }
 

@@ -12,13 +12,16 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
-// ActiveSidecar holds the currently active sidecar(s) for a project. A single
-// sidecar is just a group of length one, so every consumer works with the same
+var activeReplacementMu sync.Mutex
+
+// ActiveSidecar holds the currently active sidecar pool for a project. A single
+// sidecar is a pool of one, so every consumer works with the same
 // SidecarIDs slice regardless of how many sidecars are in play.
 type ActiveSidecar struct {
 	SidecarIDs []string `json:"sidecar_ids,omitempty"`
@@ -31,7 +34,7 @@ type ActiveSidecar struct {
 	Workspace string `json:"workspace,omitempty"`
 }
 
-// ID returns the primary sidecar ID (the first in the group), or "" when no
+// ID returns the primary sidecar ID (the first in the pool), or "" when no
 // sidecar is set.
 func (a *ActiveSidecar) ID() string {
 	if a == nil || len(a.SidecarIDs) == 0 {
@@ -40,7 +43,7 @@ func (a *ActiveSidecar) ID() string {
 	return a.SidecarIDs[0]
 }
 
-// UnmarshalJSON reads active-sidecar state, folding the legacy single-valued
+// UnmarshalJSON reads active-pool state, folding the legacy single-valued
 // "sidecar_id" field into SidecarIDs so state files written by older versions
 // keep working.
 func (a *ActiveSidecar) UnmarshalJSON(data []byte) error {
@@ -173,7 +176,7 @@ func SaveActiveTo(ctx context.Context, dir string, a ActiveSidecar) error {
 }
 
 // pruneRekeyedState removes state files other than keep that name any of the
-// sidecarIDs in the active group.
+// sidecarIDs in the active pool.
 //
 // A sidecar is re-keyed under the current session and branch when it is adopted,
 // or when the same session switches branch. Without this the file it came from
@@ -332,7 +335,7 @@ func ClearActiveByOrg(orgID string) (int, error) {
 	return removed, errors.Join(errs...)
 }
 
-// RemoveActiveSidecar removes sidecarID from the active sidecar group. If the
+// RemoveActiveSidecar removes sidecarID from the active sidecar pool. If the
 // removed sidecar was the last remaining member, the active state file is
 // cleared entirely. Returns true when the active state changed.
 func RemoveActiveSidecar(ctx context.Context, sidecarID string) (bool, error) {
@@ -353,6 +356,36 @@ func RemoveActiveSidecar(ctx context.Context, sidecarID string) (bool, error) {
 
 	active.SidecarIDs = filtered
 	return true, SaveActive(ctx, *active)
+}
+
+// replaceActiveSidecars updates IDs that belong to the active pool while
+// leaving unrelated explicit targets and active-state metadata untouched.
+func replaceActiveSidecars(ctx context.Context, replacements map[string]string) error {
+	if len(replacements) == 0 {
+		return nil
+	}
+	activeReplacementMu.Lock()
+	defer activeReplacementMu.Unlock()
+
+	active, err := LoadActive(ctx)
+	if err != nil || active == nil {
+		return err
+	}
+
+	ids := slices.Clone(active.SidecarIDs)
+	changed := false
+	for i, id := range ids {
+		if replacement, ok := replacements[id]; ok && replacement != id {
+			ids[i] = replacement
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+
+	active.SidecarIDs = ids
+	return SaveActive(ctx, *active)
 }
 
 // ClearActiveFrom removes the active sidecar state file in dir.

@@ -133,12 +133,13 @@ var roleSpec = map[string]struct {
 	name    string
 	role    string
 	timeout int
+	local   bool
 }{
-	roleInstall:     {config.CmdInstall, "", 0},
-	roleTest:        {roleTest, config.RoleGate, 300},
-	roleLint:        {roleLint, config.RoleGate, 60},
-	roleFormatCheck: {roleFormatCheck, config.RoleGate, 30},
-	roleFormat:      {roleFormat, config.RoleAutofix, 30},
+	roleInstall:     {config.CmdInstall, "", 0, false},
+	roleTest:        {roleTest, config.RoleGate, 300, false},
+	roleLint:        {roleLint, config.RoleGate, 60, false},
+	roleFormatCheck: {roleFormatCheck, config.RoleGate, 30, false},
+	roleFormat:      {roleFormat, config.RoleAutofix, 30, true},
 }
 
 // emitOrder is the order commands are written to .chunk/config.json.
@@ -193,6 +194,7 @@ func commandsFromCI(workDir string) Detection {
 			Run:     candidateRun(c),
 			Role:    spec.role,
 			Timeout: spec.timeout,
+			Local:   spec.local,
 		}
 	}
 

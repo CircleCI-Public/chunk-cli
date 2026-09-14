@@ -201,7 +201,7 @@ in `config.Resolve` and makes clients testable.
 | `CLAUDE_PROJECT_DIR` | settings | IDE-provided project directory used by generated `PreToolUse` hooks |
 | `CLAUDE_WORKING_DIR` | validate | Active worktree directory (Stop hook context) |
 | `CHUNK_HOOKS_DISABLED` | validate, hook | Disable Stop-hook validation when set (any non-empty value) |
-| `CLAUDE_CODE_SESSION_ID` | session, sidecar | Which agent session is running the command, so parallel sessions in one working tree get their own sidecar |
+| `CLAUDE_CODE_SESSION_ID` | session, sidecar | Which agent session is running the command, so parallel sessions in one working tree get their own sidecar pool |
 | `CHUNK_SESSION_ID` | session, sidecar | Pins that session identity by hand; wins over `CLAUDE_CODE_SESSION_ID` |
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |

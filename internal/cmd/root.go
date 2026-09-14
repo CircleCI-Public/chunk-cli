@@ -75,7 +75,7 @@ Environment Variables:
   ANTHROPIC_BASE_URL              Anthropic API URL [default: https://api.anthropic.com]
   GITHUB_API_URL                  GitHub API URL [default: https://api.github.com]
   SSH_AUTH_SOCK                   SSH agent socket for sidecar key auth
-  CHUNK_SESSION_ID                Agent session identity; keeps parallel sessions on separate sidecars
+  CHUNK_SESSION_ID                Agent session identity; keeps parallel sessions on separate sidecar pools
                                   (read from CLAUDE_CODE_SESSION_ID when unset)
   NO_COLOR                        Disable colored output
   CI                              Disable interactive prompts (set by most CI systems); also disables telemetry

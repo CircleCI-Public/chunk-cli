@@ -190,7 +190,7 @@ func commandsFromFilenames(workDir string, has map[string]bool) []config.Command
 			return []config.Command{
 				{Name: "test", Run: "task test", Role: config.RoleGate, Timeout: 300},
 				{Name: "lint", Run: "task lint", Role: config.RoleGate, Timeout: 60},
-				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Timeout: 30},
+				{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Timeout: 30, Local: true},
 			}
 		}
 		return []config.Command{
@@ -212,7 +212,7 @@ func commandsFromFilenames(workDir string, has map[string]bool) []config.Command
 		return []config.Command{
 			{Name: "test", Run: "go test ./...", Role: config.RoleGate, Timeout: 300},
 			{Name: "lint", Run: "golangci-lint run ./...", Role: config.RoleGate, Timeout: 60},
-			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Timeout: 30},
+			{Name: "format", Run: "gofmt -w .", Role: config.RoleAutofix, Timeout: 30, Local: true},
 		}
 
 	case has["Cargo.toml"]:

@@ -235,6 +235,7 @@ func TestInitDetectsTaskfileGoCommands(t *testing.T) {
 	format := commandByName(cfg, "format")
 	assert.Assert(t, format != nil, "expected format command")
 	assert.Equal(t, format["run"], "task fmt")
+	assert.Equal(t, format["local"], true)
 
 	assert.Assert(t, commandByName(cfg, "test-changed") == nil, "test-changed should not be detected")
 }
@@ -290,6 +291,7 @@ func TestInitDetectsGoModOnlyCommands(t *testing.T) {
 	format := commandByName(cfg, "format")
 	assert.Assert(t, format != nil, "expected format command")
 	assert.Equal(t, format["run"], "gofmt -w .")
+	assert.Equal(t, format["local"], true)
 }
 
 func TestInitDetectsCargoCommands(t *testing.T) {
