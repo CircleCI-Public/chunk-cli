@@ -19,56 +19,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
-func TestRemoteCommandLabel(t *testing.T) {
-	tests := []struct {
-		name   string
-		script string
-		want   string
-	}{
-		{
-			// The shape newExecFn actually builds.
-			name:   "strips the workspace cd",
-			script: "cd '/home/user/repo' && go test ./...",
-			want:   "go test ./...",
-		},
-		{
-			name:   "keeps later && intact",
-			script: "cd '/home/user/repo' && go build ./... && go test ./...",
-			want:   "go build ./... && go test ./...",
-		},
-		{
-			// WorkspaceExists probes with a bare test, no cd.
-			name:   "script without a cd is used whole",
-			script: "test -d '/home/user/repo'",
-			want:   "test -d '/home/user/repo'",
-		},
-		{
-			name:   "multi-line script is titled by its first line",
-			script: "cd '/repo' && set -e\ngo vet ./...\ngo test ./...",
-			want:   "set -e",
-		},
-		{
-			name:   "empty script stays empty",
-			script: "",
-			want:   "",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := remoteCommandLabel(tt.script)
-			assert.Check(t, cmp.Equal(got, tt.want))
-		})
-	}
-}
-
-func TestRemoteCommandLabelIsBounded(t *testing.T) {
-	// A label is a pane header, so an enormous generated script must not become
-	// one. The output is shown in full regardless.
-	long := strings.Repeat("x", 500)
-	got := remoteCommandLabel("cd '/repo' && " + long)
-	assert.Check(t, len(got) <= 120, "label should be capped, got %d chars", len(got))
-}
-
 func TestReportExitCode(t *testing.T) {
 	// Reading succeeded in every one of these cases, so none of them is an error:
 	// making `logs` fail because the command it reports on failed would leave the

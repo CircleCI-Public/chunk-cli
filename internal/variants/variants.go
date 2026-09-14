@@ -17,7 +17,7 @@ import (
 )
 
 // namePrefix marks every sidecar this package creates. Variant sidecars are
-// deliberately absent from the active-sidecar file, so the reaper in
+// deliberately absent from active-pool state, so the reaper in
 // internal/sidecar cannot see them; the prefix is what makes them findable by
 // SweepOrphans instead.
 const namePrefix = "variant-"
@@ -94,7 +94,7 @@ type Options struct {
 	AuthSock     string
 	Workspace    string // remote working directory, must be non-empty
 	CWD          string // local source directory to sync from
-	Parallel     int    // max concurrent sidecars (default 5)
+	Parallel     int    // maximum temporary pool capacity (default 5)
 	Commands     []Command
 	StatusFn     iostream.StatusFunc
 }

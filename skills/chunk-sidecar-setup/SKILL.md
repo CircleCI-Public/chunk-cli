@@ -290,7 +290,7 @@ Create the snapshot:
 chunk sidecar snapshot create --name <snapshot-name>
 ```
 
-Note the snapshot ID from the output. The source sidecar is automatically deleted after a successful snapshot — that is expected behavior. Local active-sidecar state is also cleared; `chunk sidecar current` will return empty until you launch from the snapshot in Stage 9.
+Note the snapshot ID from the output. The source sidecar is automatically deleted after a successful snapshot — that is expected behavior. The member is also removed from local active-pool state; `chunk sidecar current` will return empty if that leaves the pool empty, until you launch from the snapshot in Stage 9.
 
 Persist the snapshot ID:
 

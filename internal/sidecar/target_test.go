@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -47,4 +48,33 @@ func TestTargetExecRunnerReturnsAndStreamsOutput(t *testing.T) {
 	assert.Equal(t, stdout, "output\n")
 	assert.Equal(t, stderr, "warning\n")
 	assert.Equal(t, exitCode, 3)
+}
+
+func TestTargetExecRunnerReportsSubmissionBeforeStreaming(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-1"}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	var commandID string
+	outputRequestedAtSubmission := false
+	target := sidecar.Target{
+		Client:    newClient(t, srv.URL),
+		SidecarID: "sb-1",
+		Workdir:   "/workspace/repo",
+		OnSubmitted: func(id string) {
+			commandID = id
+			for _, request := range cci.Recorder.AllRequests() {
+				if strings.HasSuffix(request.URL.Path, "/output") {
+					outputRequestedAtSubmission = true
+				}
+			}
+		},
+	}
+	runner, _, err := target.ExecRunner(context.Background(), t.TempDir(), nil, iostream.Streams{})
+	assert.NilError(t, err)
+	_, _, _, err = runner(context.Background(), "true")
+	assert.NilError(t, err)
+	assert.Equal(t, commandID, "cmd-1")
+	assert.Assert(t, !outputRequestedAtSubmission, "submission callback must run before output streaming")
 }

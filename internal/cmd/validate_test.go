@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -40,10 +41,7 @@ func runValidateHook(t *testing.T, workDir string) (stdout, stderr string, err e
 	root.SetOut(&outBuf)
 	root.SetErr(&errBuf)
 	root.SetIn(strings.NewReader(hookPayload))
-	// Prepend --insecure-storage so the hook resolves credentials from the
-	// config file, never the developer's keychain. This goes through the real
-	// root command, so the flag has to arrive as an argument.
-	root.SetArgs([]string{"--insecure-storage", "validate", "--project", workDir})
+	root.SetArgs([]string{"validate", "--project", workDir})
 	err = root.Execute()
 	return outBuf.String(), errBuf.String(), err
 }
@@ -102,9 +100,8 @@ func TestValidateHookExitsOneWhenCircleCITokenMissingAndSidecarImage(t *testing.
 		"expected auth message in stderr, got: %q", stderr)
 }
 
-// TestValidateHookRequiresAuthByDefault verifies that hook invocations now
-// always require CircleCI auth — even when no commands are explicitly marked
-// Remote:true — because remote is the default execution mode.
+// TestValidateHookRequiresAuthByDefault verifies that hook invocations always
+// require CircleCI auth, even when no commands are explicitly marked remote.
 func TestValidateHookRequiresAuthByDefault(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")
@@ -125,25 +122,64 @@ func TestValidateHookRequiresAuthByDefault(t *testing.T) {
 		"auth check must fire because remote is the default, stderr: %q", stderr)
 }
 
-func TestValidateNeedsSidecarSidecarImage(t *testing.T) {
-	cfg := &config.ProjectConfig{
-		Validation: &config.ValidationConfig{SidecarImage: "my-snapshot-abc123"},
-	}
-	got := validateNeedsSidecar(false, cfg)
-	assert.Assert(t, got, "expected validateNeedsSidecar=true with sidecarImage configured")
-}
-
-func TestHostForwardEnv(t *testing.T) {
+func TestRemoteExecEnv(t *testing.T) {
 	t.Run("returns nil when token is empty", func(t *testing.T) {
-		assert.Assert(t, hostForwardEnv("") == nil)
+		assert.Assert(t, remoteExecEnv("", nil) == nil)
 	})
 
 	t.Run("forwards token as CIRCLE_TOKEN", func(t *testing.T) {
-		env := hostForwardEnv("abc123")
+		env := remoteExecEnv("abc123", nil)
 		assert.Equal(t, env[config.EnvCircleToken], "abc123")
 		_, hasAlias := env[config.EnvCircleCIToken]
 		assert.Assert(t, !hasAlias)
 	})
+
+	t.Run("merges explicit env vars", func(t *testing.T) {
+		env := remoteExecEnv("abc123", map[string]string{"FOO": "bar"})
+		assert.Equal(t, env[config.EnvCircleToken], "abc123")
+		assert.Equal(t, env["FOO"], "bar")
+	})
+}
+
+func TestRunValidationPlanLocalOnlyDoesNotRequirePool(t *testing.T) {
+	workDir := t.TempDir()
+	plan := validate.Plan{
+		LocalCommands: []config.Command{{Name: "test", Run: "printf ran > result"}},
+	}
+
+	result, err := runValidationPlan(
+		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, nil, nil,
+		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	assert.NilError(t, err)
+	assert.Equal(t, result.Passed, 1)
+	assert.Equal(t, result.Total, 1)
+	data, err := os.ReadFile(filepath.Join(workDir, "result"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), "ran")
+}
+
+func TestRunValidationPlanRemoteRequiresPool(t *testing.T) {
+	plan := validate.Plan{
+		RemoteCommands: []config.Command{{Name: "test", Run: "true"}},
+		PoolSize:       1,
+	}
+
+	result, err := runValidationPlan(
+		context.Background(), nil, plan, config.ResolvedConfig{}, t.TempDir(), nil, nil,
+		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	assert.Equal(t, result, validate.Result{})
+	assert.ErrorContains(t, err, "requires a sidecar pool")
+}
+
+func TestValidationRepoPath(t *testing.T) {
+	active := &sidecar.ActiveSidecar{Workspace: "/saved/workspace"}
+	assert.Equal(t, validationRepoPath("/explicit/workspace", active), "/explicit/workspace")
+	assert.Equal(t, validationRepoPath("", active), "/saved/workspace")
+	assert.Equal(t, validationRepoPath("", nil), "")
 }
 
 func TestOpenAPIExecPassesEnvVars(t *testing.T) {
@@ -163,7 +199,8 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
-	execFn, _, err := newExecFn(context.Background(), client, "sidecar-123", "", t.TempDir(), envVars, config.ResolvedConfig{}, nil, streams)
+	target := sidecar.Target{Client: client, SidecarID: "sidecar-123", Workdir: "/workspace"}
+	execFn, _, err := target.ExecRunner(context.Background(), ".", remoteExecEnv("", envVars), streams)
 	assert.NilError(t, err)
 
 	_, _, _, err = execFn(context.Background(), "echo hello")
@@ -332,6 +369,58 @@ func TestValidateLocalRunRegistersProjectForTheDaemon(t *testing.T) {
 	assert.Equal(t, total, 1)
 }
 
+func TestPlanValidationRemoteFlagOverridesLocalConfig(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{
+		{Name: "format", Run: "task fmt", Local: true},
+	}}
+
+	plan := planValidationExecution(cfg, &validateOpts{remote: true}, "")
+
+	assert.Equal(t, len(plan.LocalCommands), 0)
+	assert.DeepEqual(t, plan.RemoteCommands, cfg.Commands)
+	assert.Equal(t, plan.PoolSize, 1)
+}
+
+func TestValidateExplicitLocalCommandNeedsNoSidecar(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "format", Run: "echo ran-locally", Local: true}},
+	}))
+
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--project", dir})
+	err := root.Execute()
+
+	assert.NilError(t, err)
+	combined := outBuf.String() + errBuf.String()
+	assert.Assert(t, strings.Contains(combined, "ran-locally"), "explicit local command did not run locally: %q", combined)
+}
+
+func TestValidateRejectsConflictingCommandPlacement(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	chunkDir := filepath.Join(dir, ".chunk")
+	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(`{"commands":[{"name":"test","run":"true","local":true,"remote":true}]}`), 0o644))
+
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--project", dir})
+	err := root.Execute()
+
+	assert.Assert(t, err != nil)
+	assert.ErrorContains(t, err, `command "test" cannot be both local and remote`)
+}
+
 func TestValidateEnvFlagBadValue(t *testing.T) {
 	isolateConfig(t)
 	dir := t.TempDir()
@@ -345,7 +434,7 @@ func TestValidateEnvFlagBadValue(t *testing.T) {
 		0o644,
 	))
 
-	cmd := insecureStorageCmd(newValidateCmd())
+	cmd := newValidateCmd()
 	cmd.SetOut(os.Stderr)
 	cmd.SetErr(os.Stderr)
 	cmd.SetArgs([]string{"--project", dir, "--env", "BADVALUE"})
@@ -851,7 +940,7 @@ func TestValidateMarkRemoteSkipsAutofix(t *testing.T) {
 	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
 		Commands: []config.Command{
 			{Name: "test", Run: "task test", Role: config.RoleGate},
-			{Name: "format", Run: "task fmt", Role: config.RoleAutofix},
+			{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Local: true},
 		},
 	}))
 
@@ -871,6 +960,20 @@ func TestValidateMarkRemoteSkipsAutofix(t *testing.T) {
 	cfg, err = config.LoadProjectConfig(dir)
 	assert.NilError(t, err)
 	assert.Assert(t, cfg.FindCommand("format").Remote)
+	assert.Assert(t, !cfg.FindCommand("format").Local)
+}
+
+func TestValidateMarkRemoteDoesNotCallUnspecifiedAutofixLocal(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "format", Run: "task fmt", Role: config.RoleAutofix}},
+	}))
+
+	_, stderr, err := runMarkRemoteCLI(t, dir)
+
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(stderr, "left local"), "unspecified commands default remote: %q", stderr)
 }
 
 // --list has to show what the skills tell agents to inspect before marking.
@@ -880,7 +983,7 @@ func TestValidateListShowsRoutingAndRole(t *testing.T) {
 	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
 		Commands: []config.Command{
 			{Name: "test", Run: "task test", Role: config.RoleGate, Remote: true},
-			{Name: "format", Run: "task fmt", Role: config.RoleAutofix},
+			{Name: "format", Run: "task fmt", Role: config.RoleAutofix, Local: true},
 			{Name: "bare", Run: "echo hi"},
 		},
 	}))
@@ -888,7 +991,7 @@ func TestValidateListShowsRoutingAndRole(t *testing.T) {
 	stdout, stderr, err := runValidateListCLI(t, dir)
 	assert.NilError(t, err)
 	out := stdout + stderr
-	for _, want := range []string{"test [remote, gate]", "format [local, autofix]", "bare [local]"} {
+	for _, want := range []string{"test [remote, gate]", "format [local, autofix]", "bare [remote]"} {
 		assert.Assert(t, strings.Contains(out, want), "missing %q in:\n%s", want, out)
 	}
 }
@@ -917,4 +1020,43 @@ func TestFailBeforeRunClosesTheRun(t *testing.T) {
 	assert.Assert(t, ok)
 	assert.Equal(t, passed, 0)
 	assert.Equal(t, total, 0)
+}
+
+func TestFinishValidateFinalizesEventLog(t *testing.T) {
+	tests := []struct {
+		name      string
+		execErr   error
+		wantLevel string
+	}{
+		{name: "success", wantLevel: "done"},
+		{name: "failure", execErr: errors.New("test failed"), wantLevel: "error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, err := eventlog.Open(t.TempDir())
+			assert.NilError(t, err)
+			recorder := log.Recorder(func(iostream.Level, string) {}, eventlog.OpValidate, "sb-1", "sidecar", "main")
+			result := validate.Result{Passed: 1, Total: 2}
+
+			err = finishValidate(
+				&cobra.Command{}, nil, tt.execErr, time.Now(), &config.ProjectConfig{}, result,
+				recorder, recorder.Status, iostream.Streams{Out: io.Discard, Err: io.Discard}, nil,
+			)
+			if tt.execErr == nil {
+				assert.NilError(t, err)
+			} else {
+				assert.ErrorIs(t, err, tt.execErr)
+			}
+
+			events, err := log.Recent(10)
+			assert.NilError(t, err)
+			assert.Equal(t, len(events), 1)
+			assert.Equal(t, events[0].Level, tt.wantLevel)
+			passed, total, final := events[0].Outcome()
+			assert.Assert(t, final)
+			assert.Equal(t, passed, result.Passed)
+			assert.Equal(t, total, result.Total)
+		})
+	}
 }

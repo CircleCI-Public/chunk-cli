@@ -116,7 +116,7 @@ Commands are defined in the project config:
 ```json
 {
   "commands": [
-    {"name": "format", "run": "task fmt", "timeout": 30},
+    {"name": "format", "run": "task fmt", "timeout": 30, "local": true},
     {"name": "lint", "run": "task lint", "timeout": 60},
     {"name": "test", "run": "task test", "timeout": 300}
   ],

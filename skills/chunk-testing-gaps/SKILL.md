@@ -128,7 +128,7 @@ It prints a JSON array, one entry per variant:
 
 `killed` and `error` are mutually exclusive, and an inconclusive variant is neither a kill nor a survivor. **Never record an inconclusive variant as either.** Counting one as killed is the worst outcome available here: it converts a broken run into a clean bill of health.
 
-Raise `--parallel` for a faster run at higher concurrent cost; lower it if the org hits sidecar limits. Use `--name <command>` to run a single validate command instead of every remote one. `--timeout <seconds>` bounds each command for variants whose mutation makes the suite hang; a command's own `timeout` in `.chunk/config.json` takes precedence.
+Raise `--parallel` for a larger temporary pool and faster run at higher concurrent cost; lower it if the org hits sidecar limits. Use `--name <command>` to run a single validate command instead of every remote one. `--timeout <seconds>` bounds each command for variants whose mutation makes the suite hang; a command's own `timeout` in `.chunk/config.json` takes precedence.
 
 Prefer a command that runs the whole suite. Template variables like `{{CHANGED_PACKAGES}}` expand against your *local* working tree before the command is sent, and the mutation exists only on the sidecar — so a changed-packages command can skip the very package it is meant to be testing and report a false survivor.
 

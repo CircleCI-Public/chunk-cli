@@ -31,14 +31,14 @@ import (
 func submitAndStream(
 	ctx context.Context, client *circleci.Client, sidecarID string,
 	reg *watchd.CommandReg, command string, args []string,
-	env map[string]string, onOutput circleci.OutputFn,
+	onOutput circleci.OutputFn,
 ) (*circleci.ExecResponse, error) {
 	// Both phases are wrapped so a failure says which one it was. They fail for
 	// different reasons and are worth telling apart: a rejected submission means
 	// the command never ran, while a broken stream means it may well be running
 	// still. The API op ("exec") is already in the wrapped error, so the phase
 	// alone is enough here.
-	commandID, err := client.SubmitExec(ctx, sidecarID, command, args, env)
+	commandID, err := client.SubmitExec(ctx, sidecarID, command, args, nil)
 	if err != nil {
 		return nil, fmt.Errorf("submit: %w", err)
 	}
