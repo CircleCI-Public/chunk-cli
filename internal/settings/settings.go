@@ -49,7 +49,7 @@ func Build(commands []config.Command) ([]byte, error) {
 		hooks = append(hooks, hookEntry{
 			Type:    "command",
 			If:      CommitIfFilter,
-			Command: fmt.Sprintf("cd ${CLAUDE_PROJECT_DIR:-.} && %s", cmd.Run),
+			Command: fmt.Sprintf("cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate %s", cmd.Name),
 			Timeout: timeout,
 		})
 	}
@@ -120,7 +120,7 @@ func BuildCodex(commands []config.Command) ([]byte, error) {
 		hooks = append(hooks, hookEntry{
 			Type:    "command",
 			If:      CommitIfFilter,
-			Command: cmd.Run,
+			Command: fmt.Sprintf("chunk validate %s", cmd.Name),
 			Timeout: timeout,
 		})
 	}

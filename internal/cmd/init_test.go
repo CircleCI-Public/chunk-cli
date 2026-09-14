@@ -126,8 +126,8 @@ func TestWriteSettingsExistingMergeApplied(t *testing.T) {
 
 	commitCommands := mergedHookCommands(hooks["PreToolUse"])
 	assert.Assert(t, slices.ContainsFunc(commitCommands, func(c string) bool {
-		return strings.Contains(c, "go test ./...")
-	}), "expected the commit hook to run the configured command, got: %v", commitCommands)
+		return strings.Contains(c, "chunk validate test")
+	}), "expected the commit hook to call chunk validate <name>, got: %v", commitCommands)
 
 	stopCommands := mergedHookCommands(hooks["Stop"])
 	assert.DeepEqual(t, stopCommands, []string{settings.StopCommand})

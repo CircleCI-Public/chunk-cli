@@ -613,7 +613,7 @@ func TestMergeCodexMinimalExisting(t *testing.T) {
 	existing := []byte(`{}`)
 	generated := []byte(`{
 		"hooks": {
-			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "go test ./...", "timeout": 60}]}],
+			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "chunk validate test", "timeout": 60}]}],
 			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 90}]}]
 		}
 	}`)
@@ -799,7 +799,7 @@ func TestMergeCodexPreservesUserEntriesInChunkStopGroup(t *testing.T) {
 func TestMergeCodexNoChangeWhenAlreadyMerged(t *testing.T) {
 	data := []byte(`{
 		"hooks": {
-			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "go test ./...", "timeout": 60}]}],
+			"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "if": "Bash(git commit*)", "command": "chunk validate test", "timeout": 60}]}],
 			"Stop": [{"hooks": [{"type": "command", "command": "chunk validate", "timeout": 90}]}]
 		}
 	}`)
