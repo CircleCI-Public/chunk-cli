@@ -203,7 +203,6 @@ func assemblePool(
 
 		headRef, err := bundleSyncFanOutSince(ctx, client, []string{seed.ID}, identityFile, authSock, repoPath, workDir, "", true, status)
 		if err != nil {
-			cleanCtx := context.Background()
 			_ = client.DeleteSidecar(cleanCtx, seed.ID)
 			return nil, fmt.Errorf("pool seed sync: %w", err)
 		}
@@ -214,7 +213,6 @@ func assemblePool(
 		} else {
 			snap, err := client.CreateSnapshot(ctx, seed.ID, fmt.Sprintf("%s-seed-%d", name, time.Now().UTC().UnixNano()))
 			if err != nil {
-				cleanCtx := context.Background()
 				_ = client.DeleteSidecar(cleanCtx, seed.ID)
 				return nil, fmt.Errorf("pool snapshot: %w", err)
 			}
@@ -251,17 +249,18 @@ func assemblePool(
 				}
 			}
 
-			cleanCtx := context.Background()
 			_ = client.DeleteSidecar(cleanCtx, seed.ID)
 			if len(errl) > 0 {
-				for _, id := range goodNew {
-					_ = client.DeleteSidecar(cleanCtx, id)
-				}
+				deleteSidecars(client, goodNew)
 				return nil, errors.Join(errl...)
 			}
 		}
 	}
-	replacements := pairReplacementIDs(staleIDs, goodNew)
+	replacements, err := pairReplacementIDs(staleIDs, goodNew)
+	if err != nil {
+		deleteSidecars(client, goodNew)
+		return nil, fmt.Errorf("pool replacements: %w", err)
+	}
 
 	allIDs := make([]string, 0, len(aliveExisting)+len(goodNew))
 	allIDs = append(allIDs, aliveExisting...)
@@ -293,10 +292,7 @@ func assemblePool(
 
 	if len(aliveExisting) == 0 {
 		if err := savePoolState(workDir, name, &poolState{SidecarIDs: allIDs, RepoPath: repoPath, Image: image, LastSyncedRef: lastSyncedRef}); err != nil {
-			cleanCtx := context.Background()
-			for _, id := range allIDs {
-				_ = client.DeleteSidecar(cleanCtx, id)
-			}
+			deleteSidecars(client, allIDs)
 			return nil, fmt.Errorf("pool state: %w", err)
 		}
 		if err := persistActiveReplacements(ctx, client, workDir, name, replacements, allIDs); err != nil {
@@ -308,17 +304,11 @@ func assemblePool(
 	status(iostream.LevelInfo, fmt.Sprintf("syncing to %d sidecars...", len(aliveExisting)))
 	prepared, err := prepareBundleSync(repoPath, workDir, lastSyncedRef, len(aliveExisting), status)
 	if err != nil {
-		cleanCtx := context.Background()
-		for _, id := range goodNew {
-			_ = client.DeleteSidecar(cleanCtx, id)
-		}
+		deleteSidecars(client, goodNew)
 		return nil, fmt.Errorf("pool sync: %w", err)
 	}
 	if err := savePoolState(workDir, name, &poolState{SidecarIDs: allIDs, RepoPath: repoPath, Image: image, LastSyncedRef: lastSyncedRef}); err != nil {
-		cleanCtx := context.Background()
-		for _, id := range goodNew {
-			_ = client.DeleteSidecar(cleanCtx, id)
-		}
+		deleteSidecars(client, goodNew)
 		return nil, fmt.Errorf("pool state: %w", err)
 	}
 	if err := persistActiveReplacements(ctx, client, workDir, name, replacements, goodNew); err != nil {
@@ -329,12 +319,22 @@ func assemblePool(
 	return pool, nil
 }
 
-func pairReplacementIDs(staleIDs, newIDs []string) map[string]string {
+func pairReplacementIDs(staleIDs, newIDs []string) (map[string]string, error) {
+	if len(newIDs) < len(staleIDs) {
+		return nil, fmt.Errorf("not enough new sidecars: need %d, got %d", len(staleIDs), len(newIDs))
+	}
 	replacements := make(map[string]string, len(staleIDs))
 	for i, id := range staleIDs {
 		replacements[id] = newIDs[i]
 	}
-	return replacements
+	return replacements, nil
+}
+
+func deleteSidecars(client *circleci.Client, ids []string) {
+	ctx := context.Background()
+	for _, id := range ids {
+		_ = client.DeleteSidecar(ctx, id)
+	}
 }
 
 func persistActiveReplacements(ctx context.Context, client *circleci.Client, workDir, name string, replacements map[string]string, cleanupIDs []string) error {

@@ -123,6 +123,23 @@ func TestPoolStateMarshalFormat(t *testing.T) {
 	assert.Assert(t, m["repo_path"] != nil)
 }
 
+func TestPairReplacementIDs(t *testing.T) {
+	t.Run("pairs stale IDs and permits capacity additions", func(t *testing.T) {
+		got, err := pairReplacementIDs([]string{"stale-1", "stale-2"}, []string{"new-1", "new-2", "new-3"})
+		assert.NilError(t, err)
+		assert.DeepEqual(t, got, map[string]string{
+			"stale-1": "new-1",
+			"stale-2": "new-2",
+		})
+	})
+
+	t.Run("rejects too few replacements", func(t *testing.T) {
+		got, err := pairReplacementIDs([]string{"stale-1", "stale-2"}, []string{"new-1"})
+		assert.Assert(t, got == nil)
+		assert.ErrorContains(t, err, "need 2, got 1")
+	})
+}
+
 type poolTestEnv struct {
 	cl      *circleci.Client
 	cci     *fakes.FakeCircleCI
