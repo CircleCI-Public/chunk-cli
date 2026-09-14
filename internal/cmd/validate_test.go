@@ -321,6 +321,27 @@ func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
 		"--local must execute commands locally even when Remote:true, got: %q", combined)
 }
 
+func TestPlanValidationRemoteFlagOverridesLocalConfig(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{
+		{Name: "format", Run: "task fmt", Local: true},
+	}}
+
+	plan := planValidationExecution(cfg, &validateOpts{remote: true}, "")
+
+	assert.Equal(t, len(plan.LocalCommands), 0)
+	assert.DeepEqual(t, plan.RemoteCommands, cfg.Commands)
+	assert.Equal(t, plan.PoolSize, 1)
+}
+
+func TestValidateRejectsRemoteAndLocalFlagsTogether(t *testing.T) {
+	root := newTestRootCmd()
+	root.SetArgs([]string{"validate", "--remote", "--local", "--cmd", "true", "--dry-run"})
+
+	err := root.Execute()
+
+	assert.ErrorContains(t, err, "if any flags in the group")
+}
+
 func TestValidateExplicitLocalCommandNeedsNoSidecar(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")
@@ -901,6 +922,19 @@ func TestValidateMarkRemoteSkipsAutofix(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, cfg.FindCommand("format").Remote)
 	assert.Assert(t, !cfg.FindCommand("format").Local)
+}
+
+func TestValidateMarkRemoteDoesNotCallUnspecifiedAutofixLocal(t *testing.T) {
+	isolateConfig(t)
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "format", Run: "task fmt", Role: config.RoleAutofix}},
+	}))
+
+	_, stderr, err := runMarkRemoteCLI(t, dir)
+
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(stderr, "left local"), "unspecified commands default remote: %q", stderr)
 }
 
 // --list has to show what the skills tell agents to inspect before marking.

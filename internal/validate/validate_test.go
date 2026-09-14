@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -421,6 +422,7 @@ func TestRunRemote(t *testing.T) {
 
 	t.Run("CHANGED_PACKAGES expanded before sending to remote", func(t *testing.T) {
 		var capturedScript string
+		var messages []string
 		execFn := func(_ context.Context, script string) (string, string, int, error) {
 			capturedScript = script
 			return "", "", 0, nil
@@ -431,8 +433,13 @@ func TestRunRemote(t *testing.T) {
 		}}
 		streams, _, _ := newStreams()
 
-		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), func(iostream.Level, string) {}, streams))
+		status := func(_ iostream.Level, message string) {
+			messages = append(messages, message)
+		}
+		assert.NilError(t, RunRemote(context.Background(), execFn, cfg, "", "/workspace", t.TempDir(), status, streams))
 		assert.Assert(t, !strings.Contains(capturedScript, "{{CHANGED_PACKAGES}}"), "expected template variable expanded before sending to remote, got: %s", capturedScript)
+		expanded := strings.TrimPrefix(capturedScript, "cd '/workspace' && ")
+		assert.Assert(t, slices.Contains(messages, "$ "+expanded), "expanded command missing from status: %v", messages)
 	})
 }
 

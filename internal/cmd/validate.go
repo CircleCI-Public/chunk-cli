@@ -113,7 +113,7 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 	var skipped []string
 	if name == "" {
 		for _, c := range cfg.Commands {
-			if c.Role == config.RoleAutofix && !c.Remote {
+			if c.Role == config.RoleAutofix && c.RunsLocally() {
 				skipped = append(skipped, c.Name)
 			}
 		}
@@ -136,8 +136,8 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 		return &userError{msg: "Could not save project configuration.", suggestion: configFilePermHint, err: err}
 	}
 
-	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Marked remote: %s", strings.Join(changed, ", "))))
-	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("now runs these on the sidecar"))
+	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Recorded remote placement: %s", strings.Join(changed, ", "))))
+	streams.ErrPrintf("  %-28s %s\n", ui.Cyan("chunk validate"), ui.Dim("runs these on the sidecar"))
 	reportSkippedAutofix(skipped, streams)
 	return nil
 }
@@ -195,8 +195,9 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.remote, "remote", false, "Run on active sidecar, or create one if none is set (default behavior)")
+	cmd.Flags().BoolVar(&opts.remote, "remote", false, "Run all selected commands on a sidecar, overriding local placement")
 	cmd.Flags().BoolVar(&opts.local, "local", false, "Run commands locally instead of on sidecar")
+	cmd.MarkFlagsMutuallyExclusive("remote", "local")
 	cmd.Flags().StringVar(&opts.sidecarID, "sidecar-id", "", "Sidecar ID for remote execution")
 	cmd.Flags().StringVar(&opts.orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&opts.identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
@@ -393,11 +394,6 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// Remote is the default; --local is the only opt-out.
-	if !opts.local {
-		opts.remote = true
-	}
-
 	// Hook: fail early when CircleCI auth is missing and remote commands need it.
 	// In non-hook context ensureCircleCIClient prompts interactively; hooks have
 	// no TTY so we surface a clear message here instead of a confusing fallback.
@@ -501,7 +497,10 @@ func planValidationExecution(cfg *config.ProjectConfig, opts *validateOpts, name
 	}
 
 	placement := validate.PlacementConfigured
-	if opts.local {
+	switch {
+	case opts.remote:
+		placement = validate.PlacementRemote
+	case opts.local:
 		placement = validate.PlacementLocal
 	}
 	return validate.PlanCommands(commands, placement, 1)

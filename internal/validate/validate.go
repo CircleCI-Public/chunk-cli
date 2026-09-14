@@ -185,6 +185,7 @@ func runRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 	maxWidth := commandutil.NameWidth(commands)
 	for i, c := range commands {
 		run := commandutil.ExpandCommand(localWorkDir, c.Run)
+		status(iostream.LevelInfo, "$ "+run)
 		script := "cd " + shellEscape(dest) + " && " + run
 		start := time.Now()
 		stdout, stderr, exitCode, err := execFn(ctx, script)
