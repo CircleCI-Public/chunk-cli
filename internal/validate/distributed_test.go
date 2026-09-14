@@ -89,31 +89,24 @@ func TestRunDistributedQueuesWorkAcrossWorkers(t *testing.T) {
 	}
 }
 
-func TestRunDistributedAggregatesFallbackAndErrors(t *testing.T) {
+func TestRunDistributedAggregatesErrors(t *testing.T) {
 	commandErr := errors.New("command failed")
-	unavailableErr := errors.New("worker unavailable")
-	commands := []config.Command{{Name: "pass"}, {Name: "fallback"}, {Name: "fail"}}
+	commands := []config.Command{{Name: "pass"}, {Name: "fail"}}
 
 	result := RunDistributed(context.Background(), commands, DistributedRunOptions[int]{
 		Parallelism: 1,
 		Acquire:     func(context.Context) (int, error) { return 1, nil },
 		Release:     func(int) {},
 		Run: func(_ context.Context, _ int, command config.Command, _ iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
-			switch command.Name {
-			case "pass":
+			if command.Name == "pass" {
 				return DistributedJobResult{Passed: 1}
-			case "fallback":
-				return DistributedJobResult{Fallback: true}
-			default:
-				return DistributedJobResult{Err: commandErr, UnavailableErr: unavailableErr}
 			}
+			return DistributedJobResult{Err: commandErr}
 		},
 	})
 
 	assert.Equal(t, result.Passed, 1)
-	assert.DeepEqual(t, result.FellBack, []config.Command{{Name: "fallback"}})
 	assert.ErrorContains(t, result.Err, commandErr.Error())
-	assert.ErrorContains(t, result.UnavailableErr, unavailableErr.Error())
 }
 
 func TestRunDistributedReportsAcquireFailure(t *testing.T) {
