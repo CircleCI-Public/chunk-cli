@@ -146,7 +146,7 @@ func TestRunValidationPlanLocalOnlyDoesNotRequirePool(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, "", nil, nil,
+		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -165,12 +165,19 @@ func TestRunValidationPlanRemoteRequiresPool(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, t.TempDir(), "", nil, nil,
+		context.Background(), nil, plan, config.ResolvedConfig{}, t.TempDir(), nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
 	assert.Equal(t, result, validate.Result{})
 	assert.ErrorContains(t, err, "requires a sidecar pool")
+}
+
+func TestValidationRepoPath(t *testing.T) {
+	active := &sidecar.ActiveSidecar{Workspace: "/saved/workspace"}
+	assert.Equal(t, validationRepoPath("/explicit/workspace", active), "/explicit/workspace")
+	assert.Equal(t, validationRepoPath("", active), "/saved/workspace")
+	assert.Equal(t, validationRepoPath("", nil), "")
 }
 
 func TestOpenAPIExecPassesEnvVars(t *testing.T) {

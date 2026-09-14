@@ -31,6 +31,7 @@ func TestPoolStateRoundTrip(t *testing.T) {
 	want := &poolState{
 		SidecarIDs:    []string{"sb-1", "sb-2", "sb-3"},
 		RepoPath:      "/home/user/myrepo",
+		Image:         "snapshot-1",
 		LastSyncedRef: "deadbeef",
 	}
 	assert.NilError(t, savePoolState(dir, "validate", want))
@@ -39,6 +40,7 @@ func TestPoolStateRoundTrip(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got.SidecarIDs, want.SidecarIDs)
 	assert.Equal(t, got.RepoPath, want.RepoPath)
+	assert.Equal(t, got.Image, want.Image)
 	assert.Equal(t, got.LastSyncedRef, want.LastSyncedRef)
 }
 
@@ -352,6 +354,49 @@ func TestAssemblePool_FreshExistingSkipsStaleProbe(t *testing.T) {
 	pool.Release(entry)
 
 	assert.Equal(t, countPoolRequests(env.cci, "POST", "/api/v3/sidecar/instances/fresh-sb-1/ssh/add-key"), 1)
+}
+
+func TestAssemblePool_FreshExistingRetriesProvisioningLag(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	env.cci.NotFoundBeforeAddKey = map[string]int{"fresh-sb-1": 1}
+
+	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "snapshot-1",
+		env.keyFile, "", DefaultWorkspace("my-repo"), env.workDir, []string{"fresh-sb-1"}, "", map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Equal(t, entry.ID, "fresh-sb-1")
+	assert.Equal(t, countPoolRequests(env.cci, "POST", "/api/v3/sidecar/instances/fresh-sb-1/ssh/add-key"), 2)
+	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 0)
+	assert.Equal(t, countPoolDeletes(env.cci), 0)
+}
+
+func TestNewPoolRestoresCreationContext(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	assert.NilError(t, savePoolState(env.workDir, "validate", &poolState{
+		SidecarIDs: []string{"existing-sb-1"},
+		RepoPath:   "/saved/workspace",
+		Image:      "snapshot-1",
+	}))
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:         1,
+		Name:         "validate",
+		OrgID:        "org-1",
+		IdentityFile: env.keyFile,
+		WorkDir:      env.workDir,
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Equal(t, pool.image, "snapshot-1")
+	assert.Equal(t, entry.RepoPath, "/saved/workspace")
 }
 
 func TestNewPoolUsesConfiguredRepoPath(t *testing.T) {

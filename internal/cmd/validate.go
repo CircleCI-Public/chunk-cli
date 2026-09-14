@@ -473,7 +473,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if err := saveInlineValidateCommand(workDir, name, opts.inlineCmd, opts.save, streams); err != nil {
 		execErr = err
 	} else {
-		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, opts.workdir, envVars, recorderCommandIDSetter(recorder), statusFn, streams)
+		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, envVars, recorderCommandIDSetter(recorder), statusFn, streams)
 	}
 	if execErr == nil && resultCache != nil {
 		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
@@ -547,10 +547,11 @@ func prepareValidationTarget(
 			}
 		}
 	} else {
-		created, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, streams)
+		created, resolvedImage, err := resolveOrCreateSidecarID(ctx, client, &opts.sidecarID, opts.orgID, image, workDir, tokenSource, streams)
 		if err != nil {
 			return nil, err
 		}
+		image = resolvedImage
 		activeSidecar, _ = sidecar.LoadActive(ctx)
 		if activeSidecar != nil {
 			existingIDs = append(existingIDs, activeSidecar.SidecarIDs...)
@@ -828,7 +829,7 @@ func runValidationPlan(
 	pool *sidecar.Pool,
 	plan validate.Plan,
 	rc config.ResolvedConfig,
-	localWorkDir, remoteWorkDir string,
+	localWorkDir string,
 	envVars map[string]string,
 	setCommandID func(string),
 	statusFn iostream.StatusFunc,
@@ -847,7 +848,7 @@ func runValidationPlan(
 				return "sidecar " + entry.ID
 			},
 			Run: func(ctx context.Context, entry *sidecar.PoolEntry, command config.Command, status iostream.StatusFunc, commandStreams iostream.Streams) validate.DistributedJobResult {
-				return runPooledValidateCommand(ctx, entry, command, rc.CircleCIToken, localWorkDir, remoteWorkDir, envVars, setCommandID, status, commandStreams)
+				return runPooledValidateCommand(ctx, entry, command, rc.CircleCIToken, localWorkDir, envVars, setCommandID, status, commandStreams)
 			},
 			Status:  statusFn,
 			Streams: streams,
@@ -878,19 +879,16 @@ func runPooledValidateCommand(
 	ctx context.Context,
 	entry *sidecar.PoolEntry,
 	command config.Command,
-	token, localWorkDir, remoteWorkDir string,
+	token, localWorkDir string,
 	envVars map[string]string,
 	setCommandID func(string),
 	statusFn iostream.StatusFunc,
 	streams iostream.Streams,
 ) validate.DistributedJobResult {
-	if remoteWorkDir == "" {
-		remoteWorkDir = entry.RepoPath
-	}
 	target := sidecar.Target{
 		Client:      entry.Client,
 		SidecarID:   entry.ID,
-		Workdir:     remoteWorkDir,
+		Workdir:     entry.RepoPath,
 		OnSubmitted: onValidateCommandSubmitted(entry.ID, localWorkDir, command.Name, setCommandID),
 	}
 	execFn, dest, err := target.ExecRunner(ctx, localWorkDir, remoteExecEnv(token, envVars), streams)
@@ -994,18 +992,19 @@ func resolveImage(name string, cfg *config.ProjectConfig) string {
 
 // resolveOrCreateSidecarID fills sidecarID from the active sidecar, or creates
 // a new sidecar when none is configured. Returns true when a new sidecar was
-// provisioned (as opposed to loaded from the active state file).
-func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir, tokenSource string, streams iostream.Streams) (created bool, err error) {
+// provisioned (as opposed to loaded from the active state file). The returned
+// image is the configured or auto-selected image used for new pool members.
+func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, sidecarID *string, orgID, image, workDir, tokenSource string, streams iostream.Streams) (created bool, resolvedImage string, err error) {
 	if *sidecarID != "" {
-		return false, nil
+		return false, image, nil
 	}
 	active, loadErr := sidecar.LoadActive(ctx)
 	if loadErr != nil {
-		return false, &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: loadErr}
+		return false, image, &userError{msg: msgCouldNotLoadSidecar, suggestion: configFilePermHint, err: loadErr}
 	}
 	if active != nil {
 		*sidecarID = active.ID()
-		return false, nil
+		return false, image, nil
 	}
 	// A status line, not stderr prose: having no sidecar yet is the normal state
 	// of a first run, and printing it raw made it the headline of the hook's
@@ -1014,7 +1013,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
 	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
 	if err != nil {
-		return false, err
+		return false, image, err
 	}
 	// No image configured means no snapshot was ever recorded for this repo.
 	// Rather than boot the bare default image, look for one of the org's
@@ -1027,9 +1026,9 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	sc, err := sidecar.Create(ctx, client, resolvedOrgID, sandboxName, image)
 	if err != nil {
 		if authErr := cannotCreateSidecar(resolvedOrgID, orgSource(orgID, workDir), err); authErr != nil {
-			return false, authErr
+			return false, image, authErr
 		}
-		return false, &userError{
+		return false, image, &userError{
 			msg:        "Could not create a sidecar.",
 			suggestion: "Check your network connection or run 'chunk sidecar create' manually.",
 			err:        err,
@@ -1051,7 +1050,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	}
 	streams.ErrPrintf("%s\n", ui.Success(fmt.Sprintf("Created sidecar %s (%s)", sc.Name, sc.ID)))
 	*sidecarID = sc.ID
-	return true, nil
+	return true, image, nil
 }
 
 // branchSanitizer is kept for the no-session fallback path.
@@ -1199,7 +1198,7 @@ func setupValidatePool(ctx context.Context, client *circleci.Client, opts *valid
 		IdentityFile: opts.identityFile,
 		AuthSock:     os.Getenv(config.EnvSSHAuthSock),
 		WorkDir:      workDir,
-		RepoPath:     opts.workdir,
+		RepoPath:     validationRepoPath(opts.workdir, active),
 		ExistingIDs:  existingIDs,
 		FreshIDs:     freshIDs,
 	}, statusFn)
@@ -1217,4 +1216,11 @@ func setupValidatePool(ctx context.Context, client *circleci.Client, opts *valid
 		}
 	}
 	return pool, nil
+}
+
+func validationRepoPath(configured string, active *sidecar.ActiveSidecar) string {
+	if configured != "" || active == nil {
+		return configured
+	}
+	return active.Workspace
 }

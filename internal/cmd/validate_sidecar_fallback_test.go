@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestResolveSidecarReportsCreateRejection(t *testing.T) {
 	cci.CreateStatusCode = http.StatusForbidden
 
 	var sidecarID string
-	created, err := resolveOrCreateSidecarID(
+	created, _, err := resolveOrCreateSidecarID(
 		context.Background(), resolutionClient(t, cci), &sidecarID,
 		"org-1", "", workDir, "",
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
@@ -91,7 +92,7 @@ func TestResolveSidecarReportsUnpickableOrg(t *testing.T) {
 	}
 
 	var sidecarID string
-	created, err := resolveOrCreateSidecarID(
+	created, _, err := resolveOrCreateSidecarID(
 		context.Background(), resolutionClient(t, cci), &sidecarID,
 		"", "", workDir, "",
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
@@ -116,7 +117,7 @@ func TestResolveSidecarUsesActiveSidecar(t *testing.T) {
 	assert.NilError(t, sidecar.SaveActive(context.Background(), sidecar.ActiveSidecar{SidecarIDs: []string{"sc-existing"}}))
 
 	var sidecarID string
-	created, err := resolveOrCreateSidecarID(
+	created, _, err := resolveOrCreateSidecarID(
 		context.Background(), resolutionClient(t, cci), &sidecarID,
 		"org-1", "", workDir, "",
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
@@ -125,6 +126,28 @@ func TestResolveSidecarUsesActiveSidecar(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, !created, "reusing state is not a fresh provision")
 	assert.Equal(t, sidecarID, "sc-existing")
+}
+
+func TestResolveSidecarReturnsAutoSelectedImage(t *testing.T) {
+	workDir := resolutionEnv(t)
+	cci := fakes.NewFakeCircleCI()
+	cci.Snapshots = []fakes.Snapshot{{
+		ID:    "snapshot-1",
+		OrgID: "org-1",
+		Name:  filepath.Base(workDir),
+	}}
+
+	var sidecarID string
+	created, image, err := resolveOrCreateSidecarID(
+		context.Background(), resolutionClient(t, cci), &sidecarID,
+		"org-1", "", workDir, "",
+		iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	assert.NilError(t, err)
+	assert.Assert(t, created)
+	assert.Equal(t, image, "snapshot-1")
+	assert.Equal(t, cci.Sidecars[0].Image, "snapshot-1")
 }
 
 // TestCannotCreateSidecarNamesOrgSource covers the ambiguity that made Claire's

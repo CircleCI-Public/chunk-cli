@@ -109,6 +109,7 @@ type FakeCircleCI struct {
 	EmptyStreamsBeforeExit   int
 	AddKeyStatusCode         int             // override for POST /sidecar/instances/:id/ssh/add-key
 	StaleIDs                 map[string]bool // IDs that return 404 from the add-key endpoint
+	NotFoundBeforeAddKey     map[string]int  // initial add-key calls that return 404 before succeeding
 	OutdatedIDs              map[string]bool // IDs that return an out-of-date 410 from the add-key endpoint
 	StaleAfterAddKey         map[string]int  // successful add-key calls allowed before an ID returns 404
 	addKeyCalls              map[string]int
@@ -375,6 +376,10 @@ func (f *FakeCircleCI) handleAddSSHKey(c *gin.Context) {
 	}
 	call := f.addKeyCalls[id]
 	f.addKeyCalls[id] = call + 1
+	if call < f.NotFoundBeforeAddKey[id] {
+		c.JSON(http.StatusNotFound, gin.H{"message": "sidecar not found"})
+		return
+	}
 	if f.StaleIDs[id] || (f.StaleAfterAddKey[id] > 0 && call >= f.StaleAfterAddKey[id]) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "sidecar not found"})
 		return

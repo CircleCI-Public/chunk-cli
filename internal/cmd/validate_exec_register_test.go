@@ -32,7 +32,7 @@ func TestPooledValidateRegistersSubmittedCommand(t *testing.T) {
 		context.Background(),
 		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
 		config.Command{Name: "test", Run: "true"},
-		"", projectRoot, "", nil,
+		"", projectRoot, nil,
 		func(id string) { recordedID = id },
 		func(iostream.Level, string) {},
 		iostream.Streams{Out: io.Discard, Err: io.Discard},

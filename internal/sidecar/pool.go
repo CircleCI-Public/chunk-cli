@@ -46,6 +46,7 @@ type Pool struct {
 type poolState struct {
 	SidecarIDs    []string `json:"sidecar_ids"`
 	RepoPath      string   `json:"repo_path"`
+	Image         string   `json:"image,omitempty"`
 	LastSyncedRef string   `json:"last_synced_ref,omitempty"`
 }
 
@@ -104,7 +105,11 @@ func NewPool(
 	if opts.Size < 1 {
 		return nil, errors.New("pool size must be positive")
 	}
+	state, _ := loadPoolState(opts.WorkDir, opts.Name)
 	repoPath := opts.RepoPath
+	if repoPath == "" && state != nil {
+		repoPath = state.RepoPath
+	}
 	if repoPath == "" {
 		_, repo, err := gitremote.DetectOrgAndRepo(opts.WorkDir)
 		if err != nil {
@@ -112,10 +117,14 @@ func NewPool(
 		}
 		repoPath = DefaultWorkspace(repo)
 	}
+	image := opts.Image
+	if image == "" && state != nil {
+		image = state.Image
+	}
 
 	existingIDs := append([]string(nil), opts.ExistingIDs...)
 	var lastSyncedRef string
-	if state, err := loadPoolState(opts.WorkDir, opts.Name); err == nil && len(state.SidecarIDs) > 0 {
+	if state != nil && len(state.SidecarIDs) > 0 {
 		if len(existingIDs) == 0 {
 			existingIDs = append(existingIDs, state.SidecarIDs...)
 		}
@@ -131,7 +140,7 @@ func NewPool(
 	for _, id := range opts.FreshIDs {
 		freshIDs[id] = true
 	}
-	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, opts.Image, opts.IdentityFile, opts.AuthSock, repoPath, opts.WorkDir, existingIDs, lastSyncedRef, freshIDs, status)
+	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, opts.IdentityFile, opts.AuthSock, repoPath, opts.WorkDir, existingIDs, lastSyncedRef, freshIDs, status)
 }
 
 func assemblePool(
@@ -283,7 +292,7 @@ func assemblePool(
 	}
 
 	if len(aliveExisting) == 0 {
-		if err := savePoolState(workDir, name, &poolState{SidecarIDs: allIDs, RepoPath: repoPath, LastSyncedRef: lastSyncedRef}); err != nil {
+		if err := savePoolState(workDir, name, &poolState{SidecarIDs: allIDs, RepoPath: repoPath, Image: image, LastSyncedRef: lastSyncedRef}); err != nil {
 			cleanCtx := context.Background()
 			for _, id := range allIDs {
 				_ = client.DeleteSidecar(cleanCtx, id)
@@ -305,7 +314,7 @@ func assemblePool(
 		}
 		return nil, fmt.Errorf("pool sync: %w", err)
 	}
-	if err := savePoolState(workDir, name, &poolState{SidecarIDs: allIDs, RepoPath: repoPath, LastSyncedRef: lastSyncedRef}); err != nil {
+	if err := savePoolState(workDir, name, &poolState{SidecarIDs: allIDs, RepoPath: repoPath, Image: image, LastSyncedRef: lastSyncedRef}); err != nil {
 		cleanCtx := context.Background()
 		for _, id := range goodNew {
 			_ = client.DeleteSidecar(cleanCtx, id)
@@ -315,7 +324,7 @@ func assemblePool(
 	if err := persistActiveReplacements(ctx, client, workDir, name, replacements, goodNew); err != nil {
 		return nil, err
 	}
-	pool.startBackgroundSync(ctx, aliveExisting, prepared, status)
+	pool.startBackgroundSync(ctx, aliveExisting, freshIDs, prepared, status)
 
 	return pool, nil
 }
@@ -400,7 +409,7 @@ func (p *Pool) Destroy(ctx context.Context) {
 	}
 }
 
-func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, prepared *preparedBundleSync, status iostream.StatusFunc) {
+func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, freshIDs map[string]bool, prepared *preparedBundleSync, status iostream.StatusFunc) {
 	parallelism := len(sidecarIDs)
 	if parallelism > bundleSyncFanOutConcurrency {
 		parallelism = bundleSyncFanOutConcurrency
@@ -416,7 +425,7 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, pre
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			err := syncPreparedSidecar(ctx, p.client, id, p.identityFile, p.authSock, false, prepared)
+			err := syncPreparedSidecar(ctx, p.client, id, p.identityFile, p.authSock, freshIDs[id], prepared)
 			if isStaleSyncError(err) {
 				entry, err = p.replaceStaleEntry(ctx, entry, prepared, status)
 				if err == nil {
@@ -439,6 +448,7 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, pre
 			if err := savePoolState(p.workDir, p.name, &poolState{
 				SidecarIDs:    p.ids,
 				RepoPath:      prepared.repoPath,
+				Image:         p.image,
 				LastSyncedRef: prepared.headRef,
 			}); err != nil {
 				status(iostream.LevelWarn, fmt.Sprintf("could not save pool state: %v", err))
