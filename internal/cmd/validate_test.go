@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -981,4 +982,43 @@ func TestFailBeforeRunClosesTheRun(t *testing.T) {
 	assert.Assert(t, ok)
 	assert.Equal(t, passed, 0)
 	assert.Equal(t, total, 0)
+}
+
+func TestFinishValidateFinalizesEventLog(t *testing.T) {
+	tests := []struct {
+		name      string
+		execErr   error
+		wantLevel string
+	}{
+		{name: "success", wantLevel: "done"},
+		{name: "failure", execErr: errors.New("test failed"), wantLevel: "error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, err := eventlog.Open(t.TempDir())
+			assert.NilError(t, err)
+			recorder := log.Recorder(func(iostream.Level, string) {}, eventlog.OpValidate, "sb-1", "sidecar", "main")
+			result := validate.Result{Passed: 1, Total: 2}
+
+			err = finishValidate(
+				&cobra.Command{}, nil, tt.execErr, time.Now(), &config.ProjectConfig{}, result,
+				recorder, recorder.Status, iostream.Streams{Out: io.Discard, Err: io.Discard}, nil,
+			)
+			if tt.execErr == nil {
+				assert.NilError(t, err)
+			} else {
+				assert.ErrorIs(t, err, tt.execErr)
+			}
+
+			events, err := log.Recent(10)
+			assert.NilError(t, err)
+			assert.Equal(t, len(events), 1)
+			assert.Equal(t, events[0].Level, tt.wantLevel)
+			passed, total, final := events[0].Outcome()
+			assert.Assert(t, final)
+			assert.Equal(t, passed, result.Passed)
+			assert.Equal(t, total, result.Total)
+		})
+	}
 }

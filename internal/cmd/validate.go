@@ -321,7 +321,7 @@ func maybeReturnCachedHookResult(
 	}
 	streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
 	n := len(cfg.Commands)
-	return true, finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, statusFn, streams, nil)
+	return true, finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, nil, statusFn, streams, nil)
 }
 
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
@@ -476,7 +476,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
 		}
 	}
-	return finishValidate(cmd, hook, execErr, start, cfg, result, statusFn, streams, notifyFunc(rc.Notifications))
+	return finishValidate(cmd, hook, execErr, start, cfg, result, recorder, statusFn, streams, notifyFunc(rc.Notifications))
 }
 
 func planValidationExecution(cfg *config.ProjectConfig, opts *validateOpts, name string) validate.Plan {
@@ -690,7 +690,7 @@ func notifyFunc(enabled bool) func(title, body string) {
 // finishValidate reports the validate outcome and handles hook exit codes.
 // notifyFn, when non-nil, is called with the notification title and body;
 // pass notify.Send for real desktop notifications, or a capturing closure in tests.
-func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, statusFn iostream.StatusFunc, streams iostream.Streams, notifyFn func(title, body string)) error {
+func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, recorder *eventlog.Recorder, statusFn iostream.StatusFunc, streams iostream.Streams, notifyFn func(title, body string)) error {
 	maxAttempts := validate.DefaultMaxAttempts
 	if hook != nil {
 		if ma := cfg.StopHookMaxAttempts; ma > 0 {
@@ -700,14 +700,20 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 
 	elapsed := ui.FormatDuration(time.Since(start))
 	summary := fmt.Sprintf("%d/%d passed", result.Passed, result.Total)
+	level := iostream.LevelDone
+	message := fmt.Sprintf("%s  %s", summary, elapsed)
 	switch {
 	case execErr != nil && hook != nil:
 		attempt := validate.ReadAttempts(hook.sessionID) + 1
-		statusFn(iostream.LevelError, fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts))
+		level = iostream.LevelError
+		message = fmt.Sprintf("%s  %s (attempt %d/%d)", summary, elapsed, attempt, maxAttempts)
 	case execErr != nil:
-		statusFn(iostream.LevelError, fmt.Sprintf("%s  %s", summary, elapsed))
-	default:
-		statusFn(iostream.LevelDone, fmt.Sprintf("%s  %s", summary, elapsed))
+		level = iostream.LevelError
+	}
+	if recorder != nil {
+		recorder.Final(level, message, result.Passed, result.Total)
+	} else {
+		statusFn(level, message)
 	}
 	if notifyFn != nil {
 		if execErr != nil {
