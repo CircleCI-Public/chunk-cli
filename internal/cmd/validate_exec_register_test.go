@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -51,4 +53,53 @@ func TestPooledValidateRegistersSubmittedCommand(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("pooled validation command was not registered")
 	}
+}
+
+func TestPooledValidateClearsCommandIDWhenSubmissionFails(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecStatusCode = http.StatusInternalServerError
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	commandID := "stale-command"
+	result := runPooledValidateCommand(
+		context.Background(),
+		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
+		config.Command{Name: "test", Run: "true"},
+		"", t.TempDir(), nil,
+		func(id string) { commandID = id },
+		func(iostream.Level, string) {},
+		iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	assert.Assert(t, result.Err != nil)
+	assert.Equal(t, commandID, "")
+	ue, ok := errors.AsType[*userError](result.Err)
+	assert.Assert(t, ok)
+	assert.Equal(t, ue.ErrorCode(), "sidecar.unreachable")
+}
+
+func TestPooledValidateReportsMissingWorkspace(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "probe-1", ExitCode: 1}
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	result := runPooledValidateCommand(
+		context.Background(),
+		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
+		config.Command{Name: "test", Run: "true"},
+		"", t.TempDir(), nil, nil,
+		func(iostream.Level, string) {},
+		iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	assert.Assert(t, result.Err != nil)
+	ue, ok := errors.AsType[*userError](result.Err)
+	assert.Assert(t, ok)
+	assert.Equal(t, ue.ErrorCode(), "sidecar.workspace_missing")
 }

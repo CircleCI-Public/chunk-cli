@@ -28,9 +28,9 @@ const (
 )
 
 // loadSidecars reads active-sidecar and pool state files and returns one
-// SidecarState per unique sidecar ID. When multiple files share the same ID
-// the entry with the newest mtime wins, so a stale state file never masks a
-// more recent sync.
+// SidecarState per unique sidecar ID. Active state is authoritative for
+// display metadata; pool state supplements it with managed members that are
+// not present there.
 func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 	projectName := filepath.Base(root)
 	repoName := projectRepoName(root)
@@ -89,6 +89,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 		}
 		var pool struct {
 			SidecarIDs []string `json:"sidecar_ids"`
+			RepoPath   string   `json:"repo_path"`
 		}
 		if json.Unmarshal(data, &pool) != nil {
 			continue
@@ -99,7 +100,13 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 		}
 		name := strings.TrimSuffix(filepath.Base(path), "-pool.json")
 		for i, id := range pool.SidecarIDs {
-			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", "", mtime)
+			if at, exists := idx[id]; exists {
+				if result[at].Workspace == "" {
+					result[at].Workspace = pool.RepoPath
+				}
+				continue
+			}
+			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", pool.RepoPath, mtime)
 		}
 	}
 	return result

@@ -128,6 +128,24 @@ func sidecarUnavailable(sidecarID string, err error) error {
 	return nil
 }
 
+func unreachableSidecar(sidecarID, commands string, err error) error {
+	return newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
+		withCode("sidecar.unreachable").
+		withDetail(fmt.Sprintf("Did not run: %s. Remote commands are not run locally.", commands)).
+		withSuggestion("Check its state with 'chunk sidecar list', or provision a replacement with 'chunk sidecar create'.").
+		withExitCode(ExitAPIError).
+		wrap(err)
+}
+
+func missingWorkspace(sidecarID, dest, commands string, err error) error {
+	return newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
+		withCode("sidecar.workspace_missing").
+		withDetail(fmt.Sprintf("Expected it at %q. Did not run: %s. Remote commands are not run locally.", dest, commands)).
+		withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+		withExitCode(ExitNotFound).
+		wrap(err)
+}
+
 func sshSessionError(err error) error {
 	if e, ok := errors.AsType[*sidecar.KeyNotFoundError](err); ok {
 		return newUserError(fmt.Sprintf("SSH key not found: %s", e.Path)).

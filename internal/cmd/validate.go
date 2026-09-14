@@ -885,15 +885,24 @@ func runPooledValidateCommand(
 	statusFn iostream.StatusFunc,
 	streams iostream.Streams,
 ) validate.DistributedJobResult {
+	if setCommandID != nil {
+		// A submission failure has no command ID. Clear any ID left by a prior
+		// command before starting so its terminal event cannot inherit one.
+		setCommandID("")
+	}
 	target := sidecar.Target{
 		Client:      entry.Client,
 		SidecarID:   entry.ID,
 		Workdir:     entry.RepoPath,
 		OnSubmitted: onValidateCommandSubmitted(entry.ID, localWorkDir, command.Name, setCommandID),
 	}
-	execFn, dest, err := target.ExecRunner(ctx, localWorkDir, remoteExecEnv(token, envVars), streams)
+	execFn, dest, err := target.ReadyExecRunner(ctx, localWorkDir, remoteExecEnv(token, envVars), streams)
 	if err != nil {
-		return validate.DistributedJobResult{Err: &userError{msg: "Could not determine workspace path.", err: err}}
+		var workspaceErr *sidecar.WorkspaceNotFoundError
+		if errors.As(err, &workspaceErr) {
+			return validate.DistributedJobResult{Err: missingWorkspace(entry.ID, entry.RepoPath, command.Name, err)}
+		}
+		return validate.DistributedJobResult{Err: unreachableSidecar(entry.ID, command.Name, err)}
 	}
 	commandCfg := &config.ProjectConfig{Commands: []config.Command{command}}
 	result, err := validate.RunRemoteStreamedResult(ctx, execFn, commandCfg, "", dest, localWorkDir, statusFn, streams)
