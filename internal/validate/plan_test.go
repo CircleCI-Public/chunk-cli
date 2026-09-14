@@ -38,6 +38,12 @@ func TestPlanCommands(t *testing.T) {
 		assert.Equal(t, plan.PoolSize, 3)
 	})
 
+	t.Run("configured placement does not infer locality from role", func(t *testing.T) {
+		plan := PlanCommands([]config.Command{{Name: "format", Role: config.RoleAutofix}}, PlacementConfigured, 1)
+		assert.Equal(t, len(plan.LocalCommands), 0)
+		assert.Equal(t, len(plan.RemoteCommands), 1)
+	})
+
 	t.Run("remote workers default to one", func(t *testing.T) {
 		plan := PlanCommands(commands, PlacementConfigured, 0)
 		assert.Equal(t, plan.PoolSize, 1)

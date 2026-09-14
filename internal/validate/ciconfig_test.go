@@ -66,6 +66,7 @@ workflows:
 	assert.Equal(t, got[1].Timeout, 300)
 	assert.Equal(t, got[2].Role, config.RoleGate)
 	assert.Equal(t, got[3].Role, config.RoleAutofix)
+	assert.Assert(t, got[3].Local, "a mutating formatter must run against the developer's working tree")
 	// The install step is not a gate and carries no role.
 	assert.Equal(t, got[0].Role, "")
 }

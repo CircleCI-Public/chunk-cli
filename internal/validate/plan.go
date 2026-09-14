@@ -31,6 +31,9 @@ func PlanCommands(commands []config.Command, placement Placement, maxRemoteWorke
 	case PlacementLocal:
 		plan.LocalCommands = append(plan.LocalCommands, commands...)
 	case PlacementConfigured:
+		// Roles describe what commands do; they do not implicitly place them.
+		// In particular, legacy autofix commands without local: true are not
+		// migrated here: unspecified placement intentionally defaults to remote.
 		for _, command := range commands {
 			if command.RunsLocally() {
 				plan.LocalCommands = append(plan.LocalCommands, command)
