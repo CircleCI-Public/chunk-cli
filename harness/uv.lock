@@ -143,9 +143,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anyio" },
-    { name = "claude-agent-sdk" },
-    { name = "pylint" },
+    { name = "anyio", specifier = ">=4.15.0,<5" },
+    { name = "claude-agent-sdk", specifier = ">=0.2.152,<1" },
+    { name = "pylint", specifier = ">=4.0.8,<5" },
 ]
 
 [[package]]
