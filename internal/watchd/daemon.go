@@ -93,7 +93,7 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		runner:    runner,
 		client:    client,
 		authError: authMessage,
-		out:       newOutputStore(ctx, outputBufferCap()),
+		out:       newOutputStore(ctx),
 		res:       newResourceSampler(client),
 	}
 	// Still cancelled explicitly: this returns before the process exits in tests
