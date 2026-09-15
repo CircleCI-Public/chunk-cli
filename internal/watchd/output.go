@@ -24,12 +24,13 @@ const (
 
 // outputBufferCap returns the per-command buffer cap. It reads
 // CHUNK_OUTPUT_BUFFER_SIZE when set; invalid or non-positive values are
-// silently ignored and the default is used instead.
+// ignored and the default is used instead, with a warning printed to stderr.
 func outputBufferCap() int {
 	if v := os.Getenv("CHUNK_OUTPUT_BUFFER_SIZE"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
+		log.Printf("warning: CHUNK_OUTPUT_BUFFER_SIZE=%q is not a positive integer; using default (%d bytes)", v, MaxCommandBytes)
 	}
 	return MaxCommandBytes
 }
