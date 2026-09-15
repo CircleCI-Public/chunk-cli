@@ -143,8 +143,6 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
 
-	log.Printf("watch daemon started pid=%d socket=%s", os.Getpid(), sockPath)
-
 	go d.pollLoop(ctx)
 	go d.checkConflictsLoop(ctx)
 
@@ -153,6 +151,21 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		<-ctx.Done()
 		_ = srv.Close()
 	}()
+
+	if addr := TCPListenAddr(); addr != "" {
+		tcpLn, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen tcp on %s: %w", addr, err)
+		}
+		log.Printf("watch daemon started pid=%d socket=%s tcp=%s", os.Getpid(), sockPath, addr)
+		go func() {
+			if serveErr := srv.Serve(tcpLn); serveErr != nil && ctx.Err() == nil {
+				log.Printf("watchd tcp: %v", serveErr)
+			}
+		}()
+	} else {
+		log.Printf("watch daemon started pid=%d socket=%s", os.Getpid(), sockPath)
+	}
 
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		return fmt.Errorf("watchd serve: %w", err)

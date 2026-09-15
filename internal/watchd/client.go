@@ -19,11 +19,67 @@ import (
 // a real validation error and fall back to inline execution.
 var ErrDaemonUnavailable = errors.New("daemon unavailable")
 
+// daemonClient returns an http.Client for the running daemon. When
+// CHUNK_WATCHD_REMOTE_ADDR is set it connects over TCP; otherwise it uses the
+// local Unix socket. Both variants ignore the URL hostname and always connect
+// to the configured address, so callers keep using "http://watchd/..." URLs.
+func daemonClient() (*http.Client, error) {
+	if addr := TCPRemoteAddr(); addr != "" {
+		return tcpClient(addr), nil
+	}
+	sockPath, err := SocketPath()
+	if err != nil {
+		return nil, err
+	}
+	return unixClient(sockPath), nil
+}
+
+// longDaemonClient is like daemonClient but without a total-request timeout,
+// suitable for long-running operations like /validate.
+func longDaemonClient() (*http.Client, error) {
+	if addr := TCPRemoteAddr(); addr != "" {
+		return longTCPClient(addr), nil
+	}
+	sockPath, err := SocketPath()
+	if err != nil {
+		return nil, err
+	}
+	return longUnixClient(sockPath), nil
+}
+
+// doPing sends a /ping request with the given client and returns reachability
+// and the daemon's build identity.
+func doPing(client *http.Client) (bool, string) {
+	resp, err := client.Get("http://watchd/ping")
+	if err != nil {
+		return false, ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if err != nil {
+		return true, ""
+	}
+	return true, strings.TrimSpace(string(body))
+}
+
+// pingDaemon pings via the configured transport (TCP when
+// CHUNK_WATCHD_REMOTE_ADDR is set, Unix socket otherwise).
+func pingDaemon() (bool, string) {
+	client, err := daemonClient()
+	if err != nil {
+		return false, ""
+	}
+	return doPing(client)
+}
+
 // FetchSnapshot connects to the running watch daemon and returns the current
 // snapshot for the given project roots. If roots is empty all known projects
 // are returned.
 func FetchSnapshot(roots []string) (Snapshot, error) {
-	sockPath, err := SocketPath()
+	client, err := daemonClient()
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -31,7 +87,7 @@ func FetchSnapshot(roots []string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("marshal roots: %w", err)
 	}
-	resp, err := unixClient(sockPath).Post("http://watchd/snapshot", "application/json", bytes.NewReader(body))
+	resp, err := client.Post("http://watchd/snapshot", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("connect to watch daemon: %w", err)
 	}
@@ -61,7 +117,7 @@ const registerTimeout = 2 * time.Second
 // and a hook that hangs waiting for a daemon launch is a far worse failure than a
 // missing logs pane.
 func RegisterCommand(reg CommandReg) {
-	sockPath, err := SocketPath()
+	client, err := daemonClient()
 	if err != nil {
 		return
 	}
@@ -69,7 +125,6 @@ func RegisterCommand(reg CommandReg) {
 	if err != nil {
 		return
 	}
-	client := unixClient(sockPath)
 	client.Timeout = registerTimeout
 	resp, err := client.Post("http://watchd/command", "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -138,13 +193,13 @@ func FetchConflicts(root string) (ConflictReport, error) {
 
 // FetchOutput reads buffered output for a command starting at offset.
 func FetchOutput(commandID string, offset int64) (OutputChunk, error) {
-	sockPath, err := SocketPath()
+	client, err := daemonClient()
 	if err != nil {
 		return OutputChunk{}, err
 	}
 	reqURL := fmt.Sprintf("http://watchd/output?command_id=%s&offset=%d",
 		neturl.QueryEscape(commandID), offset)
-	resp, err := unixClient(sockPath).Get(reqURL)
+	resp, err := client.Get(reqURL)
 	if err != nil {
 		return OutputChunk{}, fmt.Errorf("connect to watch daemon: %w", err)
 	}
@@ -159,24 +214,10 @@ func FetchOutput(commandID string, offset int64) (OutputChunk, error) {
 	return chunk, nil
 }
 
-// ping reports whether the daemon at sockPath is reachable, along with the build
-// identity it names. A daemon older than that identity reports "".
+// ping reports whether the daemon at sockPath is reachable, along with the
+// build identity it names. A daemon older than that identity reports "".
 func ping(sockPath string) (bool, string) {
-	resp, err := unixClient(sockPath).Get("http://watchd/ping")
-	if err != nil {
-		return false, ""
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return false, ""
-	}
-	// Bounded: the identity is short, and a body this side cannot recognise is
-	// no reason to read an unbounded amount of it.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512))
-	if err != nil {
-		return true, ""
-	}
-	return true, strings.TrimSpace(string(body))
+	return doPing(unixClient(sockPath))
 }
 
 // stopDaemon asks the daemon to exit and waits until it stops answering, so the
@@ -233,11 +274,7 @@ func StopForCredentialChange() {
 // from the same binary as the caller. A daemon from an older build is treated
 // as absent: it may not serve routes added since it was compiled.
 func IsDaemonRunning() bool {
-	sockPath, err := SocketPath()
-	if err != nil {
-		return false
-	}
-	ok, _ := ping(sockPath)
+	ok, _ := pingDaemon()
 	return ok
 }
 
@@ -246,11 +283,7 @@ func IsDaemonRunning() bool {
 // not support all API endpoints (e.g. /validate), so delegation should be
 // skipped and the operation run inline instead.
 func IsDaemonCompatible() bool {
-	sockPath, err := SocketPath()
-	if err != nil {
-		return false
-	}
-	ok, build := ping(sockPath)
+	ok, build := pingDaemon()
 	return ok && build == BuildID()
 }
 
@@ -267,7 +300,7 @@ func IsDaemonCompatible() bool {
 // daemon needs to know about a run keeps growing, and every addition would
 // otherwise be another positional parameter at two call sites.
 func RunValidate(req ValidateRequest) (ValidateResponse, error) {
-	sockPath, err := SocketPath()
+	client, err := longDaemonClient()
 	if err != nil {
 		return ValidateResponse{}, err
 	}
@@ -278,7 +311,7 @@ func RunValidate(req ValidateRequest) (ValidateResponse, error) {
 	if err != nil {
 		return ValidateResponse{}, fmt.Errorf("marshal validate request: %w", err)
 	}
-	resp, err := longUnixClient(sockPath).Post("http://watchd/validate", "application/json", bytes.NewReader(body))
+	resp, err := client.Post("http://watchd/validate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return ValidateResponse{}, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
 	}
