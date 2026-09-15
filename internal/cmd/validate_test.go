@@ -381,6 +381,15 @@ func TestPlanValidationRemoteFlagOverridesLocalConfig(t *testing.T) {
 	assert.Equal(t, plan.PoolSize, 1)
 }
 
+func TestValidateRejectsRemoteAndLocalFlagsTogether(t *testing.T) {
+	root := newTestRootCmd()
+	root.SetArgs([]string{"validate", "--remote", "--local", "--cmd", "true", "--dry-run"})
+
+	err := root.Execute()
+
+	assert.ErrorContains(t, err, "if any flags in the group")
+}
+
 func TestValidateExplicitLocalCommandNeedsNoSidecar(t *testing.T) {
 	isolateConfig(t)
 	t.Setenv(config.EnvCircleToken, "")
