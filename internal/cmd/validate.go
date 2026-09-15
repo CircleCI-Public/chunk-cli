@@ -650,15 +650,19 @@ func ensureRequestedValidateCommand(workDir, name, inlineCmd string, cfg *config
 	return ensureValidateCommand(workDir, name, cfg, streams)
 }
 
-// wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
-// is active. Returns statusFn unchanged when no sidecar is involved, so callers
-// with empty sidecar IDs never write events with a blank sidecar_id.
+// wrapEventLogStatusFn wraps statusFn so a run's progress is recorded in its
+// project's event log, and returns the recorder alongside it.
+//
 // Wired for every run, local included. A run with no sidecar is still a run
 // whose results a developer will look for, and the daemon reads these logs off
 // disk rather than being sent anything — so skipping the recorder here is how a
 // --local run, or a repo with no remote commands, ends up reporting to nobody.
 // An empty sidecar ID is what the dashboard files under a project's "local"
 // row, not a reason to write nothing.
+//
+// A project with no readable data directory is the one case that gets statusFn
+// back unchanged: there is nowhere to write, so the run reports without
+// recording.
 func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) (iostream.StatusFunc, *eventlog.Recorder) {
 	// The run's own project, not the one the process happens to be standing in:
 	// sidecar.StateDir derives its root from the working directory, which is not
