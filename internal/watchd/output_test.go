@@ -123,7 +123,7 @@ func TestOutputStoreDuplicateRegistrationIgnored(t *testing.T) {
 }
 
 func TestBufferKeepsTailAndReportsTruncation(t *testing.T) {
-	b := newBuffer()
+	b := newBuffer(MaxCommandBytes)
 	// Two full buffers' worth, so the first half must be evicted.
 	b.append([]byte(strings.Repeat("a", MaxCommandBytes)))
 	b.append([]byte(strings.Repeat("b", 100)))
@@ -139,7 +139,7 @@ func TestBufferKeepsTailAndReportsTruncation(t *testing.T) {
 }
 
 func TestBufferNotTruncatedWhenUnderCap(t *testing.T) {
-	b := newBuffer()
+	b := newBuffer(MaxCommandBytes)
 	b.append([]byte("small"))
 	chunk := b.read(0)
 	assert.Check(t, !chunk.Truncated)
@@ -338,7 +338,7 @@ func TestStreamersStopWhenTheDaemonContextIsCancelled(t *testing.T) {
 // getting it right: whatever the allocation strategy, the reader's view of how
 // much was dropped has to stay exact.
 func TestBufferAppendLargerThanCapKeepsTail(t *testing.T) {
-	b := newBuffer()
+	b := newBuffer(MaxCommandBytes)
 	b.append([]byte(strings.Repeat("a", 1000)))
 	// Two caps' worth in one write, so both the existing data and the head of
 	// this write are evicted.
@@ -365,7 +365,7 @@ func TestBufferAppendLargerThanCapKeepsTail(t *testing.T) {
 // The boundary between the two paths: a write of exactly the cap keeps all of
 // itself and drops everything before it.
 func TestBufferAppendExactlyCapDropsOnlyPrior(t *testing.T) {
-	b := newBuffer()
+	b := newBuffer(MaxCommandBytes)
 	b.append([]byte(strings.Repeat("a", 10)))
 	b.append([]byte(strings.Repeat("b", MaxCommandBytes)))
 
