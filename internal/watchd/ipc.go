@@ -126,3 +126,29 @@ func longUnixClient(sockPath string) *http.Client {
 		},
 	}
 }
+
+// tcpClient returns an *http.Client that dials addr over TCP. The custom
+// DialContext ignores the URL hostname (kept as "watchd" for consistency with
+// the unix variants) and always connects to addr.
+func tcpClient(addr string) *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+			},
+		},
+	}
+}
+
+// longTCPClient is like tcpClient but with no total-request timeout, suitable
+// for long-running operations like /validate.
+func longTCPClient(addr string) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+			},
+		},
+	}
+}
