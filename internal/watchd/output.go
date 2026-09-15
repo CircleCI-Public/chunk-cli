@@ -30,7 +30,7 @@ func outputBufferCap() int {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
-		log.Printf("warning: CHUNK_OUTPUT_BUFFER_SIZE=%q is not a positive integer; using default (%d bytes)", v, MaxCommandBytes)
+		log.Printf("warning: CHUNK_OUTPUT_BUFFER_SIZE=%q is not a positive integer; using default (%d bytes)", v, MaxCommandBytes) //nolint:gosec // %q escapes control characters, preventing log injection
 	}
 	return MaxCommandBytes
 }
