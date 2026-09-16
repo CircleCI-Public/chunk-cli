@@ -48,6 +48,10 @@ type daemon struct {
 	out *outputStore
 	// res samples resource usage, only while a dashboard is attached.
 	res *resourceSampler
+	// prov creates and tracks sidecars owned by this daemon instance. Nil when
+	// the daemon has no client (unauthenticated), in which case POST /sidecar
+	// returns 503.
+	prov *provisioner
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -89,6 +93,11 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
+	var prov *provisioner
+	if client != nil {
+		prov = newProvisioner(client)
+	}
+
 	d := &daemon{
 		projects:  make(map[string]*projectState),
 		runner:    runner,
@@ -96,12 +105,16 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		authError: authMessage,
 		out:       newOutputStore(ctx),
 		res:       newResourceSampler(client),
+		prov:      prov,
 	}
 	// Still cancelled explicitly: this returns before the process exits in tests
 	// and any embedded caller, and it is what stops streamers promptly rather
 	// than whenever the parent context happens to be torn down.
 	defer d.out.stopAll()
 	defer d.res.stopAll()
+	if prov != nil {
+		defer prov.stopAll(context.Background())
+	}
 
 	// Poll once before accepting connections so the first request has data.
 	d.poll()

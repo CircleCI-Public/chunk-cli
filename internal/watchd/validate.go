@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -26,6 +28,10 @@ type ValidateRequest struct {
 	// Env is the caller's os.Environ(), forwarded verbatim to the subprocess so
 	// session-identity variables (e.g. CLAUDE_CODE_SESSION_ID) reach it intact.
 	Env []string `json:"env,omitempty"`
+	// OrgID is the CircleCI org UUID for this project. When set and the daemon
+	// has credentials, the daemon provisions a fresh sidecar for the run rather
+	// than expecting one to already be registered on its filesystem.
+	OrgID string `json:"org_id,omitempty"`
 }
 
 // ValidateResponse is the response from POST /validate.
@@ -62,8 +68,20 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	args := req.Args
+	if d.prov != nil && req.OrgID != "" {
+		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
+		id, err := d.prov.create(ctx, req.OrgID, name, "")
+		if err != nil {
+			http.Error(w, "provision sidecar: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer func() { _ = d.prov.delete(context.Background(), id) }()
+		args = append(append([]string(nil), args...), "--sidecar-id", id)
+	}
+
 	var stdout, stderr bytes.Buffer
-	exitCode := d.runner(ctx, req.Args, req.Env, &stdout, &stderr)
+	exitCode := d.runner(ctx, args, req.Env, &stdout, &stderr)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ValidateResponse{

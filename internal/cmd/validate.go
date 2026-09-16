@@ -412,7 +412,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	if shouldUseDaemon(hook, opts.noDaemon) {
-		err := runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, nil, streams)
+		err := runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, cfg.OrgID, nil, streams)
 		if !errors.Is(err, watchd.ErrDaemonUnavailable) {
 			return err
 		}
@@ -743,7 +743,7 @@ func validateEnvFlag(envVarsFlag []string) error {
 // runValidateViaDaemon delegates a validate run to the watch daemon and writes
 // its captured output to streams. When hook is non-nil its context is forwarded
 // to the subprocess via hidden flags so it runs as a hook invocation.
-func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext, streams iostream.Streams) error {
+func runValidateViaDaemon(args []string, circleCIToken, orgID string, hook *hookContext, streams iostream.Streams) error {
 	reqArgs := args
 	if hook != nil {
 		reqArgs = append(append([]string(nil), args...), "--hook-session-id", hook.sessionID)
@@ -751,7 +751,7 @@ func runValidateViaDaemon(args []string, circleCIToken string, hook *hookContext
 			reqArgs = append(reqArgs, "--stop-hook-active")
 		}
 	}
-	resp, err := watchd.RunValidate(reqArgs, circleCIToken)
+	resp, err := watchd.RunValidate(reqArgs, circleCIToken, orgID)
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
 	}
@@ -780,7 +780,7 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, noDaemon bool, strea
 	if err != nil {
 		return false, nil // fall back to inline; inline path handles auth
 	}
-	err = runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, hook, streams)
+	err = runValidateViaDaemon(os.Args[1:], rc.CircleCIToken, "", hook, streams)
 	if errors.Is(err, watchd.ErrDaemonUnavailable) {
 		return false, nil // daemon disappeared between check and POST; run inline
 	}

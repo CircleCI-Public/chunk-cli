@@ -237,7 +237,8 @@ func IsDaemonCompatible() bool {
 
 // RunValidate delegates a validate run to the daemon. args is os.Args[1:];
 // circleCIToken is forwarded to the subprocess as CIRCLE_TOKEN.
-func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) {
+// orgID is forwarded so a remote daemon can provision its own sidecar for the run.
+func RunValidate(args []string, circleCIToken, orgID string) (ValidateResponse, error) {
 	client, err := longDaemonClient()
 	if err != nil {
 		return ValidateResponse{}, err
@@ -249,6 +250,9 @@ func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) 
 		// Over TCP the remote daemon already carries its own credentials and env.
 		req.CircleCIToken = circleCIToken
 		req.Env = os.Environ()
+	} else {
+		// Remote daemon: forward the org ID so it can provision a sidecar.
+		req.OrgID = orgID
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -275,6 +279,58 @@ func RunValidate(args []string, circleCIToken string) (ValidateResponse, error) 
 		return ValidateResponse{}, fmt.Errorf("decode validate response: %w", err)
 	}
 	return result, nil
+}
+
+// ProvisionSidecar asks the remote daemon to create a new sidecar and return
+// its ID. Returns an error if the daemon is unavailable or unauthenticated.
+//
+// Only meaningful when CHUNK_WATCHD_REMOTE_ADDR is set; against a local Unix
+// socket the caller can create sidecars directly without going through the daemon.
+func ProvisionSidecar(req ProvisionRequest) (ProvisionResponse, error) {
+	client, err := daemonClient()
+	if err != nil {
+		return ProvisionResponse{}, err
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return ProvisionResponse{}, fmt.Errorf("marshal provision request: %w", err)
+	}
+	resp, err := client.Post("http://watchd/sidecar", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return ProvisionResponse{}, fmt.Errorf("provision sidecar: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return ProvisionResponse{}, fmt.Errorf("daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+	}
+	var result ProvisionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ProvisionResponse{}, fmt.Errorf("decode provision response: %w", err)
+	}
+	return result, nil
+}
+
+// DeprovisionSidecar asks the remote daemon to delete a sidecar it provisioned.
+func DeprovisionSidecar(id string) error {
+	client, err := daemonClient()
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodDelete, "http://watchd/sidecar/"+id, nil)
+	if err != nil {
+		return fmt.Errorf("build deprovision request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("deprovision sidecar: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("daemon returned %s: %s", resp.Status, bytes.TrimSpace(msg))
+	}
+	return nil
 }
 
 // EnsureRunning checks whether the watch daemon is running and serving, and
