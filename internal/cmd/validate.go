@@ -409,7 +409,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		name = args[0]
 	}
 
-	cfg, done, err := validateEarlyExits(hook, opts, name, workDir, streams, statusFn)
+	cfg, done, err := validateEarlyExits(cmd.OutOrStdout(), hook, opts, name, workDir, streams, statusFn)
 	if done || err != nil {
 		return err
 	}
@@ -812,7 +812,9 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, noDaemon bool, strea
 
 // validateEarlyExits handles --list, --mark-remote, missing config, --dry-run.
 // Returns (cfg, done=true, err) to stop, or (cfg, false, nil) to continue.
-func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+// w is the real stdout writer for hook JSON responses (streams.Out may be
+// redirected to stderr in hook mode).
+func validateEarlyExits(w io.Writer, hook *hookContext, opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
 	if opts.list {
 		return nil, true, runValidateList(workDir, opts.jsonOut, streams, statusFn)
 	}
@@ -822,7 +824,7 @@ func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir str
 	if opts.markRemote {
 		return nil, true, runMarkRemote(workDir, name, streams)
 	}
-	return prepareValidateConfig(streams.Out, workDir, hook, opts, name, statusFn)
+	return prepareValidateConfig(w, workDir, hook, opts, name, statusFn)
 }
 
 func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc) error {
