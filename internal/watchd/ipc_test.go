@@ -351,3 +351,24 @@ func TestFetchConflictsReportsAMissingDaemonAsUnreachable(t *testing.T) {
 	assert.Check(t, errors.Is(err, ErrDaemonUnreachable), "want ErrDaemonUnreachable, got: %v", err)
 	assert.Check(t, !errors.Is(err, ErrDaemonTimeout))
 }
+
+func TestConflictReportIsKnownWithNoAnswerBeforeTheFirstCheck(t *testing.T) {
+	// The state the daemon is in for firstConflictDelay after it starts: the
+	// project is tracked, ps.conflict is still nil. Known must be true anyway —
+	// the daemon does know the project — while Conflict stays nil, because no
+	// check has run. Collapsing either way loses a distinction the callers rely
+	// on: Known false sends someone to register a project already registered,
+	// and a non-nil Conflict would be an answer nobody computed.
+	root := t.TempDir()
+	d := &daemon{projects: map[string]*projectState{
+		root: {root: root, canonRoot: canonicalRoot(root)},
+	}}
+
+	report := d.conflictReport(root)
+	assert.Check(t, report.Known, "a tracked project is known before its first check")
+	assert.Check(t, cmp.Nil(report.Conflict), "no check has run, so there is no answer to report")
+
+	// And nothing is said or claimed on the back of it.
+	assert.Check(t, cmp.Equal(ConflictNotice(report), ""))
+	assert.Check(t, cmp.Contains(ConflictStatus(report), "No conflict check has completed"))
+}

@@ -259,3 +259,48 @@ func TestConflictsHookModeStaysQuietWhenTheDaemonStalls(t *testing.T) {
 	assert.Check(t, cmp.Equal(out, ""))
 	assert.Check(t, cmp.Equal(errOut, ""))
 }
+
+// pendingReport is what the daemon serves for the first firstConflictDelay
+// after it starts: the project is tracked, no check has completed. Known with a
+// nil Conflict is the shape, and every mode has to survive it.
+func pendingReport() watchd.ConflictReport {
+	return watchd.ConflictReport{Root: "/repo", Known: true}
+}
+
+func TestConflictsHookModeIsQuietBeforeTheFirstCheck(t *testing.T) {
+	// Exits cleanly with no output. A nil Conflict behind Known: true is the
+	// state a commit lands in when the daemon has only just started, and it
+	// reaches every mode through the same socket read.
+	serveConflicts(t, pendingReport())
+
+	out, errOut, err := runConflictsCmd(t, t.TempDir(), "--hook")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(out, ""))
+	assert.Check(t, cmp.Equal(errOut, ""))
+}
+
+func TestConflictsManualModeSaysNoCheckHasRunYet(t *testing.T) {
+	// A person gets told which silence this is. "Merges cleanly" here would be
+	// an all-clear that nothing ever checked.
+	serveConflicts(t, pendingReport())
+
+	out, _, err := runConflictsCmd(t, t.TempDir())
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Contains(out, "No conflict check has completed"))
+	assert.Check(t, !strings.Contains(out, "merges cleanly"),
+		"a pending check must not be reported as a clean merge")
+}
+
+func TestConflictsJSONModeKeepsOneShapeBeforeTheFirstCheck(t *testing.T) {
+	// known is present and true, conflict is absent rather than half-built, so
+	// a consumer that reads known then guards on conflict sees a coherent pair.
+	serveConflicts(t, pendingReport())
+
+	out, _, err := runConflictsCmd(t, t.TempDir(), "--json")
+	assert.NilError(t, err)
+
+	var report watchd.ConflictReport
+	assert.NilError(t, json.Unmarshal([]byte(out), &report))
+	assert.Check(t, report.Known)
+	assert.Check(t, cmp.Nil(report.Conflict))
+}
