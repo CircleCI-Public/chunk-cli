@@ -250,6 +250,11 @@ func stopDaemon(pid int, sockPath string) error {
 // not fail a login that has otherwise succeeded, and the cost of not stopping it
 // is the buffered output of a daemon that was not streaming anything anyway.
 func StopForCredentialChange() {
+	// A remote daemon is managed externally; we have no way to restart it, and
+	// the local pid file / socket are unrelated to it.
+	if TCPRemoteAddr() != "" {
+		return
+	}
 	pidPath, err := PIDPath()
 	if err != nil {
 		return
@@ -304,7 +309,7 @@ func RunValidate(req ValidateRequest) (ValidateResponse, error) {
 	if err != nil {
 		return ValidateResponse{}, err
 	}
-	if req.Env == nil {
+	if req.Env == nil && TCPRemoteAddr() == "" {
 		req.Env = os.Environ()
 	}
 	body, err := json.Marshal(req)
@@ -420,6 +425,11 @@ func CollectValidateResults(projectRoot string) ([]TaskState, error) {
 // launches it if not. subArgs are the CLI arguments used to invoke the daemon
 // (e.g. ["watch", "_daemon"]).
 func EnsureRunning(subArgs []string) error {
+	// Remote daemons are managed externally; local pid/socket operations are
+	// irrelevant and would start a stray local daemon.
+	if TCPRemoteAddr() != "" {
+		return nil
+	}
 	pidPath, err := PIDPath()
 	if err != nil {
 		return err
@@ -457,6 +467,10 @@ func EnsureRunning(subArgs []string) error {
 // check is a startup decision, made once, where the cost of being wrong is one
 // restart rather than a restart per poll for as long as two dashboards are open.
 func EnsureLaunched(subArgs []string) error {
+	// Remote daemons are managed externally; starting a local one would be wrong.
+	if TCPRemoteAddr() != "" {
+		return nil
+	}
 	pidPath, err := PIDPath()
 	if err != nil {
 		return err

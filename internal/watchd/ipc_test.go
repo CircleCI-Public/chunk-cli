@@ -211,6 +211,113 @@ func TestSnapshotReportsAuthErrorWhenCredentialsAreMissing(t *testing.T) {
 	assert.Check(t, cmp.Contains(snap.AuthError, "chunk auth login"))
 }
 
+// TCP transport: start a real daemon with CHUNK_WATCHD_TCP_ADDR, connect over
+// TCP, and verify that the bearer-token guard is enforced.
+func startTestDaemonTCP(t *testing.T, token string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wd-tcp")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Pick a free port by binding on :0 and immediately releasing it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	addr := ln.Addr().String()
+	assert.NilError(t, ln.Close())
+
+	t.Setenv("CHUNK_WATCHD_TCP_ADDR", addr)
+	if token != "" {
+		t.Setenv("CHUNK_WATCHD_TCP_TOKEN", token)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- RunDaemon(ctx, nil, "", nil, nil) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Error("daemon did not shut down within 5s")
+		}
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok, _ := doPing(tcpClient(addr)); ok {
+			return addr
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("tcp daemon did not become reachable within 5s")
+	return ""
+}
+
+func TestTCPTransport_NoTokenAllowsAll(t *testing.T) {
+	addr := startTestDaemonTCP(t, "")
+
+	// Without a token configured, any request is allowed.
+	ok, _ := doPing(tcpClient(addr))
+	assert.Check(t, ok, "expected ping to succeed with no token configured")
+}
+
+func TestTCPTransport_ValidTokenAllows(t *testing.T) {
+	const token = "test-secret-token"
+	addr := startTestDaemonTCP(t, token)
+	t.Setenv("CHUNK_WATCHD_TCP_TOKEN", token)
+
+	ok, _ := doPing(tcpClient(addr))
+	assert.Check(t, ok, "expected ping to succeed with correct token")
+}
+
+func TestTCPTransport_MissingTokenRejects(t *testing.T) {
+	const token = "test-secret-token"
+	addr := startTestDaemonTCP(t, token)
+	// Client has no token set — tcpClient will not add an Authorization header.
+	t.Setenv("CHUNK_WATCHD_TCP_TOKEN", "")
+
+	ok, _ := doPing(tcpClient(addr))
+	assert.Check(t, !ok, "expected ping to fail when Authorization header is absent")
+}
+
+func TestTCPTransport_WrongTokenRejects(t *testing.T) {
+	const token = "test-secret-token"
+	addr := startTestDaemonTCP(t, token)
+	// Manually craft a client with the wrong token.
+	wrongToken := "wrong-token"
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+		},
+	}
+	wrongClient := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &bearerTransport{inner: transport, token: wrongToken},
+	}
+
+	ok, _ := doPing(wrongClient)
+	assert.Check(t, !ok, "expected ping to fail with wrong token")
+}
+
+func TestEnsureRunning_SkipsInRemoteMode(t *testing.T) {
+	// Point CHUNK_WATCHD_REMOTE_ADDR at a non-existent host so that any attempt
+	// to touch a local daemon would clearly succeed (no local state exists).
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:9")
+	// No CHUNK_WATCHD_DIR set, so a real EnsureRunning attempt would fail.
+	// If the remote guard is missing, EnsureRunning will call launchDaemon which
+	// will fail on the missing executable path — the test would not return nil.
+	err := EnsureRunning([]string{"watch", "_daemon"})
+	assert.NilError(t, err)
+}
+
+func TestEnsureLaunched_SkipsInRemoteMode(t *testing.T) {
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:9")
+	err := EnsureLaunched([]string{"watch", "_daemon"})
+	assert.NilError(t, err)
+}
+
 // The daemon is useful without credentials: it cannot stream output, but it can
 // still say the command ran. Losing the registration too would leave the
 // dashboard blank with nothing to explain it.
