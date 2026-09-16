@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
@@ -59,6 +61,10 @@ type ValidateRequest struct {
 	// watching a terminal does not, and releasing them would leave the run's
 	// output going nowhere they are looking.
 	AllowAsync bool `json:"allow_async,omitempty"`
+	// OrgID is the CircleCI org UUID for this project. When set and the daemon
+	// has credentials, the daemon provisions a fresh sidecar for the run rather
+	// than expecting one to already be registered on its filesystem.
+	OrgID string `json:"org_id,omitempty"`
 }
 
 // ValidateResponse is the response from POST /validate.
@@ -346,8 +352,19 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *
 	d.validateMu.Lock()
 	defer d.validateMu.Unlock()
 
+	args := req.Args
+	if d.prov != nil && req.OrgID != "" {
+		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
+		id, err := d.prov.create(ctx, req.OrgID, name, "")
+		if err != nil {
+			return ValidateResponse{ExitCode: 1, Stderr: "provision sidecar: " + err.Error()}
+		}
+		defer func() { _ = d.prov.delete(context.Background(), id) }()
+		args = append(append([]string(nil), args...), "--sidecar-id", id)
+	}
+
 	var stdout, stderr bytes.Buffer
-	exitCode := d.runner(ctx, req.ProjectRoot, req.Args, req.Env, &stdout, &stderr)
+	exitCode := d.runner(ctx, req.ProjectRoot, args, req.Env, &stdout, &stderr)
 
 	// Recorded from synchronous runs too, not just background ones. This is what
 	// clears a failure debt: a project that owes a blocking run gets one, and if
