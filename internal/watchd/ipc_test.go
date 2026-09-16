@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -231,4 +232,71 @@ func TestCommandIsRecordedWithoutCredentials(t *testing.T) {
 	assert.Check(t, chunk.Found)
 	assert.Check(t, !chunk.Running)
 	assert.Check(t, cmp.Contains(chunk.Error, "credentials"))
+}
+
+func TestConflictsEndpointRequiresRoot(t *testing.T) {
+	startTestDaemon(t)
+	sockPath, err := SocketPath()
+	assert.NilError(t, err)
+
+	resp, err := unixClient(sockPath).Get("http://watchd/conflicts")
+	assert.NilError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Check(t, cmp.Equal(resp.StatusCode, http.StatusBadRequest))
+}
+
+func TestConflictsEndpointReportsUnknownRootAsUnknown(t *testing.T) {
+	// The distinction the endpoint exists to carry: a root the daemon does not
+	// track is "no answer", not "no conflicts". Collapsing them would have a
+	// hook tell an agent a branch is clean when nothing ever looked.
+	startTestDaemon(t)
+
+	report, err := FetchConflicts(t.TempDir())
+	assert.NilError(t, err)
+	assert.Check(t, !report.Known)
+	assert.Check(t, cmp.Nil(report.Conflict))
+	// And nothing is advised on the back of it.
+	notice := ConflictNotice(report)
+	assert.Check(t, cmp.Equal(notice, ""))
+}
+
+func TestConflictsEndpointServesStoredState(t *testing.T) {
+	startTestDaemon(t)
+
+	root := t.TempDir()
+	d := &daemon{projects: map[string]*projectState{
+		root: {
+			root:      root,
+			canonRoot: canonicalRoot(root),
+			conflict: &ConflictState{
+				Branch: "feature", Target: "origin/main",
+				Conflicted: true, Paths: []string{"a.go"}, TotalPaths: 1,
+			},
+		},
+	}}
+
+	report := d.conflictReport(root)
+	assert.Check(t, report.Known)
+	assert.Assert(t, report.Conflict != nil)
+	assert.Check(t, report.Conflict.Conflicted)
+	assert.Check(t, cmp.DeepEqual(report.Conflict.Paths, []string{"a.go"}))
+}
+
+func TestConflictReportMatchesASymlinkedRoot(t *testing.T) {
+	// Two callers can name the same project by different paths — git's
+	// --show-toplevel resolves symlinks, a shell's $PWD does not. Matching only
+	// the literal string would report the project as unknown.
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	err := os.Symlink(target, link)
+	assert.NilError(t, err)
+
+	d := &daemon{projects: map[string]*projectState{
+		target: {root: target, canonRoot: canonicalRoot(target), conflict: &ConflictState{Branch: "feature"}},
+	}}
+
+	report := d.conflictReport(link)
+	assert.Check(t, report.Known, "a symlinked root must resolve to the same project")
+	assert.Assert(t, report.Conflict != nil)
+	assert.Check(t, cmp.Equal(report.Conflict.Branch, "feature"))
 }

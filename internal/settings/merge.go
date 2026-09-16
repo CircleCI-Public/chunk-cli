@@ -31,6 +31,15 @@ const legacyCommitMatcher = "Bash(git commit*)"
 // command written by Build and BuildCodex.
 const StopCommand = "chunk validate"
 
+// ConflictsCommand is the advisory merge-conflict notice chunk writes into the
+// commit hook group. It carries CommitIfFilter like every other entry there, so
+// Merge already owns it and no separate ownership rule is needed.
+//
+// --hook is what keeps it advisory: the command exits 0 whatever it finds, and
+// reports through hook JSON rather than an exit code. It sits alongside entries
+// whose failure blocks the commit, so that distinction is the whole contract.
+const ConflictsCommand = "chunk conflicts --hook"
+
 // MergeResult holds the computed merge without performing any I/O.
 type MergeResult struct {
 	Original []byte // existing settings.json content (re-marshaled for normalized formatting)

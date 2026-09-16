@@ -101,6 +101,7 @@ Configuration:
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newHookCmd())
+	rootCmd.AddCommand(newConflictsCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
 	rootCmd.AddCommand(newReceiveTelemetryCmd())
 	rootCmd.AddCommand(newWatchCmd())
