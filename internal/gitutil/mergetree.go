@@ -163,7 +163,7 @@ func FetchRemoteBranch(ctx context.Context, dir, remote, branch string) error {
 	// A fetch must never turn into a credential prompt: this process has no
 	// terminal to prompt on, and a git that blocks waiting for input would hang
 	// the timer it runs on until the context expires.
-	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=")
+	cmd.Env = noPromptEnv(cmd.Environ())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
 			return fmt.Errorf("fetch %s %s: %s", remote, branch, msg)
@@ -189,4 +189,42 @@ func RevParseCtx(ctx context.Context, dir, rev string) (string, error) {
 		return "", fmt.Errorf("resolve %s: empty output", rev)
 	}
 	return sha, nil
+}
+
+// noPromptEnv returns env with every interactive credential path disabled.
+//
+// The inherited entries are dropped rather than shadowed, so exactly one entry
+// per key reaches git. Appending alone would also work — exec.Cmd runs
+// dedupEnv before starting the process, which keeps the last duplicate — but
+// that is a property of the standard library rather than of this code, and a
+// reader checking whether a background fetch can prompt should not have to
+// know it. One entry per key makes the answer visible here.
+func noPromptEnv(env []string) []string {
+	// Empty GIT_ASKPASS and SSH_ASKPASS rather than absent: git and ssh only
+	// consult them when they name a program, so an empty value is what turns
+	// the helper off.
+	overrides := []string{"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS="}
+	out := make([]string, 0, len(env)+len(overrides))
+	for _, kv := range env {
+		if !overridden(kv, overrides) {
+			out = append(out, kv)
+		}
+	}
+	return append(out, overrides...)
+}
+
+// overridden reports whether kv sets a key that overrides also sets.
+func overridden(kv string, overrides []string) bool {
+	name, _, ok := strings.Cut(kv, "=")
+	if !ok {
+		// Not of the form key=value. exec preserves such entries unchanged, so
+		// this does too rather than dropping something it cannot read.
+		return false
+	}
+	for _, o := range overrides {
+		if key, _, _ := strings.Cut(o, "="); key == name {
+			return true
+		}
+	}
+	return false
 }

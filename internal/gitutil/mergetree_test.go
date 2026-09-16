@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -223,4 +224,53 @@ func TestFetchRemoteBranchErrorsOnMissingRemote(t *testing.T) {
 	dir := setupRepo(t)
 	err := FetchRemoteBranch(context.Background(), dir, "origin", "main")
 	assert.Check(t, err != nil)
+}
+
+func TestNoPromptEnvLeavesOneEntryPerKey(t *testing.T) {
+	// A parent that already disagrees with every override. Shadowing these
+	// rather than replacing them would leave git's view of them dependent on
+	// exec's dedup rule, which is not where a reader will look for it.
+	env := []string{
+		"GIT_TERMINAL_PROMPT=1",
+		"PATH=/usr/bin",
+		"SSH_ASKPASS=/usr/bin/ssh-askpass",
+		"GIT_ASKPASS=/usr/bin/git-askpass",
+		"HOME=/home/dev",
+	}
+
+	got := noPromptEnv(env)
+
+	counts := map[string]int{}
+	values := map[string]string{}
+	for _, kv := range got {
+		k, v, _ := strings.Cut(kv, "=")
+		counts[k]++
+		values[k] = v
+	}
+
+	for _, k := range []string{"GIT_TERMINAL_PROMPT", "GIT_ASKPASS", "SSH_ASKPASS"} {
+		assert.Check(t, cmp.Equal(counts[k], 1), "exactly one entry for %s", k)
+	}
+	assert.Check(t, cmp.Equal(values["GIT_TERMINAL_PROMPT"], "0"))
+	assert.Check(t, cmp.Equal(values["GIT_ASKPASS"], ""))
+	assert.Check(t, cmp.Equal(values["SSH_ASKPASS"], ""))
+
+	// Everything unrelated survives untouched: this disables prompting, it does
+	// not sanitise the environment.
+	assert.Check(t, cmp.Equal(values["PATH"], "/usr/bin"))
+	assert.Check(t, cmp.Equal(values["HOME"], "/home/dev"))
+}
+
+func TestNoPromptEnvKeepsEntriesItCannotParse(t *testing.T) {
+	// exec preserves items that are not key=value unchanged, so dropping them
+	// here would make this function the one place that quietly loses them.
+	got := noPromptEnv([]string{"MALFORMED", "GIT_TERMINAL_PROMPT=1"})
+
+	var kept bool
+	for _, kv := range got {
+		if kv == "MALFORMED" {
+			kept = true
+		}
+	}
+	assert.Check(t, kept, "a non key=value entry must survive")
 }
