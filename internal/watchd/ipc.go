@@ -86,6 +86,36 @@ func newServer(d *daemon) *http.Server {
 	}
 }
 
+// withBearerAuth wraps h so that every request must carry a matching
+// Authorization: Bearer <token> header. When token is empty the handler is
+// returned unchanged (auth disabled).
+func withBearerAuth(h http.Handler, token string) http.Handler {
+	if token == "" {
+		return h
+	}
+	want := "Bearer " + token
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != want {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// bearerTransport is an http.RoundTripper that adds an Authorization header
+// to every request before delegating to the inner transport.
+type bearerTransport struct {
+	inner http.RoundTripper
+	token string
+}
+
+func (bt *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+bt.token)
+	return bt.inner.RoundTrip(req)
+}
+
 // unixClient returns an *http.Client that dials the given Unix socket path.
 func unixClient(sockPath string) *http.Client {
 	return &http.Client{
@@ -114,24 +144,32 @@ func longUnixClient(sockPath string) *http.Client {
 // DialContext ignores the URL hostname (kept as "watchd" for consistency with
 // the unix variants) and always connects to addr.
 func tcpClient(addr string) *http.Client {
-	return &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
-			},
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 		},
 	}
+	var rt http.RoundTripper = transport
+	if token := TCPToken(); token != "" {
+		rt = &bearerTransport{inner: transport, token: token}
+	}
+	return &http.Client{Timeout: 5 * time.Second, Transport: rt}
 }
 
 // longTCPClient is like tcpClient but with no total-request timeout, suitable
-// for long-running operations like /validate.
+// for long-running operations like /validate. A 10 s dial timeout bounds how
+// long an unreachable sandbox can stall the caller before ErrDaemonUnavailable
+// triggers a fallback to inline execution.
 func longTCPClient(addr string) *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
-			},
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", addr)
 		},
+		ResponseHeaderTimeout: 30 * time.Second,
 	}
+	var rt http.RoundTripper = transport
+	if token := TCPToken(); token != "" {
+		rt = &bearerTransport{inner: transport, token: token}
+	}
+	return &http.Client{Transport: rt}
 }

@@ -65,3 +65,10 @@ func TCPListenAddr() string {
 func TCPRemoteAddr() string {
 	return os.Getenv("CHUNK_WATCHD_REMOTE_ADDR")
 }
+
+// TCPToken returns the bearer token required for TCP connections, read from
+// CHUNK_WATCHD_TCP_TOKEN. When set, the daemon requires this token on every
+// TCP request and clients include it in every request header.
+func TCPToken() string {
+	return os.Getenv("CHUNK_WATCHD_TCP_TOKEN")
+}
