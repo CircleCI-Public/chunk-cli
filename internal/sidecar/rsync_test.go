@@ -113,6 +113,47 @@ func TestSSHCommandSetsIdentitiesOnlyAtMostOnce(t *testing.T) {
 	}
 }
 
+func TestWorktreeWorkspace(t *testing.T) {
+	cases := []struct {
+		name      string
+		originURL string
+		wantPath  string
+		wantOK    bool
+	}{
+		{
+			name:      "GitHub HTTPS URL",
+			originURL: "https://github.com/CircleCI-Public/chunk-cli.git",
+			wantPath:  DefaultWorkspace("chunk-cli"),
+			wantOK:    true,
+		},
+		{
+			name:      "GitHub SSH URL",
+			originURL: "git@github.com:CircleCI-Public/chunk-cli.git",
+			wantPath:  DefaultWorkspace("chunk-cli"),
+			wantOK:    true,
+		},
+		{
+			name:      "non-GitHub remote returns false",
+			originURL: "git@gitlab.com:org/repo.git",
+			wantOK:    false,
+		},
+		{
+			name:      "empty origin URL returns false",
+			originURL: "",
+			wantOK:    false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := worktreeWorkspace(tc.originURL)
+			assert.Equal(t, ok, tc.wantOK)
+			if tc.wantOK {
+				assert.Equal(t, got, tc.wantPath)
+			}
+		})
+	}
+}
+
 func TestRsyncErrDetail(t *testing.T) {
 	const hostKeyNotice = "Warning: Permanently added '[127.0.0.1]:52134' (ED25519) to the list of known hosts."
 

@@ -55,32 +55,46 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 		return fmt.Errorf("rsync: open session: %w", err)
 	}
 
-	// Detect a git worktree early: in a worktree .git is a file (not a dir)
-	// containing a gitdir pointer to an absolute local path. This affects both
-	// workspace resolution (use repo name, not directory name) and how the
-	// remote git repo is set up after the sync.
-	gitInfo, statErr := os.Stat(filepath.Join(cwd, ".git"))
-	isWorktree := statErr == nil && !gitInfo.IsDir()
+	// Detect a git worktree by walking up from cwd to find the git root, then
+	// checking whether .git there is a file (worktree pointer) or a directory
+	// (normal checkout). Walking up ensures detection works when chunk is run
+	// from a subdirectory of the worktree.
+	gitRoot, _ := findGitRootFrom(cwd)
+	var isWorktree bool
+	if gitRoot != "" {
+		if gitInfo, statErr := os.Stat(filepath.Join(gitRoot, ".git")); statErr == nil {
+			isWorktree = !gitInfo.IsDir()
+		}
+	}
 
 	// In a worktree, fetch the origin URL once; it is used for workspace
 	// resolution (to parse the repo name) and to configure the remote on the
 	// sidecar after init.
 	var worktreeOriginURL string
 	if isWorktree {
-		if out, execErr := exec.CommandContext(ctx, "git", "-C", cwd, "remote", "get-url", "origin").Output(); execErr == nil {
+		out, execErr := exec.CommandContext(ctx, "git", "-C", gitRoot, "remote", "get-url", "origin").Output()
+		if execErr != nil {
+			status(iostream.LevelWarn, fmt.Sprintf("Could not read git remote origin: %v", execErr))
+		} else {
 			worktreeOriginURL = strings.TrimSpace(string(out))
 		}
 	}
 
 	repoPath := workdir
 	if persist {
-		if isWorktree && worktreeOriginURL != "" && workdir == "" {
+		resolved := false
+		if isWorktree && workdir == "" {
 			// Skip the saved workspace in a worktree: it may have been recorded as
 			// the worktree directory name by older code. Derive from the repo name
 			// so the path matches what every other code path expects.
-			_, repo, _ := gitremote.ParseRemoteURL(worktreeOriginURL)
-			repoPath = DefaultWorkspace(repo)
-		} else {
+			if ws, ok := worktreeWorkspace(worktreeOriginURL); ok {
+				repoPath = ws
+				resolved = true
+			}
+			// If worktreeWorkspace returns false (non-GitHub remote, empty URL, or
+			// unparseable), fall through to normal resolution below.
+		}
+		if !resolved {
 			_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
 			if repoErr != nil {
 				repo = filepath.Base(cwd)
@@ -143,7 +157,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 		// Exclude the .git pointer file: rsync --delete does not remove excluded
 		// destination files, so a stale pointer from a previous run stays on the
 		// sidecar. We clean it up and rebuild a proper git repo after the sync.
-		rsyncArgs = append(rsyncArgs, "--exclude=.git")
+		rsyncArgs = append(rsyncArgs, "--exclude=/.git")
 	}
 	rsyncArgs = append(rsyncArgs, "-e", sshCmd, src, dst)
 
@@ -165,6 +179,59 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	}
 
 	status(iostream.LevelDone, "Synced")
+	return nil
+}
+
+// worktreeWorkspace returns the sidecar workspace path for a git worktree by
+// parsing the repo name from originURL. Returns ("", false) when the URL is
+// empty or cannot be parsed, so the caller can fall back to ResolveWorkspace.
+func worktreeWorkspace(originURL string) (string, bool) {
+	if originURL == "" {
+		return "", false
+	}
+	_, repo, err := gitremote.ParseRemoteURL(originURL)
+	if err != nil || repo == "" {
+		return "", false
+	}
+	return DefaultWorkspace(repo), true
+}
+
+// initWorktreeGitRepo sets up a minimal git repo in repoPath on the sidecar
+// after an rsync that excluded the .git pointer file. On the first sync it
+// removes any stale .git entry and runs git init; on subsequent syncs the
+// existing .git directory is reused. The origin URL is set (or updated) each
+// time so that git remote detection works inside the workspace.
+func initWorktreeGitRepo(ctx context.Context, sess *Session, repoPath, originURL string) error {
+	// Only initialise if there is no .git directory yet. This avoids rebuilding
+	// sidecar-side git state on every sync.
+	check, err := ExecOverSSH(ctx, sess, "test -d "+ShellEscape(repoPath+"/.git"), nil, nil)
+	if err != nil {
+		return fmt.Errorf("check .git on sidecar: %w", err)
+	}
+	if check.ExitCode != 0 {
+		// No .git directory — remove any stale pointer file left by a previous sync
+		// and initialise a fresh repo.
+		if result, err := ExecOverSSH(ctx, sess, "rm -rf "+ShellEscape(repoPath+"/.git"), nil, nil); err != nil {
+			return fmt.Errorf("remove stale .git on sidecar: %w", err)
+		} else if result.ExitCode != 0 {
+			return fmt.Errorf("remove stale .git on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
+		}
+		if result, err := ExecOverSSH(ctx, sess, "git -C "+ShellEscape(repoPath)+" init -q", nil, nil); err != nil {
+			return fmt.Errorf("git init on sidecar: %w", err)
+		} else if result.ExitCode != 0 {
+			return fmt.Errorf("git init on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
+		}
+	}
+	if originURL == "" {
+		return nil
+	}
+	// git config remote.origin.url is idempotent: creates or updates the URL.
+	setURL := "git -C " + ShellEscape(repoPath) + " config remote.origin.url " + ShellEscape(originURL)
+	if result, err := ExecOverSSH(ctx, sess, setURL, nil, nil); err != nil {
+		return fmt.Errorf("set remote origin on sidecar: %w", err)
+	} else if result.ExitCode != 0 {
+		return fmt.Errorf("set remote origin on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
+	}
 	return nil
 }
 
@@ -229,36 +296,6 @@ func sshCommand(sess *Session, port string) string {
 		args = append(args, "-o", "IdentitiesOnly=no", "-o", "IdentityAgent="+sess.AuthSock)
 	}
 	return strings.Join(args, " ")
-}
-
-// initWorktreeGitRepo sets up a minimal git repo in repoPath on the sidecar
-// after an rsync that excluded the .git pointer file. It removes any stale
-// .git entry, runs git init, and wires up the origin URL so that git remote
-// detection works inside the workspace.
-func initWorktreeGitRepo(ctx context.Context, sess *Session, repoPath, originURL string) error {
-	// Remove any stale .git entry left by a previous sync (broken worktree
-	// pointer file or directory from a prior git init).
-	if result, err := ExecOverSSH(ctx, sess, "rm -rf "+ShellEscape(repoPath+"/.git"), nil, nil); err != nil {
-		return fmt.Errorf("remove stale .git on sidecar: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("remove stale .git on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
-	}
-	if result, err := ExecOverSSH(ctx, sess, "git -C "+ShellEscape(repoPath)+" init -q", nil, nil); err != nil {
-		return fmt.Errorf("git init on sidecar: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("git init on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
-	}
-	if originURL == "" {
-		return nil
-	}
-	// git config remote.origin.url is idempotent: creates or updates the URL.
-	setURL := "git -C " + ShellEscape(repoPath) + " config remote.origin.url " + ShellEscape(originURL)
-	if result, err := ExecOverSSH(ctx, sess, setURL, nil, nil); err != nil {
-		return fmt.Errorf("set remote origin on sidecar: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("set remote origin on sidecar: exit %d: %s", result.ExitCode, result.Stderr)
-	}
-	return nil
 }
 
 // startSSHProxy starts a local TCP listener on a random port and bridges each
