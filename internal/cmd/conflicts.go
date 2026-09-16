@@ -127,6 +127,14 @@ func reportConflictLookupError(streams iostream.Streams, root string, err error,
 		})
 		return
 	}
+	if errors.Is(err, watchd.ErrDaemonTimeout) {
+		// Deliberately not the "run chunk watch" advice below: the daemon is
+		// already running, and telling someone to start it sends them to fix
+		// something that is not broken.
+		streams.Printf("%s", "The watch daemon did not answer in time, so there is no conflict information.\n"+
+			"It is running but busy — try again in a moment.\n")
+		return
+	}
 	if errors.Is(err, watchd.ErrDaemonUnreachable) {
 		streams.Printf("%s", "No watch daemon is running, so there is no conflict information.\n"+
 			"Run `chunk watch` to start it.\n")

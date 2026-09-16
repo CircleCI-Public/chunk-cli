@@ -92,6 +92,15 @@ const conflictTimeout = 2 * time.Second
 // session end for everyone who does not.
 var ErrDaemonUnreachable = errors.New("no watch daemon is running")
 
+// ErrDaemonTimeout reports that a daemon was there but did not answer within
+// conflictTimeout.
+//
+// Kept apart from ErrDaemonUnreachable because the two call for different
+// advice: one means start the daemon, the other means it is already running and
+// busy, so asking again is what helps. Collapsing them told people with a
+// working daemon to go start one.
+var ErrDaemonTimeout = errors.New("the watch daemon did not answer in time")
+
 // FetchConflicts asks the running daemon whether root's branch still merges
 // cleanly into its merge target.
 //
@@ -108,6 +117,12 @@ func FetchConflicts(root string) (ConflictReport, error) {
 	client.Timeout = conflictTimeout
 	resp, err := client.Get(reqURL)
 	if err != nil {
+		// A refused connection and an expired deadline are different answers.
+		// os.IsTimeout sees through the *url.Error the client wraps around it,
+		// which is why the check is not an errors.Is against a sentinel.
+		if os.IsTimeout(err) {
+			return ConflictReport{}, ErrDaemonTimeout
+		}
 		return ConflictReport{}, ErrDaemonUnreachable
 	}
 	defer func() { _ = resp.Body.Close() }()

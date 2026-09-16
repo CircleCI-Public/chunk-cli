@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,6 +201,58 @@ func TestConflictsHookModeSaysNothingWhenTheMergeIsClean(t *testing.T) {
 	report.Conflict.Paths = nil
 	report.Conflict.TotalPaths = 0
 	serveConflicts(t, report)
+
+	out, errOut, err := runConflictsCmd(t, t.TempDir(), "--hook")
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Equal(out, ""))
+	assert.Check(t, cmp.Equal(errOut, ""))
+}
+
+// stalledDaemon listens on the daemon socket and never answers, which is what a
+// daemon busy elsewhere looks like to this command.
+func stalledDaemon(t *testing.T) {
+	t.Helper()
+	// Not t.TempDir(): it embeds the test name, and a unix socket path is capped
+	// at 104 bytes on darwin.
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+
+	ln, err := net.Listen("unix", filepath.Join(dir, "watchd.sock"))
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			// Held open, not closed: closing would be a refusal, which is the
+			// other case entirely.
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+}
+
+func TestConflictsManualModeDoesNotBlameAMissingDaemonForASlowOne(t *testing.T) {
+	// What the reader is told has to match what happened. A daemon that is up
+	// but busy was being reported with "Run `chunk watch` to start it", sending
+	// someone to start a daemon they already have.
+	stalledDaemon(t)
+
+	out, _, err := runConflictsCmd(t, t.TempDir())
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Contains(out, "did not answer in time"))
+	assert.Check(t, !strings.Contains(out, "to start it"),
+		"a running daemon must not be reported as one that needs starting")
+}
+
+func TestConflictsHookModeStaysQuietWhenTheDaemonStalls(t *testing.T) {
+	// Still nothing on a commit. A slow daemon is no more worth announcing on
+	// every commit than an absent one.
+	stalledDaemon(t)
 
 	out, errOut, err := runConflictsCmd(t, t.TempDir(), "--hook")
 	assert.NilError(t, err)

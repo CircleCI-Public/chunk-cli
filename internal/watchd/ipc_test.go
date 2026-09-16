@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -299,4 +301,53 @@ func TestConflictReportMatchesASymlinkedRoot(t *testing.T) {
 	assert.Check(t, report.Known, "a symlinked root must resolve to the same project")
 	assert.Assert(t, report.Conflict != nil)
 	assert.Check(t, cmp.Equal(report.Conflict.Branch, "feature"))
+}
+
+// hangingDaemon listens on the daemon socket and never answers, which is what
+// a daemon busy elsewhere looks like from the client side.
+func hangingDaemon(t *testing.T) {
+	t.Helper()
+	// Not t.TempDir(): a unix socket path is capped at 104 bytes on darwin and
+	// the test name pushes a temp dir past it.
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+
+	ln, err := net.Listen("unix", filepath.Join(dir, "watchd.sock"))
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			// Hold the connection open without replying. Closing it would be a
+			// refusal, which is the case this test exists to be distinct from.
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+}
+
+func TestFetchConflictsSeparatesASlowDaemonFromAMissingOne(t *testing.T) {
+	// A daemon that accepts and then stalls must not be reported as absent. The
+	// advice differs: one says start it, the other says it is already up.
+	hangingDaemon(t)
+
+	_, err := FetchConflicts(t.TempDir())
+	assert.Check(t, errors.Is(err, ErrDaemonTimeout), "want ErrDaemonTimeout, got: %v", err)
+	assert.Check(t, !errors.Is(err, ErrDaemonUnreachable),
+		"a stalled daemon must not be reported as no daemon at all")
+}
+
+func TestFetchConflictsReportsAMissingDaemonAsUnreachable(t *testing.T) {
+	// The counterpart, so the split above cannot be satisfied by calling
+	// everything a timeout.
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+
+	_, err := FetchConflicts(t.TempDir())
+	assert.Check(t, errors.Is(err, ErrDaemonUnreachable), "want ErrDaemonUnreachable, got: %v", err)
+	assert.Check(t, !errors.Is(err, ErrDaemonTimeout))
 }
