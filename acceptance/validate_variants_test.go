@@ -130,10 +130,10 @@ func TestValidateVariantsNoRemoteCommands(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	workDir := env.HomeDir
-	// Write config with only local (non-remote) commands.
+	// Write config with only explicitly local commands.
 	chunkDir := filepath.Join(workDir, ".chunk")
 	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
-	cfg := `{"commands":[{"name":"test","run":"go test ./...","remote":false}]}`
+	cfg := `{"commands":[{"name":"test","run":"go test ./...","local":true}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
 
 	path := writeVariantsFile(t, workDir, []variants.Variant{
@@ -149,6 +149,14 @@ func TestValidateVariantsNoRemoteCommands(t *testing.T) {
 	combined := result.Stdout + result.Stderr
 	assert.Assert(t, strings.Contains(combined, "remote"),
 		"expected 'remote' in error output, got: %s", combined)
+
+	named := binary.RunCLI(t, []string{
+		"validate", "variants", path,
+		"--name", "test",
+		"--org-id", "org-aaa",
+	}, env, workDir)
+	assert.Assert(t, named.ExitCode != 0, "expected explicitly local named command to be rejected")
+	assert.Assert(t, strings.Contains(named.Stdout+named.Stderr, "configured for local execution"))
 }
 
 func TestValidateVariantsNamedCommand(t *testing.T) {

@@ -166,7 +166,9 @@ func downloadAndReplace(client *http.Client, url, installPath string) error {
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
 		}
-		if filepath.Base(hdr.Name) != "chunk" {
+		// Match the archive root exactly, not by base name: nothing stops the
+		// archive shipping a nested file called "chunk" ahead of the binary.
+		if hdr.Typeflag != tar.TypeReg || filepath.Clean(hdr.Name) != "chunk" {
 			continue
 		}
 

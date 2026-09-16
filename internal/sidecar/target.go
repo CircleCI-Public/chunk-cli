@@ -18,6 +18,9 @@ type Target struct {
 	SidecarID  string
 	Workdir    string
 	RetryOn404 bool
+	// OnSubmitted receives the command ID after submission and before output is
+	// streamed. Callers that probe a target should leave it nil.
+	OnSubmitted func(string)
 }
 
 type WorkspaceNotFoundError struct {
@@ -74,9 +77,16 @@ func (t Target) ExecRunner(ctx context.Context, cwd string, envVars map[string]s
 			}
 			_, _ = w.Write(data)
 		}
-		result, err := t.Client.Exec(ctx, t.SidecarID, "sh", []string{"-c", script}, envVars, onOutput)
+		commandID, err := t.Client.SubmitExec(ctx, t.SidecarID, "sh", []string{"-c", script}, envVars)
 		if err != nil {
-			return "", "", 0, err
+			return "", "", 0, fmt.Errorf("submit command: %w", err)
+		}
+		if t.OnSubmitted != nil {
+			t.OnSubmitted(commandID)
+		}
+		result, err := t.Client.StreamOutput(ctx, commandID, "", onOutput)
+		if err != nil {
+			return "", "", 0, fmt.Errorf("stream command output: %w", err)
 		}
 		return stdout.String(), stderr.String(), result.ExitCode, nil
 	}
@@ -84,16 +94,22 @@ func (t Target) ExecRunner(ctx context.Context, cwd string, envVars map[string]s
 }
 
 func (t Target) ReadyExecRunner(ctx context.Context, cwd string, envVars map[string]string, streams iostream.Streams) (func(context.Context, string) (string, string, int, error), string, error) {
-	execFn, dest, err := t.ExecRunner(ctx, cwd, envVars, streams)
+	probeTarget := t
+	probeTarget.OnSubmitted = nil
+	probeExecFn, dest, err := probeTarget.ExecRunner(ctx, cwd, envVars, streams)
 	if err != nil {
 		return nil, "", err
 	}
-	_, _, exitCode, err := execFn(ctx, "test -d "+ShellEscape(dest))
+	_, _, exitCode, err := probeExecFn(ctx, "test -d "+ShellEscape(dest))
 	if err != nil {
 		return nil, "", &TargetUnavailableError{SidecarID: t.SidecarID, Err: fmt.Errorf("check workspace: %w", err)}
 	}
 	if exitCode != 0 {
 		return nil, "", &WorkspaceNotFoundError{SidecarID: t.SidecarID, Path: dest}
+	}
+	execFn, _, err := t.ExecRunner(ctx, cwd, envVars, streams)
+	if err != nil {
+		return nil, "", err
 	}
 	return execFn, dest, nil
 }

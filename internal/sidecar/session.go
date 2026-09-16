@@ -77,7 +77,8 @@ type Session struct {
 }
 
 // IsDefinitelyStale probes sidecarID with a single AddSSHKey attempt under a
-// short timeout. It returns true only when the provisioner responds 404.
+// short timeout. It returns true only when the sidecar is gone or too old for
+// the current API.
 func IsDefinitelyStale(ctx context.Context, client *circleci.Client, sidecarID string) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -96,8 +97,7 @@ func IsDefinitelyStale(ctx context.Context, client *circleci.Client, sidecarID s
 	if err == nil {
 		return false
 	}
-	var se *circleci.StatusError
-	return errors.As(err, &se) && se.StatusCode == http.StatusNotFound
+	return circleci.SidecarGone(err) || circleci.SidecarOutOfDate(err)
 }
 
 // addSSHKey registers a public key with the sidecar. When retryOn404 is true

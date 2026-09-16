@@ -7,6 +7,20 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 )
 
+// Resources is one sample of a sidecar's resource usage.
+//
+// Memory is reported as used-of-limit rather than a percentage so the display
+// can show both, and because a limit of zero (unknown) has to be distinguishable
+// from a usage of zero.
+type Resources struct {
+	CPUPercent     float64   `json:"cpu_percent"`
+	MemUsedBytes   int64     `json:"mem_used_bytes"`
+	MemLimitBytes  int64     `json:"mem_limit_bytes"`
+	DiskUsedBytes  int64     `json:"disk_used_bytes"`
+	DiskTotalBytes int64     `json:"disk_total_bytes"`
+	SampledAt      time.Time `json:"sampled_at"`
+}
+
 // SidecarState describes one active sidecar as maintained by the daemon.
 type SidecarState struct {
 	ID   string `json:"id"`
@@ -15,15 +29,21 @@ type SidecarState struct {
 	// written outside a session or before sessions existed. Sidecars are
 	// isolated per session, so two entries for one project and branch are two
 	// sessions working in the same tree — this is what tells them apart.
-	SessionID    string      `json:"session_id,omitempty"`
-	ProjectName  string      `json:"project_name"`
-	RepoName     string      `json:"repo_name"`
-	SnapshotName string      `json:"snapshot_name"`
-	FileMtime    time.Time   `json:"file_mtime"`
+	SessionID    string    `json:"session_id,omitempty"`
+	ProjectName  string    `json:"project_name"`
+	RepoName     string    `json:"repo_name"`
+	SnapshotName string    `json:"snapshot_name"`
+	FileMtime    time.Time `json:"file_mtime"`
+	// Workspace is the sidecar-side repo path, used to sample disk usage where
+	// the work actually happens rather than wherever a shell starts.
+	Workspace    string      `json:"workspace,omitempty"`
 	LastActivity time.Time   `json:"last_activity"`
 	LastOp       eventlog.Op `json:"last_op"`
 	LastLevel    string      `json:"last_level"`
 	Running      bool        `json:"running"`
+	// Resources is the most recent resource sample, or nil when none has
+	// arrived — sampling only runs while a dashboard is attached.
+	Resources *Resources `json:"resources,omitempty"`
 }
 
 // CommandState describes one remote command the daemon is buffering output for.

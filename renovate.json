@@ -10,6 +10,10 @@
   "vulnerabilityAlerts": {
     "enabled": true
   },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 5am on monday"]
+  },
   "enabledManagers": ["gomod", "pep621"],
   "packageRules": [
     {

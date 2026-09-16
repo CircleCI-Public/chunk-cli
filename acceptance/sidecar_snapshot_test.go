@@ -89,7 +89,7 @@ func TestSidecarSnapshotCreateUsesActiveSidecar(t *testing.T) {
 		"expected active sidecar ID in request body")
 
 	// After a successful snapshot, the source sidecar should have been deleted
-	// and the local active-sidecar state cleared.
+	// and the member removed from local active-pool state.
 	currentResult := binary.RunCLI(t, []string{"sidecar", "current"}, env, workDir)
 	assert.Equal(t, currentResult.ExitCode, 0)
 	assert.Assert(t, strings.Contains(currentResult.Stderr, "No active sidecar"),

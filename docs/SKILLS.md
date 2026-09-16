@@ -104,7 +104,7 @@ Agent: [probes state — active sidecar found]
        ✓ all validations passed
 ```
 
-**Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar — two sessions never sync into the same remote workspace. State is keyed by session and branch and stored in `XDG_DATA_HOME` (see Architecture docs); the session comes from the Stop hook payload, or from `CLAUDE_CODE_SESSION_ID` for commands the agent runs itself. No manual configuration is needed; set `CHUNK_SESSION_ID` to pin the identity by hand (for an agent other than Claude Code, say).
+**Parallel sessions**: When multiple Claude sessions are open in the same repo, each session automatically targets its own sidecar pool — two sessions never sync into the same remote workspace. State is keyed by session and branch and stored in `XDG_DATA_HOME` (see Architecture docs); the session comes from the Stop hook payload, or from `CLAUDE_CODE_SESSION_ID` for commands the agent runs itself. No manual configuration is needed; set `CHUNK_SESSION_ID` to pin the identity by hand (for an agent other than Claude Code, say).
 
 ---
 
@@ -142,7 +142,7 @@ Runs a four-stage mutation testing process to find undertested code paths.
 **What it does**:
 
 1. **Discovery** — identifies mutation candidates in changed code
-2. **Validation** — triages candidates locally, then runs the survivors on parallel throwaway sidecars via `chunk validate variants`
+2. **Validation** — triages candidates locally, then runs the survivors on a temporary sidecar pool via `chunk validate variants`
 3. **Production cross-reference** — checks whether survivors touch production code paths
 4. **Risk assessment** — reports high-risk survivors with recommended tests
 

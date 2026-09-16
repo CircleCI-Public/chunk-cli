@@ -43,7 +43,7 @@ func startTestDaemonWithAuth(t *testing.T, authMessage string) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, authMessage) }()
+	go func() { errCh <- RunDaemon(ctx, nil, authMessage, nil) }()
 	t.Cleanup(func() {
 		cancel()
 		select {

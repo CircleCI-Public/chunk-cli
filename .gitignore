@@ -38,6 +38,9 @@ PLANS.md
 .chunk/sidecar.json
 .chunk/sidecar.*.json
 
+# managed sidecar pool state
+.chunk/*-pool.json
+
 # mutation variants scratch file
 .chunk/variants.json
 

@@ -55,13 +55,14 @@ func newConfigShowCmd() *cobra.Command {
 					Source string `json:"source,omitempty"`
 				}
 				type configOutput struct {
-					Model           configEntry `json:"model"`
-					AnthropicAPIKey configEntry `json:"anthropicAPIKey"`
-					CircleCIToken   configEntry `json:"circleCIToken"`
-					GitHubToken     configEntry `json:"gitHubToken"`
-					OrgID           configEntry `json:"orgID"`
-					Telemetry       bool        `json:"telemetry"`
-					Notifications   bool        `json:"notifications"`
+					Model            configEntry `json:"model"`
+					AnthropicAPIKey  configEntry `json:"anthropicAPIKey"`
+					CircleCIToken    configEntry `json:"circleCIToken"`
+					GitHubToken      configEntry `json:"gitHubToken"`
+					OrgID            configEntry `json:"orgID"`
+					Telemetry        bool        `json:"telemetry"`
+					Notifications    bool        `json:"notifications"`
+					AutoLaunchDaemon bool        `json:"autoLaunchDaemon"`
 				}
 				maskOrEmpty := func(key string) string {
 					if key == "" {
@@ -70,13 +71,14 @@ func newConfigShowCmd() *cobra.Command {
 					return config.MaskKey(key)
 				}
 				return iostream.PrintJSON(io.Out, configOutput{
-					Model:           configEntry{Value: rc.Model, Source: rc.ModelSource},
-					AnthropicAPIKey: configEntry{Value: maskOrEmpty(rc.AnthropicAPIKey), Source: rc.AnthropicAPIKeySource},
-					CircleCIToken:   configEntry{Value: maskOrEmpty(rc.CircleCIToken), Source: rc.CircleCITokenSource},
-					GitHubToken:     configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
-					OrgID:           configEntry{Value: orgID, Source: orgIDSource},
-					Telemetry:       telemetryEnabled,
-					Notifications:   userCfg.Notifications,
+					Model:            configEntry{Value: rc.Model, Source: rc.ModelSource},
+					AnthropicAPIKey:  configEntry{Value: maskOrEmpty(rc.AnthropicAPIKey), Source: rc.AnthropicAPIKeySource},
+					CircleCIToken:    configEntry{Value: maskOrEmpty(rc.CircleCIToken), Source: rc.CircleCITokenSource},
+					GitHubToken:      configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
+					OrgID:            configEntry{Value: orgID, Source: orgIDSource},
+					Telemetry:        telemetryEnabled,
+					Notifications:    userCfg.Notifications,
+					AutoLaunchDaemon: userCfg.AutoLaunchDaemon,
 				})
 			}
 
@@ -109,6 +111,7 @@ func newConfigShowCmd() *cobra.Command {
 
 			io.Printf("%s %v\n", ui.Label("telemetry:", w), telemetryEnabled)
 			io.Printf("%s %v\n", ui.Label("notifications:", w), userCfg.Notifications)
+			io.Printf("%s %v\n", ui.Label("autoLaunchDaemon:", w), userCfg.AutoLaunchDaemon)
 
 			return nil
 		},
@@ -123,7 +126,7 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, telemetry, notifications\nProject keys: orgID, validation.sidecarImage",
+		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, telemetry, notifications, autoLaunchDaemon\nProject keys: orgID, validation.sidecarImage",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
@@ -159,7 +162,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, telemetry, notifications, orgID, validation.sidecarImage.",
+					detail: "Supported keys: model, telemetry, notifications, autoLaunchDaemon, orgID, validation.sidecarImage.",
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}
@@ -184,6 +187,12 @@ func newConfigSetCmd() *cobra.Command {
 					return err
 				}
 				cfg.Notifications = b
+			case "autoLaunchDaemon":
+				b, err := parseBoolValue("autoLaunchDaemon", value)
+				if err != nil {
+					return err
+				}
+				cfg.AutoLaunchDaemon = b
 			}
 
 			if err := config.Save(cfg); err != nil {

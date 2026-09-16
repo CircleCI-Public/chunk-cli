@@ -83,37 +83,6 @@ func cannotCreateSidecar(orgID, source string, err error) error {
 		wrap(err)
 }
 
-// unreachableSidecar and missingWorkspace phrase the two ways a sidecar that
-// already exists can fail to run the commands routed to it. Both return an
-// error rather than letting those commands run locally: a command is marked
-// remote because a local result does not answer the question it was written to
-// answer, so running it here reports a pass the sidecar never gave. That is the
-// same false green as a refused creation, reached one step later — and it costs
-// the full suite's runtime before saying so. Naming the commands that did not
-// run keeps the skipped work visible rather than implied.
-//
-// The advice does not distinguish a sidecar this run provisioned from a
-// pre-existing one. Inspecting or replacing it is sound either way, and
-// "chunk sidecar list" shows a still-starting sidecar as such, so the caller
-// does not have to thread that state down here to word the error.
-func unreachableSidecar(sidecarID, cmds string, err error) error {
-	return newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
-		withCode("sidecar.unreachable").
-		withDetail(fmt.Sprintf("Did not run: %s. Commands marked remote are not run locally.", cmds)).
-		withSuggestion("Check its state with 'chunk sidecar list', or provision a replacement with 'chunk sidecar create'.").
-		withExitCode(ExitAPIError).
-		wrap(err)
-}
-
-func missingWorkspace(sidecarID, dest, cmds string, err error) error {
-	return newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
-		withCode("sidecar.workspace_missing").
-		withDetail(fmt.Sprintf("Expected it at %q. Did not run: %s. Commands marked remote are not run locally.", dest, cmds)).
-		withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
-		withExitCode(ExitNotFound).
-		wrap(err)
-}
-
 // outdatedSidecarAPI maps an unsupported output format to guidance that points
 // the right way. The API is behind this binary, not ahead of it, so telling
 // someone to upgrade chunk would send them in exactly the wrong direction —
@@ -156,6 +125,24 @@ func sidecarUnavailable(sidecarID string, err error) error {
 			wrap(err)
 	}
 	return nil
+}
+
+func unreachableSidecar(sidecarID, commands string, err error) error {
+	return newUserError(fmt.Sprintf("Could not reach sidecar %s.", sidecarID)).
+		withCode("sidecar.unreachable").
+		withDetail(fmt.Sprintf("Did not run: %s. Remote commands are not run locally.", commands)).
+		withSuggestion("Check its state with 'chunk sidecar list', or provision a replacement with 'chunk sidecar create'.").
+		withExitCode(ExitAPIError).
+		wrap(err)
+}
+
+func missingWorkspace(sidecarID, dest, commands string, err error) error {
+	return newUserError(fmt.Sprintf("Workspace not found on sidecar %s.", sidecarID)).
+		withCode("sidecar.workspace_missing").
+		withDetail(fmt.Sprintf("Expected it at %q. Did not run: %s. Remote commands are not run locally.", dest, commands)).
+		withSuggestion("Run 'chunk sidecar env build' to prepare the workspace.").
+		withExitCode(ExitNotFound).
+		wrap(err)
 }
 
 func sshSessionError(err error) error {

@@ -104,7 +104,7 @@ func TestRunCommandsShellFailureIsNotAKill(t *testing.T) {
 
 // TestRunCommandsTimeoutIsNotAKill covers a mutant that makes the suite hang.
 // Nothing was proven, so it must not read as caught — and returning is what frees
-// the parallel slot and lets the caller delete the billed sidecar.
+// the pool slot and lets the caller delete the billed sidecar.
 func TestRunCommandsTimeoutIsNotAKill(t *testing.T) {
 	release := make(chan struct{})
 	// A defer, not a t.Cleanup: this must release the blocked handler before the

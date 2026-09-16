@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,51 +27,98 @@ const (
 	levelError = "error"
 )
 
-// loadSidecars reads all sidecar*.json files from dataDir and returns one
-// SidecarState per unique sidecar ID. When multiple files share the same ID
-// the entry with the newest mtime wins, so a stale state file never masks a
-// more recent sync.
+// loadSidecars reads active-sidecar and pool state files and returns one
+// SidecarState per unique sidecar ID. Active state is authoritative for
+// display metadata; pool state supplements it with managed members that are
+// not present there.
 func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
-	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	projectName := filepath.Base(root)
 	repoName := projectRepoName(root)
 	idx := map[string]int{}
 	var result []SidecarState
+	appendState := func(id, name, sessionID, workspace string, mtime time.Time) {
+		if id == "" {
+			return
+		}
+		at, duplicate := idx[id]
+		if duplicate && !mtime.After(result[at].FileMtime) {
+			return
+		}
+		state := SidecarState{
+			ID:           id,
+			Name:         name,
+			SessionID:    sessionID,
+			ProjectName:  projectName,
+			RepoName:     repoName,
+			SnapshotName: snapshotName,
+			FileMtime:    mtime,
+			Workspace:    workspace,
+		}
+		if duplicate {
+			result[at] = state
+			return
+		}
+		idx[id] = len(result)
+		result = append(result, state)
+	}
+
+	matches, _ := filepath.Glob(filepath.Join(dataDir, "sidecar*.json"))
 	for _, path := range matches {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
 		var as sidecar.ActiveSidecar
-		if json.Unmarshal(data, &as) != nil || as.ID() == "" {
+		if json.Unmarshal(data, &as) != nil {
 			continue
 		}
 		var mtime time.Time
 		if fi, err := os.Stat(path); err == nil {
 			mtime = fi.ModTime()
 		}
-		id := as.ID()
-		at, dup := idx[id]
-		if dup && !mtime.After(result[at].FileMtime) {
+		for i, id := range as.SidecarIDs {
+			appendState(id, sidecarName(as.Name, i, len(as.SidecarIDs)), as.SessionID, as.Workspace, mtime)
+		}
+	}
+
+	poolMatches, _ := filepath.Glob(filepath.Join(root, ".chunk", "*-pool.json"))
+	for _, path := range poolMatches {
+		data, err := os.ReadFile(path)
+		if err != nil {
 			continue
 		}
-		ss := SidecarState{
-			ID:           id,
-			Name:         as.Name,
-			SessionID:    as.SessionID,
-			ProjectName:  projectName,
-			RepoName:     repoName,
-			SnapshotName: snapshotName,
-			FileMtime:    mtime,
+		var pool struct {
+			SidecarIDs []string `json:"sidecar_ids"`
+			RepoPath   string   `json:"repo_path"`
 		}
-		if dup {
-			result[at] = ss
+		if json.Unmarshal(data, &pool) != nil {
 			continue
 		}
-		idx[id] = len(result)
-		result = append(result, ss)
+		var mtime time.Time
+		if fi, err := os.Stat(path); err == nil {
+			mtime = fi.ModTime()
+		}
+		name := strings.TrimSuffix(filepath.Base(path), "-pool.json")
+		for i, id := range pool.SidecarIDs {
+			if at, exists := idx[id]; exists {
+				if result[at].Workspace == "" {
+					result[at].Workspace = pool.RepoPath
+				}
+				continue
+			}
+			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", pool.RepoPath, mtime)
+		}
 	}
 	return result
+}
+
+func sidecarName(name string, index, total int) string {
+	// Preserve unnamed legacy state and avoid adding a redundant suffix to a
+	// pool of one; only named multi-member pools need distinct display names.
+	if name == "" || total == 1 {
+		return name
+	}
+	return name + "-" + strconv.Itoa(index+1)
 }
 
 // loadSnapshotName returns the Name field from any snapshot*.json in dataDir,

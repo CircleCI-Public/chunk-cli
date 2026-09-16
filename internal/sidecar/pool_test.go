@@ -31,6 +31,7 @@ func TestPoolStateRoundTrip(t *testing.T) {
 	want := &poolState{
 		SidecarIDs:    []string{"sb-1", "sb-2", "sb-3"},
 		RepoPath:      "/home/user/myrepo",
+		Image:         "snapshot-1",
 		LastSyncedRef: "deadbeef",
 	}
 	assert.NilError(t, savePoolState(dir, "validate", want))
@@ -39,6 +40,7 @@ func TestPoolStateRoundTrip(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got.SidecarIDs, want.SidecarIDs)
 	assert.Equal(t, got.RepoPath, want.RepoPath)
+	assert.Equal(t, got.Image, want.Image)
 	assert.Equal(t, got.LastSyncedRef, want.LastSyncedRef)
 }
 
@@ -121,6 +123,23 @@ func TestPoolStateMarshalFormat(t *testing.T) {
 	assert.Assert(t, m["repo_path"] != nil)
 }
 
+func TestPairReplacementIDs(t *testing.T) {
+	t.Run("pairs stale IDs and permits capacity additions", func(t *testing.T) {
+		got, err := pairReplacementIDs([]string{"stale-1", "stale-2"}, []string{"new-1", "new-2", "new-3"})
+		assert.NilError(t, err)
+		assert.DeepEqual(t, got, map[string]string{
+			"stale-1": "new-1",
+			"stale-2": "new-2",
+		})
+	})
+
+	t.Run("rejects too few replacements", func(t *testing.T) {
+		got, err := pairReplacementIDs([]string{"stale-1", "stale-2"}, []string{"new-1"})
+		assert.Assert(t, got == nil)
+		assert.ErrorContains(t, err, "need 2, got 1")
+	})
+}
+
 type poolTestEnv struct {
 	cl      *circleci.Client
 	cci     *fakes.FakeCircleCI
@@ -175,7 +194,7 @@ func TestAssemblePool_CreatesAndSyncsAll(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, nil, "", func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool.ids), 2)
 
@@ -197,7 +216,7 @@ func TestAssemblePool_CreateFailure_ReturnsError(t *testing.T) {
 	env.cci.CreateStatusCode = 500
 
 	_, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, nil, "", func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, countPoolDeletes(env.cci), 0)
 }
@@ -207,7 +226,7 @@ func TestAssemblePool_PartialCreateFailure_CleansUp(t *testing.T) {
 	env.cci.CreateErrorAfter = 1
 
 	_, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, nil, "", func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, countPoolDeletes(env.cci), 1)
 	assert.Equal(t, len(env.cci.Sidecars), 0)
@@ -219,7 +238,7 @@ func TestAssemblePool_SyncFailure_CleansUp(t *testing.T) {
 	env.cci.AddKeyStatusCode = 500
 
 	_, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, nil, "", func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
 	assert.Assert(t, err != nil)
 	assert.Equal(t, countPoolDeletes(env.cci), 1)
 	assert.Equal(t, len(env.cci.Sidecars), 0)
@@ -231,10 +250,100 @@ func TestAssemblePool_StaleExisting_ReplacedAutomatically(t *testing.T) {
 	env.cci.StaleIDs = map[string]bool{"stale-sb-1": true, "stale-sb-2": true}
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, []string{"stale-sb-1", "stale-sb-2"}, "", func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, []string{"stale-sb-1", "stale-sb-2"}, "", nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool.ids), 2)
 	assert.Equal(t, countPoolDeletes(env.cci), 3)
+}
+
+func TestAssemblePool_OutdatedExisting_ReplacedAutomatically(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	env.cci.OutdatedIDs = map[string]bool{"outdated-sb-1": true}
+	ctx := context.Background()
+	assert.NilError(t, SaveActive(ctx, ActiveSidecar{
+		SidecarIDs: []string{"outdated-sb-1"},
+		Name:       "development",
+		OrgID:      "org-1",
+		Workspace:  "/workspace/my-repo",
+	}))
+
+	pool, err := assemblePool(ctx, env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, []string{"outdated-sb-1"}, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(ctx)
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Assert(t, entry.ID != "outdated-sb-1")
+	active, err := LoadActive(ctx)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, active.SidecarIDs, []string{entry.ID})
+	assert.Equal(t, active.Name, "development")
+	assert.Equal(t, active.OrgID, "org-1")
+	assert.Equal(t, active.Workspace, "/workspace/my-repo")
+	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 1)
+	assert.Equal(t, countPoolDeletes(env.cci), 1)
+
+	second, err := NewPool(ctx, env.cl, PoolOptions{
+		Size:        1,
+		Name:        "validate",
+		OrgID:       active.OrgID,
+		Image:       "ubuntu:22.04",
+		WorkDir:     env.workDir,
+		RepoPath:    DefaultWorkspace("my-repo"),
+		ExistingIDs: active.SidecarIDs,
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	secondEntry, err := second.Acquire(ctx)
+	assert.NilError(t, err)
+	second.Release(secondEntry)
+
+	assert.Equal(t, secondEntry.ID, entry.ID)
+	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 1)
+}
+
+func TestAssemblePool_SidecarGoneDuringSync_ReplacedAutomatically(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	env.cci.StaleAfterAddKey = map[string]int{"existing-sb-1": 1}
+	assert.NilError(t, SaveActive(context.Background(), ActiveSidecar{
+		SidecarIDs: []string{"other-sb", "existing-sb-1"},
+		Name:       "development",
+	}))
+
+	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, []string{"existing-sb-1"}, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Assert(t, entry.ID != "existing-sb-1")
+	assert.Equal(t, pool.ids[0], entry.ID)
+	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 1)
+	assert.Equal(t, countPoolDeletes(env.cci), 1)
+	active, err := LoadActive(context.Background())
+	assert.NilError(t, err)
+	assert.DeepEqual(t, active.SidecarIDs, []string{"other-sb", entry.ID})
+	assert.Equal(t, active.Name, "development")
+}
+
+func TestAssemblePool_OrdinaryExistingSyncFailureDoesNotReplace(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	env.cci.AddKeyStatusCode = 500
+
+	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, []string{"existing-sb-1"}, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	_, err = pool.Acquire(context.Background())
+	assert.Assert(t, err != nil)
+
+	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 0)
+	assert.Equal(t, countPoolDeletes(env.cci), 0)
 }
 
 func TestAssemblePool_ReuseExisting_OnlyCreatesGap(t *testing.T) {
@@ -242,11 +351,89 @@ func TestAssemblePool_ReuseExisting_OnlyCreatesGap(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, []string{"existing-sb-1"}, "", func(iostream.Level, string) {})
+		DefaultWorkspace("my-repo"), env.workDir, []string{"existing-sb-1"}, "", nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool.ids), 2)
 	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 1)
 	assert.Equal(t, countPoolDeletes(env.cci), 0)
+}
+
+func TestAssemblePool_FreshExistingSkipsStaleProbe(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+
+	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, []string{"fresh-sb-1"}, "", map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Equal(t, countPoolRequests(env.cci, "POST", "/api/v3/sidecar/instances/fresh-sb-1/ssh/add-key"), 1)
+}
+
+func TestAssemblePool_FreshExistingRetriesProvisioningLag(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	env.cci.NotFoundBeforeAddKey = map[string]int{"fresh-sb-1": 1}
+
+	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "snapshot-1",
+		DefaultWorkspace("my-repo"), env.workDir, []string{"fresh-sb-1"}, "", map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Equal(t, entry.ID, "fresh-sb-1")
+	assert.Equal(t, countPoolRequests(env.cci, "POST", "/api/v3/sidecar/instances/fresh-sb-1/ssh/add-key"), 2)
+	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 0)
+	assert.Equal(t, countPoolDeletes(env.cci), 0)
+}
+
+func TestNewPoolRestoresCreationContext(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	assert.NilError(t, savePoolState(env.workDir, "validate", &poolState{
+		SidecarIDs: []string{"existing-sb-1"},
+		RepoPath:   "/saved/workspace",
+		Image:      "snapshot-1",
+	}))
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:    1,
+		Name:    "validate",
+		OrgID:   "org-1",
+		WorkDir: env.workDir,
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Equal(t, pool.image, "snapshot-1")
+	assert.Equal(t, entry.RepoPath, "/saved/workspace")
+}
+
+func TestNewPoolUsesConfiguredRepoPath(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:        1,
+		Name:        "validate",
+		OrgID:       "org-1",
+		Image:       "ubuntu:22.04",
+		WorkDir:     env.workDir,
+		RepoPath:    "/custom/workspace",
+		ExistingIDs: []string{"fresh-sb-1"},
+		FreshIDs:    []string{"fresh-sb-1"},
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.Equal(t, entry.RepoPath, "/custom/workspace")
 }
 
 func TestPool_Rebuild(t *testing.T) {
@@ -254,11 +441,10 @@ func TestPool_Rebuild(t *testing.T) {
 	t.Chdir(env.workDir)
 
 	pool := &Pool{
-		client: env.cl,
-		orgID:  "org-1",
-		image:  "ubuntu:22.04",
-		name:   "validate",
-
+		client:  env.cl,
+		orgID:   "org-1",
+		image:   "ubuntu:22.04",
+		name:    "validate",
 		workDir: env.workDir,
 		free:    make(chan *PoolEntry, 1),
 	}
@@ -298,7 +484,7 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	noopStatus := iostream.StatusFunc(func(_ iostream.Level, _ string) {})
 
 	pool, err := assemblePool(ctx, env.cl, n, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, nil, "", noopStatus)
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, noopStatus)
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool.ids), n)
 	releasePoolEntries(pool, drainPoolEntries(ctx, t, pool, n))
@@ -308,7 +494,7 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
 	pool2, err := assemblePool(ctx, env.cl, n, "validate", "org-1", "ubuntu:22.04",
-		DefaultWorkspace("my-repo"), env.workDir, pool.ids, "", noopStatus)
+		DefaultWorkspace("my-repo"), env.workDir, pool.ids, "", nil, noopStatus)
 	assert.NilError(t, err)
 	assert.Equal(t, len(pool2.ids), n)
 	releasePoolEntries(pool2, drainPoolEntries(ctx, t, pool2, n))

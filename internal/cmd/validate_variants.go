@@ -23,7 +23,7 @@ func newValidateVariantsCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "variants <variants-file>",
-		Short:        "Run validation commands against code variants on parallel sidecars",
+		Short:        "Run validation commands against code variants on a temporary sidecar pool",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -72,10 +72,17 @@ func newValidateVariantsCmd() *cobra.Command {
 						errMsg: fmt.Sprintf("command %q not found", name),
 					}
 				}
+				if c.RunsLocally() {
+					return &userError{
+						msg:        fmt.Sprintf("Command %q is configured for local execution.", name),
+						suggestion: "Remove local: true before using it for remote variants.",
+						errMsg:     fmt.Sprintf("command %q is configured local", name),
+					}
+				}
 				cmds = []config.Command{*c}
 			} else {
 				for _, c := range cfg.Commands {
-					if c.Remote {
+					if c.RunsRemotely() {
 						cmds = append(cmds, c)
 					}
 				}
@@ -83,7 +90,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			if len(cmds) == 0 {
 				return &userError{
 					msg:        "No remote commands configured.",
-					suggestion: "Mark at least one command as remote in .chunk/config.json, or use --name to specify a command.",
+					suggestion: "Remove local: true from at least one command in .chunk/config.json.",
 					errMsg:     "no remote commands configured",
 				}
 			}
@@ -117,7 +124,7 @@ func newValidateVariantsCmd() *cobra.Command {
 
 			// Sweep before booting anything: a crashed earlier run can leave
 			// sidecars the reaper will never collect, because variant sidecars
-			// are deliberately absent from the active-sidecar file.
+			// are deliberately absent from active-pool state.
 			statusFn := newStatusFunc(streams)
 			if swept := variants.SweepOrphans(ctx, client, resolvedOrgID, statusFn); swept > 0 {
 				statusFn(iostream.LevelInfo, fmt.Sprintf("swept %d orphaned variant sidecar(s) from a previous run", swept))
@@ -147,7 +154,7 @@ func newValidateVariantsCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Validate command name to run (default: all remote commands)")
-	cmd.Flags().IntVar(&parallel, "parallel", 5, "Max concurrent sidecars")
+	cmd.Flags().IntVar(&parallel, "parallel", 5, "Maximum sidecar pool capacity")
 	cmd.Flags().IntVar(&timeout, "timeout", validate.DefaultTimeout,
 		"Per-command timeout in seconds, used when the command sets none (0 for no limit)")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")

@@ -23,6 +23,10 @@ import (
 // next to the command it names.
 const watchCmdName = "watch"
 
+// watchDaemonSubcmd is the hidden subcommand name used to spawn the background
+// watch daemon process. Defined here so all cmd-package callers share one constant.
+const watchDaemonSubcmd = "_daemon"
+
 func newWatchCmd() *cobra.Command {
 	var (
 		focus bool
@@ -31,7 +35,7 @@ func newWatchCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "watch [dir...]",
-		Short:        "Live dashboard for active sidecars and recent activity",
+		Short:        "Live dashboard for active pools and recent activity",
 		SilenceUsage: true,
 		Args:         cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -39,7 +43,7 @@ func newWatchCmd() *cobra.Command {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			daemonArgs := []string{watchCmdName, "_daemon"}
+			daemonArgs := []string{watchCmdName, watchDaemonSubcmd}
 			if err := watchd.EnsureRunning(daemonArgs); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}

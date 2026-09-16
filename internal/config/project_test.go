@@ -58,6 +58,26 @@ func TestLoadProjectConfigWithoutEnvironment(t *testing.T) {
 	assert.Equal(t, len(cfg.Commands), 1)
 }
 
+func TestCommandPlacementDefaultsRemote(t *testing.T) {
+	assert.Assert(t, Command{}.RunsRemotely())
+	assert.Assert(t, !Command{}.RunsLocally())
+	assert.Assert(t, Command{Remote: true}.RunsRemotely())
+	assert.Assert(t, Command{Local: true}.RunsLocally())
+}
+
+func TestLoadProjectConfigRejectsConflictingPlacement(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"commands":[{"name":"test","run":"task test","local":true,"remote":true}]}`)
+
+	_, err := LoadProjectConfig(dir)
+	assert.ErrorContains(t, err, `command "test" cannot be both local and remote`)
+}
+
+func TestSaveProjectConfigRejectsConflictingPlacement(t *testing.T) {
+	err := SaveProjectConfig(t.TempDir(), &ProjectConfig{Commands: []Command{{Name: "test", Local: true, Remote: true}}})
+	assert.ErrorContains(t, err, `command "test" cannot be both local and remote`)
+}
+
 func TestHasSidecarImage(t *testing.T) {
 	assert.Assert(t, !(*ProjectConfig)(nil).HasSidecarImage())
 
@@ -78,6 +98,7 @@ func TestMarkRemoteCommandsForSidecarSetup(t *testing.T) {
 			{Name: "test", Run: "npm test", Role: RoleGate},
 			{Name: "format", Run: "npm run format", Role: RoleAutofix},
 			{Name: "lint", Run: "npm run lint"},
+			{Name: "local-gate", Run: "npm test", Role: RoleGate, Local: true},
 			{Name: "test-changed", Run: "npm test --changed", Role: RoleGate, Remote: true},
 		},
 	}
@@ -88,6 +109,8 @@ func TestMarkRemoteCommandsForSidecarSetup(t *testing.T) {
 	assert.Assert(t, cfg.FindCommand("test").Remote)
 	assert.Assert(t, !cfg.FindCommand("format").Remote)
 	assert.Assert(t, !cfg.FindCommand("lint").Remote)
+	assert.Assert(t, !cfg.FindCommand("local-gate").Remote)
+	assert.Assert(t, cfg.FindCommand("local-gate").Local)
 	assert.Assert(t, cfg.FindCommand("test-changed").Remote)
 
 	assert.Assert(t, !cfg.MarkRemoteCommandsForSidecarSetup())
@@ -107,10 +130,12 @@ func TestMarkCommandRemote(t *testing.T) {
 
 	t.Run("named command", func(t *testing.T) {
 		cfg := newCfg()
+		cfg.FindCommand("test").Local = true
 		changed, err := cfg.MarkCommandRemote("test")
 		assert.NilError(t, err)
 		assert.DeepEqual(t, changed, []string{"test"})
 		assert.Assert(t, cfg.FindCommand("test").Remote)
+		assert.Assert(t, !cfg.FindCommand("test").Local)
 		// Untargeted commands keep whatever they had.
 		assert.Assert(t, !cfg.FindCommand(CmdInstall).Remote)
 	})

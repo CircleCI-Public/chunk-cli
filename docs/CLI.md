@@ -66,7 +66,7 @@ chunk
 │   --json                          # Output as JSON (only applies with --list)
 │   --cmd <command>                 # Run an inline command
 │   --save                          # Save --cmd to config
-│   --remote                        # Run on the active sidecar
+│   --remote                        # Run using the active sidecar pool
 │   --mark-remote                   # Mark [name] (or all commands) remote in config, then exit
 │   --sidecar-id <id>               # Remote execution in specific sidecar
 │   --org-id <id>                   # Organization ID (used when creating a new sidecar)
@@ -75,9 +75,9 @@ chunk
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
 │   │
-│   └── variants <variants-file>    # Run code variants on parallel throwaway sidecars
+│   └── variants <variants-file>    # Run code variants on a temporary sidecar pool
 │       --name <command>            # Validate command to run (default: all remote commands)
-│       --parallel <n>              # Max concurrent sidecars (default 5)
+│       --parallel <n>              # Maximum pool capacity (default 5)
 │       --timeout <seconds>         # Per-command timeout when the command sets none (0 for no limit)
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
@@ -100,6 +100,8 @@ chunk
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --command <cmd>             # Command to run (required)
 │   │   --args <args>               # Command arguments
+│   ├── logs <command-id>           # Print output of a command that ran on a sidecar
+│   │   -f / --follow               # Keep printing until the command exits
 │   ├── add-ssh-key                 # Add SSH key to sidecar
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --public-key <key>          # SSH public key string
@@ -137,7 +139,7 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
-├── watch [dir...]                  # Live TUI dashboard for active sidecars and recent activity
+├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
 │
 ├── hook                            # Manage chunk hook execution
@@ -167,8 +169,11 @@ chunk
   to disable.
 - `config set` user keys: `model`, `telemetry`, `notifications`. Project keys (`.chunk/config.json`):
   `orgID`, `validation.sidecarImage`. Credentials use `chunk auth set`, not `config set`.
-- `validate --mark-remote` sets `remote: true` on commands in `.chunk/config.json`
-  and exits without running anything. With a `[name]` it marks that one command;
+- Validation commands run remotely by default. Set `local: true` on a command to
+  run it in the local working tree. `remote: true` remains an explicit,
+  backwards-compatible annotation; setting both fields is invalid.
+- `validate --mark-remote` sets `remote: true` and clears `local: true` on commands
+  in `.chunk/config.json`, then exits. With a `[name]` it marks that one command;
   without it every configured command **except `role: autofix`** ones, which it
   names as skipped — a formatter that runs on the sidecar rewrites files there and
   the edits never reach the local working tree. Naming an autofix command marks it
@@ -176,12 +181,9 @@ chunk
   change. `chunk sidecar setup` marks install and gate commands automatically, so
   `--mark-remote` is for the rest: a sidecar set up by hand, or a command whose
   role does not qualify. Unmarking is still a hand edit of the config.
-- Per-command `remote` routing only decides anything while
-  `validation.sidecarImage` is unset. Once it is set, `validate` sends **every**
-  command to the sidecar (`allRemote`), marked or not, exactly as `--remote` does.
-  Since `sidecar snapshot create` is normally followed by recording that key, a
-  project on a snapshot runs everything remotely and `remote: true` becomes a
-  no-op.
+- Command placement is independent of `validation.sidecarImage`: explicit local
+  commands stay local, while unspecified and explicitly remote commands use the
+  managed sidecar pool. `--local` remains the whole-run local override.
 - **Snapshot selection.** When a sidecar has to be created and no
   `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
   picks one of the org's snapshots instead of booting the bare default image.
@@ -202,6 +204,43 @@ chunk
   Non-interactive sessions (agents, CI) should set `orgID` in project config or
   pass `--org-id` / `CIRCLECI_ORG_ID`.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
+- **`watch` can show a command's output.** In the activity pane, an invocation
+  marked `▤` has output the daemon still holds; `Enter` opens a scrollback view
+  of it. A command that is still running tails live — the pane polls every 200 ms
+  while it is open, and drops back to the 5 s snapshot tick when closed, so a tail
+  never speeds up everything else. `↑`/`↓` and `PgUp`/`PgDn` scroll, `g` jumps to
+  the top, `G` re-follows the end, and `Esc` closes the pane rather than quitting
+  the dashboard. Scrolling up detaches from the bottom so arriving output does not
+  yank the view away from what you are reading; scrolling back to the end
+  re-follows automatically.
+  - Output is capped at 256 KiB per command, keeping the **tail** — the end of a
+    failed run is the part worth reading. When earlier output has been dropped the
+    pane says `(earlier output dropped)` rather than presenting a partial run as if
+    it were whole.
+  - The daemon holds at most 20 commands per project, evicting the oldest
+    *finished* one first. A running command is never evicted.
+  - Buffers are in memory only, so restarting the daemon loses them. `Enter` on an
+    invocation the daemon no longer knows about says so.
+  - Output streaming needs a CircleCI token. Without one the dashboard still works
+    and shows a one-line hint in the footer; the daemon never prompts.
+- **`chunk sidecar logs <command-id>`** is the non-TUI door onto the same output,
+  for scripts and for agents with no terminal. Command IDs appear in the `watch`
+  dashboard. It reads the watch daemon's buffer when the daemon has the command
+  and falls back to streaming from the API when it does not, so it works either
+  way. `-f`/`--follow` keeps printing until the command exits.
+  - Output goes to stdout and nothing else does, so it can be piped. A non-zero
+    remote status is reported on **stderr** as `exit status N`.
+  - `logs` itself exits non-zero only when *reading* failed. A failing command is
+    not a failing read — conflating the two would make the exit status useless to
+    a caller.
+- **`watch` shows live resource usage** for the selected sidecar — CPU, memory and
+  disk, sampled every 2 seconds. Sampling only runs while a dashboard is attached,
+  since each sampled sidecar is running a shell loop for it; close `watch` and it
+  stops. A
+  sample older than three intervals renders dimmed and marked `(stale)` rather
+  than disappearing, so a stalled sampler looks stalled instead of looking like an
+  idle sidecar. Memory is read from the sidecar's cgroup, not `/proc/meminfo`,
+  because the latter reports the host's memory.
 - **`watch` rows are per branch, except when they cannot be.** A branch's local runs
   are folded into its sidecar's row, so one row shows both kinds of run along with
   sync state. A branch with more than one sidecar — two agent sessions in one
@@ -246,12 +285,12 @@ chunk
   without one, and deletes nothing if the listing fails, since an empty listing is
   not proof of absence. A sidecar the API rejects as out of date (410) is deleted
   when a sync hits it, because no listing reveals that state.
-- **`validate variants` sidecars are outside that scheme.** Each variant gets its
-  own sidecar, and none of them are written to the active-sidecar file — parallel
+- **The `validate variants` pool is outside that scheme.** Variants are queued
+  across temporary pool members, which are not written to active-pool state —
   workers would race on it and leave the user's own session pointing at a sidecar
   about to be deleted. That also makes them invisible to the reaper above, so the
-  command cleans up after itself instead: it deletes each sidecar as its variant
-  finishes, catches SIGINT/SIGTERM so an interrupt still unwinds through those
+  command cleans up after itself instead: it deletes each sidecar when the pool
+  shuts down, catches SIGINT/SIGTERM so an interrupt still unwinds through those
   deletes, and sweeps stranded `variant-*` sidecars from an earlier crashed run
   before starting a new one. Each name carries that sidecar's own creation time
   (`variant-<base36 seconds>--<id>`), which is what lets the sweep spare a

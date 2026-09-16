@@ -28,8 +28,15 @@ type Command struct {
 	Role         string `json:"role,omitempty"`
 	Timeout      int    `json:"timeout,omitempty"`
 	Remote       bool   `json:"remote,omitempty"`
+	Local        bool   `json:"local,omitempty"`
 	SidecarImage string `json:"sidecarImage,omitempty"`
 }
+
+// RunsLocally reports whether the command explicitly opts out of remote execution.
+func (c Command) RunsLocally() bool { return c.Local }
+
+// RunsRemotely reports whether the command uses the default remote placement.
+func (c Command) RunsRemotely() bool { return !c.Local }
 
 // VCSConfig holds VCS configuration for the project.
 type VCSConfig struct {
@@ -63,6 +70,9 @@ func LoadProjectConfig(workDir string) (*ProjectConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config.json: %w", err)
 	}
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("validate config.json: %w", err)
+	}
 	// Configs written by earlier versions may carry a "test" step in the saved
 	// environment. Drop it on load so it is neither run as a setup step nor
 	// written back out on the next save.
@@ -75,26 +85,13 @@ func (c *ProjectConfig) HasCommands() bool {
 	return len(c.Commands) > 0
 }
 
-// HasRemoteCommands reports whether any commands are marked for remote execution.
-func (c *ProjectConfig) HasRemoteCommands() bool {
-	if c == nil {
-		return false
-	}
-	for _, cmd := range c.Commands {
-		if cmd.Remote {
-			return true
-		}
-	}
-	return false
-}
-
 // HasSidecarImage reports whether a project-level sidecar snapshot image is configured.
 func (c *ProjectConfig) HasSidecarImage() bool {
 	return c != nil && c.Validation != nil && c.Validation.SidecarImage != ""
 }
 
 func commandEligibleForSidecarRemote(cmd Command) bool {
-	if cmd.Remote {
+	if cmd.Remote || cmd.Local {
 		return false
 	}
 	if cmd.Name == CmdInstall {
@@ -148,6 +145,7 @@ func (c *ProjectConfig) MarkCommandRemote(name string) ([]string, error) {
 			continue
 		}
 		c.Commands[i].Remote = true
+		c.Commands[i].Local = false
 		changed = append(changed, c.Commands[i].Name)
 	}
 	return changed, nil
@@ -165,6 +163,9 @@ func (c *ProjectConfig) FindCommand(name string) *Command {
 
 // SaveProjectConfig writes the config back to .chunk/config.json.
 func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
+	if err := cfg.validate(); err != nil {
+		return fmt.Errorf("validate config.json: %w", err)
+	}
 	dir := filepath.Join(workDir, ".chunk")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -174,6 +175,18 @@ func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "config.json"), append(data, '\n'), 0o644)
+}
+
+func (c *ProjectConfig) validate() error {
+	if c == nil {
+		return nil
+	}
+	for _, command := range c.Commands {
+		if command.Local && command.Remote {
+			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
+		}
+	}
+	return nil
 }
 
 // SaveCommand upserts a command in .chunk/config.json.
