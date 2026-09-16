@@ -823,7 +823,6 @@ func TestValidateMarkRemoteNamedCommand(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, cfg.FindCommand("test").Remote)
 	assert.Assert(t, !cfg.FindCommand("install").Remote)
-	assert.Assert(t, cfg.HasRemoteCommands())
 }
 
 func TestValidateMarkRemoteAllCommands(t *testing.T) {

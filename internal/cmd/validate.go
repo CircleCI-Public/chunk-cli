@@ -861,23 +861,19 @@ func runValidationPlan(
 		renderDistributedOutput(remote.Output, streams)
 	}
 
-	localCommands := make([]config.Command, 0, len(plan.LocalCommands)+len(remote.FellBack))
-	localCommands = append(localCommands, remote.FellBack...)
-	localCommands = append(localCommands, plan.LocalCommands...)
 	result := validate.Result{
 		Passed: remote.Passed,
 		Total:  len(plan.RemoteCommands) + len(plan.LocalCommands),
 	}
-	runErr := errors.Join(remote.Err, remote.UnavailableErr)
-	if len(localCommands) == 0 {
-		return result, runErr
+	if len(plan.LocalCommands) == 0 {
+		return result, remote.Err
 	}
 
-	statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(localCommands)))
-	localCfg := &config.ProjectConfig{Commands: localCommands}
+	statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(plan.LocalCommands)))
+	localCfg := &config.ProjectConfig{Commands: plan.LocalCommands}
 	localResult, err := mapValidateError(validate.RunAll(ctx, localWorkDir, localCfg, envVars, statusFn, streams))
 	result.Passed += localResult.Passed
-	return result, errors.Join(runErr, err)
+	return result, errors.Join(remote.Err, err)
 }
 
 func runPooledValidateCommand(

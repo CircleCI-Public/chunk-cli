@@ -85,19 +85,6 @@ func (c *ProjectConfig) HasCommands() bool {
 	return len(c.Commands) > 0
 }
 
-// HasRemoteCommands reports whether any commands use remote execution.
-func (c *ProjectConfig) HasRemoteCommands() bool {
-	if c == nil {
-		return false
-	}
-	for _, cmd := range c.Commands {
-		if cmd.RunsRemotely() {
-			return true
-		}
-	}
-	return false
-}
-
 // HasSidecarImage reports whether a project-level sidecar snapshot image is configured.
 func (c *ProjectConfig) HasSidecarImage() bool {
 	return c != nil && c.Validation != nil && c.Validation.SidecarImage != ""
