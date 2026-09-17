@@ -217,6 +217,7 @@ type validateOpts struct {
 	envFile        string
 	async          bool   // run via the daemon without waiting for the result
 	noDaemon       bool   // bypasses daemon delegation; set by the daemon when calling in-process
+	attributeTo    string // project the results belong to, when commands run in a snapshot copy
 	hookSessionID  string // hook session ID forwarded from client to daemon subprocess
 	stopHookActive bool   // stop_hook_active forwarded from client to daemon subprocess
 }
@@ -261,6 +262,8 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.async, "async", false, "Run in the background via the watch daemon and report on a later run")
 	cmd.Flags().BoolVar(&opts.noDaemon, "no-daemon", false, "")
 	_ = cmd.Flags().MarkHidden("no-daemon")
+	cmd.Flags().StringVar(&opts.attributeTo, "attribute-to", "", "")
+	_ = cmd.Flags().MarkHidden("attribute-to")
 	cmd.Flags().StringVar(&opts.hookSessionID, "hook-session-id", "", "")
 	_ = cmd.Flags().MarkHidden("hook-session-id")
 	cmd.Flags().BoolVar(&opts.stopHookActive, "stop-hook-active", false, "")
@@ -278,7 +281,7 @@ func newValidateCmd() *cobra.Command {
 // in ambiguous cases.
 // Returns updated ctx and streams, a skip flag (true = return nil immediately),
 // and a non-nil error when the hook should exit with a non-zero code.
-func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitutil.Worktree, treeErr error, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
+func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitutil.Worktree, treeErr error, snapshot bool, streams iostream.Streams) (context.Context, iostream.Streams, bool, error) {
 	if hook == nil {
 		return ctx, streams, false, nil
 	}
@@ -311,7 +314,12 @@ func initHook(ctx context.Context, hook *hookContext, workDir string, tree gitut
 	if treeErr != nil {
 		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: working tree state unavailable (%v); running everything, caching nothing", treeErr)))
 	}
-	if tree.Clean {
+	// A snapshot run is exempt from the clean-tree skip, and must be: the
+	// snapshot was checked out from the state being validated, so git sees a
+	// tree with nothing changed in it and "nothing changed" here means the
+	// opposite of what it usually means. Skipping would run no commands and
+	// report a pass — a green light for code nothing looked at.
+	if tree.Clean && !snapshot {
 		return ctx, streams, true, nil
 	}
 	return ctx, streams, false, nil
@@ -335,6 +343,30 @@ func maybeEnsureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc confi
 	}
 	return ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
 }
+
+// attributionRoot is the project a run's results belong to, which is not always
+// the directory the commands run in.
+//
+// They differ in one case: the daemon running background checks in a
+// checked-out snapshot. The copy is where the commands execute, and the real
+// repository is where the developer is watching for their results — so the
+// event log, the project breadcrumb the daemon discovers projects by, and the
+// branch a run is filed under all come from here rather than from the copy,
+// which is on a detached HEAD in a temp directory nobody is looking at.
+func (o *validateOpts) attributionRoot(workDir string) string {
+	if o.attributeTo != "" {
+		return o.attributeTo
+	}
+	return workDir
+}
+
+// snapshotRun reports whether the commands are running against a checked-out
+// copy of a project rather than the project itself.
+//
+// It reads off the attribution root for a reason: results belonging to a
+// different directory than the one being validated is exactly what a snapshot
+// run is, and the daemon is the only thing that arranges one.
+func (o *validateOpts) snapshotRun() bool { return o.attributeTo != "" }
 
 func resolveWorkDir(opts *validateOpts) (string, error) {
 	if opts.projectDir != "" {
@@ -419,7 +451,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 
 	var skip bool
 	var hookErr error
-	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, tree, treeErr, streams)
+	ctx, streams, skip, hookErr = initHook(ctx, hook, workDir, tree, treeErr, opts.snapshotRun(), streams)
 	if hookErr != nil {
 		return hookErr
 	}
@@ -489,7 +521,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// before env loading, so that sync and env-resolve status events are
 	// captured. Wired for every run, sidecar or not: an empty sidecar_id is what
 	// files a run under a project's local row, not a reason to record nothing.
-	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
+	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, opts.attributionRoot(workDir), hook)
 	setupComplete := false
 	var setupErr error
 	defer func() {
@@ -510,7 +542,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if err := saveInlineValidateCommand(workDir, name, opts.inlineCmd, opts.save, streams); err != nil {
 		execErr = err
 	} else {
-		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, envVars, recorderCommandIDSetter(recorder), statusFn, streams)
+		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, opts.attributionRoot(workDir), envVars, recorderCommandIDSetter(recorder), statusFn, streams)
 	}
 	if execErr == nil && resultCache != nil {
 		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
@@ -1036,26 +1068,36 @@ func runResults(workDir string, streams iostream.Streams) error {
 // of the feature, and driving it through a socket to find out is a poor trade.
 func printResults(streams iostream.Streams, tasks []watchd.TaskState) {
 	for _, t := range tasks {
-		// A discarded run reports no verdict, only that it was discarded. The
-		// daemon strips the exit code and output of a stale task precisely so this
-		// cannot be read as a pass or a failure — the run described code that has
-		// since changed, and the honest thing to say is that there is no answer.
+		// A live-tree run the tree has moved past reports no verdict, only that it
+		// was discarded. The daemon strips the exit code and output of such a task
+		// precisely so this cannot be read as a pass or a failure — the run
+		// described code that has since changed, and the honest thing to say is
+		// that there is no answer.
 		//
 		// Said out loud rather than swallowed because the usual cause is the run
 		// itself: a command that writes coverage output or regenerates a golden
 		// moves a path git is watching and invalidates its own result. Silence
 		// there is indistinguishable from no run happening, which leaves a whole
 		// class of projects getting nothing with nothing to explain it.
-		if t.Stale {
+		if t.Stale && !t.Snapshot {
 			streams.Printf("chunk validate discarded a background run (%s): the working tree changed while it ran, so its result no longer describes your code\n", shortTaskID(t.ID))
 			streams.Printf("  if this repeats, the run is probably changing the tree itself; gitignore what it writes\n")
 			continue
 		}
+		// A snapshot-backed run keeps its verdict when the tree has moved past it,
+		// because the answer is still exactly true about the state it ran against.
+		// Saying which state that was is the difference between useful and
+		// misleading: the agent needs to know this is not a verdict on what it has
+		// since written.
+		as := ""
+		if t.Stale {
+			as = " — for the code as it was when that turn ended; the tree has changed since"
+		}
 		if t.Passed() {
-			streams.Printf("chunk validate passed in the background (%s)\n", shortTaskID(t.ID))
+			streams.Printf("chunk validate passed in the background (%s)%s\n", shortTaskID(t.ID), as)
 			continue
 		}
-		streams.Printf("chunk validate FAILED in the background (%s), exit status %d\n", shortTaskID(t.ID), t.ExitCode)
+		streams.Printf("chunk validate FAILED in the background (%s), exit status %d%s\n", shortTaskID(t.ID), t.ExitCode, as)
 		if t.Output != "" {
 			streams.Printf("%s\n", strings.TrimRight(t.Output, "\n"))
 		}
@@ -1110,6 +1152,10 @@ func runValidationPlan(
 	plan validate.Plan,
 	rc config.ResolvedConfig,
 	localWorkDir string,
+	// projectRoot is the repository a submitted command is registered under,
+	// which is localWorkDir for every run but a snapshot — see
+	// validateOpts.attributionRoot.
+	projectRoot string,
 	envVars map[string]string,
 	setCommandID func(string),
 	statusFn iostream.StatusFunc,
@@ -1128,7 +1174,7 @@ func runValidationPlan(
 				return "sidecar " + entry.ID
 			},
 			Run: func(ctx context.Context, entry *sidecar.PoolEntry, command config.Command, status iostream.StatusFunc, commandStreams iostream.Streams) validate.DistributedJobResult {
-				return runPooledValidateCommand(ctx, entry, command, rc.CircleCIToken, localWorkDir, envVars, setCommandID, status, commandStreams)
+				return runPooledValidateCommand(ctx, entry, command, rc.CircleCIToken, localWorkDir, projectRoot, envVars, setCommandID, status, commandStreams)
 			},
 			Status:  statusFn,
 			Streams: streams,
@@ -1155,7 +1201,7 @@ func runPooledValidateCommand(
 	ctx context.Context,
 	entry *sidecar.PoolEntry,
 	command config.Command,
-	token, localWorkDir string,
+	token, localWorkDir, projectRoot string,
 	envVars map[string]string,
 	setCommandID func(string),
 	statusFn iostream.StatusFunc,
@@ -1170,7 +1216,7 @@ func runPooledValidateCommand(
 		Client:      entry.Client,
 		SidecarID:   entry.ID,
 		Workdir:     entry.RepoPath,
-		OnSubmitted: onValidateCommandSubmitted(entry.ID, localWorkDir, command.Name, setCommandID),
+		OnSubmitted: onValidateCommandSubmitted(entry.ID, projectRoot, command.Name, setCommandID),
 	}
 	execFn, dest, err := target.ReadyExecRunner(ctx, localWorkDir, remoteExecEnv(token, envVars), streams)
 	if err != nil {

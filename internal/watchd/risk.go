@@ -6,7 +6,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/filestate"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 )
 
@@ -70,6 +72,8 @@ func allInert(paths []string) bool {
 type asyncPolicy struct {
 	mode     string
 	maxLines int
+	// worktree runs background checks in a snapshot rather than the live tree.
+	worktree bool
 }
 
 // policyFor reads root's async validation policy. A project with no config, or
@@ -88,6 +92,7 @@ func policyFor(root string) asyncPolicy {
 	if cfg.AsyncValidateMaxLines > 0 {
 		p.maxLines = cfg.AsyncValidateMaxLines
 	}
+	p.worktree = cfg.AsyncValidateWorktree
 	return p
 }
 
@@ -112,9 +117,9 @@ type riskDecision struct {
 // deliberately lopsided. Anything it cannot measure, and anything that has
 // recently failed, is made to block — the direction that costs a developer time
 // rather than the direction that costs them a missed failure.
-func decideRisk(p asyncPolicy, owesBlockingRun bool, ch gitutil.Changes, chErr error, hist historyEvidence) riskDecision {
+func decideRisk(p asyncPolicy, owesBlockingRun bool, ch changeset.Changes, chErr error, hist historyEvidence) riskDecision {
 	since := ""
-	if ch.Baseline != "" && ch.Baseline != gitutil.BaselineHead {
+	if ch.Incremental() {
 		since = " since the last passing run"
 	}
 	limit := p.maxLines
@@ -207,17 +212,29 @@ func lineCount(n int) string {
 type riskMemory struct {
 	mu     sync.Mutex
 	failed map[string]bool // canonical project root → owes a blocking run
-	// green is the tree each project last passed its checks against, and what
-	// the next change is measured from. See recordGreen.
-	green map[string]string
+	// green is the state each project last passed its checks in, and what the
+	// next change is measured from. See recordGreen.
+	green map[string]treeState
 }
 
 func newRiskMemory() *riskMemory {
 	return &riskMemory{
 		failed: make(map[string]bool),
-		green:  make(map[string]string),
+		green:  make(map[string]treeState),
 	}
 }
+
+// treeState is what a project looked like at a point in time, kept so a later
+// change can be measured from it. At most one of its fields is set: a git tree
+// object where git could answer for the tree, and a hashed walk where it could
+// not — a repository with no commits, or a directory that is not one.
+type treeState struct {
+	tree  string
+	index filestate.Index
+}
+
+// known reports whether this is a state anything can be measured against.
+func (s treeState) known() bool { return s.tree != "" || s.index != nil }
 
 // record notes how a run for root ended.
 func (m *riskMemory) record(root string, passed bool) {
@@ -258,19 +275,19 @@ func (m *riskMemory) owesBlockingRun(root string) bool {
 // that is the state the run actually validated. Whether the working tree has
 // moved on since is a separate question, and the one the next measurement is
 // about to answer.
-func (m *riskMemory) recordGreen(root, tree string) {
-	if tree == "" {
+func (m *riskMemory) recordGreen(root string, state treeState) {
+	if !state.known() {
 		return
 	}
 	root = config.CanonicalProjectRoot(root)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.green[root] = tree
+	m.green[root] = state
 }
 
-// baseline returns the tree root's changes should be measured against, or "" to
-// measure against HEAD.
-func (m *riskMemory) baseline(root string) string {
+// baseline returns the state root's changes should be measured against. An
+// unknown state means there is nothing to measure from yet.
+func (m *riskMemory) baseline(root string) treeState {
 	root = config.CanonicalProjectRoot(root)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -296,14 +313,73 @@ func (d *daemon) assessRisk(root string) riskDecision {
 // started, or a project whose runs have never passed. Falling back rather than
 // refusing keeps the first run after a restart working; it measures a larger
 // change than the incremental one, which errs towards making somebody wait.
-func (d *daemon) measure(root string) (gitutil.Changes, error) {
-	if base := d.risk.baseline(root); base != "" {
-		ch, err := gitutil.ChangesBetween(root, base)
+func (d *daemon) measure(root string) (changeset.Changes, error) {
+	base := d.risk.baseline(root)
+	if base.tree != "" {
+		ch, err := gitutil.ChangesBetween(root, base.tree)
 		if err == nil {
 			return ch, nil
 		}
 		// The snapshot is gone — collected by git's gc, or the repo has moved
 		// under it. Measuring against HEAD is worse but still true.
 	}
-	return gitutil.WorkingChanges(root)
+	if base.index != nil {
+		if idx, err := filestate.Build(root); err == nil {
+			return idx.Changes(base.index), nil
+		}
+	}
+
+	ch, err := gitutil.WorkingChanges(root)
+	if err == nil {
+		return ch, nil
+	}
+	// Git cannot answer for this tree: no repository, or one with no commits
+	// yet. Measured by hand instead, against nothing, so that three files in a
+	// fresh repo read as three files rather than as an unmeasurable change that
+	// blocks every run for as long as the repo stays fresh.
+	if idx, buildErr := filestate.Build(root); buildErr == nil {
+		return idx.Changes(nil), nil
+	}
+	return ch, err
+}
+
+// fingerprintTree identifies the state of a working tree for the staleness
+// check, in a way that does not need git to be able to answer.
+//
+// It is what lets a repository with no commits be validated in the background
+// at all. Staleness is only detectable against a recorded identity, and the git
+// fingerprint has none to give for a tree with no HEAD — so the run would be
+// refused and held, however small the change. Hashing the tree gives the same
+// guarantee by other means: two equal digests are the same content.
+//
+// Git first where git can answer, because it reads only the files it reports as
+// changed rather than walking everything.
+func fingerprintTree(dir string) (gitutil.Worktree, error) {
+	wt, err := gitutil.Fingerprint(dir)
+	if err == nil {
+		return wt, nil
+	}
+	idx, buildErr := filestate.Build(dir)
+	if buildErr != nil {
+		// Git's error names the condition — no repo, no commits, a dirty
+		// submodule — and is the more useful of the two to report.
+		return gitutil.Worktree{}, err
+	}
+	return gitutil.Worktree{Digest: idx.Digest(), Clean: len(idx) == 0}, nil
+}
+
+// snapshotState captures what root looks like now, to be recorded as the
+// baseline if the run about to happen passes. An unknown state simply means the
+// next change is measured against HEAD.
+func (d *daemon) snapshotState(root string) treeState {
+	if root == "" {
+		return treeState{}
+	}
+	if tree, err := gitutil.SnapshotTree(root); err == nil {
+		return treeState{tree: tree}
+	}
+	if idx, err := filestate.Build(root); err == nil {
+		return treeState{index: idx}
+	}
+	return treeState{}
 }

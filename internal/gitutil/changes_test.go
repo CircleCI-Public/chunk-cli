@@ -8,10 +8,12 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
 )
 
 // changes asserts the tree could be measured and returns the measurement.
-func changes(t *testing.T, dir string) Changes {
+func changes(t *testing.T, dir string) changeset.Changes {
 	t.Helper()
 	ch, err := WorkingChanges(dir)
 	assert.NilError(t, err)
@@ -119,7 +121,7 @@ func TestWorkingChangesRefusesMoreUntrackedContentThanTheBudget(t *testing.T) {
 
 	ch, err := WorkingChanges(dir)
 	assert.Assert(t, errors.Is(err, ErrCountBudget), "got %v", err)
-	assert.DeepEqual(t, ch, Changes{})
+	assert.DeepEqual(t, ch, changeset.Changes{})
 }
 
 // A tree whose state cannot be established reports the zero value, which reads
@@ -128,7 +130,7 @@ func TestWorkingChangesRefusesMoreUntrackedContentThanTheBudget(t *testing.T) {
 func TestWorkingChangesNotARepoIsUnusable(t *testing.T) {
 	ch, err := WorkingChanges(t.TempDir())
 	assert.Assert(t, err != nil, "a non-repo dir must not produce a measurement")
-	assert.DeepEqual(t, ch, Changes{})
+	assert.DeepEqual(t, ch, changeset.Changes{})
 }
 
 func TestWorkingChangesRepoWithoutCommitsIsUnusable(t *testing.T) {

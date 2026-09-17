@@ -28,13 +28,17 @@ func TestPooledValidateRegistersSubmittedCommand(t *testing.T) {
 
 	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
 	assert.NilError(t, err)
+	// Deliberately different: a snapshot run executes in a copy and belongs to
+	// the repository it was copied from, and the registration has to name the
+	// one the developer is watching.
+	snapshotDir := t.TempDir()
 	projectRoot := t.TempDir()
 	var recordedID string
 	result := runPooledValidateCommand(
 		context.Background(),
 		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
 		config.Command{Name: "test", Run: "true"},
-		"", projectRoot, nil,
+		"", snapshotDir, projectRoot, nil,
 		func(id string) { recordedID = id },
 		func(iostream.Level, string) {},
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
@@ -46,7 +50,7 @@ func TestPooledValidateRegistersSubmittedCommand(t *testing.T) {
 	case reg := <-regs:
 		assert.Equal(t, reg.CommandID, "cmd-1")
 		assert.Equal(t, reg.SidecarID, "sb-1")
-		assert.Equal(t, reg.ProjectRoot, projectRoot)
+		assert.Equal(t, reg.ProjectRoot, projectRoot, "a snapshot run was registered under the copy it ran in")
 		assert.Equal(t, reg.Op, string(eventlog.OpValidate))
 		assert.Equal(t, reg.Name, "test")
 		assert.Assert(t, !reg.SubmittedAt.IsZero())
@@ -68,7 +72,7 @@ func TestPooledValidateClearsCommandIDWhenSubmissionFails(t *testing.T) {
 		context.Background(),
 		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
 		config.Command{Name: "test", Run: "true"},
-		"", t.TempDir(), nil,
+		"", t.TempDir(), t.TempDir(), nil,
 		func(id string) { commandID = id },
 		func(iostream.Level, string) {},
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
@@ -93,7 +97,7 @@ func TestPooledValidateReportsMissingWorkspace(t *testing.T) {
 		context.Background(),
 		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
 		config.Command{Name: "test", Run: "true"},
-		"", t.TempDir(), nil, nil,
+		"", t.TempDir(), t.TempDir(), nil, nil,
 		func(iostream.Level, string) {},
 		iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
