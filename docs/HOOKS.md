@@ -4,13 +4,26 @@ Quality checks that run automatically as Claude Code works.
 
 ## How It Works
 
-`chunk init` generates `.claude/settings.json` with two hooks:
+`chunk init` generates `.claude/settings.json` with three hooks:
 
 **PreToolUse** — matches the `Bash` tool. Each hook entry carries an `if: "Bash(git commit*)"` filter so only git commit commands trigger validation. If any command fails, the commit is blocked.
 
 **Stop** — runs `chunk validate` after every session ends. Skips everything
 when the working tree is clean. When there are changes, it runs all configured
 commands so problems are surfaced before the agent stops working.
+
+**UserPromptSubmit** — runs `chunk validate results`, which prints what
+background runs (`chunk validate --async`) concluded and then forgets them. It
+runs no commands, only reads results the daemon is already holding, so its
+timeout is 10s. This hook exists because a background run's answer arrives after
+Stop has already fired and the agent has gone; the next prompt is the first
+moment it can be delivered. A result whose working tree changed mid-run is
+discarded: you are told the run was thrown out, but not what it concluded,
+since its answer describes code that has since changed. The usual cause is the
+run itself — a command that writes coverage output or regenerates a golden moves
+a path git is watching and invalidates its own result — so gitignoring what your
+commands write is what stops it recurring. With no daemon running there is
+nothing to report and the hook stays silent.
 
 ## Result Caching
 

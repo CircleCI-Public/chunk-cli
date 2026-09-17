@@ -75,6 +75,10 @@ chunk
 │   --project <path>                # Override project directory
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
+│   --async                         # Run in the background via the watch daemon; results are read later
+│   │
+│   ├── results                     # Print results of finished background runs, then forget them
+│   │   --project <path>            # Override project directory
 │   │
 │   └── variants <variants-file>    # Run code variants on a temporary sidecar pool
 │       --name <command>            # Validate command to run (default: all remote commands)
@@ -333,6 +337,27 @@ chunk
   `skipped` instead of re-running. Manual runs, `--cmd` inline commands, and
   repos whose state cannot be hashed never cache. Entries expire after 7 days.
   See [HOOKS.md](HOOKS.md#result-caching).
+- **`validate --async` and `validate results` are two halves of one flow.**
+  `--async` hands the run to the watch daemon and returns immediately; `results`
+  reads what finished and prints it to stdout. They are split because a
+  background answer arrives after the agent has stopped, so there is nobody left
+  to hand it to — `chunk init` installs `chunk validate results` as a
+  UserPromptSubmit hook, which is the next moment an agent can be told. A result
+  is reported once and then forgotten. A run whose working tree changed while it
+  was in flight has its verdict discarded: a pass describing code that is no
+  longer on disk reads as a green light for work already changed. The discard
+  itself is reported, without an exit code or output, because the commonest
+  reason the tree moved is the run — output written, a golden regenerated, a
+  lockfile touched — and staying silent about that is indistinguishable from no
+  run having happened, which leaves such a project getting nothing with no way
+  to tell why. `TaskState.Passed` consults `Stale`, so a stripped verdict cannot
+  read as a clean pass. Stopping the tree moving under the run in the first place
+  is a matter of where the run happens, not how its result is judged.
+- **`validate results` is a subcommand, not a flag, because it validates
+  nothing.** It reads daemon state. It replaces `--collect`, which is still
+  accepted but hidden — that flag is written into `.claude/settings.json` by
+  older versions of `chunk init`, so hooks on disk keep working, and re-running
+  `chunk init` rewrites the entry rather than adding a second one beside it.
 - Every command checks GitHub for a newer release in the background and prints a
   notice to stderr once it finishes. The result is cached in the app state dir
   (`update-check.json`) for 24 h to stay inside GitHub's unauthenticated rate

@@ -93,8 +93,8 @@ Run this after authenticating — init uses your CircleCI credentials to detect 
 What it creates:
 
 - **`.chunk/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
-- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session; tracked in git
-- **`.codex/hooks.json`** — the same hooks, for Codex sessions (only written if Codex is installed); tracked in git
+- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session, plus one that reports finished background runs before each prompt; tracked in git
+- **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
 - **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
 
 `chunk init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
@@ -474,10 +474,11 @@ The `--suite` value must match the `name` field in `.circleci/test-suites.yml`. 
 
 ## Hook behavior
 
-After `chunk init`, two hooks run automatically in Claude Code and Cursor:
+After `chunk init`, three hooks run automatically in Claude Code and Cursor:
 
 - **PreToolUse** — runs before every `git commit`. Blocks the commit if any validation command fails.
 - **Stop** — runs when the agent finishes a session. Skips if the working tree is clean; runs all configured commands otherwise.
+- **UserPromptSubmit** — runs before each prompt you send, and reports what `chunk validate --async` runs concluded. It runs none of your commands: it only reads results the daemon is already holding, so it adds nothing to the time your prompt takes and stays silent when there is nothing to say (including when no daemon is running). Written to `.claude/settings.json` only — Codex sessions get the commit and session hooks, so background results are not reported there.
 
 The Stop hook retries up to `stopHookMaxAttempts` times (default: 3) before giving up and letting the session end.
 
