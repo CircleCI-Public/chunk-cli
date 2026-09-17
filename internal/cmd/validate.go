@@ -464,11 +464,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// Wire event log only when a sidecar is involved. The wrap goes here, after
-	// target preparation fills opts.sidecarID but before env loading, so that
-	// sync and env-resolve status events are captured. Skipping when there is no
-	// sidecar avoids writing events with an empty sidecar_id that the TUI would
-	// filter out and never display.
+	// The wrap goes here, after target preparation fills opts.sidecarID but
+	// before env loading, so that sync and env-resolve status events are
+	// captured. Wired for every run, sidecar or not: an empty sidecar_id is what
+	// files a run under a project's local row, not a reason to record nothing.
 	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 	setupComplete := false
 	var setupErr error
@@ -671,15 +670,34 @@ func ensureRequestedValidateCommand(workDir, name, inlineCmd string, cfg *config
 	return ensureValidateCommand(workDir, name, cfg, streams)
 }
 
-// wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
-// is active. Returns statusFn unchanged when no sidecar is involved, so callers
-// with empty sidecar IDs never write events with a blank sidecar_id.
+// wrapEventLogStatusFn wraps statusFn so a run's progress is recorded in its
+// project's event log, and returns the recorder alongside it.
+//
+// Wired for every run, local included. A run with no sidecar is still a run
+// whose results a developer will look for, and the daemon reads these logs off
+// disk rather than being sent anything — so skipping the recorder here is how a
+// --local run, or a repo with no remote commands, ends up reporting to nobody.
+// An empty sidecar ID is what the dashboard files under a project's "local"
+// row, not a reason to write nothing.
+//
+// A project with no readable data directory is the one case that gets statusFn
+// back unchanged: there is nowhere to write, so the run reports without
+// recording.
 func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) (iostream.StatusFunc, *eventlog.Recorder) {
-	if sidecarID == "" {
-		return statusFn, nil
-	}
-	dataDir, err := sidecar.StateDir()
+	// Keyed on workDir rather than sidecar.StateDir, which walks up from the
+	// process's own working directory and so answers for the wrong project under
+	// --project.
+	//
+	// workDir is only as good as what reached it, and two cases are known to
+	// leave it pointing elsewhere. A project whose .chunk lives below the git
+	// root keys its log here but its sidecar state under the root, splitting one
+	// project's state in two. And a daemon-delegated run without an explicit
+	// --project resolves workDir to the daemon's own working directory, because
+	// the request carries Args and Env but nothing about where the caller stood.
+	// Both file a run under a project that did not run it.
+	dataDir, err := config.ProjectDataDir(workDir)
 	if err != nil {
+		// A missing data dir leaves the recorder reporting without recording.
 		return statusFn, nil
 	}
 	scName := ""
@@ -690,6 +708,16 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	if hook != nil && hook.stopHookActive {
 		op = eventlog.OpHook
 	}
+	// Register the project alongside the log about to be written to it. A run's
+	// results are never sent to the watch daemon — it reads this same log off
+	// disk — and only saving sidecar state used to register a project, so a run
+	// with no sidecar logged its results where no daemon would ever look for
+	// them. Registered remote commands were reached the same way: the daemon
+	// buffers their output under a project root it lists only once it has
+	// discovered that project.
+	// Best-effort: a run still records without the breadcrumb, and still reports
+	// without the log.
+	_ = sidecar.RegisterProjectRoot(dataDir, workDir)
 	recorder := eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
 	return recorder.Status, recorder
 }
