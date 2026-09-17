@@ -97,7 +97,9 @@ func TestBuildCodexNoMetadata(t *testing.T) {
 	assert.Assert(t, !hasPerms, "BuildCodex must not include permissions")
 }
 
-func TestBuildCodexCommandNotWrappedWithCd(t *testing.T) {
+func TestBuildCodexCommandIsChunkValidate(t *testing.T) {
+	// Codex pre-commit hooks call "chunk validate <name>" so they route through
+	// the daemon and result cache, matching Stop hook behavior.
 	cmds := []config.Command{
 		{Name: "test", Run: "go test ./...", Timeout: 60},
 	}
@@ -119,7 +121,7 @@ func TestBuildCodexCommandNotWrappedWithCd(t *testing.T) {
 	assert.Assert(t, ok, "expected hook entry to be a map")
 
 	cmd, _ := entry["command"].(string)
-	assert.Equal(t, cmd, "go test ./...", "Codex hook command must be the raw command without a cd prefix")
+	assert.Equal(t, cmd, "chunk validate test", "Codex hook must call chunk validate <name>")
 }
 
 func TestBuildCodexTimeoutDefaultsToSixty(t *testing.T) {

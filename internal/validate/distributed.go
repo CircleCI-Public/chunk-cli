@@ -13,10 +13,8 @@ import (
 
 // DistributedJobResult reports the outcome of one remotely scheduled command.
 type DistributedJobResult struct {
-	Passed         int
-	Fallback       bool
-	Err            error
-	UnavailableErr error
+	Passed int
+	Err    error
 }
 
 // DistributedRunOutput is buffered output from one concurrently run command.
@@ -28,11 +26,9 @@ type DistributedRunOutput struct {
 
 // DistributedRunResult aggregates remotely scheduled validation commands.
 type DistributedRunResult struct {
-	Passed         int
-	FellBack       []config.Command
-	Output         []DistributedRunOutput
-	Err            error
-	UnavailableErr error
+	Passed int
+	Output []DistributedRunOutput
+	Err    error
 }
 
 // DistributedRunOptions supplies resource management and command execution.
@@ -171,17 +167,13 @@ func collectDistributedResults(commands []config.Command, results <-chan distrib
 			continue
 		}
 		result.Passed += job.result.Passed
-		if job.result.Fallback {
-			result.FellBack = append(result.FellBack, job.command)
-		}
 		result.Err = errors.Join(result.Err, job.result.Err)
-		result.UnavailableErr = errors.Join(result.UnavailableErr, job.result.UnavailableErr)
 		if job.stdout != "" || job.stderr != "" {
 			result.Output = append(result.Output, DistributedRunOutput{Command: job.command, Stdout: job.stdout, Stderr: job.stderr})
 		}
 		if job.result.Err != nil {
 			status(iostream.LevelWarn, fmt.Sprintf("%s failed on %s: %v", job.command.Name, job.workerName, job.result.Err))
-		} else if !job.result.Fallback {
+		} else {
 			status(iostream.LevelDone, fmt.Sprintf("%s passed on %s", job.command.Name, job.workerName))
 		}
 	}
