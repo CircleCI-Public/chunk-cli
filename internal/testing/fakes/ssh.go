@@ -111,16 +111,31 @@ func GenerateSSHKeypairAt(t *testing.T, path string) ssh.PublicKey {
 func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 	t.Helper()
 
+	return newSSHServer(t, func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+		if bytes.Equal(key.Marshal(), authorizedKey.Marshal()) {
+			return &ssh.Permissions{}, nil
+		}
+		return nil, &unauthorizedKeyError{}
+	})
+}
+
+// NewSSHServerAcceptingAnyKey starts a server like NewSSHServer but authorises
+// whichever key the client presents. Use it when chunk generates the keypair
+// itself, so the test cannot know the public key in advance.
+func NewSSHServerAcceptingAnyKey(t *testing.T) *SSHServer {
+	t.Helper()
+
+	return newSSHServer(t, func(_ ssh.ConnMetadata, _ ssh.PublicKey) (*ssh.Permissions, error) {
+		return &ssh.Permissions{}, nil
+	})
+}
+
+func newSSHServer(t *testing.T, authCallback func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error)) *SSHServer {
+	t.Helper()
+
 	hostSigner := generateHostKey(t)
 
-	sshCfg := &ssh.ServerConfig{
-		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			if bytes.Equal(key.Marshal(), authorizedKey.Marshal()) {
-				return &ssh.Permissions{}, nil
-			}
-			return nil, &unauthorizedKeyError{}
-		},
-	}
+	sshCfg := &ssh.ServerConfig{PublicKeyCallback: authCallback}
 	sshCfg.AddHostKey(hostSigner)
 
 	srv := &SSHServer{t: t}

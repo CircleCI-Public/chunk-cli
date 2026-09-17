@@ -496,6 +496,21 @@ func newSidecarAddSSHKeyCmd() *cobra.Command {
 	return cmd
 }
 
+// commandStdin returns os.Stdin when the process stdin is a pipe or a file, so
+// a remote command can read piped input, and nil when it is a terminal.
+//
+// The return type is io.Reader rather than *os.File on purpose: a
+// (*os.File)(nil) stored in an interface is not nil, so the SSH session would
+// accept it as a stdin source and then fail the whole exec with "invalid
+// argument" on the first read.
+func commandStdin() io.Reader {
+	fi, err := os.Stdin.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice != 0 {
+		return nil
+	}
+	return os.Stdin
+}
+
 func newSidecarSSHCmd() *cobra.Command {
 	var sidecarID, envFile string
 	var envVarsFlag []string
@@ -523,11 +538,7 @@ func newSidecarSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var stdin *os.File
-			if fi, statErr := os.Stdin.Stat(); statErr == nil && fi.Mode()&os.ModeCharDevice == 0 {
-				stdin = os.Stdin
-			}
-			err = sidecar.SSH(cmd.Context(), client, sidecarID, args, envVars, io, stdin)
+			err = sidecar.SSH(cmd.Context(), client, sidecarID, args, envVars, io, commandStdin())
 			if err != nil {
 				if err := sshSessionError(err); err != nil {
 					return err

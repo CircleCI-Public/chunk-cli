@@ -376,10 +376,15 @@ func TestSidecarsSyncCheckoutFlagRemoved(t *testing.T) {
 		"--checkout must be an unknown flag; got: %s", combined)
 }
 
-// TestSidecarsSshNoKey verifies that `sidecar ssh` fails with a clear error
-// when no default key exists at ~/.ssh/chunk_ai.
+// TestSidecarsSshNoKey verifies that `sidecar ssh` generates the default
+// keypair at ~/.ssh/chunk_ai instead of asking the user to run ssh-keygen.
+// Reaching a sidecar has to work without `sidecar setup` having run first.
 func TestSidecarsSshNoKey(t *testing.T) {
+	sshSrv := fakes.NewSSHServerAcceptingAnyKey(t)
+	sshSrv.SetResult("hello\n", 0)
+
 	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
@@ -387,12 +392,21 @@ func TestSidecarsSshNoKey(t *testing.T) {
 	env.CircleCIURL = srv.URL
 
 	// No key at env.HomeDir/.ssh/chunk_ai — the default path.
-	result := binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111"}, env, env.HomeDir)
+	keyPath := filepath.Join(env.HomeDir, ".ssh", "chunk_ai")
+	_, err := os.Stat(keyPath)
+	assert.Assert(t, os.IsNotExist(err), "expected no key before the run")
 
-	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH key missing)")
+	result := binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "echo", "hello"}, env, env.HomeDir)
+
 	combined := result.Stdout + result.Stderr
-	assert.Assert(t, strings.Contains(combined, "SSH key not found"),
-		"expected SSH key not found error, got: %s", combined)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Assert(t, !strings.Contains(combined, "SSH key not found"),
+		"key should have been generated, not reported missing: %s", combined)
+
+	_, err = os.Stat(keyPath)
+	assert.NilError(t, err, "private key should have been generated")
+	_, err = os.Stat(keyPath + ".pub")
+	assert.NilError(t, err, "public key should have been generated")
 }
 
 func TestSidecarsExecWithArgs(t *testing.T) {

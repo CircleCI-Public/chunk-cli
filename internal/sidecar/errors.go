@@ -14,15 +14,6 @@ var (
 	ErrPrivateKeyProvided = errors.New("provided key is a private key")
 )
 
-// KeyNotFoundError indicates the SSH private key file does not exist.
-type KeyNotFoundError struct {
-	Path string
-}
-
-func (e *KeyNotFoundError) Error() string {
-	return fmt.Sprintf("ssh key not found: %s", e.Path)
-}
-
 // PublicKeyNotFoundError indicates the SSH public key file does not exist.
 type PublicKeyNotFoundError struct {
 	KeyPath      string

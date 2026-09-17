@@ -127,8 +127,10 @@ func addSSHKey(ctx context.Context, client *circleci.Client, sidecarID, pubKey s
 }
 
 // OpenSession registers the default SSH key (~/.ssh/chunk_ai) with the sidecar
-// and returns session info. retryOn404 should be true only for freshly created
-// sidecars where a 404 can be transient.
+// and returns session info. The keypair is generated when it does not exist yet,
+// so every path that reaches a sidecar gets one without the user creating keys
+// by hand. retryOn404 should be true only for freshly created sidecars where a
+// 404 can be transient.
 func OpenSession(ctx context.Context, client *circleci.Client, sidecarID string, retryOn404 bool) (*Session, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -138,7 +140,12 @@ func OpenSession(ctx context.Context, client *circleci.Client, sidecarID string,
 	identityFile := filepath.Join(sshDir, defaultKeyName)
 
 	if _, err := os.Stat(identityFile); err != nil {
-		return nil, &KeyNotFoundError{Path: identityFile}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat SSH key: %w", err)
+		}
+		if err := GenerateKeyPair(identityFile); err != nil {
+			return nil, fmt.Errorf("generate SSH key: %w", err)
+		}
 	}
 
 	pubKeyPath := identityFile + ".pub"

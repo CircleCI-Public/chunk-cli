@@ -146,17 +146,10 @@ func missingWorkspace(sidecarID, dest, commands string, err error) error {
 }
 
 func sshSessionError(err error) error {
-	if e, ok := errors.AsType[*sidecar.KeyNotFoundError](err); ok {
-		return newUserError(fmt.Sprintf("SSH key not found: %s", e.Path)).
-			withCode("ssh.key_not_found").
-			withSuggestion(fmt.Sprintf("Generate one with: ssh-keygen -t ed25519 -f %s", e.Path)).
-			withExitCode(ExitBadArgs).
-			wrap(err)
-	}
 	if e, ok := errors.AsType[*sidecar.PublicKeyNotFoundError](err); ok {
 		return newUserError(fmt.Sprintf("SSH public key not found: %s", e.KeyPath)).
 			withCode("ssh.public_key_not_found").
-			withSuggestion(fmt.Sprintf("Generate a new keypair with: ssh-keygen -t ed25519 -f %s", e.IdentityFile)).
+			withSuggestion(fmt.Sprintf("Delete %s* and chunk will regenerate the pair on the next run.", e.IdentityFile)).
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
