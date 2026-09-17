@@ -464,11 +464,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// Wire event log only when a sidecar is involved. The wrap goes here, after
-	// target preparation fills opts.sidecarID but before env loading, so that
-	// sync and env-resolve status events are captured. Skipping when there is no
-	// sidecar avoids writing events with an empty sidecar_id that the TUI would
-	// filter out and never display.
+	// The wrap goes here, after target preparation fills opts.sidecarID but
+	// before env loading, so that sync and env-resolve status events are
+	// captured. Wired for every run, sidecar or not: an empty sidecar_id is what
+	// files a run under a project's local row, not a reason to record nothing.
 	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 	setupComplete := false
 	var setupErr error
@@ -685,10 +684,17 @@ func ensureRequestedValidateCommand(workDir, name, inlineCmd string, cfg *config
 // back unchanged: there is nowhere to write, so the run reports without
 // recording.
 func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) (iostream.StatusFunc, *eventlog.Recorder) {
-	// The run's own project, not the one the process happens to be standing in:
-	// sidecar.StateDir derives its root from the working directory, which is not
-	// workDir under --project or when the daemon runs a validate on a project's
-	// behalf.
+	// Keyed on workDir rather than sidecar.StateDir, which walks up from the
+	// process's own working directory and so answers for the wrong project under
+	// --project.
+	//
+	// workDir is only as good as what reached it, and two cases are known to
+	// leave it pointing elsewhere. A project whose .chunk lives below the git
+	// root keys its log here but its sidecar state under the root, splitting one
+	// project's state in two. And a daemon-delegated run without an explicit
+	// --project resolves workDir to the daemon's own working directory, because
+	// the request carries Args and Env but nothing about where the caller stood.
+	// Both file a run under a project that did not run it.
 	dataDir, err := config.ProjectDataDir(workDir)
 	if err != nil {
 		// A missing data dir leaves the recorder reporting without recording.

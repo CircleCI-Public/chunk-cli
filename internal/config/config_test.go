@@ -83,6 +83,40 @@ func TestCanonicalProjectRoot_FallsBackToClean(t *testing.T) {
 	assert.Equal(t, CanonicalProjectRoot("/no/such/dir/../dir"), "/no/such/dir")
 }
 
+// A relative root is the spelling --project is most likely to be handed, and it
+// reaches here untouched. EvalSymlinks leaves it relative, so without an
+// absolute step "." survives canonicalisation — and "." is not a name for any
+// one project. It names whichever directory the reader happens to be standing
+// in, which for the watch daemon is its own.
+func TestCanonicalProjectRoot_MakesRelativeRootsAbsolute(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "project")
+	assert.NilError(t, os.MkdirAll(project, 0o755))
+	t.Chdir(project)
+
+	canonical := CanonicalProjectRoot(".")
+	assert.Assert(t, filepath.IsAbs(canonical), "a canonical root must be absolute, got %q", canonical)
+	assert.Equal(t, canonical, CanonicalProjectRoot(project),
+		"a relative root and its absolute spelling name one project")
+}
+
+// The consequence the canonicalisation exists to prevent, on the
+// relative-vs-absolute axis rather than the symlink one: two spellings of a
+// single root must not be filed apart. Left unfixed, every project validated as
+// "." shares one data directory — one event log holding runs from repos that
+// have nothing to do with each other.
+func TestProjectDataDir_RelativeAndAbsoluteRootsShareADirectory(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, t.TempDir())
+	project := filepath.Join(t.TempDir(), "project")
+	assert.NilError(t, os.MkdirAll(project, 0o755))
+	t.Chdir(project)
+
+	viaRelative, err := ProjectDataDir(".")
+	assert.NilError(t, err)
+	viaAbsolute, err := ProjectDataDir(project)
+	assert.NilError(t, err)
+	assert.Equal(t, viaRelative, viaAbsolute, "both spellings must share one data directory")
+}
+
 // --- Dir / Path ---
 
 func TestDir_XDGSet(t *testing.T) {
