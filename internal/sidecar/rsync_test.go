@@ -133,13 +133,48 @@ func TestWorktreeWorkspace(t *testing.T) {
 			wantOK:    true,
 		},
 		{
-			name:      "non-GitHub remote returns false",
-			originURL: "git@gitlab.com:org/repo.git",
-			wantOK:    false,
+			name:      "GitHub Enterprise SSH URL falls back to last path segment",
+			originURL: "git@ghe.company.com:org/repo.git",
+			wantPath:  DefaultWorkspace("repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "GitLab HTTPS URL falls back to last path segment",
+			originURL: "https://gitlab.com/group/subgroup/my-repo.git",
+			wantPath:  DefaultWorkspace("my-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "local path remote falls back to last path segment",
+			originURL: "/srv/git/some-repo.git",
+			wantPath:  DefaultWorkspace("some-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "trailing slash is ignored",
+			originURL: "https://gitlab.com/group/my-repo/",
+			wantPath:  DefaultWorkspace("my-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "scp style remote without a path",
+			originURL: "git@host:repo.git",
+			wantPath:  DefaultWorkspace("repo"),
+			wantOK:    true,
 		},
 		{
 			name:      "empty origin URL returns false",
 			originURL: "",
+			wantOK:    false,
+		},
+		{
+			name:      "whitespace only origin URL returns false",
+			originURL: "   ",
+			wantOK:    false,
+		},
+		{
+			name:      "root only remote returns false",
+			originURL: "/",
 			wantOK:    false,
 		},
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -82,27 +83,9 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 
 	repoPath := workdir
 	if persist {
-		resolved := false
-		if isWorktree && workdir == "" {
-			// Skip the saved workspace in a worktree: it may have been recorded as
-			// the worktree directory name by older code. Derive from the repo name
-			// so the path matches what every other code path expects.
-			if ws, ok := worktreeWorkspace(worktreeOriginURL); ok {
-				repoPath = ws
-				resolved = true
-			}
-			// If worktreeWorkspace returns false (non-GitHub remote, empty URL, or
-			// unparseable), fall through to normal resolution below.
-		}
-		if !resolved {
-			_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
-			if repoErr != nil {
-				repo = filepath.Base(cwd)
-			}
-			repoPath, err = ResolveWorkspace(ctx, workdir, repo)
-			if err != nil {
-				return fmt.Errorf("rsync: resolve workspace: %w", err)
-			}
+		repoPath, err = rsyncWorkspace(ctx, workdir, cwd, worktreeOriginURL, isWorktree, status)
+		if err != nil {
+			return err
 		}
 		if err := persistWorkspace(ctx, repoPath); err != nil {
 			status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
@@ -182,18 +165,76 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	return nil
 }
 
+// rsyncWorkspace determines the sidecar workspace path for a sync. In a git
+// worktree with no --workdir override it derives the path from the origin URL,
+// deliberately skipping the saved workspace: older versions recorded the
+// worktree directory name there, which no other code path agrees with.
+// Otherwise it defers to ResolveWorkspace.
+func rsyncWorkspace(ctx context.Context, workdir, cwd, originURL string, isWorktree bool,
+	status iostream.StatusFunc) (string, error) {
+
+	inWorktree := isWorktree && workdir == ""
+	if inWorktree {
+		if ws, ok := worktreeWorkspace(originURL); ok {
+			return ws, nil
+		}
+		// Empty or unusable origin URL — fall through to normal resolution.
+	}
+
+	_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+	if repoErr != nil {
+		repo = filepath.Base(cwd)
+		if inWorktree {
+			// The worktree directory name is not the repo name, so this path will
+			// not match the one other code paths use. Say so rather than silently
+			// syncing to the wrong workspace.
+			status(iostream.LevelWarn, fmt.Sprintf(
+				"Could not determine the repo name from git; using the directory name %q as the sidecar workspace.", repo))
+		}
+	}
+	repoPath, err := ResolveWorkspace(ctx, workdir, repo)
+	if err != nil {
+		return "", fmt.Errorf("rsync: resolve workspace: %w", err)
+	}
+	return repoPath, nil
+}
+
 // worktreeWorkspace returns the sidecar workspace path for a git worktree by
 // parsing the repo name from originURL. Returns ("", false) when the URL is
-// empty or cannot be parsed, so the caller can fall back to ResolveWorkspace.
+// empty or yields no usable repo name, so the caller can fall back to
+// ResolveWorkspace.
 func worktreeWorkspace(originURL string) (string, bool) {
 	if originURL == "" {
 		return "", false
 	}
-	_, repo, err := gitremote.ParseRemoteURL(originURL)
-	if err != nil || repo == "" {
+	if _, repo, err := gitremote.ParseRemoteURL(originURL); err == nil && repo != "" {
+		return DefaultWorkspace(repo), true
+	}
+	// Non-GitHub remote (GitHub Enterprise, GitLab, a plain local path). The repo
+	// name is still the last path segment, which is what the sidecar workspace
+	// should be named after — and far better than the worktree directory name.
+	if repo, ok := repoNameFromURL(originURL); ok {
+		return DefaultWorkspace(repo), true
+	}
+	return "", false
+}
+
+// repoNameFromURL extracts a repo name from an arbitrary git remote URL by
+// taking its last path segment and stripping a trailing .git. It handles scp
+// style remotes (git@host:org/repo.git) as well as URLs and local paths.
+// Returns ("", false) when no plausible name can be recovered.
+func repoNameFromURL(originURL string) (string, bool) {
+	trimmed := strings.TrimRight(strings.TrimSpace(originURL), "/")
+	// Drop any scp style host prefix so "git@host:repo.git" yields "repo".
+	if idx := strings.LastIndex(trimmed, ":"); idx != -1 {
+		trimmed = trimmed[idx+1:]
+	}
+	repo := strings.TrimSuffix(path.Base(trimmed), ".git")
+	// path.Base returns "." for an empty input and "/" for a root-only path.
+	if repo == "" || repo == "." || repo == "/" {
 		return "", false
 	}
-	return DefaultWorkspace(repo), true
+	return repo, true
 }
 
 // initWorktreeGitRepo sets up a minimal git repo in repoPath on the sidecar
