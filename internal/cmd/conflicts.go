@@ -10,21 +10,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
-// hookOutput is the JSON Claude Code reads from a hook's stdout.
-//
-// additionalContext is the channel for telling an agent something without
-// standing in its way — unlike a non-zero exit, which is how `chunk validate`
-// makes a failed check block a commit. Using it here is what makes this
-// advisory in fact and not merely in wording.
-type hookOutput struct {
-	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
-}
-
-type hookSpecificOutput struct {
-	HookEventName     string `json:"hookEventName"`
-	AdditionalContext string `json:"additionalContext"`
-}
-
 func newConflictsCmd() *cobra.Command {
 	var (
 		projectDir string
@@ -94,7 +79,11 @@ func runConflicts(cmd *cobra.Command, projectDir string, hookMode, jsonOut bool)
 	// sees. They cannot be combined — plain text on stdout would stop the JSON
 	// parsing that carries it to the agent.
 	streams.ErrPrintf("%s", notice)
-	out := hookOutput{HookSpecificOutput: hookSpecificOutput{
+	// additionalContext is the channel for telling an agent something without
+	// standing in its way — unlike a non-zero exit, which is how `chunk validate`
+	// makes a failed check block a commit. Using it here is what makes this
+	// advisory in fact and not merely in wording.
+	out := hookResponse{HookSpecificOutput: hookSpecificOutput{
 		HookEventName:     "PreToolUse",
 		AdditionalContext: notice,
 	}}

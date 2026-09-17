@@ -179,7 +179,7 @@ func TestConflictsHookModeEmitsOnlyJSONOnStdout(t *testing.T) {
 
 	// Unmarshal of the whole buffer is the assertion: it fails on anything
 	// trailing the object, which is how stray text would show up.
-	var parsed hookOutput
+	var parsed hookResponse
 	assert.NilError(t, json.Unmarshal([]byte(out), &parsed))
 	assert.Check(t, cmp.Equal(parsed.HookSpecificOutput.HookEventName, "PreToolUse"))
 	assert.Check(t, cmp.Contains(parsed.HookSpecificOutput.AdditionalContext,
