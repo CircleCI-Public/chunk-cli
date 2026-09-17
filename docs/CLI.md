@@ -352,7 +352,8 @@ chunk
   the `chunk validate results` hook. Only hook runs are ever released — a
   `chunk validate` typed at a terminal always waits. Set `asyncValidate` in
   `.chunk/config.json` to `never` or `always` to override the judgement, and
-  `asyncValidateMaxLines` to move the threshold. See
+  `asyncValidateMaxLines` to move the threshold, `asyncValidateInert` and
+  `asyncValidateBlocking` to say which paths it applies to. See
   [HOOKS.md](HOOKS.md#background-validation).
 - `chunk validate` caches successful runs in hook mode only, keyed by
   `.chunk/config.json`, the execution target, the HEAD SHA, and the contents of
@@ -409,6 +410,8 @@ chunk
 | `asyncValidate` | `.chunk/config.json` | Whether hook runs may be validated in the background: `auto` (default), `always`, `never` |
 | `asyncValidateMaxLines` | `.chunk/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |
 | `asyncValidateWorktree` | `.chunk/config.json` | Run background checks in a checked-out snapshot so edits cannot make the result stale (`true`/`false`, default: `false` — a snapshot holds nothing gitignored) |
+| `asyncValidateInert` | `.chunk/config.json` | Extensions (`.sql`) or file names (`NOTICE`) this project also counts as prose, validated in the background at any size; adds to the built-in list |
+| `asyncValidateBlocking` | `.chunk/config.json` | Extensions or file names that always block, over an inert default, the line threshold, and `asyncValidate: always` |
 
 `chunk config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project

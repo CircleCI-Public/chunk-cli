@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 )
@@ -84,6 +86,19 @@ type ProjectConfig struct {
 	// dependencies or a build cache would see environment failures reported as
 	// code failures.
 	AsyncValidateWorktree bool `json:"asyncValidateWorktree,omitempty"`
+	// AsyncValidateInert adds to the paths this project counts as prose: an
+	// extension (".sql") or an exact file name ("NOTICE"). A change confined to
+	// them is validated in the background however large it is.
+	//
+	// It adds rather than replaces, because the built-in list is an allowlist
+	// and an allowlist fails towards making somebody wait. A project that wants
+	// one of the defaults checked says so with AsyncValidateBlocking.
+	AsyncValidateInert []string `json:"asyncValidateInert,omitempty"`
+	// AsyncValidateBlocking names paths whose change always blocks, in the same
+	// two forms. It is the narrower instruction and so it wins over everything
+	// else — an inert default, a small diff, and the "always" mode included,
+	// since a project naming a path here has said it wants to wait for it.
+	AsyncValidateBlocking []string `json:"asyncValidateBlocking,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.
@@ -204,6 +219,10 @@ func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
 	return os.WriteFile(filepath.Join(dir, "config.json"), append(data, '\n'), 0o644)
 }
 
+// Validate reports whether the config is usable, for callers assembling one
+// before it is written.
+func (c *ProjectConfig) Validate() error { return c.validate() }
+
 func (c *ProjectConfig) validate() error {
 	if c == nil {
 		return nil
@@ -211,6 +230,42 @@ func (c *ProjectConfig) validate() error {
 	for _, command := range c.Commands {
 		if command.Local && command.Remote {
 			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
+		}
+	}
+	// Reported rather than ignored. A misspelt entry here fails silently in the
+	// direction nobody checks: the project believes it is waiting for its .sql
+	// changes, and nothing ever tells it otherwise.
+	if err := validatePathRules("asyncValidateInert", c.AsyncValidateInert); err != nil {
+		return err
+	}
+	if err := validatePathRules("asyncValidateBlocking", c.AsyncValidateBlocking); err != nil {
+		return err
+	}
+	for _, entry := range c.AsyncValidateBlocking {
+		if slices.Contains(c.AsyncValidateInert, entry) {
+			return fmt.Errorf("%q is in both asyncValidateInert and asyncValidateBlocking", entry)
+		}
+	}
+	return nil
+}
+
+// validatePathRules checks the entries of an inert or blocking list.
+//
+// An entry is either an extension with its leading dot (".sql") or an exact
+// file name ("NOTICE"). Anything else is a mistake worth naming: a path, a
+// glob, and a bare extension are all things somebody would reasonably write
+// and none of them would ever match.
+func validatePathRules(key string, entries []string) error {
+	for _, entry := range entries {
+		switch {
+		case strings.TrimSpace(entry) == "":
+			return fmt.Errorf("%s has an empty entry", key)
+		case entry == ".":
+			return fmt.Errorf("%s: %q is not an extension or a file name", key, entry)
+		case strings.ContainsAny(entry, `/\`):
+			return fmt.Errorf("%s: %q looks like a path; use an extension (\".md\") or a file name (\"NOTICE\")", key, entry)
+		case strings.Contains(entry, "*"):
+			return fmt.Errorf("%s: %q looks like a glob; use an extension (\".md\") or a file name (\"NOTICE\")", key, entry)
 		}
 	}
 	return nil

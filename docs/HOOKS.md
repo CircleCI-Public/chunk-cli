@@ -40,6 +40,10 @@ The daemon takes the offer when the change is:
 - **confined to docs and text** — `.md`, `.markdown`, `.txt`, `.rst`, `.adoc`,
   and `LICENSE`/`NOTICE`/`AUTHORS`/`CHANGELOG`, at any size.
 
+Both lists are defaults, not rules: `asyncValidateInert` adds to what counts as
+prose here, and `asyncValidateBlocking` names paths this project always waits
+for, whatever their size. See [Configuration](#chunkconfigjson).
+
 ### What "under 500 lines" is measured against
 
 The last state that passed its checks — not `HEAD`.
@@ -290,7 +294,9 @@ Commands are defined in the project config:
   ],
   "stopHookMaxAttempts": 3,
   "asyncValidate": "auto",
-  "asyncValidateMaxLines": 500
+  "asyncValidateMaxLines": 500,
+  "asyncValidateInert": [".sql"],
+  "asyncValidateBlocking": [".tf"]
 }
 ```
 
@@ -305,6 +311,33 @@ and `always` releases every hook run — including one for a project that owes a
 blocking run, since a project that asked for this has opted out of that safety
 net. `asyncValidateMaxLines` moves the size threshold `auto` uses; a project
 whose checks are fast enough to be worth waiting for can lower it.
+
+`asyncValidateInert` and `asyncValidateBlocking` move the other half of the
+judgement — which paths it applies to. Each entry is an extension with its dot
+(`.sql`) or an exact file name (`NOTICE`); paths and globs are refused when the
+config loads, rather than silently never matching.
+
+- `asyncValidateInert` **adds** to the prose list above. It never replaces it,
+  because that list is an allowlist: an unfamiliar extension already makes
+  somebody wait, and dropping an entry by accident would release a change
+  instead.
+- `asyncValidateBlocking` names paths that always block — over an inert
+  default, over the size threshold, and over `asyncValidate: always`. It is the
+  narrower instruction of the two and it only ever makes somebody wait, so it is
+  allowed to win. A repo that lints its markdown puts `.md` here and the
+  built-in "markdown is prose" rule stops applying to it.
+
+Set them with `chunk config set` rather than by hand, which validates the value
+before writing it:
+
+```bash
+chunk config set asyncValidateMaxLines 800
+chunk config set asyncValidateBlocking ".tf,.sql"
+chunk config set asyncValidateInert ""
+```
+
+Each `set` replaces that list. The `chunk-validate-config` skill drives all of
+this from a conversation — see [SKILLS.md](SKILLS.md).
 
 ### `.claude/settings.json`
 
