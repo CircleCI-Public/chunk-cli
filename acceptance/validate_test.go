@@ -63,18 +63,21 @@ func hookStdin(t *testing.T, sessionID string, stopHookActive bool) []byte {
 	return data
 }
 
-func hookAdditionalContext(t *testing.T, stdout string) string {
+// hookSystemMessage parses the Stop hook response and returns its display-only
+// systemMessage. It also pins the absence of additionalContext: on Stop that
+// field is injected into the model's context and continues the conversation, so
+// emitting it on a passing run stops the turn from ever ending.
+func hookSystemMessage(t *testing.T, stdout string) string {
 	t.Helper()
 	var response struct {
-		HookSpecificOutput struct {
-			HookEventName     string `json:"hookEventName"`
-			AdditionalContext string `json:"additionalContext"`
-		} `json:"hookSpecificOutput"`
+		SystemMessage      string          `json:"systemMessage"`
+		HookSpecificOutput json.RawMessage `json:"hookSpecificOutput"`
 	}
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &response),
 		"stdout must be one valid JSON hook response; got: %s", stdout)
-	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
-	return response.HookSpecificOutput.AdditionalContext
+	assert.Equal(t, len(response.HookSpecificOutput), 0,
+		"Stop response must not inject model context; got: %s", stdout)
+	return response.SystemMessage
 }
 
 // commitAll stages and commits all files in dir.
@@ -121,8 +124,8 @@ func TestValidateHookMode_CleanTree(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 0,
 		"expected exit 0 (skipped) for clean tree; stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(hookAdditionalContext(t, result.Stdout), "working tree is clean"),
-		"expected clean-tree context; got stdout: %s", result.Stdout)
+	assert.Equal(t, result.Stdout, "",
+		"a skipped run must write nothing to stdout so the turn can end")
 }
 
 func TestValidateHookMode_NoConfig(t *testing.T) {
@@ -133,8 +136,8 @@ func TestValidateHookMode_NoConfig(t *testing.T) {
 		hookStdin(t, "test-session-no-config", false))
 
 	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for unconfigured hook; stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(hookAdditionalContext(t, result.Stdout), "no validation commands configured"),
-		"expected unconfigured context; got stdout: %s", result.Stdout)
+	assert.Equal(t, result.Stdout, "",
+		"an unconfigured run must write nothing to stdout so the turn can end")
 }
 
 func TestValidateRunDryRun(t *testing.T) {
@@ -660,8 +663,8 @@ func TestValidateHookMode_SuccessResponse(t *testing.T) {
 		hookStdin(t, "test-session-success-line", false))
 
 	assert.Equal(t, result.ExitCode, 0, "expected exit 0 for passing hook; stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(hookAdditionalContext(t, result.Stdout), "chunk validate passed"),
-		"expected completion context; got stdout: %s stderr: %s", result.Stdout, result.Stderr)
+	assert.Assert(t, strings.Contains(hookSystemMessage(t, result.Stdout), "chunk validate passed"),
+		"expected completion message; got stdout: %s stderr: %s", result.Stdout, result.Stderr)
 	assert.Assert(t, !strings.Contains(result.Stdout, "validation-command-output"),
 		"command output must not contaminate hook JSON; got stdout: %s", result.Stdout)
 	assert.Assert(t, strings.Contains(result.Stderr, "validation-command-output"),
