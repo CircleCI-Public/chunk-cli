@@ -373,3 +373,19 @@ func TestBufferAppendExactlyCapDropsOnlyPrior(t *testing.T) {
 	assert.Check(t, cmp.Equal(string(chunk.Data), strings.Repeat("b", MaxCommandBytes)))
 	assert.Check(t, cmp.Equal(chunk.NextOffset, int64(10+MaxCommandBytes)))
 }
+
+// A client that sends no project root has nothing the dashboard can file its
+// output under, and canonicalising the empty string used to invent one: Clean
+// turns it into ".", which the daemon then treats as a project root like any
+// other — it stats clean against its own working directory, so it is listed,
+// and it collects the output of every command that arrived without a root.
+func TestOutputStoreRegistrationWithNoRootIsNotFiledUnderARelativeRoot(t *testing.T) {
+	s := newOutputStore(context.Background())
+	s.register(reg("cmd-1", ""), immediateStream([]string{"output\n"}, 0))
+	waitForFinish(t, s, "cmd-1")
+
+	assert.Check(t, cmp.Len(s.commandsFor("."), 0),
+		`a rootless command must not be listed under "."`)
+	// It is still recorded, so the dashboard can say the command exists.
+	assert.Check(t, s.read("cmd-1", 0).Found)
+}

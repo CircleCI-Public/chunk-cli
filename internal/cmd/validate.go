@@ -60,25 +60,22 @@ type hookContext struct {
 	stopHookActive bool
 }
 
+// hookResponse is the JSON hook response written to stdout.
+//
+// Deliberately absent: hookSpecificOutput.additionalContext. On Stop that field
+// is injected into the model's context and the conversation *continues* so the
+// model can act on it, so announcing a pass with it re-signals the agent and the
+// turn never ends. systemMessage is display-only and leaves the turn alone.
+// Blocking stays with exit code 2 plus stderr, which stopHookMaxAttempts caps.
 type hookResponse struct {
-	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
+	SystemMessage string `json:"systemMessage,omitempty"`
 }
 
-type hookSpecificOutput struct {
-	HookEventName     string `json:"hookEventName"`
-	AdditionalContext string `json:"additionalContext"`
-}
-
-// writeStopHookResponse writes the Claude Code hook response format also
-// understood by Codex and Cursor. Hook stdout must contain JSON only; progress
-// and command output continue to use stderr.
-func writeStopHookResponse(w io.Writer, message string) error {
-	if err := json.NewEncoder(w).Encode(hookResponse{
-		HookSpecificOutput: hookSpecificOutput{
-			HookEventName:     "Stop",
-			AdditionalContext: message,
-		},
-	}); err != nil {
+// writeStopHookMessage writes a display-only Stop hook response, in the Claude
+// Code format also understood by Codex and Cursor. Hook stdout must contain JSON
+// only; progress and command output continue to use stderr.
+func writeStopHookMessage(w io.Writer, message string) error {
+	if err := json.NewEncoder(w).Encode(hookResponse{SystemMessage: message}); err != nil {
 		return fmt.Errorf("write Stop hook response: %w", err)
 	}
 	return nil
@@ -418,7 +415,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return hookErr
 	}
 	if skip {
-		return writeStopHookResponse(cmd.OutOrStdout(), "chunk validate skipped (working tree is clean)")
+		return nil // nothing ran; stdout stays empty so the turn can end
 	}
 	statusFn := newStatusFunc(streams)
 	insecureStorage := insecureStorageFlag(cmd)
@@ -428,7 +425,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		name = args[0]
 	}
 
-	cfg, done, err := validateEarlyExits(cmd.OutOrStdout(), hook, opts, name, workDir, streams, statusFn)
+	cfg, done, err := validateEarlyExits(hook, opts, name, workDir, streams, statusFn)
 	if done || err != nil {
 		return err
 	}
@@ -479,11 +476,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	// Wire event log only when a sidecar is involved. The wrap goes here, after
-	// target preparation fills opts.sidecarID but before env loading, so that
-	// sync and env-resolve status events are captured. Skipping when there is no
-	// sidecar avoids writing events with an empty sidecar_id that the TUI would
-	// filter out and never display.
+	// The wrap goes here, after target preparation fills opts.sidecarID but
+	// before env loading, so that sync and env-resolve status events are
+	// captured. Wired for every run, sidecar or not: an empty sidecar_id is what
+	// files a run under a project's local row, not a reason to record nothing.
 	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, workDir, hook)
 	setupComplete := false
 	var setupErr error
@@ -617,14 +613,14 @@ func checkHookAuth(hook *hookContext, needsSidecar bool, token string, streams i
 	return nil
 }
 
-func prepareValidateConfig(w io.Writer, workDir string, hook *hookContext, opts *validateOpts, name string, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+func prepareValidateConfig(workDir string, hook *hookContext, opts *validateOpts, name string, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
 	cfg, err := config.LoadProjectConfig(workDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, false, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
 	}
 	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
 		if hook != nil {
-			return nil, true, writeStopHookResponse(w, "chunk validate skipped (no validation commands configured)")
+			return nil, true, nil // no config in hook context: skip silently
 		}
 		return nil, false, &userError{
 			msg:        msgValidateNotConfigured,
@@ -686,15 +682,34 @@ func ensureRequestedValidateCommand(workDir, name, inlineCmd string, cfg *config
 	return ensureValidateCommand(workDir, name, cfg, streams)
 }
 
-// wrapEventLogStatusFn wraps statusFn with event log recording when a sidecar
-// is active. Returns statusFn unchanged when no sidecar is involved, so callers
-// with empty sidecar IDs never write events with a blank sidecar_id.
+// wrapEventLogStatusFn wraps statusFn so a run's progress is recorded in its
+// project's event log, and returns the recorder alongside it.
+//
+// Wired for every run, local included. A run with no sidecar is still a run
+// whose results a developer will look for, and the daemon reads these logs off
+// disk rather than being sent anything — so skipping the recorder here is how a
+// --local run, or a repo with no remote commands, ends up reporting to nobody.
+// An empty sidecar ID is what the dashboard files under a project's "local"
+// row, not a reason to write nothing.
+//
+// A project with no readable data directory is the one case that gets statusFn
+// back unchanged: there is nowhere to write, so the run reports without
+// recording.
 func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) (iostream.StatusFunc, *eventlog.Recorder) {
-	if sidecarID == "" {
-		return statusFn, nil
-	}
-	dataDir, err := sidecar.StateDir()
+	// Keyed on workDir rather than sidecar.StateDir, which walks up from the
+	// process's own working directory and so answers for the wrong project under
+	// --project.
+	//
+	// workDir is only as good as what reached it, and two cases are known to
+	// leave it pointing elsewhere. A project whose .chunk lives below the git
+	// root keys its log here but its sidecar state under the root, splitting one
+	// project's state in two. And a daemon-delegated run without an explicit
+	// --project resolves workDir to the daemon's own working directory, because
+	// the request carries Args and Env but nothing about where the caller stood.
+	// Both file a run under a project that did not run it.
+	dataDir, err := config.ProjectDataDir(workDir)
 	if err != nil {
+		// A missing data dir leaves the recorder reporting without recording.
 		return statusFn, nil
 	}
 	scName := ""
@@ -705,6 +720,16 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	if hook != nil && hook.stopHookActive {
 		op = eventlog.OpHook
 	}
+	// Register the project alongside the log about to be written to it. A run's
+	// results are never sent to the watch daemon — it reads this same log off
+	// disk — and only saving sidecar state used to register a project, so a run
+	// with no sidecar logged its results where no daemon would ever look for
+	// them. Registered remote commands were reached the same way: the daemon
+	// buffers their output under a project root it lists only once it has
+	// discovered that project.
+	// Best-effort: a run still records without the breadcrumb, and still reports
+	// without the log.
+	_ = sidecar.RegisterProjectRoot(dataDir, workDir)
 	recorder := eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
 	return recorder.Status, recorder
 }
@@ -763,7 +788,7 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
-		return writeStopHookResponse(cmd.OutOrStdout(), fmt.Sprintf("chunk validate passed (%s)", elapsed))
+		return writeStopHookMessage(cmd.OutOrStdout(), fmt.Sprintf("chunk validate passed (%s)", elapsed))
 	}
 	return hookErr
 }
@@ -977,9 +1002,7 @@ func printResults(streams iostream.Streams, tasks []watchd.TaskState) {
 
 // validateEarlyExits handles --list, --mark-remote, missing config, --dry-run.
 // Returns (cfg, done=true, err) to stop, or (cfg, false, nil) to continue.
-// w is the real stdout writer for hook JSON responses (streams.Out may be
-// redirected to stderr in hook mode).
-func validateEarlyExits(w io.Writer, hook *hookContext, opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
+func validateEarlyExits(hook *hookContext, opts *validateOpts, name, workDir string, streams iostream.Streams, statusFn iostream.StatusFunc) (*config.ProjectConfig, bool, error) {
 	if opts.list {
 		return nil, true, runValidateList(workDir, opts.jsonOut, streams, statusFn)
 	}
@@ -989,7 +1012,7 @@ func validateEarlyExits(w io.Writer, hook *hookContext, opts *validateOpts, name
 	if opts.markRemote {
 		return nil, true, runMarkRemote(workDir, name, streams)
 	}
-	return prepareValidateConfig(w, workDir, hook, opts, name, statusFn)
+	return prepareValidateConfig(workDir, hook, opts, name, statusFn)
 }
 
 func runValidateDryRun(name, inlineCmd string, cfg *config.ProjectConfig, statusFn iostream.StatusFunc) error {

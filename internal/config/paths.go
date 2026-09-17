@@ -47,13 +47,13 @@ func AppData() (string, error) {
 }
 
 // CanonicalProjectRoot returns projectRoot in the spelling everything that keys
-// state by a project agrees on: cleaned, with symlinks resolved, falling back to
-// the cleaned path when it cannot be resolved (a root that no longer exists,
-// most often) so callers always get a usable path. The empty string is returned
-// unchanged: filepath.Clean would turn it into ".", a root that passes every
-// existence check by standing for whatever directory the process happens to be
-// running in, and so files state belonging to no project under one that reads
-// as real.
+// state by a project agrees on: cleaned, made absolute, with symlinks resolved,
+// falling back to the closest spelling it reached when a step cannot be
+// completed (a root that no longer exists, most often) so callers always get a
+// usable path. The empty string is returned unchanged: filepath.Clean would turn
+// it into ".", a root that passes every existence check by standing for whatever
+// directory the process happens to be running in, and so files state belonging
+// to no project under one that reads as real.
 //
 // It exists because a project has more than one name. The same repo is
 // /tmp/x to a shell and /private/tmp/x to git on darwin, and the two used to be
@@ -67,9 +67,20 @@ func CanonicalProjectRoot(projectRoot string) string {
 		return ""
 	}
 	clean := filepath.Clean(projectRoot)
-	resolved, err := filepath.EvalSymlinks(clean)
+	// Absolute before resolved, because EvalSymlinks leaves a relative path
+	// relative: "." resolves to "." and survives every check below. A relative
+	// root reaches here from --project, which is passed through untouched, and it
+	// is the one spelling that is not a name for any particular project — it
+	// hashes to a single data directory shared by every project invoked that way,
+	// and lands in a breadcrumb the daemon later resolves against its own working
+	// directory instead of the project's.
+	abs, err := filepath.Abs(clean)
 	if err != nil {
 		return clean
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return abs
 	}
 	return resolved
 }

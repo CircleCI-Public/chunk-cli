@@ -472,3 +472,43 @@ func TestRemoveActiveSidecar_ClearsWhenLastMemberRemoved(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, got == nil)
 }
+
+// One project must not read as two. ProjectDataDir keys a data directory by the
+// resolved path, so a symlinked spelling of a root and a real one share it — but
+// the watch daemon keys projects by the breadcrumb string, and the writers
+// disagree about the spelling: a validate run passes the working directory it
+// was given, chunk watch passes git's top-level. Left as written, the two
+// spellings listed one log as two projects, which the dashboard drew as
+// duplicate rows.
+func TestProjectRootRegistrationCanonicalisesTheRoot(t *testing.T) {
+	setupXDGData(t)
+
+	base := t.TempDir()
+	target := filepath.Join(base, "project")
+	assert.NilError(t, os.MkdirAll(target, 0o755))
+	link := filepath.Join(base, "link")
+	assert.NilError(t, os.Symlink(target, link))
+
+	// Resolved rather than compared against target: on darwin the temp directory
+	// itself sits behind /var → /private/var, so target is not already canonical.
+	want, err := filepath.EvalSymlinks(target)
+	assert.NilError(t, err)
+
+	dataDir, err := config.ProjectDataDir(link)
+	assert.NilError(t, err)
+	assert.NilError(t, RegisterProjectRoot(dataDir, link))
+
+	crumb, err := os.ReadFile(ProjectRootPath(dataDir))
+	assert.NilError(t, err)
+	assert.Equal(t, string(crumb), want)
+
+	roots, err := AllProjectRoots()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, roots, []string{want})
+
+	// A breadcrumb written before this canonicalised anything still lists once.
+	assert.NilError(t, os.WriteFile(ProjectRootPath(dataDir), []byte(link), 0o644))
+	roots, err = AllProjectRoots()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, roots, []string{want})
+}

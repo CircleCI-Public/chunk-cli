@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -45,25 +46,28 @@ func runValidateHook(t *testing.T, workDir string) (stdout, stderr string, err e
 	return outBuf.String(), errBuf.String(), err
 }
 
-func TestWriteStopHookResponse(t *testing.T) {
+func TestWriteStopHookMessage(t *testing.T) {
 	var out bytes.Buffer
-	assert.NilError(t, writeStopHookResponse(&out, "validation completed: 2/2 passed"))
+	assert.NilError(t, writeStopHookMessage(&out, "validation completed: 2/2 passed"))
 
 	var response hookResponse
 	assert.NilError(t, json.Unmarshal(out.Bytes(), &response))
-	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
-	assert.Equal(t, response.HookSpecificOutput.AdditionalContext, "validation completed: 2/2 passed")
+	assert.Equal(t, response.SystemMessage, "validation completed: 2/2 passed")
+
+	// additionalContext on Stop continues the conversation, so a passing run
+	// must never emit it — that is what looped the turn in #577.
+	assert.Assert(t, !strings.Contains(out.String(), "additionalContext"),
+		"Stop response must not inject model context; got: %s", out.String())
 }
 
-func TestValidateHookNoConfigWritesResponse(t *testing.T) {
+// TestValidateHookNoConfigIsSilent pins the unconfigured skip to empty stdout.
+// Any response here is a signal to the agent that no check ran and none needs
+// reporting, so silence is what lets the turn end.
+func TestValidateHookNoConfigIsSilent(t *testing.T) {
 	isolateConfig(t)
 	stdout, _, err := runValidateHook(t, t.TempDir())
 	assert.NilError(t, err)
-
-	var response hookResponse
-	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
-	assert.Equal(t, response.HookSpecificOutput.AdditionalContext, "chunk validate skipped (no validation commands configured)")
+	assert.Equal(t, stdout, "", "unconfigured hook must write nothing to stdout")
 }
 
 func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testing.T) {
@@ -343,6 +347,52 @@ func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
 		"--local must execute commands locally even when Remote:true, got: %q", combined)
 }
 
+// A run with no sidecar is the only record of itself: nothing is streamed to the
+// watch daemon, which reads this same on-disk log. Registering the project is
+// what tells the daemon the log exists at all, so a run that skips it leaves
+// results nothing will ever show.
+func TestValidateLocalRunRegistersProjectForTheDaemon(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "echo ran-locally"}},
+	}))
+
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--local", "--project", dir})
+	assert.NilError(t, root.Execute())
+
+	// Canonical, because that is what registration writes and the daemon keys on:
+	// a darwin temp dir arrives here as /var/... and resolves to /private/var/...
+	canonical, err := filepath.EvalSymlinks(dir)
+	assert.NilError(t, err)
+	roots, err := sidecar.AllProjectRoots()
+	assert.NilError(t, err)
+	assert.Assert(t, slices.Contains(roots, canonical),
+		"a local run must register the project it logged to, got: %v", roots)
+
+	// And the run it recorded there closes with a tally, so a daemon that starts
+	// afterwards has a result to show rather than an open-ended run.
+	dataDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	log, err := eventlog.Open(dataDir)
+	assert.NilError(t, err)
+	events, err := log.Recent(10)
+	assert.NilError(t, err)
+	assert.Assert(t, len(events) > 0, "the run recorded no events")
+	passed, total, ok := events[len(events)-1].Outcome()
+	assert.Assert(t, ok, "last event does not close the run: %+v", events[len(events)-1])
+	assert.Equal(t, passed, 1)
+	assert.Equal(t, total, 1)
+}
+
 func TestPlanValidationRemoteFlagOverridesLocalConfig(t *testing.T) {
 	cfg := &config.ProjectConfig{Commands: []config.Command{
 		{Name: "format", Run: "task fmt", Local: true},
@@ -520,7 +570,7 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
 	var response hookResponse
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Assert(t, strings.Contains(response.HookSpecificOutput.AdditionalContext, "chunk validate passed"),
+	assert.Assert(t, strings.Contains(response.SystemMessage, "chunk validate passed"),
 		"cache hit must return a successful hook response, got: %q", stdout)
 
 	// The hit cleared the counter, so the next failure is attempt 1 again.
