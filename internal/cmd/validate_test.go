@@ -46,25 +46,28 @@ func runValidateHook(t *testing.T, workDir string) (stdout, stderr string, err e
 	return outBuf.String(), errBuf.String(), err
 }
 
-func TestWriteStopHookResponse(t *testing.T) {
+func TestWriteStopHookMessage(t *testing.T) {
 	var out bytes.Buffer
-	assert.NilError(t, writeStopHookResponse(&out, "validation completed: 2/2 passed"))
+	assert.NilError(t, writeStopHookMessage(&out, "validation completed: 2/2 passed"))
 
 	var response hookResponse
 	assert.NilError(t, json.Unmarshal(out.Bytes(), &response))
-	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
-	assert.Equal(t, response.HookSpecificOutput.AdditionalContext, "validation completed: 2/2 passed")
+	assert.Equal(t, response.SystemMessage, "validation completed: 2/2 passed")
+
+	// additionalContext on Stop continues the conversation, so a passing run
+	// must never emit it — that is what looped the turn in #577.
+	assert.Assert(t, !strings.Contains(out.String(), "additionalContext"),
+		"Stop response must not inject model context; got: %s", out.String())
 }
 
-func TestValidateHookNoConfigWritesResponse(t *testing.T) {
+// TestValidateHookNoConfigIsSilent pins the unconfigured skip to empty stdout.
+// Any response here is a signal to the agent that no check ran and none needs
+// reporting, so silence is what lets the turn end.
+func TestValidateHookNoConfigIsSilent(t *testing.T) {
 	isolateConfig(t)
 	stdout, _, err := runValidateHook(t, t.TempDir())
 	assert.NilError(t, err)
-
-	var response hookResponse
-	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Equal(t, response.HookSpecificOutput.HookEventName, "Stop")
-	assert.Equal(t, response.HookSpecificOutput.AdditionalContext, "chunk validate skipped (no validation commands configured)")
+	assert.Equal(t, stdout, "", "unconfigured hook must write nothing to stdout")
 }
 
 func TestValidateHookExitsOneWhenCircleCITokenMissingAndRemoteCommands(t *testing.T) {
@@ -567,7 +570,7 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
 	var response hookResponse
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Assert(t, strings.Contains(response.HookSpecificOutput.AdditionalContext, "chunk validate passed"),
+	assert.Assert(t, strings.Contains(response.SystemMessage, "chunk validate passed"),
 		"cache hit must return a successful hook response, got: %q", stdout)
 
 	// The hit cleared the counter, so the next failure is attempt 1 again.
