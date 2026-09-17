@@ -133,7 +133,7 @@ func TestAllInert(t *testing.T) {
 		{"notes.TXT"},
 		{"LICENSE", "CHANGELOG"},
 	} {
-		assert.Equal(t, allInert(paths), true, "expected inert: %v", paths)
+		assert.Equal(t, inertRules{}.allInert(paths), true, "expected inert: %v", paths)
 	}
 	for _, paths := range [][]string{
 		{},
@@ -144,7 +144,7 @@ func TestAllInert(t *testing.T) {
 		{"README.md", "main.go"},
 		{"docs/gen.py"},
 	} {
-		assert.Equal(t, allInert(paths), false, "expected not inert: %v", paths)
+		assert.Equal(t, inertRules{}.allInert(paths), false, "expected not inert: %v", paths)
 	}
 }
 
@@ -451,4 +451,75 @@ func writeSourceNamed(t *testing.T, dir, name string, n int) {
 	t.Helper()
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, name),
 		[]byte(strings.Repeat("// line\n", n)), 0o644))
+}
+
+// A project knows its own tree better than the built-in list does. What it adds
+// is prose to it, however much of it moved.
+func TestAConfiguredInertExtensionIsTreatedAsProse(t *testing.T) {
+	p := auto
+	p.rules = newInertRules([]string{".sql", "NOTES"}, nil)
+
+	for _, paths := range [][]string{{"db/schema.sql"}, {"NOTES"}, {"db/schema.sql", "README.md"}} {
+		d := decideRisk(p, false, changeset.Changes{Paths: paths, Lines: 5000}, nil, historyEvidence{})
+		assert.Equal(t, d.async, true, "not released: %v", paths)
+		assert.Assert(t, strings.Contains(d.reason, "docs and text"), "reason was %q", d.reason)
+	}
+}
+
+// The narrower instruction wins. A repo that lints its markdown says so here,
+// and the default that calls markdown prose stops applying to it.
+func TestAConfiguredBlockingPathBeatsTheInertDefaults(t *testing.T) {
+	p := auto
+	p.rules = newInertRules(nil, []string{".md"})
+
+	d := decideRisk(p, false, changeset.Changes{Paths: []string{"README.md"}, Lines: 3}, nil, historyEvidence{})
+	assert.Equal(t, d.async, false)
+	assert.Assert(t, strings.Contains(d.reason, "always validates"), "reason was %q", d.reason)
+	assert.Equal(t, p.rules.allInert([]string{"README.md"}), false)
+}
+
+// Three lines of a migration is not a small change if the project says it is
+// not. The size threshold does not get to overrule that.
+func TestAConfiguredBlockingPathBeatsASmallDiff(t *testing.T) {
+	p := auto
+	p.rules = newInertRules(nil, []string{".sql"})
+
+	d := decideRisk(p, false, changeset.Changes{Paths: []string{"db/0001.sql"}, Lines: 3}, nil, historyEvidence{})
+	assert.Equal(t, d.async, false)
+}
+
+// And it beats "always", which is the one mode that otherwise releases
+// everything: naming a path is the narrower statement of the two, and it only
+// ever makes somebody wait.
+func TestAConfiguredBlockingPathBeatsModeAlways(t *testing.T) {
+	p := asyncPolicy{mode: config.AsyncValidateAlways, maxLines: DefaultAsyncMaxLines}
+	p.rules = newInertRules(nil, []string{".sql"})
+
+	assert.Equal(t, decideRisk(p, false, changeset.Changes{Paths: []string{"db/0001.sql"}, Lines: 3}, nil, historyEvidence{}).async, false)
+	// Any other path still follows the mode.
+	assert.Equal(t, decideRisk(p, false, sourceChange(9000), nil, historyEvidence{}).async, true)
+}
+
+// "never" already blocks everything, so a blocking path cannot say anything it
+// has not already said — and must not change the reason a developer is given.
+func TestAConfiguredBlockingPathSaysNothingUnderModeNever(t *testing.T) {
+	p := asyncPolicy{mode: config.AsyncValidateNever, maxLines: DefaultAsyncMaxLines}
+	p.rules = newInertRules(nil, []string{".sql"})
+
+	d := decideRisk(p, false, changeset.Changes{Paths: []string{"db/0001.sql"}, Lines: 3}, nil, historyEvidence{})
+	assert.Equal(t, d.async, false)
+	assert.Assert(t, strings.Contains(d.reason, "off for this project"), "reason was %q", d.reason)
+}
+
+func TestPolicyForReadsTheConfiguredPathRules(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk", "config.json"),
+		[]byte(`{"asyncValidateInert":[".SQL"],"asyncValidateBlocking":[".md"]}`), 0o644))
+
+	p := policyFor(dir)
+	// Extensions are matched case-insensitively, so a config written in caps
+	// still matches the paths git reports.
+	assert.Equal(t, p.rules.allInert([]string{"db/schema.sql"}), true)
+	assert.Equal(t, p.rules.blocks([]string{"README.md"}), true)
 }
