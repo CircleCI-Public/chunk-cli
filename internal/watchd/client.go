@@ -79,6 +79,63 @@ func RegisterCommand(reg CommandReg) {
 	_ = resp.Body.Close()
 }
 
+// conflictTimeout bounds a conflict query. Short for the same reason
+// registerTimeout is: this call sits on the hook path in front of work the
+// developer is waiting for, and an advisory notice is never worth delaying it.
+const conflictTimeout = 2 * time.Second
+
+// ErrDaemonUnreachable reports that no watch daemon answered.
+//
+// Callers on the hook path are expected to treat this as "nothing to say" and
+// carry on. The daemon is optional — it runs when the developer has `chunk
+// watch` open — and a hook that complains about its absence would fire on every
+// session end for everyone who does not.
+var ErrDaemonUnreachable = errors.New("no watch daemon is running")
+
+// ErrDaemonTimeout reports that a daemon was there but did not answer within
+// conflictTimeout.
+//
+// Kept apart from ErrDaemonUnreachable because the two call for different
+// advice: one means start the daemon, the other means it is already running and
+// busy, so asking again is what helps. Collapsing them told people with a
+// working daemon to go start one.
+var ErrDaemonTimeout = errors.New("the watch daemon did not answer in time")
+
+// FetchConflicts asks the running daemon whether root's branch still merges
+// cleanly into its merge target.
+//
+// Unlike RegisterCommand this reports its errors, because the caller decides
+// how loudly to fail: a hook stays quiet, a person running the command by hand
+// gets told why there is no answer.
+func FetchConflicts(root string) (ConflictReport, error) {
+	sockPath, err := SocketPath()
+	if err != nil {
+		return ConflictReport{}, err
+	}
+	reqURL := "http://watchd/conflicts?root=" + neturl.QueryEscape(root)
+	client := unixClient(sockPath)
+	client.Timeout = conflictTimeout
+	resp, err := client.Get(reqURL)
+	if err != nil {
+		// A refused connection and an expired deadline are different answers.
+		// os.IsTimeout sees through the *url.Error the client wraps around it,
+		// which is why the check is not an errors.Is against a sentinel.
+		if os.IsTimeout(err) {
+			return ConflictReport{}, ErrDaemonTimeout
+		}
+		return ConflictReport{}, ErrDaemonUnreachable
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return ConflictReport{}, fmt.Errorf("watch daemon returned %s", resp.Status)
+	}
+	var report ConflictReport
+	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
+		return ConflictReport{}, fmt.Errorf("decode conflicts: %w", err)
+	}
+	return report, nil
+}
+
 // FetchOutput reads buffered output for a command starting at offset.
 func FetchOutput(commandID string, offset int64) (OutputChunk, error) {
 	sockPath, err := SocketPath()
