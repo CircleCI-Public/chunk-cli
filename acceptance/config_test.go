@@ -362,3 +362,38 @@ func TestConfigShowOrgIDEnvPrecedence(t *testing.T) {
 		"project orgID should not appear when env var is set, got: %s", combined)
 	assert.Check(t, cmp.Contains(combined, "CIRCLECI_ORG_ID"))
 }
+
+// The point of these keys is that an agent can set them from a conversation
+// rather than telling a developer to hand-edit JSON, so they are driven here
+// the way an agent would drive them.
+func TestConfigSetBackgroundValidationKeys(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+	repoDir := gitrepo.SetupGitRepo(t, "test-org", "async-config")
+
+	for _, args := range [][]string{
+		{"config", "set", "asyncValidate", "auto"},
+		{"config", "set", "asyncValidateMaxLines", "800"},
+		{"config", "set", "asyncValidateBlocking", ".sql, db/../NOTICE"},
+	} {
+		result := binary.RunCLI(t, args, env, repoDir)
+		if args[2] == "asyncValidateBlocking" {
+			// A path is refused, and refused as a bad rule rather than as a
+			// failure to write the file.
+			assert.Assert(t, result.ExitCode != 0, "a path was accepted as a rule")
+			assert.Check(t, cmp.Contains(result.Stdout+result.Stderr, "looks like a path"))
+			continue
+		}
+		assert.Equal(t, result.ExitCode, 0, "%v failed\nstdout: %s\nstderr: %s", args, result.Stdout, result.Stderr)
+	}
+
+	result := binary.RunCLI(t, []string{"config", "set", "asyncValidateBlocking", ".sql,.tf"}, env, repoDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	data, err := os.ReadFile(filepath.Join(repoDir, ".chunk", "config.json"))
+	assert.NilError(t, err)
+	var cfg config.ProjectConfig
+	assert.NilError(t, json.Unmarshal(data, &cfg))
+	assert.Equal(t, cfg.AsyncValidate, config.AsyncValidateAuto)
+	assert.Equal(t, cfg.AsyncValidateMaxLines, 800)
+	assert.DeepEqual(t, cfg.AsyncValidateBlocking, []string{".sql", ".tf"})
+}
