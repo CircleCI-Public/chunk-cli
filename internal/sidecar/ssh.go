@@ -270,19 +270,10 @@ func InteractiveShell(ctx context.Context, session *Session, envVars map[string]
 	return sess.Wait()
 }
 
-// sshAuth returns the appropriate SSH auth method and a cleanup function.
-// The caller must call cleanup when the SSH session is done.
-func sshAuth(ctx context.Context, session *Session) (ssh.AuthMethod, func(), error) {
+// sshAuth returns the SSH auth method for the session's identity file.
+// The returned cleanup function is a no-op but kept for interface symmetry.
+func sshAuth(_ context.Context, session *Session) (ssh.AuthMethod, func(), error) {
 	noop := func() {}
-
-	if session.UseAgent {
-		ag, conn, err := dialAgent(ctx, session.AuthSock)
-		if err != nil {
-			return nil, noop, err
-		}
-		return ssh.PublicKeysCallback(ag.Signers), func() { _ = conn.Close() }, nil
-	}
-
 	privateKeyData, err := os.ReadFile(session.IdentityFile)
 	if err != nil {
 		return nil, noop, fmt.Errorf("read private key: %w", err)

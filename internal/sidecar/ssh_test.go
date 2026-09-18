@@ -3,6 +3,7 @@ package sidecar
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -51,4 +52,58 @@ func TestTofuHostKeyCallback(t *testing.T) {
 	data, err := os.ReadFile(knownHosts)
 	assert.NilError(t, err)
 	assert.Assert(t, len(data) > 0)
+}
+
+// TestEnsureKeyPairConcurrent covers the fan-out paths (bundle sync per
+// sidecar, validate per variant) reaching a machine with no key yet. Every
+// goroutine must end up with the same keypair: if two generate, each registers
+// a public key whose private half is then overwritten, and those sidecars
+// reject the key that survived on disk.
+func TestEnsureKeyPairConcurrent(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), ".ssh", "chunk_ai")
+
+	const goroutines = 8
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		generated int
+		pubKeys   []string
+	)
+	start := make(chan struct{})
+
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+
+			didGenerate, err := EnsureKeyPair(keyPath)
+			assert.NilError(t, err)
+
+			pub, err := os.ReadFile(keyPath + ".pub")
+			assert.NilError(t, err)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if didGenerate {
+				generated++
+			}
+			pubKeys = append(pubKeys, string(pub))
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, generated, 1, "exactly one goroutine should generate the keypair")
+	for _, pub := range pubKeys {
+		assert.Equal(t, pub, pubKeys[0], "every goroutine should observe the same public key")
+	}
+
+	// An existing key is left alone.
+	didGenerate, err := EnsureKeyPair(keyPath)
+	assert.NilError(t, err)
+	assert.Assert(t, !didGenerate, "should not regenerate an existing key")
+	pub, err := os.ReadFile(keyPath + ".pub")
+	assert.NilError(t, err)
+	assert.Equal(t, string(pub), pubKeys[0])
 }

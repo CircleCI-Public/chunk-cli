@@ -496,8 +496,23 @@ func newSidecarAddSSHKeyCmd() *cobra.Command {
 	return cmd
 }
 
+// commandStdin returns os.Stdin when the process stdin is a pipe or a file, so
+// a remote command can read piped input, and nil when it is a terminal.
+//
+// The return type is io.Reader rather than *os.File on purpose: a
+// (*os.File)(nil) stored in an interface is not nil, so the SSH session would
+// accept it as a stdin source and then fail the whole exec with "invalid
+// argument" on the first read.
+func commandStdin() io.Reader {
+	fi, err := os.Stdin.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice != 0 {
+		return nil
+	}
+	return os.Stdin
+}
+
 func newSidecarSSHCmd() *cobra.Command {
-	var sidecarID, identityFile, envFile string
+	var sidecarID, envFile string
 	var envVarsFlag []string
 
 	cmd := &cobra.Command{
@@ -509,7 +524,6 @@ func newSidecarSSHCmd() *cobra.Command {
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
 			}
-			authSock := os.Getenv(config.EnvSSHAuthSock)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
 			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
@@ -524,11 +538,7 @@ func newSidecarSSHCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var stdin *os.File
-			if fi, statErr := os.Stdin.Stat(); statErr == nil && fi.Mode()&os.ModeCharDevice == 0 {
-				stdin = os.Stdin
-			}
-			err = sidecar.SSH(cmd.Context(), client, sidecarID, identityFile, authSock, args, envVars, io, stdin)
+			err = sidecar.SSH(cmd.Context(), client, sidecarID, args, envVars, io, commandStdin())
 			if err != nil {
 				if err := sshSessionError(err); err != nil {
 					return err
@@ -546,7 +556,6 @@ func newSidecarSSHCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
-	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in the remote session (repeatable)")
 	cmd.Flags().StringVar(&envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
 
@@ -554,7 +563,7 @@ func newSidecarSSHCmd() *cobra.Command {
 }
 
 func newSidecarSyncCmd() *cobra.Command {
-	var sidecarID, identityFile, workdir string
+	var sidecarID, workdir string
 
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -564,7 +573,6 @@ func newSidecarSyncCmd() *cobra.Command {
 			if err := resolveSidecarID(cmd.Context(), &sidecarID); err != nil {
 				return err
 			}
-			authSock := os.Getenv(config.EnvSSHAuthSock)
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
 			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
@@ -583,7 +591,7 @@ func newSidecarSyncCmd() *cobra.Command {
 				}
 				syncFn = eventlog.Record(dataDir, syncFn, eventlog.OpSync, sidecarID, scName, sidecar.CurrentBranch(cwd)).Status
 			}
-			err = sidecar.RsyncSync(cmd.Context(), client, sidecarID, identityFile, authSock, workdir, cwd, syncFn)
+			err = sidecar.RsyncSync(cmd.Context(), client, sidecarID, workdir, cwd, syncFn)
 			if err != nil {
 				if err := sshSessionError(err); err != nil {
 					return err
@@ -604,7 +612,6 @@ func newSidecarSyncCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
-	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Destination path on sidecar (defaults to /home/user/<basename> when omitted)")
 
 	return cmd
@@ -991,7 +998,7 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 }
 
 func newSidecarSetupCmd() *cobra.Command {
-	var sidecarID, orgID, name, identityFile, dir string
+	var sidecarID, orgID, name, dir string
 	var skipSync, force bool
 	var envVarsFlag []string
 	var envFile string
@@ -1015,7 +1022,6 @@ Example:
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			streams := iostream.FromCmd(cmd)
 			status := newStatusFunc(streams)
-			authSock := os.Getenv("SSH_AUTH_SOCK")
 
 			insecureStorage := insecureStorageFlag(cmd)
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -1067,14 +1073,14 @@ Example:
 					}
 				}
 
-				// Step 3: Ensure SSH key exists (generate if missing and no explicit key given).
-				if err := sidecarSetupEnsureSSHKey(identityFile, status); err != nil {
+				// Step 3: Ensure SSH key exists (generate if missing).
+				if err := sidecarSetupEnsureSSHKey(status); err != nil {
 					return err
 				}
 
 				// Step 4: Sync files to sidecar.
 				if !skipSync {
-					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, identityFile, authSock, dir, rc.CircleCITokenSource, status); err != nil {
+					if err := sidecarSetupSync(cmd.Context(), client, sidecarID, dir, rc.CircleCITokenSource, status); err != nil {
 						return err
 					}
 				}
@@ -1087,14 +1093,12 @@ Example:
 
 				// Step 6: Run setup steps over SSH.
 				opts := sidecarRunSetupOpts{
-					client:       client,
-					sidecarID:    sidecarID,
-					identityFile: identityFile,
-					authSock:     authSock,
-					env:          env,
-					envVars:      envVars,
-					streams:      streams,
-					status:       status,
+					client:    client,
+					sidecarID: sidecarID,
+					env:       env,
+					envVars:   envVars,
+					streams:   streams,
+					status:    status,
 				}
 				if err := sidecarSetupRunSetup(cmd.Context(), opts); err != nil {
 					return err
@@ -1142,7 +1146,6 @@ Example:
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&name, "name", "", "Sidecar name (used when creating a new sidecar)")
-	cmd.Flags().StringVar(&identityFile, "identity-file", "", "SSH identity file")
 	cmd.Flags().BoolVar(&skipSync, "skip-sync", false, "Skip syncing files to the sidecar")
 	cmd.Flags().BoolVar(&force, "force", false, "Re-detect environment even if cached in .chunk/config.json")
 	cmd.Flags().StringArrayVarP(&envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
@@ -1193,20 +1196,17 @@ func sidecarSetupResolveSidecar(
 	return sc.ID, sc.Name, nil
 }
 
-func sidecarSetupEnsureSSHKey(identityFile string, status iostream.StatusFunc) error {
-	if identityFile != "" {
-		return nil
-	}
+func sidecarSetupEnsureSSHKey(status iostream.StatusFunc) error {
 	keyPath, err := sidecar.DefaultKeyPath()
 	if err != nil {
 		return &userError{msg: "Could not determine SSH key path.", err: err}
 	}
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		status(iostream.LevelStep, fmt.Sprintf("Generating SSH key at %s...", keyPath))
-		if err := sidecar.GenerateKeyPair(keyPath); err != nil {
-			return &userError{msg: "Could not generate SSH key.", err: err}
-		}
-		status(iostream.LevelDone, "SSH key generated")
+	generated, err := sidecar.EnsureKeyPair(keyPath)
+	if err != nil {
+		return &userError{msg: "Could not generate SSH key.", err: err}
+	}
+	if generated {
+		status(iostream.LevelDone, fmt.Sprintf("Generated SSH key at %s", keyPath))
 	}
 	return nil
 }
@@ -1214,13 +1214,13 @@ func sidecarSetupEnsureSSHKey(identityFile string, status iostream.StatusFunc) e
 func sidecarSetupSync(
 	ctx context.Context,
 	client *circleci.Client,
-	sidecarID, identityFile, authSock string,
+	sidecarID string,
 	cwd string,
 	tokenSource string,
 	status iostream.StatusFunc,
 ) error {
 	status(iostream.LevelStep, "Syncing files to sidecar...")
-	err := sidecar.RsyncSync(ctx, client, sidecarID, identityFile, authSock, "", cwd, status)
+	err := sidecar.RsyncSync(ctx, client, sidecarID, "", cwd, status)
 	if err == nil {
 		return nil
 	}
@@ -1234,14 +1234,12 @@ func sidecarSetupSync(
 }
 
 type sidecarRunSetupOpts struct {
-	client       *circleci.Client
-	sidecarID    string
-	identityFile string
-	authSock     string
-	env          *envbuilder.Environment
-	envVars      map[string]string
-	streams      iostream.Streams
-	status       iostream.StatusFunc
+	client    *circleci.Client
+	sidecarID string
+	env       *envbuilder.Environment
+	envVars   map[string]string
+	streams   iostream.Streams
+	status    iostream.StatusFunc
 }
 
 func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
@@ -1265,7 +1263,7 @@ func sidecarSetupRunSetup(ctx context.Context, opts sidecarRunSetupOpts) error {
 			continue
 		}
 		opts.status(iostream.LevelStep, fmt.Sprintf("Running setup step %q: %s", step.Name, step.Command))
-		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, opts.identityFile, opts.authSock, false)
+		session, err := sidecar.OpenSession(ctx, opts.client, opts.sidecarID, false)
 		if err != nil {
 			if sessErr := sshSessionError(err); sessErr != nil {
 				return sessErr
