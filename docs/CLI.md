@@ -59,6 +59,14 @@ chunk
 │   ├── install                     # Install all skills
 │   └── list                        # List skills and install status
 │
+├── mutate [path]                   # Find test coverage gaps via mutation testing
+│   --parallelism <n>               # Sidecar pool capacity (0: enumerate only)
+│   --max <n>                       # Limit the number of mutations (0: no limit)
+│   --output <table|json>           # Enumeration output format
+│   --test-cmd <command>            # Test command override
+│   --test-timeout <duration>       # Per-mutation test timeout
+│   --destroy-pool                  # Delete pool sidecars after the run
+│
 ├── validate                        # Run validation commands
 │   [name]                          # Optional: run a specific named command
 │   --dry-run                       # Print commands without executing
