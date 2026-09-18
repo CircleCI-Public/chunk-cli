@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
@@ -51,7 +52,13 @@ func (e *TargetUnavailableError) Unwrap() error {
 }
 
 func (t Target) ResolveWorkspace(ctx context.Context, cwd string) (string, error) {
-	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
+	_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+	if repoErr != nil {
+		// Fall back to the directory name rather than passing an empty repo:
+		// ResolveWorkspace rejects that outright, so discarding the error here
+		// turned a missing git origin into a failed workspace resolution.
+		repo = filepath.Base(cwd)
+	}
 	return ResolveWorkspace(ctx, t.Workdir, repo)
 }
 

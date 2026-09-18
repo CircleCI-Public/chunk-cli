@@ -54,6 +54,12 @@ func NewRootCmd(version string) *cobra.Command {
 			return telemetry.FromContext(cmd.Context()).Close()
 		},
 	}
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return newUserError(err.Error()).
+			withCode("command.invalid_flags").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	})
 
 	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + `
 Getting started:

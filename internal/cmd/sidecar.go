@@ -305,6 +305,7 @@ func newSidecarCreateCmd() *cobra.Command {
 
 func newSidecarDeleteCmd() *cobra.Command {
 	var sidecarID string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "delete",
@@ -319,6 +320,19 @@ func newSidecarDeleteCmd() *cobra.Command {
 			client, err := ensureCircleCIClient(cmd.Context(), cmd, rc, io, ui.PromptHidden)
 			if err != nil {
 				return err
+			}
+			if !force {
+				if nonInteractive() {
+					return errNoForce("delete sidecar")
+				}
+				confirmed, err := ui.Confirm(fmt.Sprintf("Delete sidecar %s?", sidecarID), false)
+				if errors.Is(err, ui.ErrNoTTY) {
+					return errNoForce("delete sidecar")
+				}
+				if err != nil || !confirmed {
+					io.ErrPrintln("Cancelled.")
+					return nil
+				}
 			}
 			if err := client.DeleteSidecar(cmd.Context(), sidecarID); err != nil {
 				if err := notAuthorized("delete sidecars", rc.CircleCITokenSource, err); err != nil {
@@ -345,6 +359,7 @@ func newSidecarDeleteCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&sidecarID, "sidecar-id", "", "Sidecar ID (defaults to active sidecar)")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompt")
 
 	return cmd
 }
