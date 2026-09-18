@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
@@ -152,11 +153,37 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 	sessionID := session.IDFromSlice(req.Env)
 	args := req.Args
 	// Taken before the run, because this is the state the run is about to
-	// validate. A tree that cannot be snapshotted just means the next change is
-	// measured against HEAD instead.
-	before, _ := gitutil.SnapshotTree(req.ProjectRoot)
+	// validate. A tree that cannot be captured at all just means the next change
+	// is measured against HEAD instead.
+	before := d.snapshotState(req.ProjectRoot)
 
-	return d.tasks.start(req.ProjectRoot, func(ctx context.Context) (int, string) {
+	// A project that has asked for it gets its checks run in a checked-out copy
+	// of that state, so editing while they run cannot make the answer describe
+	// code that has moved. Materialising can fail — no snapshot, no worktree
+	// support, no disk — and then the run happens in the live tree as usual,
+	// which is slower to be sure of but never wrong about what it ran.
+	shadow, cleanup := "", func() {}
+	if policyFor(req.ProjectRoot).worktree && before.tree != "" {
+		if path, remove, err := gitutil.MaterializeTree(req.ProjectRoot, before.tree); err == nil {
+			shadow, cleanup = path, remove
+			// The commands run in the copy; the results still belong to the real
+			// project, whose data directory and event log the developer is watching.
+			// Where they run is the runner's projectRoot argument below, not a
+			// --project here: the runner appends its own --project last, and cobra
+			// takes the final value, so a --project in args would be overridden and
+			// the run would happen in the live tree while claiming otherwise.
+			args = append(append([]string(nil), args...), "--attribute-to", req.ProjectRoot)
+		}
+	}
+
+	// Whatever was already running for this project is validating a tree that
+	// has since moved, which is why this run exists at all.
+	if stopped := d.tasks.supersede(req.ProjectRoot); stopped > 0 {
+		log.Printf("watchd: superseded %d in-flight validate run(s) for %s", stopped, req.ProjectRoot)
+	}
+
+	taskID, err := d.tasks.start(req.ProjectRoot, shadow != "", func(ctx context.Context) (int, string) {
+		defer cleanup()
 		// Serialised against every other validate run, async or not: two runs of
 		// the same commands in one tree would race over whatever they build.
 		d.validateMu.Lock()
@@ -168,11 +195,23 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 		ctx = envctx.WithEnv(ctx, env)
 
 		var stdout, stderr bytes.Buffer
-		// The request's project root, not the daemon's cwd: the task is filed and
-		// fingerprinted against this project, so validating any other one would
-		// report an answer about the wrong repo — and the staleness check,
+		// Where the commands run: the snapshot copy when there is one, and the
+		// request's project root otherwise. Never the daemon's cwd — the task is
+		// filed and fingerprinted against this project, so validating any other one
+		// would report an answer about the wrong repo, and the staleness check,
 		// comparing this project against itself, would confirm it.
-		exitCode := d.runner(ctx, req.ProjectRoot, args, env, &stdout, &stderr)
+		runRoot := req.ProjectRoot
+		if shadow != "" {
+			runRoot = shadow
+		}
+		exitCode := d.runner(ctx, runRoot, args, env, &stdout, &stderr)
+		if ctx.Err() != nil {
+			// Superseded, or the daemon is shutting down. The run concluded
+			// nothing, so nothing is recorded: a cancelled run is not a failed one,
+			// and filing it as either a failure or a known-good state would be a
+			// verdict on work that never finished.
+			return exitCode, stdout.String() + stderr.String()
+		}
 		if exitCode == 0 {
 			// Recorded even if the tree has moved on since. Staleness decides
 			// whether this *result* can be reported, which is a different
@@ -188,6 +227,14 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 		// retains (see maxTaskOutput).
 		return exitCode, stdout.String() + stderr.String()
 	})
+	if err != nil {
+		// The run never started, so nothing will ever reach the deferred cleanup
+		// above. A shadow left behind would be a temp directory and a worktree
+		// entry per refused run.
+		cleanup()
+		return "", err
+	}
+	return taskID, nil
 }
 
 // handleCollect returns the finished results for a project and records them
@@ -291,10 +338,7 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 
 // runValidateNow runs req to completion while the caller waits.
 func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *RiskSummary) ValidateResponse {
-	var before string
-	if req.ProjectRoot != "" {
-		before, _ = gitutil.SnapshotTree(req.ProjectRoot)
-	}
+	before := d.snapshotState(req.ProjectRoot)
 
 	d.validateMu.Lock()
 	defer d.validateMu.Unlock()
