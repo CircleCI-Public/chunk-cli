@@ -55,6 +55,29 @@ func TestProjectDataDir_CollisionFree(t *testing.T) {
 	assert.Assert(t, dSlash != dHyphen, "paths that differ only by separator vs hyphen must not collide: %s", dSlash)
 }
 
+// An empty root is not a project. Hashed anyway it becomes one shared bucket
+// that every caller who lost track of their root lands in together, reading and
+// writing each other's sidecar, snapshot and event-log state.
+//
+// It is also indistinguishable from a resolved symlink as far as the migration
+// is concerned — filepath.Clean("") is ".", which never equals the empty
+// canonical root — so it can rename the sha256(".") directory somewhere else.
+func TestProjectDataDir_EmptyRootIsRejected(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, t.TempDir())
+
+	_, err := ProjectDataDir("")
+	assert.Assert(t, err != nil, "an empty project root was given a data directory")
+}
+
+// A real root still works, so the guard rejects only the case with no answer.
+func TestProjectDataDir_RealRootStillResolves(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, t.TempDir())
+
+	dir, err := ProjectDataDir(t.TempDir())
+	assert.NilError(t, err)
+	assert.Assert(t, dir != "")
+}
+
 // --- CanonicalProjectRoot ---
 
 // An empty root is not a project, and must not be canonicalised into one.

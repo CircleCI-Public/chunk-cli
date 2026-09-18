@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,6 +96,20 @@ func CanonicalProjectRoot(projectRoot string) string {
 // new location so users with symlinked project roots don't silently lose their
 // sidecar/snapshot/event-log state.
 func ProjectDataDir(projectRoot string) (string, error) {
+	// An empty root is not a project and has no data directory. Hashing it anyway
+	// hands every caller that passes one the same shared bucket, so unrelated
+	// projects would read and write each other's sidecar, snapshot and event-log
+	// state — and it is the callers who lost track of their root, the ones least
+	// able to notice, who would land there together.
+	//
+	// It also reaches the migration below by accident: filepath.Clean("") is ".",
+	// which never equals the empty canonical root, so an empty argument looks
+	// exactly like a root whose symlinks resolved to somewhere else and can
+	// rename the sha256(".") directory out from under whatever wrote it.
+	if projectRoot == "" {
+		return "", errors.New("project root required")
+	}
+
 	base, err := AppData()
 	if err != nil {
 		return "", err
