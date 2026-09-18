@@ -40,39 +40,15 @@ func TestValidateResultsNeedsNoProjectConfig(t *testing.T) {
 }
 
 // No daemon means no background runs, which is the common case rather than a
-// failure. This runs on every prompt, so an error here would put noise in front
-// of the agent constantly — and a non-zero exit from a UserPromptSubmit hook is
-// shown to the user.
+// failure. Quiet matters because this is the shape a hook would call it in:
+// wired in front of every prompt, an error here would put noise in front of the
+// agent constantly, and a non-zero exit is shown to the user.
 func TestValidateResultsIsQuietWithoutADaemon(t *testing.T) {
 	stdout, stderr, err := runValidateResults(t, "validate", "results", "--project", t.TempDir())
 
 	assert.NilError(t, err)
 	assert.Equal(t, stdout, "")
 	assert.Equal(t, stderr, "", "a missing daemon is not worth a word")
-}
-
-// --collect is the spelling the results subcommand replaced, and it is written
-// into .claude/settings.json by every version of chunk init before this one.
-// Those hooks keep invoking it until the settings are regenerated, so it has to
-// keep reaching the same place.
-func TestValidateCollectFlagStillReachesResults(t *testing.T) {
-	stdout, stderr, err := runValidateResults(t, "validate", "--collect", "--project", t.TempDir())
-
-	assert.NilError(t, err)
-	assert.Equal(t, stdout, "")
-	assert.Equal(t, stderr, "")
-}
-
-// Hidden, because it is deprecated: a developer reading --help should be pointed
-// at the subcommand, while the flag keeps working for hooks already on disk.
-func TestValidateCollectFlagIsHidden(t *testing.T) {
-	root := newTestRootCmd()
-	validateCmd, _, err := root.Find([]string{"validate"})
-	assert.NilError(t, err)
-
-	flag := validateCmd.Flags().Lookup("collect")
-	assert.Assert(t, flag != nil, "--collect was removed outright, breaking hooks already installed")
-	assert.Assert(t, flag.Hidden, "--collect is deprecated and should not be advertised")
 }
 
 // A discarded run has to reach the agent as a discard: no verdict, and no

@@ -2,8 +2,11 @@ package watchd
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -15,6 +18,52 @@ import (
 // tasks are evicted, so a project cannot lose a run that is still going. It is
 // also what bounds delivered results, which collect keeps rather than deletes.
 const MaxTasksPerProject = 20
+
+// maxTaskOutput caps what a single finished task retains. Without it the only
+// bound on the daemon's heap is MaxTasksPerProject times however verbose the
+// project's validate commands are, times however many projects are active —
+// and a verbose test run is megabytes.
+//
+// Nothing collects a result on its own: reading one is something a developer
+// asks for, so the retained size has to be survivable for runs nobody ever
+// reads. Twenty tasks at this cap is under 2 MB per project.
+const maxTaskOutput = 64 * 1024
+
+// tailOutput keeps the last maxTaskOutput bytes of a run's output.
+//
+// The tail rather than the head because that is where a validate run says what
+// failed and prints its tally; the head is commands announcing themselves,
+// which is the part a reader can most afford to lose. What went is replaced by
+// a marker, so a truncated result cannot be misread as the whole of a short
+// one.
+//
+// The cut is moved forward to the next line break so the tail does not open
+// mid-line, but only within lineScanLimit: output with no line breaks at all —
+// a progress bar rewriting one line, a single JSON blob — would otherwise give
+// back whatever trails its last newline, throwing away almost the whole window
+// to tidy the first line. Past that limit the raw cut is kept and only stray
+// continuation bytes are trimmed, so the result is still valid UTF-8.
+func tailOutput(out string) string {
+	if len(out) <= maxTaskOutput {
+		return out
+	}
+	dropped := len(out) - maxTaskOutput
+	tail := out[dropped:]
+	if i := strings.IndexByte(tail[:min(len(tail), lineScanLimit)], '\n'); i >= 0 {
+		dropped += i + 1
+		tail = tail[i+1:]
+	}
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		dropped++
+		tail = tail[1:]
+	}
+	return fmt.Sprintf("[%d bytes of earlier output dropped]\n%s", dropped, tail)
+}
+
+// lineScanLimit bounds how far tailOutput will skip forward to start on a line
+// boundary. Enough to clear one partial line of ordinary output, small enough
+// that losing it to tidiness costs nothing.
+const lineScanLimit = 1024
 
 // TaskState is a validation task as reported to a caller.
 type TaskState struct {
@@ -30,6 +79,7 @@ type TaskState struct {
 	// has finished.
 	ExitCode int `json:"exit_code"`
 	// Output is what the run printed, held for whoever collects the result.
+	// Capped at maxTaskOutput, keeping the tail.
 	Output string `json:"output,omitempty"`
 	// Stale reports that the working tree changed between the run starting and
 	// its result being read, so the result describes code that is no longer on
@@ -172,6 +222,21 @@ func (s *taskStore) start(root string, run runFn) (string, error) {
 		return "", err
 	}
 
+	s.mu.Lock()
+	// Refused rather than queued. evictLocked will not reclaim a running task —
+	// cancelling work that has not reported yet is worse than going over the
+	// cap — so without this nothing bounds the store at all: every start past
+	// the cap adds an entry and a goroutine that no eviction can take back.
+	//
+	// Runs are serialised against each other, so tasks past the first are not
+	// even progressing; they are parked on the mutex holding whatever their
+	// environment captured. Refusing sends the caller inline instead, which is
+	// where an answer it actually waits for comes from.
+	if n := s.runningLocked(root); n >= MaxTasksPerProject {
+		s.mu.Unlock()
+		return "", fmt.Errorf("%d runs already in flight for this project", n)
+	}
+
 	id := uuid.NewString()
 	ctx, cancel := context.WithCancel(s.parent)
 	entry := &taskEntry{
@@ -185,7 +250,6 @@ func (s *taskStore) start(root string, run runFn) (string, error) {
 		cancel: cancel,
 	}
 
-	s.mu.Lock()
 	s.tasks[id] = entry
 	s.byProject[root] = append(s.byProject[root], id)
 	s.evictLocked(root)
@@ -232,21 +296,8 @@ func (s *taskStore) finish(id string, exitCode int, output string) {
 	entry.state.Running = false
 	entry.state.FinishedAt = s.now()
 	entry.state.ExitCode = exitCode
-	entry.state.Output = output
+	entry.state.Output = tailOutput(output)
 	entry.state.Stale = stale
-}
-
-// collect returns the finished tasks for root that nobody has been told about
-// yet — including ones discarded as stale, with their verdicts stripped — and
-// records them delivered in one step. It is peek followed by acknowledge, for
-// callers with nothing that can fail in between.
-//
-// The daemon's handler does not use it: there, encoding and writing the response
-// sit between the two halves, and both can fail. See handleCollect.
-func (s *taskStore) collect(root string) []TaskState {
-	tasks := s.peek(root)
-	s.acknowledge(tasks)
-	return tasks
 }
 
 // peek returns the finished tasks for root that nobody has been told about yet,
@@ -290,16 +341,15 @@ func (s *taskStore) peek(root string) []TaskState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ids := s.byProject[root]
-	kept := make([]string, 0, len(ids))
 	var out []TaskState
-	for _, id := range ids {
+	for _, id := range s.byProject[root] {
+		// Present by construction: evictLocked is the only thing that removes a
+		// task, and it drops the id from this slice in the same step.
 		entry, ok := s.tasks[id]
 		if !ok {
 			continue
 		}
 		if entry.state.Running || !entry.state.DeliveredAt.IsZero() {
-			kept = append(kept, id)
 			continue
 		}
 		// Stale either because the tree moved while the run was in flight, or
@@ -324,12 +374,6 @@ func (s *taskStore) peek(root string) []TaskState {
 			reported.Output = ""
 		}
 		out = append(out, reported)
-		kept = append(kept, id)
-	}
-	if len(kept) == 0 {
-		delete(s.byProject, root)
-	} else {
-		s.byProject[root] = kept
 	}
 	return out
 }
@@ -356,6 +400,18 @@ func (s *taskStore) acknowledge(tasks []TaskState) {
 		}
 		entry.state.DeliveredAt = at
 	}
+}
+
+// runningLocked counts the project's tasks that have not finished yet. Callers
+// hold s.mu.
+func (s *taskStore) runningLocked(root string) int {
+	n := 0
+	for _, id := range s.byProject[root] {
+		if entry, ok := s.tasks[id]; ok && entry.state.Running {
+			n++
+		}
+	}
+	return n
 }
 
 // inFlight reports the tasks still running for root, for the dashboard and for

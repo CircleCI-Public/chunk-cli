@@ -349,11 +349,11 @@ chunk
   See [HOOKS.md](HOOKS.md#result-caching).
 - **`validate --async` and `validate results` are two halves of one flow.**
   `--async` hands the run to the watch daemon and returns immediately; `results`
-  reads what finished and prints it to stdout. They are split because a
-  background answer arrives after the agent has stopped, so there is nobody left
-  to hand it to — `chunk init` installs `chunk validate results` as a
-  UserPromptSubmit hook, which is the next moment an agent can be told. A result
-  is reported once and then forgotten. A run whose working tree changed while it
+  reads what finished and prints it to stdout. Nothing installs a hook to call
+  `results` yet: a background run is something you ask for explicitly, so
+  reading its answer back is too. Wiring it into a hook waits for the change
+  that makes background runs happen on their own. A result is reported once and
+  then forgotten. A run whose working tree changed while it
   was in flight has its verdict discarded: a pass describing code that is no
   longer on disk reads as a green light for work already changed. The discard
   itself is reported, without an exit code or output, because the commonest
@@ -364,10 +364,8 @@ chunk
   read as a clean pass. Stopping the tree moving under the run in the first place
   is a matter of where the run happens, not how its result is judged.
 - **`validate results` is a subcommand, not a flag, because it validates
-  nothing.** It reads daemon state. It replaces `--collect`, which is still
-  accepted but hidden — that flag is written into `.claude/settings.json` by
-  older versions of `chunk init`, so hooks on disk keep working, and re-running
-  `chunk init` rewrites the entry rather than adding a second one beside it.
+  nothing.** It reads daemon state. A flag on `validate` would read as a
+  modifier of a run that never happens.
 - Every command checks GitHub for a newer release in the background and prints a
   notice to stderr once it finishes. The result is cached in the app state dir
   (`update-check.json`) for 24 h to stay inside GitHub's unauthenticated rate

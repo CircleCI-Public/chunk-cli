@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"gotest.tools/v3/assert"
 
@@ -73,6 +75,23 @@ func assertDiscarded(t *testing.T, got []TaskState) {
 	assert.Assert(t, !got[0].Passed(), "a discarded run must never read as passed")
 	assert.Equal(t, got[0].ExitCode, 0, "a discarded run must not carry an exit code")
 	assert.Equal(t, got[0].Output, "", "a discarded run must not carry output")
+}
+
+// collect is peek followed by acknowledge in one step: the finished tasks for
+// root that nobody has been told about yet, including ones discarded as stale
+// with their verdicts stripped, marked delivered on the way out.
+//
+// It lives here rather than on the store because no production caller can use
+// it. Acknowledging is what makes a result unrepeatable, so it must not happen
+// until whatever consumes the result has succeeded — in handleCollect,
+// encoding and writing the response sit between the two halves and either can
+// fail. A test has nothing in between, which is the only place collapsing them
+// is safe, and keeping it out of the store means nobody adding a second
+// endpoint can reach for it without noticing the ordering it skips.
+func (s *taskStore) collect(root string) []TaskState {
+	tasks := s.peek(root)
+	s.acknowledge(tasks)
+	return tasks
 }
 
 func tree(head, digest string) gitutil.Worktree {
@@ -283,23 +302,33 @@ func TestTasksAreKeptPerProject(t *testing.T) {
 }
 
 // Eviction keeps the store bounded, but a run that has not reported yet is not
-// a candidate: dropping it would lose work about to produce an answer.
+// a candidate: dropping it would lose work about to produce an answer. So a
+// project already holding its cap of finished results evicts one of those to
+// make room, and the live run is what survives.
 func TestEvictionNeverDropsARunningTask(t *testing.T) {
 	s, _ := newFakeStore(t, tree("abc", "d1"))
 
-	release := make(chan struct{})
-	for i := 0; i < MaxTasksPerProject+5; i++ {
-		_, err := s.start("/repo", func(context.Context) (int, string) {
-			<-release
-			return 0, "ok"
-		})
+	for i := 0; i < MaxTasksPerProject; i++ {
+		_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "ok" })
 		assert.NilError(t, err)
+		waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 	}
-	// Over the cap on purpose: every task is still running.
-	assert.Equal(t, len(s.inFlight("/repo")), MaxTasksPerProject+5)
+
+	// One more, still going: the store is at its cap, so taking it means
+	// evicting something, and the only safe victims are the finished ones.
+	release := make(chan struct{})
+	live, err := s.start("/repo", func(context.Context) (int, string) {
+		<-release
+		return 0, "ok"
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, len(s.byProject["/repo"]), MaxTasksPerProject, "the cap was not enforced")
+	_, kept := s.tasks[live]
+	assert.Assert(t, kept, "the running task was evicted to stay under the cap")
 
 	close(release)
-	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "runs never finished")
+	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
 }
 
 // Finished tasks are evicted oldest-first once a project is over the cap, so a
@@ -852,6 +881,21 @@ func TestCollectEndpointRequiresARoot(t *testing.T) {
 	assert.Equal(t, rec.Code, http.StatusBadRequest)
 }
 
+// Collecting is a read to its caller but a write to the store: it stamps every
+// result it returns as delivered, and a delivered result is never reported
+// again. The stdlib mux enforces no method of its own, so without this guard
+// any request that reaches the path — a stray DELETE, a probe, a form POST —
+// drains the results the next prompt was going to be told about.
+func TestCollectEndpointRejectsNonGET(t *testing.T) {
+	d := newTestDaemon()
+	t.Cleanup(d.tasks.stopAll)
+
+	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPut} {
+		rec := serve(d, httptest.NewRequest(method, "/validate/collect?root=/repo", nil))
+		assert.Equal(t, rec.Code, http.StatusMethodNotAllowed, "%s reached the collect handler", method)
+	}
+}
+
 // The project root has to reach the runner, not just the task store. One daemon
 // serves every repo on the machine from whatever directory it was launched in,
 // so a runner left to resolve the project itself validates that directory — and
@@ -899,4 +943,137 @@ func TestValidateEndpointTellsTheRunnerWhichProject(t *testing.T) {
 
 	assert.Equal(t, rec.Code, http.StatusOK)
 	assert.Equal(t, ran, "/repo/b", "the runner was not told which project to validate")
+}
+
+// Output under the cap is the whole of what the run printed, unmarked. A
+// marker on a short result would be a lie about what was dropped.
+func TestTailOutputKeepsShortOutputWhole(t *testing.T) {
+	out := strings.Repeat("line\n", 10)
+	assert.Equal(t, tailOutput(out), out)
+}
+
+// The bound is on what the daemon retains, so it has to hold whatever the run
+// printed: a verbose test suite is megabytes, and twenty of them per project
+// sit in the heap until somebody asks for them.
+func TestTailOutputCapsLongOutput(t *testing.T) {
+	out := strings.Repeat("x", 4*maxTaskOutput) + "\nthe tally\n"
+
+	got := tailOutput(out)
+
+	assert.Assert(t, len(got) <= maxTaskOutput+64, "output was not capped: %d bytes", len(got))
+	assert.Assert(t, strings.HasSuffix(got, "the tally\n"), "the tail was not what survived")
+	assert.Assert(t, strings.Contains(got, "bytes of earlier output dropped"),
+		"a truncated result must say so")
+}
+
+// A cut landing inside a multi-byte rune would leave the result invalid UTF-8,
+// which survives a Go string but breaks whatever renders it.
+func TestTailOutputStaysValidUTF8(t *testing.T) {
+	// No line breaks, so the line-boundary step cannot do the trimming.
+	out := strings.Repeat("é", maxTaskOutput)
+
+	got := tailOutput(out)
+
+	assert.Assert(t, utf8.ValidString(got), "the cut left a partial rune")
+	assert.Assert(t, len(got) <= maxTaskOutput+64, "output was not capped: %d bytes", len(got))
+}
+
+// The store is what holds the memory, so the cap belongs on the way in rather
+// than on whichever caller happens to produce the output.
+func TestFinishCapsStoredOutput(t *testing.T) {
+	s, _ := newFakeStore(t, tree("abc", "d1"))
+
+	_, err := s.start("/repo", func(context.Context) (int, string) {
+		return 0, strings.Repeat("y", 4*maxTaskOutput)
+	})
+	assert.NilError(t, err)
+	waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
+
+	got := s.collect("/repo")
+	assert.Equal(t, len(got), 1)
+	assert.Assert(t, len(got[0].Output) <= maxTaskOutput+64,
+		"the store retained %d bytes", len(got[0].Output))
+}
+
+// Output with no line breaks must still fill the window. Seeking forward to a
+// line boundary unboundedly would hand back only whatever trails the last
+// newline — a few bytes of a 64 KiB budget — for a progress bar or a single
+// JSON blob.
+func TestTailOutputKeepsTheWindowWhenThereAreNoLineBreaks(t *testing.T) {
+	out := strings.Repeat("x", 4*maxTaskOutput) + "\nthe tally"
+
+	got := tailOutput(out)
+
+	assert.Assert(t, len(got) > maxTaskOutput/2, "only %d bytes survived a full window", len(got))
+	assert.Assert(t, strings.HasSuffix(got, "the tally"), "the tail was not what survived")
+}
+
+// Nothing else bounds the store. evictLocked will not reclaim a running task,
+// so once a project is at its cap of in-flight runs every further start would
+// add an entry and a goroutine that no eviction can ever take back.
+func TestStartRefusesOnceTheProjectIsAtItsInFlightCap(t *testing.T) {
+	s, _ := newFakeStore(t, tree("abc", "d1"))
+
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	for i := 0; i < MaxTasksPerProject; i++ {
+		_, err := s.start("/repo", func(context.Context) (int, string) {
+			<-block
+			return 0, ""
+		})
+		assert.NilError(t, err, "run %d was refused below the cap", i)
+	}
+
+	_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "" })
+	assert.ErrorContains(t, err, "already in flight")
+	assert.Equal(t, len(s.inFlight("/repo")), MaxTasksPerProject, "a refused run was still filed")
+}
+
+// The cap is per project, as the eviction it compensates for is. One busy repo
+// must not stop another from validating in the background.
+func TestTheInFlightCapIsPerProject(t *testing.T) {
+	s, _ := newFakeStore(t, tree("abc", "d1"))
+
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	for i := 0; i < MaxTasksPerProject; i++ {
+		_, err := s.start("/repo", func(context.Context) (int, string) {
+			<-block
+			return 0, ""
+		})
+		assert.NilError(t, err)
+	}
+
+	_, err := s.start("/other", func(context.Context) (int, string) { return 0, "" })
+	assert.NilError(t, err, "a different project was refused for a busy neighbour")
+}
+
+// Refusing has to be temporary. The cap counts runs still going, not runs ever
+// started, or a project would validate asynchronously twenty times and then
+// never again for the life of the daemon.
+func TestTheInFlightCapFreesUpAsRunsFinish(t *testing.T) {
+	s, _ := newFakeStore(t, tree("abc", "d1"))
+
+	for i := 0; i < MaxTasksPerProject*2; i++ {
+		_, err := s.start("/repo", func(context.Context) (int, string) { return 0, "" })
+		assert.NilError(t, err, "run %d was refused although the earlier ones had finished", i)
+		waitFor(t, func() bool { return len(s.inFlight("/repo")) == 0 }, "run never finished")
+	}
+}
+
+// Collecting is a hook-path call: it runs in front of a prompt and must stay
+// quiet when there is no daemon to ask. Its callers recognise that case by
+// ErrDaemonUnavailable, so a socket path that cannot even be resolved — no
+// HOME, a container with no user dir — has to arrive under the same sentinel.
+// Returned bare it becomes an error message before the prompt instead.
+func TestCollectValidateResultsReportsAnUnresolvableSocketAsUnavailable(t *testing.T) {
+	t.Setenv("CHUNK_WATCHD_DIR", "")
+	t.Setenv("HOME", "")
+
+	if _, err := SocketPath(); err == nil {
+		t.Skip("this platform resolves a home dir without HOME")
+	}
+
+	_, err := CollectValidateResults(t.TempDir())
+	assert.ErrorIs(t, err, ErrDaemonUnavailable)
 }

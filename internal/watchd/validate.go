@@ -124,15 +124,18 @@ func (d *daemon) handleAsyncValidate(w http.ResponseWriter, r *http.Request) {
 		exitCode := d.runner(ctx, root, args, env, &stdout, &stderr)
 		// stderr carries the progress lines and the tally; stdout is usually
 		// empty for a validate run. Both are kept so whoever collects the result
-		// sees what the developer would have seen.
+		// sees what the developer would have seen, up to the tail the store
+		// retains (see maxTaskOutput).
 		return exitCode, stdout.String() + stderr.String()
 	})
 	if err != nil {
-		// The tree could not be fingerprinted, so staleness would be undetectable.
+		// Either the tree could not be fingerprinted, so staleness would be
+		// undetectable, or the project already has its cap of runs in flight.
 		// Reported as a conflict rather than a server error: nothing is broken,
-		// this tree just cannot be validated asynchronously, and the caller is
-		// expected to run inline instead.
-		http.Error(w, "cannot validate asynchronously: "+err.Error(), http.StatusConflict)
+		// this run just cannot be taken asynchronously, and the caller is
+		// expected to run inline instead. The reason travels as the body so the
+		// caller can say which it was.
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 
@@ -159,6 +162,10 @@ func (d *daemon) handleAsyncValidate(w http.ResponseWriter, r *http.Request) {
 // round trip on every prompt for a case an unacknowledged result already
 // survives — it is simply reported again next turn.
 func (d *daemon) handleCollect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	root := r.URL.Query().Get("root")
 	if root == "" {
 		http.Error(w, "root required", http.StatusBadRequest)

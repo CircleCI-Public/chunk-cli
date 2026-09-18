@@ -238,9 +238,11 @@ func RunValidate(projectRoot string, args []string, circleCIToken string) (Valid
 }
 
 // ErrAsyncRefused is returned by StartAsyncValidate when the daemon will not
-// run this tree asynchronously — it could not be fingerprinted, so a stale
-// result would be undetectable. Callers fall back to running inline, where the
-// answer reaches whoever asked for it while it is still true.
+// take this run asynchronously: the tree could not be fingerprinted, so a
+// stale result would be undetectable, or the project already has its cap of
+// runs in flight. Callers fall back to running inline, where the answer
+// reaches whoever asked for it while it is still true. The daemon's reason is
+// wrapped alongside the sentinel.
 var ErrAsyncRefused = errors.New("async validation refused")
 
 // StartAsyncValidate asks the daemon to validate projectRoot in the background
@@ -295,7 +297,7 @@ func StartAsyncValidate(projectRoot string, args []string, circleCIToken string)
 func CollectValidateResults(projectRoot string) ([]TaskState, error) {
 	sockPath, err := SocketPath()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrDaemonUnavailable, err)
 	}
 	url := "http://watchd/validate/collect?root=" + neturl.QueryEscape(projectRoot)
 	resp, err := unixClient(sockPath).Get(url)

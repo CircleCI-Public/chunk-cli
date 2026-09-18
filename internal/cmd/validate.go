@@ -191,7 +191,6 @@ type validateOpts struct {
 	envVarsFlag    []string
 	envFile        string
 	async          bool   // run via the daemon without waiting for the result
-	collect        bool   // deprecated alias for the results subcommand
 	noDaemon       bool   // bypasses daemon delegation; set by the daemon when calling in-process
 	hookSessionID  string // hook session ID forwarded from client to daemon subprocess
 	stopHookActive bool   // stop_hook_active forwarded from client to daemon subprocess
@@ -235,15 +234,6 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringArrayVarP(&opts.envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
 	cmd.Flags().BoolVar(&opts.async, "async", false, "Run in the background via the watch daemon and report on a later run")
-	// --collect is what "validate results" used to be. Hidden rather than
-	// removed: the flag is written into .claude/settings.json by chunk init, so
-	// every project already set up by an earlier version has a hook invoking it,
-	// and dropping it would make those hooks fail until the settings are
-	// regenerated. Merge rewrites the entry to the subcommand (see
-	// settings.legacyCollectCommand); this keeps the old spelling working in the
-	// meantime.
-	cmd.Flags().BoolVar(&opts.collect, "collect", false, "Deprecated: use 'chunk validate results'")
-	_ = cmd.Flags().MarkHidden("collect")
 	cmd.Flags().BoolVar(&opts.noDaemon, "no-daemon", false, "")
 	_ = cmd.Flags().MarkHidden("no-daemon")
 	cmd.Flags().StringVar(&opts.hookSessionID, "hook-session-id", "", "")
@@ -375,12 +365,6 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	workDir, err := resolveWorkDir(opts)
 	if err != nil {
 		return err
-	}
-
-	// Reporting runs nothing. It says what earlier background runs concluded and
-	// exits, so it is safe to reach before any of the setup below.
-	if opts.collect {
-		return runResults(workDir, streams)
 	}
 
 	hook := detectHook(cmd.InOrStdin())
@@ -895,7 +879,10 @@ func tryAsyncDelegate(workDir, circleCIToken string, streams iostream.Streams) (
 	taskID, err := watchd.StartAsyncValidate(workDir, os.Args[1:], circleCIToken)
 	switch {
 	case errors.Is(err, watchd.ErrAsyncRefused):
-		streams.ErrPrintln(ui.ErrDim("chunk validate: tree cannot be fingerprinted, running inline"))
+		// The daemon's own words: it refuses for more than one reason, and a
+		// developer told the wrong one goes looking in the wrong place.
+		reason := strings.TrimPrefix(err.Error(), watchd.ErrAsyncRefused.Error()+": ")
+		streams.ErrPrintln(ui.ErrDim("chunk validate: " + reason + ", running inline"))
 		return false, nil
 	case errors.Is(err, watchd.ErrDaemonUnavailable):
 		streams.ErrPrintln(ui.ErrDim("chunk validate: watch daemon unavailable, running inline"))
@@ -919,10 +906,8 @@ func shortTaskID(id string) string {
 // newValidateResultsCmd reports what background validation runs concluded.
 //
 // A subcommand rather than a flag on validate because it validates nothing: it
-// reads results the daemon is already holding and prints them. The flag it
-// replaces, --collect, was named for the store operation on the daemon's side
-// rather than for what the caller gets back, and read as a modifier of a run
-// that never happens.
+// reads results the daemon is already holding and prints them. A flag would
+// read as a modifier of a run that never happens.
 //
 // Nobody can have a validate command named "results" any more, the same trade
 // `validate variants` already makes.
