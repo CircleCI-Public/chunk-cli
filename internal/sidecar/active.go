@@ -311,6 +311,12 @@ func findGitRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return findGitRootFrom(dir)
+}
+
+// findGitRootFrom walks up from dir and returns the first directory containing
+// .git, or "" if none is found.
+func findGitRootFrom(dir string) (string, error) {
 	for {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir, nil

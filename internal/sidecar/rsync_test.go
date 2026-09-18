@@ -113,6 +113,82 @@ func TestSSHCommandSetsIdentitiesOnlyAtMostOnce(t *testing.T) {
 	}
 }
 
+func TestWorktreeWorkspace(t *testing.T) {
+	cases := []struct {
+		name      string
+		originURL string
+		wantPath  string
+		wantOK    bool
+	}{
+		{
+			name:      "GitHub HTTPS URL",
+			originURL: "https://github.com/CircleCI-Public/chunk-cli.git",
+			wantPath:  DefaultWorkspace("chunk-cli"),
+			wantOK:    true,
+		},
+		{
+			name:      "GitHub SSH URL",
+			originURL: "git@github.com:CircleCI-Public/chunk-cli.git",
+			wantPath:  DefaultWorkspace("chunk-cli"),
+			wantOK:    true,
+		},
+		{
+			name:      "GitHub Enterprise SSH URL falls back to last path segment",
+			originURL: "git@ghe.company.com:org/repo.git",
+			wantPath:  DefaultWorkspace("repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "GitLab HTTPS URL falls back to last path segment",
+			originURL: "https://gitlab.com/group/subgroup/my-repo.git",
+			wantPath:  DefaultWorkspace("my-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "local path remote falls back to last path segment",
+			originURL: "/srv/git/some-repo.git",
+			wantPath:  DefaultWorkspace("some-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "trailing slash is ignored",
+			originURL: "https://gitlab.com/group/my-repo/",
+			wantPath:  DefaultWorkspace("my-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "scp style remote without a path",
+			originURL: "git@host:repo.git",
+			wantPath:  DefaultWorkspace("repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "empty origin URL returns false",
+			originURL: "",
+			wantOK:    false,
+		},
+		{
+			name:      "whitespace only origin URL returns false",
+			originURL: "   ",
+			wantOK:    false,
+		},
+		{
+			name:      "root only remote returns false",
+			originURL: "/",
+			wantOK:    false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := worktreeWorkspace(tc.originURL)
+			assert.Equal(t, ok, tc.wantOK)
+			if tc.wantOK {
+				assert.Equal(t, got, tc.wantPath)
+			}
+		})
+	}
+}
+
 func TestRsyncErrDetail(t *testing.T) {
 	const hostKeyNotice = "Warning: Permanently added '[127.0.0.1]:52134' (ED25519) to the list of known hosts."
 
