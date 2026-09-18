@@ -683,6 +683,98 @@ func TestSidecarsUseCommand(t *testing.T) {
 		"expected sb-manual in current output, got: %s", combined)
 }
 
+// TestSidecarDeleteRequiresForceWithoutTTY verifies that sidecar delete requires
+// --force (or a TTY) to proceed; without either it exits non-zero.
+func TestSidecarDeleteRequiresForceWithoutTTY(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sb-del-1", Name: "to-delete", OrgID: "org-aaa"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{"sidecar", "delete", "--sidecar-id", "sb-del-1"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit without --force, got 0")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "force"),
+		"expected --force suggestion in output, got: %s", combined)
+
+	// Sidecar should not have been deleted.
+	assert.Equal(t, len(cci.Sidecars), 1, "expected sidecar to remain after cancelled delete")
+}
+
+// TestSidecarDeleteForceSkipsConfirmation verifies that --force deletes without prompting.
+func TestSidecarDeleteForceSkipsConfirmation(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sb-del-2", Name: "to-delete", OrgID: "org-aaa"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{"sidecar", "delete", "--sidecar-id", "sb-del-2", "--force"}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "Deleted"),
+		"expected success message, got: %s", combined)
+
+	assert.Equal(t, len(cci.Sidecars), 0, "expected sidecar to be deleted")
+}
+
+// TestPruneRequiresForceWithoutTTY verifies that chunk prune requires --force
+// (or a TTY) to proceed; without either it exits non-zero.
+func TestPruneRequiresForceWithoutTTY(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sb-prune-1", Name: "old-sidecar", OrgID: "org-bbb"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{"prune", "--org-id", "org-bbb"}, env, env.HomeDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit without --force, got 0")
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "force"),
+		"expected --force suggestion in output, got: %s", combined)
+
+	// Nothing should have been pruned.
+	assert.Equal(t, len(cci.Sidecars), 1, "expected sidecar to remain after cancelled prune")
+}
+
+// TestPruneForceSkipsConfirmation verifies that --force prunes without prompting.
+func TestPruneForceSkipsConfirmation(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.Sidecars = []fakes.Sidecar{
+		{ID: "sb-prune-2", Name: "old-sidecar", OrgID: "org-ccc"},
+	}
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{"prune", "--org-id", "org-ccc", "--force"}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	combined := result.Stdout + result.Stderr
+	assert.Assert(t, strings.Contains(combined, "Deleted"),
+		"expected success message, got: %s", combined)
+
+	assert.Equal(t, len(cci.Sidecars), 0, "expected sidecars to be pruned")
+}
+
 // filterByMethod returns requests matching both method and path prefix.
 func filterByMethod(reqs []recorder.RecordedRequest, method, pathPrefix string) []recorder.RecordedRequest {
 	var out []recorder.RecordedRequest
