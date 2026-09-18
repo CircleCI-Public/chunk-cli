@@ -11,12 +11,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
+
+// proxyErrDrainTimeout bounds how long a failed rsync waits for the SSH proxy
+// goroutine to report why it gave up. Long enough for an in-flight WebSocket
+// dial to resolve after the proxy is cancelled, short enough not to be felt.
+const proxyErrDrainTimeout = 200 * time.Millisecond
 
 // RsyncSync syncs the local working tree (rooted at cwd) to a sidecar using
 // rsync over an SSH-over-WebSocket tunnel. The .git directory is included so
@@ -113,11 +119,16 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		detail := rsyncErrDetail(stderr.String())
+		// Stop the proxy before reading proxyErr. bridgeConn only sends once
+		// its WebSocket dial resolves, so a non-blocking read here would drop
+		// the proxy error whenever rsync exited for an unrelated reason (its
+		// own timeout, a signal) while the dial was still in flight.
+		stopProxy()
 		var proxyDetail string
 		select {
 		case pe := <-proxyErr:
 			proxyDetail = pe.Error()
-		default:
+		case <-time.After(proxyErrDrainTimeout):
 		}
 		switch {
 		case detail != "" && proxyDetail != "":

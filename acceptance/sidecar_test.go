@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
@@ -379,6 +380,12 @@ func TestSidecarsSyncCheckoutFlagRemoved(t *testing.T) {
 // TestSidecarsSshNoKey verifies that `sidecar ssh` generates the default
 // keypair at ~/.ssh/chunk_ai instead of asking the user to run ssh-keygen.
 // Reaching a sidecar has to work without `sidecar setup` having run first.
+//
+// The first run uses a server accepting any key, since the test cannot know
+// the generated key in advance. It then checks that the key registered with
+// the API is the one left on disk, and that a second run authenticates
+// against a server authorising only that key — a generate-then-register
+// mismatch would pass the any-key handshake but fail here.
 func TestSidecarsSshNoKey(t *testing.T) {
 	sshSrv := fakes.NewSSHServerAcceptingAnyKey(t)
 	sshSrv.SetResult("hello\n", 0)
@@ -405,8 +412,28 @@ func TestSidecarsSshNoKey(t *testing.T) {
 
 	_, err = os.Stat(keyPath)
 	assert.NilError(t, err, "private key should have been generated")
-	_, err = os.Stat(keyPath + ".pub")
+	pubKeyData, err := os.ReadFile(keyPath + ".pub")
 	assert.NilError(t, err, "public key should have been generated")
+
+	// The key registered with the API must be the one left on disk.
+	addKeyReqs := filterByPath(cci.Recorder.AllRequests(), "/api/v3/sidecar/instances/sb-111/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 1)
+	var addKeyBody struct {
+		PublicKey string `json:"public_key"`
+	}
+	assert.NilError(t, json.Unmarshal(addKeyReqs[0].Body, &addKeyBody))
+	assert.Equal(t, addKeyBody.PublicKey, strings.TrimSpace(string(pubKeyData)),
+		"registered key should match the generated key on disk")
+
+	// A second run has to authenticate against a server that authorises only
+	// the key on disk, proving the private key and registered key are a pair.
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey(pubKeyData)
+	assert.NilError(t, err)
+	sshSrv.RestrictToKey(pubKey)
+
+	result = binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "echo", "hello"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "second run should authenticate with the generated key: stdout: %s\nstderr: %s",
+		result.Stdout, result.Stderr)
 }
 
 func TestSidecarsExecWithArgs(t *testing.T) {

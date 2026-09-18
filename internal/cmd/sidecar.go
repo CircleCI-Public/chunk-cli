@@ -1201,12 +1201,12 @@ func sidecarSetupEnsureSSHKey(status iostream.StatusFunc) error {
 	if err != nil {
 		return &userError{msg: "Could not determine SSH key path.", err: err}
 	}
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		status(iostream.LevelStep, fmt.Sprintf("Generating SSH key at %s...", keyPath))
-		if err := sidecar.GenerateKeyPair(keyPath); err != nil {
-			return &userError{msg: "Could not generate SSH key.", err: err}
-		}
-		status(iostream.LevelDone, "SSH key generated")
+	generated, err := sidecar.EnsureKeyPair(keyPath)
+	if err != nil {
+		return &userError{msg: "Could not generate SSH key.", err: err}
+	}
+	if generated {
+		status(iostream.LevelDone, fmt.Sprintf("Generated SSH key at %s", keyPath))
 	}
 	return nil
 }

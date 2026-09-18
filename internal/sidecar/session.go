@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -65,6 +66,30 @@ func GenerateKeyPair(path string) error {
 		return fmt.Errorf("write public key: %w", err)
 	}
 	return nil
+}
+
+// keyGenMu serializes the check-then-generate below. Sidecar work fans out
+// concurrently (bundle sync per sidecar, validate per variant) and every
+// goroutine calls EnsureKeyPair. Without the lock they all see a missing key,
+// each writes its own ed25519 material to the same path, and the sidecars that
+// registered an overwritten public key reject the private key that survived.
+var keyGenMu sync.Mutex
+
+// EnsureKeyPair generates the keypair at path if it is not already there, and
+// reports whether it generated one. Concurrent callers see a single generation.
+func EnsureKeyPair(path string) (generated bool, err error) {
+	keyGenMu.Lock()
+	defer keyGenMu.Unlock()
+
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("stat SSH key: %w", err)
+	}
+	if err := GenerateKeyPair(path); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Session holds the info needed to SSH into a sidecar.
@@ -139,13 +164,8 @@ func OpenSession(ctx context.Context, client *circleci.Client, sidecarID string,
 	sshDir := filepath.Join(home, ".ssh")
 	identityFile := filepath.Join(sshDir, defaultKeyName)
 
-	if _, err := os.Stat(identityFile); err != nil {
-		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("stat SSH key: %w", err)
-		}
-		if err := GenerateKeyPair(identityFile); err != nil {
-			return nil, fmt.Errorf("generate SSH key: %w", err)
-		}
+	if _, err := EnsureKeyPair(identityFile); err != nil {
+		return nil, fmt.Errorf("generate SSH key: %w", err)
 	}
 
 	pubKeyPath := identityFile + ".pub"

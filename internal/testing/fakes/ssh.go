@@ -31,8 +31,10 @@ type SSHServer struct {
 	stdout   string
 	exitCode int
 	resultFn func(command string) (string, int)
-	commands []string
-	envVars  map[string]string
+	// authorizedKey, when non-nil, is the only key the server accepts.
+	authorizedKey ssh.PublicKey
+	commands      []string
+	envVars       map[string]string
 }
 
 // GenerateSSHKeypair generates an ed25519 keypair, writes the private and public
@@ -111,34 +113,38 @@ func GenerateSSHKeypairAt(t *testing.T, path string) ssh.PublicKey {
 func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 	t.Helper()
 
-	return newSSHServer(t, func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-		if bytes.Equal(key.Marshal(), authorizedKey.Marshal()) {
-			return &ssh.Permissions{}, nil
-		}
-		return nil, &unauthorizedKeyError{}
-	})
+	return newSSHServer(t, authorizedKey)
 }
 
 // NewSSHServerAcceptingAnyKey starts a server like NewSSHServer but authorises
 // whichever key the client presents. Use it when chunk generates the keypair
-// itself, so the test cannot know the public key in advance.
+// itself, so the test cannot know the public key in advance. Pair it with
+// RestrictToKey once the generated key is known.
 func NewSSHServerAcceptingAnyKey(t *testing.T) *SSHServer {
 	t.Helper()
 
-	return newSSHServer(t, func(_ ssh.ConnMetadata, _ ssh.PublicKey) (*ssh.Permissions, error) {
-		return &ssh.Permissions{}, nil
-	})
+	return newSSHServer(t, nil)
 }
 
-func newSSHServer(t *testing.T, authCallback func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error)) *SSHServer {
+// RestrictToKey narrows the server to accept only authorizedKey from now on.
+// Keeping the same server (and so the same host key and address) lets a test
+// first let chunk generate a keypair, then prove the private key chunk kept is
+// the pair of the public key it registered.
+func (s *SSHServer) RestrictToKey(authorizedKey ssh.PublicKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authorizedKey = authorizedKey
+}
+
+func newSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 	t.Helper()
 
 	hostSigner := generateHostKey(t)
 
-	sshCfg := &ssh.ServerConfig{PublicKeyCallback: authCallback}
-	sshCfg.AddHostKey(hostSigner)
+	srv := &SSHServer{t: t, authorizedKey: authorizedKey}
 
-	srv := &SSHServer{t: t}
+	sshCfg := &ssh.ServerConfig{PublicKeyCallback: srv.authorize}
+	sshCfg.AddHostKey(hostSigner)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ssh/tunnel", func(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +162,18 @@ func newSSHServer(t *testing.T, authCallback func(ssh.ConnMetadata, ssh.PublicKe
 	t.Cleanup(srv.srv.Close)
 
 	return srv
+}
+
+// authorize accepts any key unless the server has been restricted to one.
+func (s *SSHServer) authorize(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	s.mu.Lock()
+	authorized := s.authorizedKey
+	s.mu.Unlock()
+
+	if authorized == nil || bytes.Equal(key.Marshal(), authorized.Marshal()) {
+		return &ssh.Permissions{}, nil
+	}
+	return nil, &unauthorizedKeyError{}
 }
 
 // Addr returns the "host:port" address the server is listening on.
