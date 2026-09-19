@@ -226,7 +226,7 @@ func TestRetryOn429_DisabledByDefault(t *testing.T) {
 	assert.Equal(t, attempts.Load(), int32(1), "retries are disabled")
 }
 
-func TestRetryOn429_5xxStillCapsAtThreeWithBudgetSet(t *testing.T) {
+func TestRetryOn429_NoTimeout5xxStillCapsAtThreeWithBudgetSet(t *testing.T) {
 	var attempts atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +240,7 @@ func TestRetryOn429_5xxStillCapsAtThreeWithBudgetSet(t *testing.T) {
 		RetryOn429Budget: 30 * time.Second,
 	})
 
-	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/"))
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/", hc.NoTimeout()))
 	assert.Assert(t, err != nil, "expected an error for the 500")
 	assert.Assert(t, !hc.IsRateLimitError(err), "a 500 must stay a plain HTTPError")
 	assert.Equal(t, attempts.Load(), int32(4), "1 attempt + 3 retries")

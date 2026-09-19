@@ -156,6 +156,7 @@ func (c *Client) CreateSidecar(ctx context.Context, orgID, name, image string) (
 			References: orgRefs{Org: v3Ref{ID: orgID}},
 		}}),
 		hc.JSONDecoder(&env),
+		hc.NoTimeout(),
 	))
 	if err != nil {
 		return nil, mapErr("create sidecar", err)

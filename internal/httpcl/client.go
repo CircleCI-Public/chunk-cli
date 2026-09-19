@@ -277,10 +277,12 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 	}
 
 	cancel := func() {}
+	if c.retryOn429Budget > 0 {
+		ctx = context.WithValue(ctx, retryCtxKey{}, &retryState{start: time.Now()})
+	}
 	if !r.noTimeout {
 		ctxTimeout := c.timeout
 		if c.retryOn429Budget > 0 {
-			ctx = context.WithValue(ctx, retryCtxKey{}, &retryState{start: time.Now()})
 			ctxTimeout = c.retryOn429Budget + c.timeout // extend deadline to cover retry waits
 		}
 		var timeoutCancel context.CancelFunc
