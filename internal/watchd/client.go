@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -55,6 +56,10 @@ func doPing(client *http.Client) (bool, string) {
 		return false, ""
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized {
+		log.Printf("watchd: daemon rejected request — check CHUNK_WATCHD_TCP_TOKEN")
+		return false, ""
+	}
 	if resp.StatusCode != http.StatusOK {
 		return false, ""
 	}
@@ -282,13 +287,20 @@ func IsDaemonRunning() bool {
 	return ok
 }
 
-// IsDaemonCompatible reports whether the watch daemon is reachable and running
-// the same build as the current process. A daemon from a different build may
-// not support all API endpoints (e.g. /validate), so delegation should be
-// skipped and the operation run inline instead.
+// IsDaemonCompatible reports whether the watch daemon is reachable and suitable
+// for delegation. For a local daemon that means matching the current build (a
+// build mismatch means it may not support all API endpoints). For a remote
+// daemon the build ID can never match — the binary lives on a different host
+// with a different path and mtime — so reachability is the meaningful check.
 func IsDaemonCompatible() bool {
 	ok, build := pingDaemon()
-	return ok && build == BuildID()
+	if !ok {
+		return false
+	}
+	if TCPRemoteAddr() != "" {
+		return true
+	}
+	return build == BuildID()
 }
 
 // RunValidate delegates a validate run to the daemon. req.ProjectRoot is the

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -278,7 +279,7 @@ func TestTCPTransport_NoTokenRejectsDaemonStart(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err = RunDaemon(ctx, nil, "", nil)
+	err = RunDaemon(ctx, nil, "", nil, nil)
 	assert.ErrorContains(t, err, "CHUNK_WATCHD_TCP_TOKEN")
 }
 
@@ -363,6 +364,84 @@ func TestCommandIsRecordedWithoutCredentials(t *testing.T) {
 	assert.Check(t, chunk.Found)
 	assert.Check(t, !chunk.Running)
 	assert.Check(t, cmp.Contains(chunk.Error, "credentials"))
+}
+
+// RunValidate must not forward the caller's CircleCI token or environment when
+// talking to a remote daemon over TCP: the remote host has its own credentials
+// and leaking the developer's env across the wire is a security risk.
+func TestRunValidateTCP_DoesNotForwardCredentials(t *testing.T) {
+	const token = "test-creds-token"
+
+	type captured struct {
+		env []string
+	}
+	got := make(chan captured, 1)
+	runner := ValidateRunner(func(_ context.Context, _ string, _ []string, env []string, stdout io.Writer, _ io.Writer) int {
+		got <- captured{env: env}
+		_, _ = stdout.Write([]byte("ok"))
+		return 0
+	})
+
+	// Start a TCP daemon with the capturing runner.
+	dir, err := os.MkdirTemp("", "wd-tcp-creds")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	addr := ln.Addr().String()
+	assert.NilError(t, ln.Close())
+
+	t.Setenv("CHUNK_WATCHD_TCP_ADDR", addr)
+	t.Setenv("CHUNK_WATCHD_TCP_TOKEN", token)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- RunDaemon(ctx, nil, "", runner, nil) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Error("daemon did not shut down within 5s")
+		}
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case startErr := <-errCh:
+			t.Fatalf("daemon exited during startup: %v", startErr)
+		default:
+		}
+		if ok, _ := doPing(tcpClient(addr)); ok {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+		if time.Now().After(deadline) {
+			t.Fatal("tcp daemon did not become reachable within 5s")
+		}
+	}
+
+	// Connect as a remote client with a non-empty token and "local" env.
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", addr)
+	_, err = RunValidate(ValidateRequest{Args: []string{"validate", "test"}, CircleCIToken: "secret-circleci-token"})
+	assert.NilError(t, err)
+
+	select {
+	case c := <-got:
+		assert.Check(t, cmp.Equal(len(c.env), 0),
+			"expected os.Environ() to be withheld over TCP, got %d entries", len(c.env))
+		for _, e := range c.env {
+			if len(e) >= 12 && e[:12] == "CIRCLE_TOKEN" {
+				t.Errorf("CIRCLE_TOKEN leaked to remote daemon via env: %s", e[:12]+"=...")
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner was not called within 5s")
+	}
 }
 
 func TestConflictsEndpointRequiresRoot(t *testing.T) {
