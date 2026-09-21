@@ -571,3 +571,21 @@ func TestEnsureInstanceID_InvalidStoredValueRegenerates(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, id != uuid.Nil)
 }
+
+// --- SessionTrackingID ---
+
+func TestSessionTrackingID_Deterministic(t *testing.T) {
+	id1 := SessionTrackingID("abc-123")
+	id2 := SessionTrackingID("abc-123")
+	assert.Equal(t, id1, id2)
+}
+
+func TestSessionTrackingID_DifferentInputsDifferentIDs(t *testing.T) {
+	id1 := SessionTrackingID("session-a")
+	id2 := SessionTrackingID("session-b")
+	assert.Assert(t, id1 != id2)
+}
+
+func TestSessionTrackingID_NonNil(t *testing.T) {
+	assert.Assert(t, SessionTrackingID("any-session") != uuid.Nil)
+}

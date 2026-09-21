@@ -63,9 +63,12 @@ type Config struct {
 type Meta struct {
 	Version    string
 	InstanceID uuid.UUID
+	// SessionTrackingID, when non-zero, is used as AnonymousId so all chunk
+	// invocations within a session share a common anonymous identifier.
+	// When zero, InstanceID is used as AnonymousId instead.
+	SessionTrackingID uuid.UUID
 	// UserID is the authenticated CircleCI user UUID. When non-zero it is sent
-	// as UserId so events can be attributed to a real user. The install UUID
-	// (InstanceID) is always sent as AnonymousId regardless.
+	// as UserId so events can be attributed to a real user.
 	UserID uuid.UUID
 
 	// OS is the operating system chunk-cli is running on, e.g. runtime.GOOS.
@@ -143,11 +146,15 @@ func (s *Sender) Track(eventName string, props map[string]any) error {
 		p.Set(key, val)
 	}
 
+	anonymousID := s.meta.InstanceID
+	if s.meta.SessionTrackingID != uuid.Nil {
+		anonymousID = s.meta.SessionTrackingID
+	}
 	track := analytics.Track{
 		Event:       eventName,
 		Timestamp:   time.Now(),
 		Properties:  p,
-		AnonymousId: s.meta.InstanceID.String(),
+		AnonymousId: anonymousID.String(),
 		Context:     s.meta.toContext(),
 	}
 	if s.meta.UserID != uuid.Nil {
