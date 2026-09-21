@@ -280,6 +280,12 @@ func sshAuth(_ context.Context, session *Session) (ssh.AuthMethod, func(), error
 	}
 	signer, err := ssh.ParsePrivateKey(privateKeyData)
 	if err != nil {
+		// A passphrase-protected key parses nowhere in this path, and since the
+		// agent and --identity-file escape hatches are gone it needs its own
+		// error so the cmd layer can name the fix.
+		if _, ok := errors.AsType[*ssh.PassphraseMissingError](err); ok {
+			return nil, noop, &EncryptedKeyError{Path: session.IdentityFile, Err: err}
+		}
 		return nil, noop, fmt.Errorf("parse private key: %w", err)
 	}
 	return ssh.PublicKeys(signer), noop, nil

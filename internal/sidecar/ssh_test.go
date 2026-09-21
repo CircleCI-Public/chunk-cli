@@ -1,11 +1,20 @@
 package sidecar
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 )
 
@@ -106,4 +115,175 @@ func TestEnsureKeyPairConcurrent(t *testing.T) {
 	pub, err := os.ReadFile(keyPath + ".pub")
 	assert.NilError(t, err)
 	assert.Equal(t, string(pub), pubKeys[0])
+}
+
+// Env vars wiring TestHelperEnsureKeyPair up as a child process of
+// TestEnsureKeyPairAcrossProcesses.
+const (
+	keyGenHelperPathEnv = "CHUNK_TEST_KEYGEN_PATH"
+	keyGenHelperAtEnv   = "CHUNK_TEST_KEYGEN_AT"
+)
+
+// TestHelperEnsureKeyPair is the child half of
+// TestEnsureKeyPairAcrossProcesses. It skips during a normal run.
+func TestHelperEnsureKeyPair(t *testing.T) {
+	keyPath := os.Getenv(keyGenHelperPathEnv)
+	if keyPath == "" {
+		t.Skip("child process helper for TestEnsureKeyPairAcrossProcesses")
+	}
+
+	// Spin to a deadline the parent shares with every sibling, so the processes
+	// contend rather than lining up behind each other's startup cost.
+	if at, err := strconv.ParseInt(os.Getenv(keyGenHelperAtEnv), 10, 64); err == nil {
+		time.Sleep(time.Until(time.Unix(0, at)))
+	}
+
+	generated, err := EnsureKeyPair(keyPath)
+	assert.NilError(t, err)
+	fmt.Printf("GENERATED=%v\n", generated)
+}
+
+// TestEnsureKeyPairAcrossProcesses guards the race an in-process mutex cannot
+// close: two chunk invocations sharing one HOME on a machine with no key yet.
+// Before the lock file they both saw a missing key and both generated, so a
+// sidecar that had registered the first public key rejected the private key that
+// survived — and with the two writes interleaved, the pair left on disk was
+// permanently mismatched, since the existence check only ever tests the private
+// half.
+func TestEnsureKeyPairAcrossProcesses(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), ".ssh", "chunk_ai")
+	startAt := time.Now().Add(500 * time.Millisecond).UnixNano()
+
+	const procs = 6
+	cmds := make([]*exec.Cmd, procs)
+	outs := make([]*bytes.Buffer, procs)
+	for i := range procs {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestHelperEnsureKeyPair$", "-test.v")
+		cmd.Env = append(os.Environ(),
+			keyGenHelperPathEnv+"="+keyPath,
+			keyGenHelperAtEnv+"="+strconv.FormatInt(startAt, 10),
+		)
+		out := &bytes.Buffer{}
+		cmd.Stdout, cmd.Stderr = out, out
+		cmds[i], outs[i] = cmd, out
+	}
+
+	for _, cmd := range cmds {
+		assert.NilError(t, cmd.Start())
+	}
+	generated := 0
+	for i, cmd := range cmds {
+		assert.NilError(t, cmd.Wait(), outs[i].String())
+		if strings.Contains(outs[i].String(), "GENERATED=true") {
+			generated++
+		}
+	}
+
+	assert.Equal(t, generated, 1, "exactly one process should generate the keypair")
+	assertKeyPairMatches(t, keyPath)
+	assertNoStrayFiles(t, keyPath)
+}
+
+// assertKeyPairMatches checks the public key on disk is the one belonging to the
+// private key on disk. A mismatch is the silent, permanent failure mode: every
+// later run stats the private key, finds it, and never regenerates.
+func assertKeyPairMatches(t *testing.T, keyPath string) {
+	t.Helper()
+
+	privData, err := os.ReadFile(keyPath)
+	assert.NilError(t, err)
+	signer, err := ssh.ParsePrivateKey(privData)
+	assert.NilError(t, err)
+
+	pubData, err := os.ReadFile(keyPath + ".pub")
+	assert.NilError(t, err)
+
+	want := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+	assert.Equal(t, strings.TrimSpace(string(pubData)), want,
+		"public key on disk does not belong to the private key on disk")
+}
+
+// assertNoStrayFiles checks generation left no temp or lock files behind.
+func assertNoStrayFiles(t *testing.T, keyPath string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(filepath.Dir(keyPath))
+	assert.NilError(t, err)
+	base := filepath.Base(keyPath)
+	for _, e := range entries {
+		assert.Assert(t, e.Name() == base || e.Name() == base+".pub",
+			"unexpected leftover file: %s", e.Name())
+	}
+}
+
+func TestGenerateKeyPairWritesMatchingPair(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), ".ssh", "chunk_ai")
+	assert.NilError(t, GenerateKeyPair(keyPath))
+
+	assertKeyPairMatches(t, keyPath)
+	assertNoStrayFiles(t, keyPath)
+
+	info, err := os.Stat(keyPath)
+	assert.NilError(t, err)
+	assert.Equal(t, info.Mode().Perm(), os.FileMode(0o600), "private key must stay owner-only")
+}
+
+// TestEnsureKeyPairBreaksStaleLock covers a process killed mid-generation: its
+// lock file outlives it, and without recovery every later run would wait out the
+// timeout and then fail rather than generating.
+func TestEnsureKeyPairBreaksStaleLock(t *testing.T) {
+	defer func(d time.Duration) { keyGenLockTimeout = d }(keyGenLockTimeout)
+	keyGenLockTimeout = 50 * time.Millisecond
+
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, ".ssh", "chunk_ai")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(keyPath), 0o700))
+	assert.NilError(t, os.WriteFile(keyPath+".lock", nil, 0o600))
+
+	generated, err := EnsureKeyPair(keyPath)
+	assert.NilError(t, err)
+	assert.Assert(t, generated, "should break the abandoned lock and generate")
+	assertKeyPairMatches(t, keyPath)
+	assertNoStrayFiles(t, keyPath)
+}
+
+// TestEnsureKeyPairAdoptsKeyPublishedByLockHolder covers the waiter's side: it
+// must use the holder's key rather than generating a second one.
+func TestEnsureKeyPairAdoptsKeyPublishedByLockHolder(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, ".ssh", "chunk_ai")
+	lockPath := keyPath + ".lock"
+	assert.NilError(t, os.MkdirAll(filepath.Dir(keyPath), 0o700))
+	assert.NilError(t, os.WriteFile(lockPath, nil, 0o600))
+
+	// Stand in for the holder finishing while we wait.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_ = GenerateKeyPair(keyPath)
+		_ = os.Remove(lockPath)
+	}()
+
+	generated, err := EnsureKeyPair(keyPath)
+	assert.NilError(t, err)
+	assert.Assert(t, !generated, "should adopt the key the holder published")
+	assertKeyPairMatches(t, keyPath)
+}
+
+// TestSSHAuthEncryptedKey checks a passphrase-protected key surfaces as a typed
+// error. With --identity-file and the ssh-agent path both gone this key cannot
+// authenticate at all, so the cmd layer needs to recognise it to name the fix.
+func TestSSHAuthEncryptedKey(t *testing.T) {
+	keygen, err := exec.LookPath("ssh-keygen")
+	if err != nil {
+		t.Skip("ssh-keygen not available")
+	}
+
+	keyPath := filepath.Join(t.TempDir(), "chunk_ai")
+	out, err := exec.Command(keygen, "-t", "ed25519", "-N", "hunter2", "-f", keyPath, "-q").CombinedOutput()
+	assert.NilError(t, err, string(out))
+
+	_, _, err = sshAuth(context.Background(), &Session{IdentityFile: keyPath})
+	var encErr *EncryptedKeyError
+	assert.Assert(t, errors.As(err, &encErr), "want EncryptedKeyError, got %v", err)
+	assert.Equal(t, encErr.Path, keyPath)
 }

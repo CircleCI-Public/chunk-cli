@@ -15,6 +15,7 @@ import (
 	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/variants"
@@ -23,6 +24,14 @@ import (
 const sidecarInstancesPath = "/api/v3/sidecar/instances"
 
 func nopStatus(_ iostream.Level, _ string) {}
+
+// isolateHome points HOME at a temp dir. OpenSession generates ~/.ssh/chunk_ai
+// on demand, so a test that reaches it writes a private key into whatever HOME
+// points at — the developer's real one under "task test" without this.
+func isolateHome(t *testing.T) {
+	t.Helper()
+	t.Setenv(config.EnvHome, t.TempDir())
+}
 
 func newTestClient(t *testing.T, srv *httptest.Server) *circleci.Client {
 	t.Helper()
@@ -111,6 +120,7 @@ func countSidecarCalls(cci *fakes.FakeCircleCI) (creates, deletes int) {
 }
 
 func TestRunDeleteCalledOnCreateSuccess(t *testing.T) {
+	isolateHome(t)
 	// Create succeeds; Sync fails at SSH key registration so delete must still run.
 	// AddKeyStatusCode=500 prevents OpenSession from succeeding, so the variant
 	// dies after the sidecar exists — the case where a missing delete leaks a
@@ -145,6 +155,7 @@ func TestRunDeleteCalledOnCreateSuccess(t *testing.T) {
 // creates and deletes both at zero — an assertion that passes with the deferred
 // delete removed entirely, and so guards nothing.
 func TestRunDeletesEverySidecarOnCancel(t *testing.T) {
+	isolateHome(t)
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyStatusCode = 500
 

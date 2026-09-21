@@ -24,6 +24,20 @@ func (e *PublicKeyNotFoundError) Error() string {
 	return fmt.Sprintf("ssh public key not found: %s", e.KeyPath)
 }
 
+// EncryptedKeyError indicates the SSH private key is passphrase protected.
+// chunk authenticates with the key material directly and has no way to prompt
+// for or cache a passphrase, so such a key cannot be used.
+type EncryptedKeyError struct {
+	Path string
+	Err  error
+}
+
+func (e *EncryptedKeyError) Error() string {
+	return fmt.Sprintf("ssh key is passphrase protected: %s", e.Path)
+}
+
+func (e *EncryptedKeyError) Unwrap() error { return e.Err }
+
 // NoOriginRemoteError indicates git remote "origin" is not configured.
 type NoOriginRemoteError struct {
 	Err error

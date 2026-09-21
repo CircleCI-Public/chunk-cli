@@ -153,6 +153,15 @@ func sshSessionError(err error) error {
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
+	if e, ok := errors.AsType[*sidecar.EncryptedKeyError](err); ok {
+		return newUserError(fmt.Sprintf("SSH key is passphrase protected: %s", e.Path)).
+			withCode("ssh.key_passphrase_protected").
+			withSuggestion(fmt.Sprintf(
+				"Remove the passphrase with: ssh-keygen -p -N \"\" -f %s (or delete %s* and chunk will regenerate an unprotected pair).",
+				e.Path, e.Path)).
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &userError{
 			msg:        "Request timed out.",

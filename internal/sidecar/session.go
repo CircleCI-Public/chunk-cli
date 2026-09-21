@@ -54,43 +54,160 @@ func GenerateKeyPair(path string) error {
 		return fmt.Errorf("marshal private key: %w", err)
 	}
 	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
-	if err := os.WriteFile(path, privPEM, 0o600); err != nil {
-		return fmt.Errorf("write private key: %w", err)
-	}
 
 	sshPub, err := ssh.NewPublicKey(pub)
 	if err != nil {
 		return fmt.Errorf("create public key: %w", err)
 	}
-	if err := os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(sshPub), 0o644); err != nil {
+
+	// Publish the public half first: callers test for the private key, so this
+	// ordering means a visible private key always implies a readable .pub.
+	if err := writeFileAtomic(path+".pub", ssh.MarshalAuthorizedKey(sshPub), 0o644); err != nil {
 		return fmt.Errorf("write public key: %w", err)
+	}
+	if err := writeFileAtomic(path, privPEM, 0o600); err != nil {
+		return fmt.Errorf("write private key: %w", err)
 	}
 	return nil
 }
 
-// keyGenMu serializes the check-then-generate below. Sidecar work fans out
-// concurrently (bundle sync per sidecar, validate per variant) and every
-// goroutine calls EnsureKeyPair. Without the lock they all see a missing key,
-// each writes its own ed25519 material to the same path, and the sidecars that
-// registered an overwritten public key reject the private key that survived.
+// writeFileAtomic writes data to a temp file in path's directory and renames it
+// over path. A reader racing generation then sees either no file or a complete
+// one, never the zero-length window os.WriteFile opens between truncate and
+// write.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	writeErr := tmp.Chmod(perm)
+	if writeErr == nil {
+		_, writeErr = tmp.Write(data)
+	}
+	if closeErr := tmp.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write temp file: %w", writeErr)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
+}
+
+// keyGenMu serializes the check-then-generate below within this process. Sidecar
+// work fans out concurrently (bundle sync per sidecar, validate per variant) and
+// every goroutine calls EnsureKeyPair. Without the lock they all see a missing
+// key, each writes its own ed25519 material to the same path, and the sidecars
+// that registered an overwritten public key reject the private key that
+// survived. The lock file in EnsureKeyPair extends the same guarantee across
+// processes.
 var keyGenMu sync.Mutex
 
+// keyGenLockTimeout bounds how long a process waits for another process that
+// already holds the generation lock. Generation is sub-millisecond, so waiting
+// longer than this means the holder died and left its lock file behind. A var
+// so tests can shorten it.
+var keyGenLockTimeout = 5 * time.Second
+
 // EnsureKeyPair generates the keypair at path if it is not already there, and
-// reports whether it generated one. Concurrent callers see a single generation.
+// reports whether it generated one. Concurrent callers see a single generation:
+// goroutines in this process via keyGenMu, and other chunk processes sharing the
+// same HOME via an O_EXCL lock file.
 func EnsureKeyPair(path string) (generated bool, err error) {
 	keyGenMu.Lock()
 	defer keyGenMu.Unlock()
 
-	if _, err := os.Stat(path); err == nil {
+	exists, err := keyExists(path)
+	if err != nil || exists {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, fmt.Errorf("create .ssh directory: %w", err)
+	}
+
+	// A bare stat-then-generate races two first-run chunk processes — parallel
+	// agent sessions share one HOME — and either strands a private key whose
+	// public half was never registered with the sidecar, or interleaves the two
+	// writes into a mismatched pair that is never repaired, because the stat
+	// above only ever tests the private key.
+	release, acquired, err := acquireKeyGenLock(path + ".lock")
+	if err != nil {
+		return false, err
+	}
+	if !acquired {
+		// Another process published the key while we waited.
 		return false, nil
-	} else if !os.IsNotExist(err) {
-		return false, fmt.Errorf("stat SSH key: %w", err)
+	}
+	defer release()
+
+	// Re-check under the lock: the previous holder may have finished between our
+	// stat above and the lock being granted.
+	if exists, err := keyExists(path); err != nil || exists {
+		return false, err
 	}
 	if err := GenerateKeyPair(path); err != nil {
 		return false, err
 	}
 	return true, nil
 }
+
+// keyExists reports whether the private key at path is present.
+func keyExists(path string) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return true, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("stat SSH key: %w", err)
+	}
+	return false, nil
+}
+
+// acquireKeyGenLock creates lockPath exclusively, making exactly one process the
+// generator. When another process holds it, it waits for that process to publish
+// the key and reports acquired=false. A lock held past keyGenLockTimeout is
+// treated as abandoned and broken, so a process killed mid-generation cannot
+// wedge every later run.
+func acquireKeyGenLock(lockPath string) (release func(), acquired bool, err error) {
+	keyPath := strings.TrimSuffix(lockPath, ".lock")
+	deadline := time.Now().Add(keyGenLockTimeout)
+
+	for {
+		lock, openErr := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if openErr == nil {
+			_ = lock.Close()
+			return func() { _ = os.Remove(lockPath) }, true, nil
+		}
+		if !os.IsExist(openErr) {
+			return nil, false, fmt.Errorf("acquire SSH key lock: %w", openErr)
+		}
+
+		exists, err := keyExists(keyPath)
+		if err != nil {
+			return nil, false, err
+		}
+		if exists {
+			return nil, false, nil
+		}
+
+		if time.Now().After(deadline) {
+			if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+				return nil, false, fmt.Errorf("clear stale SSH key lock: %w", err)
+			}
+			deadline = time.Now().Add(keyGenLockTimeout)
+			continue
+		}
+		time.Sleep(keyGenPollInterval)
+	}
+}
+
+// keyGenPollInterval is how often a waiting process re-tests the lock.
+const keyGenPollInterval = 10 * time.Millisecond
 
 // Session holds the info needed to SSH into a sidecar.
 // It is a plain value type with no open connections or resources to close.
