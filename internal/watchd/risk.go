@@ -67,6 +67,16 @@ func newInertRules(inert, blocking []string) inertRules {
 	return inertRules{inert: ruleSet(inert), blocking: ruleSet(blocking)}
 }
 
+// ruleSet indexes one configured list for lookup by matches.
+//
+// Extensions are folded to lower case and file names are not, which is
+// deliberate rather than an oversight. ".MD" and ".md" are the same kind of
+// file by universal convention, so an entry for one means the other. Two file
+// names differing only in case are two different files — git records the case
+// it was given, and a repo can hold both "notice" and "NOTICE" — so folding
+// them would let a list match paths the project never named. For the inert
+// list that is the direction that releases a change and loses a failure, which
+// is the one direction this package is built not to guess in.
 func ruleSet(entries []string) map[string]bool {
 	if len(entries) == 0 {
 		return nil
@@ -82,7 +92,8 @@ func ruleSet(entries []string) map[string]bool {
 }
 
 // matches reports whether path is named by set, by exact file name or by
-// extension.
+// extension folded to lower case. See ruleSet for why only one of the two
+// folds.
 func matches(set map[string]bool, path string) bool {
 	if len(set) == 0 {
 		return false
