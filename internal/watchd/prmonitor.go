@@ -27,7 +27,7 @@ type prMonitor struct {
 	client *github.Client // nil when no GitHub credentials
 
 	mu        sync.Mutex
-	states    map[string]*PRState // latest PR state per project root (nil = no open PR)
+	states    map[prProjectKey]*PRState // latest PR state per (root, branch) pair (nil = no open PR)
 	lastFetch map[prProjectKey]time.Time
 	inflight  map[prProjectKey]bool
 }
@@ -35,7 +35,7 @@ type prMonitor struct {
 func newPRMonitor(client *github.Client) *prMonitor {
 	return &prMonitor{
 		client:    client,
-		states:    make(map[string]*PRState),
+		states:    make(map[prProjectKey]*PRState),
 		lastFetch: make(map[prProjectKey]time.Time),
 		inflight:  make(map[prProjectKey]bool),
 	}
@@ -94,7 +94,7 @@ func (pm *prMonitor) fetch(ctx context.Context, root, branch, org, repo string, 
 	}
 
 	pm.mu.Lock()
-	pm.states[root] = state
+	pm.states[key] = state
 	pm.lastFetch[key] = time.Now()
 	pm.mu.Unlock()
 }
@@ -105,7 +105,7 @@ func (pm *prMonitor) annotate(snap *ProjectSnapshot) {
 		return
 	}
 	pm.mu.Lock()
-	state, ok := pm.states[snap.Root]
+	state, ok := pm.states[prProjectKey{root: snap.Root, branch: snap.Branch}]
 	pm.mu.Unlock()
 	if ok {
 		snap.PR = state
