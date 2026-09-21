@@ -154,6 +154,9 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 	}()
 
 	if addr := TCPListenAddr(); addr != "" {
+		if TCPToken() == "" {
+			return fmt.Errorf("CHUNK_WATCHD_TCP_ADDR requires CHUNK_WATCHD_TCP_TOKEN to be set")
+		}
 		tcpLn, err := net.Listen("tcp", addr)
 		if err != nil {
 			return fmt.Errorf("listen tcp on %s: %w", addr, err)

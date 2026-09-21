@@ -275,9 +275,8 @@ func StopForCredentialChange() {
 	_ = stopDaemon(pid, sockPath)
 }
 
-// IsDaemonRunning reports whether the watch daemon is reachable and was built
-// from the same binary as the caller. A daemon from an older build is treated
-// as absent: it may not serve routes added since it was compiled.
+// IsDaemonRunning reports whether the watch daemon is reachable. Use
+// IsDaemonCompatible when the caller needs to confirm the build identity too.
 func IsDaemonRunning() bool {
 	ok, _ := pingDaemon()
 	return ok

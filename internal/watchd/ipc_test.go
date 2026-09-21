@@ -246,6 +246,12 @@ func startTestDaemonTCP(t *testing.T, token string) string {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("daemon exited during startup: %v", err)
+			return ""
+		default:
+		}
 		if ok, _ := doPing(tcpClient(addr)); ok {
 			return addr
 		}
@@ -255,12 +261,25 @@ func startTestDaemonTCP(t *testing.T, token string) string {
 	return ""
 }
 
-func TestTCPTransport_NoTokenAllowsAll(t *testing.T) {
-	addr := startTestDaemonTCP(t, "")
+func TestTCPTransport_NoTokenRejectsDaemonStart(t *testing.T) {
+	dir, err := os.MkdirTemp("", "wd-tcp-notoken")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	// Without a token configured, any request is allowed.
-	ok, _ := doPing(tcpClient(addr))
-	assert.Check(t, ok, "expected ping to succeed with no token configured")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	addr := ln.Addr().String()
+	assert.NilError(t, ln.Close())
+
+	t.Setenv("CHUNK_WATCHD_TCP_ADDR", addr)
+	// CHUNK_WATCHD_TCP_TOKEN is deliberately not set.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err = RunDaemon(ctx, nil, "", nil)
+	assert.ErrorContains(t, err, "CHUNK_WATCHD_TCP_TOKEN")
 }
 
 func TestTCPTransport_ValidTokenAllows(t *testing.T) {
@@ -302,10 +321,10 @@ func TestTCPTransport_WrongTokenRejects(t *testing.T) {
 }
 
 func TestEnsureRunning_SkipsInRemoteMode(t *testing.T) {
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
 	// Point CHUNK_WATCHD_REMOTE_ADDR at a non-existent host so that any attempt
 	// to touch a local daemon would clearly succeed (no local state exists).
 	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:9")
-	// No CHUNK_WATCHD_DIR set, so a real EnsureRunning attempt would fail.
 	// If the remote guard is missing, EnsureRunning will call launchDaemon which
 	// will fail on the missing executable path — the test would not return nil.
 	err := EnsureRunning([]string{"watch", "_daemon"})
@@ -313,6 +332,7 @@ func TestEnsureRunning_SkipsInRemoteMode(t *testing.T) {
 }
 
 func TestEnsureLaunched_SkipsInRemoteMode(t *testing.T) {
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
 	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:9")
 	err := EnsureLaunched([]string{"watch", "_daemon"})
 	assert.NilError(t, err)

@@ -2,6 +2,7 @@ package watchd
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -112,7 +113,7 @@ func withBearerAuth(h http.Handler, token string) http.Handler {
 	}
 	want := "Bearer " + token
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != want {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(want)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -177,12 +178,15 @@ func tcpClient(addr string) *http.Client {
 // for long-running operations like /validate. A 10 s dial timeout bounds how
 // long an unreachable sandbox can stall the caller before ErrDaemonUnavailable
 // triggers a fallback to inline execution.
+//
+// ResponseHeaderTimeout is intentionally omitted: handleValidate buffers all
+// output before writing the response, so the header arrives only after the run
+// completes, and capping it would silently abort long validate runs.
 func longTCPClient(addr string) *http.Client {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", addr)
 		},
-		ResponseHeaderTimeout: 30 * time.Second,
 	}
 	var rt http.RoundTripper = transport
 	if token := TCPToken(); token != "" {
