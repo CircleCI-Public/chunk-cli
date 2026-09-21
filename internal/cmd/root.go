@@ -146,10 +146,14 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	send := optedIn && writeKey != "" && !testing.Testing()
 
 	var instanceID uuid.UUID
+	var sessionTrackingID uuid.UUID
 	if optedIn {
 		instanceID, err = config.EnsureInstanceID()
 		if err != nil {
 			return err
+		}
+		if sid := session.IDFromEnv(); sid != "" {
+			sessionTrackingID = config.SessionTrackingID(sid)
 		}
 	}
 
@@ -164,11 +168,12 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		WriteKey: writeKey,
 		Binary:   executable,
 		Metadata: telemetry.Meta{
-			Version:     version,
-			InstanceID:  instanceID,
-			UserID:      config.GetUserID(),
-			OS:          runtime.GOOS,
-			CodingAgent: telemetry.DetectCodingAgent(),
+			Version:           version,
+			InstanceID:        instanceID,
+			SessionTrackingID: sessionTrackingID,
+			UserID:            config.GetUserID(),
+			OS:                runtime.GOOS,
+			CodingAgent:       telemetry.DetectCodingAgent(),
 		},
 	})
 	if err != nil {

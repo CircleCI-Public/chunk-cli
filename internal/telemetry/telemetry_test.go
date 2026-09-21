@@ -62,6 +62,29 @@ func TestSender_Track(t *testing.T) {
 	assert.Equal(t, tr.Context.Extra["codingAgent"], agentClaudeCode)
 }
 
+func TestSender_Track_WithSessionTrackingID(t *testing.T) {
+	fake := &fakeDestination{}
+	instanceID := uuid.New()
+	sessionID := uuid.New()
+
+	s, err := NewSender(Config{
+		TestDestination: fake,
+		Metadata: Meta{
+			Version:           "1.2.3",
+			InstanceID:        instanceID,
+			SessionTrackingID: sessionID,
+			OS:                "linux",
+		},
+	})
+	assert.NilError(t, err)
+
+	assert.NilError(t, s.Track("command_invocation", nil))
+
+	tr := fake.tracks[0]
+	assert.Equal(t, tr.AnonymousId, sessionID.String(), "session ID should be used as AnonymousId")
+	assert.Equal(t, tr.Context.Device.Id, instanceID.String(), "install ID should remain in device context")
+}
+
 func TestSender_Track_WithUserID(t *testing.T) {
 	fake := &fakeDestination{}
 	instanceID := uuid.New()
