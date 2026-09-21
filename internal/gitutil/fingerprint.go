@@ -112,12 +112,21 @@ func digestTree(root, status string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// changedPaths extracts the paths from -z porcelain status output. Entries are
+// statusEntry is one record of porcelain status output: the two status codes
+// git reports for a path, and the path itself.
+type statusEntry struct {
+	// X is the index status and Y the worktree status, as git prints them —
+	// " M" for a modified file, "??" for an untracked one.
+	X, Y byte
+	Path string
+}
+
+// parseStatus extracts the entries from -z porcelain status output. Entries are
 // "XY <path>\x00"; rename and copy entries carry an extra "<origPath>\x00"
 // field that is skipped, since nothing exists under the original name.
-func changedPaths(status string) []string {
+func parseStatus(status string) []statusEntry {
 	fields := strings.Split(status, "\x00")
-	var paths []string
+	var entries []statusEntry
 	for i := 0; i < len(fields); i++ {
 		f := fields[i]
 		// Every entry is at least "XY " plus one path character; anything
@@ -125,10 +134,20 @@ func changedPaths(status string) []string {
 		if len(f) < 4 {
 			continue
 		}
-		paths = append(paths, f[3:])
+		entries = append(entries, statusEntry{X: f[0], Y: f[1], Path: f[3:]})
 		if f[0] == 'R' || f[0] == 'C' || f[1] == 'R' || f[1] == 'C' {
 			i++
 		}
+	}
+	return entries
+}
+
+// changedPaths extracts the paths from -z porcelain status output.
+func changedPaths(status string) []string {
+	entries := parseStatus(status)
+	paths := make([]string, 0, len(entries))
+	for _, e := range entries {
+		paths = append(paths, e.Path)
 	}
 	return paths
 }

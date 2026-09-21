@@ -54,10 +54,18 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 	}
 }
 
-// hookContext holds the Claude Code Stop hook payload fields.
+// hookEventStop is the hook_event_name of the end-of-turn hook, the one run
+// whose answer may arrive after it has exited.
+const hookEventStop = "Stop"
+
+// hookContext holds the Claude Code hook payload fields.
 type hookContext struct {
 	sessionID      string
 	stopHookActive bool
+	// event is the payload's hook_event_name — "Stop", "PreToolUse", and so on.
+	// Empty when the payload does not carry one, as an older Claude Code or
+	// another agent's hook runner may not.
+	event string
 }
 
 // hookResponse is the JSON hook response written to stdout.
@@ -82,7 +90,7 @@ func writeStopHookMessage(w io.Writer, message string) error {
 }
 
 // detectHook reads the Claude Code hook JSON payload from r when r is not a
-// terminal. Returns nil if not running as a Stop hook.
+// terminal. Returns nil if not running as a hook.
 func detectHook(r io.Reader) *hookContext {
 	if f, ok := r.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		return nil
@@ -90,12 +98,29 @@ func detectHook(r io.Reader) *hookContext {
 	var p struct {
 		SessionID      string `json:"session_id"`
 		StopHookActive bool   `json:"stop_hook_active"`
+		HookEventName  string `json:"hook_event_name"`
 	}
 	_ = json.NewDecoder(r).Decode(&p)
 	if p.SessionID == "" {
 		return nil
 	}
-	return &hookContext{sessionID: p.SessionID, stopHookActive: p.StopHookActive}
+	return &hookContext{sessionID: p.SessionID, stopHookActive: p.StopHookActive, event: p.HookEventName}
+}
+
+// mayRunInBackground reports whether this run may be handed to the daemon and
+// left to finish after the caller has exited.
+//
+// Only the Stop hook may. Every hook payload looks alike from here — a session
+// ID and little else — but they are not alike in what a release would mean. A
+// Stop hook has a next turn to hear the answer on. The commit gate on
+// PreToolUse does not: releasing it would let the commit it exists to hold back
+// go through unvalidated, which is the one outcome the gate has to prevent.
+//
+// A payload with no hook_event_name is not released either. It is what an older
+// Claude Code or another agent's runner sends, and an unrecognised hook is not
+// evidence of a hook that can wait.
+func mayRunInBackground(hook *hookContext) bool {
+	return hook != nil && hook.event == hookEventStop
 }
 
 func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, statusFn iostream.StatusFunc) error {
@@ -790,6 +815,11 @@ func validateEnvFlag(envVarsFlag []string) error {
 // serves every repo on the machine from whatever directory it was launched in,
 // so a run that resolved the project from the daemon's cwd would validate that
 // repo instead of this one.
+//
+// A Stop hook run also offers the daemon the option of taking the run into the
+// background — see mayRunInBackground for why only that one. A developer
+// waiting at a terminal has no next turn, and releasing them would send the
+// run's output somewhere they are not looking.
 func runValidateViaDaemon(workDir string, args []string, circleCIToken string, hook *hookContext, streams iostream.Streams) error {
 	reqArgs := args
 	if hook != nil {
@@ -798,16 +828,63 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken string, h
 			reqArgs = append(reqArgs, "--stop-hook-active")
 		}
 	}
-	resp, err := watchd.RunValidate(workDir, reqArgs, circleCIToken)
+	resp, err := watchd.RunValidate(watchd.ValidateRequest{
+		Args:          reqArgs,
+		CircleCIToken: circleCIToken,
+		ProjectRoot:   workDir,
+		AllowAsync:    mayRunInBackground(hook),
+	})
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
 	}
+	return reportDelegatedValidate(resp, streams)
+}
+
+// reportDelegatedValidate writes what the daemon made of a delegated run and
+// returns its outcome.
+//
+// Three shapes arrive here. A task ID means the run was taken into the
+// background and nothing has happened yet, so there is no output and no verdict
+// to pass on — the answer reaches the agent on its next turn, through the
+// collect hook. A reason with no task ID means the run was offered to the
+// background and held here instead, and the reason says why. Neither means the
+// caller never offered, and there was no decision to explain.
+func reportDelegatedValidate(resp watchd.ValidateResponse, streams iostream.Streams) error {
+	if resp.TaskID != "" {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf(
+			"validating in the background: %s (%s)", shortTaskID(resp.TaskID), resp.Reason)))
+		reportRisk(resp.Risk, streams)
+		return nil
+	}
+	if resp.Reason != "" {
+		streams.ErrPrintf("  %s\n", ui.ErrDim("validating now: "+resp.Reason))
+	}
+	reportRisk(resp.Risk, streams)
 	_, _ = streams.Out.Write([]byte(resp.Stdout))
 	_, _ = streams.Err.Write([]byte(resp.Stderr))
 	if resp.ExitCode != 0 {
 		return &silentExitError{code: resp.ExitCode}
 	}
 	return nil
+}
+
+// reportRisk writes the daemon's judgement of the change, when it is worth
+// saying.
+//
+// A low-risk change gets no line. It is the common case, it is what everyone
+// expects, and a score printed on every turn is how a number stops being read
+// at all. Advice is printed whenever there is any, since advice exists only
+// where there is something to act on.
+func reportRisk(risk *watchd.RiskSummary, streams iostream.Streams) {
+	if risk == nil {
+		return
+	}
+	if risk.Band != watchd.BandLow {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(risk.String()))
+	}
+	if risk.Advice != "" {
+		streams.ErrPrintf("  %s\n", ui.ErrDim(risk.Advice))
+	}
 }
 
 // tryHookDelegate delegates a hook-invoked validate run to the daemon before
