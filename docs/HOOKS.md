@@ -12,8 +12,6 @@ Quality checks that run automatically as Claude Code works.
 when the working tree is clean. When there are changes, it runs all configured
 commands so problems are surfaced before the agent stops working.
 
-<<<<<<< HEAD
-=======
 **UserPromptSubmit** — runs `chunk validate results`, which prints what
 background runs (`chunk validate --async`) concluded and then forgets them. It
 runs no commands, only reads results the daemon is already holding, so its
@@ -138,7 +136,6 @@ not thereby teach it that enormous is fine — that is how a heuristic learns it
 way into missing failures. And an explicit `asyncValidate: always` still wins,
 because history is a heuristic and that setting is an instruction.
 
->>>>>>> 21c4fad (Add risk assessment to the daemon)
 ## Result Caching
 
 In hook mode only, a successful `chunk validate` run is cached. If the hook
