@@ -12,6 +12,175 @@ Quality checks that run automatically as Claude Code works.
 when the working tree is clean. When there are changes, it runs all configured
 commands so problems are surfaced before the agent stops working.
 
+**UserPromptSubmit** — runs `chunk validate results`, which prints what
+background runs (`chunk validate --async`) concluded and then forgets them. It
+runs no commands, only reads results the daemon is already holding, so its
+timeout is 10s. This hook exists because a background run's answer arrives after
+Stop has already fired and the agent has gone; the next prompt is the first
+moment it can be delivered. A result whose working tree changed mid-run is
+discarded: you are told the run was thrown out, but not what it concluded,
+since its answer describes code that has since changed. The usual cause is the
+run itself — a command that writes coverage output or regenerates a golden moves
+a path git is watching and invalidates its own result — so gitignoring what your
+commands write is what stops it recurring. With no daemon running there is
+nothing to report and the hook stays silent.
+
+## Background Validation
+
+A Stop hook that runs the full check suite is the right thing for a risky
+change and an expensive interruption for a typo. When the watch daemon is
+running, the Stop hook offers it the choice: run the checks now, while the hook
+waits, or take them into the background and answer on the next turn.
+
+The daemon takes the offer when the change is:
+
+- **under 500 lines**, or
+- **confined to docs and text** — `.md`, `.markdown`, `.txt`, `.rst`, `.adoc`,
+  and `LICENSE`/`NOTICE`/`AUTHORS`/`CHANGELOG`, at any size.
+
+Both lists are defaults, not rules: `asyncValidateInert` adds to what counts as
+prose here, and `asyncValidateBlocking` names paths this project always waits
+for, whatever their size. See [Configuration](#chunkconfigjson).
+
+### What "under 500 lines" is measured against
+
+The last state that passed its checks — not `HEAD`.
+
+Every run snapshots the working tree before validating it, and a run that
+passes leaves that snapshot behind as the mark to measure the next change from.
+So five turns of 100 lines are five small changes, not a 500-line one by the
+fifth. Measured against `HEAD` the number would only grow until something
+committed, and the agent would be made to wait for work it had been released
+for four turns running.
+
+The snapshot is content, not a commit, which keeps the measurement honest in
+both directions: a commit in the middle of a change no longer hides it, and a
+commit no longer resets the count to zero — which would otherwise call a large
+pile of unvalidated work "no change" the moment anything committed.
+
+Nothing about your repository moves. The snapshot stages into a throwaway index
+in a temp file, so your own staging area is untouched; it writes unreferenced
+objects into `.git/objects` that git's `gc` collects in its own time. Until
+a project's first passing run — a freshly started daemon, say — there is no mark
+yet and the change is measured against `HEAD`, which reads larger and so errs
+towards making you wait.
+
+It holds the caller — the blocking behaviour of every earlier version — when:
+
+- the change is larger than the limit,
+- the working tree cannot be measured, or cannot be fingerprinted,
+- **the project's last run failed.** A failure found in the background has
+  nobody left to report to, so it is remembered and the next run is made to
+  block, where the hook can act on what it finds. A passing run clears it. This
+  is also what keeps a discarded result from being a lost one: a run whose tree
+  changed while it was in flight is thrown away rather than reported, but if it
+  threw away a failure, the debt it left still forces the next run to block.
+
+Only the Stop hook is ever released. The commit gate on PreToolUse never is —
+releasing it would let the commit it exists to hold back go through
+unvalidated — and a `chunk validate` typed at a terminal has no later turn to
+hear the answer on, so it always waits too.
+
+A released hook prints where the answer will come from and exits 0:
+
+```
+  validating in the background: 0192cf6e (small change, 42 lines)
+```
+
+and the next turn begins with what it concluded:
+
+```
+chunk validate passed in the background (0192cf6e)
+```
+
+Failures arrive the same way, with the output of the run that failed. Because
+a failure also leaves the project owing a blocking run, the Stop hook after it
+blocks as it always did.
+
+With no daemon running nothing changes: every hook run is blocking.
+
+### Running the checks in a snapshot
+
+Background checks run against the live working tree by default, which means
+they are racing whoever is editing it. If the tree moves while they run, the
+answer describes code that is no longer there and gets thrown away.
+
+Setting `asyncValidateWorktree: true` runs them in a checked-out copy of the
+state being validated instead. The copy cannot move, so the answer stays true
+about the state it ran against — the state the agent's turn actually produced —
+and it is reported with that said rather than discarded:
+
+```
+chunk validate passed in the background (0192cf6e) — for the code as it was when that turn ended; the tree has changed since
+```
+
+It is off by default, for one reason: **a snapshot holds nothing git was told to
+ignore.** No installed dependencies, no build cache, no `.env.local`. For a
+project whose checks need any of those, every background run would report an
+environment failure as a code failure, which is worse than a discarded result.
+Projects whose checks run against source alone lose nothing by turning it on.
+
+Two smaller things to know. The copy is a real git worktree, so tools that ask
+git about it get answers; it is removed when the run ends, and a daemon killed
+mid-run leaves an entry that the next cleanup prunes. And remote commands in a
+snapshot run register their output under the copy, so the `chunk watch` logs
+pane will not show it — the event log and the run itself are still filed under
+the real project.
+
+### The risk score
+
+Every judgement also produces a 0–100 score, the facts behind it, and any
+advice that follows. A low-risk change prints nothing — it is the common case,
+and a number printed every turn is a number nobody reads. Anything else says so:
+
+```
+  validating now: large change since the last passing run, 2100 lines, over the 500-line limit
+  risk 92/100 high — 2100 lines (60), 3 files (6), last run failed (25)
+  2100 lines across 3 files is past the point where checks can run in the background; committing it in parts would get each piece checked sooner
+```
+
+The score is a report, not the decision. Release still turns on the facts
+themselves, because a threshold on lines can be argued with and a threshold on
+a composite cannot — nobody can tell you whether 47 should have been 52. What
+the score is for is the questions one bit cannot answer: which of two changes
+is riskier, and whether there is anything worth advising about either.
+
+Advice is only given where there is something to do about it. "Commit in parts"
+is actionable for 2,000 lines across nine files and impossible for 2,000 lines
+in one generated file, so a single-file change is told nothing rather than
+something it cannot act on.
+
+### Trees git cannot answer for
+
+A repository with no commits has no `HEAD` to diff against, and a directory that
+was never a repository has nothing at all. Both used to be unmeasurable, which
+meant every run in them blocked. The daemon now walks and hashes such a tree
+itself, so a small change in a fresh repo reads as a small change.
+
+It is the fallback, not the default. Git knows what is ignored, and knows how
+much of a modified file an edit actually touched; hashing only knows that a file
+changed, so it counts the whole file — a one-line edit in a 900-line file reads
+as 900 lines. That over-measures, which makes you wait, rather than
+under-measuring, which would wave a change through.
+
+### Relative to this repo
+
+Five hundred lines is a rewrite in one codebase and a Tuesday in another, so
+each project's finished runs are kept in `risk-history.jsonl` in its data
+directory — sizes and verdicts, no paths and no content — and used for the
+questions an absolute threshold cannot answer:
+
+- whether a change is large *for this repo* (it raises the score), and
+- whether changes this size usually fail here. Once a project has at least five
+  comparable runs and half of them failed, a change the rules would have
+  released is held instead.
+
+What history is allowed to do is deliberately one-directional: it can make the
+daemon more cautious, never less. A repo whose changes are all enormous must
+not thereby teach it that enormous is fine — that is how a heuristic learns its
+way into missing failures. And an explicit `asyncValidate: always` still wins,
+because history is a heuristic and that setting is an instruction.
+
 ## Result Caching
 
 In hook mode only, a successful `chunk validate` run is cached. If the hook
@@ -179,7 +348,11 @@ Commands are defined in the project config:
     {"name": "lint", "run": "task lint", "timeout": 60},
     {"name": "test", "run": "task test", "timeout": 300}
   ],
-  "stopHookMaxAttempts": 3
+  "stopHookMaxAttempts": 3,
+  "asyncValidate": "auto",
+  "asyncValidateMaxLines": 500,
+  "asyncValidateInert": [".sql"],
+  "asyncValidateBlocking": [".tf"]
 }
 ```
 
@@ -187,6 +360,40 @@ Commands are defined in the project config:
 agent when validation keeps failing for the same uncommitted changes. After that
 many consecutive failures the hook exits 0 (ending the session) instead of
 non-zero (which would ask Claude to try again). Defaults to 3 if unset.
+
+`asyncValidate` decides whether hook runs may be validated in the background:
+`auto` (the default) applies the rules above, `never` keeps every run blocking,
+and `always` releases every hook run — including one for a project that owes a
+blocking run, since a project that asked for this has opted out of that safety
+net. `asyncValidateMaxLines` moves the size threshold `auto` uses; a project
+whose checks are fast enough to be worth waiting for can lower it.
+
+`asyncValidateInert` and `asyncValidateBlocking` move the other half of the
+judgement — which paths it applies to. Each entry is an extension with its dot
+(`.sql`) or an exact file name (`NOTICE`); paths and globs are refused when the
+config loads, rather than silently never matching.
+
+- `asyncValidateInert` **adds** to the prose list above. It never replaces it,
+  because that list is an allowlist: an unfamiliar extension already makes
+  somebody wait, and dropping an entry by accident would release a change
+  instead.
+- `asyncValidateBlocking` names paths that always block — over an inert
+  default, over the size threshold, and over `asyncValidate: always`. It is the
+  narrower instruction of the two and it only ever makes somebody wait, so it is
+  allowed to win. A repo that lints its markdown puts `.md` here and the
+  built-in "markdown is prose" rule stops applying to it.
+
+Set them with `chunk config set` rather than by hand, which validates the value
+before writing it:
+
+```bash
+chunk config set asyncValidateMaxLines 800
+chunk config set asyncValidateBlocking ".tf,.sql"
+chunk config set asyncValidateInert ""
+```
+
+Each `set` replaces that list. The `chunk-validate-config` skill drives all of
+this from a conversation — see [SKILLS.md](SKILLS.md).
 
 ### `.claude/settings.json`
 
@@ -210,6 +417,13 @@ Generated by `chunk init`:
       {
         "hooks": [
           {"type": "command", "command": "chunk validate", "timeout": 420}
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {"type": "command", "command": "chunk validate results", "timeout": 10}
         ]
       }
     ]

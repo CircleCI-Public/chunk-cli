@@ -55,6 +55,91 @@ func TestProjectDataDir_CollisionFree(t *testing.T) {
 	assert.Assert(t, dSlash != dHyphen, "paths that differ only by separator vs hyphen must not collide: %s", dSlash)
 }
 
+// An empty root is not a project. Hashed anyway it becomes one shared bucket
+// that every caller who lost track of their root lands in together, reading and
+// writing each other's sidecar, snapshot and event-log state.
+//
+// It is also indistinguishable from a resolved symlink as far as the migration
+// is concerned — filepath.Clean("") is ".", which never equals the empty
+// canonical root — so it can rename the sha256(".") directory somewhere else.
+func TestProjectDataDir_EmptyRootIsRejected(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, t.TempDir())
+
+	_, err := ProjectDataDir("")
+	assert.Assert(t, err != nil, "an empty project root was given a data directory")
+}
+
+// A real root still works, so the guard rejects only the case with no answer.
+func TestProjectDataDir_RealRootStillResolves(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, t.TempDir())
+
+	dir, err := ProjectDataDir(t.TempDir())
+	assert.NilError(t, err)
+	assert.Assert(t, dir != "")
+}
+
+// --- CanonicalProjectRoot ---
+
+// An empty root is not a project, and must not be canonicalised into one.
+// filepath.Clean("") is ".", which stats clean against the process's working
+// directory and so survives every check a reader makes before treating a root
+// as real — leaving state that belongs to no project filed under one that does.
+func TestCanonicalProjectRoot_EmptyStaysEmpty(t *testing.T) {
+	assert.Equal(t, CanonicalProjectRoot(""), "")
+}
+
+func TestCanonicalProjectRoot_ResolvesSymlinks(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "project")
+	assert.NilError(t, os.MkdirAll(target, 0o755))
+	link := filepath.Join(base, "link")
+	assert.NilError(t, os.Symlink(target, link))
+
+	resolved, err := filepath.EvalSymlinks(target)
+	assert.NilError(t, err)
+	assert.Equal(t, CanonicalProjectRoot(link), resolved)
+}
+
+// A root that no longer exists cannot be resolved, and the cleaned path is
+// still more useful to a caller than an error it has nowhere to put.
+func TestCanonicalProjectRoot_FallsBackToClean(t *testing.T) {
+	assert.Equal(t, CanonicalProjectRoot("/no/such/dir/../dir"), "/no/such/dir")
+}
+
+// A relative root is the spelling --project is most likely to be handed, and it
+// reaches here untouched. EvalSymlinks leaves it relative, so without an
+// absolute step "." survives canonicalisation — and "." is not a name for any
+// one project. It names whichever directory the reader happens to be standing
+// in, which for the watch daemon is its own.
+func TestCanonicalProjectRoot_MakesRelativeRootsAbsolute(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "project")
+	assert.NilError(t, os.MkdirAll(project, 0o755))
+	t.Chdir(project)
+
+	canonical := CanonicalProjectRoot(".")
+	assert.Assert(t, filepath.IsAbs(canonical), "a canonical root must be absolute, got %q", canonical)
+	assert.Equal(t, canonical, CanonicalProjectRoot(project),
+		"a relative root and its absolute spelling name one project")
+}
+
+// The consequence the canonicalisation exists to prevent, on the
+// relative-vs-absolute axis rather than the symlink one: two spellings of a
+// single root must not be filed apart. Left unfixed, every project validated as
+// "." shares one data directory — one event log holding runs from repos that
+// have nothing to do with each other.
+func TestProjectDataDir_RelativeAndAbsoluteRootsShareADirectory(t *testing.T) {
+	t.Setenv(EnvXDGDataHome, t.TempDir())
+	project := filepath.Join(t.TempDir(), "project")
+	assert.NilError(t, os.MkdirAll(project, 0o755))
+	t.Chdir(project)
+
+	viaRelative, err := ProjectDataDir(".")
+	assert.NilError(t, err)
+	viaAbsolute, err := ProjectDataDir(project)
+	assert.NilError(t, err)
+	assert.Equal(t, viaRelative, viaAbsolute, "both spellings must share one data directory")
+}
+
 // --- Dir / Path ---
 
 func TestDir_XDGSet(t *testing.T) {
@@ -416,7 +501,6 @@ func TestResolve_SkipsKeychainWhenInsecureStorage(t *testing.T) {
 
 func TestValidConfigKeys(t *testing.T) {
 	assert.Assert(t, ValidConfigKeys["model"])
-	assert.Assert(t, ValidConfigKeys["useSSHIdentityFile"])
 	assert.Assert(t, ValidConfigKeys["telemetry"])
 	assert.Assert(t, !ValidConfigKeys["anthropicAPIKey"])
 	assert.Assert(t, !ValidConfigKeys["badkey"])
@@ -486,4 +570,22 @@ func TestEnsureInstanceID_InvalidStoredValueRegenerates(t *testing.T) {
 	id, err := EnsureInstanceID()
 	assert.NilError(t, err)
 	assert.Assert(t, id != uuid.Nil)
+}
+
+// --- SessionTrackingID ---
+
+func TestSessionTrackingID_Deterministic(t *testing.T) {
+	id1 := SessionTrackingID("abc-123")
+	id2 := SessionTrackingID("abc-123")
+	assert.Equal(t, id1, id2)
+}
+
+func TestSessionTrackingID_DifferentInputsDifferentIDs(t *testing.T) {
+	id1 := SessionTrackingID("session-a")
+	id2 := SessionTrackingID("session-b")
+	assert.Assert(t, id1 != id2)
+}
+
+func TestSessionTrackingID_NonNil(t *testing.T) {
+	assert.Assert(t, SessionTrackingID("any-session") != uuid.Nil)
 }

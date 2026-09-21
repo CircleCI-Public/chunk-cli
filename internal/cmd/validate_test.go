@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // hookPayload is the JSON Claude Code sends to Stop hooks via stdin.
@@ -171,7 +173,7 @@ func TestRunValidationPlanLocalOnlyDoesNotRequirePool(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, nil, nil,
+		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -190,7 +192,7 @@ func TestRunValidationPlanRemoteRequiresPool(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, t.TempDir(), nil, nil,
+		context.Background(), nil, plan, config.ResolvedConfig{}, t.TempDir(), t.TempDir(), nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -344,6 +346,52 @@ func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
 	combined := outBuf.String() + errBuf.String()
 	assert.Assert(t, strings.Contains(combined, "ran-locally"),
 		"--local must execute commands locally even when Remote:true, got: %q", combined)
+}
+
+// A run with no sidecar is the only record of itself: nothing is streamed to the
+// watch daemon, which reads this same on-disk log. Registering the project is
+// what tells the daemon the log exists at all, so a run that skips it leaves
+// results nothing will ever show.
+func TestValidateLocalRunRegistersProjectForTheDaemon(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	dir := t.TempDir()
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "echo ran-locally"}},
+	}))
+
+	var outBuf, errBuf bytes.Buffer
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--local", "--project", dir})
+	assert.NilError(t, root.Execute())
+
+	// Canonical, because that is what registration writes and the daemon keys on:
+	// a darwin temp dir arrives here as /var/... and resolves to /private/var/...
+	canonical, err := filepath.EvalSymlinks(dir)
+	assert.NilError(t, err)
+	roots, err := sidecar.AllProjectRoots()
+	assert.NilError(t, err)
+	assert.Assert(t, slices.Contains(roots, canonical),
+		"a local run must register the project it logged to, got: %v", roots)
+
+	// And the run it recorded there closes with a tally, so a daemon that starts
+	// afterwards has a result to show rather than an open-ended run.
+	dataDir, err := config.ProjectDataDir(dir)
+	assert.NilError(t, err)
+	log, err := eventlog.Open(dataDir)
+	assert.NilError(t, err)
+	events, err := log.Recent(10)
+	assert.NilError(t, err)
+	assert.Assert(t, len(events) > 0, "the run recorded no events")
+	passed, total, ok := events[len(events)-1].Outcome()
+	assert.Assert(t, ok, "last event does not close the run: %+v", events[len(events)-1])
+	assert.Equal(t, passed, 1)
+	assert.Equal(t, total, 1)
 }
 
 func TestPlanValidationRemoteFlagOverridesLocalConfig(t *testing.T) {
@@ -1016,6 +1064,173 @@ func TestFailBeforeRunClosesTheRun(t *testing.T) {
 	assert.Assert(t, ok)
 	assert.Equal(t, passed, 0)
 	assert.Equal(t, total, 0)
+}
+
+// A released run reports where the answer will come from and nothing else:
+// there is no verdict yet, so claiming one either way would be a lie.
+func TestReportDelegatedValidateAnnouncesABackgroundRun(t *testing.T) {
+	var outBuf, errBuf bytes.Buffer
+	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
+
+	err := reportDelegatedValidate(watchd.ValidateResponse{
+		TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
+		Reason: "small change, 42 lines",
+		// Ignored: a released run has not produced these, and a daemon that
+		// sends them anyway must not have them read as a result.
+		ExitCode: 1,
+		Stderr:   "should not be shown",
+	}, streams)
+
+	assert.NilError(t, err)
+	assert.Equal(t, outBuf.String(), "")
+	assert.Assert(t, strings.Contains(errBuf.String(), "validating in the background"), "got %q", errBuf.String())
+	assert.Assert(t, strings.Contains(errBuf.String(), "0192cf6e"), "the task ID was not reported: %q", errBuf.String())
+	assert.Assert(t, strings.Contains(errBuf.String(), "small change, 42 lines"), "got %q", errBuf.String())
+	assert.Assert(t, !strings.Contains(errBuf.String(), "should not be shown"), "output of a run that never happened was printed")
+}
+
+// A run that was offered to the background and held says why, then behaves
+// exactly as a delegated run always has.
+func TestReportDelegatedValidateExplainsAHeldRun(t *testing.T) {
+	var outBuf, errBuf bytes.Buffer
+	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
+
+	err := reportDelegatedValidate(watchd.ValidateResponse{
+		Reason:   "large change, 912 lines, over the 500-line limit",
+		ExitCode: 2,
+		Stdout:   "on stdout",
+		Stderr:   "on stderr",
+	}, streams)
+
+	var silent *silentExitError
+	assert.Assert(t, errors.As(err, &silent), "a failing run must carry its exit code, got %v", err)
+	assert.Equal(t, silent.code, 2)
+	assert.Equal(t, outBuf.String(), "on stdout")
+	assert.Assert(t, strings.Contains(errBuf.String(), "validating now: large change"), "got %q", errBuf.String())
+	assert.Assert(t, strings.Contains(errBuf.String(), "on stderr"), "got %q", errBuf.String())
+}
+
+// A caller that never offered to be released is told nothing extra.
+func TestReportDelegatedValidateSaysNothingWhenThereWasNoDecision(t *testing.T) {
+	var outBuf, errBuf bytes.Buffer
+	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
+
+	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{Stderr: "1/1 passed"}, streams))
+	assert.Equal(t, errBuf.String(), "1/1 passed")
+}
+
+// The commit gate and the end-of-turn hook arrive here looking alike, and only
+// one of them can be released: a released commit gate is a commit that went
+// through without the checks it exists to run.
+func TestOnlyTheStopHookMayRunInBackground(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		want    bool
+	}{
+		{`{"session_id":"s","hook_event_name":"Stop"}`, true},
+		{`{"session_id":"s","hook_event_name":"PreToolUse"}`, false},
+		{`{"session_id":"s","hook_event_name":"UserPromptSubmit"}`, false},
+		// No event name: an older Claude Code, or another agent's hook runner.
+		// An unrecognised hook is not evidence of one that can wait.
+		{`{"session_id":"s"}`, false},
+	} {
+		hook := detectHook(strings.NewReader(tc.payload))
+		assert.Assert(t, hook != nil, "payload was not read as a hook: %s", tc.payload)
+		assert.Equal(t, mayRunInBackground(hook), tc.want, "payload: %s", tc.payload)
+	}
+
+	// Not a hook at all — a developer at a terminal, with no next turn to hear
+	// the answer on.
+	assert.Equal(t, mayRunInBackground(nil), false)
+}
+
+func TestDetectHookReadsTheEventName(t *testing.T) {
+	hook := detectHook(strings.NewReader(`{"session_id":"abc","stop_hook_active":true,"hook_event_name":"Stop"}`))
+	assert.Assert(t, hook != nil)
+	assert.Equal(t, hook.sessionID, "abc")
+	assert.Equal(t, hook.stopHookActive, true)
+	assert.Equal(t, hook.event, "Stop")
+}
+
+// A low-risk change gets no score line: it is the common case, and a number
+// printed every turn is a number nobody reads. Advice is printed whenever
+// there is any.
+func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
+	var quiet bytes.Buffer
+	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{
+		Risk: &watchd.RiskSummary{Score: 12, Band: watchd.BandLow, Parts: []string{"12 lines (1)"}},
+	}, iostream.Streams{Out: &quiet, Err: &quiet}))
+	assert.Equal(t, quiet.String(), "", "a low-risk change was narrated")
+
+	var loud bytes.Buffer
+	err := reportDelegatedValidate(watchd.ValidateResponse{
+		Reason:   "large change, 2000 lines, over the 500-line limit",
+		ExitCode: 1,
+		Risk: &watchd.RiskSummary{
+			Score:  92,
+			Band:   watchd.BandHigh,
+			Parts:  []string{"2000 lines (60)", "3 files (6)"},
+			Advice: "committing it in parts would get each piece checked sooner",
+		},
+	}, iostream.Streams{Out: &loud, Err: &loud})
+
+	assert.Assert(t, err != nil)
+	out := loud.String()
+	assert.Assert(t, strings.Contains(out, "risk 92/100 high"), "got %q", out)
+	assert.Assert(t, strings.Contains(out, "2000 lines (60)"), "got %q", out)
+	assert.Assert(t, strings.Contains(out, "committing it in parts"), "got %q", out)
+}
+
+// A snapshot run validates a tree that was checked out from the state being
+// validated, so git sees nothing changed in it. The clean-tree skip must not
+// fire there: skipping would run no commands and report a pass, which is a
+// green light for code nothing looked at.
+//
+// This is the shape of a real bug. The unit tests around the daemon stub the
+// runner, so the skip lived below all of them and the first honest end-to-end
+// run reported "passed" having executed nothing.
+func TestASnapshotRunIsNotSkippedForBeingClean(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	// A clean repo: everything committed, exactly as a checked-out snapshot is.
+	dir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ran")
+	assert.NilError(t, config.SaveProjectConfig(dir, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "touch " + marker}},
+	}))
+	for _, args := range [][]string{
+		{"init"}, {"config", "user.email", "t@t.co"}, {"config", "user.name", "t"},
+		{"add", "-A"}, {"commit", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, "git %v: %s", args, out)
+	}
+
+	run := func(extra ...string) {
+		var outBuf, errBuf bytes.Buffer
+		root := newTestRootCmd()
+		root.SetOut(&outBuf)
+		root.SetErr(&errBuf)
+		root.SetIn(strings.NewReader(hookPayload))
+		root.SetArgs(append([]string{"--insecure-storage", "validate", "--local", "--project", dir}, extra...))
+		_ = root.Execute()
+	}
+
+	// Without the attribution, a clean tree is skipped — the behaviour every
+	// ordinary hook run relies on.
+	run()
+	_, err := os.Stat(marker)
+	assert.Assert(t, err != nil, "a clean ordinary run should have been skipped")
+
+	// With it, the commands run.
+	run("--attribute-to", dir)
+	_, err = os.Stat(marker)
+	assert.NilError(t, err, "a snapshot run was skipped and reported without running anything")
 }
 
 func TestFinishValidateFinalizesEventLog(t *testing.T) {

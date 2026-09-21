@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
@@ -14,12 +15,10 @@ import (
 // Target represents operations against one sidecar.
 // It is the base unit that higher-level coordination, including pools, builds on.
 type Target struct {
-	Client       *circleci.Client
-	SidecarID    string
-	IdentityFile string
-	AuthSock     string
-	Workdir      string
-	RetryOn404   bool
+	Client     *circleci.Client
+	SidecarID  string
+	Workdir    string
+	RetryOn404 bool
 	// OnSubmitted receives the command ID after submission and before output is
 	// streamed. Callers that probe a target should leave it nil.
 	OnSubmitted func(string)
@@ -51,15 +50,21 @@ func (e *TargetUnavailableError) Unwrap() error {
 }
 
 func (t Target) ResolveWorkspace(ctx context.Context, cwd string) (string, error) {
-	_, repo, _ := gitremote.DetectOrgAndRepo(cwd)
+	_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+	if repoErr != nil {
+		// Fall back to the directory name rather than passing an empty repo:
+		// ResolveWorkspace rejects that outright, so discarding the error here
+		// turned a missing git origin into a failed workspace resolution.
+		repo = filepath.Base(cwd)
+	}
 	return ResolveWorkspace(ctx, t.Workdir, repo)
 }
 
 func (t Target) Sync(ctx context.Context, cwd string, useBundle bool, status iostream.StatusFunc) error {
 	if useBundle {
-		return BundleSync(ctx, t.Client, t.SidecarID, t.IdentityFile, t.AuthSock, t.Workdir, cwd, t.RetryOn404, status)
+		return BundleSync(ctx, t.Client, t.SidecarID, t.Workdir, cwd, t.RetryOn404, status)
 	}
-	return syncCheckout(ctx, t.Client, t.SidecarID, t.IdentityFile, t.AuthSock, t.Workdir, cwd, status)
+	return syncCheckout(ctx, t.Client, t.SidecarID, t.Workdir, cwd, status)
 }
 
 func (t Target) ExecRunner(ctx context.Context, cwd string, envVars map[string]string, streams iostream.Streams) (func(context.Context, string) (string, string, int, error), string, error) {
@@ -116,8 +121,8 @@ func (t Target) ReadyExecRunner(ctx context.Context, cwd string, envVars map[str
 	return execFn, dest, nil
 }
 
-func syncCheckout(ctx context.Context, client *circleci.Client, sidecarID, identityFile, authSock, workdir, cwd string, status iostream.StatusFunc) error {
-	session, err := OpenSession(ctx, client, sidecarID, identityFile, authSock, false)
+func syncCheckout(ctx context.Context, client *circleci.Client, sidecarID, workdir, cwd string, status iostream.StatusFunc) error {
+	session, err := OpenSession(ctx, client, sidecarID, false)
 	if err != nil {
 		return err
 	}

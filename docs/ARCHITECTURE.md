@@ -285,7 +285,7 @@ tailing each project's `events.jsonl` by byte offset, and serves snapshots as
 JSON over a Unix socket at `~/.chunk/watchd/watchd.sock`
 (`CHUNK_WATCHD_DIR` overrides the directory).
 
-Beyond that it owns two things that outlive the processes they came from.
+Beyond that it owns three things that outlive the processes they came from.
 
 ### Command output buffering
 
@@ -307,6 +307,16 @@ command finishes, so anything holding the only copy of the output loses it.
 
 Design constraints worth preserving:
 
+- **The daemon has no working directory worth trusting.** The socket is
+  user-global, so one daemon serves every repo on the machine, and it was
+  launched with whatever cwd the developer happened to be in — one arbitrary repo
+  out of all of them (`launchDaemon` sets no `Dir`). Anything the daemon runs on
+  a caller's behalf must therefore be told which project it is for:
+  `ValidateRequest.ProjectRoot` carries it, and `makeValidateRunner` turns it
+  into `--project` so the run cannot fall through to `os.Getwd()`. A run that
+  resolves the project itself validates the daemon's repo and reports the answer
+  under whichever project asked — and on the async path the staleness check,
+  comparing the requested project against itself, confirms it as current.
 - **Registration is best-effort and never starts the daemon.** `RegisterCommand`
   reports no error and uses a 2 s timeout. It sits on the hook path in front of a
   command the developer is waiting on, so a missing daemon must cost nothing.
@@ -375,6 +385,93 @@ Parsing is separated from transport (`parseSampleFrame`, `cpuPercent`,
 `splitFrames`, `consumeSamples`) so it is testable against captured fixtures with
 no SSH involved.
 
+### Background validation
+
+A hook run delegated to the daemon (`POST /validate`) can set `allow_async`,
+offering to be released before the answer exists. The daemon weighs the change
+(`risk.go`) and either runs it while the caller waits or starts a tracked task
+(`asyncvalidate.go`) and answers with its ID. `chunk validate results` reads
+finished results back on the next turn.
+
+```
+POST /validate         {args, env, project_root, allow_async}
+    → {exit_code, stdout, stderr}          # ran here
+    → {task_id, reason}                    # released; nothing has run yet
+POST /validate/async   {args, env, project_root}   → {task_id}
+GET  /validate/collect?root=<path>                 → {tasks}
+```
+
+- **The decision is made before `validateMu` is taken.** A caller offering to be
+  released must not first queue behind whatever run is already in flight, since
+  that wait is the whole thing being avoided. The run itself still takes the
+  lock, so background runs serialise with synchronous ones exactly as before —
+  what changes is who waits, not how many run at once.
+- **Async breaks the assumption every other validate path rests on**: that
+  somebody is waiting. `taskStore` holds which project a run was for, whether it
+  is still going, and what it concluded, until a later turn collects it.
+- **A live-tree verdict is only reported if it still describes the tree.** Each
+  task records a `fingerprintTree` reading at the start, compared again when the
+  run ends and when the result is read. Any difference discards the verdict: a
+  pass describing code that is no longer on disk reads as a green light for work
+  already changed. The task is still handed over, stripped of its exit code and
+  output, so the discard itself is visible. A snapshot-backed run is the
+  exception and keeps its verdict — see the snapshot bullet below.
+- **A failure leaves a debt, so a discarded result is not a lost one.**
+  `riskMemory` remembers a project whose last run failed — including one whose
+  failure went stale — and the next run is held rather than released, where a
+  hook can act on it. Any passing run clears it.
+- **Both stores are in memory.** A daemon restart loses in-flight tasks and
+  forgets the debt. A lost task reports nothing rather than reporting wrongly,
+  and a forgotten debt costs one turn's delay before the failure is found again.
+- **Judgement lives in one place**, next to the git read it depends on. Splitting
+  it between the client and the daemon would mean two `git status` walks that can
+  disagree about the same tree.
+- **Size is measured from the last passing state, not from `HEAD`.** Every run
+  takes a `gitutil.SnapshotTree` before validating, and a pass records it as the
+  baseline (`riskMemory.recordGreen`); the next change is a
+  `gitutil.ChangesBetween` from there. Against `HEAD` the number only grows
+  until something commits — five 100-line turns read as 500 by the fifth — and
+  resets to nothing when anything does, validated or not. A snapshot is content,
+  so neither happens.
+- **A new run supersedes the live-tree run in flight.** A run is released because
+  the tree moved, so whatever is already running is validating code that is no
+  longer there and its result is headed for the bin; `taskStore.supersede`
+  cancels it rather than leaving two runs of the same commands queued behind each
+  other. A cancelled run records nothing — not a failure, not a known-good state
+  — because it concluded nothing. Snapshot-backed runs are exempt: their verdict
+  survives the tree moving, so they are the one thing here worth letting finish.
+- **A snapshot run is exempt from the clean-tree skip.** `gitutil.MaterializeTree`
+  checks the snapshot out into a temp worktree (opt-in: `asyncValidateWorktree`),
+  so the checks cannot be raced by an edit — and a result about a copy is
+  reported even when the live tree has moved, since it is still exactly true
+  about the state it ran against. The trap is that a fresh checkout is a *clean*
+  tree, and the Stop hook skips clean trees: without the exemption the run
+  executes nothing and reports a pass. `--attribute-to` is both the signal for
+  that exemption and what keeps the event log and the project breadcrumb under
+  the real repository rather than the copy.
+- **History tightens, never loosens.** `riskHistory` keeps each project's
+  finished runs (`risk-history.jsonl`: sizes and verdicts, no paths, no content)
+  and answers what an absolute threshold cannot — is this change large *for this
+  repo*, and do changes this size fail here. It can hold a run the rules would
+  have released and raise a score; it can never release one or lower a score. A
+  codebase where every change is enormous must not teach the daemon that
+  enormous is fine.
+- **Where git cannot answer, the daemon measures the tree itself.** A repository
+  with no commits has no HEAD to diff against, and a directory that was never one
+  has nothing at all; both used to be unmeasurable, and so blocked every run.
+  `filestate` walks and hashes instead (`Index`, `Changes`, `Digest`), which also
+  gives the staleness check an identity to compare against — see
+  `fingerprintTree`. It is the fallback, not the default: git knows what is
+  ignored, and knows how much of a modified file an edit touched, where
+  `filestate` can only tell that it changed and so counts the whole file. That
+  over-measures, which errs towards blocking.
+- **The snapshot never touches the developer's repository state.** It stages into
+  a throwaway index (`GIT_INDEX_FILE` in a temp file, seeded from the real index
+  for its stat cache, without which every file is re-hashed per call). The
+  objects it writes are unreferenced, so git's `gc` may collect a baseline;
+  `ChangesBetween` then errors and the assessment falls back to `HEAD`, which
+  reads larger and so errs towards blocking.
+
 ## Data Flow: merge conflict advisories
 
 The `watchd` daemon answers "does this branch still merge cleanly?" out of band,
@@ -409,6 +506,22 @@ Three properties the layering exists to hold:
   and `ConflictReport.Known` keep a detached HEAD, an unfetched target, and an
   absent daemon from being reported as a clean merge. Collapsing them would have
   the hook tell an agent a branch is clean when nothing ever looked.
+
+## Change Measurement (`internal/changeset/`, `internal/gitutil/`, `internal/filestate/`)
+
+`changeset.Changes` is the shape of one answer — how far a working tree has
+moved from an earlier state — and lives in its own package because there is more
+than one way to find it and they have to agree on what the answer looks like.
+
+- `gitutil` measures with git: `WorkingChanges` against HEAD, `SnapshotTree` and
+  `ChangesBetween` against an earlier uncommitted state.
+- `filestate` measures by walking and hashing, for trees git cannot answer for.
+
+The two are not equivalent, and the difference is documented where it bites:
+git knows what is ignored and how much of a modified file changed; `filestate`
+only knows a file changed, so it counts the file. Both err in the same
+direction — over-measuring, which makes somebody wait — because the opposite
+error is a change that reads smaller than it is and gets waved through.
 
 ## HTTP Client (`internal/httpcl/`)
 

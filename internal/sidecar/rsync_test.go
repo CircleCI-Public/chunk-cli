@@ -21,95 +21,110 @@ var hardeningOpts = []string{
 }
 
 func TestSSHCommand(t *testing.T) {
+	sess := &Session{IdentityFile: "/home/dev/.ssh/chunk_ai"}
+	got := sshCommand(sess, "2222")
+
+	want := append([]string{
+		"ssh -p 2222",
+		"-o IdentitiesOnly=yes",
+		"-i /home/dev/.ssh/chunk_ai",
+	}, hardeningOpts...)
+	for _, w := range want {
+		assert.Assert(t, strings.Contains(got, w), "want %q in %q", w, got)
+	}
+
+	// The key path is passed raw: rsync splits -e on whitespace and execve's the
+	// result, so quoting would embed literal quotes in the filename. -q would
+	// hide ssh's diagnostics from the rsync error, and discarding the user's
+	// config wholesale breaks passphrase-protected keys.
+	for _, w := range []string{"'", " -q", "-F /dev/null"} {
+		assert.Assert(t, !strings.Contains(got, w), "want %q absent from %q", w, got)
+	}
+}
+
+// TestSSHCommandSetsIdentitiesOnlyAtMostOnce guards the reason this helper was
+// extracted. OpenSSH honours the first occurrence of an option and silently
+// ignores the rest, so a repeated IdentitiesOnly would make the later value dead
+// weight rather than an override.
+func TestSSHCommandSetsIdentitiesOnlyAtMostOnce(t *testing.T) {
+	cmd := sshCommand(&Session{IdentityFile: "/home/dev/.ssh/chunk_ai"}, "2222")
+	assert.Assert(t, strings.Count(cmd, "-o IdentitiesOnly=") <= 1,
+		"IdentitiesOnly set more than once, later values are ignored: %q", cmd)
+}
+
+func TestWorktreeWorkspace(t *testing.T) {
 	cases := []struct {
-		name string
-		sess *Session
-		// want / notWant are matched as substrings of the built command.
-		want    []string
-		notWant []string
+		name      string
+		originURL string
+		wantPath  string
+		wantOK    bool
 	}{
 		{
-			name: "agent session pins IdentitiesOnly=no so the agent key can be offered",
-			sess: &Session{UseAgent: true, AuthSock: "/tmp/agent.sock"},
-			want: []string{
-				"ssh -p 2222",
-				"-o IdentitiesOnly=no",
-				"-o IdentityAgent=/tmp/agent.sock",
-			},
-			// -q would hide ssh's diagnostics from the rsync error. Discarding the
-			// user's config wholesale breaks passphrase-protected keys.
-			notWant: []string{"-o IdentitiesOnly=yes", "-F /dev/null", " -q"},
+			name:      "GitHub HTTPS URL",
+			originURL: "https://github.com/CircleCI-Public/chunk-cli.git",
+			wantPath:  DefaultWorkspace("chunk-cli"),
+			wantOK:    true,
 		},
 		{
-			name: "identity file session restricts ssh to that key",
-			sess: &Session{IdentityFile: "/home/dev/.ssh/chunk_ai"},
-			want: []string{
-				"ssh -p 2222",
-				"-o IdentitiesOnly=yes",
-				"-i /home/dev/.ssh/chunk_ai",
-			},
-			// The path is passed raw: rsync splits -e on whitespace and execve's
-			// the result, so quoting would embed literal quotes in the filename.
-			// IdentityAgent is for the agent path only.
-			notWant: []string{"'", " -q", "-F /dev/null", "-o IdentityAgent="},
+			name:      "GitHub SSH URL",
+			originURL: "git@github.com:CircleCI-Public/chunk-cli.git",
+			wantPath:  DefaultWorkspace("chunk-cli"),
+			wantOK:    true,
 		},
 		{
-			name: "identity file takes precedence when an agent is also available",
-			sess: &Session{IdentityFile: "/home/dev/.ssh/chunk_ai", UseAgent: true, AuthSock: "/tmp/agent.sock"},
-			want: []string{"-o IdentitiesOnly=yes", "-i /home/dev/.ssh/chunk_ai"},
-			// Pinning the agent alongside an explicit key would undo IdentitiesOnly.
-			notWant: []string{"-o IdentityAgent=", "-o IdentitiesOnly=no"},
+			name:      "GitHub Enterprise SSH URL falls back to last path segment",
+			originURL: "git@ghe.company.com:org/repo.git",
+			wantPath:  DefaultWorkspace("repo"),
+			wantOK:    true,
 		},
 		{
-			name: "agent session without a socket cannot pin the agent",
-			sess: &Session{UseAgent: true},
-			// Emitting a bare "-o IdentityAgent=" would point ssh at no agent
-			// at all, so neither option is set and ssh falls back to defaults.
-			notWant: []string{"-o IdentityAgent=", "-i "},
+			name:      "GitLab HTTPS URL falls back to last path segment",
+			originURL: "https://gitlab.com/group/subgroup/my-repo.git",
+			wantPath:  DefaultWorkspace("my-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "local path remote falls back to last path segment",
+			originURL: "/srv/git/some-repo.git",
+			wantPath:  DefaultWorkspace("some-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "trailing slash is ignored",
+			originURL: "https://gitlab.com/group/my-repo/",
+			wantPath:  DefaultWorkspace("my-repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "scp style remote without a path",
+			originURL: "git@host:repo.git",
+			wantPath:  DefaultWorkspace("repo"),
+			wantOK:    true,
+		},
+		{
+			name:      "empty origin URL returns false",
+			originURL: "",
+			wantOK:    false,
+		},
+		{
+			name:      "whitespace only origin URL returns false",
+			originURL: "   ",
+			wantOK:    false,
+		},
+		{
+			name:      "root only remote returns false",
+			originURL: "/",
+			wantOK:    false,
 		},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sshCommand(tc.sess, "2222")
-			for _, w := range append(tc.want, hardeningOpts...) {
-				assert.Assert(t, strings.Contains(got, w), "want %q in %q", w, got)
-			}
-			for _, w := range tc.notWant {
-				assert.Assert(t, !strings.Contains(got, w), "want %q absent from %q", w, got)
+			got, ok := worktreeWorkspace(tc.originURL)
+			assert.Equal(t, ok, tc.wantOK)
+			if tc.wantOK {
+				assert.Equal(t, got, tc.wantPath)
 			}
 		})
-	}
-}
-
-// TestSSHCommandOmitsIdentityFileFlag checks that no -i reaches ssh on the
-// agent path. Matching the substring "-i " alone would miss an -i emitted as
-// the final token, so the built command is tokenised instead.
-func TestSSHCommandOmitsIdentityFileFlag(t *testing.T) {
-	for _, sess := range []*Session{
-		{UseAgent: true, AuthSock: "/tmp/agent.sock"},
-		{UseAgent: true},
-	} {
-		for _, tok := range strings.Fields(sshCommand(sess, "2222")) {
-			assert.Assert(t, tok != "-i", "agent path must not pass -i: %q", sshCommand(sess, "2222"))
-		}
-	}
-}
-
-// TestSSHCommandSetsIdentitiesOnlyAtMostOnce guards the exact bug this file's
-// helper was extracted for. OpenSSH honours the first occurrence of an option
-// and silently ignores the rest, so the original unconditional
-// IdentitiesOnly=yes plus a later IdentitiesOnly=no was not a fix.
-func TestSSHCommandSetsIdentitiesOnlyAtMostOnce(t *testing.T) {
-	for _, sess := range []*Session{
-		{UseAgent: true, AuthSock: "/tmp/agent.sock"},
-		{IdentityFile: "/home/dev/.ssh/chunk_ai"},
-		{IdentityFile: "/home/dev/.ssh/chunk_ai", UseAgent: true, AuthSock: "/tmp/agent.sock"},
-		{UseAgent: true},
-	} {
-		cmd := sshCommand(sess, "2222")
-		assert.Assert(t, strings.Count(cmd, "-o IdentitiesOnly=") <= 1,
-			"IdentitiesOnly set more than once, later values are ignored: %q", cmd)
 	}
 }
 

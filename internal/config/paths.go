@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,6 +46,45 @@ func AppData() (string, error) {
 	return filepath.Join(dh, appName), nil
 }
 
+// CanonicalProjectRoot returns projectRoot in the spelling everything that keys
+// state by a project agrees on: cleaned, made absolute, with symlinks resolved,
+// falling back to the closest spelling it reached when a step cannot be
+// completed (a root that no longer exists, most often) so callers always get a
+// usable path. The empty string is returned unchanged: filepath.Clean would turn
+// it into ".", a root that passes every existence check by standing for whatever
+// directory the process happens to be running in, and so files state belonging
+// to no project under one that reads as real.
+//
+// It exists because a project has more than one name. The same repo is
+// /tmp/x to a shell and /private/tmp/x to git on darwin, and the two used to be
+// filed apart: ProjectDataDir hashed the resolved path while the project
+// breadcrumb and registered commands carried whatever the caller was handed. One
+// project then read as two — duplicate rows over a single log — or, for a
+// command registered under the unresolved name, as output belonging to no
+// project at all. Anything that keys by project root must run it through here.
+func CanonicalProjectRoot(projectRoot string) string {
+	if projectRoot == "" {
+		return ""
+	}
+	clean := filepath.Clean(projectRoot)
+	// Absolute before resolved, because EvalSymlinks leaves a relative path
+	// relative: "." resolves to "." and survives every check below. A relative
+	// root reaches here from --project, which is passed through untouched, and it
+	// is the one spelling that is not a name for any particular project — it
+	// hashes to a single data directory shared by every project invoked that way,
+	// and lands in a breadcrumb the daemon later resolves against its own working
+	// directory instead of the project's.
+	abs, err := filepath.Abs(clean)
+	if err != nil {
+		return clean
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return abs
+	}
+	return resolved
+}
+
 // ProjectDataDir returns the per-project data directory keyed by projectRoot.
 // The directory name is the hex-encoded SHA-256 of the real absolute path
 // (symlinks resolved via EvalSymlinks, falling back to filepath.Clean), which
@@ -56,15 +96,26 @@ func AppData() (string, error) {
 // new location so users with symlinked project roots don't silently lose their
 // sidecar/snapshot/event-log state.
 func ProjectDataDir(projectRoot string) (string, error) {
+	// An empty root is not a project and has no data directory. Hashing it anyway
+	// hands every caller that passes one the same shared bucket, so unrelated
+	// projects would read and write each other's sidecar, snapshot and event-log
+	// state — and it is the callers who lost track of their root, the ones least
+	// able to notice, who would land there together.
+	//
+	// It also reaches the migration below by accident: filepath.Clean("") is ".",
+	// which never equals the empty canonical root, so an empty argument looks
+	// exactly like a root whose symlinks resolved to somewhere else and can
+	// rename the sha256(".") directory out from under whatever wrote it.
+	if projectRoot == "" {
+		return "", errors.New("project root required")
+	}
+
 	base, err := AppData()
 	if err != nil {
 		return "", err
 	}
 	clean := filepath.Clean(projectRoot)
-	resolved := clean
-	if r, err := filepath.EvalSymlinks(clean); err == nil {
-		resolved = r
-	}
+	resolved := CanonicalProjectRoot(projectRoot)
 	newDir := filepath.Join(base, fmt.Sprintf("%x", sha256.Sum256([]byte(resolved))))
 
 	// Only attempt migration when the symlink actually changed the path.

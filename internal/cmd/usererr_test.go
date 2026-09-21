@@ -10,6 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // The API being behind this binary must not be reported as "upgrade chunk":
@@ -125,4 +126,26 @@ func TestSidecarUnavailableNamesTheSidecarAndTheRemedy(t *testing.T) {
 			assert.Assert(t, sidecarUnavailable(id, c) == nil, "must not claim to handle %v", c)
 		}
 	})
+}
+
+// TestSSHSessionErrorEncryptedKey guards the gap a passphrase-protected
+// ~/.ssh/chunk_ai used to fall through. sshSessionError returned nil for it, so
+// "chunk sidecar ssh" printed a bare parse error with no suggestion, and
+// "chunk validate" attached its network-failure suggestion instead — advice
+// that sends someone to recreate sidecars forever.
+func TestSSHSessionErrorEncryptedKey(t *testing.T) {
+	keyPath := "/home/dev/.ssh/chunk_ai"
+	err := sshSessionError(&sidecar.EncryptedKeyError{
+		Path: keyPath,
+		Err:  errors.New("ssh: this private key is passphrase protected"),
+	})
+	assert.Assert(t, err != nil, "an encrypted key must map to a user error")
+
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "want *userError, got %T", err)
+	assert.Equal(t, ue.code, "ssh.key_passphrase_protected")
+	assert.Equal(t, ue.exitCode, ExitBadArgs)
+	assert.Check(t, strings.Contains(ue.msg, keyPath), "the message should name the key: %q", ue.msg)
+	assert.Check(t, strings.Contains(ue.suggestion, "ssh-keygen -p"),
+		"the suggestion should say how to strip the passphrase: %q", ue.suggestion)
 }

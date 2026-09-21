@@ -31,8 +31,10 @@ type SSHServer struct {
 	stdout   string
 	exitCode int
 	resultFn func(command string) (string, int)
-	commands []string
-	envVars  map[string]string
+	// authorizedKey, when non-nil, is the only key the server accepts.
+	authorizedKey ssh.PublicKey
+	commands      []string
+	envVars       map[string]string
 }
 
 // GenerateSSHKeypair generates an ed25519 keypair, writes the private and public
@@ -72,25 +74,77 @@ func GenerateSSHKeypair(t *testing.T) (keyFile string, pubKey ssh.PublicKey) {
 	return keyPath, sshPub
 }
 
+// GenerateSSHKeypairAt generates an ed25519 keypair at the given path (private
+// key at path, public key at path+".pub") and returns the parsed public key.
+// The destination directory is created if it does not exist.
+func GenerateSSHKeypairAt(t *testing.T, path string) ssh.PublicKey {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+	if err := os.WriteFile(path, privPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pubLine := ssh.MarshalAuthorizedKey(sshPub)
+	if err := os.WriteFile(path+".pub", pubLine, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return sshPub
+}
+
 // NewSSHServer starts a WebSocket+SSH server that accepts connections
 // authenticated with authorizedKey. The server is shut down automatically
 // when the test ends.
 func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 	t.Helper()
 
+	return newSSHServer(t, authorizedKey)
+}
+
+// NewSSHServerAcceptingAnyKey starts a server like NewSSHServer but authorises
+// whichever key the client presents. Use it when chunk generates the keypair
+// itself, so the test cannot know the public key in advance. Pair it with
+// RestrictToKey once the generated key is known.
+func NewSSHServerAcceptingAnyKey(t *testing.T) *SSHServer {
+	t.Helper()
+
+	return newSSHServer(t, nil)
+}
+
+// RestrictToKey narrows the server to accept only authorizedKey from now on.
+// Keeping the same server (and so the same host key and address) lets a test
+// first let chunk generate a keypair, then prove the private key chunk kept is
+// the pair of the public key it registered.
+func (s *SSHServer) RestrictToKey(authorizedKey ssh.PublicKey) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authorizedKey = authorizedKey
+}
+
+func newSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
+	t.Helper()
+
 	hostSigner := generateHostKey(t)
 
-	sshCfg := &ssh.ServerConfig{
-		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			if bytes.Equal(key.Marshal(), authorizedKey.Marshal()) {
-				return &ssh.Permissions{}, nil
-			}
-			return nil, &unauthorizedKeyError{}
-		},
-	}
-	sshCfg.AddHostKey(hostSigner)
+	srv := &SSHServer{t: t, authorizedKey: authorizedKey}
 
-	srv := &SSHServer{t: t}
+	sshCfg := &ssh.ServerConfig{PublicKeyCallback: srv.authorize}
+	sshCfg.AddHostKey(hostSigner)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ssh/tunnel", func(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +162,18 @@ func NewSSHServer(t *testing.T, authorizedKey ssh.PublicKey) *SSHServer {
 	t.Cleanup(srv.srv.Close)
 
 	return srv
+}
+
+// authorize accepts any key unless the server has been restricted to one.
+func (s *SSHServer) authorize(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	s.mu.Lock()
+	authorized := s.authorizedKey
+	s.mu.Unlock()
+
+	if authorized == nil || bytes.Equal(key.Marshal(), authorized.Marshal()) {
+		return &ssh.Permissions{}, nil
+	}
+	return nil, &unauthorizedKeyError{}
 }
 
 // Addr returns the "host:port" address the server is listening on.

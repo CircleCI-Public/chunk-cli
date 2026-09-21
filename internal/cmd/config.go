@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -55,15 +57,14 @@ func newConfigShowCmd() *cobra.Command {
 					Source string `json:"source,omitempty"`
 				}
 				type configOutput struct {
-					Model              configEntry `json:"model"`
-					AnthropicAPIKey    configEntry `json:"anthropicAPIKey"`
-					CircleCIToken      configEntry `json:"circleCIToken"`
-					GitHubToken        configEntry `json:"gitHubToken"`
-					OrgID              configEntry `json:"orgID"`
-					UseSSHIdentityFile bool        `json:"useSSHIdentityFile"`
-					Telemetry          bool        `json:"telemetry"`
-					Notifications      bool        `json:"notifications"`
-					AutoLaunchDaemon   bool        `json:"autoLaunchDaemon"`
+					Model            configEntry `json:"model"`
+					AnthropicAPIKey  configEntry `json:"anthropicAPIKey"`
+					CircleCIToken    configEntry `json:"circleCIToken"`
+					GitHubToken      configEntry `json:"gitHubToken"`
+					OrgID            configEntry `json:"orgID"`
+					Telemetry        bool        `json:"telemetry"`
+					Notifications    bool        `json:"notifications"`
+					AutoLaunchDaemon bool        `json:"autoLaunchDaemon"`
 				}
 				maskOrEmpty := func(key string) string {
 					if key == "" {
@@ -72,15 +73,14 @@ func newConfigShowCmd() *cobra.Command {
 					return config.MaskKey(key)
 				}
 				return iostream.PrintJSON(io.Out, configOutput{
-					Model:              configEntry{Value: rc.Model, Source: rc.ModelSource},
-					AnthropicAPIKey:    configEntry{Value: maskOrEmpty(rc.AnthropicAPIKey), Source: rc.AnthropicAPIKeySource},
-					CircleCIToken:      configEntry{Value: maskOrEmpty(rc.CircleCIToken), Source: rc.CircleCITokenSource},
-					GitHubToken:        configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
-					OrgID:              configEntry{Value: orgID, Source: orgIDSource},
-					UseSSHIdentityFile: rc.UseSSHIdentityFile,
-					Telemetry:          telemetryEnabled,
-					Notifications:      userCfg.Notifications,
-					AutoLaunchDaemon:   userCfg.AutoLaunchDaemon,
+					Model:            configEntry{Value: rc.Model, Source: rc.ModelSource},
+					AnthropicAPIKey:  configEntry{Value: maskOrEmpty(rc.AnthropicAPIKey), Source: rc.AnthropicAPIKeySource},
+					CircleCIToken:    configEntry{Value: maskOrEmpty(rc.CircleCIToken), Source: rc.CircleCITokenSource},
+					GitHubToken:      configEntry{Value: maskOrEmpty(rc.GitHubToken), Source: rc.GitHubTokenSource},
+					OrgID:            configEntry{Value: orgID, Source: orgIDSource},
+					Telemetry:        telemetryEnabled,
+					Notifications:    userCfg.Notifications,
+					AutoLaunchDaemon: userCfg.AutoLaunchDaemon,
 				})
 			}
 
@@ -111,7 +111,6 @@ func newConfigShowCmd() *cobra.Command {
 				io.Printf("%s %s\n", ui.Label("orgID:", w), ui.Dim("(not set)"))
 			}
 
-			io.Printf("%s %v\n", ui.Label("useSSHIdentityFile:", w), rc.UseSSHIdentityFile)
 			io.Printf("%s %v\n", ui.Label("telemetry:", w), telemetryEnabled)
 			io.Printf("%s %v\n", ui.Label("notifications:", w), userCfg.Notifications)
 			io.Printf("%s %v\n", ui.Label("autoLaunchDaemon:", w), userCfg.AutoLaunchDaemon)
@@ -129,8 +128,13 @@ func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Long:  "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\nUser keys: model, useSSHIdentityFile, telemetry, notifications, autoLaunchDaemon\nProject keys: orgID, validation.sidecarImage",
-		Args:  cobra.ExactArgs(2),
+		Long: "Set a config value. Use 'chunk auth set <provider>' to store credentials with validation.\n\n" +
+			"User keys: model, useSSHIdentityFile, telemetry, notifications, autoLaunchDaemon\n" +
+			"Project keys: orgID, validation.sidecarImage, asyncValidate, asyncValidateMaxLines,\n" +
+			"asyncValidateWorktree, asyncValidateInert, asyncValidateBlocking\n\n" +
+			"The two rule lists are comma-separated, each entry an extension (\".sql\") or an\n" +
+			"exact file name (\"NOTICE\"). Pass an empty string to clear one.",
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			io := iostream.FromCmd(cmd)
 			key, value := args[0], args[1]
@@ -152,8 +156,50 @@ func newConfigSetCmd() *cobra.Command {
 						projCfg.Validation = &config.ValidationConfig{}
 					}
 					projCfg.Validation.SidecarImage = value
+				case "asyncValidate":
+					if !validAsyncValidateModes[value] {
+						return &userError{
+							msg:    fmt.Sprintf("%q is not a background validation mode.", value),
+							detail: "Supported modes: auto, always, never.",
+							errMsg: fmt.Sprintf("invalid asyncValidate %q", value),
+						}
+					}
+					projCfg.AsyncValidate = value
+				case "asyncValidateMaxLines":
+					n, convErr := strconv.Atoi(value)
+					if convErr != nil || n < 0 {
+						return &userError{
+							msg:    fmt.Sprintf("%q is not a line count.", value),
+							detail: "Pass a whole number of lines, or 0 for the built-in default.",
+							errMsg: fmt.Sprintf("invalid asyncValidateMaxLines %q", value),
+						}
+					}
+					projCfg.AsyncValidateMaxLines = n
+				case "asyncValidateWorktree":
+					b, convErr := strconv.ParseBool(value)
+					if convErr != nil {
+						return &userError{
+							msg:    fmt.Sprintf("%q is not true or false.", value),
+							errMsg: fmt.Sprintf("invalid asyncValidateWorktree %q", value),
+						}
+					}
+					projCfg.AsyncValidateWorktree = b
+				case "asyncValidateInert":
+					projCfg.AsyncValidateInert = splitRuleList(value)
+				case "asyncValidateBlocking":
+					projCfg.AsyncValidateBlocking = splitRuleList(value)
 				default:
 					return fmt.Errorf("internal: unhandled project config key %q", key)
+				}
+				// Checked here so a rejected rule reads as the mistake it is, rather
+				// than arriving wrapped in a save failure that suggests looking at
+				// file permissions.
+				if invalid := projCfg.Validate(); invalid != nil {
+					return &userError{
+						msg:    fmt.Sprintf("Could not set %s.", key),
+						detail: invalid.Error(),
+						errMsg: invalid.Error(),
+					}
 				}
 				if err := config.SaveProjectConfig(workDir, projCfg); err != nil {
 					return &userError{msg: "Could not save project configuration.", suggestion: configFilePermHint, err: err}
@@ -165,7 +211,7 @@ func newConfigSetCmd() *cobra.Command {
 			if !config.ValidConfigKeys[key] {
 				return &userError{
 					msg:    fmt.Sprintf("Unknown config key: %q.", key),
-					detail: "Supported keys: model, useSSHIdentityFile, telemetry, notifications, autoLaunchDaemon, orgID, validation.sidecarImage.",
+					detail: "Supported keys: model, useSSHIdentityFile, telemetry, notifications, autoLaunchDaemon, orgID, validation.sidecarImage, asyncValidate, asyncValidateMaxLines, asyncValidateWorktree, asyncValidateInert, asyncValidateBlocking.",
 					errMsg: fmt.Sprintf("unknown config key %q", key),
 				}
 			}
@@ -178,12 +224,6 @@ func newConfigSetCmd() *cobra.Command {
 			switch key {
 			case "model":
 				cfg.Model = value
-			case "useSSHIdentityFile":
-				b, err := parseBoolValue("useSSHIdentityFile", value)
-				if err != nil {
-					return err
-				}
-				cfg.UseSSHIdentityFile = b
 			case "telemetry":
 				b, err := parseBoolValue("telemetry", value)
 				if err != nil {
@@ -227,4 +267,27 @@ func parseBoolValue(key, value string) (bool, error) {
 			errMsg: fmt.Sprintf("invalid boolean value %q", value),
 		}
 	}
+}
+
+// validAsyncValidateModes are the values "config set asyncValidate" accepts.
+var validAsyncValidateModes = map[string]bool{
+	config.AsyncValidateAuto:   true,
+	config.AsyncValidateAlways: true,
+	config.AsyncValidateNever:  true,
+}
+
+// splitRuleList parses a comma-separated inert or blocking list. An empty value
+// clears the list, which is the only way to undo one from the CLI.
+func splitRuleList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	rules := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			rules = append(rules, p)
+		}
+	}
+	return rules
 }

@@ -17,6 +17,7 @@ import (
 
 func newPruneCmd() *cobra.Command {
 	var orgID, before string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "prune",
@@ -56,6 +57,20 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 				cutoff = &t
 			}
 
+			if !force {
+				if nonInteractive() {
+					return errNoForce("prune sidecars")
+				}
+				confirmed, err := ui.Confirm("Delete all matching sidecars?", false)
+				if errors.Is(err, ui.ErrNoTTY) {
+					return errNoForce("prune sidecars")
+				}
+				if err != nil || !confirmed {
+					io.ErrPrintln("Cancelled.")
+					return nil
+				}
+			}
+
 			deleted, err := client.PruneSidecars(cmd.Context(), resolvedOrgID, cutoff)
 			if err != nil {
 				if errors.Is(err, circleci.ErrNotAuthorized) {
@@ -93,6 +108,7 @@ Pass --before to extend the cutoff (e.g. --before 24h).`,
 
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&before, "before", "", "Delete sidecars created more than this long ago (e.g. 2h, 24h; default: 1h)")
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompt")
 
 	return cmd
 }

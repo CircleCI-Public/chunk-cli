@@ -73,16 +73,15 @@ func runValidateForSnapshotSelection(t *testing.T, snapshots []fakes.Snapshot, s
 	}
 	writeRemoteCommandConfig(t, workDir)
 
-	sshDir := filepath.Join(t.TempDir(), ".ssh")
-	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	identityFile := filepath.Join(sshDir, "chunk_ai")
-	assert.NilError(t, generateTestSSHKey(t, identityFile))
-
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
 
-	binary.RunCLI(t, []string{"validate", "--identity-file", identityFile}, env, workDir)
+	sshDir := filepath.Join(env.HomeDir, ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+
+	binary.RunCLI(t, []string{"validate"}, env, workDir)
 	return cci
 }
 

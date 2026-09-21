@@ -68,7 +68,6 @@ const (
 const (
 	EnvHome          = "HOME"
 	EnvShell         = "SHELL"
-	EnvSSHAuthSock   = "SSH_AUTH_SOCK"
 	EnvNoColor       = "NO_COLOR"
 	EnvXDGConfigHome = "XDG_CONFIG_HOME"
 	EnvXDGStateHome  = "XDG_STATE_HOME"
@@ -97,11 +96,11 @@ type EnvVars struct {
 	CircleCIOrgID    string `env:"CIRCLECI_ORG_ID"`
 	Home             string `env:"HOME"`
 	Shell            string `env:"SHELL"`
-	SSHAuthSock      string `env:"SSH_AUTH_SOCK"`
 	NoColor          string `env:"NO_COLOR"`
-	XDGConfigHome    string `env:"XDG_CONFIG_HOME"`
-	XDGStateHome     string `env:"XDG_STATE_HOME"`
-	XDGDataHome      string `env:"XDG_DATA_HOME"`
+
+	XDGConfigHome string `env:"XDG_CONFIG_HOME"`
+	XDGStateHome  string `env:"XDG_STATE_HOME"`
+	XDGDataHome   string `env:"XDG_DATA_HOME"`
 }
 
 // LoadEnv populates an EnvVars struct from the process environment.
@@ -115,13 +114,12 @@ func LoadEnv(ctx context.Context) (EnvVars, error) {
 
 // UserConfig is the on-disk JSON config.
 type UserConfig struct {
-	AnthropicAPIKey    string `json:"anthropicAPIKey,omitempty"`
-	CircleCIToken      string `json:"circleCIToken,omitempty"`
-	CircleCIUserID     string `json:"circleCIUserID,omitempty"`
-	GitHubToken        string `json:"gitHubToken,omitempty"`
-	Model              string `json:"model,omitempty"`
-	UseSSHIdentityFile bool   `json:"useSSHIdentityFile,omitempty"`
-	InstanceID         string `json:"instanceID,omitempty"`
+	AnthropicAPIKey string `json:"anthropicAPIKey,omitempty"`
+	CircleCIToken   string `json:"circleCIToken,omitempty"`
+	CircleCIUserID  string `json:"circleCIUserID,omitempty"`
+	GitHubToken     string `json:"gitHubToken,omitempty"`
+	Model           string `json:"model,omitempty"`
+	InstanceID      string `json:"instanceID,omitempty"`
 
 	// Telemetry is the persisted telemetry preference: true enables it,
 	// false disables it. nil means no preference has been set, in which
@@ -158,7 +156,6 @@ type ResolvedConfig struct {
 	ModelSource           string
 	AnalyzeModel          string
 	PromptModel           string
-	UseSSHIdentityFile    bool
 	Notifications         bool
 }
 
@@ -303,6 +300,18 @@ func IsTelemetry(cfg UserConfig) bool {
 	return *cfg.Telemetry
 }
 
+// chunkTelemetryNamespace is a fixed UUID used as the v5 namespace when
+// deriving per-session anonymous tracking IDs. It uniquely scopes the hash
+// domain to chunk-cli so session IDs from other tools never collide.
+var chunkTelemetryNamespace = uuid.MustParse("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+
+// SessionTrackingID derives a stable, anonymous UUID from the given session
+// ID string. The result is deterministic (same input → same UUID) but not
+// reversible, so the original session ID cannot be recovered from it.
+func SessionTrackingID(sessionID string) uuid.UUID {
+	return uuid.NewSHA1(chunkTelemetryNamespace, []byte(sessionID))
+}
+
 // EnsureInstanceID returns the persisted anonymous instance ID used to
 // associate telemetry events with a single install, generating and saving
 // one on first run.
@@ -397,7 +406,6 @@ func Resolve(flagAPIKey, flagModel string, insecureStorage bool) (ResolvedConfig
 	rc.CircleCIBaseURL = env.CircleCIBaseURL
 	rc.AnthropicBaseURL = env.AnthropicBaseURL
 	rc.GitHubAPIURL = env.GitHubAPIURL
-	rc.UseSSHIdentityFile = cfg.UseSSHIdentityFile
 	rc.Notifications = cfg.Notifications
 
 	return rc, err
@@ -418,13 +426,12 @@ func ResolveCircleCI(insecureStorage bool) (ResolvedConfig, error) {
 	}
 
 	rc := ResolvedConfig{
-		AnalyzeModel:       AnalyzeModel,
-		PromptModel:        PromptModel,
-		CircleCIBaseURL:    env.CircleCIBaseURL,
-		AnthropicBaseURL:   env.AnthropicBaseURL,
-		GitHubAPIURL:       env.GitHubAPIURL,
-		UseSSHIdentityFile: cfg.UseSSHIdentityFile,
-		Notifications:      cfg.Notifications,
+		AnalyzeModel:     AnalyzeModel,
+		PromptModel:      PromptModel,
+		CircleCIBaseURL:  env.CircleCIBaseURL,
+		AnthropicBaseURL: env.AnthropicBaseURL,
+		GitHubAPIURL:     env.GitHubAPIURL,
+		Notifications:    cfg.Notifications,
 	}
 	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg, insecureStorage)
 	return rc, nil
@@ -456,11 +463,10 @@ func ResolveOrgID(workDir string) (value, source string) {
 // Credentials (anthropicAPIKey, circleCIToken) are intentionally excluded —
 // users should use "auth set" which validates before storing.
 var ValidConfigKeys = map[string]bool{
-	"model":              true,
-	"useSSHIdentityFile": true,
-	"telemetry":          true,
-	"notifications":      true,
-	"autoLaunchDaemon":   true,
+	"model":            true,
+	"telemetry":        true,
+	"notifications":    true,
+	"autoLaunchDaemon": true,
 }
 
 // ValidProjectConfigKeys are the keys accepted by "config set" that write to
@@ -468,4 +474,9 @@ var ValidConfigKeys = map[string]bool{
 var ValidProjectConfigKeys = map[string]bool{
 	"orgID":                   true,
 	"validation.sidecarImage": true,
+	"asyncValidate":           true,
+	"asyncValidateMaxLines":   true,
+	"asyncValidateWorktree":   true,
+	"asyncValidateInert":      true,
+	"asyncValidateBlocking":   true,
 }

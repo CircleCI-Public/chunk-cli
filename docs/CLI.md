@@ -59,6 +59,14 @@ chunk
 │   ├── install                     # Install all skills
 │   └── list                        # List skills and install status
 │
+├── mutate [path]                   # Find test coverage gaps via mutation testing
+│   --parallelism <n>               # Sidecar pool capacity (0: enumerate only)
+│   --max <n>                       # Limit the number of mutations (0: no limit)
+│   --output <table|json>           # Enumeration output format
+│   --test-cmd <command>            # Test command override
+│   --test-timeout <duration>       # Per-mutation test timeout
+│   --destroy-pool                  # Delete pool sidecars after the run
+│
 ├── validate                        # Run validation commands
 │   [name]                          # Optional: run a specific named command
 │   --dry-run                       # Print commands without executing
@@ -70,11 +78,14 @@ chunk
 │   --mark-remote                   # Mark [name] (or all commands) remote in config, then exit
 │   --sidecar-id <id>               # Remote execution in specific sidecar
 │   --org-id <id>                   # Organization ID (used when creating a new sidecar)
-│   --identity-file <path>          # SSH identity file for sidecar
 │   --workdir <path>                # Working directory on sidecar
 │   --project <path>                # Override project directory
 │   -e / --env KEY=VALUE            # Set env var in remote sidecar session (repeatable)
 │   --env-file <path>               # Env file to load (default: .env.local; pass a path to override)
+│   --async                         # Run in the background via the watch daemon; results are read later
+│   │
+│   ├── results                     # Print results of finished background runs, then forget them
+│   │   --project <path>            # Override project directory
 │   │
 │   └── variants <variants-file>    # Run code variants on a temporary sidecar pool
 │       --name <command>            # Validate command to run (default: all remote commands)
@@ -82,7 +93,6 @@ chunk
 │       --timeout <seconds>         # Per-command timeout when the command sets none (0 for no limit)
 │       --org-id <id>               # Organization ID
 │       --image <id>                # Snapshot image ID (default: validation.sidecarImage)
-│       --identity-file <path>      # SSH identity file
 │       --workdir <path>            # Remote working directory
 │
 ├── sidecar
@@ -110,12 +120,10 @@ chunk
 │   │   --public-key-file <path>    # Path to public key file
 │   ├── ssh                         # SSH into sidecar (stdin forwarded when piped)
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
-│   │   --identity-file <path>      # SSH identity file
 │   │   -e / --env KEY=VALUE        # Set env var in remote session (repeatable)
 │   │   --env-file <path>           # Env file to load (default: .env.local; pass a path to override)
 │   ├── sync                        # Sync files to sidecar
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
-│   │   --identity-file <path>      # SSH identity file
 │   │   --workdir <path>            # Destination path on sidecar (auto-detected when omitted)
 │   │   --checkout                  # Sync via git checkout/patch instead of bundle (requires branch pushed to GitHub)
 │   ├── env                         # Detect tech stack and print environment spec as JSON
@@ -129,7 +137,6 @@ chunk
 │   │   --sidecar-id <id>           # Sidecar ID (defaults to active sidecar)
 │   │   --org-id <id>               # Organization ID (used when creating a new sidecar)
 │   │   --name <name>               # Sidecar name (used when creating a new sidecar)
-│   │   --identity-file <path>      # SSH identity file
 │   │   --skip-sync                 # Skip syncing files to the sidecar
 │   │   --force                     # Re-detect environment even if cached
 │   │   -e / --env KEY=VALUE        # Set env var in remote sidecar session (repeatable)
@@ -235,6 +242,16 @@ chunk
   HEAD, a repo with no recorded default branch, and a branch that is itself the
   merge target all produce "no answer" rather than a clean bill of health.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
+- **Run results are read from disk, not sent to the daemon.** Every `validate` run
+  writes its events to the project's event log and registers the project (a
+  `project-root` breadcrumb in the same data directory) whether or not a daemon
+  is running and whether or not a sidecar is involved. The daemon discovers
+  projects from those breadcrumbs and replays each log from the start, so a run
+  made with no dashboard open — a `--local` run, or one in a repo that has never
+  had a sidecar — is there in full the next time `watch` opens, under the
+  project's `local` row. (Remote command *output* is the exception: it is
+  registered with the daemon live and buffered in memory, keyed by the same
+  project root, so it too is only listed for a project that has been registered.)
 - **`watch` can show a command's output.** In the activity pane, an invocation
   marked `▤` has output the daemon still holds; `Enter` opens a scrollback view
   of it. A command that is still running tails live — the pane polls every 200 ms
@@ -353,12 +370,47 @@ chunk
 - `chunk auth set github` stores a GitHub token in the config file; previously
   only the `GITHUB_TOKEN` environment variable was supported.
 - `chunk hook disable` creates a `.chunk/hooks-disabled` sentinel file inspected by the `chunk validate` Stop hook; `hook enable` removes it. Stop-hook validation is also disabled when `CHUNK_HOOKS_DISABLED` is set in the environment.
+- **Hook runs may be validated in the background.** When the watch daemon is
+  running, a Stop-hook `chunk validate` offers the daemon the choice of running
+  the checks after the hook has exited. The daemon takes the offer for a change
+  under 500 lines, or one confined to docs and text files, and holds the caller
+  for anything larger, anything it cannot measure, and any project whose last
+  run failed. Size is measured against the last state that passed its checks
+  rather than against `HEAD`, so consecutive small changes do not accumulate
+  into a large one and a commit neither hides a change nor resets the count. Results of a background run reach the agent on its next turn, via
+  the `chunk validate results` hook. Only hook runs are ever released — a
+  `chunk validate` typed at a terminal always waits. Set `asyncValidate` in
+  `.chunk/config.json` to `never` or `always` to override the judgement, and
+  `asyncValidateMaxLines` to move the threshold, `asyncValidateInert` and
+  `asyncValidateBlocking` to say which paths it applies to. See
+  [HOOKS.md](HOOKS.md#background-validation).
 - `chunk validate` caches successful runs in hook mode only, keyed by
   `.chunk/config.json`, the execution target, the HEAD SHA, and the contents of
   all changed files; a repeat hook invocation with nothing changed prints
   `skipped` instead of re-running. Manual runs, `--cmd` inline commands, and
   repos whose state cannot be hashed never cache. Entries expire after 7 days.
   See [HOOKS.md](HOOKS.md#result-caching).
+- **`validate --async` and `validate results` are two halves of one flow.**
+  `--async` hands the run to the watch daemon and returns immediately; `results`
+  reads what finished and prints it to stdout. Nothing installs a hook to call
+  `results` yet: a background run is something you ask for explicitly, so
+  reading its answer back is too. Wiring it into a hook waits for the change
+  that makes background runs happen on their own. A result is reported once and
+  then forgotten. A live-tree run whose working tree changed while it was in
+  flight has its verdict discarded: a pass describing code that is no longer on
+  disk reads as a green light for work already changed. The discard itself is
+  reported, without an exit code or output, because the commonest reason the
+  tree moved is the run — output written, a golden regenerated, a lockfile
+  touched — and staying silent about that is indistinguishable from no run
+  having happened, which leaves such a project getting nothing with no way to
+  tell why. `TaskState.Passed` consults `Stale`, so a stripped verdict cannot
+  read as a clean pass. Stopping the tree moving under the run in the first
+  place is a matter of where the run happens, not how its result is judged —
+  which is what `asyncValidateWorktree` does: a run that validated a snapshot
+  keeps its verdict and is reported with the state it describes named.
+- **`validate results` is a subcommand, not a flag, because it validates
+  nothing.** It reads daemon state. A flag on `validate` would read as a
+  modifier of a run that never happens.
 - Every command checks GitHub for a newer release in the background and prints a
   notice to stderr once it finishes. The result is cached in the app state dir
   (`update-check.json`) for 24 h to stay inside GitHub's unauthenticated rate
@@ -384,6 +436,11 @@ chunk
 | `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
+| `asyncValidate` | `.chunk/config.json` | Whether hook runs may be validated in the background: `auto` (default), `always`, `never` |
+| `asyncValidateMaxLines` | `.chunk/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |
+| `asyncValidateWorktree` | `.chunk/config.json` | Run background checks in a checked-out snapshot so edits cannot make the result stale (`true`/`false`, default: `false` — a snapshot holds nothing gitignored) |
+| `asyncValidateInert` | `.chunk/config.json` | Extensions (`.sql`) or file names (`NOTICE`) this project also counts as prose, validated in the background at any size; adds to the built-in list |
+| `asyncValidateBlocking` | `.chunk/config.json` | Extensions or file names that always block, over an inert default, the line threshold, and `asyncValidate: always` |
 
 `chunk config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project

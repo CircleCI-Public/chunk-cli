@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -23,24 +22,59 @@ func newClient(t *testing.T, serverURL string) *circleci.Client {
 	return cl
 }
 
-func TestOpenSessionDefaultKeyFallback(t *testing.T) {
+// TestOpenSessionGeneratesMissingKey covers the promise made in
+// GETTING_STARTED.md: a user never has to create keys by hand, whichever
+// command reaches a sidecar first.
+func TestOpenSessionGeneratesMissingKey(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	srv := httptest.NewServer(cci)
 	defer srv.Close()
 
 	// Use a temp dir as HOME so ~/.ssh/chunk_ai definitely doesn't exist.
-	t.Setenv(config.EnvHome, t.TempDir())
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
 
 	cl := newClient(t, srv.URL)
 	ctx := context.Background()
 
-	// Both identityFile and authSock are empty — should attempt default key path.
-	_, err := sidecar.OpenSession(ctx, cl, "sb-1", "", "", false)
-	assert.Assert(t, err != nil)
-	assert.Assert(t, strings.Contains(err.Error(), "chunk_ai"),
-		"expected default key name in error, got: %v", err)
-	assert.Assert(t, !strings.Contains(err.Error(), "SSH key not found: \n"),
-		"error should not reference empty path, got: %v", err)
+	keyPath := filepath.Join(home, ".ssh", "chunk_ai")
+	sess, err := sidecar.OpenSession(ctx, cl, "sb-1", false)
+	assert.NilError(t, err)
+	assert.Equal(t, sess.IdentityFile, keyPath)
+
+	priv, err := os.Stat(keyPath)
+	assert.NilError(t, err)
+	assert.Equal(t, priv.Mode().Perm(), os.FileMode(0o600))
+	_, err = os.Stat(keyPath + ".pub")
+	assert.NilError(t, err)
+}
+
+// TestOpenSessionKeepsExistingKey guards against regenerating over a key the
+// sidecar has already been told about.
+func TestOpenSessionKeepsExistingKey(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	keyPath := filepath.Join(home, ".ssh", "chunk_ai")
+	fakes.GenerateSSHKeypairAt(t, keyPath)
+	privBefore, err := os.ReadFile(keyPath)
+	assert.NilError(t, err)
+	pubBefore, err := os.ReadFile(keyPath + ".pub")
+	assert.NilError(t, err)
+
+	_, err = sidecar.OpenSession(context.Background(), newClient(t, srv.URL), "sb-1", false)
+	assert.NilError(t, err)
+
+	privAfter, err := os.ReadFile(keyPath)
+	assert.NilError(t, err)
+	pubAfter, err := os.ReadFile(keyPath + ".pub")
+	assert.NilError(t, err)
+	assert.Equal(t, string(privAfter), string(privBefore))
+	assert.Equal(t, string(pubAfter), string(pubBefore))
 }
 
 func TestCreate(t *testing.T) {

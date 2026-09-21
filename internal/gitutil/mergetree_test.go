@@ -11,27 +11,15 @@ import (
 	"gotest.tools/v3/assert/cmp"
 )
 
-// commitFile writes rel and commits it on the current branch.
-func commitFile(t *testing.T, dir, rel, content, msg string) {
-	t.Helper()
-	path := filepath.Join(dir, rel)
-	err := os.MkdirAll(filepath.Dir(path), 0o755)
-	assert.NilError(t, err)
-	err = os.WriteFile(path, []byte(content), 0o644)
-	assert.NilError(t, err)
-	gitRun(t, dir, "add", rel)
-	gitRun(t, dir, "commit", "-m", msg)
-}
-
 func TestPreviewMergeCleanWhenBranchesTouchDifferentFiles(t *testing.T) {
 	dir := setupRepo(t)
-	commitFile(t, dir, "base.txt", "base\n", "base")
+	commitFile(t, dir, "base.txt", "base\n")
 
 	gitRun(t, dir, "checkout", "-b", "feature")
-	commitFile(t, dir, "feature.txt", "feature\n", "feature")
+	commitFile(t, dir, "feature.txt", "feature\n")
 
 	gitRun(t, dir, "checkout", "main")
-	commitFile(t, dir, "other.txt", "other\n", "other")
+	commitFile(t, dir, "other.txt", "other\n")
 
 	preview, err := PreviewMerge(context.Background(), dir, "feature", "main")
 	assert.NilError(t, err)
@@ -41,13 +29,13 @@ func TestPreviewMergeCleanWhenBranchesTouchDifferentFiles(t *testing.T) {
 
 func TestPreviewMergeReportsConflictingPaths(t *testing.T) {
 	dir := setupRepo(t)
-	commitFile(t, dir, "shared.txt", "original\n", "base")
+	commitFile(t, dir, "shared.txt", "original\n")
 
 	gitRun(t, dir, "checkout", "-b", "feature")
-	commitFile(t, dir, "shared.txt", "feature edit\n", "feature")
+	commitFile(t, dir, "shared.txt", "feature edit\n")
 
 	gitRun(t, dir, "checkout", "main")
-	commitFile(t, dir, "shared.txt", "main edit\n", "main")
+	commitFile(t, dir, "shared.txt", "main edit\n")
 
 	preview, err := PreviewMerge(context.Background(), dir, "feature", "main")
 	assert.NilError(t, err)
@@ -62,13 +50,13 @@ func TestPreviewMergeLeavesTheWorkingTreeAlone(t *testing.T) {
 	// checkout somebody is working in, and must not touch their index, HEAD, or
 	// files. A real `git merge` here would leave conflict markers on disk.
 	dir := setupRepo(t)
-	commitFile(t, dir, "shared.txt", "original\n", "base")
+	commitFile(t, dir, "shared.txt", "original\n")
 
 	gitRun(t, dir, "checkout", "-b", "feature")
-	commitFile(t, dir, "shared.txt", "feature edit\n", "feature")
+	commitFile(t, dir, "shared.txt", "feature edit\n")
 
 	gitRun(t, dir, "checkout", "main")
-	commitFile(t, dir, "shared.txt", "main edit\n", "main")
+	commitFile(t, dir, "shared.txt", "main edit\n")
 
 	// An uncommitted edit, to prove the preview neither reads nor disturbs it.
 	err := os.WriteFile(filepath.Join(dir, "shared.txt"), []byte("uncommitted\n"), 0o644)
@@ -101,13 +89,13 @@ func TestPreviewMergeIgnoresUncommittedConflicts(t *testing.T) {
 	// the merge is of commits. Pinned as a test because every caller has to say
 	// so out loud, or the silence reads as an all-clear it did not check.
 	dir := setupRepo(t)
-	commitFile(t, dir, "shared.txt", "original\n", "base")
+	commitFile(t, dir, "shared.txt", "original\n")
 
 	gitRun(t, dir, "checkout", "-b", "feature")
-	commitFile(t, dir, "untouched.txt", "x\n", "feature")
+	commitFile(t, dir, "untouched.txt", "x\n")
 
 	gitRun(t, dir, "checkout", "main")
-	commitFile(t, dir, "shared.txt", "main edit\n", "main")
+	commitFile(t, dir, "shared.txt", "main edit\n")
 	gitRun(t, dir, "checkout", "feature")
 
 	// Would conflict with main's committed change if it were committed.
@@ -121,7 +109,7 @@ func TestPreviewMergeIgnoresUncommittedConflicts(t *testing.T) {
 
 func TestPreviewMergeErrorsOnUnknownRevision(t *testing.T) {
 	dir := setupRepo(t)
-	commitFile(t, dir, "base.txt", "base\n", "base")
+	commitFile(t, dir, "base.txt", "base\n")
 
 	_, err := PreviewMerge(context.Background(), dir, "main", "no-such-branch")
 	// git exits 1 for this, the same code as a conflicted merge, so a reading
@@ -132,7 +120,7 @@ func TestPreviewMergeErrorsOnUnknownRevision(t *testing.T) {
 
 func TestDefaultRemoteBranchInReadsRemoteHead(t *testing.T) {
 	dir := setupRepo(t)
-	commitFile(t, dir, "base.txt", "base\n", "base")
+	commitFile(t, dir, "base.txt", "base\n")
 	gitRun(t, dir, "remote", "add", "origin", "https://example.com/x/y.git")
 	gitRun(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
 
@@ -146,7 +134,7 @@ func TestDefaultRemoteBranchInPrefersOriginOverUpstream(t *testing.T) {
 	// A fork checkout has both. origin wins, because that is the remote whose
 	// tracking ref a fetch would refresh.
 	dir := setupRepo(t)
-	commitFile(t, dir, "base.txt", "base\n", "base")
+	commitFile(t, dir, "base.txt", "base\n")
 	gitRun(t, dir, "remote", "add", "origin", "https://example.com/me/y.git")
 	gitRun(t, dir, "remote", "add", "upstream", "https://example.com/them/y.git")
 	gitRun(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
@@ -160,7 +148,7 @@ func TestDefaultRemoteBranchInPrefersOriginOverUpstream(t *testing.T) {
 
 func TestDefaultRemoteBranchInFallsBackToUpstream(t *testing.T) {
 	dir := setupRepo(t)
-	commitFile(t, dir, "base.txt", "base\n", "base")
+	commitFile(t, dir, "base.txt", "base\n")
 	gitRun(t, dir, "remote", "add", "upstream", "https://example.com/them/y.git")
 	gitRun(t, dir, "symbolic-ref", "refs/remotes/upstream/HEAD", "refs/remotes/upstream/trunk")
 
@@ -178,7 +166,7 @@ func TestDefaultRemoteBranchInErrorsWithoutRemoteHead(t *testing.T) {
 
 func TestRevParseCtxRejectsNonCommits(t *testing.T) {
 	dir := setupRepo(t)
-	commitFile(t, dir, "base.txt", "base\n", "base")
+	commitFile(t, dir, "base.txt", "base\n")
 
 	sha, err := RevParseCtx(context.Background(), dir, "main")
 	assert.NilError(t, err)
@@ -196,7 +184,7 @@ func TestFetchRemoteBranchUpdatesTrackingRef(t *testing.T) {
 	// FetchRemoteBranch precisely so this works regardless of what the remote's
 	// configured fetch refspec happens to be, so a local remote is a fair test.
 	upstream := setupRepo(t)
-	commitFile(t, upstream, "base.txt", "base\n", "base")
+	commitFile(t, upstream, "base.txt", "base\n")
 
 	clone := setupRepo(t)
 	gitRun(t, clone, "remote", "add", "origin", upstream)
@@ -211,7 +199,7 @@ func TestFetchRemoteBranchUpdatesTrackingRef(t *testing.T) {
 
 	// A second commit upstream is picked up by a second fetch, so the tracking
 	// ref genuinely advances rather than being written once at add time.
-	commitFile(t, upstream, "next.txt", "next\n", "next")
+	commitFile(t, upstream, "next.txt", "next\n")
 	err = FetchRemoteBranch(context.Background(), clone, "origin", "main")
 	assert.NilError(t, err)
 	advanced, err := RevParseCtx(context.Background(), clone, "origin/main")

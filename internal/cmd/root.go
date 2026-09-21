@@ -54,6 +54,12 @@ func NewRootCmd(version string) *cobra.Command {
 			return telemetry.FromContext(cmd.Context()).Close()
 		},
 	}
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return newUserError(err.Error()).
+			withCode("command.invalid_flags").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	})
 
 	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + `
 Getting started:
@@ -74,7 +80,6 @@ Environment Variables:
   CIRCLECI_BASE_URL               CircleCI API URL [default: https://circleci.com]
   ANTHROPIC_BASE_URL              Anthropic API URL [default: https://api.anthropic.com]
   GITHUB_API_URL                  GitHub API URL [default: https://api.github.com]
-  SSH_AUTH_SOCK                   SSH agent socket for sidecar key auth
   CHUNK_SESSION_ID                Agent session identity; keeps parallel sessions on separate sidecar pools
                                   (read from CLAUDE_CODE_SESSION_ID when unset)
   NO_COLOR                        Disable colored output
@@ -100,6 +105,7 @@ Configuration:
 	rootCmd.AddCommand(newPruneCmd())
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
+	rootCmd.AddCommand(newMutateCmd())
 	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newConflictsCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
@@ -141,10 +147,14 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	send := optedIn && writeKey != "" && !testing.Testing()
 
 	var instanceID uuid.UUID
+	var sessionTrackingID uuid.UUID
 	if optedIn {
 		instanceID, err = config.EnsureInstanceID()
 		if err != nil {
 			return err
+		}
+		if sid := session.IDFromEnv(); sid != "" {
+			sessionTrackingID = config.SessionTrackingID(sid)
 		}
 	}
 
@@ -159,11 +169,12 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		WriteKey: writeKey,
 		Binary:   executable,
 		Metadata: telemetry.Meta{
-			Version:     version,
-			InstanceID:  instanceID,
-			UserID:      config.GetUserID(),
-			OS:          runtime.GOOS,
-			CodingAgent: telemetry.DetectCodingAgent(),
+			Version:           version,
+			InstanceID:        instanceID,
+			SessionTrackingID: sessionTrackingID,
+			UserID:            config.GetUserID(),
+			OS:                runtime.GOOS,
+			CodingAgent:       telemetry.DetectCodingAgent(),
 		},
 	})
 	if err != nil {

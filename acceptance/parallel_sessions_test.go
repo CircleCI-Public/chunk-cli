@@ -23,10 +23,9 @@ import (
 // talks to. Two runs against one sessionEnv stand in for two agent sessions open
 // in the same working tree.
 type sessionEnv struct {
-	cci          *fakes.FakeCircleCI
-	env          *testenv.TestEnv
-	workDir      string
-	identityFile string
+	cci     *fakes.FakeCircleCI
+	env     *testenv.TestEnv
+	workDir string
 }
 
 func newSessionEnv(t *testing.T) *sessionEnv {
@@ -42,18 +41,17 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 	cfg := `{"commands":[{"name":"test","run":"echo test","remote":true}]}`
 	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"), []byte(cfg), 0o644))
 
-	sshDir := filepath.Join(t.TempDir(), ".ssh")
-	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
-	identityFile := filepath.Join(sshDir, "chunk_ai")
-	assert.NilError(t, generateTestSSHKey(t, identityFile))
-
 	// One HOME across both runs, so they share the state directory the way two
 	// sessions on one machine do.
 	env := testenv.NewTestEnv(t)
 	env.CircleCIURL = srv.URL
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
 
-	return &sessionEnv{cci: cci, env: env, workDir: workDir, identityFile: identityFile}
+	sshDir := filepath.Join(env.HomeDir, ".ssh")
+	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
+	assert.NilError(t, generateTestSSHKey(t, filepath.Join(sshDir, "chunk_ai")))
+
+	return &sessionEnv{cci: cci, env: env, workDir: workDir}
 }
 
 // validateAs runs `chunk validate` as the given agent session, identified the way
@@ -61,7 +59,7 @@ func newSessionEnv(t *testing.T) *sessionEnv {
 func (e *sessionEnv) validateAs(t *testing.T, sessionID string) {
 	t.Helper()
 	e.env.Extra[session.EnvClaudeSessionID] = sessionID
-	result := binary.RunCLI(t, []string{"validate", "--identity-file", e.identityFile}, e.env, e.workDir)
+	result := binary.RunCLI(t, []string{"validate"}, e.env, e.workDir)
 	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running; stderr: %s", result.Stderr)
 }
 
@@ -115,7 +113,7 @@ func TestSessionCreatesOwnSidecarAlways(t *testing.T) {
 	e := newSessionEnv(t)
 
 	// No session ID: this is a human running the command.
-	result := binary.RunCLI(t, []string{"validate", "--identity-file", e.identityFile}, e.env, e.workDir)
+	result := binary.RunCLI(t, []string{"validate"}, e.env, e.workDir)
 	assert.Assert(t, result.ExitCode != 0, "expected failure because no SSH server is running")
 	assert.Equal(t, e.createdSidecars(t), 1)
 

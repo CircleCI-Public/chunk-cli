@@ -93,8 +93,8 @@ Run this after authenticating — init uses your CircleCI credentials to detect 
 What it creates:
 
 - **`.chunk/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
-- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session; tracked in git
-- **`.codex/hooks.json`** — the same hooks, for Codex sessions (only written if Codex is installed); tracked in git
+- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session, plus one that reports finished background runs before each prompt; tracked in git
+- **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
 - **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
 
 `chunk init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.
@@ -228,6 +228,18 @@ To fall back to the git checkout/patch approach (requires the branch to be pushe
 chunk sidecar sync --checkout
 ```
 
+### SSH key management
+
+chunk generates and manages its own SSH keypair at `~/.ssh/chunk_ai`. The public key is registered with each sidecar automatically when you first sync or SSH in — you do not need to create keys, run `ssh-add`, or pass an identity file.
+
+If sync or SSH fails with `permission denied (publickey)`, re-register the key:
+
+```bash
+chunk sidecar add-ssh-key --public-key-file ~/.ssh/chunk_ai.pub
+```
+
+If the key is missing or corrupted, delete `~/.ssh/chunk_ai*` and chunk will regenerate the pair on next use.
+
 ### Validation pools
 
 `chunk validate` currently uses a managed pool with capacity one. Remote commands are queued on that sidecar in configuration order, then commands explicitly configured with `local: true` run locally. Placement does not implicitly increase pool capacity.
@@ -285,13 +297,18 @@ chunk watch  1 sidecar  main@a3f9e12                      15:04:32
   ↑/↓ j/k  select  ·  q  quit
 ```
 
-`watch` shows every project you've watched before, not just the current one:
+`watch` shows every project you've watched or validated in before, not just the current one:
 
 ```bash
-chunk watch                   # all projects you've watched before
+chunk watch                   # all projects chunk has seen
 chunk watch --focus           # current directory only
 chunk watch /path/to/other    # add another project
 ```
+
+You don't have to have the dashboard open at the time. Every `chunk validate` run
+records its results to disk — including a purely local run, in a project that has
+never had a sidecar — so runs you made with no dashboard open are waiting for you
+the next time you open one, under a `local` row for the project.
 
 `watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).
 

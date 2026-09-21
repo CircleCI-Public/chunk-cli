@@ -12,18 +12,7 @@ var (
 	ErrPublicKeyRequired = errors.New("public key is required")
 	// ErrPrivateKeyProvided indicates a private key was given where a public key was expected.
 	ErrPrivateKeyProvided = errors.New("provided key is a private key")
-	// ErrAuthSockNotSet indicates the SSH agent socket is not configured.
-	ErrAuthSockNotSet = errors.New("ssh auth socket not set")
 )
-
-// KeyNotFoundError indicates the SSH private key file does not exist.
-type KeyNotFoundError struct {
-	Path string
-}
-
-func (e *KeyNotFoundError) Error() string {
-	return fmt.Sprintf("ssh key not found: %s", e.Path)
-}
 
 // PublicKeyNotFoundError indicates the SSH public key file does not exist.
 type PublicKeyNotFoundError struct {
@@ -34,6 +23,20 @@ type PublicKeyNotFoundError struct {
 func (e *PublicKeyNotFoundError) Error() string {
 	return fmt.Sprintf("ssh public key not found: %s", e.KeyPath)
 }
+
+// EncryptedKeyError indicates the SSH private key is passphrase protected.
+// chunk authenticates with the key material directly and has no way to prompt
+// for or cache a passphrase, so such a key cannot be used.
+type EncryptedKeyError struct {
+	Path string
+	Err  error
+}
+
+func (e *EncryptedKeyError) Error() string {
+	return fmt.Sprintf("ssh key is passphrase protected: %s", e.Path)
+}
+
+func (e *EncryptedKeyError) Unwrap() error { return e.Err }
 
 // NoOriginRemoteError indicates git remote "origin" is not configured.
 type NoOriginRemoteError struct {

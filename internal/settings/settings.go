@@ -77,7 +77,11 @@ func Build(commands []config.Command) ([]byte, error) {
 		},
 	}
 
-	if len(hooks) > 0 {
+	// Gated on commands, not on len(hooks): the conflicts advisory is prepended
+	// unconditionally, so a project with nothing to validate would otherwise get
+	// a settings file whose Stop hook runs `chunk validate` with no commands to
+	// run. An unconfigured project gets no hooks at all, advisory included.
+	if len(commands) > 0 {
 		// Compute a Stop hook timeout that covers all commands running sequentially,
 		// capped at 600s to avoid exceeding Claude Code's maximum hook timeout.
 		const maxStopTimeout = 600

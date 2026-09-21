@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/envspec"
 )
@@ -20,6 +22,21 @@ const (
 // CmdInstall is the conventional name for the dependency install command. It has
 // no role of its own but sidecar setup treats it like a gate command.
 const CmdInstall = "install"
+
+// Async validation modes, the values ProjectConfig.AsyncValidate accepts.
+//
+// They exist because the judgement of which changes are safe to validate in the
+// background is a judgement, and a repo whose checks it reads wrongly needs a
+// way to say so without waiting for a new release.
+const (
+	// AsyncValidateAuto lets the daemon decide per change. The default.
+	AsyncValidateAuto = "auto"
+	// AsyncValidateAlways backgrounds every hook-driven run, however large.
+	AsyncValidateAlways = "always"
+	// AsyncValidateNever keeps every run blocking, as it was before background
+	// validation existed.
+	AsyncValidateNever = "never"
+)
 
 // Command is a single validation command.
 type Command struct {
@@ -57,6 +74,31 @@ type ProjectConfig struct {
 	OrgID               string               `json:"orgID,omitempty"`
 	StopHookMaxAttempts int                  `json:"stopHookMaxAttempts,omitempty"`
 	Environment         *envspec.Environment `json:"environment,omitempty"`
+	// AsyncValidate is one of the AsyncValidate* modes. Empty means auto.
+	AsyncValidate string `json:"asyncValidate,omitempty"`
+	// AsyncValidateMaxLines overrides how large a change may be and still be
+	// validated in the background. Zero means the built-in default.
+	AsyncValidateMaxLines int `json:"asyncValidateMaxLines,omitempty"`
+	// AsyncValidateWorktree runs background checks in a checked-out snapshot
+	// instead of the live working tree, so editing while they run cannot make
+	// the answer describe code that has moved. Off by default: a snapshot holds
+	// nothing git was told to ignore, so a project whose checks need installed
+	// dependencies or a build cache would see environment failures reported as
+	// code failures.
+	AsyncValidateWorktree bool `json:"asyncValidateWorktree,omitempty"`
+	// AsyncValidateInert adds to the paths this project counts as prose: an
+	// extension (".sql") or an exact file name ("NOTICE"). A change confined to
+	// them is validated in the background however large it is.
+	//
+	// It adds rather than replaces, because the built-in list is an allowlist
+	// and an allowlist fails towards making somebody wait. A project that wants
+	// one of the defaults checked says so with AsyncValidateBlocking.
+	AsyncValidateInert []string `json:"asyncValidateInert,omitempty"`
+	// AsyncValidateBlocking names paths whose change always blocks, in the same
+	// two forms. It is the narrower instruction and so it wins over everything
+	// else — an inert default, a small diff, and the "always" mode included,
+	// since a project naming a path here has said it wants to wait for it.
+	AsyncValidateBlocking []string `json:"asyncValidateBlocking,omitempty"`
 }
 
 // LoadProjectConfig reads .chunk/config.json from workDir.
@@ -177,6 +219,10 @@ func SaveProjectConfig(workDir string, cfg *ProjectConfig) error {
 	return os.WriteFile(filepath.Join(dir, "config.json"), append(data, '\n'), 0o644)
 }
 
+// Validate reports whether the config is usable, for callers assembling one
+// before it is written.
+func (c *ProjectConfig) Validate() error { return c.validate() }
+
 func (c *ProjectConfig) validate() error {
 	if c == nil {
 		return nil
@@ -184,6 +230,42 @@ func (c *ProjectConfig) validate() error {
 	for _, command := range c.Commands {
 		if command.Local && command.Remote {
 			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
+		}
+	}
+	// Reported rather than ignored. A misspelt entry here fails silently in the
+	// direction nobody checks: the project believes it is waiting for its .sql
+	// changes, and nothing ever tells it otherwise.
+	if err := validatePathRules("asyncValidateInert", c.AsyncValidateInert); err != nil {
+		return err
+	}
+	if err := validatePathRules("asyncValidateBlocking", c.AsyncValidateBlocking); err != nil {
+		return err
+	}
+	for _, entry := range c.AsyncValidateBlocking {
+		if slices.Contains(c.AsyncValidateInert, entry) {
+			return fmt.Errorf("%q is in both asyncValidateInert and asyncValidateBlocking", entry)
+		}
+	}
+	return nil
+}
+
+// validatePathRules checks the entries of an inert or blocking list.
+//
+// An entry is either an extension with its leading dot (".sql") or an exact
+// file name ("NOTICE"). Anything else is a mistake worth naming: a path, a
+// glob, and a bare extension are all things somebody would reasonably write
+// and none of them would ever match.
+func validatePathRules(key string, entries []string) error {
+	for _, entry := range entries {
+		switch {
+		case strings.TrimSpace(entry) == "":
+			return fmt.Errorf("%s has an empty entry", key)
+		case entry == ".":
+			return fmt.Errorf("%s: %q is not an extension or a file name", key, entry)
+		case strings.ContainsAny(entry, `/\`):
+			return fmt.Errorf("%s: %q looks like a path; use an extension (\".md\") or a file name (\"NOTICE\")", key, entry)
+		case strings.Contains(entry, "*"):
+			return fmt.Errorf("%s: %q looks like a glob; use an extension (\".md\") or a file name (\"NOTICE\")", key, entry)
 		}
 	}
 	return nil

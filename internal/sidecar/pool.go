@@ -25,17 +25,15 @@ type PoolEntry struct {
 
 // Pool manages a fixed set of sidecars as a work queue for concurrent tasks.
 type Pool struct {
-	free         chan *PoolEntry
-	updates      chan struct{}
-	ids          []string
-	entries      []*PoolEntry
-	client       *circleci.Client
-	workDir      string
-	orgID        string
-	image        string
-	name         string
-	identityFile string
-	authSock     string
+	free    chan *PoolEntry
+	updates chan struct{}
+	ids     []string
+	entries []*PoolEntry
+	client  *circleci.Client
+	workDir string
+	orgID   string
+	image   string
+	name    string
 
 	mu           sync.Mutex
 	pendingSyncs int
@@ -52,16 +50,14 @@ type poolState struct {
 
 // PoolOptions describes the resources and persisted identity of a pool.
 type PoolOptions struct {
-	Size         int
-	Name         string
-	OrgID        string
-	Image        string
-	IdentityFile string
-	AuthSock     string
-	WorkDir      string
-	RepoPath     string
-	ExistingIDs  []string
-	FreshIDs     []string
+	Size        int
+	Name        string
+	OrgID       string
+	Image       string
+	WorkDir     string
+	RepoPath    string
+	ExistingIDs []string
+	FreshIDs    []string
 }
 
 func poolStatePath(workDir, name string) string {
@@ -140,14 +136,14 @@ func NewPool(
 	for _, id := range opts.FreshIDs {
 		freshIDs[id] = true
 	}
-	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, opts.IdentityFile, opts.AuthSock, repoPath, opts.WorkDir, existingIDs, lastSyncedRef, freshIDs, status)
+	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, existingIDs, lastSyncedRef, freshIDs, status)
 }
 
 func assemblePool(
 	ctx context.Context,
 	client *circleci.Client,
 	n int,
-	name, orgID, image, identityFile, authSock, repoPath, workDir string,
+	name, orgID, image, repoPath, workDir string,
 	existingIDs []string,
 	lastSyncedRef string,
 	freshIDs map[string]bool,
@@ -164,7 +160,7 @@ func assemblePool(
 		swg.Add(1)
 		go func(i int, id string) {
 			defer swg.Done()
-			staleFlags[i] = IsDefinitelyStale(ctx, client, id, identityFile, authSock)
+			staleFlags[i] = IsDefinitelyStale(ctx, client, id)
 		}(i, id)
 	}
 	swg.Wait()
@@ -201,7 +197,7 @@ func assemblePool(
 		}
 		status(iostream.LevelInfo, fmt.Sprintf("created sidecar %d (%s)", seedIdx, seed.ID))
 
-		headRef, err := bundleSyncFanOutSince(ctx, client, []string{seed.ID}, identityFile, authSock, repoPath, workDir, "", true, status)
+		headRef, err := bundleSyncFanOutSince(ctx, client, []string{seed.ID}, repoPath, workDir, "", true, status)
 		if err != nil {
 			_ = client.DeleteSidecar(cleanCtx, seed.ID)
 			return nil, fmt.Errorf("pool seed sync: %w", err)
@@ -285,8 +281,6 @@ func assemblePool(
 		orgID:        orgID,
 		image:        image,
 		name:         name,
-		identityFile: identityFile,
-		authSock:     authSock,
 		pendingSyncs: len(aliveExisting),
 	}
 
@@ -357,7 +351,7 @@ func (p *Pool) Rebuild(ctx context.Context, dead *PoolEntry, status iostream.Sta
 		return nil, fmt.Errorf("rebuild: create sidecar: %w", err)
 	}
 
-	if err := BundleSyncFanOut(ctx, p.client, []string{sc.ID}, p.identityFile, p.authSock, dead.RepoPath, p.workDir, true, status); err != nil {
+	if err := BundleSyncFanOut(ctx, p.client, []string{sc.ID}, dead.RepoPath, p.workDir, true, status); err != nil {
 		_ = p.client.DeleteSidecar(ctx, sc.ID)
 		return nil, fmt.Errorf("rebuild: sync: %w", err)
 	}
@@ -425,7 +419,7 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			err := syncPreparedSidecar(ctx, p.client, id, p.identityFile, p.authSock, freshIDs[id], prepared)
+			err := syncPreparedSidecar(ctx, p.client, id, freshIDs[id], prepared)
 			if isStaleSyncError(err) {
 				entry, err = p.replaceStaleEntry(ctx, entry, prepared, status)
 				if err == nil {
@@ -472,7 +466,7 @@ func (p *Pool) replaceStaleEntry(ctx context.Context, stale *PoolEntry, prepared
 		return stale, fmt.Errorf("replace stale sidecar: create: %w", err)
 	}
 	replacement := &PoolEntry{ID: sc.ID, RepoPath: stale.RepoPath, Client: p.client}
-	if err := syncPreparedSidecar(ctx, p.client, replacement.ID, p.identityFile, p.authSock, true, prepared); err != nil {
+	if err := syncPreparedSidecar(ctx, p.client, replacement.ID, true, prepared); err != nil {
 		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
 		return stale, fmt.Errorf("replace stale sidecar: sync: %w", err)
 	}

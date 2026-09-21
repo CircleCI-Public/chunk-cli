@@ -11,7 +11,15 @@ import (
 	embeddedSkills "github.com/CircleCI-Public/chunk-cli/skills"
 )
 
-var skillNames = []string{"chunk-testing-gaps", "chunk-review", "debug-ci-failures", "chunk-sidecar", "chunk-sidecar-setup"}
+// skillNames is read off the registry rather than repeated, so adding a skill
+// does not fail four tests that have nothing to say about it.
+var skillNames = func() []string {
+	names := make([]string, 0, len(skills.All))
+	for _, s := range skills.All {
+		names = append(names, s.Name)
+	}
+	return names
+}()
 
 func TestInstallBothAgents(t *testing.T) {
 	home := t.TempDir()
