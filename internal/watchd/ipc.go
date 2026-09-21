@@ -2,6 +2,7 @@ package watchd
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -115,7 +116,7 @@ func withBearerAuth(h http.Handler, token string) http.Handler {
 	}
 	want := "Bearer " + token
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != want {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(want)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -185,7 +186,6 @@ func longTCPClient(addr string) *http.Client {
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", addr)
 		},
-		ResponseHeaderTimeout: 30 * time.Second,
 	}
 	var rt http.RoundTripper = transport
 	if token := TCPToken(); token != "" {
