@@ -176,7 +176,6 @@ func reportSkippedAutofix(skipped []string, streams iostream.Streams) {
 
 type validateOpts struct {
 	sidecarID      string
-	identityFile   string
 	workdir        string
 	orgID          string
 	dryRun         bool
@@ -221,7 +220,6 @@ func newValidateCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("remote", "local")
 	cmd.Flags().StringVar(&opts.sidecarID, "sidecar-id", "", "Sidecar ID for remote execution")
 	cmd.Flags().StringVar(&opts.orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
-	cmd.Flags().StringVar(&opts.identityFile, "identity-file", "", "SSH identity file (uses ssh-agent or ~/.ssh/chunk_ai when omitted)")
 	cmd.Flags().StringVar(&opts.workdir, "workdir", "", "Working directory on sidecar (reads from sidecar.json, defaults to /home/user/<repo>)")
 	cmd.Flags().BoolVar(&opts.markRemote, "mark-remote", false, "Mark [name] (or every command) as remote in .chunk/config.json and exit")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Show commands without executing")
@@ -1249,16 +1247,14 @@ func setupValidatePool(ctx context.Context, client *circleci.Client, opts *valid
 		resolvedOrgID, _ = config.ResolveOrgID(workDir)
 	}
 	pool, err := sidecar.NewPool(ctx, client, sidecar.PoolOptions{
-		Size:         n,
-		Name:         "validate",
-		OrgID:        resolvedOrgID,
-		Image:        image,
-		IdentityFile: opts.identityFile,
-		AuthSock:     os.Getenv(config.EnvSSHAuthSock),
-		WorkDir:      workDir,
-		RepoPath:     validationRepoPath(opts.workdir, active),
-		ExistingIDs:  existingIDs,
-		FreshIDs:     freshIDs,
+		Size:        n,
+		Name:        "validate",
+		OrgID:       resolvedOrgID,
+		Image:       image,
+		WorkDir:     workDir,
+		RepoPath:    validationRepoPath(opts.workdir, active),
+		ExistingIDs: existingIDs,
+		FreshIDs:    freshIDs,
 	}, statusFn)
 	if err != nil {
 		if sshErr := sshSessionError(err); sshErr != nil {

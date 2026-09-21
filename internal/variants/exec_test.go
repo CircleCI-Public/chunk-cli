@@ -3,6 +3,7 @@ package variants
 import (
 	"context"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,9 @@ func discardStatus(_ iostream.Level, _ string) {}
 func newSession(t *testing.T, exitFor func(command string) (string, int)) (*sidecar.Session, *fakes.SSHServer) {
 	t.Helper()
 
-	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+	homeDir := t.TempDir()
+	t.Setenv(config.EnvHome, homeDir)
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
 	sshSrv.SetResultFn(exitFor)
 
@@ -33,13 +36,10 @@ func newSession(t *testing.T, exitFor func(command string) (string, int)) (*side
 	api := httptest.NewServer(cci)
 	t.Cleanup(api.Close)
 
-	// OpenSession resolves known_hosts under HOME; keep it in a temp dir.
-	t.Setenv(config.EnvHome, t.TempDir())
-
 	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
 	assert.NilError(t, err)
 
-	session, err := sidecar.OpenSession(context.Background(), client, "sc-1", keyFile, "", false)
+	session, err := sidecar.OpenSession(context.Background(), client, "sc-1", false)
 	assert.NilError(t, err)
 	return session, sshSrv
 }

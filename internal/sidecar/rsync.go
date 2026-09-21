@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -20,6 +21,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
+
+// proxyErrDrainTimeout bounds how long a failed rsync waits for the SSH proxy
+// goroutine to report why it gave up. Long enough for an in-flight WebSocket
+// dial to resolve after the proxy is cancelled, short enough not to be felt.
+const proxyErrDrainTimeout = 200 * time.Millisecond
 
 // RsyncSync syncs the local working tree (rooted at cwd) to a sidecar using
 // rsync over an SSH-over-WebSocket tunnel. Files matching .gitignore rules are
@@ -29,29 +35,29 @@ import (
 // initialised on the remote instead. workdir overrides the destination path;
 // defaults to /home/user/<repo name from git remote>.
 func RsyncSync(ctx context.Context,
-	client *circleci.Client, sidecarID, identityFile, authSock, workdir, cwd string,
+	client *circleci.Client, sidecarID, workdir, cwd string,
 	status iostream.StatusFunc) error {
 
-	return rsyncTo(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, true, status)
+	return rsyncTo(ctx, client, sidecarID, workdir, cwd, true, status)
 }
 
 // RsyncSyncEphemeral syncs like RsyncSync but neither reads nor writes the
 // active sidecar file. workdir is required.
 func RsyncSyncEphemeral(ctx context.Context,
-	client *circleci.Client, sidecarID, identityFile, authSock, workdir, cwd string,
+	client *circleci.Client, sidecarID, workdir, cwd string,
 	status iostream.StatusFunc) error {
 
 	if workdir == "" {
 		return fmt.Errorf("rsync: workdir is required for an ephemeral sync")
 	}
-	return rsyncTo(ctx, client, sidecarID, identityFile, authSock, workdir, cwd, false, status)
+	return rsyncTo(ctx, client, sidecarID, workdir, cwd, false, status)
 }
 
 func rsyncTo(ctx context.Context, client *circleci.Client,
-	sidecarID, identityFile, authSock, workdir, cwd string, persist bool,
+	sidecarID, workdir, cwd string, persist bool,
 	status iostream.StatusFunc) error {
 
-	sess, err := OpenSession(ctx, client, sidecarID, identityFile, authSock, false)
+	sess, err := OpenSession(ctx, client, sidecarID, false)
 	if err != nil {
 		return fmt.Errorf("rsync: open session: %w", err)
 	}
@@ -115,7 +121,7 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 		return fmt.Errorf("rsync: mkdir %s: %s", repoPath, result.Stderr)
 	}
 
-	localAddr, stopProxy, err := startSSHProxy(ctx, sess)
+	localAddr, stopProxy, proxyErr, err := startSSHProxy(ctx, sess)
 	if err != nil {
 		return fmt.Errorf("rsync: start SSH proxy: %w", err)
 	}
@@ -149,10 +155,27 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		detail := rsyncErrDetail(stderr.String())
-		if detail != "" {
-			return fmt.Errorf("rsync: %w\n%s", err, detail)
+		// Stop the proxy before reading proxyErr. bridgeConn only sends once
+		// its WebSocket dial resolves, so a non-blocking read here would drop
+		// the proxy error whenever rsync exited for an unrelated reason (its
+		// own timeout, a signal) while the dial was still in flight.
+		stopProxy()
+		var proxyDetail string
+		select {
+		case pe := <-proxyErr:
+			proxyDetail = pe.Error()
+		case <-time.After(proxyErrDrainTimeout):
 		}
-		return fmt.Errorf("rsync: %w", err)
+		switch {
+		case detail != "" && proxyDetail != "":
+			return fmt.Errorf("rsync: %w\n%s\nproxy: %s", err, detail, proxyDetail)
+		case proxyDetail != "":
+			return fmt.Errorf("rsync: %w\nproxy: %s", err, proxyDetail)
+		case detail != "":
+			return fmt.Errorf("rsync: %w\n%s", err, detail)
+		default:
+			return fmt.Errorf("rsync: %w", err)
+		}
 	}
 
 	if isWorktree {
@@ -296,24 +319,17 @@ func rsyncErrDetail(stderr string) string {
 // sshCommand builds the command rsync passes to -e in order to reach the
 // sidecar through the local proxy listening on port.
 //
-// IdentitiesOnly=yes is set only alongside an explicit -i. OpenSSH honours the
-// first occurrence of an option, so setting it unconditionally cannot be undone
-// later: an IdentitiesOnly=no appended for agent sessions is silently ignored,
-// leaving ssh unable to offer the agent key OpenSession registered. With no -i
-// to restrict, IdentitiesOnly=yes also does not mean "no keys" — ssh falls back
-// to the default ~/.ssh/id_* filenames, so it offers unrelated keys instead.
-//
 // A user ssh_config cannot override what we pass here: command-line options are
 // parsed first, so -p and every -o below win. Only options we do not set can leak
 // in, and just three can redirect this hop — ProxyCommand, ProxyJump and the
 // ControlMaster socket — so they are pinned individually rather than discarding
 // the whole config with -F /dev/null. That keeps /etc/ssh/ssh_config and settings
-// like UseKeychain intact, which a passphrase-protected -i key needs in order to
+// like UseKeychain intact, which a passphrase-protected key needs in order to
 // authenticate instead of blocking on a prompt inside the rsync child.
 //
 // -q is deliberately absent so ssh diagnostics reach the rsync error.
 func sshCommand(sess *Session, port string) string {
-	args := []string{"ssh", "-p", port,
+	return strings.Join([]string{"ssh", "-p", port,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "ProxyCommand=none",
@@ -322,32 +338,27 @@ func sshCommand(sess *Session, port string) string {
 		// rsync drives ssh over pipes; a config "RequestTTY yes" only adds a
 		// "Pseudo-terminal will not be allocated" notice to the error detail.
 		"-o", "RequestTTY=no",
-	}
-	if sess.IdentityFile != "" {
-		// Pass path directly — rsync tokenizes -e by whitespace and calls execve,
-		// so shell quoting (ShellEscape) would embed literal quote characters in
-		// the filename and cause ssh to fall through to agent keys.
-		args = append(args, "-o", "IdentitiesOnly=yes", "-i", sess.IdentityFile)
-	} else if sess.UseAgent && sess.AuthSock != "" {
-		// Set IdentitiesOnly=no explicitly: a user ssh_config with
-		// "IdentitiesOnly yes" would otherwise stop ssh offering the agent key
-		// OpenSession registered, reproducing the failure this helper fixes.
-		// Pinning IdentityAgent keeps the agent in step with ExecOverSSH, which
-		// dials sess.AuthSock rather than the ambient SSH_AUTH_SOCK.
-		args = append(args, "-o", "IdentitiesOnly=no", "-o", "IdentityAgent="+sess.AuthSock)
-	}
-	return strings.Join(args, " ")
+		// IdentitiesOnly=yes keeps ssh from falling through to the default
+		// ~/.ssh/id_* keys, which the sidecar has never been told about.
+		"-o", "IdentitiesOnly=yes",
+		// Pass the path directly — rsync tokenizes -e by whitespace and calls
+		// execve, so shell quoting (ShellEscape) would embed literal quote
+		// characters in the filename and cause ssh to reject it.
+		"-i", sess.IdentityFile,
+	}, " ")
 }
 
 // startSSHProxy starts a local TCP listener on a random port and bridges each
 // incoming connection to the sidecar's WebSocket SSH tunnel. Returns the local
-// address and a stop function.
-func startSSHProxy(ctx context.Context, sess *Session) (addr string, stop func(), err error) {
+// address, a stop function, and a channel that receives the first proxy-level
+// error (non-blocking send, capacity 1).
+func startSSHProxy(ctx context.Context, sess *Session) (addr string, stop func(), proxyErr <-chan error, err error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", nil, fmt.Errorf("listen: %w", err)
+		return "", nil, nil, fmt.Errorf("listen: %w", err)
 	}
 
+	errCh := make(chan error, 1)
 	proxyCtx, cancel := context.WithCancel(ctx)
 
 	go func() {
@@ -356,24 +367,29 @@ func startSSHProxy(ctx context.Context, sess *Session) (addr string, stop func()
 			if acceptErr != nil {
 				return
 			}
-			go bridgeConn(proxyCtx, conn, sess)
+			go bridgeConn(proxyCtx, conn, sess, errCh)
 		}
 	}()
 
 	return ln.Addr().String(), func() {
 		cancel()
 		_ = ln.Close()
-	}, nil
+	}, errCh, nil
 }
 
 // bridgeConn forwards a TCP connection transparently to the sidecar's
 // WebSocket SSH tunnel, enabling standard SSH clients (and rsync --rsh) to
-// connect without WebSocket awareness.
-func bridgeConn(ctx context.Context, tcpConn net.Conn, sess *Session) {
+// connect without WebSocket awareness. Dial failures are sent to errCh so
+// callers can include them in error messages instead of seeing a silent close.
+func bridgeConn(ctx context.Context, tcpConn net.Conn, sess *Session, errCh chan<- error) {
 	defer func() { _ = tcpConn.Close() }()
 
 	wsURL, _, err := toWebSocketURL(sess.URL)
 	if err != nil {
+		select {
+		case errCh <- fmt.Errorf("build WebSocket URL: %w", err):
+		default:
+		}
 		return
 	}
 
@@ -391,6 +407,10 @@ func bridgeConn(ctx context.Context, tcpConn net.Conn, sess *Session) {
 		if resp != nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
+		}
+		select {
+		case errCh <- fmt.Errorf("websocket connect to %s: %w", wsURL, err):
+		default:
 		}
 		return
 	}

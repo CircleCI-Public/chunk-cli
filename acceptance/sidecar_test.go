@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
@@ -376,35 +377,63 @@ func TestSidecarsSyncCheckoutFlagRemoved(t *testing.T) {
 		"--checkout must be an unknown flag; got: %s", combined)
 }
 
-// TestSidecarsSshSyncFlags verifies that SSH/sync flags are accepted and
-// code progresses past flag parsing (fails at SSH step, not at parsing).
-func TestSidecarsSshSyncFlags(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-	}{
-		{"ssh identity-file", []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
-		{"sync identity-file", []string{"sidecar", "sync", "--sidecar-id", "sb-111", "--identity-file", "/tmp/fake-key"}},
+// TestSidecarsSshNoKey verifies that `sidecar ssh` generates the default
+// keypair at ~/.ssh/chunk_ai instead of asking the user to run ssh-keygen.
+// Reaching a sidecar has to work without `sidecar setup` having run first.
+//
+// The first run uses a server accepting any key, since the test cannot know
+// the generated key in advance. It then checks that the key registered with
+// the API is the one left on disk, and that a second run authenticates
+// against a server authorising only that key — a generate-then-register
+// mismatch would pass the any-key handshake but fail here.
+func TestSidecarsSshNoKey(t *testing.T) {
+	sshSrv := fakes.NewSSHServerAcceptingAnyKey(t)
+	sshSrv.SetResult("hello\n", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	// No key at env.HomeDir/.ssh/chunk_ai — the default path.
+	keyPath := filepath.Join(env.HomeDir, ".ssh", "chunk_ai")
+	_, err := os.Stat(keyPath)
+	assert.Assert(t, os.IsNotExist(err), "expected no key before the run")
+
+	result := binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "echo", "hello"}, env, env.HomeDir)
+
+	combined := result.Stdout + result.Stderr
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Assert(t, !strings.Contains(combined, "SSH key not found"),
+		"key should have been generated, not reported missing: %s", combined)
+
+	_, err = os.Stat(keyPath)
+	assert.NilError(t, err, "private key should have been generated")
+	pubKeyData, err := os.ReadFile(keyPath + ".pub")
+	assert.NilError(t, err, "public key should have been generated")
+
+	// The key registered with the API must be the one left on disk.
+	addKeyReqs := filterByPath(cci.Recorder.AllRequests(), "/api/v3/sidecar/instances/sb-111/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 1)
+	var addKeyBody struct {
+		PublicKey string `json:"public_key"`
 	}
+	assert.NilError(t, json.Unmarshal(addKeyReqs[0].Body, &addKeyBody))
+	assert.Equal(t, addKeyBody.PublicKey, strings.TrimSpace(string(pubKeyData)),
+		"registered key should match the generated key on disk")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cci := fakes.NewFakeCircleCI()
-			srv := httptest.NewServer(cci)
-			defer srv.Close()
+	// A second run has to authenticate against a server that authorises only
+	// the key on disk, proving the private key and registered key are a pair.
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey(pubKeyData)
+	assert.NilError(t, err)
+	sshSrv.RestrictToKey(pubKey)
 
-			env := testenv.NewTestEnv(t)
-			env.CircleCIURL = srv.URL
-
-			result := binary.RunCLI(t, tt.args, env, env.HomeDir)
-
-			// Commands should fail at SSH key step, not at flag parsing
-			assert.Assert(t, result.ExitCode != 0, "expected non-zero exit (SSH fails)")
-			combined := result.Stdout + result.Stderr
-			assert.Assert(t, strings.Contains(combined, "SSH key not found"),
-				"expected SSH key error (proves flags accepted), got: %s", combined)
-		})
-	}
+	result = binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "echo", "hello"}, env, env.HomeDir)
+	assert.Equal(t, result.ExitCode, 0, "second run should authenticate with the generated key: stdout: %s\nstderr: %s",
+		result.Stdout, result.Stderr)
 }
 
 func TestSidecarsExecWithArgs(t *testing.T) {

@@ -420,19 +420,24 @@ func TestSamplerReportsWhyItGaveUp(t *testing.T) {
 	var mu sync.Mutex
 	var lines []string
 
+	gaveUp := make(chan struct{})
+	var once sync.Once
+
 	r := newResourceSampler(nil)
 	r.logf = func(format string, args ...any) {
+		line := fmt.Sprintf(format, args...)
 		mu.Lock()
-		defer mu.Unlock()
-		lines = append(lines, fmt.Sprintf(format, args...))
-	}
-	gaveUp := make(chan struct{})
-	var attempts int
-	r.sample = func(_ context.Context, _ SidecarState, s *sidecarSampler) error {
-		attempts++
-		if attempts == maxSamplerFailures {
-			defer close(gaveUp)
+		lines = append(lines, line)
+		mu.Unlock()
+		// Wake on the report itself rather than on the sample that triggers it:
+		// run logs the pause only after sample has returned, so counting samples
+		// here would let the assertions below read lines before the line under
+		// test was ever appended.
+		if strings.Contains(line, "pausing sampling") {
+			once.Do(func() { close(gaveUp) })
 		}
+	}
+	r.sample = func(_ context.Context, _ SidecarState, _ *sidecarSampler) error {
 		return errors.New("ssh: connection refused")
 	}
 	r.touch()
@@ -440,8 +445,8 @@ func TestSamplerReportsWhyItGaveUp(t *testing.T) {
 
 	select {
 	case <-gaveUp:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the sampler never reached its failure ceiling")
+	case <-time.After(30 * time.Second):
+		t.Fatal("the sampler never reported reaching its failure ceiling")
 	}
 	r.stopAll()
 
