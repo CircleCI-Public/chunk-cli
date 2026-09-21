@@ -22,11 +22,7 @@ const branchPRQuery = `
           title
           url
           updatedAt
-          reviews(last: 20) {
-            nodes {
-              state
-            }
-          }
+          reviewDecision
           reviewThreads(first: 30) {
             nodes {
               isResolved

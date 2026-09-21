@@ -42,16 +42,12 @@ type branchPRData struct {
 }
 
 type branchPRNode struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	URL       string `json:"url"`
-	UpdatedAt string `json:"updatedAt"`
-	Reviews   struct {
-		Nodes []struct {
-			State string `json:"state"`
-		} `json:"nodes"`
-	} `json:"reviews"`
-	ReviewThreads struct {
+	Number         int    `json:"number"`
+	Title          string `json:"title"`
+	URL            string `json:"url"`
+	UpdatedAt      string `json:"updatedAt"`
+	ReviewDecision string `json:"reviewDecision"`
+	ReviewThreads  struct {
 		Nodes []struct {
 			IsResolved bool `json:"isResolved"`
 			Comments   struct {
@@ -165,13 +161,7 @@ func (c *Client) FetchPRForBranch(ctx context.Context, owner, repo, branch strin
 		})
 	}
 
-	// Flag CHANGES_REQUESTED.
-	for _, r := range pr.Reviews.Nodes {
-		if r.State == "CHANGES_REQUESTED" {
-			info.ChangesRequested = true
-			break
-		}
-	}
+	info.ChangesRequested = pr.ReviewDecision == "CHANGES_REQUESTED"
 
 	return info, nil
 }
