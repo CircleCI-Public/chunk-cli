@@ -93,8 +93,8 @@ Run this after authenticating — init uses your CircleCI credentials to detect 
 What it creates:
 
 - **`.chunk/config.json`** — list of validation commands (test, lint, format) and your CircleCI org ID; tracked in git
-- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session; tracked in git
-- **`.codex/hooks.json`** — the same hooks, for Codex sessions (only written if Codex is installed); tracked in git
+- **`.claude/settings.json`** — hooks that run validation before commits and after each agent session, plus one that reports finished background runs before each prompt; tracked in git
+- **`.codex/hooks.json`** — the commit and session hooks, for Codex sessions (only written if Codex is installed); tracked in git
 - **`.git/hooks/pre-commit`** — runs `chunk validate` locally before every commit; not tracked in git
 
 `chunk init` prints a one-line explanation after each of these hidden files so it's clear what got added and why.

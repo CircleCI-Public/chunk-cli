@@ -306,6 +306,16 @@ command finishes, so anything holding the only copy of the output loses it.
 
 Design constraints worth preserving:
 
+- **The daemon has no working directory worth trusting.** The socket is
+  user-global, so one daemon serves every repo on the machine, and it was
+  launched with whatever cwd the developer happened to be in — one arbitrary repo
+  out of all of them (`launchDaemon` sets no `Dir`). Anything the daemon runs on
+  a caller's behalf must therefore be told which project it is for:
+  `ValidateRequest.ProjectRoot` carries it, and `makeValidateRunner` turns it
+  into `--project` so the run cannot fall through to `os.Getwd()`. A run that
+  resolves the project itself validates the daemon's repo and reports the answer
+  under whichever project asked — and on the async path the staleness check,
+  comparing the requested project against itself, confirms it as current.
 - **Registration is best-effort and never starts the daemon.** `RegisterCommand`
   reports no error and uses a 2 s timeout. It sits on the hook path in front of a
   command the developer is waiting on, so a missing daemon must cost nothing.

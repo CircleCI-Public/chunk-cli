@@ -182,3 +182,13 @@ func TestBuildCodexNoCommandsProducesEmptyHooks(t *testing.T) {
 	_, hasHooks := s["hooks"]
 	assert.Assert(t, !hasHooks, "BuildCodex with no commands must produce empty hooks")
 }
+
+// With no commands there is nothing to validate, so chunk writes no hooks at all.
+func TestBuildWritesNoHooksWithoutCommands(t *testing.T) {
+	data, err := Build(nil)
+	assert.NilError(t, err)
+
+	var s map[string]interface{}
+	assert.NilError(t, json.Unmarshal(data, &s))
+	assert.Assert(t, s["hooks"] == nil, "hooks were written for a project with no commands")
+}

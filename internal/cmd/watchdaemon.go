@@ -63,7 +63,7 @@ func authMessage(err error) string {
 // in-process by running a fresh cobra root command with the caller's env and
 // session ID seeded into the context.
 func makeValidateRunner() watchd.ValidateRunner {
-	return func(ctx context.Context, args []string, env []string, stdout, stderr io.Writer) int {
+	return func(ctx context.Context, projectRoot string, args []string, env []string, stdout, stderr io.Writer) int {
 		// Seed the context with the caller's session ID before cobra's
 		// PersistentPreRunE runs, so IDFromEnv (which reads the daemon's own env)
 		// does not overwrite it.
@@ -78,7 +78,18 @@ func makeValidateRunner() watchd.ValidateRunner {
 		rootCmd.SetOut(stdout)
 		rootCmd.SetErr(stderr)
 		// Append --no-daemon so the in-process call skips daemon re-delegation.
-		rootCmd.SetArgs(append(append([]string(nil), args...), "--no-daemon"))
+		runArgs := append(append([]string(nil), args...), "--no-daemon")
+		// And --project, so the run resolves the repo the request was about rather
+		// than falling through to resolveWorkDir's os.Getwd(). The daemon's cwd is
+		// wherever it was launched from — one arbitrary repo out of every repo the
+		// user-global socket serves — so without this a run started from repo B
+		// validates repo A and reports A's exit code as B's answer. It goes last
+		// because cobra takes the final value, and the caller's own --project is
+		// already what the client resolved this from.
+		if projectRoot != "" {
+			runArgs = append(runArgs, "--project", projectRoot)
+		}
+		rootCmd.SetArgs(runArgs)
 		if err := rootCmd.ExecuteContext(ctx); err != nil {
 			if ec, ok := err.(interface{ ExitCode() int }); ok {
 				return ec.ExitCode()
