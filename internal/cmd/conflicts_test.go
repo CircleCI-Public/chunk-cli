@@ -26,7 +26,13 @@ import (
 // reaching its assertions.
 func noDaemon(t *testing.T) {
 	t.Helper()
-	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+	// Not t.TempDir(): its name embeds the test name and overruns the 104-byte
+	// unix socket path cap on darwin, so the dial fails with EINVAL — an error
+	// that is not "no daemon is running" and no longer reported as one.
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
 }
 
 // serveConflicts stands up a Unix socket answering /conflicts the way the daemon
@@ -109,6 +115,28 @@ func TestConflictsManualModeExplainsAMissingDaemon(t *testing.T) {
 	out, _, err := runConflictsCmd(t, t.TempDir())
 	assert.NilError(t, err)
 	assert.Check(t, cmp.Contains(out, "chunk watch"))
+}
+
+// The complaint this split exists for: a socket the user cannot open is not a
+// socket that is missing, and sending them to start a daemon they already have
+// is advice that cannot work.
+func TestConflictsManualModeDoesNotSendAnUnreadableSocketToStartADaemon(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the denial cannot be staged")
+	}
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "watchd.sock"), nil, 0o600))
+	assert.NilError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+
+	out, _, runErr := runConflictsCmd(t, t.TempDir())
+	assert.NilError(t, runErr)
+	assert.Check(t, !cmp.Contains(out, "chunk watch")().Success(),
+		"starting a second daemon leaves the same socket unreadable: %s", out)
+	assert.Check(t, cmp.Contains(out, "cannot be opened"))
 }
 
 func TestConflictsJSONModeStaysParseableWithoutADaemon(t *testing.T) {
