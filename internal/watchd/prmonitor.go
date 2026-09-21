@@ -72,7 +72,7 @@ func (pm *prMonitor) maybeRefresh(ctx context.Context, root, branch, org, repo s
 	}()
 }
 
-func (pm *prMonitor) fetch(ctx context.Context, root, branch, org, repo string, key prProjectKey) {
+func (pm *prMonitor) fetch(ctx context.Context, _, branch, org, repo string, key prProjectKey) {
 	// Use a bounded context: a stalled GitHub request should not hold the slot
 	// open indefinitely.
 	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
