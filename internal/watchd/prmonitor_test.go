@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 )
@@ -20,11 +19,11 @@ func cannedPRResponse(t *testing.T) []byte {
 				"pullRequests": map[string]any{
 					"nodes": []map[string]any{
 						{
-							"number":    42,
-							"title":     "Old branch PR",
-							"url":       "https://github.com/org/repo/pull/42",
-							"updatedAt": "2026-01-01T00:00:00Z",
-							"reviews":   map[string]any{"nodes": []any{}},
+							"number":         42,
+							"title":          "Old branch PR",
+							"url":            "https://github.com/org/repo/pull/42",
+							"updatedAt":      "2026-01-01T00:00:00Z",
+							"reviewDecision": "APPROVED",
 							"reviewThreads": map[string]any{
 								"nodes": []any{},
 							},
@@ -122,9 +121,6 @@ func TestPRMonitor_SameBranchAnnotated(t *testing.T) {
 	// Simulate a completed fetch for feature/current.
 	key := prProjectKey{root: "/repo", branch: "feature/current"}
 	pm.fetch(context.Background(), "/repo", "feature/current", "org", "repo", key)
-
-	// Allow some time for the fetch to complete (it's synchronous here).
-	_ = time.Now() // just to reference the import
 
 	snap := &ProjectSnapshot{
 		Root:   "/repo",

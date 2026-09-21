@@ -12,7 +12,11 @@ const orgReposQuery = `
   }
 `
 
-// branchPRQuery fetches the open PR for a given branch with check status and comments.
+// branchPRQuery fetches the open PR for a given branch with check status and
+// review thread comments. reviewDecision is used instead of iterating reviews
+// nodes because GitHub returns reviews oldest-first; a loop that stops on the
+// first CHANGES_REQUESTED would incorrectly flag a PR as blocked even after the
+// reviewer later approved.
 const branchPRQuery = `
   query BranchPR($owner: String!, $repo: String!, $branch: String!) {
     repository(owner: $owner, name: $repo) {
