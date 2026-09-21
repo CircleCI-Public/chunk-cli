@@ -395,8 +395,9 @@ whose checks are fast enough to be worth waiting for can lower it.
 
 `asyncValidateInert` and `asyncValidateBlocking` move the other half of the
 judgement — which paths it applies to. Each entry is an extension with its dot
-(`.sql`) or an exact file name (`NOTICE`); paths and globs are refused when the
-config loads, rather than silently never matching.
+(`.sql`) or an exact file name (`NOTICE`); paths, globs, and extensions written
+without their dot (`sql`) are refused when the config loads, rather than
+silently never matching.
 
 - `asyncValidateInert` **adds** to the prose list above. It never replaces it,
   because that list is an allowlist: an unfamiliar extension already makes

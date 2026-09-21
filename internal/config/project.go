@@ -266,9 +266,34 @@ func validatePathRules(key string, entries []string) error {
 			return fmt.Errorf("%s: %q looks like a path; use an extension (\".md\") or a file name (\"NOTICE\")", key, entry)
 		case strings.Contains(entry, "*"):
 			return fmt.Errorf("%s: %q looks like a glob; use an extension (\".md\") or a file name (\"NOTICE\")", key, entry)
+		case knownExtensions[strings.ToLower(entry)]:
+			return fmt.Errorf("%s: %q looks like an extension missing its dot; write %q", key, entry, "."+entry)
 		}
 	}
 	return nil
+}
+
+// knownExtensions are extension names, without their leading dot, that are
+// rejected when written bare. An entry with no dot is stored as an exact file
+// name, so "sql" waits for a file called "sql" and never sees a migration.
+//
+// It is a list of names rather than a test of shape because the two shapes are
+// the same: "sql" and "mvnw" are both lowercase letters with no dot, and a shape
+// test would reject the second with no way for a project to insist. A list only
+// ever misses one, and the ones it holds are the ones somebody writes.
+var knownExtensions = map[string]bool{
+	"adoc": true, "bash": true, "bat": true, "c": true, "cc": true, "clj": true,
+	"cljs": true, "cpp": true, "cs": true, "css": true, "csv": true, "dart": true,
+	"edn": true, "erl": true, "ex": true, "exs": true, "gif": true, "go": true,
+	"gql": true, "gradle": true, "graphql": true, "h": true, "hpp": true,
+	"hs": true, "htm": true, "html": true, "ini": true, "java": true, "jpeg": true,
+	"jpg": true, "js": true, "json": true, "jsx": true, "kt": true, "kts": true,
+	"less": true, "lua": true, "markdown": true, "md": true, "php": true,
+	"pl": true, "png": true, "proto": true, "ps1": true, "py": true, "rb": true,
+	"rs": true, "rst": true, "scala": true, "scss": true, "sh": true, "sql": true,
+	"svg": true, "swift": true, "tf": true, "tfvars": true, "toml": true,
+	"ts": true, "tsv": true, "tsx": true, "txt": true, "xml": true, "yaml": true,
+	"yml": true, "zsh": true,
 }
 
 // SaveCommand upserts a command in .chunk/config.json.

@@ -192,6 +192,8 @@ func TestLoadProjectConfigRejectsUnusablePathRules(t *testing.T) {
 		"a glob":       {`{"asyncValidateInert":["*.md"]}`, "looks like a glob"},
 		"empty entry":  {`{"asyncValidateBlocking":["  "]}`, "has an empty entry"},
 		"a bare dot":   {`{"asyncValidateBlocking":["."]}`, "not an extension or a file name"},
+		"bare ext":     {`{"asyncValidateInert":["sql"]}`, `looks like an extension missing its dot; write ".sql"`},
+		"bare ext cap": {`{"asyncValidateBlocking":["SQL"]}`, "missing its dot"},
 		"contradicted": {`{"asyncValidateInert":[".sql"],"asyncValidateBlocking":[".sql"]}`, "in both"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -205,10 +207,12 @@ func TestLoadProjectConfigRejectsUnusablePathRules(t *testing.T) {
 
 func TestLoadProjectConfigAcceptsPathRules(t *testing.T) {
 	dir := t.TempDir()
-	writeProjectConfig(t, dir, `{"asyncValidateInert":[".sql","NOTES"],"asyncValidateBlocking":[".md"]}`)
+	// mvnw has the shape of a bare extension and is a real file name, so it is
+	// kept: the check names extensions rather than guessing at shapes.
+	writeProjectConfig(t, dir, `{"asyncValidateInert":[".sql","NOTES"],"asyncValidateBlocking":[".md","Makefile","mvnw"]}`)
 
 	cfg, err := LoadProjectConfig(dir)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, cfg.AsyncValidateInert, []string{".sql", "NOTES"})
-	assert.DeepEqual(t, cfg.AsyncValidateBlocking, []string{".md"})
+	assert.DeepEqual(t, cfg.AsyncValidateBlocking, []string{".md", "Makefile", "mvnw"})
 }
