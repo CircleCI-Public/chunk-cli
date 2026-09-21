@@ -267,7 +267,13 @@ func TestConflictsEndpointReportsUnknownRootAsUnknown(t *testing.T) {
 	report, err := FetchConflicts(t.TempDir())
 	assert.NilError(t, err)
 	assert.Check(t, !report.Known)
-	assert.Check(t, cmp.Nil(report.Conflict))
+	// The reason rides along rather than being left to inference: every
+	// Known-false report carries one, so a consumer reading conflict.unavailable
+	// does not have to guard on which flavour of "no answer" it received.
+	assert.Assert(t, report.Conflict != nil)
+	assert.Check(t, cmp.Contains(report.Conflict.Unavailable, "not tracking"))
+	// Still no claim about the merge itself.
+	assert.Check(t, !report.Conflict.Conflicted)
 	// And nothing is advised on the back of it.
 	notice := ConflictNotice(report)
 	assert.Check(t, cmp.Equal(notice, ""))

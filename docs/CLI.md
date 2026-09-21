@@ -229,11 +229,25 @@ chunk
   the daemon is optional, and announcing its absence on every commit would be
   noise — while a manual run says why there is no answer.
 - **`conflicts --json` always emits one shape.** Output is a `ConflictReport`
-  whether or not there is an answer, so `.known` and `.conflict` are always
-  present and a consumer never has to tell a report apart from an error object.
-  When there is no answer — no daemon, an unfetched target — `known` is `false`
-  and the reason is in `conflict.unavailable`, the same field that carries a
-  detached HEAD or a branch that is its own merge target.
+  whether or not there is an answer, so `.known` is always present and a
+  consumer never has to tell a report apart from an error object. `.conflict` is
+  a pointer and is omitted in one case, so a script must guard it before
+  dereferencing:
+
+  | | `known` | `conflict` |
+  |---|---|---|
+  | No daemon, or a socket it cannot reach | `false` | reason in `conflict.unavailable` |
+  | Daemon up, project not tracked | `false` | reason in `conflict.unavailable` |
+  | Daemon up, tracked, no check has run yet | `true` | **absent** |
+  | Tracked and checked, but not comparable | `true` | reason in `conflict.unavailable` |
+  | Tracked and checked | `true` | `conflict.conflicted` is the answer |
+
+  So `known: false` always carries its reason in `conflict.unavailable`, and the
+  only report without a `conflict` object at all is the tracked project whose
+  first check has not finished. `conflict.unavailable` is the one field for
+  every "there is no answer, and here is why": no daemon, an untracked project,
+  a detached HEAD, an unfetched target, or a branch that is its own merge
+  target.
 - **What `conflicts` compares.** The daemon previews merging each project's
   branch into the default branch on `origin`, falling back to `upstream`
   (`DefaultRemoteBranchIn`), re-checking every 60s and refreshing the target's

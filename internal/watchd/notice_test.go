@@ -68,6 +68,17 @@ func TestConflictStatusDistinguishesEveryQuietCase(t *testing.T) {
 	unknown := ConflictStatus(ConflictReport{Root: "/x"})
 	assert.Check(t, cmp.Contains(unknown, "chunk watch"))
 
+	// The shape the daemon actually returns for a root it does not track: Known
+	// false *and* a reason in Unavailable. Known is read first on purpose — the
+	// person needs to be told to register the project, which the generic "no
+	// merge comparison" line further down would not do.
+	untracked := ConflictStatus(ConflictReport{Root: "/x", Conflict: &ConflictState{
+		Unavailable: "the watch daemon is not tracking this project",
+	}})
+	assert.Check(t, cmp.Contains(untracked, "chunk watch"))
+	assert.Check(t, !cmp.Contains(untracked, "No merge comparison")().Success(),
+		"an untracked project needs registering, not a merge-comparison excuse")
+
 	pending := ConflictStatus(ConflictReport{Root: "/x", Known: true})
 	assert.Check(t, cmp.Contains(pending, "No conflict check has completed"))
 
