@@ -40,7 +40,10 @@ against the test suite in parallel.`,
 				return err
 			}
 
-			cfg, _ := config.LoadProjectConfig(workDir)
+			cfg, err := config.LoadProjectConfig(workDir)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
 
 			stack := mutate.DetectedStack(workDir, cfg)
 			if stack == "" {
@@ -57,8 +60,8 @@ against the test suite in parallel.`,
 				return err
 			}
 
-			if g, ok := enumerator.(*mutate.GoEnumerator); ok && len(args) > 0 {
-				g.Paths = args
+			if len(args) > 0 {
+				enumerator.Paths = args
 			}
 
 			cmd.Printf("Enumerating mutations (stack: %s)...\n", stack)

@@ -2,7 +2,6 @@
 package mutate
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,15 +21,10 @@ type Mutation struct {
 	After    string `json:"after"`  // mutated token, e.g. "<="
 }
 
-// Enumerator produces a list of candidate mutations for a directory.
-type Enumerator interface {
-	Enumerate(ctx context.Context, dir string) ([]Mutation, error)
-}
-
-// EnumeratorFor returns the appropriate Enumerator for the project.
+// EnumeratorFor returns the GoEnumerator for the project.
 // It consults cfg.Environment.Stack first, then falls back to file
 // pattern detection in dir.
-func EnumeratorFor(dir string, cfg *config.ProjectConfig) (Enumerator, error) {
+func EnumeratorFor(dir string, cfg *config.ProjectConfig) (*GoEnumerator, error) {
 	stack := detectedStack(dir, cfg)
 	switch stack {
 	case "go":
