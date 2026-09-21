@@ -46,6 +46,9 @@ type branchPRNode struct {
 	Title          string `json:"title"`
 	URL            string `json:"url"`
 	UpdatedAt      string `json:"updatedAt"`
+	// ReviewDecision is the aggregate review state computed by GitHub
+	// (APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED). It accounts for
+	// re-reviews and dismissals, unlike iterating over individual review nodes.
 	ReviewDecision string `json:"reviewDecision"`
 	ReviewThreads  struct {
 		Nodes []struct {
@@ -161,6 +164,10 @@ func (c *Client) FetchPRForBranch(ctx context.Context, owner, repo, branch strin
 		})
 	}
 
+	// Use GitHub's pre-computed reviewDecision rather than iterating reviews
+	// nodes. The nodes are returned oldest-first, so a loop that breaks on the
+	// first CHANGES_REQUESTED would incorrectly flag a PR as blocked even after
+	// the reviewer later approved.
 	info.ChangesRequested = pr.ReviewDecision == "CHANGES_REQUESTED"
 
 	return info, nil

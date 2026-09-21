@@ -26,8 +26,12 @@ type prProjectKey struct {
 type prMonitor struct {
 	client *github.Client // nil when no GitHub credentials
 
-	mu        sync.Mutex
-	states    map[prProjectKey]*PRState // latest PR state per (root, branch) pair (nil = no open PR)
+	mu sync.Mutex
+	// states is keyed by (root, branch) so that switching branches does not
+	// surface the old branch's PR until a fresh fetch for the new branch lands.
+	// Keying by root alone would leave stale data in place for up to one poll
+	// interval after a branch switch.
+	states    map[prProjectKey]*PRState
 	lastFetch map[prProjectKey]time.Time
 	inflight  map[prProjectKey]bool
 }
@@ -99,7 +103,9 @@ func (pm *prMonitor) fetch(ctx context.Context, _, branch, org, repo string, key
 	pm.mu.Unlock()
 }
 
-// annotate fills snap.PR from the cached PR state.
+// annotate fills snap.PR from the cached PR state for the snapshot's current
+// branch. Only the exact (root, branch) pair is used so a stale entry from a
+// previously checked-out branch is never surfaced on the new branch's snapshot.
 func (pm *prMonitor) annotate(snap *ProjectSnapshot) {
 	if pm == nil {
 		return
