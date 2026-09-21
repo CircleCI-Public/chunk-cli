@@ -83,7 +83,7 @@ func runConflicts(cmd *cobra.Command, projectDir string, hookMode, jsonOut bool)
 	// standing in its way — unlike a non-zero exit, which is how `chunk validate`
 	// makes a failed check block a commit. Using it here is what makes this
 	// advisory in fact and not merely in wording.
-	out := hookResponse{HookSpecificOutput: hookSpecificOutput{
+	out := hookResponse{HookSpecificOutput: &hookSpecificOutput{
 		HookEventName:     "PreToolUse",
 		AdditionalContext: notice,
 	}}
