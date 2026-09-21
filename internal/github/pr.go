@@ -42,10 +42,10 @@ type branchPRData struct {
 }
 
 type branchPRNode struct {
-	Number         int    `json:"number"`
-	Title          string `json:"title"`
-	URL            string `json:"url"`
-	UpdatedAt      string `json:"updatedAt"`
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+	UpdatedAt string `json:"updatedAt"`
 	// ReviewDecision is the aggregate review state computed by GitHub
 	// (APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED). It accounts for
 	// re-reviews and dismissals, unlike iterating over individual review nodes.
