@@ -182,3 +182,33 @@ func TestMarkCommandRemote(t *testing.T) {
 		assert.Assert(t, errors.Is(err, ErrNoSuchCommand))
 	})
 }
+
+// A misspelt rule fails in the direction nobody checks: the project believes it
+// is waiting for its migrations and nothing ever says otherwise. So each of
+// these is reported rather than ignored.
+func TestLoadProjectConfigRejectsUnusablePathRules(t *testing.T) {
+	for name, tc := range map[string]struct{ json, want string }{
+		"a path":       {`{"asyncValidateInert":["docs/api.md"]}`, "looks like a path"},
+		"a glob":       {`{"asyncValidateInert":["*.md"]}`, "looks like a glob"},
+		"empty entry":  {`{"asyncValidateBlocking":["  "]}`, "has an empty entry"},
+		"a bare dot":   {`{"asyncValidateBlocking":["."]}`, "not an extension or a file name"},
+		"contradicted": {`{"asyncValidateInert":[".sql"],"asyncValidateBlocking":[".sql"]}`, "in both"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeProjectConfig(t, dir, tc.json)
+			_, err := LoadProjectConfig(dir)
+			assert.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestLoadProjectConfigAcceptsPathRules(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"asyncValidateInert":[".sql","NOTES"],"asyncValidateBlocking":[".md"]}`)
+
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.AsyncValidateInert, []string{".sql", "NOTES"})
+	assert.DeepEqual(t, cfg.AsyncValidateBlocking, []string{".md"})
+}

@@ -133,6 +133,30 @@ Ends with a summary of what was configured and instructions for using `/chunk-si
 
 ---
 
+### chunk-validate-config
+
+**Trigger phrases**: "chunk keeps making me wait", "stop chunk blocking every turn", "run my tests in the background", "configure background validation", "always validate my migrations", "change the async validate threshold"
+
+Reads and sets the `asyncValidate*` keys in `.chunk/config.json` – the ones that
+decide whether the agent waits for `chunk validate` or is released and told the
+answer on its next turn. Nothing it sets changes *whether* a change is
+validated; only who waits.
+
+**What it does**:
+
+1. **Asks what you want** – to wait less often, to always wait, or to always wait for particular paths
+2. **Looks at the repo** rather than guessing, using `git diff --name-only` and the project's file types
+3. **Sets the narrowest key that does it** via `chunk config set`, which validates the value first: `asyncValidate`, `asyncValidateMaxLines`, `asyncValidateInert`, `asyncValidateBlocking`, `asyncValidateWorktree`
+4. **Says what changed in one line** – which key, what value, and whether you now wait more or less
+
+It will not put source extensions (`.go`, `.ts`, `.py`) in the inert list, and
+it asks before setting `asyncValidateWorktree`, which reports environment
+failures as code failures in a project whose checks need gitignored files.
+
+See [HOOKS.md](HOOKS.md#background-validation) for what each key means.
+
+---
+
 ### chunk-testing-gaps
 
 **Trigger phrases**: "find testing gaps", "chunk testing-gaps", "mutation test", "mutate this code", "test mutation coverage", "find surviving mutants"

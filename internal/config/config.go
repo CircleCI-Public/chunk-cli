@@ -474,4 +474,9 @@ var ValidConfigKeys = map[string]bool{
 var ValidProjectConfigKeys = map[string]bool{
 	"orgID":                   true,
 	"validation.sidecarImage": true,
+	"asyncValidate":           true,
+	"asyncValidateMaxLines":   true,
+	"asyncValidateWorktree":   true,
+	"asyncValidateInert":      true,
+	"asyncValidateBlocking":   true,
 }

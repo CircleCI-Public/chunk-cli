@@ -48,13 +48,75 @@ var inertNames = map[string]bool{
 	"CHANGELOG": true,
 }
 
+// inertRules is what a project has added to the built-in lists.
+//
+// The zero value is the built-in behaviour, so a project that says nothing and
+// a caller that has nothing to say are the same case. Additions extend the
+// defaults rather than replacing them: the defaults are an allowlist, and
+// dropping one silently would turn a wait into a release, which is the
+// direction that loses failures.
+type inertRules struct {
+	// inert and blocking hold extensions (".sql", lowercased) and exact file
+	// names ("NOTICE"), told apart by the leading dot.
+	inert    map[string]bool
+	blocking map[string]bool
+}
+
+// newInertRules reads the two configured lists.
+func newInertRules(inert, blocking []string) inertRules {
+	return inertRules{inert: ruleSet(inert), blocking: ruleSet(blocking)}
+}
+
+func ruleSet(entries []string) map[string]bool {
+	if len(entries) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if strings.HasPrefix(e, ".") {
+			e = strings.ToLower(e)
+		}
+		set[e] = true
+	}
+	return set
+}
+
+// matches reports whether path is named by set, by exact file name or by
+// extension.
+func matches(set map[string]bool, path string) bool {
+	if len(set) == 0 {
+		return false
+	}
+	base := filepath.Base(path)
+	return set[base] || set[strings.ToLower(filepath.Ext(base))]
+}
+
+// blocks reports whether any changed path is one this project always waits for.
+func (r inertRules) blocks(paths []string) bool {
+	for _, p := range paths {
+		if matches(r.blocking, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // allInert reports whether every path is one no check should care about. An
 // empty set is not inert: it says nothing changed, which is a different answer.
-func allInert(paths []string) bool {
+//
+// A path the project always validates is never inert, however prose-like it
+// looks — that is the whole of what listing it means.
+func (r inertRules) allInert(paths []string) bool {
 	if len(paths) == 0 {
 		return false
 	}
 	for _, p := range paths {
+		if matches(r.blocking, p) {
+			return false
+		}
+		if matches(r.inert, p) {
+			continue
+		}
 		base := filepath.Base(p)
 		if inertNames[base] {
 			continue
@@ -74,6 +136,8 @@ type asyncPolicy struct {
 	maxLines int
 	// worktree runs background checks in a snapshot rather than the live tree.
 	worktree bool
+	// rules is what this project added to the built-in prose lists.
+	rules inertRules
 }
 
 // policyFor reads root's async validation policy. A project with no config, or
@@ -93,6 +157,7 @@ func policyFor(root string) asyncPolicy {
 		p.maxLines = cfg.AsyncValidateMaxLines
 	}
 	p.worktree = cfg.AsyncValidateWorktree
+	p.rules = newInertRules(cfg.AsyncValidateInert, cfg.AsyncValidateBlocking)
 	return p
 }
 
@@ -127,7 +192,15 @@ func decideRisk(p asyncPolicy, owesBlockingRun bool, ch changeset.Changes, chErr
 		limit = DefaultAsyncMaxLines
 	}
 
-	risk := scoreChange(limit, owesBlockingRun, ch, chErr, hist)
+	risk := scoreChange(limit, p.rules, owesBlockingRun, ch, chErr, hist)
+
+	// Ahead of the mode, and so ahead of "always". A project naming a path here
+	// has said it wants to wait for that path, which is narrower than a mode set
+	// once for the whole repo, and it only ever tightens — the direction that
+	// costs time rather than a missed failure.
+	if p.mode != config.AsyncValidateNever && p.rules.blocks(ch.Paths) {
+		return riskDecision{reason: "a path this project always validates changed", risk: risk}
+	}
 
 	switch p.mode {
 	case config.AsyncValidateNever:
@@ -158,7 +231,7 @@ func decideRisk(p asyncPolicy, owesBlockingRun bool, ch changeset.Changes, chErr
 		// would want explained, and a line on every clean turn is just noise.
 		return riskDecision{risk: risk}
 	}
-	if allInert(ch.Paths) {
+	if p.rules.allInert(ch.Paths) {
 		return tighten(riskDecision{async: true, reason: "only docs and text changed", risk: risk}, hist)
 	}
 	if ch.Lines < limit {

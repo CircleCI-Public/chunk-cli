@@ -189,8 +189,8 @@ func TestHistoryDoesNotOverrideModeAlways(t *testing.T) {
 
 // Being unusual for this repo raises the score without deciding anything.
 func TestAnUnusuallyLargeChangeScoresHigher(t *testing.T) {
-	normal := scoreChange(500, false, change(100, "a.go"), nil, historyEvidence{Similar: 6, Percentile: 40})
-	unusual := scoreChange(500, false, change(100, "a.go"), nil, historyEvidence{Similar: 6, Percentile: 95})
+	normal := scoreChange(500, inertRules{}, false, change(100, "a.go"), nil, historyEvidence{Similar: 6, Percentile: 40})
+	unusual := scoreChange(500, inertRules{}, false, change(100, "a.go"), nil, historyEvidence{Similar: 6, Percentile: 95})
 
 	assert.Equal(t, unusual.Score, normal.Score+unusualWeight)
 	assert.Assert(t, strings.Contains(strings.Join(unusual.Parts, ", "), "larger than 95%"),
