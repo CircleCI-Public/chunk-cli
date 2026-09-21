@@ -57,6 +57,21 @@ func newServer(d *daemon) *http.Server {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
+	// Conflict state for one project root. Its own endpoint rather than a field
+	// read off /snapshot: the caller is a hook, it wants one project, and
+	// serving it the whole snapshot means every registered project's event
+	// backlog crosses the socket to answer a yes-or-no question.
+	mux.HandleFunc("/conflicts", func(w http.ResponseWriter, r *http.Request) {
+		root := r.URL.Query().Get("root")
+		if root == "" {
+			http.Error(w, "root required", http.StatusBadRequest)
+			return
+		}
+		report := d.conflictReport(root)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(report)
+	})
+
 	// Buffered output for one command, from a byte offset. The offset is into the
 	// daemon's buffer, not the API's opaque SSE cursor, so a reader never has to
 	// reason about reconnects.

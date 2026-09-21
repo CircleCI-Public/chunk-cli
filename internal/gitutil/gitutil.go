@@ -46,18 +46,8 @@ func CurrentBranchIn(dir string) (string, error) {
 // repo created with `git init` and pushed has no remote HEAD at all, and
 // callers are expected to fall back rather than treat this as fatal.
 func DefaultBranchIn(dir string) (string, error) {
-	for _, remote := range []string{"origin", "upstream"} {
-		out, err := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD").Output()
-		if err != nil {
-			continue
-		}
-		// The symref reads back qualified — "origin/main" — and only the branch
-		// name is comparable to a config's branch filters.
-		if branch := strings.TrimPrefix(strings.TrimSpace(string(out)), remote+"/"); branch != "" {
-			return branch, nil
-		}
-	}
-	return "", fmt.Errorf("no remote HEAD is set for %s", dir)
+	_, branch, err := DefaultRemoteBranchIn(dir)
+	return branch, err
 }
 
 // HeadRef returns the SHA of the current HEAD commit in the repo at cwd.

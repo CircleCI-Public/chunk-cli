@@ -70,13 +70,25 @@ type hookContext struct {
 
 // hookResponse is the JSON hook response written to stdout.
 //
-// Deliberately absent: hookSpecificOutput.additionalContext. On Stop that field
-// is injected into the model's context and the conversation *continues* so the
-// model can act on it, so announcing a pass with it re-signals the agent and the
-// turn never ends. systemMessage is display-only and leaves the turn alone.
-// Blocking stays with exit code 2 plus stderr, which stopHookMaxAttempts caps.
+// Deliberately absent from Stop hook usage: hookSpecificOutput.additionalContext.
+// On Stop that field is injected into the model's context and the conversation
+// *continues* so the model can act on it, so announcing a pass with it
+// re-signals the agent and the turn never ends. systemMessage is display-only
+// and leaves the turn alone. Blocking stays with exit code 2 plus stderr,
+// which stopHookMaxAttempts caps.
+//
+// PreToolUse hooks use HookSpecificOutput to pass advisory context to the agent
+// without blocking the tool call.
 type hookResponse struct {
-	SystemMessage string `json:"systemMessage,omitempty"`
+	SystemMessage      string              `json:"systemMessage,omitempty"`
+	HookSpecificOutput *hookSpecificOutput `json:"hookSpecificOutput,omitempty"`
+}
+
+// hookSpecificOutput carries PreToolUse hook data: an advisory notice passed
+// to the agent via additionalContext without blocking the tool call.
+type hookSpecificOutput struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext,omitempty"`
 }
 
 // writeStopHookMessage writes a display-only Stop hook response, in the Claude
