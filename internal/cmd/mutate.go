@@ -122,12 +122,11 @@ against the test suite in parallel.`,
 			statusFn(iostream.LevelStep, fmt.Sprintf("Creating pool of %d sidecar(s)...", parallelism))
 
 			pool, err := sidecar.NewPool(cmd.Context(), client, sidecar.PoolOptions{
-				Size:     parallelism,
-				Name:     "mutate",
-				OrgID:    orgID,
-				Image:    image,
-				AuthSock: os.Getenv(config.EnvSSHAuthSock),
-				WorkDir:  workDir,
+				Size:    parallelism,
+				Name:    "mutate",
+				OrgID:   orgID,
+				Image:   image,
+				WorkDir: workDir,
 			}, statusFn)
 			if err != nil {
 				return fmt.Errorf("pool: %w", err)
