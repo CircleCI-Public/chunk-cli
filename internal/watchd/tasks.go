@@ -83,9 +83,10 @@ type TaskState struct {
 	Output string `json:"output,omitempty"`
 	// Stale reports that the working tree changed between the run starting and
 	// its result being read, so the result describes code that is no longer on
-	// disk. ExitCode and Output are cleared when it is set: a stale task is
-	// reported so that the discard is visible, and carrying the verdict would
-	// invite it to be read as one.
+	// disk. For a live-tree run ExitCode and Output are cleared when it is set: a
+	// stale task is reported so that the discard is visible, and carrying the
+	// verdict would invite it to be read as one. For a snapshot run they are
+	// kept — see Snapshot, where the verdict outlives the tree moving.
 	//
 	// The tree most often moved because of the run itself — output written,
 	// goldens regenerated, a lockfile touched. Reporting the discard is what
@@ -100,6 +101,11 @@ type TaskState struct {
 	// tree from moving under the run, which is a matter of where the run
 	// happens rather than how its result is judged.
 	Stale bool `json:"stale"`
+	// Snapshot reports that the run validated a checked-out copy of the tree
+	// rather than the tree itself. Such a result is exact about the state it
+	// ran against whatever happened afterwards, so it is reported even when
+	// stale — qualified rather than thrown away.
+	Snapshot bool `json:"snapshot,omitempty"`
 	// DeliveredAt records when this result was handed to a caller. A stamped
 	// task is never reported again; an unstamped one is still owed to somebody.
 	//
@@ -110,12 +116,18 @@ type TaskState struct {
 
 // Passed reports whether a finished task validated the tree successfully.
 //
-// A stale task never passes, whatever its exit code says. Its verdict is
-// stripped when it is reported, which leaves ExitCode at zero — so without the
-// Stale check a discarded run would read here as a clean pass, which is exactly
-// the claim discarding it exists to avoid making.
+// A stale live-tree task never passes, whatever its exit code says. Its verdict
+// is stripped when it is reported, which leaves ExitCode at zero — so without
+// the Stale check a discarded run would read here as a clean pass, which is
+// exactly the claim discarding it exists to avoid making.
+//
+// A stale snapshot task can still pass. It ran against a copy that could not
+// move, so its exit code remains exactly true about the state it was handed;
+// what staleness says there is that the state has been overtaken, not that the
+// verdict is unreliable. Callers are expected to report that qualification —
+// see printResults.
 func (t TaskState) Passed() bool {
-	return !t.Running && !t.Stale && t.ExitCode == 0
+	return !t.Running && t.ExitCode == 0 && (!t.Stale || t.Snapshot)
 }
 
 // taskEntry is a validation task in flight or finished, with the tree it began
@@ -179,7 +191,7 @@ func newTaskStore(parent context.Context) *taskStore {
 		parent:      parent,
 		tasks:       make(map[string]*taskEntry),
 		byProject:   make(map[string][]string),
-		fingerprint: gitutil.Fingerprint,
+		fingerprint: fingerprintTree,
 		repoRoot:    gitutil.RepoRoot,
 		now:         time.Now,
 	}
@@ -221,7 +233,7 @@ func (s *taskStore) projectKey(dir string) string {
 // reported as if it described the current tree. Callers are expected to fall
 // back to running synchronously, where the answer reaches whoever asked for it
 // while it is still true.
-func (s *taskStore) start(root string, run runFn) (string, error) {
+func (s *taskStore) start(root string, snapshot bool, run runFn) (string, error) {
 	root = s.projectKey(root)
 	start, err := s.fingerprint(root)
 	if err != nil {
@@ -251,6 +263,7 @@ func (s *taskStore) start(root string, run runFn) (string, error) {
 			ProjectRoot: root,
 			StartedAt:   s.now(),
 			Running:     true,
+			Snapshot:    snapshot,
 		},
 		start:  start,
 		cancel: cancel,
@@ -374,20 +387,27 @@ func (s *taskStore) peek(root string) []TaskState {
 		movedSince := unverifiable || now.Head != entry.start.Head || now.Digest != entry.start.Digest
 		reported := entry.state
 		if entry.state.Stale || movedSince {
-			// Handed over as stale rather than dropped. The verdict is stripped
-			// before it goes (see TaskState.Stale): what is being reported is that
-			// a run was discarded, not what it concluded.
-			//
-			// It has to be reported at all because the commonest reason the tree
-			// moved is the run itself — a validate command that writes coverage
-			// output, regenerates a golden or touches a lockfile changes a path
-			// git is watching, and the result it just produced is thrown out on
-			// that basis. Dropped in silence that is indistinguishable from no run
-			// having happened, so a project whose commands are not perfectly
-			// gitignored gets nothing, forever, with nothing to say why.
 			reported.Stale = true
-			reported.ExitCode = 0
-			reported.Output = ""
+			if !entry.state.Snapshot {
+				// A live-tree run is handed over as stale rather than dropped, with
+				// its verdict stripped before it goes (see TaskState.Stale): what is
+				// being reported is that a run was discarded, not what it concluded.
+				//
+				// It has to be reported at all because the commonest reason the tree
+				// moved is the run itself — a validate command that writes coverage
+				// output, regenerates a golden or touches a lockfile changes a path
+				// git is watching, and the result it just produced is thrown out on
+				// that basis. Dropped in silence that is indistinguishable from no run
+				// having happened, so a project whose commands are not perfectly
+				// gitignored gets nothing, forever, with nothing to say why.
+				reported.ExitCode = 0
+				reported.Output = ""
+			}
+			// A snapshot-backed run keeps its verdict. It validated a copy that
+			// cannot move, so the answer is still exactly true about the state it ran
+			// against — reported with that said rather than discarded, because the
+			// work was done, and "your code passed as of the end of that turn" is
+			// worth more than silence.
 		}
 		out = append(out, reported)
 	}
@@ -445,6 +465,56 @@ func (s *taskStore) inFlight(root string) []TaskState {
 		}
 	}
 	return out
+}
+
+// supersede stops the runs in flight for root that a new run makes pointless,
+// and reports how many it stopped.
+//
+// A run is released because the tree has moved — that is what made a new hook
+// fire — so a live-tree run already in flight is validating code that is no
+// longer on disk, and its result is going to be discarded the moment it
+// finishes. Stopping it frees the validate lock the new run is about to want,
+// instead of leaving two runs of the same commands queued behind each other for
+// an answer only one of them can give.
+//
+// Snapshot-backed runs are left alone. Their verdict stays true about the state
+// they were handed whatever the tree does afterwards, so that one will be
+// reported rather than thrown away — cancelling it would discard the only work
+// here that was going to survive.
+func (s *taskStore) supersede(root string) int {
+	root = s.projectKey(root)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := s.byProject[root]
+	kept := make([]string, 0, len(ids))
+	stopped := 0
+	for _, id := range ids {
+		entry, ok := s.tasks[id]
+		if !ok {
+			continue
+		}
+		if !entry.state.Running || entry.state.Snapshot {
+			kept = append(kept, id)
+			continue
+		}
+		if entry.cancel != nil {
+			entry.cancel()
+		}
+		// Dropped here rather than left to report a cancellation. finish finds no
+		// task and records nothing, which is right: a run that was stopped has
+		// concluded nothing, and reporting it as a failure would owe the project a
+		// blocking run it never earned.
+		delete(s.tasks, id)
+		stopped++
+	}
+	if len(kept) == 0 {
+		delete(s.byProject, root)
+	} else {
+		s.byProject[root] = kept
+	}
+	return stopped
 }
 
 // evictLocked drops tasks until root is under MaxTasksPerProject, taking the

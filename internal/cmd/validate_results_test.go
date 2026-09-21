@@ -91,6 +91,27 @@ func TestResultsDoesNotPrintOutputOfADiscardedRun(t *testing.T) {
 		"a discarded run reported an exit status, got: %q", got)
 }
 
+// A snapshot-backed run is the one case where a stale task still carries a
+// verdict: it validated a copy that could not move, so its answer is exactly
+// true about the state it ran against. It is reported with that said — an agent
+// told only "passed" would read it as a verdict on what it has written since.
+func TestResultsQualifiesAStaleSnapshotVerdictInsteadOfDiscardingIt(t *testing.T) {
+	var out bytes.Buffer
+	streams := iostream.Streams{Out: &out, Err: &out}
+
+	printResults(streams, []watchd.TaskState{
+		{ID: "abcdef123456", Stale: true, Snapshot: true, ExitCode: 0},
+	})
+
+	got := out.String()
+	assert.Assert(t, strings.Contains(got, "passed in the background"),
+		"a snapshot verdict was thrown away, got: %q", got)
+	assert.Assert(t, strings.Contains(got, "as it was"),
+		"the verdict did not say which state it described, got: %q", got)
+	assert.Assert(t, !strings.Contains(got, "discarded"),
+		"a snapshot verdict was reported as a discard, got: %q", got)
+}
+
 // A genuine verdict still reads as one, either way.
 func TestResultsStillReportsRealVerdicts(t *testing.T) {
 	var out bytes.Buffer

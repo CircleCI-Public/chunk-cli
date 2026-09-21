@@ -369,16 +369,18 @@ chunk
   `results` yet: a background run is something you ask for explicitly, so
   reading its answer back is too. Wiring it into a hook waits for the change
   that makes background runs happen on their own. A result is reported once and
-  then forgotten. A run whose working tree changed while it
-  was in flight has its verdict discarded: a pass describing code that is no
-  longer on disk reads as a green light for work already changed. The discard
-  itself is reported, without an exit code or output, because the commonest
-  reason the tree moved is the run — output written, a golden regenerated, a
-  lockfile touched — and staying silent about that is indistinguishable from no
-  run having happened, which leaves such a project getting nothing with no way
-  to tell why. `TaskState.Passed` consults `Stale`, so a stripped verdict cannot
-  read as a clean pass. Stopping the tree moving under the run in the first place
-  is a matter of where the run happens, not how its result is judged.
+  then forgotten. A live-tree run whose working tree changed while it was in
+  flight has its verdict discarded: a pass describing code that is no longer on
+  disk reads as a green light for work already changed. The discard itself is
+  reported, without an exit code or output, because the commonest reason the
+  tree moved is the run — output written, a golden regenerated, a lockfile
+  touched — and staying silent about that is indistinguishable from no run
+  having happened, which leaves such a project getting nothing with no way to
+  tell why. `TaskState.Passed` consults `Stale`, so a stripped verdict cannot
+  read as a clean pass. Stopping the tree moving under the run in the first
+  place is a matter of where the run happens, not how its result is judged —
+  which is what `asyncValidateWorktree` does: a run that validated a snapshot
+  keeps its verdict and is reported with the state it describes named.
 - **`validate results` is a subcommand, not a flag, because it validates
   nothing.** It reads daemon state. A flag on `validate` would read as a
   modifier of a run that never happens.
@@ -409,6 +411,7 @@ chunk
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |
 | `asyncValidate` | `.chunk/config.json` | Whether hook runs may be validated in the background: `auto` (default), `always`, `never` |
 | `asyncValidateMaxLines` | `.chunk/config.json` | Largest change, in lines, still validated in the background under `auto` (default: 500) |
+| `asyncValidateWorktree` | `.chunk/config.json` | Run background checks in a checked-out snapshot so edits cannot make the result stale (`true`/`false`, default: `false` — a snapshot holds nothing gitignored) |
 
 `chunk config show` displays resolved user credentials and, when run from a
 project directory, the resolved `orgID` (env var takes precedence over project
