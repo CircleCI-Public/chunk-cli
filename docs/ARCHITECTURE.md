@@ -224,42 +224,19 @@ install UUID is sent as `AnonymousId` (not `UserId`) to avoid mixing machine
 identifiers with real user IDs in shared event counts. When the user has
 authenticated, their CircleCI user UUID is also sent as `UserId`.
 
-The pre-auth and post-auth halves of a journey are stitched together rather
-than left as two strangers. When an auth flow validates a token it persists
-the CircleCI user UUID (`config.SaveUserID`) and calls
-`telemetry.IdentifyUser`, which (a) attaches the user ID to the rest of the
-current run — including the `command_invocation` event for the login itself,
-which would otherwise still be anonymous, since `Meta.UserID` is read from
-config before the command runs — and (b) sends a Segment `identify` joining
-the anonymous ID(s) the install was reporting under to that user ID. Segment
-aliases the anonymous profile into the identified one on receipt, so the
-anonymous journey up to logging in belongs to the same person afterwards.
-When a session tracking ID is in play the anonymous half is split across two
-identifiers (the per-session one events carry and the per-install one in the
-device context), so one `identify` is sent for each and both threads join the
-same user. No traits are sent — the join needs only the two IDs.
-`chunk auth remove circleci` calls `config.ClearUserID`, so a logged-out user
-reports anonymously again — but only once no CircleCI token resolves at all.
-Removing one of the places a token can live can leave a working one in the
-environment or the config file, and clearing the ID then would strand a still
-authenticated user reporting anonymously: nothing re-persists it until an
-explicit `chunk auth login`, because the prompt that would is gated on no
-token resolving. Note that the install's anonymous ID is not rotated on
-logout, so the join Segment already recorded stands.
+When an auth flow validates a token, it persists the user UUID
+(`config.SaveUserID`) and calls `telemetry.IdentifyUser`. That attaches the
+user ID to the rest of the current run, and sends a Segment `identify` joining
+the anonymous history to the user: one for the current session tracking ID
+(if any) and one for the instance ID, which is the `AnonymousId` of every run
+made outside an agent session. `chunk auth remove circleci` clears the stored
+user ID once no CircleCI token resolves anywhere.
 
-The identify is buffered like any other event, and `cmd.ExecuteRoot` — not
-`PersistentPostRunE` — is what flushes it, because cobra returns as soon as
-`RunE` errors and never reaches its post-run hooks. A dropped
-`command_invocation` is just a missing row, but the identify is sent once, on
-the run that logs in; losing it because that run went on to fail would orphan
-the anonymous half of the journey for good.
-
-Because a payload can now mix tracks and identifies, buffered events cross to
-the `receive-telemetry` subprocess as an array of tagged envelopes
-(`receiver.Message`) rather than bare `analytics.Track` values. The receiver
-still accepts the old bare-track form: `chunk upgrade` can replace the binary
-between a run starting and its delegate spawning, so a new receiver may be
-handed an older CLI's payload.
+Telemetry is flushed by `cmd.ExecuteRoot` rather than `PersistentPostRunE`,
+which cobra skips when `RunE` errors — otherwise a login followed by a failed
+command would lose its one-time identify. Buffered events reach the
+`receive-telemetry` subprocess as tagged `receiver.Message` envelopes; the
+receiver also accepts the older bare-track array.
 
 Every event's `Context` also carries the operating system (`runtime.GOOS`)
 and, if detected, the AI coding agent chunk-cli was invoked from (e.g.

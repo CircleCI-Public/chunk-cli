@@ -105,8 +105,8 @@ func (m *Meta) anonymousID() uuid.UUID {
 }
 
 // anonymousIDs returns every non-zero anonymous identifier this install
-// reports under, deduplicated: the one events carry plus, when they differ,
-// the per-install ID that only appears in the device context.
+// reports under, deduplicated: the current one plus, inside an agent session,
+// the instance ID that runs outside a session report under.
 func (m *Meta) anonymousIDs() []uuid.UUID {
 	ids := make([]uuid.UUID, 0, 2)
 	for _, id := range []uuid.UUID{m.anonymousID(), m.InstanceID} {
@@ -236,10 +236,9 @@ func (s *Sender) SetUserID(userID uuid.UUID) {
 // authenticated. Segment aliases the anonymous ID to the user ID on receipt,
 // so the pre-auth and post-auth halves of a journey become one profile.
 //
-// When a session tracking ID is in play the anonymous half of the journey is
-// split across two identifiers — the per-session one that events carry and the
-// per-install one in the device context — so one identify is sent for each,
-// and both threads join the same user. No PII is sent as traits.
+// Inside an agent session, events carry the session tracking ID while runs
+// outside a session carry the instance ID, so one identify is sent for each
+// to join both to the user. No PII is sent as traits.
 //
 // Safe to call on a nil Sender. Calling it with uuid.Nil is a no-op: an
 // identify without a user ID would have nothing to join to.
