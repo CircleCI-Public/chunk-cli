@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -571,8 +573,8 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
 	var response hookResponse
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Assert(t, strings.Contains(response.SystemMessage, "chunk validate passed"),
-		"cache hit must return a successful hook response, got: %q", stdout)
+	assert.Equal(t, response.SystemMessage, "chunk validate: skipped, nothing changed since the last pass",
+		"cache hit must return a successful hook response that says nothing ran")
 
 	// The hit cleared the counter, so the next failure is attempt 1 again.
 	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
@@ -1079,7 +1081,7 @@ func TestReportDelegatedValidateAnnouncesABackgroundRun(t *testing.T) {
 		// sends them anyway must not have them read as a result.
 		ExitCode: 1,
 		Stderr:   "should not be shown",
-	}, streams)
+	}, nil, streams)
 
 	assert.NilError(t, err)
 	assert.Equal(t, outBuf.String(), "")
@@ -1100,7 +1102,7 @@ func TestReportDelegatedValidateExplainsAHeldRun(t *testing.T) {
 		ExitCode: 2,
 		Stdout:   "on stdout",
 		Stderr:   "on stderr",
-	}, streams)
+	}, nil, streams)
 
 	var silent *silentExitError
 	assert.Assert(t, errors.As(err, &silent), "a failing run must carry its exit code, got %v", err)
@@ -1115,7 +1117,7 @@ func TestReportDelegatedValidateSaysNothingWhenThereWasNoDecision(t *testing.T) 
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{Stderr: "1/1 passed"}, streams))
+	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{Stderr: "1/1 passed"}, nil, streams))
 	assert.Equal(t, errBuf.String(), "1/1 passed")
 }
 
@@ -1159,7 +1161,7 @@ func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 	var quiet bytes.Buffer
 	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{
 		Risk: &watchd.RiskSummary{Score: 12, Band: watchd.BandLow, Parts: []string{"12 lines (1)"}},
-	}, iostream.Streams{Out: &quiet, Err: &quiet}))
+	}, nil, iostream.Streams{Out: &quiet, Err: &quiet}))
 	assert.Equal(t, quiet.String(), "", "a low-risk change was narrated")
 
 	var loud bytes.Buffer
@@ -1172,7 +1174,7 @@ func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 			Parts:  []string{"2000 lines (60)", "3 files (6)"},
 			Advice: "committing it in parts would get each piece checked sooner",
 		},
-	}, iostream.Streams{Out: &loud, Err: &loud})
+	}, nil, iostream.Streams{Out: &loud, Err: &loud})
 
 	assert.Assert(t, err != nil)
 	out := loud.String()
@@ -1251,7 +1253,7 @@ func TestFinishValidateFinalizesEventLog(t *testing.T) {
 			result := validate.Result{Passed: 1, Total: 2}
 
 			err = finishValidate(
-				&cobra.Command{}, nil, tt.execErr, time.Now(), &config.ProjectConfig{}, result,
+				&cobra.Command{}, nil, tt.execErr, time.Now(), &config.ProjectConfig{}, result, "",
 				recorder, recorder.Status, iostream.Streams{Out: io.Discard, Err: io.Discard}, nil,
 			)
 			if tt.execErr == nil {
@@ -1268,6 +1270,159 @@ func TestFinishValidateFinalizesEventLog(t *testing.T) {
 			assert.Assert(t, final)
 			assert.Equal(t, passed, result.Passed)
 			assert.Equal(t, total, result.Total)
+		})
+	}
+}
+
+// A passing hook run names what it ran, so the user can tell a full check from
+// a single command.
+func TestValidateHookPassNamesTheCommands(t *testing.T) {
+	isolateConfig(t)
+	dir := hookProject(t, "exit 0")
+
+	stdout, _, err := runActiveStopHookOutput(t, dir)
+	assert.NilError(t, err)
+	var response hookResponse
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
+	assert.Assert(t, strings.HasPrefix(response.SystemMessage, "chunk validate passed: test ("),
+		"got %q", response.SystemMessage)
+}
+
+// Codex shows a systemMessage as a warning, so a pass says nothing there. The
+// client detects Codex from the payload and the daemon subprocess is told by
+// flag; both must reach the same answer.
+func TestValidateHookPassIsQuietUnderCodex(t *testing.T) {
+	for name, tc := range map[string]struct {
+		stdin string
+		args  []string
+	}{
+		"payload": {
+			stdin: `{"session_id":"test-session-001","stop_hook_active":true,"hook_event_name":"Stop","turn_id":"turn-1"}`,
+		},
+		"forwarded": {
+			args: []string{"--hook-session-id", "test-session-001", "--stop-hook-active", "--hook-codex"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			isolateConfig(t)
+			dir := hookProject(t, "exit 0")
+
+			var outBuf, errBuf bytes.Buffer
+			root := newTestRootCmd()
+			root.SetOut(&outBuf)
+			root.SetErr(&errBuf)
+			root.SetIn(strings.NewReader(tc.stdin))
+			root.SetArgs(append([]string{"validate", "--local", "--no-daemon", "--project", dir}, tc.args...))
+			assert.NilError(t, root.Execute())
+
+			assert.Equal(t, outBuf.String(), "", "a pass under Codex must not write a hook response")
+			assert.Assert(t, strings.Contains(errBuf.String(), "1/1 passed"), "the run did not happen: %q", errBuf.String())
+		})
+	}
+}
+
+func TestDetectHookRecognisesCodex(t *testing.T) {
+	hook := detectHook(strings.NewReader(`{"session_id":"abc","hook_event_name":"Stop","turn_id":"turn-1"}`))
+	assert.Assert(t, hook != nil)
+	assert.Assert(t, hook.codex)
+
+	hook = detectHook(strings.NewReader(`{"session_id":"abc","hook_event_name":"Stop"}`))
+	assert.Assert(t, hook != nil)
+	assert.Assert(t, !hook.codex)
+}
+
+// fakeValidateDaemon stands up a Unix socket answering /ping with build and
+// /validate with a pass, and returns a channel of the validate requests it got.
+func fakeValidateDaemon(t *testing.T, build string) <-chan watchd.ValidateRequest {
+	t.Helper()
+	// Not t.TempDir(): a unix socket path is capped at 104 bytes on darwin.
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "")
+
+	reqs := make(chan watchd.ValidateRequest, 4)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, build)
+	})
+	mux.HandleFunc("/validate", func(w http.ResponseWriter, r *http.Request) {
+		var req watchd.ValidateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reqs <- req
+		_ = json.NewEncoder(w).Encode(watchd.ValidateResponse{})
+	})
+
+	ln, err := net.Listen("unix", filepath.Join(dir, "watchd.sock"))
+	assert.NilError(t, err)
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return reqs
+}
+
+// The daemon subprocess learns it is under Codex only from the request, so the
+// client must say so for a Codex payload and only for one. It says so in a field
+// and never as a flag: a remote daemon's build cannot be checked, and one that
+// predates the flag would reject the run with a non-blocking exit.
+func TestRunValidateViaDaemonForwardsCodex(t *testing.T) {
+	for name, tc := range map[string]struct {
+		hook  *hookContext
+		codex bool
+	}{
+		"claude": {hook: &hookContext{sessionID: "abc", event: hookEventStop}},
+		"codex":  {hook: &hookContext{sessionID: "abc", event: hookEventStop, codex: true}, codex: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reqs := fakeValidateDaemon(t, watchd.BuildID())
+
+			var outBuf, errBuf bytes.Buffer
+			err := runValidateViaDaemon(t.TempDir(), []string{"validate"}, "", "", tc.hook,
+				iostream.Streams{Out: &outBuf, Err: &errBuf})
+			assert.NilError(t, err)
+
+			req := <-reqs
+			assert.Equal(t, req.HookCodex, tc.codex)
+			assert.Assert(t, !slices.Contains(req.Args, "--hook-codex"), "args: %q", req.Args)
+		})
+	}
+}
+
+// A daemon from another build may not know the hook flags, and rejects a run
+// carrying one with a non-blocking exit — a commit gate would pass having
+// checked nothing. The hook runs inline instead.
+func TestTryHookDelegateSkipsADaemonFromAnotherBuild(t *testing.T) {
+	reqs := fakeValidateDaemon(t, "some-older-build")
+	hook := &hookContext{sessionID: "abc", event: "PreToolUse", codex: true}
+
+	delegated, err := tryHookDelegate(&cobra.Command{}, hook, t.TempDir(), false, iostream.Streams{})
+	assert.NilError(t, err)
+	assert.Assert(t, !delegated)
+	assert.Equal(t, len(reqs), 0, "the run was sent to the mismatched daemon")
+}
+
+// A hook released to the background says so in its response, under Codex too:
+// otherwise the hook finishes with nothing to show it checked anything.
+func TestReportDelegatedValidateTellsTheHookAboutABackgroundRun(t *testing.T) {
+	for name, hook := range map[string]*hookContext{
+		"claude": {sessionID: "abc", event: hookEventStop},
+		"codex":  {sessionID: "abc", event: hookEventStop, codex: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var outBuf, errBuf bytes.Buffer
+			err := reportDelegatedValidate(watchd.ValidateResponse{
+				TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
+				Reason: "small change, 42 lines",
+			}, hook, iostream.Streams{Out: &outBuf, Err: &errBuf})
+			assert.NilError(t, err)
+
+			var response hookResponse
+			assert.NilError(t, json.Unmarshal(outBuf.Bytes(), &response))
+			assert.Equal(t, response.SystemMessage, "chunk validate: running in the background (small change, 42 lines)")
 		})
 	}
 }

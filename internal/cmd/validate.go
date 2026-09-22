@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,6 +67,11 @@ type hookContext struct {
 	// Empty when the payload does not carry one, as an older Claude Code or
 	// another agent's hook runner may not.
 	event string
+	// codex is set when the payload came from Codex, which marks its payloads
+	// with turn_id, a field Claude Code does not send. Codex surfaces a hook's
+	// systemMessage as a warning rather than a note, so a run that has nothing
+	// wrong to report stays quiet there.
+	codex bool
 }
 
 // hookResponse is the JSON hook response written to stdout.
@@ -101,6 +107,17 @@ func writeStopHookMessage(w io.Writer, message string) error {
 	return nil
 }
 
+// writeHookOutcome reports a hook run that has nothing wrong to report — a
+// pass, or a cache hit. It is the note Claude Code shows once the hook
+// finishes; under Codex it writes nothing, since there it would be a warning on
+// every turn. Exit 0 with no output is a success to both.
+func writeHookOutcome(w io.Writer, hook *hookContext, message string) error {
+	if hook.codex {
+		return nil
+	}
+	return writeStopHookMessage(w, message)
+}
+
 // detectHook reads the Claude Code hook JSON payload from r when r is not a
 // terminal. Returns nil if not running as a hook.
 func detectHook(r io.Reader) *hookContext {
@@ -111,12 +128,13 @@ func detectHook(r io.Reader) *hookContext {
 		SessionID      string `json:"session_id"`
 		StopHookActive bool   `json:"stop_hook_active"`
 		HookEventName  string `json:"hook_event_name"`
+		TurnID         string `json:"turn_id"`
 	}
 	_ = json.NewDecoder(r).Decode(&p)
 	if p.SessionID == "" {
 		return nil
 	}
-	return &hookContext{sessionID: p.SessionID, stopHookActive: p.StopHookActive, event: p.HookEventName}
+	return &hookContext{sessionID: p.SessionID, stopHookActive: p.StopHookActive, event: p.HookEventName, codex: p.TurnID != ""}
 }
 
 // mayRunInBackground reports whether this run may be handed to the daemon and
@@ -231,6 +249,7 @@ type validateOpts struct {
 	attributeTo    string // project the results belong to, when commands run in a snapshot copy
 	hookSessionID  string // hook session ID forwarded from client to daemon subprocess
 	stopHookActive bool   // stop_hook_active forwarded from client to daemon subprocess
+	hookCodex      bool   // Codex payload detection forwarded from client to daemon subprocess
 }
 
 func newValidateCmd() *cobra.Command {
@@ -278,6 +297,8 @@ func newValidateCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("hook-session-id")
 	cmd.Flags().BoolVar(&opts.stopHookActive, "stop-hook-active", false, "")
 	_ = cmd.Flags().MarkHidden("stop-hook-active")
+	cmd.Flags().BoolVar(&opts.hookCodex, "hook-codex", false, "")
+	_ = cmd.Flags().MarkHidden("hook-codex")
 
 	cmd.AddCommand(newValidateVariantsCmd())
 	cmd.AddCommand(newValidateResultsCmd())
@@ -412,7 +433,8 @@ func maybeReturnCachedHookResult(
 	}
 	streams.ErrPrintln("chunk validate: skipped (no changes since last successful run)")
 	n := len(cfg.Commands)
-	return true, finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, nil, statusFn, streams, nil)
+	const skipped = "chunk validate: skipped, nothing changed since the last pass"
+	return true, finishValidate(cmd, hook, nil, start, cfg, validate.Result{Passed: n, Total: n}, skipped, nil, statusFn, streams, nil)
 }
 
 func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) error {
@@ -437,7 +459,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	hook := detectHook(cmd.InOrStdin())
 	// When running as a daemon subprocess, hook context arrives via flags.
 	if opts.hookSessionID != "" && hook == nil {
-		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive}
+		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive, codex: opts.hookCodex}
 	}
 	ctx := cmd.Context()
 
@@ -559,7 +581,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
 		}
 	}
-	return finishValidate(cmd, hook, execErr, start, cfg, result, recorder, statusFn, streams, notifyFunc(rc.Notifications))
+	passed := fmt.Sprintf("chunk validate passed: %s (%s)", commandNames(slices.Concat(executionPlan.LocalCommands, executionPlan.RemoteCommands)), ui.FormatDuration(time.Since(start)))
+	return finishValidate(cmd, hook, execErr, start, cfg, result, passed, recorder, statusFn, streams, notifyFunc(rc.Notifications))
 }
 
 func planValidationExecution(cfg *config.ProjectConfig, opts *validateOpts, name string) validate.Plan {
@@ -800,9 +823,10 @@ func notifyFunc(enabled bool) func(title, body string) {
 }
 
 // finishValidate reports the validate outcome and handles hook exit codes.
+// passMessage is what a hook run that succeeded tells the user it did.
 // notifyFn, when non-nil, is called with the notification title and body;
 // pass notify.Send for real desktop notifications, or a capturing closure in tests.
-func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, recorder *eventlog.Recorder, statusFn iostream.StatusFunc, streams iostream.Streams, notifyFn func(title, body string)) error {
+func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start time.Time, cfg *config.ProjectConfig, result validate.Result, passMessage string, recorder *eventlog.Recorder, statusFn iostream.StatusFunc, streams iostream.Streams, notifyFn func(title, body string)) error {
 	maxAttempts := validate.DefaultMaxAttempts
 	if hook != nil {
 		if ma := cfg.StopHookMaxAttempts; ma > 0 {
@@ -839,7 +863,7 @@ func finishValidate(cmd *cobra.Command, hook *hookContext, execErr error, start 
 	}
 	hookErr := validate.WrapHookResult(hook.sessionID, execErr, maxAttempts, streams.Err)
 	if hookErr == nil && execErr == nil {
-		return writeStopHookMessage(cmd.OutOrStdout(), fmt.Sprintf("chunk validate passed (%s)", elapsed))
+		return writeHookOutcome(cmd.OutOrStdout(), hook, passMessage)
 	}
 	return hookErr
 }
@@ -877,6 +901,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID st
 		ProjectRoot: workDir,
 		OrgID:       orgID,
 		AllowAsync:  mayRunInBackground(hook),
+		HookCodex:   hook != nil && hook.codex,
 	}
 	// Forward local credentials only over the Unix socket (isolated to the local
 	// filesystem). Over TCP the remote daemon runs with its own credentials.
@@ -888,7 +913,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID st
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
 	}
-	return reportDelegatedValidate(resp, streams)
+	return reportDelegatedValidate(resp, hook, streams)
 }
 
 // reportDelegatedValidate writes what the daemon made of a delegated run and
@@ -900,12 +925,20 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID st
 // collect hook. A reason with no task ID means the run was offered to the
 // background and held here instead, and the reason says why. Neither means the
 // caller never offered, and there was no decision to explain.
-func reportDelegatedValidate(resp watchd.ValidateResponse, streams iostream.Streams) error {
+//
+// A hook released to the background exits before anything has run, so it also
+// says so in its hook response; otherwise the user sees the hook finish with
+// nothing to show whether it checked anything. That is written under Codex
+// too, where it shows as a warning: work still outstanding is worth one.
+func reportDelegatedValidate(resp watchd.ValidateResponse, hook *hookContext, streams iostream.Streams) error {
 	if resp.TaskID != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf(
 			"validating in the background: %s (%s)", shortTaskID(resp.TaskID), resp.Reason)))
 		reportRisk(resp.Risk, streams)
-		return nil
+		if hook == nil {
+			return nil
+		}
+		return writeStopHookMessage(streams.Out, fmt.Sprintf("chunk validate: running in the background (%s)", resp.Reason))
 	}
 	if resp.Reason != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim("validating now: "+resp.Reason))
@@ -941,8 +974,15 @@ func reportRisk(risk *watchd.RiskSummary, streams iostream.Streams) {
 // tryHookDelegate delegates a hook-invoked validate run to the daemon before
 // initHook runs, so the subprocess prints the session header (not the client).
 // Returns (true, err) when the call was delegated, (false, nil) to run inline.
+//
+// A local daemon from another build runs inline instead: the hook context
+// travels as hidden flags, and a daemon that predates one rejects the whole run
+// with exit 1. That is not the blocking exit, so the hook would pass having
+// checked nothing — a commit gate would let the commit through. A remote
+// daemon's build cannot be checked, which is why a new piece of hook context
+// goes in a request field (see ValidateRequest.HookCodex) rather than a flag.
 func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDaemon bool, streams iostream.Streams) (bool, error) {
-	if hook == nil || noDaemon || !watchd.IsDaemonRunning() {
+	if hook == nil || noDaemon || !watchd.IsDaemonCompatible() {
 		return false, nil
 	}
 	// If hooks are disabled in this environment, don't delegate — the daemon

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/spf13/cobra"
@@ -105,6 +106,14 @@ func makeValidateRunner() watchd.ValidateRunner {
 		if err := rootCmd.ExecuteContext(ctx); err != nil {
 			if ec, ok := err.(interface{ ExitCode() int }); ok {
 				return ec.ExitCode()
+			}
+			// A user error keeps its exit code, as it would inline. For a usage error
+			// that is ExitBadArgs, and collapsing it to 1 matters under a hook: 1 does
+			// not block, so a run this build could not even parse would pass a commit
+			// gate having checked nothing, and say nothing about why.
+			if ue, ok := err.(interface{ UserExitCode() int }); ok {
+				_, _ = fmt.Fprintln(stderr, err)
+				return ue.UserExitCode()
 			}
 			return 1
 		}

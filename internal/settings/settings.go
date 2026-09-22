@@ -13,12 +13,28 @@ import (
 // commit proceeds either way.
 const conflictsTimeout = 5
 
+// Spinner text the agent shows while each hook runs. It is fixed when init
+// writes the file, so it names the command being run and nothing decided at
+// run time: whether the Stop hook hits the cache, skips a clean tree, or goes to
+// the background is reported afterwards, through the hook's systemMessage.
+const (
+	stopStatusMessage      = "Running chunk validate"
+	conflictsStatusMessage = "Running chunk conflicts before commit"
+)
+
+// commitStatusMessage is the spinner text for the commit gate entry that runs
+// the named command. It says why the commit is waiting.
+func commitStatusMessage(name string) string {
+	return fmt.Sprintf("Running chunk validate %s before commit", name)
+}
+
 // hookEntry is one hook command within a hook group.
 type hookEntry struct {
-	Type    string `json:"type"`
-	If      string `json:"if,omitempty"`
-	Command string `json:"command"`
-	Timeout int    `json:"timeout"`
+	Type          string `json:"type"`
+	If            string `json:"if,omitempty"`
+	Command       string `json:"command"`
+	Timeout       int    `json:"timeout"`
+	StatusMessage string `json:"statusMessage,omitempty"`
 }
 
 // hookGroup is a group of hooks filtered by matcher.
@@ -51,10 +67,11 @@ func Build(commands []config.Command) ([]byte, error) {
 	// stop the commit. Its timeout is short because it only reads an answer the
 	// daemon computed earlier — it never previews a merge itself.
 	hooks = append(hooks, hookEntry{
-		Type:    "command",
-		If:      CommitIfFilter,
-		Command: ConflictsCommand,
-		Timeout: conflictsTimeout,
+		Type:          "command",
+		If:            CommitIfFilter,
+		Command:       ConflictsCommand,
+		Timeout:       conflictsTimeout,
+		StatusMessage: conflictsStatusMessage,
 	})
 	for _, cmd := range commands {
 		timeout := cmd.Timeout
@@ -62,10 +79,11 @@ func Build(commands []config.Command) ([]byte, error) {
 			timeout = 60
 		}
 		hooks = append(hooks, hookEntry{
-			Type:    "command",
-			If:      CommitIfFilter,
-			Command: fmt.Sprintf("cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate %s", cmd.Name),
-			Timeout: timeout,
+			Type:          "command",
+			If:            CommitIfFilter,
+			Command:       fmt.Sprintf("cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate %s", cmd.Name),
+			Timeout:       timeout,
+			StatusMessage: commitStatusMessage(cmd.Name),
 		})
 	}
 
@@ -109,9 +127,10 @@ func Build(commands []config.Command) ([]byte, error) {
 				{
 					Hooks: []hookEntry{
 						{
-							Type:    "command",
-							Command: StopCommand,
-							Timeout: stopTimeout,
+							Type:          "command",
+							Command:       StopCommand,
+							Timeout:       stopTimeout,
+							StatusMessage: stopStatusMessage,
 						},
 					},
 				},
@@ -137,10 +156,11 @@ func BuildCodex(commands []config.Command) ([]byte, error) {
 		}
 		stopTimeout += timeout
 		hooks = append(hooks, hookEntry{
-			Type:    "command",
-			If:      CommitIfFilter,
-			Command: fmt.Sprintf("chunk validate %s", cmd.Name),
-			Timeout: timeout,
+			Type:          "command",
+			If:            CommitIfFilter,
+			Command:       fmt.Sprintf("chunk validate %s", cmd.Name),
+			Timeout:       timeout,
+			StatusMessage: commitStatusMessage(cmd.Name),
 		})
 	}
 	if stopTimeout > maxStopTimeout {
@@ -162,9 +182,10 @@ func BuildCodex(commands []config.Command) ([]byte, error) {
 				{
 					Hooks: []hookEntry{
 						{
-							Type:    "command",
-							Command: StopCommand,
-							Timeout: stopTimeout,
+							Type:          "command",
+							Command:       StopCommand,
+							Timeout:       stopTimeout,
+							StatusMessage: stopStatusMessage,
 						},
 					},
 				},

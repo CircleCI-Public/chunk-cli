@@ -14,17 +14,20 @@
           {
             "type": "command",
             "command": "cd ${CLAUDE_PROJECT_DIR:-.} && task fmt",
-            "timeout": 30
+            "timeout": 30,
+            "statusMessage": "Running task fmt before commit"
           },
           {
             "type": "command",
             "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint",
-            "timeout": 60
+            "timeout": 60,
+            "statusMessage": "Running chunk validate lint before commit"
           },
           {
             "type": "command",
             "command": "cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test",
-            "timeout": 300
+            "timeout": 300,
+            "statusMessage": "Running chunk validate test before commit"
           }
         ]
       }
@@ -35,7 +38,8 @@
           {
             "type": "command",
             "command": "chunk validate",
-            "timeout": 420
+            "timeout": 420,
+            "statusMessage": "Running chunk validate"
           }
         ]
       }

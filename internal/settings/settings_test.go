@@ -218,3 +218,48 @@ func TestBuildWritesNoHooksWithoutCommands(t *testing.T) {
 	assert.NilError(t, json.Unmarshal(data, &s))
 	assert.Assert(t, s["hooks"] == nil, "hooks were written for a project with no commands")
 }
+
+// statusMessages maps each hook entry's command to its statusMessage, across
+// every hook type in data.
+func statusMessages(t *testing.T, data []byte) map[string]string {
+	t.Helper()
+	var s struct {
+		Hooks map[string][]hookGroup `json:"hooks"`
+	}
+	assert.NilError(t, json.Unmarshal(data, &s))
+	got := make(map[string]string)
+	for _, groups := range s.Hooks {
+		for _, g := range groups {
+			for _, e := range g.Hooks {
+				got[e.Command] = e.StatusMessage
+			}
+		}
+	}
+	return got
+}
+
+// Every entry names the command it runs in its spinner text, and the commit
+// gate's say why the commit is waiting. Codex reads the same field.
+func TestBuildSetsStatusMessages(t *testing.T) {
+	cmds := []config.Command{
+		{Name: "lint", Run: "task lint", Timeout: 60},
+		{Name: "test", Run: "task test", Timeout: 300},
+	}
+
+	data, err := Build(cmds)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, statusMessages(t, data), map[string]string{
+		ConflictsCommand: "Running chunk conflicts before commit",
+		"cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint": "Running chunk validate lint before commit",
+		"cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test": "Running chunk validate test before commit",
+		StopCommand: "Running chunk validate",
+	})
+
+	data, err = BuildCodex(cmds)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, statusMessages(t, data), map[string]string{
+		"chunk validate lint": "Running chunk validate lint before commit",
+		"chunk validate test": "Running chunk validate test before commit",
+		StopCommand:           "Running chunk validate",
+	})
+}
