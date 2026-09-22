@@ -324,7 +324,14 @@ func (d *daemon) conflictReport(root string) ConflictReport {
 		}
 		return ConflictReport{Root: ps.root, Conflict: ps.conflict, Known: true}
 	}
-	return ConflictReport{Root: root}
+	// The reason travels in Unavailable rather than being left for the caller to
+	// infer from Known alone. Every Known-false report carries its own
+	// explanation that way — the no-daemon report the command synthesises
+	// already did — so a consumer reading conflict.unavailable to find out why
+	// there is no answer never has to special-case which of the two it got.
+	return ConflictReport{Root: root, Conflict: &ConflictState{
+		Unavailable: "the watch daemon is not tracking this project",
+	}}
 }
 
 // updateProject refreshes sidecar files, new log events, and git state for ps.

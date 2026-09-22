@@ -124,6 +124,14 @@ func reportConflictLookupError(streams iostream.Streams, root string, err error,
 			"It is running but busy — try again in a moment.\n")
 		return
 	}
+	if errors.Is(err, watchd.ErrDaemonPermission) {
+		// Also not the "run chunk watch" advice: the socket exists, so this is
+		// not an absent daemon but one this user cannot open. A second daemon
+		// would find the same socket in its way and leave it just as unreadable.
+		streams.Printf("%s", "The watch daemon socket cannot be opened, so there is no conflict information.\n"+
+			"It likely belongs to a daemon running as another user: "+err.Error()+"\n")
+		return
+	}
 	if errors.Is(err, watchd.ErrDaemonUnreachable) {
 		streams.Printf("%s", "No watch daemon is running, so there is no conflict information.\n"+
 			"Run `chunk watch` to start it.\n")

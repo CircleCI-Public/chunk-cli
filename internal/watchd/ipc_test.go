@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -35,13 +37,22 @@ func startTestDaemon(t *testing.T) {
 // the daemon's own behaviour does not need the real message, only a message.
 const testAuthMessage = "not authenticated to CircleCI — command output unavailable (run: chunk auth login)"
 
-func startTestDaemonWithAuth(t *testing.T, authMessage string) {
+// socketDir is a temp dir whose name is short enough to hold a unix socket
+// path. Not t.TempDir(): it embeds the test name, and a unix socket path is
+// capped at 104 bytes on darwin, so a descriptive name silently breaks listen —
+// and makes a dial fail with EINVAL before it can fail for the reason a test is
+// actually about.
+func socketDir(t *testing.T) string {
 	t.Helper()
-	// Not t.TempDir(): it embeds the test name, and a unix socket path is capped
-	// at 104 bytes on darwin, so a descriptive name silently breaks listen.
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func startTestDaemonWithAuth(t *testing.T, authMessage string) {
+	t.Helper()
+	dir := socketDir(t)
 	t.Setenv("CHUNK_WATCHD_DIR", dir)
 	// Keep the first poll hermetic: pointed at a real data dir it makes a git
 	// call per known project and can outlast the wait below.
@@ -175,9 +186,7 @@ func TestFetchOutputUnknownCommandIsNotFound(t *testing.T) {
 // The registration path must survive the daemon being absent without erroring,
 // because it sits in front of a command the developer is waiting on.
 func TestRegisterCommandIsBestEffortWithoutDaemon(t *testing.T) {
-	dir, err := os.MkdirTemp("", "wd")
-	assert.NilError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := socketDir(t)
 	t.Setenv("CHUNK_WATCHD_DIR", dir)
 
 	done := make(chan struct{})
@@ -466,7 +475,13 @@ func TestConflictsEndpointReportsUnknownRootAsUnknown(t *testing.T) {
 	report, err := FetchConflicts(t.TempDir())
 	assert.NilError(t, err)
 	assert.Check(t, !report.Known)
-	assert.Check(t, cmp.Nil(report.Conflict))
+	// The reason rides along rather than being left to inference: every
+	// Known-false report carries one, so a consumer reading conflict.unavailable
+	// does not have to guard on which flavour of "no answer" it received.
+	assert.Assert(t, report.Conflict != nil)
+	assert.Check(t, cmp.Contains(report.Conflict.Unavailable, "not tracking"))
+	// Still no claim about the merge itself.
+	assert.Check(t, !report.Conflict.Conflicted)
 	// And nothing is advised on the back of it.
 	notice := ConflictNotice(report)
 	assert.Check(t, cmp.Equal(notice, ""))
@@ -519,9 +534,7 @@ func hangingDaemon(t *testing.T) {
 	t.Helper()
 	// Not t.TempDir(): a unix socket path is capped at 104 bytes on darwin and
 	// the test name pushes a temp dir past it.
-	dir, err := os.MkdirTemp("", "wd")
-	assert.NilError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := socketDir(t)
 	t.Setenv("CHUNK_WATCHD_DIR", dir)
 
 	ln, err := net.Listen("unix", filepath.Join(dir, "watchd.sock"))
@@ -555,11 +568,76 @@ func TestFetchConflictsSeparatesASlowDaemonFromAMissingOne(t *testing.T) {
 func TestFetchConflictsReportsAMissingDaemonAsUnreachable(t *testing.T) {
 	// The counterpart, so the split above cannot be satisfied by calling
 	// everything a timeout.
-	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+	t.Setenv("CHUNK_WATCHD_DIR", socketDir(t))
 
 	_, err := FetchConflicts(t.TempDir())
 	assert.Check(t, errors.Is(err, ErrDaemonUnreachable), "want ErrDaemonUnreachable, got: %v", err)
 	assert.Check(t, !errors.Is(err, ErrDaemonTimeout))
+}
+
+// A socket this user cannot open is not a socket that is missing. The advice
+// attached to ErrDaemonUnreachable is to go start a daemon, which is the one
+// thing that cannot help: a second daemon would leave this socket just as
+// unreadable.
+func TestFetchConflictsSeparatesAnUnreadableSocketFromAMissingOne(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the denial cannot be staged")
+	}
+	dir := socketDir(t)
+	// Chmod the directory rather than the socket: BSD-derived kernels have not
+	// always enforced the mode on the socket file itself, but path resolution
+	// through an unsearchable directory denies everywhere.
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "watchd.sock"), nil, 0o600))
+	assert.NilError(t, os.Chmod(dir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+
+	_, err := FetchConflicts(t.TempDir())
+	assert.Check(t, errors.Is(err, ErrDaemonPermission), "want ErrDaemonPermission, got: %v", err)
+	assert.Check(t, !errors.Is(err, ErrDaemonUnreachable),
+		"an unreadable socket must not be reported as no daemon at all")
+	assert.Check(t, cmp.Contains(err.Error(), filepath.Join(dir, "watchd.sock")),
+		"the message must name the socket, since fixing this means looking at it")
+}
+
+// The sentinels carry advice, so what maps onto them is worth pinning even for
+// the causes a test cannot stage for real.
+func TestClassifyDialErrorMapsCausesOntoAdvice(t *testing.T) {
+	// The shape net/http actually returns: the syscall wrapped three deep.
+	dialErr := func(e error) error {
+		return &neturl.Error{Op: "Get", Err: &net.OpError{
+			Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", e),
+		}}
+	}
+	tests := []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"nothing listening on a stale socket", dialErr(syscall.ECONNREFUSED), ErrDaemonUnreachable},
+		{"no socket at all", dialErr(syscall.ENOENT), ErrDaemonUnreachable},
+		{"socket owned by another user", dialErr(syscall.EACCES), ErrDaemonPermission},
+		{"not permitted", dialErr(syscall.EPERM), ErrDaemonPermission},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyDialError(tc.err, "/tmp/watchd.sock")
+			assert.Check(t, errors.Is(got, tc.want), "want %v, got: %v", tc.want, got)
+		})
+	}
+}
+
+// Anything unrecognised keeps its own text. Reporting it as an absent daemon
+// would hand the reader advice that is wrong and that nothing on screen would
+// let them doubt.
+func TestClassifyDialErrorDoesNotCallAnUnknownFailureAMissingDaemon(t *testing.T) {
+	got := classifyDialError(errors.New("boom"), "/tmp/watchd.sock")
+
+	assert.Check(t, !errors.Is(got, ErrDaemonUnreachable))
+	assert.Check(t, !errors.Is(got, ErrDaemonPermission))
+	assert.Check(t, !errors.Is(got, ErrDaemonTimeout))
+	assert.Check(t, cmp.Contains(got.Error(), "boom"))
+	assert.Check(t, cmp.Contains(got.Error(), "/tmp/watchd.sock"))
 }
 
 func TestConflictReportIsKnownWithNoAnswerBeforeTheFirstCheck(t *testing.T) {

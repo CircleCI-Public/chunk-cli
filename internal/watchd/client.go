@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	neturl "net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -161,6 +163,15 @@ var ErrDaemonUnreachable = errors.New("no watch daemon is running")
 // working daemon to go start one.
 var ErrDaemonTimeout = errors.New("the watch daemon did not answer in time")
 
+// ErrDaemonPermission reports that the socket is there but this user cannot
+// open it — a daemon running as somebody else, or a directory whose mode has
+// been changed.
+//
+// Kept apart from ErrDaemonUnreachable for the same reason ErrDaemonTimeout is:
+// the advice differs. Starting a second daemon leaves the same socket just as
+// unreadable, so "run chunk watch" is the one thing that cannot help here.
+var ErrDaemonPermission = errors.New("the watch daemon socket is not accessible to this user")
+
 // FetchConflicts asks the running daemon whether root's branch still merges
 // cleanly into its merge target.
 //
@@ -177,13 +188,7 @@ func FetchConflicts(root string) (ConflictReport, error) {
 	client.Timeout = conflictTimeout
 	resp, err := client.Get(reqURL)
 	if err != nil {
-		// A refused connection and an expired deadline are different answers.
-		// os.IsTimeout sees through the *url.Error the client wraps around it,
-		// which is why the check is not an errors.Is against a sentinel.
-		if os.IsTimeout(err) {
-			return ConflictReport{}, ErrDaemonTimeout
-		}
-		return ConflictReport{}, ErrDaemonUnreachable
+		return ConflictReport{}, classifyDialError(err, sockPath)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -194,6 +199,32 @@ func FetchConflicts(root string) (ConflictReport, error) {
 		return ConflictReport{}, fmt.Errorf("decode conflicts: %w", err)
 	}
 	return report, nil
+}
+
+// classifyDialError turns a failed request to the socket into the sentinel that
+// carries the right advice.
+//
+// Only the errors that actually mean "nothing is listening" become
+// ErrDaemonUnreachable. Anything else keeps its own text rather than being
+// reported as an absent daemon: the advice attached to that sentinel is to go
+// start one, which is wrong — and unfalsifiable to the reader — for every cause
+// but the one it names.
+func classifyDialError(err error, sockPath string) error {
+	switch {
+	case os.IsTimeout(err):
+		// A refused connection and an expired deadline are different answers.
+		// os.IsTimeout sees through the *url.Error the client wraps around it,
+		// which is why the check is not an errors.Is against a sentinel.
+		return ErrDaemonTimeout
+	case errors.Is(err, fs.ErrPermission):
+		return fmt.Errorf("%w: %s", ErrDaemonPermission, sockPath)
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ECONNREFUSED):
+		// No socket file, or one left behind by a daemon that died. Both mean
+		// there is nothing to talk to, which is what starting one fixes.
+		return ErrDaemonUnreachable
+	default:
+		return fmt.Errorf("reach the watch daemon at %s: %w", sockPath, err)
+	}
 }
 
 // FetchOutput reads buffered output for a command starting at offset.
