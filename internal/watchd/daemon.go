@@ -87,6 +87,24 @@ type daemon struct {
 // error without a runner). ghClient may be nil; PR monitoring is skipped when
 // no GitHub credentials are available.
 func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
+	var tcpLn net.Listener
+	if addr := TCPListenAddr(); addr != "" {
+		if TCPToken() == "" {
+			return fmt.Errorf("CHUNK_WATCHD_TCP_ADDR requires CHUNK_WATCHD_TCP_TOKEN to be set")
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen tcp on %s: %w", addr, err)
+		}
+		tcpLn = ln
+	}
+	return runDaemon(ctx, tcpLn, client, authMessage, runner, ghClient)
+}
+
+// runDaemon is the inner daemon loop. It accepts a pre-opened tcpLn (nil when
+// TCP is disabled) so tests can avoid the TOCTOU race of closing and re-opening
+// a listener to discover a free port.
+func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -153,15 +171,8 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		_ = srv.Close()
 	}()
 
-	if addr := TCPListenAddr(); addr != "" {
-		if TCPToken() == "" {
-			return fmt.Errorf("CHUNK_WATCHD_TCP_ADDR requires CHUNK_WATCHD_TCP_TOKEN to be set")
-		}
-		tcpLn, err := net.Listen("tcp", addr)
-		if err != nil {
-			return fmt.Errorf("listen tcp on %s: %w", addr, err)
-		}
-		log.Printf("watch daemon started pid=%d socket=%s tcp=%s", os.Getpid(), sockPath, addr)
+	if tcpLn != nil {
+		log.Printf("watch daemon started pid=%d socket=%s tcp=%s", os.Getpid(), sockPath, tcpLn.Addr())
 		// The TCP server wraps the same handler with bearer-token auth so the
 		// Unix socket (bound to the local user's filesystem) stays unauthenticated
 		// while the TCP listener enforces a shared secret.

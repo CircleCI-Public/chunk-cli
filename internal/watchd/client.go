@@ -306,11 +306,14 @@ func IsDaemonCompatible() bool {
 // RunValidate delegates a validate run to the daemon. req.ProjectRoot is the
 // repo to validate, already resolved by the caller.
 //
-// req.Env is filled from the caller's environment when it is empty, since the
-// point of forwarding it is to carry this process's identity into the run. Set
-// req.AllowAsync to offer the daemon the option of releasing this caller and
-// reporting later; a response carrying a TaskID is that offer taken, and means
-// nothing has run yet.
+// The caller is responsible for deciding which fields to populate: req.Env and
+// req.CircleCIToken should only be set when using the local Unix socket — over
+// TCP the remote daemon uses its own credentials and environment. See
+// runValidateViaDaemon in cmd/ for the canonical call site.
+//
+// Set req.AllowAsync to offer the daemon the option of releasing this caller
+// and reporting later; a response carrying a TaskID is that offer taken, and
+// means nothing has run yet.
 //
 // It takes the request type rather than a list of arguments because what the
 // daemon needs to know about a run keeps growing, and every addition would
@@ -319,9 +322,6 @@ func RunValidate(req ValidateRequest) (ValidateResponse, error) {
 	client, err := longDaemonClient()
 	if err != nil {
 		return ValidateResponse{}, err
-	}
-	if req.Env == nil && TCPRemoteAddr() == "" {
-		req.Env = os.Environ()
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
