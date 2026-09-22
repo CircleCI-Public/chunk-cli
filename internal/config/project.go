@@ -232,6 +232,10 @@ func (c *ProjectConfig) validate() error {
 			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
 		}
 	}
+	// Trimmed before the checks below rather than after, so the entry validated
+	// and the entry stored are the one somebody meant.
+	trimPathRules(c.AsyncValidateInert)
+	trimPathRules(c.AsyncValidateBlocking)
 	// Reported rather than ignored. A misspelt entry here fails silently in the
 	// direction nobody checks: the project believes it is waiting for its .sql
 	// changes, and nothing ever tells it otherwise.
@@ -247,6 +251,26 @@ func (c *ProjectConfig) validate() error {
 		}
 	}
 	return nil
+}
+
+// trimPathRules strips surrounding whitespace from an inert or blocking list,
+// in place.
+//
+// Whitespace in a config file is invisible to the person who wrote it, so
+// "sql " has to mean what "sql" means or every check below is one a typo walks
+// past: the bare-extension check misses it, the entry is stored as a file name
+// nothing is called, and the project waits for migrations that never block.
+// A file name whose whitespace is load-bearing loses here, which is the right
+// way round — such a name is close to unheard of, and the cost of trimming it
+// is an entry that does not match, the cost of keeping it an entry that
+// silently matches nothing.
+//
+// Entries left empty are not dropped. validatePathRules reports them, because
+// a list that quietly shrinks is the silence this whole check exists to break.
+func trimPathRules(entries []string) {
+	for i, entry := range entries {
+		entries[i] = strings.TrimSpace(entry)
+	}
 }
 
 // validatePathRules checks the entries of an inert or blocking list.

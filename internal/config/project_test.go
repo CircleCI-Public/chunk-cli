@@ -195,6 +195,11 @@ func TestLoadProjectConfigRejectsUnusablePathRules(t *testing.T) {
 		"bare ext":     {`{"asyncValidateInert":["sql"]}`, `looks like an extension missing its dot; write ".sql"`},
 		"bare ext cap": {`{"asyncValidateBlocking":["SQL"]}`, "missing its dot"},
 		"contradicted": {`{"asyncValidateInert":[".sql"],"asyncValidateBlocking":[".sql"]}`, "in both"},
+		// Whitespace is invisible in a config file, so it must not be the thing
+		// that carries an entry past a check it would otherwise fail.
+		"padded bare ext": {`{"asyncValidateInert":["sql  "]}`, `write ".sql"`},
+		"padded path":     {`{"asyncValidateInert":[" docs/api.md"]}`, "looks like a path"},
+		"padded contra":   {`{"asyncValidateInert":[".sql"],"asyncValidateBlocking":[" .sql "]}`, "in both"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -215,4 +220,28 @@ func TestLoadProjectConfigAcceptsPathRules(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, cfg.AsyncValidateInert, []string{".sql", "NOTES"})
 	assert.DeepEqual(t, cfg.AsyncValidateBlocking, []string{".md", "Makefile", "mvnw"})
+}
+
+// A padded entry is stored trimmed, so the rules the daemon matches against are
+// the ones the project meant rather than names no file has.
+func TestLoadProjectConfigTrimsPathRules(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectConfig(t, dir, `{"asyncValidateInert":[" .sql","NOTES  "],"asyncValidateBlocking":["\t.md "]}`)
+
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.AsyncValidateInert, []string{".sql", "NOTES"})
+	assert.DeepEqual(t, cfg.AsyncValidateBlocking, []string{".md"})
+}
+
+// The trim reaches the saved file too: a config assembled in memory is written
+// out normalised, not stored padded for the next load to clean up.
+func TestSaveProjectConfigTrimsPathRules(t *testing.T) {
+	dir := t.TempDir()
+	err := SaveProjectConfig(dir, &ProjectConfig{AsyncValidateInert: []string{" .sql "}})
+	assert.NilError(t, err)
+
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, cfg.AsyncValidateInert, []string{".sql"})
 }
