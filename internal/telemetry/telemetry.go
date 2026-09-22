@@ -217,11 +217,7 @@ func (s *Sender) Track(eventName string, props map[string]any) error {
 }
 
 // SetUserID attaches userID to every event this Sender reports from now on,
-// including the command_invocation event for the command that is running when
-// it is called. Without it, the invocation a user authenticates in — the one
-// that matters most for following their journey — would still report
-// anonymously, because Meta.UserID is read from config before the command
-// runs. Safe to call on a nil Sender.
+// including the in-flight command_invocation. Safe to call on a nil Sender.
 func (s *Sender) SetUserID(userID uuid.UUID) {
 	if s == nil {
 		return
@@ -231,19 +227,12 @@ func (s *Sender) SetUserID(userID uuid.UUID) {
 	s.meta.UserID = userID
 }
 
-// Identify sends a Segment identify call joining this install's anonymous
-// ID(s) to userID, de-anonymizing everything the user did before they
-// authenticated. Segment aliases the anonymous ID to the user ID on receipt,
-// so the pre-auth and post-auth halves of a journey become one profile.
-//
-// Inside an agent session, events carry the session tracking ID while runs
-// outside a session carry the instance ID, so one identify is sent for each
-// to join both to the user. No PII is sent as traits.
-//
-// Safe to call on a nil Sender. Calling it with uuid.Nil is a no-op: an
-// identify without a user ID would have nothing to join to.
+// Identify sends a Segment identify joining this install's anonymous ID(s) to
+// userID. One call goes out per anonymous ID (session and/or instance), so
+// both the in-session and out-of-session histories join the user. No traits
+// are sent. Safe to call on a nil or closed Sender; uuid.Nil is a no-op.
 func (s *Sender) Identify(userID uuid.UUID) error {
-	if s == nil || userID == uuid.Nil {
+	if s == nil || userID == uuid.Nil || s.closed.Load() {
 		return nil
 	}
 

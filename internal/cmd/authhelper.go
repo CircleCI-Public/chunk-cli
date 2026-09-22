@@ -142,9 +142,7 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 		if err := config.SaveUserID(userID); err != nil {
 			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
 		}
-		// Joins the anonymous events from before this login to the user, so
-		// their journey up to authenticating is not a separate stranger.
-		telemetry.IdentifyUser(ctx, userID)
+		telemetry.IdentifyUser(ctx, userID) // joins pre-auth history to this user
 	}
 	printSaved(streams, "CircleCI token", insecureStorage)
 	return circleci.NewClient(circleci.Config{

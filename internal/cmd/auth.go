@@ -308,9 +308,7 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 		if err := config.SaveUserID(userID); err != nil {
 			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
 		}
-		// Joins the anonymous events from before this login to the user, so
-		// their journey up to authenticating is not a separate stranger.
-		telemetry.IdentifyUser(ctx, userID)
+		telemetry.IdentifyUser(ctx, userID) // joins pre-auth history to this user
 	}
 
 	streams.ErrPrintln("")
@@ -526,18 +524,10 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 		}
 	}
 
-	// The user ID was only persisted for telemetry attribution, so it goes
-	// away with the credentials it was derived from — but only once no
-	// CircleCI token resolves at all. Removing one of the places a token can
-	// live (the keychain entry here, say) can leave a working token in the
-	// environment or the config file, and the notices below say so. Clearing
-	// the user ID then would de-anonymize nothing while leaving a still
-	// authenticated user reporting anonymously for good: nothing re-persists
-	// the ID until an explicit `chunk auth login`, because the prompt that
-	// would is gated on no token resolving. The keychain is checked even
-	// under --insecure-storage, which only picks where to remove from: a
-	// keychain token left behind still authenticates every normal run.
-	if after, err := config.ResolveCircleCI(false); err != nil || after.CircleCIToken == "" {
+	// Only clear once no token resolves anywhere: removing one source (e.g.
+	// the config file) can leave a working keychain token behind, and nothing
+	// re-persists the ID until an explicit `auth login`.
+	if after, err := config.ResolveCircleCI(false); err == nil && after.CircleCIToken == "" {
 		if err := config.ClearUserID(); err != nil {
 			io.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not clear stored CircleCI user ID: %v", err)))
 		}
