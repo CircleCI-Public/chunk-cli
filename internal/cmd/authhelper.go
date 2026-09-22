@@ -18,6 +18,7 @@ import (
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
@@ -141,6 +142,9 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 		if err := config.SaveUserID(userID); err != nil {
 			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
 		}
+		// Joins the anonymous events from before this login to the user, so
+		// their journey up to authenticating is not a separate stranger.
+		telemetry.IdentifyUser(cmd.Context(), userID)
 	}
 	printSaved(streams, "CircleCI token", insecureStorage)
 	return circleci.NewClient(circleci.Config{

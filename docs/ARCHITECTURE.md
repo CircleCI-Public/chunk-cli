@@ -224,6 +224,30 @@ install UUID is sent as `AnonymousId` (not `UserId`) to avoid mixing machine
 identifiers with real user IDs in shared event counts. When the user has
 authenticated, their CircleCI user UUID is also sent as `UserId`.
 
+The pre-auth and post-auth halves of a journey are stitched together rather
+than left as two strangers. When an auth flow validates a token it persists
+the CircleCI user UUID (`config.SaveUserID`) and calls
+`telemetry.IdentifyUser`, which (a) attaches the user ID to the rest of the
+current run — including the `command_invocation` event for the login itself,
+which would otherwise still be anonymous, since `Meta.UserID` is read from
+config before the command runs — and (b) sends a Segment `identify` joining
+the anonymous ID(s) the install was reporting under to that user ID. Segment
+aliases the anonymous profile into the identified one on receipt, so the
+anonymous journey up to logging in belongs to the same person afterwards.
+When a session tracking ID is in play the anonymous half is split across two
+identifiers (the per-session one events carry and the per-install one in the
+device context), so one `identify` is sent for each and both threads join the
+same user. No traits are sent — the join needs only the two IDs.
+`chunk auth remove circleci` calls `config.ClearUserID`, so a logged-out user
+reports anonymously again.
+
+Because a payload can now mix tracks and identifies, buffered events cross to
+the `receive-telemetry` subprocess as an array of tagged envelopes
+(`receiver.Message`) rather than bare `analytics.Track` values. The receiver
+still accepts the old bare-track form: `chunk upgrade` can replace the binary
+between a run starting and its delegate spawning, so a new receiver may be
+handed an older CLI's payload.
+
 Every event's `Context` also carries the operating system (`runtime.GOOS`)
 and, if detected, the AI coding agent chunk-cli was invoked from (e.g.
 `claude-code`, `cursor`) — see `internal/telemetry/agent.go`'s

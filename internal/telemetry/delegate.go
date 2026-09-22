@@ -23,14 +23,19 @@ type delegateDestination struct {
 	endpoint string
 
 	mu       sync.RWMutex
-	messages []analytics.Track
+	messages []receiver.Message
 }
 
-func (d *delegateDestination) Enqueue(message analytics.Track) error {
+func (d *delegateDestination) Enqueue(message analytics.Message) error {
+	envelope, err := receiver.Wrap(message)
+	if err != nil {
+		return err
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.messages = append(d.messages, message)
+	d.messages = append(d.messages, envelope)
 	return nil
 }
 

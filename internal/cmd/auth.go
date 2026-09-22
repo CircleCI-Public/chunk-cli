@@ -14,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
@@ -307,6 +308,9 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 		if err := config.SaveUserID(userID); err != nil {
 			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
 		}
+		// Joins the anonymous events from before this login to the user, so
+		// their journey up to authenticating is not a separate stranger.
+		telemetry.IdentifyUser(ctx, userID)
 	}
 
 	streams.ErrPrintln("")
@@ -520,6 +524,12 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 		if err := config.Clear("circleCIToken"); err != nil {
 			return &userError{msg: "Failed to remove CircleCI token.", err: err}
 		}
+	}
+
+	// The user ID was only persisted for telemetry attribution; without a
+	// token there is nothing left to attribute to it.
+	if err := config.ClearUserID(); err != nil {
+		io.Println(ui.Dim(fmt.Sprintf("note: could not clear stored CircleCI user ID: %v", err)))
 	}
 
 	io.Println(ui.Success("CircleCI token removed successfully."))

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -102,4 +103,21 @@ func RecordNow(cmd *cobra.Command, err error, duration time.Duration) {
 	}
 
 	_ = tc.Track("command_invocation", props)
+}
+
+// IdentifyUser de-anonymizes the current session: it attaches userID to every
+// event the Sender in ctx reports from here on, and sends an identify call so
+// Segment joins the anonymous identifiers this install was reporting under to
+// that user. Call it right after an authentication flow persists a user ID.
+//
+// It is best-effort, like the rest of telemetry: a missing Sender or a failed
+// enqueue is silently ignored rather than breaking the auth flow the user
+// actually asked for.
+func IdentifyUser(ctx context.Context, userID uuid.UUID) {
+	s := FromContext(ctx)
+	if s == nil || userID == uuid.Nil {
+		return
+	}
+	s.SetUserID(userID)
+	_ = s.Identify(userID)
 }

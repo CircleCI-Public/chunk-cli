@@ -87,19 +87,34 @@ func TestDelegateDestination_Close_DeliversToSegment(t *testing.T) {
 		Event:  "test_event",
 		UserId: "user-1",
 	}))
+	assert.NilError(t, d.Enqueue(analytics.Identify{
+		UserId:      "user-1",
+		AnonymousId: "anon-1",
+	}))
 	assert.NilError(t, d.Close())
 
 	poll.WaitOn(t, func(t poll.LogT) poll.Result {
 		mu.Lock()
 		defer mu.Unlock()
-		if len(batch) == 1 {
+		if len(batch) == 2 {
 			return poll.Success()
 		}
-		return poll.Continue("received %d events, want 1", len(batch))
+		return poll.Continue("received %d events, want 2", len(batch))
 	}, poll.WithTimeout(5*time.Second))
 
 	mu.Lock()
 	defer mu.Unlock()
+	assert.Equal(t, batch[0]["type"], "track")
 	assert.Equal(t, batch[0]["event"], "test_event")
 	assert.Equal(t, batch[0]["userId"], "user-1")
+	assert.Equal(t, batch[1]["type"], "identify")
+	assert.Equal(t, batch[1]["userId"], "user-1")
+	assert.Equal(t, batch[1]["anonymousId"], "anon-1")
+}
+
+func TestDelegateDestination_Enqueue_RejectsUnsupportedMessage(t *testing.T) {
+	d := &delegateDestination{bin: receiverBinPath}
+	err := d.Enqueue(analytics.Page{Name: "somewhere"})
+	assert.ErrorContains(t, err, "unsupported telemetry message type")
+	assert.NilError(t, d.Close())
 }

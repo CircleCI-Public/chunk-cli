@@ -19,7 +19,7 @@ func (mc *multiDestination) Close() error {
 	return errors.Join(errs...)
 }
 
-func (mc *multiDestination) Enqueue(m analytics.Track) error {
+func (mc *multiDestination) Enqueue(m analytics.Message) error {
 	errs := make([]error, 0, len(mc.delegates))
 	for _, d := range mc.delegates {
 		errs = append(errs, d.Enqueue(m))
