@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/analytics-go/v3"
+	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 )
@@ -35,10 +36,15 @@ func TestSender_Track(t *testing.T) {
 	s, err := NewSender(Config{
 		TestDestination: fake,
 		Metadata: Meta{
-			Version:     "1.2.3",
-			InstanceID:  instanceID,
-			OS:          "linux",
-			CodingAgent: agentClaudeCode,
+			Version:    "1.2.3",
+			InstanceID: instanceID,
+			HostInfo: &host.InfoStat{
+				OS:              "linux",
+				PlatformFamily:  "debian",
+				PlatformVersion: "24.04",
+				KernelArch:      "x86_64",
+			},
+			Extra: map[string]any{"agent": agentClaudeCode},
 		},
 	})
 	assert.NilError(t, err)
@@ -58,8 +64,12 @@ func TestSender_Track(t *testing.T) {
 	assert.Equal(t, tr.Context.App.Name, "chunk-cli")
 	assert.Equal(t, tr.Context.App.Version, "1.2.3")
 	assert.Equal(t, tr.Context.Device.Id, instanceID.String())
+	assert.Equal(t, tr.Context.Device.Model, "x86_64")
+	assert.Equal(t, tr.Context.Device.Type, "debian")
 	assert.Equal(t, tr.Context.OS.Name, "linux")
-	assert.Equal(t, tr.Context.Extra["codingAgent"], agentClaudeCode)
+	assert.Equal(t, tr.Context.OS.Version, "24.04")
+	assert.Equal(t, tr.Context.Traits["agent"], agentClaudeCode)
+	assert.Assert(t, tr.Integrations["Amplitude"] == true)
 }
 
 func TestSender_Track_WithSessionTrackingID(t *testing.T) {
@@ -73,7 +83,6 @@ func TestSender_Track_WithSessionTrackingID(t *testing.T) {
 			Version:           "1.2.3",
 			InstanceID:        instanceID,
 			SessionTrackingID: sessionID,
-			OS:                "linux",
 		},
 	})
 	assert.NilError(t, err)
@@ -96,7 +105,6 @@ func TestSender_Track_WithUserID(t *testing.T) {
 			Version:    "1.2.3",
 			InstanceID: instanceID,
 			UserID:     userID,
-			OS:         "linux",
 		},
 	})
 	assert.NilError(t, err)
@@ -108,13 +116,21 @@ func TestSender_Track_WithUserID(t *testing.T) {
 	assert.Equal(t, tr.UserId, userID.String())
 }
 
-func TestMeta_ToContext_OmitsCodingAgentWhenUndetected(t *testing.T) {
-	m := Meta{Version: "1.2.3", OS: "darwin"}
+func TestMeta_ToContext_NilHostInfo(t *testing.T) {
+	m := Meta{Version: "1.2.3"}
 	ctx := m.toContext()
 
-	assert.Equal(t, ctx.OS.Name, "darwin")
-	_, ok := ctx.Extra["codingAgent"]
-	assert.Assert(t, !ok)
+	assert.Equal(t, ctx.OS.Name, "")
+	assert.Equal(t, ctx.OS.Version, "")
+	assert.Equal(t, ctx.Device.Model, "")
+	assert.Equal(t, ctx.Device.Type, "")
+}
+
+func TestMeta_ToContext_NilExtraOmitsTraits(t *testing.T) {
+	m := Meta{Version: "1.2.3"}
+	ctx := m.toContext()
+
+	assert.Assert(t, ctx.Traits == nil)
 }
 
 func TestSender_CloseIsIdempotent(t *testing.T) {

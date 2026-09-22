@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/analytics-go/v3"
+	"github.com/shirou/gopsutil/v4/host"
 )
 
 // Sender tracks anonymous command-usage events. A nil *Sender is valid and
@@ -71,27 +72,31 @@ type Meta struct {
 	// as UserId so events can be attributed to a real user.
 	UserID uuid.UUID
 
-	// OS is the operating system chunk-cli is running on, e.g. runtime.GOOS.
-	OS string
-	// CodingAgent is the AI coding agent chunk-cli was invoked from (e.g.
-	// "claude-code", "cursor"), or "" if none was detected. See
-	// DetectCodingAgent.
-	CodingAgent string
+	// HostInfo is the host info to associate with events. When non-nil, OS.Name,
+	// OS.Version, Device.Model (kernel arch), and Device.Type (platform family)
+	// are populated from it. Best-effort: may be nil when host detection fails.
+	HostInfo *host.InfoStat
+	// Extra is forwarded to Context.Traits on every event (e.g. "agent", "is_tty").
+	Extra map[string]any
 }
 
 func (m *Meta) toContext() *analytics.Context {
-	ctx := &analytics.Context{
-		App: analytics.AppInfo{
-			Name:    "chunk-cli",
-			Version: m.Version,
-		},
-		Device: analytics.DeviceInfo{Id: m.InstanceID.String()},
-		OS:     analytics.OSInfo{Name: m.OS},
+	var osInfo analytics.OSInfo
+	device := analytics.DeviceInfo{Id: m.InstanceID.String()}
+	if m.HostInfo != nil {
+		osInfo = analytics.OSInfo{
+			Name:    m.HostInfo.OS,
+			Version: m.HostInfo.PlatformVersion,
+		}
+		device.Model = m.HostInfo.KernelArch
+		device.Type = m.HostInfo.PlatformFamily
 	}
-	if m.CodingAgent != "" {
-		ctx.Extra = map[string]interface{}{"codingAgent": m.CodingAgent}
+	return &analytics.Context{
+		App:    analytics.AppInfo{Name: "chunk-cli", Version: m.Version},
+		OS:     osInfo,
+		Device: device,
+		Traits: m.Extra,
 	}
-	return ctx
 }
 
 // NewSender creates a new Sender per cfg.
@@ -151,11 +156,12 @@ func (s *Sender) Track(eventName string, props map[string]any) error {
 		anonymousID = s.meta.SessionTrackingID
 	}
 	track := analytics.Track{
-		Event:       eventName,
-		Timestamp:   time.Now(),
-		Properties:  p,
-		AnonymousId: anonymousID.String(),
-		Context:     s.meta.toContext(),
+		Event:        eventName,
+		Timestamp:    time.Now(),
+		Properties:   p,
+		AnonymousId:  anonymousID.String(),
+		Context:      s.meta.toContext(),
+		Integrations: analytics.NewIntegrations().Enable("Amplitude"),
 	}
 	if s.meta.UserID != uuid.Nil {
 		track.UserId = s.meta.UserID.String()
