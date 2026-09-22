@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -1327,6 +1329,77 @@ func TestDetectHookRecognisesCodex(t *testing.T) {
 	hook = detectHook(strings.NewReader(`{"session_id":"abc","hook_event_name":"Stop"}`))
 	assert.Assert(t, hook != nil)
 	assert.Assert(t, !hook.codex)
+}
+
+// fakeValidateDaemon stands up a Unix socket answering /ping with build and
+// /validate with a pass, and returns a channel of the validate requests it got.
+func fakeValidateDaemon(t *testing.T, build string) <-chan watchd.ValidateRequest {
+	t.Helper()
+	// Not t.TempDir(): a unix socket path is capped at 104 bytes on darwin.
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "")
+
+	reqs := make(chan watchd.ValidateRequest, 4)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, build)
+	})
+	mux.HandleFunc("/validate", func(w http.ResponseWriter, r *http.Request) {
+		var req watchd.ValidateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reqs <- req
+		_ = json.NewEncoder(w).Encode(watchd.ValidateResponse{})
+	})
+
+	ln, err := net.Listen("unix", filepath.Join(dir, "watchd.sock"))
+	assert.NilError(t, err)
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return reqs
+}
+
+// The daemon subprocess learns it is under Codex only from the forwarded flag,
+// so the client must add it for a Codex payload and only for one.
+func TestRunValidateViaDaemonForwardsCodex(t *testing.T) {
+	for name, tc := range map[string]struct {
+		hook  *hookContext
+		codex bool
+	}{
+		"claude": {hook: &hookContext{sessionID: "abc", event: hookEventStop}},
+		"codex":  {hook: &hookContext{sessionID: "abc", event: hookEventStop, codex: true}, codex: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reqs := fakeValidateDaemon(t, watchd.BuildID())
+
+			var outBuf, errBuf bytes.Buffer
+			err := runValidateViaDaemon(t.TempDir(), []string{"validate"}, "", "", tc.hook,
+				iostream.Streams{Out: &outBuf, Err: &errBuf})
+			assert.NilError(t, err)
+
+			req := <-reqs
+			assert.Equal(t, slices.Contains(req.Args, "--hook-codex"), tc.codex, "args: %q", req.Args)
+		})
+	}
+}
+
+// A daemon from another build may not know the hook flags, and rejects a run
+// carrying one with a non-blocking exit — a commit gate would pass having
+// checked nothing. The hook runs inline instead.
+func TestTryHookDelegateSkipsADaemonFromAnotherBuild(t *testing.T) {
+	reqs := fakeValidateDaemon(t, "some-older-build")
+	hook := &hookContext{sessionID: "abc", event: "PreToolUse", codex: true}
+
+	delegated, err := tryHookDelegate(&cobra.Command{}, hook, t.TempDir(), false, iostream.Streams{})
+	assert.NilError(t, err)
+	assert.Assert(t, !delegated)
+	assert.Equal(t, len(reqs), 0, "the run was sent to the mismatched daemon")
 }
 
 // A hook released to the background says so in its response, under Codex too:

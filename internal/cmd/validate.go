@@ -976,8 +976,13 @@ func reportRisk(risk *watchd.RiskSummary, streams iostream.Streams) {
 // tryHookDelegate delegates a hook-invoked validate run to the daemon before
 // initHook runs, so the subprocess prints the session header (not the client).
 // Returns (true, err) when the call was delegated, (false, nil) to run inline.
+//
+// A daemon from another build runs inline instead: the hook context travels as
+// hidden flags, and a daemon that predates one rejects the whole run with exit
+// 1. That is not the blocking exit, so the hook would pass having checked
+// nothing — a commit gate would let the commit through.
 func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDaemon bool, streams iostream.Streams) (bool, error) {
-	if hook == nil || noDaemon || !watchd.IsDaemonRunning() {
+	if hook == nil || noDaemon || !watchd.IsDaemonCompatible() {
 		return false, nil
 	}
 	// If hooks are disabled in this environment, don't delegate — the daemon
