@@ -872,12 +872,18 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken string, h
 			reqArgs = append(reqArgs, "--stop-hook-active")
 		}
 	}
-	resp, err := watchd.RunValidate(watchd.ValidateRequest{
-		Args:          reqArgs,
-		CircleCIToken: circleCIToken,
-		ProjectRoot:   workDir,
-		AllowAsync:    mayRunInBackground(hook),
-	})
+	req := watchd.ValidateRequest{
+		Args:        reqArgs,
+		ProjectRoot: workDir,
+		AllowAsync:  mayRunInBackground(hook),
+	}
+	// Forward local credentials only over the Unix socket (isolated to the local
+	// filesystem). Over TCP the remote daemon runs with its own credentials.
+	if watchd.TCPRemoteAddr() == "" {
+		req.CircleCIToken = circleCIToken
+		req.Env = os.Environ()
+	}
+	resp, err := watchd.RunValidate(req)
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
 	}

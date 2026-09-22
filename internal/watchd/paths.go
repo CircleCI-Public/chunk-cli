@@ -52,3 +52,23 @@ func LogPath() (string, error) {
 	}
 	return filepath.Join(d, "watchd.log"), nil
 }
+
+// TCPListenAddr returns the TCP address the daemon should bind, read from
+// CHUNK_WATCHD_TCP_ADDR (e.g. "0.0.0.0:7777"). Empty means TCP is disabled.
+func TCPListenAddr() string {
+	return os.Getenv("CHUNK_WATCHD_TCP_ADDR")
+}
+
+// TCPRemoteAddr returns the address of a remote daemon to connect to, read
+// from CHUNK_WATCHD_REMOTE_ADDR (e.g. "sandbox-host:7777"). Empty means
+// clients use the local Unix socket.
+func TCPRemoteAddr() string {
+	return os.Getenv("CHUNK_WATCHD_REMOTE_ADDR")
+}
+
+// TCPToken returns the bearer token required for TCP connections, read from
+// CHUNK_WATCHD_TCP_TOKEN. When set, the daemon requires this token on every
+// TCP request and clients include it in every request header.
+func TCPToken() string {
+	return os.Getenv("CHUNK_WATCHD_TCP_TOKEN")
+}

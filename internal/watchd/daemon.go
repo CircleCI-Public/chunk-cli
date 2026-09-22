@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sort"
@@ -86,6 +87,24 @@ type daemon struct {
 // error without a runner). ghClient may be nil; PR monitoring is skipped when
 // no GitHub credentials are available.
 func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
+	var tcpLn net.Listener
+	if addr := TCPListenAddr(); addr != "" {
+		if TCPToken() == "" {
+			return fmt.Errorf("CHUNK_WATCHD_TCP_ADDR requires CHUNK_WATCHD_TCP_TOKEN to be set")
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen tcp on %s: %w", addr, err)
+		}
+		tcpLn = ln
+	}
+	return runDaemon(ctx, tcpLn, client, authMessage, runner, ghClient)
+}
+
+// runDaemon is the inner daemon loop. It accepts a pre-opened tcpLn (nil when
+// TCP is disabled) so tests can avoid the TOCTOU race of closing and re-opening
+// a listener to discover a free port.
+func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -143,8 +162,6 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
 
-	log.Printf("watch daemon started pid=%d socket=%s", os.Getpid(), sockPath)
-
 	go d.pollLoop(ctx)
 	go d.checkConflictsLoop(ctx)
 
@@ -153,6 +170,28 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		<-ctx.Done()
 		_ = srv.Close()
 	}()
+
+	if tcpLn != nil {
+		log.Printf("watch daemon started pid=%d socket=%s tcp=%s", os.Getpid(), sockPath, tcpLn.Addr())
+		// The TCP server wraps the same handler with bearer-token auth so the
+		// Unix socket (bound to the local user's filesystem) stays unauthenticated
+		// while the TCP listener enforces a shared secret.
+		tcpSrv := &http.Server{
+			Handler:           withBearerAuth(srv.Handler, TCPToken()),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			<-ctx.Done()
+			_ = tcpSrv.Close()
+		}()
+		go func() {
+			if serveErr := tcpSrv.Serve(tcpLn); serveErr != nil && ctx.Err() == nil {
+				log.Printf("watchd tcp: %v", serveErr)
+			}
+		}()
+	} else {
+		log.Printf("watch daemon started pid=%d socket=%s", os.Getpid(), sockPath)
+	}
 
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		return fmt.Errorf("watchd serve: %w", err)

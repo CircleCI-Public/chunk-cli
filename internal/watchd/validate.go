@@ -286,6 +286,9 @@ func (d *daemon) handleCollect(w http.ResponseWriter, r *http.Request) {
 // in the background if the caller offered to be released and the change is one
 // worth releasing them for.
 func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
+	// Bound body size before decoding; an attacker-controlled Content-Length
+	// could otherwise grow the heap by hundreds of MiB.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req ValidateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)

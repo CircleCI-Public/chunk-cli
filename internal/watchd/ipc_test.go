@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -211,6 +212,135 @@ func TestSnapshotReportsAuthErrorWhenCredentialsAreMissing(t *testing.T) {
 	assert.Check(t, cmp.Contains(snap.AuthError, "chunk auth login"))
 }
 
+// TCP transport: start a real daemon with CHUNK_WATCHD_TCP_ADDR, connect over
+// TCP, and verify that the bearer-token guard is enforced.
+func startTestDaemonTCP(t *testing.T, token string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wd-tcp")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// Bind on :0 to get a free port, then keep the listener open and pass it
+	// directly into the daemon. Closing it first and re-opening by address
+	// would be a TOCTOU race: another process could claim the port in between.
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	addr := tcpLn.Addr().String()
+	t.Cleanup(func() { _ = tcpLn.Close() })
+
+	t.Setenv("CHUNK_WATCHD_TCP_ADDR", addr)
+	if token != "" {
+		t.Setenv("CHUNK_WATCHD_TCP_TOKEN", token)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- runDaemon(ctx, tcpLn, nil, "", nil, nil) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Error("daemon did not shut down within 5s")
+		}
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("daemon exited during startup: %v", err)
+			return ""
+		default:
+		}
+		if ok, _ := doPing(tcpClient(addr)); ok {
+			return addr
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("tcp daemon did not become reachable within 5s")
+	return ""
+}
+
+func TestTCPTransport_NoTokenRejectsDaemonStart(t *testing.T) {
+	dir, err := os.MkdirTemp("", "wd-tcp-notoken")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	addr := ln.Addr().String()
+	assert.NilError(t, ln.Close())
+
+	t.Setenv("CHUNK_WATCHD_TCP_ADDR", addr)
+	// CHUNK_WATCHD_TCP_TOKEN is deliberately not set.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err = RunDaemon(ctx, nil, "", nil, nil)
+	assert.ErrorContains(t, err, "CHUNK_WATCHD_TCP_TOKEN")
+}
+
+func TestTCPTransport_ValidTokenAllows(t *testing.T) {
+	const token = "test-secret-token"
+	addr := startTestDaemonTCP(t, token)
+	t.Setenv("CHUNK_WATCHD_TCP_TOKEN", token)
+
+	ok, _ := doPing(tcpClient(addr))
+	assert.Check(t, ok, "expected ping to succeed with correct token")
+}
+
+func TestTCPTransport_MissingTokenRejects(t *testing.T) {
+	const token = "test-secret-token"
+	addr := startTestDaemonTCP(t, token)
+	// Client has no token set — tcpClient will not add an Authorization header.
+	t.Setenv("CHUNK_WATCHD_TCP_TOKEN", "")
+
+	ok, _ := doPing(tcpClient(addr))
+	assert.Check(t, !ok, "expected ping to fail when Authorization header is absent")
+}
+
+func TestTCPTransport_WrongTokenRejects(t *testing.T) {
+	const token = "test-secret-token"
+	addr := startTestDaemonTCP(t, token)
+	// Manually craft a client with the wrong token.
+	wrongToken := "wrong-token"
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+		},
+	}
+	wrongClient := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &bearerTransport{inner: transport, token: wrongToken},
+	}
+
+	ok, _ := doPing(wrongClient)
+	assert.Check(t, !ok, "expected ping to fail with wrong token")
+}
+
+func TestEnsureRunning_SkipsInRemoteMode(t *testing.T) {
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+	// Point CHUNK_WATCHD_REMOTE_ADDR at a non-existent host so that any attempt
+	// to touch a local daemon would clearly succeed (no local state exists).
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:9")
+	// If the remote guard is missing, EnsureRunning will call launchDaemon which
+	// will fail on the missing executable path — the test would not return nil.
+	err := EnsureRunning([]string{"watch", "_daemon"})
+	assert.NilError(t, err)
+}
+
+func TestEnsureLaunched_SkipsInRemoteMode(t *testing.T) {
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:9")
+	err := EnsureLaunched([]string{"watch", "_daemon"})
+	assert.NilError(t, err)
+}
+
 // The daemon is useful without credentials: it cannot stream output, but it can
 // still say the command ran. Losing the registration too would leave the
 // dashboard blank with nothing to explain it.
@@ -236,6 +366,84 @@ func TestCommandIsRecordedWithoutCredentials(t *testing.T) {
 	assert.Check(t, chunk.Found)
 	assert.Check(t, !chunk.Running)
 	assert.Check(t, cmp.Contains(chunk.Error, "credentials"))
+}
+
+// When RunValidate is used in TCP mode (CHUNK_WATCHD_REMOTE_ADDR set), the
+// cmd/ layer is responsible for not passing local credentials. This test
+// verifies that a request built without credentials (as cmd/ constructs it in
+// TCP mode) reaches the daemon with no token or env — confirming RunValidate
+// is a pure "send this request" function and carries no hidden credential policy.
+func TestRunValidateTCP_DoesNotForwardCredentials(t *testing.T) {
+	const token = "test-creds-token"
+
+	type captured struct {
+		env []string
+	}
+	got := make(chan captured, 1)
+	runner := ValidateRunner(func(_ context.Context, _ string, _ []string, env []string, stdout io.Writer, _ io.Writer) int {
+		got <- captured{env: env}
+		_, _ = stdout.Write([]byte("ok"))
+		return 0
+	})
+
+	// Start a TCP daemon with the capturing runner, keeping the listener open
+	// to avoid the TOCTOU race of closing and re-opening by address.
+	dir, err := os.MkdirTemp("", "wd-tcp-creds")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	addr := tcpLn.Addr().String()
+	t.Cleanup(func() { _ = tcpLn.Close() })
+
+	t.Setenv("CHUNK_WATCHD_TCP_ADDR", addr)
+	t.Setenv("CHUNK_WATCHD_TCP_TOKEN", token)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- runDaemon(ctx, tcpLn, nil, "", runner, nil) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(5 * time.Second):
+			t.Error("daemon did not shut down within 5s")
+		}
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case startErr := <-errCh:
+			t.Fatalf("daemon exited during startup: %v", startErr)
+		default:
+		}
+		if ok, _ := doPing(tcpClient(addr)); ok {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+		if time.Now().After(deadline) {
+			t.Fatal("tcp daemon did not become reachable within 5s")
+		}
+	}
+
+	// Simulate what cmd/ does in TCP mode: send a request with no token and no
+	// env. RunValidate is a pure transport function; the caller is responsible
+	// for deciding what to include.
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", addr)
+	_, err = RunValidate(ValidateRequest{Args: []string{"validate", "test"}})
+	assert.NilError(t, err)
+
+	select {
+	case c := <-got:
+		assert.Check(t, cmp.Equal(len(c.env), 0),
+			"expected no env to be forwarded in TCP mode, got %d entries", len(c.env))
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner was not called within 5s")
+	}
 }
 
 func TestConflictsEndpointRequiresRoot(t *testing.T) {
