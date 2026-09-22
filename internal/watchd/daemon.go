@@ -81,6 +81,9 @@ type daemon struct {
 	// the daemon has no client (unauthenticated), in which case POST /sidecar
 	// returns 503.
 	prov *provisioner
+	// claims tracks which sessions are actively validating which paths, for
+	// advisory cross-agent coordination.
+	claims *claimStore
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -158,6 +161,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		hist:      newRiskHistory(),
 		prm:       newPRMonitor(ghClient),
 		prov:      prov,
+		claims:    newClaimStore(),
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.
@@ -219,6 +223,7 @@ func (d *daemon) pollLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			d.poll()
+			d.claims.expireAll()
 		case <-ctx.Done():
 			return
 		}
@@ -367,6 +372,8 @@ func (d *daemon) updateProject(ps *projectState) {
 		Commands: d.out.commandsFor(ps.root),
 	}
 	d.prm.annotate(&snap)
+
+	snap.ActiveClaims = d.claims.forProject(ps.root)
 
 	d.mu.Lock()
 	// Read under the same lock that publishes snap, because the conflict loop

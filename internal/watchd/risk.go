@@ -172,6 +172,9 @@ type riskDecision struct {
 	// risk summarises the change the decision was made about. It travels with
 	// every decision, including the ones reached without consulting it.
 	risk RiskSummary
+	// paths is the set of repo-relative paths changed in the working tree,
+	// reused for claim registration so assessRisk's d.measure() is not called twice.
+	paths []string
 }
 
 // decideRisk judges whether a validate run against a measured tree can be
@@ -378,7 +381,9 @@ func (d *daemon) assessRisk(root string) riskDecision {
 	// The evidence lookup needs the size, and the size is what the measurement
 	// just produced, so the facts are read first and the judgement made once.
 	hist := d.hist.evidence(root, RiskSummary{Lines: ch.Lines, Files: len(ch.Paths)})
-	return decideRisk(policy, owes, ch, err, hist)
+	dec := decideRisk(policy, owes, ch, err, hist)
+	dec.paths = ch.Paths
+	return dec
 }
 
 // measure reads how far root has moved from the last state that passed its
