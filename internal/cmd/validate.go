@@ -502,7 +502,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 		return err
 	}
 
-	if done, err := delegateToDaemon(opts, hook, workDir, rc.CircleCIToken, streams); done {
+	if done, err := delegateToDaemon(opts, hook, workDir, rc.CircleCIToken, cfg.OrgID, streams); done {
 		return err
 	}
 	image := resolveImage(name, cfg)
@@ -864,7 +864,7 @@ func validateEnvFlag(envVarsFlag []string) error {
 // background — see mayRunInBackground for why only that one. A developer
 // waiting at a terminal has no next turn, and releasing them would send the
 // run's output somewhere they are not looking.
-func runValidateViaDaemon(workDir string, args []string, circleCIToken string, hook *hookContext, streams iostream.Streams) error {
+func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID string, hook *hookContext, streams iostream.Streams) error {
 	reqArgs := args
 	if hook != nil {
 		reqArgs = append(append([]string(nil), args...), "--hook-session-id", hook.sessionID)
@@ -875,6 +875,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken string, h
 	req := watchd.ValidateRequest{
 		Args:        reqArgs,
 		ProjectRoot: workDir,
+		OrgID:       orgID,
 		AllowAsync:  mayRunInBackground(hook),
 	}
 	// Forward local credentials only over the Unix socket (isolated to the local
@@ -954,7 +955,7 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDa
 	if err != nil {
 		return false, nil // fall back to inline; inline path handles auth
 	}
-	err = runValidateViaDaemon(workDir, os.Args[1:], rc.CircleCIToken, hook, streams)
+	err = runValidateViaDaemon(workDir, os.Args[1:], rc.CircleCIToken, "", hook, streams)
 	if errors.Is(err, watchd.ErrDaemonUnavailable) {
 		return false, nil // daemon disappeared between check and POST; run inline
 	}
@@ -969,14 +970,14 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDa
 // whether this process waits for the answer. Either can decline — an
 // unfingerprintable tree, an old daemon, no daemon at all — and every decline
 // means the same thing, which is to run the commands here instead.
-func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCIToken string, streams iostream.Streams) (bool, error) {
+func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCIToken, orgID string, streams iostream.Streams) (bool, error) {
 	if opts.async && !opts.noDaemon {
 		// A refusal falls through to inline: slower than the caller asked for,
 		// but it always tells them the truth about the tree in front of them.
 		return tryAsyncDelegate(workDir, circleCIToken, streams)
 	}
 	if shouldUseDaemon(hook, opts.noDaemon) {
-		err := runValidateViaDaemon(workDir, os.Args[1:], circleCIToken, nil, streams)
+		err := runValidateViaDaemon(workDir, os.Args[1:], circleCIToken, orgID, nil, streams)
 		// ErrDaemonUnavailable covers two cases: the daemon disappeared between
 		// the IsDaemonCompatible check and the POST (connection refused), and the
 		// daemon lacks the /validate endpoint because it is from an older build
