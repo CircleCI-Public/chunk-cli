@@ -65,6 +65,24 @@ type ValidateRequest struct {
 	// has credentials, the daemon provisions a fresh sidecar for the run rather
 	// than expecting one to already be registered on its filesystem.
 	OrgID string `json:"org_id,omitempty"`
+	// HookCodex says the run is a hook invocation from Codex, and the daemon
+	// passes it on to the run as --hook-codex.
+	//
+	// It travels as a field rather than in Args because a remote daemon's build
+	// cannot be checked, and one that predates the flag would reject the whole
+	// run with a non-blocking exit — a commit gate would pass having checked
+	// nothing. A daemon that predates this field ignores it instead, and the run
+	// goes ahead, just without Codex's quieter output.
+	HookCodex bool `json:"hook_codex,omitempty"`
+}
+
+// runArgs is the command line the run is given: the caller's args, plus
+// whatever the request carries as fields that the run takes as flags.
+func (req ValidateRequest) runArgs() []string {
+	if !req.HookCodex {
+		return req.Args
+	}
+	return append(append([]string(nil), req.Args...), "--hook-codex")
 }
 
 // ValidateResponse is the response from POST /validate.
@@ -157,7 +175,7 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 		env = append(append([]string(nil), env...), "CIRCLE_TOKEN="+req.CircleCIToken)
 	}
 	sessionID := session.IDFromSlice(req.Env)
-	args := req.Args
+	args := req.runArgs()
 	// Taken before the run, because this is the state the run is about to
 	// validate. A tree that cannot be captured at all just means the next change
 	// is measured against HEAD instead.
@@ -352,7 +370,7 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *
 	d.validateMu.Lock()
 	defer d.validateMu.Unlock()
 
-	args := req.Args
+	args := req.runArgs()
 	if d.prov != nil && req.OrgID != "" {
 		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
 		id, err := d.prov.create(ctx, req.OrgID, name, "")

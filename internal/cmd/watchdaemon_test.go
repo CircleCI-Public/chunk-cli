@@ -88,3 +88,18 @@ func TestValidateRunnerOverridesACallerSuppliedProject(t *testing.T) {
 	assert.Assert(t, strings.Contains(combined, "ran-in-requested-project"),
 		"the appended project root did not win, got: %q", combined)
 }
+
+// A flag the daemon's build does not know is a usage error, and it has to come
+// back as one. Collapsed to 1 it would not block, so a commit gate handed a run
+// the daemon could not even parse would pass having checked nothing.
+func TestValidateRunnerReportsAnUnknownFlagAsBadArgs(t *testing.T) {
+	isolateConfig(t)
+
+	var stdout, stderr bytes.Buffer
+	code := makeValidateRunner()(context.Background(), t.TempDir(),
+		[]string{"validate", "--no-such-flag"}, os.Environ(), &stdout, &stderr)
+
+	assert.Equal(t, code, ExitBadArgs)
+	assert.Assert(t, strings.Contains(stderr.String(), "no-such-flag"),
+		"the run should say what it rejected, got: %q", stderr.String())
+}

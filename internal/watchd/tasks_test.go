@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -966,6 +967,36 @@ func TestValidateEndpointTellsTheRunnerWhichProject(t *testing.T) {
 
 	assert.Equal(t, rec.Code, http.StatusOK)
 	assert.Equal(t, ran, "/repo/b", "the runner was not told which project to validate")
+}
+
+// Codex detection travels as a request field so that a daemon too old to know
+// the flag ignores it instead of rejecting the run. A daemon that does know it
+// has to hand it on, or the run never learns it is under Codex.
+func TestValidateEndpointPassesHookCodexToTheRunner(t *testing.T) {
+	for name, tc := range map[string]struct {
+		codex bool
+	}{
+		"codex":  {codex: true},
+		"claude": {codex: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newTestDaemon()
+			t.Cleanup(d.tasks.stopAll)
+
+			var ran []string
+			d.runner = func(_ context.Context, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
+				ran = args
+				return 0
+			}
+
+			body, err := json.Marshal(ValidateRequest{Args: []string{"validate"}, ProjectRoot: "/repo", HookCodex: tc.codex})
+			assert.NilError(t, err)
+			rec := serve(d, httptest.NewRequest(http.MethodPost, "/validate", bytes.NewReader(body)))
+
+			assert.Equal(t, rec.Code, http.StatusOK)
+			assert.Equal(t, slices.Contains(ran, "--hook-codex"), tc.codex, "args: %q", ran)
+		})
+	}
 }
 
 // Output under the cap is the whole of what the run printed, unmarked. A

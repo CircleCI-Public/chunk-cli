@@ -895,15 +895,13 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID st
 		if hook.stopHookActive {
 			reqArgs = append(reqArgs, "--stop-hook-active")
 		}
-		if hook.codex {
-			reqArgs = append(reqArgs, "--hook-codex")
-		}
 	}
 	req := watchd.ValidateRequest{
 		Args:        reqArgs,
 		ProjectRoot: workDir,
 		OrgID:       orgID,
 		AllowAsync:  mayRunInBackground(hook),
+		HookCodex:   hook != nil && hook.codex,
 	}
 	// Forward local credentials only over the Unix socket (isolated to the local
 	// filesystem). Over TCP the remote daemon runs with its own credentials.
@@ -977,10 +975,12 @@ func reportRisk(risk *watchd.RiskSummary, streams iostream.Streams) {
 // initHook runs, so the subprocess prints the session header (not the client).
 // Returns (true, err) when the call was delegated, (false, nil) to run inline.
 //
-// A daemon from another build runs inline instead: the hook context travels as
-// hidden flags, and a daemon that predates one rejects the whole run with exit
-// 1. That is not the blocking exit, so the hook would pass having checked
-// nothing — a commit gate would let the commit through.
+// A local daemon from another build runs inline instead: the hook context
+// travels as hidden flags, and a daemon that predates one rejects the whole run
+// with exit 1. That is not the blocking exit, so the hook would pass having
+// checked nothing — a commit gate would let the commit through. A remote
+// daemon's build cannot be checked, which is why a new piece of hook context
+// goes in a request field (see ValidateRequest.HookCodex) rather than a flag.
 func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDaemon bool, streams iostream.Streams) (bool, error) {
 	if hook == nil || noDaemon || !watchd.IsDaemonCompatible() {
 		return false, nil

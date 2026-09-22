@@ -1365,8 +1365,10 @@ func fakeValidateDaemon(t *testing.T, build string) <-chan watchd.ValidateReques
 	return reqs
 }
 
-// The daemon subprocess learns it is under Codex only from the forwarded flag,
-// so the client must add it for a Codex payload and only for one.
+// The daemon subprocess learns it is under Codex only from the request, so the
+// client must say so for a Codex payload and only for one. It says so in a field
+// and never as a flag: a remote daemon's build cannot be checked, and one that
+// predates the flag would reject the run with a non-blocking exit.
 func TestRunValidateViaDaemonForwardsCodex(t *testing.T) {
 	for name, tc := range map[string]struct {
 		hook  *hookContext
@@ -1384,7 +1386,8 @@ func TestRunValidateViaDaemonForwardsCodex(t *testing.T) {
 			assert.NilError(t, err)
 
 			req := <-reqs
-			assert.Equal(t, slices.Contains(req.Args, "--hook-codex"), tc.codex, "args: %q", req.Args)
+			assert.Equal(t, req.HookCodex, tc.codex)
+			assert.Assert(t, !slices.Contains(req.Args, "--hook-codex"), "args: %q", req.Args)
 		})
 	}
 }
