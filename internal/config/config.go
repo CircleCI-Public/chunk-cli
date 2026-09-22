@@ -301,9 +301,11 @@ func IsTelemetry(cfg UserConfig) bool {
 }
 
 // chunkTelemetryNamespace is a fixed UUID used as the v5 namespace when
-// deriving per-session anonymous tracking IDs. It uniquely scopes the hash
-// domain to chunk-cli so session IDs from other tools never collide.
-var chunkTelemetryNamespace = uuid.MustParse("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+// deriving per-session anonymous tracking IDs. It was generated specifically
+// for chunk-cli (rather than reusing a published example namespace) so the
+// hash domain is unique to this tool and session IDs from other tools can
+// never collide. Changing it would orphan previously reported session IDs.
+var chunkTelemetryNamespace = uuid.MustParse("455166ad-6bea-4450-89bd-0dce51341582")
 
 // SessionTrackingID derives a stable, anonymous UUID from the given session
 // ID string. The result is deterministic (same input → same UUID) but not
