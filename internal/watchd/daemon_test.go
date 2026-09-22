@@ -29,7 +29,9 @@ func newTestDaemon() *daemon {
 		out:      newOutputStore(context.Background()),
 		// No client: these tests never attach a dashboard, so nothing is sampled
 		// and the sampler only has to be non-nil to annotate.
-		res:   newResourceSampler(nil),
+		res: newResourceSampler(nil),
+		// No GitHub client: PR monitoring is skipped when client is nil.
+		prm:   newPRMonitor(nil),
 		tasks: newTaskStore(context.Background()),
 		risk:  newRiskMemory(),
 		hist:  newRiskHistory(),
@@ -48,7 +50,7 @@ func TestDaemonRoundTrip(t *testing.T) {
 	defer cancel()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, "", nil) }()
+	go func() { errCh <- RunDaemon(ctx, nil, "", nil, nil) }()
 
 	sockPath, err := SocketPath()
 	assert.NilError(t, err)
@@ -163,7 +165,7 @@ func TestEnsureLaunched_leavesAReachableDaemonAlone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, "", nil) }()
+	go func() { errCh <- RunDaemon(ctx, nil, "", nil, nil) }()
 
 	sockPath, err := SocketPath()
 	assert.NilError(t, err)

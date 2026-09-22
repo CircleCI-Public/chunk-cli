@@ -285,6 +285,13 @@ tailing each project's `events.jsonl` by byte offset, and serves snapshots as
 JSON over a Unix socket at `~/.chunk/watchd/watchd.sock`
 (`CHUNK_WATCHD_DIR` overrides the directory).
 
+| Variable | Default | Purpose |
+|---|---|---|
+| `CHUNK_WATCHD_DIR` | `~/.chunk/watchd/` | Override the directory for the socket, pid file and log |
+| `CHUNK_WATCHD_TCP_ADDR` | _(disabled)_ | Bind a TCP listener on this address in addition to the Unix socket (e.g. `127.0.0.1:7777`); requires `CHUNK_WATCHD_TCP_TOKEN` |
+| `CHUNK_WATCHD_REMOTE_ADDR` | _(local socket)_ | Connect to a remote daemon at this TCP address instead of the local socket (e.g. `127.0.0.1:7777` via an SSH tunnel) |
+| `CHUNK_WATCHD_TCP_TOKEN` | _(required when TCP is enabled)_ | Bearer token required on every TCP request; set the same value on the daemon and all clients. TCP traffic is not encrypted — use an SSH tunnel (`ssh -L`) when the daemon is not on loopback. |
+
 Beyond that it owns three things that outlive the processes they came from.
 
 ### Command output buffering

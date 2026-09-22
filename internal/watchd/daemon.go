@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sort"
@@ -15,6 +16,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
+	"github.com/CircleCI-Public/chunk-cli/internal/github"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
@@ -37,6 +40,9 @@ type projectState struct {
 	// no check has completed yet.
 	conflict  *ConflictState
 	lastFetch time.Time
+	// org and repo are resolved once from the git remote and cached for PR monitoring.
+	org  string
+	repo string
 }
 
 type daemon struct {
@@ -68,6 +74,9 @@ type daemon struct {
 	// hist is what past runs say about each project, for the questions an
 	// absolute threshold cannot answer.
 	hist *riskHistory
+	// prm monitors open PRs for each project's current branch. Nil when no
+	// GitHub credentials are available.
+	prm *prMonitor
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -75,8 +84,27 @@ type daemon struct {
 // client and authMessage support the output-buffering feature; runner is called
 // in-process to handle /validate requests. Both client and runner may be nil
 // (the daemon still records commands without a client, and /validate returns an
-// error without a runner).
-func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner) error {
+// error without a runner). ghClient may be nil; PR monitoring is skipped when
+// no GitHub credentials are available.
+func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
+	var tcpLn net.Listener
+	if addr := TCPListenAddr(); addr != "" {
+		if TCPToken() == "" {
+			return fmt.Errorf("CHUNK_WATCHD_TCP_ADDR requires CHUNK_WATCHD_TCP_TOKEN to be set")
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen tcp on %s: %w", addr, err)
+		}
+		tcpLn = ln
+	}
+	return runDaemon(ctx, tcpLn, client, authMessage, runner, ghClient)
+}
+
+// runDaemon is the inner daemon loop. It accepts a pre-opened tcpLn (nil when
+// TCP is disabled) so tests can avoid the TOCTOU race of closing and re-opening
+// a listener to discover a free port.
+func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -119,6 +147,7 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		tasks:     newTaskStore(ctx),
 		risk:      newRiskMemory(),
 		hist:      newRiskHistory(),
+		prm:       newPRMonitor(ghClient),
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.
@@ -133,8 +162,6 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
 
-	log.Printf("watch daemon started pid=%d socket=%s", os.Getpid(), sockPath)
-
 	go d.pollLoop(ctx)
 	go d.checkConflictsLoop(ctx)
 
@@ -143,6 +170,28 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		<-ctx.Done()
 		_ = srv.Close()
 	}()
+
+	if tcpLn != nil {
+		log.Printf("watch daemon started pid=%d socket=%s tcp=%s", os.Getpid(), sockPath, tcpLn.Addr())
+		// The TCP server wraps the same handler with bearer-token auth so the
+		// Unix socket (bound to the local user's filesystem) stays unauthenticated
+		// while the TCP listener enforces a shared secret.
+		tcpSrv := &http.Server{
+			Handler:           withBearerAuth(srv.Handler, TCPToken()),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		go func() {
+			<-ctx.Done()
+			_ = tcpSrv.Close()
+		}()
+		go func() {
+			if serveErr := tcpSrv.Serve(tcpLn); serveErr != nil && ctx.Err() == nil {
+				log.Printf("watchd tcp: %v", serveErr)
+			}
+		}()
+	} else {
+		log.Printf("watch daemon started pid=%d socket=%s", os.Getpid(), sockPath)
+	}
 
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		return fmt.Errorf("watchd serve: %w", err)
@@ -235,7 +284,14 @@ func (d *daemon) initProject(root string) *projectState {
 		log.Printf("watchd: event log for %s: %v", root, err)
 		return nil
 	}
-	return &projectState{root: root, canonRoot: canonicalRoot(root), dataDir: dataDir, log: el}
+	ps := &projectState{root: root, canonRoot: canonicalRoot(root), dataDir: dataDir, log: el}
+	// Resolve org/repo once for PR monitoring. Failure is silently ignored:
+	// the project may not be on GitHub, or the remote may not be reachable.
+	if org, repo, err := gitremote.DetectOrgAndRepo(root); err == nil {
+		ps.org = org
+		ps.repo = repo
+	}
+	return ps
 }
 
 // conflictReport answers a conflict query for one project root.
@@ -284,6 +340,10 @@ func (d *daemon) updateProject(ps *projectState) {
 	annotateActivity(sidecars, ps.events)
 	d.res.annotate(sidecars)
 
+	// Kick off a background PR fetch if one is due. Uses a background context
+	// derived from the daemon's own: the fetch must survive this poll returning.
+	d.prm.maybeRefresh(context.Background(), ps.root, branch, ps.org, ps.repo)
+
 	snap := ProjectSnapshot{
 		Root:     ps.root,
 		Branch:   branch,
@@ -293,6 +353,8 @@ func (d *daemon) updateProject(ps *projectState) {
 		Events:   ps.events,
 		Commands: d.out.commandsFor(ps.root),
 	}
+	d.prm.annotate(&snap)
+
 	d.mu.Lock()
 	// Read under the same lock that publishes snap, because the conflict loop
 	// writes it from another goroutine on its own schedule.
