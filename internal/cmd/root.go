@@ -49,9 +49,11 @@ func NewRootCmd(version string) *cobra.Command {
 			startUpdateCheck(cmd)
 			return maybeAutoLaunchDaemon(cmd)
 		},
+		// Telemetry is flushed by ExecuteRoot, not here: cobra skips the
+		// post-run hooks when RunE returns an error.
 		PersistentPostRunE: func(cmd *cobra.Command, _ []string) error {
 			printUpdateNotice(cmd)
-			return telemetry.FromContext(cmd.Context()).Close()
+			return nil
 		},
 	}
 	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
@@ -133,6 +135,29 @@ func agentExtra() map[string]any {
 		return nil
 	}
 	return map[string]any{"agent": agent}
+}
+
+// ExecuteRoot runs rootCmd and flushes buffered telemetry whether or not the
+// command succeeds.
+//
+// The flush cannot live in PersistentPostRunE: cobra returns as soon as RunE
+// reports an error and never reaches its post-run hooks, so every failed
+// invocation would drop the events it buffered. A lost command_invocation is
+// only a missing row, but an auth flow prompted mid-command also buffers the
+// identify that joins the user's pre-auth events to them — and that is sent
+// once, on the run that logs in. If the command then fails, nothing re-sends
+// it and the anonymous half of the journey stays orphaned for good.
+func ExecuteRoot(rootCmd *cobra.Command) error {
+	// The sender lives on the context of the command cobra actually resolved,
+	// which ExecuteC returns; rootCmd's own context does not carry it.
+	executed, err := rootCmd.ExecuteC()
+	if executed == nil {
+		executed = rootCmd
+	}
+	if ctx := executed.Context(); ctx != nil {
+		_ = telemetry.FromContext(ctx).Close()
+	}
+	return err
 }
 
 // setupTelemetry resolves the user's telemetry preference and attaches a

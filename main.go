@@ -25,7 +25,7 @@ func main() {
 
 	rootCmd := cmd.NewRootCmd(version)
 	rootCmd.SetContext(ctx)
-	err := rootCmd.Execute()
+	err := cmd.ExecuteRoot(rootCmd)
 	stop() // release signal resources before any os.Exit
 	if err != nil {
 		// ExitCode errors have already written their output; exit without

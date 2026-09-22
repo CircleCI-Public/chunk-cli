@@ -103,7 +103,8 @@ func makeValidateRunner() watchd.ValidateRunner {
 			runArgs = append(runArgs, "--project", projectRoot)
 		}
 		rootCmd.SetArgs(runArgs)
-		if err := rootCmd.ExecuteContext(ctx); err != nil {
+		rootCmd.SetContext(ctx)
+		if err := ExecuteRoot(rootCmd); err != nil {
 			if ec, ok := err.(interface{ ExitCode() int }); ok {
 				return ec.ExitCode()
 			}

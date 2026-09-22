@@ -144,7 +144,7 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 		}
 		// Joins the anonymous events from before this login to the user, so
 		// their journey up to authenticating is not a separate stranger.
-		telemetry.IdentifyUser(cmd.Context(), userID)
+		telemetry.IdentifyUser(ctx, userID)
 	}
 	printSaved(streams, "CircleCI token", insecureStorage)
 	return circleci.NewClient(circleci.Config{

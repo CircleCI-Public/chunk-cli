@@ -9,9 +9,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/analytics-go/v3"
+	gokeyring "github.com/zalando/go-keyring"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
@@ -120,4 +122,51 @@ func TestAuthRemoveCircleCI_ClearsUserID(t *testing.T) {
 	assert.NilError(t, authRemoveCircleCI(discardStreams(), false, true, true))
 
 	assert.Equal(t, config.GetUserID(), uuid.Nil, "a logged-out user should report anonymously again")
+}
+
+func TestAuthRemoveCircleCI_KeepsUserIDWhileEnvTokenAuthenticates(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvCircleToken, "cci-env-token")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	cfg, err := config.Load()
+	assert.NilError(t, err)
+	cfg.CircleCIToken = "cci-test-token"
+	assert.NilError(t, config.Save(cfg))
+
+	userID := uuid.New()
+	assert.NilError(t, config.SaveUserID(userID))
+
+	assert.NilError(t, authRemoveCircleCI(discardStreams(), true, true, true))
+
+	// The env token still authenticates every later command, and nothing
+	// short of an explicit login would re-persist the ID, so clearing it here
+	// would leave an authenticated user reporting anonymously for good.
+	assert.Equal(t, config.GetUserID(), userID,
+		"a user the environment still authenticates should keep reporting as themselves")
+}
+
+func TestAuthRemoveCircleCI_InsecureStorageKeepsUserIDWhileKeychainTokenAuthenticates(t *testing.T) {
+	isolateConfig(t)
+	gokeyring.MockInit()
+	t.Setenv(config.EnvCircleToken, "")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	cfg, err := config.Load()
+	assert.NilError(t, err)
+	cfg.CircleCIToken = "cci-config-token"
+	assert.NilError(t, config.Save(cfg))
+	service := keyring.ServiceCircleCI(unroutableBaseURL)
+	assert.NilError(t, keyring.Set(service, "cci-keychain-token"))
+	t.Cleanup(func() { _ = keyring.Delete(service) })
+
+	userID := uuid.New()
+	assert.NilError(t, config.SaveUserID(userID))
+
+	// --insecure-storage removes only the config-file token; the keychain
+	// token still authenticates every normal run.
+	assert.NilError(t, authRemoveCircleCI(discardStreams(), false, true, true))
+
+	assert.Equal(t, config.GetUserID(), userID,
+		"a user the keychain still authenticates should keep reporting as themselves")
 }

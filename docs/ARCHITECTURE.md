@@ -239,7 +239,20 @@ identifiers (the per-session one events carry and the per-install one in the
 device context), so one `identify` is sent for each and both threads join the
 same user. No traits are sent — the join needs only the two IDs.
 `chunk auth remove circleci` calls `config.ClearUserID`, so a logged-out user
-reports anonymously again.
+reports anonymously again — but only once no CircleCI token resolves at all.
+Removing one of the places a token can live can leave a working one in the
+environment or the config file, and clearing the ID then would strand a still
+authenticated user reporting anonymously: nothing re-persists it until an
+explicit `chunk auth login`, because the prompt that would is gated on no
+token resolving. Note that the install's anonymous ID is not rotated on
+logout, so the join Segment already recorded stands.
+
+The identify is buffered like any other event, and `cmd.ExecuteRoot` — not
+`PersistentPostRunE` — is what flushes it, because cobra returns as soon as
+`RunE` errors and never reaches its post-run hooks. A dropped
+`command_invocation` is just a missing row, but the identify is sent once, on
+the run that logs in; losing it because that run went on to fail would orphan
+the anonymous half of the journey for good.
 
 Because a payload can now mix tracks and identifies, buffered events cross to
 the `receive-telemetry` subprocess as an array of tagged envelopes
