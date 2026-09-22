@@ -44,7 +44,7 @@ func newPRMonitor(client *github.Client) *prMonitor {
 // maybeRefresh fires a background fetch for the project's branch if one is due.
 // It is called from the daemon's poll path and must not block.
 func (pm *prMonitor) maybeRefresh(ctx context.Context, root, branch, org, repo string) {
-	if pm == nil || pm.client == nil || branch == "" || org == "" || repo == "" {
+	if pm.client == nil || branch == "" || org == "" || repo == "" {
 		return
 	}
 	key := prProjectKey{root: root, branch: branch}
