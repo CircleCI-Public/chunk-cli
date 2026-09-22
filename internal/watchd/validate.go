@@ -357,7 +357,7 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *
 		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
 		id, err := d.prov.create(ctx, req.OrgID, name, "")
 		if err != nil {
-			return ValidateResponse{ExitCode: 1, Stderr: "provision sidecar: " + err.Error()}
+			return ValidateResponse{ExitCode: 1, Stderr: err.Error()}
 		}
 		defer func() { _ = d.prov.delete(context.Background(), id) }()
 		args = append(append([]string(nil), args...), "--sidecar-id", id)

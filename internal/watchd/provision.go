@@ -23,9 +23,10 @@ type ProvisionResponse struct {
 // provisioner creates and tracks sidecars owned by the daemon.
 // It is safe to call from multiple goroutines.
 type provisioner struct {
-	mu     sync.Mutex
-	client *circleci.Client
-	owned  map[string]bool // sidecar IDs created by this daemon instance
+	mu      sync.Mutex
+	stopped bool
+	client  *circleci.Client
+	owned   map[string]bool // sidecar IDs created by this daemon instance
 }
 
 func newProvisioner(client *circleci.Client) *provisioner {
@@ -36,11 +37,24 @@ func newProvisioner(client *circleci.Client) *provisioner {
 }
 
 func (p *provisioner) create(ctx context.Context, orgID, name, image string) (string, error) {
+	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		return "", fmt.Errorf("provision sidecar: daemon is shutting down")
+	}
+	p.mu.Unlock()
+
 	sc, err := p.client.CreateSidecar(ctx, orgID, name, image)
 	if err != nil {
 		return "", fmt.Errorf("provision sidecar: %w", err)
 	}
+
 	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		_ = p.client.DeleteSidecar(context.Background(), sc.ID)
+		return "", fmt.Errorf("provision sidecar: daemon is shutting down")
+	}
 	p.owned[sc.ID] = true
 	p.mu.Unlock()
 	return sc.ID, nil
@@ -48,8 +62,12 @@ func (p *provisioner) create(ctx context.Context, orgID, name, image string) (st
 
 func (p *provisioner) delete(ctx context.Context, id string) error {
 	p.mu.Lock()
+	owned := p.owned[id]
 	delete(p.owned, id)
 	p.mu.Unlock()
+	if !owned {
+		return fmt.Errorf("sidecar %s not owned by this daemon", id)
+	}
 	return p.client.DeleteSidecar(ctx, id)
 }
 
@@ -57,6 +75,7 @@ func (p *provisioner) delete(ctx context.Context, id string) error {
 // so ephemeral sidecars never outlive the daemon that owns them.
 func (p *provisioner) stopAll(ctx context.Context) {
 	p.mu.Lock()
+	p.stopped = true
 	ids := make([]string, 0, len(p.owned))
 	for id := range p.owned {
 		ids = append(ids, id)

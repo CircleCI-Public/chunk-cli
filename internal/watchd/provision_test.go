@@ -35,7 +35,7 @@ func startTestDaemonWithClient(t *testing.T, client *circleci.Client) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, client, "", nil) }()
+	go func() { errCh <- RunDaemon(ctx, client, "", nil, nil) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
