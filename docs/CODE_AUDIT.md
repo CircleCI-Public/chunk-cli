@@ -3,10 +3,13 @@
 A point-in-time review of `chunk-cli` for correctness, duplication and adherence to the
 conventions in [AGENTS.md](../AGENTS.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**Audited at:** `6bb97f9` (main, after #505 merged). Every `file:line` below was re-derived
+**Originally audited at:** `6bb97f9` (main, after #505 merged).
+
+**Re-audited at:** `0f3882a` (main, 2026-09-22). Every `file:line` below was re-derived
 against that commit. Line numbers drift — treat them as a starting point, not a contract.
 
-**Nothing in this audit has been fixed.** It is a work list.
+Findings marked **[fixed]** were resolved between the two audits; where a specific commit
+is known it is cited. Everything else is still open.
 
 ## How to read this
 
@@ -25,7 +28,7 @@ confirmed by running code rather than reading it, and say so explicitly.
 ### 1.1 Nested retry gives 12 HTTP attempts per GraphQL query
 
 `internal/github/client.go:37` constructs the shared HTTP client without `DisableRetries`, so
-`internal/httpcl` retries three times internally (`internal/httpcl/client.go:106`,
+`internal/httpcl` retries three times internally (`internal/httpcl/client.go:177`,
 `RetryMax = 3`, roughly 1s + 2s + 4s of backoff). `internal/github/retry.go:75`
 (`doWithRetry`) then wraps that in **another** three attempts with its own 2s/4s backoff.
 
@@ -38,7 +41,8 @@ A GitHub 5xx therefore costs up to 12 HTTP attempts and around 27 seconds **per 
 ### 1.2 Wrapping a `userError` silently discards the whole payload
 
 `main.go:63` (`errorDetails`) and `main.go:90` (`errorCode`) interrogate errors with direct
-interface type assertions:
+interface type assertions (five assertion sites in `errorDetails` at lines 68–84, one in
+`errorCode` at line 91):
 
 ```go
 if um, ok := err.(interface{ UserMessage() string }); ok {
@@ -57,48 +61,21 @@ for the next person who adds context to an error on the way out.
 
 **Fix:** `errors.As` with an interface target at each of the five assertion sites in `main.go`.
 
-### 1.3 Git helpers run against the process working directory
+### 1.3 Git helpers run against the process working directory **[fixed]**
 
-`internal/gitutil/gitutil.go:37` (`CurrentBranch`), `:51` (`IsBranchPushed`), `:62`
-(`MergeBase`) and `:88` (`GeneratePatch`) shell out to `git` with no `-C`, no `cmd.Dir` and no
-`context.Context`. They take no directory argument at all, so they operate on whatever the
-process cwd happens to be.
+`CurrentBranch`, `IsBranchPushed`, `MergeBase`, and `GeneratePatch` no longer exist.
+`CurrentBranch` was renamed `CurrentBranchIn(dir string)` and now uses `-C dir` correctly.
+The other three were removed when the sidecar sync path switched from git-patch to
+git-bundle and then rsync (PRs #442, #574; commits `80f2936`, `dc6d73f`). Findings 1.4 and
+1.5 are closed by the same removals.
 
-Their callers in `internal/sidecar/sync.go` have both a `ctx` and an explicit repo path in
-hand. So `chunk validate --project /somewhere/else`, on the `--checkout` sync path, diffs the
-wrong repository.
+### 1.4 `GeneratePatch` mutates the user's index and hides the cleanup failure **[fixed]**
 
-Siblings in the same file get this right: `HeadRefCtx:123` and `TopLevelCtx:139` both take a
-`ctx` and a directory.
+`GeneratePatch` was removed as part of the sync-path rewrite described in 1.3.
 
-**Fix:** thread `ctx` and a `dir` through all four. That also closes 1.4, 1.5 and 3.6.
+### 1.5 `MergeBase` reports a cause it has not established **[fixed]**
 
-### 1.4 `GeneratePatch` mutates the user's index and hides the cleanup failure
-
-`internal/gitutil/gitutil.go:88` stages untracked files with `git add -N` so they appear in the
-diff, then restores state in a `defer`:
-
-```go
-defer func() {
-    args := append([]string{"reset", gitHEAD, "--"}, untracked...)
-    _ = exec.Command("git", args...).Run()
-}()
-```
-
-The error is discarded. If the reset fails — or the process is killed between the two commands
-— the user is left with intent-to-add entries in their real index and nothing reported. On a
-repository with no commits, `git reset HEAD --` fails outright.
-
-**Fix:** surface the reset error (join it with the return error), and scope the operation to an
-explicit directory per 1.3.
-
-### 1.5 `MergeBase` reports a cause it has not established
-
-`internal/gitutil/gitutil.go:62` reassigns `err` partway through, discarding the actual
-`git merge-base` failure, then reports "no upstream tracking branch or origin/HEAD found" — a
-diagnosis that can be flatly wrong about what went wrong.
-
-**Fix:** keep the original error and wrap it with `%w`.
+`MergeBase` was removed as part of the sync-path rewrite described in 1.3.
 
 ### 1.6 A locked keychain is reported as "no credential stored"
 
@@ -110,24 +87,25 @@ user is told to authenticate again when the credential is sitting right there.
 **Fix:** return a distinct wrapped error for operational failures and only map genuine absence
 to `ErrNotFound`.
 
-### 1.7 Colour globals are raced by the spinner goroutine
+### 1.7 Colour global is raced by the spinner goroutine
 
-`internal/ui/colors.go:13-14` declares `stdoutColorEnabled` and `stderrColorEnabled` as plain
-package variables. Exported `SetColorEnabled` (`:28`) writes both with no synchronisation, and
-`Spinner.render` (`internal/ui/spinner.go:112`) reads `stderrColorEnabled` via `ErrDim` — from
-the goroutine started at `internal/ui/spinner.go:54`.
+`internal/ui/colors.go` was replaced by `internal/ui/styles.go` in commit `33ee96a` (PR #543,
+lipgloss migration). The underlying race survives: `_colorEnabled` at `styles.go:22` is still a
+plain package variable, `SetColorEnabled` (`:62`) still writes it without synchronisation, and
+`Spinner.render` (`internal/ui/spinner.go:122`) still reads it via `ErrDim` from the goroutine
+started at `spinner.go:54`.
 
 Unsynchronised read/write on a shared global, detectable under `-race`.
 
-**Fix:** an `atomic.Bool` per stream, or route colour state through a struct the caller owns.
+**Fix:** an `atomic.Bool`, or route colour state through a struct the caller owns.
 
 ### 1.8 Colour detection cannot be influenced by tests
 
-The same two variables at `internal/ui/colors.go:13-14` are initialised at **package load**,
-and `detectColorFor` (`:17`) calls `os.Getenv` there. `t.Setenv` can therefore never affect
-them. Two test files then reset the baseline in opposite directions —
-`internal/ui/colors_test.go:6` to `false`, `internal/cmd/init_test.go:459` to `true` — leaving
-the package baseline dependent on execution order.
+`_colorEnabled` at `internal/ui/styles.go:22` is still initialised at **package load** via
+`colorSupported()` which calls `os.Getenv`. `t.Setenv` can therefore never affect it. Two test
+files still reset the baseline in opposite directions — `internal/ui/colors_test.go:6` to
+`false`, `internal/cmd/init_test.go:495` to `true` — leaving the package baseline dependent on
+execution order.
 
 **Fix:** resolve colour lazily on first use, or inject it.
 
@@ -149,7 +127,7 @@ keep-alive connection blocks teardown of the login flow indefinitely.
 
 ### 1.11 `chunk upgrade` cannot be interrupted or timed out
 
-`internal/upgrade/upgrade.go:68` builds requests with `http.NewRequest` (not
+`internal/upgrade/upgrade.go:108` builds requests with `http.NewRequest` (not
 `NewRequestWithContext`), takes no `ctx`, and is handed `http.DefaultClient` — which has no
 `Timeout` — from `internal/cmd/upgrade.go`. An unresponsive GitHub hangs the command with no
 way out. See also 3.7.
@@ -160,9 +138,10 @@ way out. See also 3.7.
 
 Two places decide behaviour by grepping error text rather than inspecting typed errors:
 
-- `main.go:98` (`errorSuggestion`) matches `"401"`, `"authentication"`, `"dial tcp"`.
+- `main.go:98` (`errorSuggestion`, now at `:97`) matches `"authentication"`, `"401"`,
+  `"dial tcp"`.
 - `internal/github/retry.go:29` (`isRetryable`) matches `"timeout"`, `"ETIMEDOUT"`,
-  `"invalid character '<'"`.
+  `"invalid character '<'"` (now at `:44-57`).
 
 `circleci.StatusError` and `httpcl.HTTPError` both exist and carry status codes. Substring
 matching breaks silently whenever an upstream message is reworded, and the repo enables
@@ -172,41 +151,31 @@ matching breaks silently whenever an upstream message is reworded, and the repo 
 
 ### 1.13 `config.Resolve` returns a half-built config with a discarded error
 
-`internal/config/config.go:304` captures the error from `Load()`, carries on building `rc`
-regardless, and returns `rc, err` at the end. Its sibling `ResolveCircleCI`
-(`internal/config/config.go:346`) returns early on the identical failure — the two constructors
+`internal/config/config.go:377` (`Resolve`) captures the error from `Load()`, carries on
+building `rc` regardless, and returns `rc, err` at the end. Its sibling `ResolveCircleCI`
+(`internal/config/config.go:419`) returns early on the identical failure — the two constructors
 disagree about whether a config-load failure is fatal.
 
-Every call site then discards it: `rc, _ := config.Resolve(...)`, 27 times across
-`internal/cmd`. A corrupt `~/.config/chunk/config.json` produces a partially populated config
-and no diagnostic anywhere.
+Every call site then discards it: `rc, _ := config.Resolve(...)`, still scattered across
+`internal/cmd` (e.g. `auth.go:50`, `:67`, `:117`, `:477`, `:540`, `:677`). A corrupt
+`~/.config/chunk/config.json` produces a partially populated config and no diagnostic
+anywhere.
 
 **Fix:** make the two agree, then handle the error at the call sites.
 
-### 1.14 `--insecure-storage` is a dead parameter on 27 call sites
+### 1.14 `--insecure-storage` is a dead parameter on 27 call sites **[fixed]**
 
-`internal/config/config.go:304` is declared:
-
-```go
-func Resolve(flagAPIKey, flagModel string, _ bool) (ResolvedConfig, error)
-```
-
-The third parameter is discarded in the signature. Same at `ResolveCircleCI(_ bool)`
-(`internal/config/config.go:346`). Twenty-seven call sites pass `insecureStorage` into it.
-
-Reads are not *wrong* — the resolution order already prefers the config file over the keychain
-— but the API tells 27 call sites they are selecting behaviour they are not.
-
-**Fix:** drop the parameter, or honour it.
+`Resolve` and `ResolveCircleCI` now declare `insecureStorage bool` (not `_ bool`) and pass it
+through to `resolveCircleCIToken`, `resolveAnthropicAPIKey`, and `resolveGitHubToken`, each of
+which switches on it to bypass the keychain. The parameter is honoured.
 
 ### 1.15 JSON:API decoding by type-assertion ladder silently drops fields
 
-`internal/circleci/client.go:80` types the resource envelope as `Attributes any` /
-`References any`. `ListSidecars` (`:122-140`) and `ListSnapshots` (`:540-558`) therefore
+`internal/circleci/client.go:85` types the resource envelope as `Attributes any` /
+`References any`. `ListSidecars` (`:129-140`) and `ListSnapshots` (`:614-626`) therefore
 hand-roll nested `map[string]any` assertion ladders to get at fields.
 
-The package **already has the right typed structs**: `sidecarAttrs:93`, `orgRefs:103`,
-`commandAttrs:450`, `snapshotAttrs:484`, `instanceRefs:458`.
+The package **already has the right typed structs** nearby in the same file.
 
 This is worse than verbose. An assertion ladder drops a field silently when the type does not
 match; a typed decode errors. The two blocks are also a confirmed 19-line duplicate.
@@ -221,7 +190,7 @@ match; a typed decode errors. The two blocks are also a confirmed 19-line duplic
 
 Two independent detectors map project marker files to test commands:
 
-| | `internal/validate/setup.go:26` | `envbuilder/envbuilder.go:1219` |
+| | `internal/validate/setup.go:187` | `envbuilder/envbuilder.go:1219` |
 |---|---|---|
 | shape | flat `switch` on marker files | scored detection, workspace aware |
 | Python | `pytest` | `uv run pytest` / `pipenv run pytest` / `pytest` by lockfile |
@@ -239,8 +208,8 @@ lines and the divergence with it.
 
 The same derivation — `sha256(sessionID + ":" + branch)`, first four bytes as hex — appears at:
 
-- `internal/sidecar/active.go:64` — names the **state file**
-- `internal/cmd/validate.go:982` — names the **sidecar**
+- `internal/sidecar/active.go:95` (`sidecarFileName`) — names the **state file**
+- `internal/cmd/validate.go:1425` — names the **sidecar**
 
 Change the scheme in one and the state file silently stops corresponding to the sidecar it
 points at.
@@ -278,7 +247,7 @@ same string, and nothing enforces it.
 ### 2.5 `isRetryable` twice, same name, different contract
 
 `internal/github/retry.go:29` is a retry policy for idempotent requests.
-`internal/circleci/client.go:436` is a resume policy for a cursor-based stream. Both are
+`internal/circleci/client.go:476` is a resume policy for a cursor-based stream. Both are
 correct for their own purpose; sharing a name across sibling packages invites someone to
 "unify" them.
 
@@ -304,7 +273,7 @@ files:
 | `Save*` | `internal/authprompt/authprompt.go:123`, `:140`, `:157` |
 | `Validate*` | `internal/authprompt/authprompt.go:25`, `:47`, `:174` |
 
-`internal/cmd/auth.go` is 727 lines and almost all of it is this. The `Save*` trio is a
+`internal/cmd/auth.go` is 737 lines and almost all of it is this. The `Save*` trio is a
 confirmed three-way duplicate; `internal/authprompt/authprompt.go:85-94` and `:110-119` are
 another confirmed pair.
 
@@ -326,10 +295,11 @@ Largest single win in the repo, and it wants its own PR.
 
 ### 3.2 `ExecOverSSH` boilerplate, 17 times in one file [swept]
 
-The shape `ExecOverSSH` then check `err` then check `ExitCode != 0` then wrap, repeats 17 times
-in `internal/sidecar/sync.go`, plus 3 in `internal/variants/variants.go` and 1 in
-`internal/cmd/sidecar.go`. `initRemoteWorkspace` and `syncWorkspace` also repeat the same
-mkdir-parent-then-test-directory pair verbatim.
+The shape `ExecOverSSH` then check `err` then check `ExitCode != 0` then wrap, repeats 15 times
+in `internal/sidecar/sync.go` (was 17; two sites were removed with the rsync refactor), plus 4
+in `internal/variants/variants.go` and 1 in `internal/cmd/sidecar.go`.
+`initRemoteWorkspace` and `syncWorkspace` also repeat the same mkdir-parent-then-test-directory
+pair verbatim.
 
 **Fix:** `sidecar.mustExec(ctx, sess, label, cmd, stdin)` in `internal/sidecar/ssh.go`.
 Around 90 lines.
@@ -345,16 +315,16 @@ The coloured unified-diff printing loop is verbatim in both.
 
 **Fix:** one helper taking a small descriptor. Move the diff-printing loop into `internal/ui`.
 
-### 3.4 Git-repo test setup, five copies [swept]
+### 3.4 Git-repo test setup, still duplicated [swept]
 
-`internal/gitutil/gitutil_test.go:14` and `:87`, `internal/cmd/init_test.go:343`,
-`internal/cmd/validate_test.go:461` (plus the same `run := func(args ...string)` closure
-re-declared at `:493`, `:521`, `:555`, `:572`), and `acceptance/validate_test.go:604`.
+`acceptance/validate_test.go` was migrated to use `gitrepo.SetupGitRepo`. The unit-test copies
+remain: `internal/cmd/init_test.go:388`, `internal/cmd/validate_test.go:742` (plus multiple
+`run := func(args ...string)` closures re-declared at `:777`, `:805`, `:839`, `:856`).
 
-`internal/testing/gitrepo` already provides this and `internal/sidecar/sync_test.go` already
-uses it.
+`internal/testing/gitrepo` already provides this and is used by acceptance tests.
 
-**Fix:** everyone uses `internal/testing/gitrepo`. Around 130 lines.
+**Fix:** migrate `internal/cmd/init_test.go` and `internal/cmd/validate_test.go` to
+`internal/testing/gitrepo`. Around 80 lines remaining.
 
 ### 3.5 Bespoke session store beside a generic one [swept]
 
@@ -369,9 +339,9 @@ everything else lives under `config.ProjectDataDir`.
 ### 3.6 The three keyring timeout wrappers
 
 `internal/keyring/keyring.go:48`, `:70` and `:84` (`Get`, `Set`, `Delete`) are three copies of
-the same goroutine plus `select` plus `time.After` wrapper. None takes a `ctx`, so the signal
-context wired up in `main.go` cannot cancel them, and `time.After` leaks its timer at all three
-sites.
+the same goroutine plus `select` plus `time.After` wrapper (timers at lines `:64`, `:78`,
+`:96`). None takes a `ctx`, so the signal context wired up in `main.go` cannot cancel them, and
+`time.After` leaks its timer at all three sites.
 
 `internal/variants/variants.go` already does this correctly: `time.NewTimer` with
 `defer timer.Stop()` and a `ctx.Done()` case.
@@ -380,7 +350,7 @@ sites.
 
 ### 3.7 Two ad-hoc HTTP paths beside the canonical client
 
-`internal/upgrade/upgrade.go:68` takes a raw `*http.Client` and hand-builds requests with
+`internal/upgrade/upgrade.go:108` takes a raw `*http.Client` and hand-builds requests with
 manual status checks. `internal/oauth/exchange.go:36` uses `http.DefaultClient`, so no timeout
 at all. Every other caller — `circleci`, `github`, `anthropic`, `envbuilder` — goes through
 `internal/httpcl`.
@@ -391,14 +361,15 @@ at all. Every other caller — `circleci`, `github`, `anthropic`, `envbuilder` �
 ### 3.8 `mapErr` written three times [swept]
 
 `internal/github/client.go:94`, `internal/anthropic/client.go:115` (identical bar one guard),
-and `internal/circleci/client.go:575` (the same core plus 401/403 and 410 handling).
+and `internal/circleci/client.go:650` (the same core plus 401/403 and 410 handling).
 
 **Fix:** `httpcl.MapErr(op, err)`; `circleci` keeps only its extra branches.
 
 ### 3.9 One text-input model, implemented twice
 
-`internal/tui/input.go:38` (`hiddenInputModel`) and `internal/tui/text.go:33`
-(`textInputModel`) have identical `Init` and `Update`. Confirmed duplicate, 22 lines.
+`internal/ui/input.go:14` (`hiddenInputModel`) and `internal/ui/text.go:10`
+(`textInputModel`) have identical `Init` and `Update`. (Paths changed from `internal/tui/` in
+commit `33ee96a`; the duplicate itself was not resolved.) Confirmed duplicate, 22 lines.
 
 **Fix:** one model with a `hidden bool`.
 
@@ -448,7 +419,7 @@ text can lie.
 
 ### 4.1 `envbuilder` is three parallel switches over one axis
 
-`envbuilder/envbuilder.go` is 2710 lines in a single file with two `//nolint:gocyclo`
+`envbuilder/envbuilder.go` is 2722 lines in a single file with two `//nolint:gocyclo`
 suppressions. The root cause of both: **31 stack-conditional branches over the same 14 stack
 constants** (`envbuilder/envbuilder.go:22-36`), spread across exactly three functions.
 
@@ -456,7 +427,7 @@ constants** (`envbuilder/envbuilder.go:22-36`), spread across exactly three func
 |---|---|---|
 | `detectCommands` `:1219` | 378 | 13 |
 | `dockerfileContent` `:444` | 271 | 9 |
-| `detectImageVersion` `:2449` | 118 | 9 |
+| `detectImageVersion` `:2460` | 118 | 9 |
 
 Plus 29 loose `detect*` helpers, most of them per-stack: `detectNodeTestCommand`,
 `detectGradleJavaVersion`, `detectSBTTestCommand`, `detectDotNetVersion`,
@@ -496,8 +467,7 @@ issue.
 
 ### 4.3 `internal/cmd/sidecar.go` is 1294 lines
 
-Twenty cobra constructors plus setup orchestration (`sidecarSetupResolveSidecar`,
-`sidecarSetupSync`, `sidecarSetupRunSetup`) in one file.
+Twenty cobra constructors plus setup orchestration in one file, now 1323 lines (was 1294).
 
 **Fix:** split into `sidecar_setup.go` / `sidecar_snapshot.go` / `sidecar_env.go`, and move the
 orchestration down into `internal/sidecar` where it can be tested without cobra.
@@ -513,9 +483,10 @@ it required by construction.
 
 ### 4.5 `HeadRef` / `HeadRefCtx` twins
 
-`internal/gitutil/gitutil.go:117` and `:123`. One call site each
-(`internal/sidecar/sync.go` and `internal/tui/watch/model.go`), so collapsing to a single
-ctx-taking function is a two-line change.
+`internal/gitutil/gitutil.go:54` (`HeadRef`) and `:60` (`HeadRefCtx`). Both now take a `cwd`
+argument — the original ctx-less callers in `sync.go` and the watch model were fixed — but
+`HeadRef` still exists as a thin wrapper. The two call sites in `sync.go:234` and the watch
+model (now at `internal/ui/watch/`) could share a single ctx-taking function.
 
 ### 4.6 Naming that stutters against the repo's own rule [swept]
 
@@ -530,7 +501,7 @@ Mechanical but wide, so it wants its own PR.
 
 ### 4.7 Test-only mutable package variables [swept]
 
-`maxStreamAttempts` and `streamRetryBase` (`internal/circleci/client.go:219`, `:224`) and
+`maxStreamAttempts` and `streamRetryBase` (`internal/circleci/client.go:224`, `:229`) and
 `maxDigestBytes` (`internal/gitutil/fingerprint.go:23`) are package `var`s solely so tests can
 overwrite them. Any future `t.Parallel()` in those packages races on them.
 
@@ -538,8 +509,8 @@ overwrite them. Any future `t.Parallel()` in those packages races on them.
 
 ### 4.8 `interface{}` versus `any`
 
-`internal/settings/merge.go` uses `interface{}` 36 times; the rest of the repo uses `any` 88
-times. Purely mechanical.
+`internal/settings/merge.go` uses `interface{}` 37 times; the rest of the repo uses `any`.
+Purely mechanical.
 
 ---
 
@@ -633,9 +604,9 @@ Recorded so nobody spends time re-checking.
 - **Test skips are all justified**: 12 in total, covering root-bypasses-permissions, a missing
   `op`/docker/git binary, and the opt-in end-to-end suite.
 - **`internal/gitutil` is not over-exported**: 10 exported functions, every one used.
-- **One stale TODO** in the tree, at `acceptance/sidecar_test.go:501`.
-- `internal/cmd/validate.go:67`'s `_ = json.NewDecoder(r).Decode(&p)` is correct by design — a
-  non-hook invocation with piped stdin decodes to nothing and the empty `SessionID` is the
+- **One stale TODO** in the tree, at `acceptance/sidecar_test.go:526`.
+- `internal/cmd/validate.go:115`'s `_ = json.NewDecoder(r).Decode(&p)` is correct by design —
+  a non-hook invocation with piped stdin decodes to nothing and the empty `SessionID` is the
   signal.
 - Best-effort silent renames in `internal/config/paths.go` and `internal/eventlog/eventlog.go`
   are deliberate and commented.
@@ -661,8 +632,9 @@ Cheap and high value first, so the linter starts catching the rest.
 4. `-count=1` on `task test` — 6.2.
 5. `docs/CLI.md` and `docs/SKILLS.md` corrections — section 7.
 6. Small duplicate collapses — 3.9, 3.12's `FormatDuration` and shell-escape rows.
-7. Thread `ctx` and `dir` through `gitutil` — closes 1.3, 1.4, 1.5 and 4.5 together.
-8. Keyring: error classification plus the generic wrapper — 1.6 and 3.6.
-9. Reconcile the two stack detectors — 2.1. Own PR.
-10. The auth provider table — 3.1. Own PR.
-11. Split `envbuilder` by stack — 4.1. Own PR.
+7. Keyring: error classification plus the generic wrapper — 1.6 and 3.6.
+8. Reconcile the two stack detectors — 2.1. Own PR.
+9. The auth provider table — 3.1. Own PR.
+10. Split `envbuilder` by stack — 4.1. Own PR.
+
+Items 1.3, 1.4, 1.5, and 1.14 from the original list are done.
