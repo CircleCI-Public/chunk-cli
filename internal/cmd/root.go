@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"runtime"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -125,6 +125,16 @@ Configuration:
 	return rootCmd
 }
 
+// agentExtra returns a non-nil Extra map only when a coding agent is detected,
+// so that no "agent" trait is forwarded for users not running inside one.
+func agentExtra() map[string]any {
+	agent := telemetry.DetectCodingAgent()
+	if agent == "" {
+		return nil
+	}
+	return map[string]any{"agent": agent}
+}
+
 // setupTelemetry resolves the user's telemetry preference and attaches a
 // telemetry.Sender to cmd's context so RecordNow can report a
 // command_invocation event once the command finishes.
@@ -163,6 +173,15 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 		executable = "chunk"
 	}
 
+	// Only gather host info when telemetry will actually be sent. Skipping
+	// it for telemetry-disabled commands (e.g. completion generation) avoids
+	// gopsutil's ioreg lookup, which fails under a restricted PATH such as
+	// Homebrew's sanitized completion-generation environment.
+	var hostInfo *host.InfoStat
+	if optedIn && !telemetry.IsTelemetryDisabled(cmd) {
+		hostInfo, _ = host.InfoWithContext(cmd.Context())
+	}
+
 	tc, err := telemetry.NewSender(telemetry.Config{
 		Send:     send,
 		Log:      optedIn && os.Getenv("CHUNK_TELEMETRY_LOG") != "",
@@ -173,8 +192,8 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 			InstanceID:        instanceID,
 			SessionTrackingID: sessionTrackingID,
 			UserID:            config.GetUserID(),
-			OS:                runtime.GOOS,
-			CodingAgent:       telemetry.DetectCodingAgent(),
+			HostInfo:          hostInfo,
+			Extra:             agentExtra(),
 		},
 	})
 	if err != nil {
