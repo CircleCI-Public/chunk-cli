@@ -27,12 +27,16 @@ func between(t *testing.T, dir, base string) changeset.Changes {
 }
 
 func TestSnapshotTreeIsStableForTheSameTree(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "a.txt", "one\n")
 	assert.Equal(t, snapshot(t, dir), snapshot(t, dir))
 }
 
 func TestSnapshotTreeChangesWithTheTree(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "a.txt", "one\n")
 	before := snapshot(t, dir)
@@ -43,6 +47,8 @@ func TestSnapshotTreeChangesWithTheTree(t *testing.T) {
 // The developer's staging area is not ours to move. A snapshot that staged
 // their work would show up in the next commit they made by hand.
 func TestSnapshotTreeLeavesTheRealIndexAlone(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "staged.txt", "one\n")
 	writeFile(t, dir, "staged.txt", "two\n")
@@ -58,6 +64,8 @@ func TestSnapshotTreeLeavesTheRealIndexAlone(t *testing.T) {
 // Staged and unstaged work are both part of the state being validated, so both
 // are in the snapshot.
 func TestSnapshotTreeIncludesStagedAndUntrackedWork(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	base := snapshot(t, dir)
 
@@ -71,6 +79,8 @@ func TestSnapshotTreeIncludesStagedAndUntrackedWork(t *testing.T) {
 }
 
 func TestSnapshotTreeExcludesIgnoredFiles(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, ".gitignore", "build/\n")
 	gitRun(t, dir, "add", ".gitignore")
@@ -85,6 +95,8 @@ func TestSnapshotTreeExcludesIgnoredFiles(t *testing.T) {
 }
 
 func TestChangesBetweenMeasuresTheEditSinceTheSnapshot(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "main.go", "package main\n")
 	base := snapshot(t, dir)
@@ -98,6 +110,8 @@ func TestChangesBetweenMeasuresTheEditSinceTheSnapshot(t *testing.T) {
 }
 
 func TestChangesBetweenIsEmptyForAnUntouchedTree(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "a.txt", "one\n")
 	base := snapshot(t, dir)
@@ -111,6 +125,8 @@ func TestChangesBetweenIsEmptyForAnUntouchedTree(t *testing.T) {
 // moves HEAD but not the content, so it neither hides a change nor resets the
 // count. Measured against HEAD the same tree reports nothing at all.
 func TestChangesBetweenIsUnaffectedByACommit(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "main.go", "package main\n")
 	base := snapshot(t, dir)
@@ -128,12 +144,16 @@ func TestChangesBetweenIsUnaffectedByACommit(t *testing.T) {
 // A snapshot is not a durable handle: git collects it in its own time. A caller
 // holding a collected one is told so, and falls back to measuring against HEAD.
 func TestChangesBetweenRefusesAnUnknownSnapshot(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	_, err := ChangesBetween(dir, "0000000000000000000000000000000000000000")
 	assert.Assert(t, err != nil, "an unknown tree must not produce a measurement")
 }
 
 func TestSnapshotTreeNotARepoIsUnusable(t *testing.T) {
+	t.Parallel()
+
 	_, err := SnapshotTree(t.TempDir())
 	assert.Assert(t, err != nil, "a non-repo dir must not produce a snapshot")
 }

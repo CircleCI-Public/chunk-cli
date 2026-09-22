@@ -30,6 +30,8 @@ func commitFile(t *testing.T, dir, rel, content string) {
 }
 
 func TestWorkingChangesCleanTreeIsEmpty(t *testing.T) {
+	t.Parallel()
+
 	ch := changes(t, setupRepo(t))
 	assert.Equal(t, ch.Empty(), true)
 	assert.Equal(t, ch.Lines, 0)
@@ -38,6 +40,8 @@ func TestWorkingChangesCleanTreeIsEmpty(t *testing.T) {
 // An untracked file is the change git will not diff, so its lines are counted
 // here or not at all.
 func TestWorkingChangesCountsEveryLineOfAnUntrackedFile(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "new.go", "package main\n\nfunc main() {}\n")
 
@@ -48,6 +52,8 @@ func TestWorkingChangesCountsEveryLineOfAnUntrackedFile(t *testing.T) {
 
 // A final line with no trailing newline is still a line.
 func TestWorkingChangesCountsAnUnterminatedLastLine(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "new.txt", "one\ntwo")
 
@@ -55,6 +61,8 @@ func TestWorkingChangesCountsAnUnterminatedLastLine(t *testing.T) {
 }
 
 func TestWorkingChangesCountsAnEditAsInsertionAndDeletion(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "main.go", "package main\n\nfunc main() {}\n")
 	writeFile(t, dir, "main.go", "package main\n\nfunc main() { println() }\n")
@@ -67,6 +75,8 @@ func TestWorkingChangesCountsAnEditAsInsertionAndDeletion(t *testing.T) {
 
 // Staged and unstaged edits are one change against HEAD, not two measurements.
 func TestWorkingChangesCountsStagedAndUnstagedTogether(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "a.txt", "one\n")
 	commitFile(t, dir, "b.txt", "one\n")
@@ -81,6 +91,8 @@ func TestWorkingChangesCountsStagedAndUnstagedTogether(t *testing.T) {
 
 // Deleting is a change, and a large deletion is a large change.
 func TestWorkingChangesCountsDeletedLines(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "gone.txt", "one\ntwo\nthree\n")
 	assert.NilError(t, os.Remove(filepath.Join(dir, "gone.txt")))
@@ -91,6 +103,8 @@ func TestWorkingChangesCountsDeletedLines(t *testing.T) {
 // A rename names the file now on disk, since that is the one a caller can
 // classify or read.
 func TestWorkingChangesNamesTheDestinationOfARename(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "before.md", "docs\n")
 	gitRun(t, dir, "mv", "before.md", "after.md")
@@ -101,6 +115,8 @@ func TestWorkingChangesNamesTheDestinationOfARename(t *testing.T) {
 // Newlines in a binary file are not lines. The path is still reported: what
 // changed is not in doubt, only how much of it.
 func TestWorkingChangesCountsNoLinesInBinaryContent(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "blob.bin", "\x00\x01\n\n\n\x00")
 
@@ -112,6 +128,8 @@ func TestWorkingChangesCountsNoLinesInBinaryContent(t *testing.T) {
 // Past the read budget the measurement fails rather than reporting a partial
 // count, because a partial count reads as a smaller change than the real one.
 func TestWorkingChangesRefusesMoreUntrackedContentThanTheBudget(t *testing.T) {
+	// Not parallel: temporarily overwrites the package-level maxCountBytes
+	// budget, which every other WorkingChanges call in this package also reads.
 	dir := setupRepo(t)
 	writeFile(t, dir, "big.txt", strings.Repeat("line\n", 1000))
 
@@ -128,12 +146,16 @@ func TestWorkingChangesRefusesMoreUntrackedContentThanTheBudget(t *testing.T) {
 // as a clean tree — so callers must treat the error, not the value, as the
 // answer.
 func TestWorkingChangesNotARepoIsUnusable(t *testing.T) {
+	t.Parallel()
+
 	ch, err := WorkingChanges(t.TempDir())
 	assert.Assert(t, err != nil, "a non-repo dir must not produce a measurement")
 	assert.DeepEqual(t, ch, changeset.Changes{})
 }
 
 func TestWorkingChangesRepoWithoutCommitsIsUnusable(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitRun(t, dir, "init")
 	writeFile(t, dir, "new.txt", "one\n")

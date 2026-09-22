@@ -20,6 +20,8 @@ func materialize(t *testing.T, dir, tree string) string {
 // Everything the snapshot held is there, committed or not: uncommitted work is
 // the whole reason for validating a snapshot rather than a commit.
 func TestMaterializeTreeCarriesUncommittedWork(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "tracked.txt", "committed\n")
 	writeFile(t, dir, "untracked.go", "package main\n")
@@ -37,6 +39,8 @@ func TestMaterializeTreeCarriesUncommittedWork(t *testing.T) {
 // The point of the whole thing: the live tree can move as much as it likes and
 // the shadow does not.
 func TestTheShadowDoesNotMoveWithTheLiveTree(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "main.go", "before\n")
 	path := materialize(t, dir, snapshot(t, dir))
@@ -54,6 +58,8 @@ func TestTheShadowDoesNotMoveWithTheLiveTree(t *testing.T) {
 // What it cannot carry, said out loud: gitignored content is absent, which is
 // why running checks in a shadow is opt-in.
 func TestMaterializeTreeLeavesIgnoredContentBehind(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, ".gitignore", "node_modules/\n")
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "node_modules"), 0o755))
@@ -67,6 +73,8 @@ func TestMaterializeTreeLeavesIgnoredContentBehind(t *testing.T) {
 
 // It is a real worktree, so tools that ask git about it get answers.
 func TestTheShadowIsAGitWorktree(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "main.go", "package main\n")
 	path := materialize(t, dir, snapshot(t, dir))
@@ -83,6 +91,8 @@ func TestTheShadowIsAGitWorktree(t *testing.T) {
 // Cleanup takes the directory and the metadata git recorded for it, so a repo
 // does not accumulate worktrees one background run at a time.
 func TestCleanupRemovesTheShadowAndItsMetadata(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "main.go", "package main\n")
 	tree := snapshot(t, dir)
@@ -102,6 +112,8 @@ func TestCleanupRemovesTheShadowAndItsMetadata(t *testing.T) {
 
 // Two runs at once must not pick the same directory.
 func TestTwoShadowsOfTheSameTreeCoexist(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "main.go", "package main\n")
 	tree := snapshot(t, dir)
@@ -112,6 +124,8 @@ func TestTwoShadowsOfTheSameTreeCoexist(t *testing.T) {
 }
 
 func TestMaterializeTreeRefusesAnEmptySnapshot(t *testing.T) {
+	t.Parallel()
+
 	_, _, err := MaterializeTree(setupRepo(t), "")
 	assert.Assert(t, err != nil)
 }
