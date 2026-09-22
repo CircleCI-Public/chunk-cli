@@ -192,8 +192,8 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 			InstanceID:        instanceID,
 			SessionTrackingID: sessionTrackingID,
 			UserID:            config.GetUserID(),
-			HostInfo: hostInfo,
-			Extra:    agentExtra(),
+			HostInfo:          hostInfo,
+			Extra:             agentExtra(),
 		},
 	})
 	if err != nil {
