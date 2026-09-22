@@ -571,8 +571,8 @@ func TestValidateHookCacheHitResetsAttempts(t *testing.T) {
 	assert.Assert(t, strings.Contains(second, skipMsg), "second run must hit the cache, got: %q", second)
 	var response hookResponse
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
-	assert.Assert(t, strings.Contains(response.SystemMessage, "chunk validate passed"),
-		"cache hit must return a successful hook response, got: %q", stdout)
+	assert.Equal(t, response.SystemMessage, "chunk validate: skipped, nothing changed since the last pass",
+		"cache hit must return a successful hook response that says nothing ran")
 
 	// The hit cleared the counter, so the next failure is attempt 1 again.
 	assert.Equal(t, validate.TrackFailedAttempt(sessionID, nil), 1)
@@ -1079,7 +1079,7 @@ func TestReportDelegatedValidateAnnouncesABackgroundRun(t *testing.T) {
 		// sends them anyway must not have them read as a result.
 		ExitCode: 1,
 		Stderr:   "should not be shown",
-	}, streams)
+	}, nil, streams)
 
 	assert.NilError(t, err)
 	assert.Equal(t, outBuf.String(), "")
@@ -1100,7 +1100,7 @@ func TestReportDelegatedValidateExplainsAHeldRun(t *testing.T) {
 		ExitCode: 2,
 		Stdout:   "on stdout",
 		Stderr:   "on stderr",
-	}, streams)
+	}, nil, streams)
 
 	var silent *silentExitError
 	assert.Assert(t, errors.As(err, &silent), "a failing run must carry its exit code, got %v", err)
@@ -1115,7 +1115,7 @@ func TestReportDelegatedValidateSaysNothingWhenThereWasNoDecision(t *testing.T) 
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{Stderr: "1/1 passed"}, streams))
+	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{Stderr: "1/1 passed"}, nil, streams))
 	assert.Equal(t, errBuf.String(), "1/1 passed")
 }
 
@@ -1159,7 +1159,7 @@ func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 	var quiet bytes.Buffer
 	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{
 		Risk: &watchd.RiskSummary{Score: 12, Band: watchd.BandLow, Parts: []string{"12 lines (1)"}},
-	}, iostream.Streams{Out: &quiet, Err: &quiet}))
+	}, nil, iostream.Streams{Out: &quiet, Err: &quiet}))
 	assert.Equal(t, quiet.String(), "", "a low-risk change was narrated")
 
 	var loud bytes.Buffer
@@ -1172,7 +1172,7 @@ func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 			Parts:  []string{"2000 lines (60)", "3 files (6)"},
 			Advice: "committing it in parts would get each piece checked sooner",
 		},
-	}, iostream.Streams{Out: &loud, Err: &loud})
+	}, nil, iostream.Streams{Out: &loud, Err: &loud})
 
 	assert.Assert(t, err != nil)
 	out := loud.String()
@@ -1251,7 +1251,7 @@ func TestFinishValidateFinalizesEventLog(t *testing.T) {
 			result := validate.Result{Passed: 1, Total: 2}
 
 			err = finishValidate(
-				&cobra.Command{}, nil, tt.execErr, time.Now(), &config.ProjectConfig{}, result,
+				&cobra.Command{}, nil, tt.execErr, time.Now(), &config.ProjectConfig{}, result, "",
 				recorder, recorder.Status, iostream.Streams{Out: io.Discard, Err: io.Discard}, nil,
 			)
 			if tt.execErr == nil {
@@ -1268,6 +1268,85 @@ func TestFinishValidateFinalizesEventLog(t *testing.T) {
 			assert.Assert(t, final)
 			assert.Equal(t, passed, result.Passed)
 			assert.Equal(t, total, result.Total)
+		})
+	}
+}
+
+// A passing hook run names what it ran, so the user can tell a full check from
+// a single command.
+func TestValidateHookPassNamesTheCommands(t *testing.T) {
+	isolateConfig(t)
+	dir := hookProject(t, "exit 0")
+
+	stdout, _, err := runActiveStopHookOutput(t, dir)
+	assert.NilError(t, err)
+	var response hookResponse
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &response))
+	assert.Assert(t, strings.HasPrefix(response.SystemMessage, "chunk validate passed: test ("),
+		"got %q", response.SystemMessage)
+}
+
+// Codex shows a systemMessage as a warning, so a pass says nothing there. The
+// client detects Codex from the payload and the daemon subprocess is told by
+// flag; both must reach the same answer.
+func TestValidateHookPassIsQuietUnderCodex(t *testing.T) {
+	for name, tc := range map[string]struct {
+		stdin string
+		args  []string
+	}{
+		"payload": {
+			stdin: `{"session_id":"test-session-001","stop_hook_active":true,"hook_event_name":"Stop","turn_id":"turn-1"}`,
+		},
+		"forwarded": {
+			args: []string{"--hook-session-id", "test-session-001", "--stop-hook-active", "--hook-codex"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			isolateConfig(t)
+			dir := hookProject(t, "exit 0")
+
+			var outBuf, errBuf bytes.Buffer
+			root := newTestRootCmd()
+			root.SetOut(&outBuf)
+			root.SetErr(&errBuf)
+			root.SetIn(strings.NewReader(tc.stdin))
+			root.SetArgs(append([]string{"validate", "--local", "--no-daemon", "--project", dir}, tc.args...))
+			assert.NilError(t, root.Execute())
+
+			assert.Equal(t, outBuf.String(), "", "a pass under Codex must not write a hook response")
+			assert.Assert(t, strings.Contains(errBuf.String(), "1/1 passed"), "the run did not happen: %q", errBuf.String())
+		})
+	}
+}
+
+func TestDetectHookRecognisesCodex(t *testing.T) {
+	hook := detectHook(strings.NewReader(`{"session_id":"abc","hook_event_name":"Stop","turn_id":"turn-1"}`))
+	assert.Assert(t, hook != nil)
+	assert.Assert(t, hook.codex)
+
+	hook = detectHook(strings.NewReader(`{"session_id":"abc","hook_event_name":"Stop"}`))
+	assert.Assert(t, hook != nil)
+	assert.Assert(t, !hook.codex)
+}
+
+// A hook released to the background says so in its response, under Codex too:
+// otherwise the hook finishes with nothing to show it checked anything.
+func TestReportDelegatedValidateTellsTheHookAboutABackgroundRun(t *testing.T) {
+	for name, hook := range map[string]*hookContext{
+		"claude": {sessionID: "abc", event: hookEventStop},
+		"codex":  {sessionID: "abc", event: hookEventStop, codex: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var outBuf, errBuf bytes.Buffer
+			err := reportDelegatedValidate(watchd.ValidateResponse{
+				TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
+				Reason: "small change, 42 lines",
+			}, hook, iostream.Streams{Out: &outBuf, Err: &errBuf})
+			assert.NilError(t, err)
+
+			var response hookResponse
+			assert.NilError(t, json.Unmarshal(outBuf.Bytes(), &response))
+			assert.Equal(t, response.SystemMessage, "chunk validate: running in the background (small change, 42 lines)")
 		})
 	}
 }
