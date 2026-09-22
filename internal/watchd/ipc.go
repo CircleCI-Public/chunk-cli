@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -98,6 +99,8 @@ func newServer(d *daemon) *http.Server {
 	mux.HandleFunc("/validate", d.handleValidate)
 	mux.HandleFunc("/validate/async", d.handleAsyncValidate)
 	mux.HandleFunc("/validate/collect", d.handleCollect)
+	mux.HandleFunc("/sidecar", d.handleSidecar)
+	mux.HandleFunc("/sidecar/", d.handleSidecarByID)
 	return &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -193,4 +196,58 @@ func longTCPClient(addr string) *http.Client {
 		rt = &bearerTransport{inner: transport, token: token}
 	}
 	return &http.Client{Transport: rt}
+}
+
+// handleSidecar serves POST /sidecar: create a new sidecar and return its ID.
+func (d *daemon) handleSidecar(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if d.prov == nil {
+		http.Error(w, "daemon has no credentials; cannot provision sidecars", http.StatusServiceUnavailable)
+		return
+	}
+	var req ProvisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.OrgID == "" {
+		http.Error(w, "org_id required", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	id, err := d.prov.create(r.Context(), req.OrgID, req.Name, req.Image)
+	if err != nil {
+		http.Error(w, "provision sidecar: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(ProvisionResponse{SidecarID: id})
+}
+
+// handleSidecarByID serves DELETE /sidecar/{id}: delete a daemon-provisioned sidecar.
+func (d *daemon) handleSidecarByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if d.prov == nil {
+		http.Error(w, "daemon has no credentials", http.StatusServiceUnavailable)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/sidecar/")
+	if id == "" {
+		http.Error(w, "sidecar id required", http.StatusBadRequest)
+		return
+	}
+	if err := d.prov.delete(r.Context(), id); err != nil {
+		http.Error(w, "delete sidecar: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

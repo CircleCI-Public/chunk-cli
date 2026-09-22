@@ -77,6 +77,10 @@ type daemon struct {
 	// prm monitors open PRs for each project's current branch. Nil when no
 	// GitHub credentials are available.
 	prm *prMonitor
+	// prov creates and tracks sidecars owned by this daemon instance. Nil when
+	// the daemon has no client (unauthenticated), in which case POST /sidecar
+	// returns 503.
+	prov *provisioner
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -137,6 +141,11 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
+	var prov *provisioner
+	if client != nil {
+		prov = newProvisioner(client)
+	}
+
 	d := &daemon{
 		projects:  make(map[string]*projectState),
 		runner:    runner,
@@ -148,6 +157,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		risk:      newRiskMemory(),
 		hist:      newRiskHistory(),
 		prm:       newPRMonitor(ghClient),
+		prov:      prov,
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.
@@ -158,6 +168,9 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.out.stopAll()
 	defer d.res.stopAll()
 	defer d.tasks.stopAll()
+	if prov != nil {
+		defer prov.stopAll(context.Background())
+	}
 
 	// Poll once before accepting connections so the first request has data.
 	d.poll()
