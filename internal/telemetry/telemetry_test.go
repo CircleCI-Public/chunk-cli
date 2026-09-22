@@ -133,6 +133,14 @@ func TestMeta_ToContext_NilExtraOmitsTraits(t *testing.T) {
 	assert.Assert(t, ctx.Traits == nil)
 }
 
+func TestMeta_ToContext_EmptyAgentNotForwarded(t *testing.T) {
+	m := Meta{Version: "1.2.3", Extra: map[string]any{"agent": ""}}
+	ctx := m.toContext()
+
+	_, ok := ctx.Traits["agent"]
+	assert.Assert(t, !ok, "empty agent string should not appear in Traits")
+}
+
 func TestSender_CloseIsIdempotent(t *testing.T) {
 	fake := &fakeDestination{}
 	s, err := NewSender(Config{TestDestination: fake})

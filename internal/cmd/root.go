@@ -125,6 +125,16 @@ Configuration:
 	return rootCmd
 }
 
+// agentExtra returns a non-nil Extra map only when a coding agent is detected,
+// so that no "agent" trait is forwarded for users not running inside one.
+func agentExtra() map[string]any {
+	agent := telemetry.DetectCodingAgent()
+	if agent == "" {
+		return nil
+	}
+	return map[string]any{"agent": agent}
+}
+
 // setupTelemetry resolves the user's telemetry preference and attaches a
 // telemetry.Sender to cmd's context so RecordNow can report a
 // command_invocation event once the command finishes.
@@ -182,10 +192,8 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 			InstanceID:        instanceID,
 			SessionTrackingID: sessionTrackingID,
 			UserID:            config.GetUserID(),
-			HostInfo:          hostInfo,
-			Extra: map[string]any{
-				"agent": telemetry.DetectCodingAgent(),
-			},
+			HostInfo: hostInfo,
+			Extra:    agentExtra(),
 		},
 	})
 	if err != nil {

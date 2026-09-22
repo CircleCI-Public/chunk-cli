@@ -91,11 +91,21 @@ func (m *Meta) toContext() *analytics.Context {
 		device.Model = m.HostInfo.KernelArch
 		device.Type = m.HostInfo.PlatformFamily
 	}
+	var traits map[string]any
+	for k, v := range m.Extra {
+		if s, ok := v.(string); ok && s == "" {
+			continue
+		}
+		if traits == nil {
+			traits = make(map[string]any)
+		}
+		traits[k] = v
+	}
 	return &analytics.Context{
 		App:    analytics.AppInfo{Name: "chunk-cli", Version: m.Version},
 		OS:     osInfo,
 		Device: device,
-		Traits: m.Extra,
+		Traits: traits,
 	}
 }
 
