@@ -249,17 +249,17 @@ func TestBuildSetsStatusMessages(t *testing.T) {
 	data, err := Build(cmds)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, statusMessages(t, data), map[string]string{
-		ConflictsCommand: "chunk conflicts (before commit)",
-		"cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint": "chunk validate lint (before commit)",
-		"cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test": "chunk validate test (before commit)",
-		StopCommand: "chunk validate",
+		ConflictsCommand: "Running chunk conflicts before commit",
+		"cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate lint": "Running chunk validate lint before commit",
+		"cd ${CLAUDE_PROJECT_DIR:-.} && chunk validate test": "Running chunk validate test before commit",
+		StopCommand: "Running chunk validate",
 	})
 
 	data, err = BuildCodex(cmds)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, statusMessages(t, data), map[string]string{
-		"chunk validate lint": "chunk validate lint (before commit)",
-		"chunk validate test": "chunk validate test (before commit)",
-		StopCommand:           "chunk validate",
+		"chunk validate lint": "Running chunk validate lint before commit",
+		"chunk validate test": "Running chunk validate test before commit",
+		StopCommand:           "Running chunk validate",
 	})
 }

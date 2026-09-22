@@ -18,14 +18,14 @@ const conflictsTimeout = 5
 // run time: whether the Stop hook hits the cache, skips a clean tree, or goes to
 // the background is reported afterwards, through the hook's systemMessage.
 const (
-	stopStatusMessage      = "chunk validate"
-	conflictsStatusMessage = "chunk conflicts (before commit)"
+	stopStatusMessage      = "Running chunk validate"
+	conflictsStatusMessage = "Running chunk conflicts before commit"
 )
 
 // commitStatusMessage is the spinner text for the commit gate entry that runs
-// the named command. The suffix says why the commit is waiting.
+// the named command. It says why the commit is waiting.
 func commitStatusMessage(name string) string {
-	return fmt.Sprintf("chunk validate %s (before commit)", name)
+	return fmt.Sprintf("Running chunk validate %s before commit", name)
 }
 
 // hookEntry is one hook command within a hook group.
