@@ -116,6 +116,24 @@ func toWebSocketURL(raw string) (wsURL, host string, err error) {
 	return u.String(), u.Hostname(), nil
 }
 
+// wssHTTPClient returns an *http.Client for dialing a wss:// sidecar tunnel.
+// TLS certificate verification is skipped because the sidecar uses a
+// self-signed certificate; trust is instead established via SSH host key
+// pinning (TOFU) once the tunnel is up. Proxy is set explicitly: a literal
+// http.Transport (unlike http.DefaultTransport) otherwise defaults to no
+// proxy, which silently ignores HTTP_PROXY/HTTPS_PROXY in environments that
+// require an egress proxy to reach the sidecar host.
+func wssHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, //nolint:gosec // sidecar uses self-signed certs; trust via SSH host key TOFU
+			},
+		},
+	}
+}
+
 // dialSSH establishes an SSH client connection to the sidecar over a WebSocket tunnel.
 // The caller must close the returned sshConn.
 func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
@@ -134,13 +152,7 @@ func dialSSH(ctx context.Context, session *Session) (*sshConn, error) {
 	// trust is established via SSH host key pinning (TOFU) below.
 	dialOpts := &websocket.DialOptions{}
 	if strings.HasPrefix(wsURL, "wss://") {
-		dialOpts.HTTPClient = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec // sidecar uses self-signed certs; trust via SSH host key TOFU
-				},
-			},
-		}
+		dialOpts.HTTPClient = wssHTTPClient()
 	}
 
 	wsConn, resp, err := websocket.Dial(ctx, wsURL, dialOpts)
