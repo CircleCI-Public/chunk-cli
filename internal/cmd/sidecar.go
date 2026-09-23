@@ -555,6 +555,14 @@ func newSidecarSSHCmd() *cobra.Command {
 			}
 			err = sidecar.SSH(cmd.Context(), client, sidecarID, args, envVars, io, commandStdin())
 			if err != nil {
+				// The remote command's output has already been written; exit
+				// with its status as ssh does, so scripts see the real code.
+				if e, ok := errors.AsType[*sidecar.RemoteExitError](err); ok {
+					if e.Signal != "" {
+						io.ErrPrintf("Command killed by signal: %s\n", e.Signal)
+					}
+					return &silentExitError{code: e.Code}
+				}
 				if err := sshSessionError(err); err != nil {
 					return err
 				}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 func TestShellEscape(t *testing.T) {
@@ -287,3 +290,47 @@ func TestSSHAuthEncryptedKey(t *testing.T) {
 	assert.Assert(t, errors.As(err, &encErr), "want EncryptedKeyError, got %v", err)
 	assert.Equal(t, encErr.Path, keyPath)
 }
+
+// TestSessionCloserAfterCleanExit verifies that closing a session whose remote
+// end has already exited cleanly is not reported as an error. ssh.Session.Close
+// returns io.EOF in that state, which previously surfaced from `chunk sidecar
+// ssh` as "An unknown error occurred" after exiting an interactive shell.
+func TestSessionCloserAfterCleanExit(t *testing.T) {
+	keyFile, pubKey := fakes.GenerateSSHKeypair(t)
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	session := &Session{
+		URL:          sshSrv.Addr(),
+		IdentityFile: keyFile,
+		KnownHosts:   filepath.Join(t.TempDir(), "known_hosts"),
+	}
+
+	client, err := dialSSH(context.Background(), session)
+	assert.NilError(t, err)
+	defer func() { _ = client.Close() }()
+
+	t.Run("raw close returns io.EOF", func(t *testing.T) {
+		sess, err := client.NewSession()
+		assert.NilError(t, err)
+		assert.NilError(t, sess.Run("exit"))
+		assert.ErrorIs(t, sess.Close(), io.EOF)
+	})
+
+	t.Run("wrapped close returns nil", func(t *testing.T) {
+		sess, err := client.NewSession()
+		assert.NilError(t, err)
+		assert.NilError(t, sess.Run("exit"))
+		assert.NilError(t, sessionCloser{sess}.Close())
+	})
+}
+
+func TestSessionCloserPropagatesOtherErrors(t *testing.T) {
+	sentinel := errors.New("boom")
+	err := sessionCloser{closeFunc(func() error { return sentinel })}.Close()
+	assert.ErrorIs(t, err, sentinel)
+}
+
+type closeFunc func() error
+
+func (f closeFunc) Close() error { return f() }

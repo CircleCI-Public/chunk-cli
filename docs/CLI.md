@@ -326,6 +326,11 @@ chunk
   apart. `--json` carries `session_id` and `owner_pid` in full.
 - `sidecar ssh -- <cmd>` forwards stdin when the process stdin is a pipe, enabling
   patterns like `cat bundle | chunk sidecar ssh -- git fetch ...`.
+- **`sidecar ssh` exits with the remote status**, for both a command and an
+  interactive shell, and prints nothing of its own — the same as `ssh` and
+  `sidecar exec`. A remote status can therefore coincide with one of chunk's own
+  exit codes (2–5); chunk's own failures are the ones that print an error. A
+  process killed by a signal additionally reports the signal on stderr.
 - **Sidecar state is per agent session.** Two agent sessions open in the same
   working tree must not share a sidecar: they would sync into the same remote
   workspace and reset the checkout under each other's test run. State files are

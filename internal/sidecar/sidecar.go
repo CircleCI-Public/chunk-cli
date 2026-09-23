@@ -65,7 +65,7 @@ func SSH(ctx context.Context, client *circleci.Client, sidecarID string, args []
 		_, _ = fmt.Fprint(streams.Err, result.Stderr)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("%q exited with status %d", command, result.ExitCode)
+		return &RemoteExitError{Code: result.ExitCode, Signal: result.Signal}
 	}
 	return nil
 }

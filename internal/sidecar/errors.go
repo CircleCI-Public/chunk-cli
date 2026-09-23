@@ -48,3 +48,18 @@ func (e *NoOriginRemoteError) Error() string {
 }
 
 func (e *NoOriginRemoteError) Unwrap() error { return e.Err }
+
+// RemoteExitError reports that a command or shell run over SSH exited
+// non-zero. Its output has already been written by the time this is returned,
+// so callers should exit with Code rather than print it as a failure of chunk.
+type RemoteExitError struct {
+	Code   int
+	Signal string // set when the remote process was killed by a signal
+}
+
+func (e *RemoteExitError) Error() string {
+	if e.Signal != "" {
+		return fmt.Sprintf("remote process killed by signal %s", e.Signal)
+	}
+	return fmt.Sprintf("remote process exited with status %d", e.Code)
+}
