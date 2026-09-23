@@ -25,16 +25,22 @@ func writeFile(t *testing.T, dir, rel, content string) {
 }
 
 func TestFingerprintSameTreeIsStable(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	assert.Equal(t, fingerprint(t, dir), fingerprint(t, dir))
 }
 
 func TestFingerprintCleanRepoIsClean(t *testing.T) {
+	t.Parallel()
+
 	wt := fingerprint(t, setupRepo(t))
 	assert.Equal(t, wt.Clean, true)
 }
 
 func TestFingerprintUntrackedFileIsNotClean(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "dirty.txt", "change")
 
@@ -46,6 +52,8 @@ func TestFingerprintUntrackedFileIsNotClean(t *testing.T) {
 // open: a directory with no git state yields the zero Worktree, which reports
 // the tree as not clean rather than claiming there is nothing to do.
 func TestFingerprintNotARepoIsUnusable(t *testing.T) {
+	t.Parallel()
+
 	wt, err := Fingerprint(t.TempDir())
 	assert.Assert(t, err != nil, "a non-repo dir must not produce a fingerprint")
 	assert.Equal(t, wt, Worktree{})
@@ -53,6 +61,8 @@ func TestFingerprintNotARepoIsUnusable(t *testing.T) {
 }
 
 func TestFingerprintRepoWithoutCommitsIsUnusable(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	gitRun(t, dir, "init")
 
@@ -62,6 +72,8 @@ func TestFingerprintRepoWithoutCommitsIsUnusable(t *testing.T) {
 }
 
 func TestFingerprintUncommittedChangeChangesDigest(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	before := fingerprint(t, dir)
 
@@ -72,6 +84,8 @@ func TestFingerprintUncommittedChangeChangesDigest(t *testing.T) {
 }
 
 func TestFingerprintNewCommitChangesHead(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	before := fingerprint(t, dir)
 
@@ -89,6 +103,8 @@ func TestFingerprintNewCommitChangesHead(t *testing.T) {
 // a further edit, so a status-only digest would call the tree unchanged and let
 // a caller skip work on the new content.
 func TestFingerprintEditAlreadyDirtyFileChangesDigest(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "tracked.go", "package p\n")
 	gitRun(t, dir, "add", "tracked.go")
@@ -107,6 +123,8 @@ func TestFingerprintEditAlreadyDirtyFileChangesDigest(t *testing.T) {
 // TestFingerprintEditUntrackedFileChangesDigest is the untracked counterpart:
 // "?? new.go" is also stable across edits to that file.
 func TestFingerprintEditUntrackedFileChangesDigest(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 
 	writeFile(t, dir, "new.go", "package p\n")
@@ -123,6 +141,8 @@ func TestFingerprintEditUntrackedFileChangesDigest(t *testing.T) {
 // without it git collapses an untracked directory to a single "dir/" entry and
 // the contents of files inside it are never hashed.
 func TestFingerprintEditFileInUntrackedDirChangesDigest(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
 
@@ -137,6 +157,8 @@ func TestFingerprintEditFileInUntrackedDirChangesDigest(t *testing.T) {
 }
 
 func TestFingerprintStagedChangeChangesDigest(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "tracked.go", "package p\n")
 	gitRun(t, dir, "add", "tracked.go")
@@ -152,6 +174,8 @@ func TestFingerprintStagedChangeChangesDigest(t *testing.T) {
 }
 
 func TestFingerprintFromSubDirMatchesRepoRoot(t *testing.T) {
+	t.Parallel()
+
 	// Porcelain paths are repo-root-relative, so a run from a subdirectory must
 	// still hash the same working tree rather than failing to open any path.
 	dir := setupRepo(t)
@@ -166,6 +190,8 @@ func TestFingerprintFromSubDirMatchesRepoRoot(t *testing.T) {
 // at all, so an oversized tree fails like any other unusable state. The error
 // has to name the budget, or a repo that silently never caches is undiagnosable.
 func TestFingerprintOversizedWorktreeIsUnusable(t *testing.T) {
+	// Not parallel: temporarily overwrites the package-level maxDigestBytes
+	// budget, which every other Fingerprint call in this package also reads.
 	dir := setupRepo(t)
 
 	original := maxDigestBytes
@@ -188,6 +214,8 @@ func TestFingerprintOversizedWorktreeIsUnusable(t *testing.T) {
 // another repository, so hashing it here would produce a digest that does not
 // track it. A directory standing in for the submodule reaches the same branch.
 func TestFingerprintNonRegularChangedPathIsUnusable(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o755))
 	// An empty untracked directory is invisible to git status, so give the
@@ -207,6 +235,8 @@ func TestFingerprintNonRegularChangedPathIsUnusable(t *testing.T) {
 // file whose contents cannot be read leaves the digest blind to it, so the whole
 // fingerprint fails rather than silently omitting the path.
 func TestFingerprintUnreadableChangedPathIsUnusable(t *testing.T) {
+	t.Parallel()
+
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores file permissions")
 	}
@@ -222,6 +252,8 @@ func TestFingerprintUnreadableChangedPathIsUnusable(t *testing.T) {
 }
 
 func TestFingerprintDeletedFileChangesDigest(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "tracked.go", "package p\n")
 	gitRun(t, dir, "add", "tracked.go")
@@ -238,6 +270,8 @@ func TestFingerprintDeletedFileChangesDigest(t *testing.T) {
 }
 
 func TestFingerprintRenamedFileChangesDigest(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	writeFile(t, dir, "old.go", "package p\n")
 	gitRun(t, dir, "add", "old.go")

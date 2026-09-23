@@ -12,6 +12,8 @@ import (
 )
 
 func TestPreviewMergeCleanWhenBranchesTouchDifferentFiles(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "base.txt", "base\n")
 
@@ -28,6 +30,8 @@ func TestPreviewMergeCleanWhenBranchesTouchDifferentFiles(t *testing.T) {
 }
 
 func TestPreviewMergeReportsConflictingPaths(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "shared.txt", "original\n")
 
@@ -46,6 +50,8 @@ func TestPreviewMergeReportsConflictingPaths(t *testing.T) {
 }
 
 func TestPreviewMergeLeavesTheWorkingTreeAlone(t *testing.T) {
+	t.Parallel()
+
 	// The whole reason merge-tree is the primitive: this runs against a
 	// checkout somebody is working in, and must not touch their index, HEAD, or
 	// files. A real `git merge` here would leave conflict markers on disk.
@@ -85,6 +91,8 @@ func TestPreviewMergeLeavesTheWorkingTreeAlone(t *testing.T) {
 }
 
 func TestPreviewMergeIgnoresUncommittedConflicts(t *testing.T) {
+	t.Parallel()
+
 	// A conflict that exists only in unstaged edits is invisible here, because
 	// the merge is of commits. Pinned as a test because every caller has to say
 	// so out loud, or the silence reads as an all-clear it did not check.
@@ -108,6 +116,8 @@ func TestPreviewMergeIgnoresUncommittedConflicts(t *testing.T) {
 }
 
 func TestPreviewMergeErrorsOnUnknownRevision(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "base.txt", "base\n")
 
@@ -119,6 +129,8 @@ func TestPreviewMergeErrorsOnUnknownRevision(t *testing.T) {
 }
 
 func TestDefaultRemoteBranchInReadsRemoteHead(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "base.txt", "base\n")
 	gitRun(t, dir, "remote", "add", "origin", "https://example.com/x/y.git")
@@ -131,6 +143,8 @@ func TestDefaultRemoteBranchInReadsRemoteHead(t *testing.T) {
 }
 
 func TestDefaultRemoteBranchInPrefersOriginOverUpstream(t *testing.T) {
+	t.Parallel()
+
 	// A fork checkout has both. origin wins, because that is the remote whose
 	// tracking ref a fetch would refresh.
 	dir := setupRepo(t)
@@ -147,6 +161,8 @@ func TestDefaultRemoteBranchInPrefersOriginOverUpstream(t *testing.T) {
 }
 
 func TestDefaultRemoteBranchInFallsBackToUpstream(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "base.txt", "base\n")
 	gitRun(t, dir, "remote", "add", "upstream", "https://example.com/them/y.git")
@@ -159,12 +175,16 @@ func TestDefaultRemoteBranchInFallsBackToUpstream(t *testing.T) {
 }
 
 func TestDefaultRemoteBranchInErrorsWithoutRemoteHead(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	_, _, err := DefaultRemoteBranchIn(dir)
 	assert.Check(t, err != nil)
 }
 
 func TestRevParseCtxRejectsNonCommits(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	commitFile(t, dir, "base.txt", "base\n")
 
@@ -180,6 +200,8 @@ func TestRevParseCtxRejectsNonCommits(t *testing.T) {
 }
 
 func TestFetchRemoteBranchUpdatesTrackingRef(t *testing.T) {
+	t.Parallel()
+
 	// A real fetch between two local repositories. The refspec is explicit in
 	// FetchRemoteBranch precisely so this works regardless of what the remote's
 	// configured fetch refspec happens to be, so a local remote is a fair test.
@@ -209,12 +231,16 @@ func TestFetchRemoteBranchUpdatesTrackingRef(t *testing.T) {
 }
 
 func TestFetchRemoteBranchErrorsOnMissingRemote(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 	err := FetchRemoteBranch(context.Background(), dir, "origin", "main")
 	assert.Check(t, err != nil)
 }
 
 func TestNoPromptEnvLeavesOneEntryPerKey(t *testing.T) {
+	t.Parallel()
+
 	// A parent that already disagrees with every override. Shadowing these
 	// rather than replacing them would leave git's view of them dependent on
 	// exec's dedup rule, which is not where a reader will look for it.
@@ -250,6 +276,8 @@ func TestNoPromptEnvLeavesOneEntryPerKey(t *testing.T) {
 }
 
 func TestNoPromptEnvKeepsEntriesItCannotParse(t *testing.T) {
+	t.Parallel()
+
 	// exec preserves items that are not key=value unchanged, so dropping them
 	// here would make this function the one place that quietly loses them.
 	got := noPromptEnv([]string{"MALFORMED", "GIT_TERMINAL_PROMPT=1"})

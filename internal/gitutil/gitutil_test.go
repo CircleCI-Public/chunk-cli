@@ -73,6 +73,8 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 }
 
 func TestRepoRoot(t *testing.T) {
+	t.Parallel()
+
 	dir := setupRepo(t)
 
 	// From repo root itself
