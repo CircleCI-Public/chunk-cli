@@ -452,6 +452,39 @@ func TestWriteGitHookAppendsToExisting(t *testing.T) {
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated .git/hooks/pre-commit")))
 }
 
+func TestWriteGitHookSymlinkSkipped(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("symlink test not meaningful as root")
+	}
+	dir := initGitRepo(t)
+	hooksDir := filepath.Join(dir, ".git", "hooks")
+	assert.NilError(t, os.MkdirAll(hooksDir, 0o755))
+
+	// Create a real file that the symlink points to (no "chunk validate" so the
+	// append path would normally be taken).
+	target := filepath.Join(dir, "pre-commit-real")
+	assert.NilError(t, os.WriteFile(target, []byte("#!/bin/sh\nnpm test\n"), 0o755))
+
+	hookPath := filepath.Join(hooksDir, "pre-commit")
+	assert.NilError(t, os.Symlink(target, hookPath))
+
+	streams, _, errOut := testStreams()
+	err := writeGitHook(filepath.Join(dir, ".git"), streams)
+	assert.NilError(t, err)
+
+	// Symlink must still be a symlink — not replaced by a regular file.
+	linfo, err := os.Lstat(hookPath)
+	assert.NilError(t, err)
+	assert.Assert(t, linfo.Mode()&os.ModeSymlink != 0, "pre-commit must still be a symlink")
+
+	// Target file must be unmodified.
+	data, err := os.ReadFile(target)
+	assert.NilError(t, err)
+	assert.Assert(t, !strings.Contains(string(data), "chunk validate"), "symlink target must not have been modified")
+
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("symlink")))
+}
+
 // TestInstallSkillsStepUsesProjectScope verifies that installSkillsStep writes
 // skills into the project's .claude/skills/ directory, not into the user's
 // home directory. Previously it called InstallByName(ScopeUser, homeDir, ...)
