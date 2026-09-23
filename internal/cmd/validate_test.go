@@ -1431,11 +1431,6 @@ func TestDetectHookReadsToolCommand(t *testing.T) {
 	hook := detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"git commit -m x"}}`))
 	assert.Equal(t, hook.toolCommand, "git commit -m x")
 
-	// Codex's unified exec may send argv rather than a command line, including a
-	// shell running one.
-	hook = detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":["bash","-lc","git commit -m x"]}}`))
-	assert.Assert(t, hook.skipsCommitGate() == false, "argv running git commit through a shell must run the gate")
-
 	hook = detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"Stop"}`))
 	assert.Equal(t, hook.toolCommand, "")
 }
@@ -1446,7 +1441,6 @@ func TestSkipsCommitGate(t *testing.T) {
 		want    bool
 	}{
 		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"ls -la"}}`, true},
-		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":["ls","-la"]}}`, true},
 		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"cd sub && git commit -m x"}}`, false},
 		// A command chunk cannot read runs the gate rather than risk missing a commit.
 		{`{"session_id":"s","hook_event_name":"PreToolUse"}`, false},

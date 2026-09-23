@@ -149,7 +149,7 @@ func detectHook(r io.Reader) *hookContext {
 		HookEventName  string `json:"hook_event_name"`
 		TurnID         string `json:"turn_id"`
 		ToolInput      struct {
-			Command json.RawMessage `json:"command"`
+			Command string `json:"command"`
 		} `json:"tool_input"`
 	}
 	_ = json.NewDecoder(r).Decode(&p)
@@ -161,25 +161,8 @@ func detectHook(r io.Reader) *hookContext {
 		stopHookActive: p.StopHookActive,
 		event:          p.HookEventName,
 		codex:          p.TurnID != "",
-		toolCommand:    toolCommandLine(p.ToolInput.Command),
+		toolCommand:    p.ToolInput.Command,
 	}
-}
-
-// toolCommandLine flattens tool_input.command into one command line. Bash
-// sends a string. Codex's unified exec may send an argv array instead, either
-// the command itself (["git", "commit"]) or a shell running it (["bash", "-lc",
-// "git commit"]), so an array is joined with its elements on separate lines:
-// each then reads as a command of its own, as well as the argv as a whole.
-func toolCommandLine(raw json.RawMessage) string {
-	var line string
-	if json.Unmarshal(raw, &line) == nil {
-		return line
-	}
-	var argv []string
-	if json.Unmarshal(raw, &argv) == nil && len(argv) > 0 {
-		return strings.Join(argv, " ") + "\n" + strings.Join(argv, "\n")
-	}
-	return ""
 }
 
 // peekHookPayload decodes the hook payload on cmd's stdin without consuming
