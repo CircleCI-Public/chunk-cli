@@ -11,7 +11,32 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
+
+func TestDisabled(t *testing.T) {
+	cases := []struct {
+		name         string
+		ci, noCheck  string
+		wantDisabled bool
+	}{
+		{name: "enabled by default", wantDisabled: false},
+		{name: "off in CI", ci: "true", wantDisabled: true},
+		{name: "off when the user opts out", noCheck: "1", wantDisabled: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Set both every time: this suite itself runs in CI, where CI is
+			// already set and would otherwise leak into the "enabled" case.
+			t.Setenv(config.EnvCI, tc.ci)
+			t.Setenv(config.EnvChunkNoUpdateCheck, tc.noCheck)
+			if got := disabled(); got != tc.wantDisabled {
+				t.Fatalf("disabled() = %v, want %v", got, tc.wantDisabled)
+			}
+		})
+	}
+}
 
 func TestCheckForUpdate(t *testing.T) {
 	t.Run("returns empty for dev version", func(t *testing.T) {

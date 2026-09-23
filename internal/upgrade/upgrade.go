@@ -56,6 +56,11 @@ func isBrewManaged(path string) bool {
 	return false
 }
 
+// ReleaseURL returns the GitHub release page for tag, where its changelog lives.
+func ReleaseURL(tag string) string {
+	return fmt.Sprintf("https://github.com/%s/%s/releases/tag/%s", repoOwner, repoName, tag)
+}
+
 // SelfUpgradeCommand returns the command that upgrades the running binary,
 // accounting for Homebrew installs, which must not be replaced in place.
 func SelfUpgradeCommand() string {

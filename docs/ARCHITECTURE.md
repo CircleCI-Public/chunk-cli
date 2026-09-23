@@ -211,6 +211,7 @@ in `config.Resolve` and makes clients testable.
 | `NO_ANALYTICS` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `DO_NOT_TRACK` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
 | `CI` | telemetry, upgrade | Also disables anonymous usage telemetry and the update check (set by most CI systems) |
+| `CHUNK_NO_UPDATE_CHECK` | upgrade | Disable the new-version check and its notice (any non-empty value) |
 | `CHUNK_TELEMETRY_LOG` | telemetry | Log telemetry events to stderr instead of (or alongside) sending them |
 
 ## Telemetry (`internal/telemetry/`)

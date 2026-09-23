@@ -29,15 +29,15 @@ type updateCache struct {
 
 // Check reports the latest release tag if it is newer than the running binary,
 // or "" if there is nothing to report. It is the entry point for the update
-// notice on every surface that shows one, so the CI guard lives here rather
-// than at each call site — CI has nobody to read a notice. Test runs are
-// covered by CheckForUpdate's "dev" guard: version.Value is only set from
-// main.go, so it is always "dev" under test and nothing is fetched or written.
+// notice on every surface that shows one, so the opt-out guards live here
+// rather than at each call site. Test runs are covered by CheckForUpdate's
+// "dev" guard: version.Value is only set from main.go, so it is always "dev"
+// under test and nothing is fetched or written.
 //
 // Callers that need to inject a cache dir or API base — the tests below —
 // should use CheckForUpdate instead.
 func Check() string {
-	if os.Getenv(config.EnvCI) != "" {
+	if disabled() {
 		return ""
 	}
 	stateDir, err := config.AppState()
@@ -49,6 +49,13 @@ func Check() string {
 		apiBase = defaultAPIBase
 	}
 	return CheckForUpdate(stateDir, apiBase, version.Value)
+}
+
+// disabled reports whether the update check is switched off: in CI, where
+// nobody reads the notice, or by the user setting CHUNK_NO_UPDATE_CHECK. No
+// request is made either way, not just no notice printed.
+func disabled() bool {
+	return os.Getenv(config.EnvCI) != "" || os.Getenv(config.EnvChunkNoUpdateCheck) != ""
 }
 
 // CheckForUpdate returns the latest release tag if it is strictly newer than

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/version"
 )
 
 func TestSkipUpdateCheck(t *testing.T) {
@@ -79,6 +81,27 @@ func TestPrintUpdateNotice(t *testing.T) {
 
 		if !strings.Contains(stderr.String(), "v9.9.9") {
 			t.Errorf("expected notice mentioning v9.9.9, got %q", stderr.String())
+		}
+	})
+
+	t.Run("shows the running version and links the release notes", func(t *testing.T) {
+		orig := version.Value
+		version.Value = "1.2.3" // the ldflags form: no leading "v"
+		t.Cleanup(func() { version.Value = orig })
+
+		ch := make(chan string, 1)
+		ch <- "v9.9.9"
+		cmd, stderr := newCmd(ch)
+
+		printUpdateNotice(cmd)
+
+		for _, want := range []string{
+			"v1.2.3 → v9.9.9",
+			"https://github.com/CircleCI-Public/chunk-cli/releases/tag/v9.9.9",
+		} {
+			if !strings.Contains(stderr.String(), want) {
+				t.Errorf("expected notice to contain %q, got %q", want, stderr.String())
+			}
 		}
 	})
 
