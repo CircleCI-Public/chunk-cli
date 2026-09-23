@@ -474,6 +474,7 @@ func TestAssemblePool_FreshExistingRetriesProvisioningLag(t *testing.T) {
 	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "snapshot-1",
 		DefaultWorkspace("my-repo"), env.workDir, []string{"fresh-sb-1"}, "", map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
 	assert.NilError(t, err)
+	t.Cleanup(func() { pool.Close(context.Background()) })
 	entry, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
 	pool.Release(entry)

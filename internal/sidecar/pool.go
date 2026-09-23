@@ -46,6 +46,7 @@ type Pool struct {
 	syncErr        error
 	createCancel   context.CancelFunc
 	createDone     chan struct{}
+	syncDone       chan struct{}
 }
 
 type poolState struct {
@@ -498,15 +499,21 @@ func (p *Pool) Release(entry *PoolEntry) {
 func (p *Pool) Close(ctx context.Context) {
 	p.mu.Lock()
 	cancel := p.createCancel
-	done := p.createDone
+	createDone := p.createDone
+	syncDone := p.syncDone
 	p.mu.Unlock()
-	if cancel == nil {
-		return
+	if cancel != nil {
+		cancel()
 	}
-	cancel()
-	select {
-	case <-done:
-	case <-ctx.Done():
+	for _, done := range []chan struct{}{createDone, syncDone} {
+		if done == nil {
+			continue
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
@@ -527,6 +534,11 @@ func (p *Pool) Destroy(ctx context.Context) {
 }
 
 func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, freshIDs map[string]bool, prepared *preparedBundleSync, status iostream.StatusFunc) {
+	done := make(chan struct{})
+	p.mu.Lock()
+	p.syncDone = done
+	p.mu.Unlock()
+
 	parallelism := len(sidecarIDs)
 	if parallelism > bundleSyncFanOutConcurrency {
 		parallelism = bundleSyncFanOutConcurrency
@@ -557,6 +569,7 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 	}
 
 	go func() {
+		defer close(done)
 		wg.Wait()
 		p.mu.Lock()
 		doneWithoutError := p.pendingSyncs == 0 && p.syncErr == nil && !p.closed
