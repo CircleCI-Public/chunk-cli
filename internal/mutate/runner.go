@@ -17,6 +17,10 @@ const DefaultTestTimeout = 3 * time.Minute
 
 const cleanupTimeout = 30 * time.Second
 
+// replaceTimeout bounds provisioning and fully syncing a replacement for an
+// unusable worker, which takes far longer than a cleanup command.
+const replaceTimeout = 10 * time.Minute
+
 // maxOutputBytes bounds the amount of test output retained per mutation.
 // The mutate runner may execute many tests concurrently, so this needs to stay
 // small enough that N parallel mutations do not exhaust local memory.
@@ -40,8 +44,46 @@ func Run(
 	testTimeout time.Duration,
 	status iostream.StatusFunc,
 ) ([]Result, error) {
+	return runWith(ctx, mutations, workDir, testCmd, testTimeout, status, runnerFuncs{
+		acquire:  pool.Acquire,
+		release:  pool.Release,
+		replace:  pool.Replace,
+		baseline: validateBaseline,
+		patch:    MutationPatch,
+		run:      runOnSidecar,
+	})
+}
+
+type runnerFuncs struct {
+	acquire  func(context.Context) (*sidecar.PoolEntry, error)
+	release  func(*sidecar.PoolEntry)
+	replace  func(context.Context, *sidecar.PoolEntry, iostream.StatusFunc) error
+	baseline func(context.Context, *sidecar.PoolEntry, string, time.Duration) error
+	patch    func(string, Mutation) ([]byte, error)
+	run      func(context.Context, *sidecar.PoolEntry, []byte, string, time.Duration) (bool, string, string, bool)
+}
+
+func runWith(
+	ctx context.Context,
+	mutations []Mutation,
+	workDir, testCmd string,
+	testTimeout time.Duration,
+	status iostream.StatusFunc,
+	fn runnerFuncs,
+) ([]Result, error) {
 	if testTimeout <= 0 {
 		testTimeout = DefaultTestTimeout
+	}
+
+	status(iostream.LevelInfo, "verifying unmodified test suite...")
+	entry, err := fn.acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire sidecar for baseline: %w", err)
+	}
+	baselineErr := fn.baseline(ctx, entry, testCmd, testTimeout)
+	fn.release(entry)
+	if baselineErr != nil {
+		return nil, baselineErr
 	}
 
 	type indexedResult struct {
@@ -50,7 +92,14 @@ func Run(
 	}
 	resultsCh := make(chan indexedResult, len(mutations))
 	var wg sync.WaitGroup
+	var statusMu sync.Mutex
 	var scheduleErr error
+	usedSidecars := make(map[string]struct{})
+	report := func(level iostream.Level, message string) {
+		statusMu.Lock()
+		defer statusMu.Unlock()
+		status(level, message)
+	}
 
 	for index, m := range mutations {
 		if err := ctx.Err(); err != nil {
@@ -58,24 +107,46 @@ func Run(
 			break
 		}
 
-		patch, err := MutationPatch(workDir, m)
+		patch, err := fn.patch(workDir, m)
 		if err != nil {
-			status(iostream.LevelWarn, fmt.Sprintf("skip %s: %v", m.ID, err))
+			report(iostream.LevelWarn, fmt.Sprintf("skip %s: %v", m.ID, err))
 			resultsCh <- indexedResult{index: index, result: Result{Mutation: m, Error: err.Error()}}
 			continue
 		}
 
-		entry, err := pool.Acquire(ctx)
+		entry, err := fn.acquire(ctx)
 		if err != nil {
 			scheduleErr = fmt.Errorf("acquire sidecar: %w", err)
 			break
+		}
+		if _, used := usedSidecars[entry.ID]; !used {
+			usedSidecars[entry.ID] = struct{}{}
+			workerCount := len(usedSidecars)
+			if workerCount <= 5 || workerCount%10 == 0 {
+				noun := "sidecars"
+				if workerCount == 1 {
+					noun = "sidecar"
+				}
+				report(iostream.LevelInfo, fmt.Sprintf("mutation workers: %d %s assigned (latest %s)", workerCount, noun, shortSidecarID(entry.ID)))
+			}
 		}
 
 		wg.Add(1)
 		go func(index int, m Mutation, entry *sidecar.PoolEntry, patch []byte) {
 			defer wg.Done()
-			defer pool.Release(entry)
-			killed, output, runErr := runOnSidecar(ctx, entry, patch, testCmd, testTimeout)
+			killed, output, runErr, reusable := fn.run(ctx, entry, patch, testCmd, testTimeout)
+			// When the run is stopping, don't provision a replacement for an
+			// unusable worker: the next pool sync resets and cleans it.
+			if reusable || ctx.Err() != nil {
+				fn.release(entry)
+			} else {
+				replaceCtx, cancel := context.WithTimeout(ctx, replaceTimeout)
+				replaceErr := fn.replace(replaceCtx, entry, report)
+				cancel()
+				if replaceErr != nil {
+					runErr = fmt.Sprintf("%s; replace sidecar: %v", runErr, replaceErr)
+				}
+			}
 			if runErr == "" && killed {
 				output = ""
 			}
@@ -84,6 +155,9 @@ func Run(
 	}
 
 	wg.Wait()
+	if len(usedSidecars) > 0 {
+		report(iostream.LevelDone, fmt.Sprintf("Used %d sidecars for mutation tests", len(usedSidecars)))
+	}
 	close(resultsCh)
 
 	ordered := make([]Result, len(mutations))
@@ -99,6 +173,46 @@ func Run(
 		}
 	}
 	return results, scheduleErr
+}
+
+func shortSidecarID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:8]
+}
+
+func validateBaseline(ctx context.Context, entry *sidecar.PoolEntry, testCmd string, testTimeout time.Duration) error {
+	testCtx, cancel := context.WithTimeout(ctx, testTimeout)
+	defer cancel()
+
+	code, output, err := execOnSidecar(testCtx, entry, fmt.Sprintf("cd %s && %s", sidecar.ShellEscape(entry.RepoPath), testCmd))
+	if err != nil {
+		if testCtx.Err() == context.DeadlineExceeded {
+			return &BaselineError{TimedOut: true, Timeout: testTimeout, Output: output}
+		}
+		return fmt.Errorf("run baseline test: %w", err)
+	}
+	if code != 0 {
+		return &BaselineError{ExitCode: code, Output: output}
+	}
+	return nil
+}
+
+// BaselineError reports that the test suite failed or timed out before any
+// mutation was applied, so mutation results would be meaningless.
+type BaselineError struct {
+	ExitCode int
+	Output   string
+	TimedOut bool
+	Timeout  time.Duration
+}
+
+func (e *BaselineError) Error() string {
+	if e.TimedOut {
+		return fmt.Sprintf("baseline test timed out after %s", e.Timeout)
+	}
+	return fmt.Sprintf("baseline test failed (exit %d)", e.ExitCode)
 }
 
 type tailBuffer struct {
@@ -141,28 +255,22 @@ func (b *tailBuffer) String() string {
 // runOnSidecar applies the mutation patch to the sidecar workspace, runs the
 // test suite under a timeout, then reverses the patch so the sidecar is ready
 // for the next mutation.
-func runOnSidecar(ctx context.Context, entry *sidecar.PoolEntry, patch []byte, testCmd string, testTimeout time.Duration) (killed bool, output, errMsg string) {
-	escaped := sidecar.ShellEscape(entry.RepoPath)
+func runOnSidecar(ctx context.Context, entry *sidecar.PoolEntry, patch []byte, testCmd string, testTimeout time.Duration) (killed bool, output, errMsg string, reusable bool) {
+	return runMutation(ctx, entry.RepoPath, patch, testCmd, testTimeout, func(ctx context.Context, script string) (int, string, error) {
+		return execOnSidecar(ctx, entry, script)
+	})
+}
 
-	exec := func(ctx context.Context, script string) (int, string, error) {
-		buf := newTailBuffer(maxOutputBytes)
-		result, err := entry.Client.Exec(ctx, entry.ID, "sh", []string{"-c", script}, nil, func(_ string, data []byte) {
-			_, _ = buf.Write(data)
-		})
-		if err != nil {
-			return 0, buf.String(), err
-		}
-		return result.ExitCode, buf.String(), nil
-	}
-
+func runMutation(ctx context.Context, repoPath string, patch []byte, testCmd string, testTimeout time.Duration, exec func(context.Context, string) (int, string, error)) (killed bool, output, errMsg string, reusable bool) {
+	escaped := sidecar.ShellEscape(repoPath)
 	encoded := sidecar.ShellEscape(base64.StdEncoding.EncodeToString(patch))
 	applyCmd := fmt.Sprintf("echo %s | base64 -d | git -C %s apply", encoded, escaped)
 	reverseCmd := fmt.Sprintf("echo %s | base64 -d | git -C %s apply --reverse", encoded, escaped)
 
 	if code, out, err := exec(ctx, applyCmd); err != nil {
-		return false, "", fmt.Sprintf("apply patch: %v", err)
+		return false, "", fmt.Sprintf("apply patch: %v", err), false
 	} else if code != 0 {
-		return false, "", fmt.Sprintf("apply patch (exit %d): %s", code, out)
+		return false, "", fmt.Sprintf("apply patch (exit %d): %s", code, out), true
 	}
 
 	testCtx, cancel := context.WithTimeout(ctx, testTimeout)
@@ -173,16 +281,27 @@ func runOnSidecar(ctx context.Context, entry *sidecar.PoolEntry, patch []byte, t
 	cleanupCode, cleanupOut, cleanupErr := exec(cleanupCtx, reverseCmd)
 	cleanupCancel()
 	if cleanupErr != nil {
-		return false, out, fmt.Sprintf("reverse patch: %v", cleanupErr)
+		return false, out, fmt.Sprintf("reverse patch: %v", cleanupErr), false
 	}
 	if cleanupCode != 0 {
-		return false, out, fmt.Sprintf("reverse patch (exit %d): %s", cleanupCode, cleanupOut)
+		return false, out, fmt.Sprintf("reverse patch (exit %d): %s", cleanupCode, cleanupOut), false
 	}
 	if err != nil {
 		if testCtx.Err() == context.DeadlineExceeded {
-			return false, out, fmt.Sprintf("run test: timed out after %s", testTimeout)
+			return false, out, fmt.Sprintf("run test: timed out after %s", testTimeout), true
 		}
-		return false, out, fmt.Sprintf("run test: %v", err)
+		return false, out, fmt.Sprintf("run test: %v", err), true
 	}
-	return code != 0, out, ""
+	return code != 0, out, "", true
+}
+
+func execOnSidecar(ctx context.Context, entry *sidecar.PoolEntry, script string) (int, string, error) {
+	buf := newTailBuffer(maxOutputBytes)
+	result, err := entry.Client.Exec(ctx, entry.ID, "sh", []string{"-c", script}, nil, func(_ string, data []byte) {
+		_, _ = buf.Write(data)
+	})
+	if err != nil {
+		return 0, buf.String(), err
+	}
+	return result.ExitCode, buf.String(), nil
 }
