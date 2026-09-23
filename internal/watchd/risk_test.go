@@ -466,6 +466,23 @@ func TestAConfiguredInertExtensionIsTreatedAsProse(t *testing.T) {
 	}
 }
 
+// Case folds on extensions and not on file names, which is the asymmetry
+// ruleSet documents: ".SQL" and ".sql" name the same kind of file, "notice" and
+// "NOTICE" are two different paths.
+func TestConfiguredRulesFoldExtensionsButNotFileNames(t *testing.T) {
+	r := newInertRules([]string{".SQL", "NOTICE"}, nil)
+
+	assert.Equal(t, r.allInert([]string{"db/schema.sql"}), true)
+	assert.Equal(t, r.allInert([]string{"db/SCHEMA.SQL"}), true)
+	assert.Equal(t, r.allInert([]string{"NOTICE"}), true)
+	// Neither this list nor the built-in one holds the lowercase spelling.
+	assert.Equal(t, r.allInert([]string{"vendor/notice"}), false)
+
+	lower := newInertRules([]string{"notice"}, nil)
+	assert.Equal(t, lower.allInert([]string{"vendor/notice"}), true)
+	assert.Equal(t, lower.allInert([]string{"vendor/Notice"}), false)
+}
+
 // The narrower instruction wins. A repo that lints its markdown says so here,
 // and the default that calls markdown prose stops applying to it.
 func TestAConfiguredBlockingPathBeatsTheInertDefaults(t *testing.T) {
