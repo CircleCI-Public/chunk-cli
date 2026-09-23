@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 )
 
 // ErrMergeTreeUnsupported reports a git too old for `merge-tree --write-tree`,
@@ -46,9 +49,8 @@ func PreviewMerge(ctx context.Context, dir, ours, theirs string) (MergePreview, 
 	// --name-only reduces the conflict section to bare paths. Without it each
 	// path arrives as a mode/oid/stage tuple that would have to be parsed apart
 	// again, and no caller here wants the stages.
-	cmd := exec.CommandContext(ctx, "git", "-C", dir,
+	out, err := (gitexec.Runner{Dir: dir}).Output(ctx,
 		"merge-tree", "--write-tree", "--name-only", ours, theirs)
-	out, err := cmd.Output()
 
 	if err == nil {
 		// Exit 0: merged cleanly. Output is the tree OID alone.
@@ -131,8 +133,9 @@ func parseConflictPaths(out string) []string {
 // Like DefaultBranchIn, an error is a routine answer: a repo with no remote HEAD
 // recorded has no default branch to find, and callers fall back rather than fail.
 func DefaultRemoteBranchIn(dir string) (remote, branch string, err error) {
+	runner := gitexec.Runner{Dir: dir}
 	for _, r := range []string{"origin", "upstream"} {
-		out, cmdErr := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "refs/remotes/"+r+"/HEAD").Output()
+		out, cmdErr := runner.Output(context.Background(), "symbolic-ref", "--short", "refs/remotes/"+r+"/HEAD")
 		if cmdErr != nil {
 			continue
 		}
@@ -158,13 +161,12 @@ func DefaultRemoteBranchIn(dir string) (remote, branch string, err error) {
 // pack the developer did not ask for.
 func FetchRemoteBranch(ctx context.Context, dir, remote, branch string) error {
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/%s/%s", branch, remote, branch)
-	cmd := exec.CommandContext(ctx, "git", "-C", dir,
-		"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, refspec)
 	// A fetch must never turn into a credential prompt: this process has no
 	// terminal to prompt on, and a git that blocks waiting for input would hang
 	// the timer it runs on until the context expires.
-	cmd.Env = noPromptEnv(cmd.Environ())
-	if out, err := cmd.CombinedOutput(); err != nil {
+	runner := gitexec.Runner{Dir: dir, Env: noPromptEnv(os.Environ())}
+	if out, err := runner.CombinedOutput(ctx,
+		"fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, refspec); err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
 			return fmt.Errorf("fetch %s %s: %s", remote, branch, msg)
 		}
@@ -179,8 +181,7 @@ func FetchRemoteBranch(ctx context.Context, dir, remote, branch string) error {
 func RevParseCtx(ctx context.Context, dir, rev string) (string, error) {
 	// --verify with a ^{commit} peel refuses anything that is not a commit,
 	// so a tag or a tree cannot resolve here and reach merge-tree as a surprise.
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", "--quiet", rev+"^{commit}")
-	out, err := cmd.Output()
+	out, err := (gitexec.Runner{Dir: dir}).Output(ctx, "rev-parse", "--verify", "--quiet", rev+"^{commit}")
 	if err != nil {
 		return "", fmt.Errorf("resolve %s: %w", rev, err)
 	}

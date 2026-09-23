@@ -77,7 +77,7 @@ func TestCommandTimeout(t *testing.T) {
 func TestVariantCommandsExpandsTemplates(t *testing.T) {
 	repoDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 
-	got := variantCommands([]config.Command{
+	got := variantCommands(context.Background(), []config.Command{
 		{Name: "test-changed", Run: "task test -- {{CHANGED_PACKAGES}}", Remote: true},
 	}, repoDir, 300)
 

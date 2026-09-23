@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -106,7 +106,7 @@ func syncTo(ctx context.Context, client *circleci.Client,
 		return fmt.Errorf("sync: %w", err)
 	}
 
-	org, repo, err := gitremote.DetectOrgAndRepo(cwd)
+	org, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
 	if err != nil {
 		return &NoOriginRemoteError{Err: err}
 	}
@@ -152,7 +152,7 @@ func syncTo(ctx context.Context, client *circleci.Client,
 // using a git bundle, without requiring the branch to be pushed.
 func BundleSync(ctx context.Context,
 	client *circleci.Client, sidecarID, workdir, cwd string, retryOn404 bool, status iostream.StatusFunc) error {
-	prepared, err := prepareBundleSync(workdir, cwd, "", 1, status)
+	prepared, err := prepareBundleSync(ctx, workdir, cwd, "", 1, status)
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ type preparedBundleSync struct {
 // in parallel. It returns the local HEAD ref that all successful targets were
 // synced to.
 func bundleSyncFanOutSince(ctx context.Context, client *circleci.Client, sidecarIDs []string, workdir, cwd, baseRef string, retryOn404 bool, status iostream.StatusFunc) (string, error) {
-	prepared, err := prepareBundleSync(workdir, cwd, baseRef, len(sidecarIDs), status)
+	prepared, err := prepareBundleSync(ctx, workdir, cwd, baseRef, len(sidecarIDs), status)
 	if err != nil {
 		return "", err
 	}
@@ -220,8 +220,8 @@ func bundleSyncFanOutSince(ctx context.Context, client *circleci.Client, sidecar
 	return prepared.headRef, nil
 }
 
-func prepareBundleSync(workdir, cwd, baseRef string, sidecarCount int, status iostream.StatusFunc) (*preparedBundleSync, error) {
-	_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+func prepareBundleSync(ctx context.Context, workdir, cwd, baseRef string, sidecarCount int, status iostream.StatusFunc) (*preparedBundleSync, error) {
+	_, repo, repoErr := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
 	if repoErr != nil && workdir == "" {
 		return nil, &NoOriginRemoteError{Err: repoErr}
 	}
@@ -231,7 +231,7 @@ func prepareBundleSync(workdir, cwd, baseRef string, sidecarCount int, status io
 		repoPath = DefaultWorkspace(repo)
 	}
 
-	headRef, err := gitutil.HeadRef(cwd)
+	headRef, err := gitutil.HeadRefCtx(ctx, cwd)
 	if err != nil {
 		return nil, fmt.Errorf("fan-out sync: %w", err)
 	}
@@ -241,7 +241,7 @@ func prepareBundleSync(workdir, cwd, baseRef string, sidecarCount int, status io
 	if baseRef == headRef {
 		status(iostream.LevelInfo, "No new commits since last sync.")
 	} else {
-		bundle, err = createBundle(baseRef, cwd)
+		bundle, err = createBundle(ctx, baseRef, cwd)
 		if err != nil {
 			return nil, fmt.Errorf("fan-out sync: %w", err)
 		}
@@ -253,7 +253,7 @@ func prepareBundleSync(workdir, cwd, baseRef string, sidecarCount int, status io
 		resetRef = "FETCH_HEAD"
 	}
 
-	patch, err := generatePatch(headRef, cwd)
+	patch, err := generatePatch(ctx, headRef, cwd)
 	if err != nil {
 		return nil, fmt.Errorf("fan-out sync: %w", err)
 	}
@@ -392,8 +392,12 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 		repoURL := fmt.Sprintf("https://github.com/%s/%s.git", org, repo)
 		var cloneCmd string
 		cwd := cwdOrDot()
-		if branchPushed(cwd) {
-			branch, err := gitutil.CurrentBranchIn(cwd)
+		pushed, err := branchPushed(ctx, cwd)
+		if err != nil {
+			return fmt.Errorf("sync: check pushed branch: %w", err)
+		}
+		if pushed {
+			branch, err := gitutil.CurrentBranchInCtx(ctx, cwd)
 			if err != nil {
 				return fmt.Errorf("sync: %w", err)
 			}
@@ -433,12 +437,12 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 		return fmt.Errorf("sync: fetch failed (exit code: %d): %s", fetchResult.ExitCode, fetchResult.Stderr)
 	}
 
-	base, err := mergeBase(cwdOrDot())
+	base, err := mergeBase(ctx, cwdOrDot())
 	if err != nil {
 		return &RemoteBaseError{Err: err}
 	}
 
-	patch, err := generatePatch(base, cwdOrDot())
+	patch, err := generatePatch(ctx, base, cwdOrDot())
 	if err != nil {
 		return err
 	}
@@ -480,26 +484,23 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 	return nil
 }
 
-func createBundle(base, cwd string) ([]byte, error) {
+func createBundle(ctx context.Context, base, cwd string) ([]byte, error) {
 	var args []string
 	if base == "" {
 		args = []string{"bundle", "create", "-", gitHeadRef}
 	} else {
 		args = []string{"bundle", "create", "-", base + "..HEAD"}
 	}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+	out, err := (gitexec.Runner{Dir: cwd}).Output(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("create bundle: %w", err)
 	}
 	return out, nil
 }
 
-func generatePatch(base, cwd string) (string, error) {
-	lsCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
-	lsCmd.Dir = cwd
-	lsOut, err := lsCmd.Output()
+func generatePatch(ctx context.Context, base, cwd string) (string, error) {
+	git := gitexec.Runner{Dir: cwd}
+	lsOut, err := git.Output(ctx, "ls-files", "--others", "--exclude-standard")
 	if err != nil {
 		return "", fmt.Errorf("list untracked files: %w", err)
 	}
@@ -507,58 +508,61 @@ func generatePatch(base, cwd string) (string, error) {
 	untracked := splitNonEmpty(strings.TrimSpace(string(lsOut)))
 	if len(untracked) > 0 {
 		args := append([]string{"add", "-N", "--"}, untracked...)
-		addCmd := exec.Command("git", args...)
-		addCmd.Dir = cwd
-		if err := addCmd.Run(); err != nil {
+		if err := git.Run(ctx, args...); err != nil {
 			return "", fmt.Errorf("stage untracked files: %w", err)
 		}
 		defer func() {
 			resetArgs := append([]string{"reset", gitHeadRef, "--"}, untracked...)
-			resetCmd := exec.Command("git", resetArgs...)
-			resetCmd.Dir = cwd
-			_ = resetCmd.Run()
+			_ = git.Run(context.WithoutCancel(ctx), resetArgs...)
 		}()
 	}
 
-	diffCmd := exec.Command("git", "diff", base, "--binary")
-	diffCmd.Dir = cwd
-	out, err := diffCmd.Output()
+	out, err := git.Output(ctx, "diff", base, "--binary")
 	if err != nil {
 		return "", fmt.Errorf("generate diff: %w", err)
 	}
 	return string(out), nil
 }
 
-func branchPushed(cwd string) bool {
-	branch, err := gitutil.CurrentBranchIn(cwd)
+func branchPushed(ctx context.Context, cwd string) (bool, error) {
+	branch, err := gitutil.CurrentBranchInCtx(ctx, cwd)
 	if err != nil {
-		return false
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		return false, nil
 	}
 	ref := "refs/remotes/origin/" + branch
-	cmd := exec.Command("git", "rev-parse", "--verify", ref)
-	cmd.Dir = cwd
-	return cmd.Run() == nil
+	err = (gitexec.Runner{Dir: cwd}).Run(ctx, "rev-parse", "--verify", ref)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	return err == nil, nil
 }
 
-func mergeBase(cwd string) (string, error) {
-	cmd := exec.Command("git", "merge-base", "@{upstream}", "origin/HEAD")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+func mergeBase(ctx context.Context, cwd string) (string, error) {
+	git := gitexec.Runner{Dir: cwd}
+	out, err := git.Output(ctx, "merge-base", "@{upstream}", "origin/HEAD")
 	if err == nil {
 		sha := strings.TrimSpace(string(out))
 		if sha != "" {
 			return sha, nil
 		}
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 
-	cmd = exec.Command("git", "rev-parse", "origin/HEAD")
-	cmd.Dir = cwd
-	out, err = cmd.Output()
+	out, err = git.Output(ctx, "rev-parse", "origin/HEAD")
 	if err != nil {
-		verifyCmd := exec.Command("git", "rev-parse", "--verify", "@{upstream}")
-		verifyCmd.Dir = cwd
-		if verifyCmd.Run() == nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		if git.Run(ctx, "rev-parse", "--verify", "@{upstream}") == nil {
 			return "", fmt.Errorf("origin/HEAD is not set")
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
 		}
 		return "", fmt.Errorf("no upstream tracking branch or origin/HEAD found")
 	}

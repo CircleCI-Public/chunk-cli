@@ -1,6 +1,8 @@
 package gitutil
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -92,6 +94,96 @@ func TestRepoRoot(t *testing.T) {
 
 	// From a non-repo directory
 	noRepo := t.TempDir()
-	_, err = RepoRoot(noRepo)
+	root, err = RepoRoot(noRepo)
+	if err == nil {
+		t.Skipf("temporary directory is inside git repository %s", root)
+	}
 	assert.Assert(t, err != nil, "expected error for non-repo dir")
+}
+
+func TestCurrentBranchIn(t *testing.T) {
+	dir := setupRepo(t)
+
+	branch, err := CurrentBranchIn(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, branch, "main")
+
+	gitRun(t, dir, "checkout", "--detach", "HEAD")
+	_, err = CurrentBranchIn(dir)
+	assert.ErrorContains(t, err, "detached HEAD")
+}
+
+func TestCurrentBranchInCtxHonoursCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := CurrentBranchInCtx(ctx, setupRepo(t))
+	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
+}
+
+func TestDefaultBranchIn(t *testing.T) {
+	t.Run("prefers origin", func(t *testing.T) {
+		dir := setupRepo(t)
+		setRemoteHead(t, dir, "upstream", "trunk")
+		setRemoteHead(t, dir, "origin", "main")
+
+		branch, err := DefaultBranchIn(dir)
+		assert.NilError(t, err)
+		assert.Equal(t, branch, "main")
+	})
+
+	t.Run("falls back to upstream", func(t *testing.T) {
+		dir := setupRepo(t)
+		setRemoteHead(t, dir, "upstream", "trunk")
+
+		branch, err := DefaultBranchIn(dir)
+		assert.NilError(t, err)
+		assert.Equal(t, branch, "trunk")
+	})
+
+	t.Run("reports missing remote HEAD", func(t *testing.T) {
+		dir := setupRepo(t)
+
+		_, err := DefaultBranchIn(dir)
+		assert.ErrorContains(t, err, "no remote HEAD")
+	})
+}
+
+func TestHeadRef(t *testing.T) {
+	dir := setupRepo(t)
+	want := gitRun(t, dir, "rev-parse", "HEAD")
+
+	got, err := HeadRef(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, got, want)
+}
+
+func TestHeadRefCtxHonoursCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := HeadRefCtx(ctx, setupRepo(t))
+	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
+}
+
+func TestTopLevelCtx(t *testing.T) {
+	dir := setupRepo(t)
+	subdir := filepath.Join(dir, "one", "two")
+	assert.NilError(t, os.MkdirAll(subdir, 0o755))
+
+	assert.Equal(t, TopLevelCtx(context.Background(), subdir), dir)
+	noRepo := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(noRepo))
+	assert.Equal(t, TopLevelCtx(context.Background(), noRepo), "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.Equal(t, TopLevelCtx(ctx, dir), "")
+}
+
+func setRemoteHead(t *testing.T, dir, remote, branch string) {
+	t.Helper()
+	gitRun(t, dir, "remote", "add", remote, "https://example.com/repo.git")
+	gitRun(t, dir, "update-ref", "refs/remotes/"+remote+"/"+branch, "HEAD")
+	gitRun(t, dir, "symbolic-ref", "refs/remotes/"+remote+"/HEAD", "refs/remotes/"+remote+"/"+branch)
 }

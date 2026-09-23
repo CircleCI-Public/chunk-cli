@@ -77,11 +77,14 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 	// sidecar after init.
 	var worktreeOriginURL string
 	if isWorktree {
-		out, execErr := exec.CommandContext(ctx, "git", "-C", gitRoot, "remote", "get-url", "origin").Output()
+		originURL, execErr := gitremote.URL(ctx, gitRoot, "origin")
 		if execErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fmt.Errorf("rsync: read git remote origin: %w", ctxErr)
+			}
 			status(iostream.LevelWarn, fmt.Sprintf("Could not read git remote origin: %v", execErr))
 		} else {
-			worktreeOriginURL = strings.TrimSpace(string(out))
+			worktreeOriginURL = originURL
 		}
 	}
 
@@ -202,8 +205,11 @@ func rsyncWorkspace(ctx context.Context, workdir, cwd, originURL string, isWorkt
 		// Empty or unusable origin URL — fall through to normal resolution.
 	}
 
-	_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+	_, repo, repoErr := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
 	if repoErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("rsync: detect repo: %w", ctxErr)
+		}
 		repo = filepath.Base(cwd)
 		if inWorktree {
 			// The worktree directory name is not the repo name, so this path will

@@ -50,7 +50,11 @@ This command always exits 0. It is advisory, and is not a check that can fail.`,
 // the wrong branch to be taken.
 func runConflicts(cmd *cobra.Command, projectDir string, hookMode, jsonOut bool) error {
 	streams := iostream.FromCmd(cmd)
-	root := resolveHookRoot(projectDir)
+	root, err := resolveHookRoot(cmd.Context(), projectDir)
+	if err != nil {
+		reportConflictLookupError(streams, root, err, hookMode, jsonOut)
+		return nil
+	}
 
 	report, err := watchd.FetchConflicts(root)
 	if err != nil {

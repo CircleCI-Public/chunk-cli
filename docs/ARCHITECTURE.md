@@ -29,6 +29,7 @@ chunk-cli/
     ├── config/                # User config (XDG_CONFIG_HOME/chunk/config.json)
     ├── filecache/             # Generic JSON-on-disk cache (FileCache[T])
     ├── github/                # GitHub GraphQL client (reviews, repos)
+    ├── gitexec/               # Low-level local Git process execution
     ├── gitremote/             # Git remote URL parsing for org/repo detection
     ├── gitutil/               # Git utility helpers, working-tree fingerprints
     ├── hashutil/              # Collision-free digests of string parts (cache keys)

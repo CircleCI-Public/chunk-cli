@@ -50,8 +50,11 @@ func (e *TargetUnavailableError) Unwrap() error {
 }
 
 func (t Target) ResolveWorkspace(ctx context.Context, cwd string) (string, error) {
-	_, repo, repoErr := gitremote.DetectOrgAndRepo(cwd)
+	_, repo, repoErr := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
 	if repoErr != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("resolve workspace: detect repo: %w", ctxErr)
+		}
 		// Fall back to the directory name rather than passing an empty repo:
 		// ResolveWorkspace rejects that outright, so discarding the error here
 		// turned a missing git origin into a failed workspace resolution.
@@ -127,7 +130,7 @@ func syncCheckout(ctx context.Context, client *circleci.Client, sidecarID, workd
 		return err
 	}
 
-	org, repo, err := gitremote.DetectOrgAndRepo(cwd)
+	org, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
 	if err != nil {
 		return &NoOriginRemoteError{Err: err}
 	}

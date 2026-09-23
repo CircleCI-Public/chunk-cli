@@ -1,20 +1,19 @@
 package sidecar
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
@@ -64,17 +63,11 @@ func (a *ActiveSidecar) UnmarshalJSON(data []byte) error {
 // CurrentBranch returns the current git branch for the repo rooted at root.
 // Returns "" on any error (no git, detached HEAD, etc.).
 func CurrentBranch(root string) string {
-	var out bytes.Buffer
-	cmd := exec.Command("git", "-C", root, "rev-parse", "--abbrev-ref", gitHeadRef)
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+	branch, err := gitutil.CurrentBranchIn(root)
+	if err != nil {
 		return ""
 	}
-	b := strings.TrimSpace(out.String())
-	if b == gitHeadRef {
-		return "" // detached HEAD
-	}
-	return b
+	return branch
 }
 
 const defaultSidecarFile = "sidecar.json"

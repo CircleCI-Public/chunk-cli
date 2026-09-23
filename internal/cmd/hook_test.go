@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,14 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
+
+func TestResolveHookRootHonoursCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := resolveHookRoot(ctx, "")
+	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
+}
 
 func runHooksCmd(t *testing.T, dir string, args ...string) (string, string, error) {
 	t.Helper()
