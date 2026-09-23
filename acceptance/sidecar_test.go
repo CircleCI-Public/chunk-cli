@@ -436,6 +436,28 @@ func TestSidecarsSshNoKey(t *testing.T) {
 		result.Stdout, result.Stderr)
 }
 
+// TestSidecarsSshPassesThroughExitCode verifies that a remote command exiting
+// non-zero makes `sidecar ssh` exit with that same code, as ssh does, without
+// chunk printing an error of its own over the command's output.
+func TestSidecarsSshPassesThroughExitCode(t *testing.T) {
+	sshSrv := fakes.NewSSHServerAcceptingAnyKey(t)
+	sshSrv.SetResult("partial output\n", 3)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{"sidecar", "ssh", "--sidecar-id", "sb-111", "--", "false"}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 3, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+	assert.Equal(t, result.Stdout, "partial output\n")
+	assert.Equal(t, result.Stderr, "", "remote exit should not be reported as a chunk error")
+}
+
 func TestSidecarsExecWithArgs(t *testing.T) {
 	cci := fakes.NewFakeCircleCI()
 	cci.ExecResponse = &fakes.ExecResponse{

@@ -29,6 +29,7 @@ type ExecResult struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+	Signal   string
 }
 
 // ShellEscape escapes a string for safe use in a POSIX shell single-quoted context.
@@ -61,6 +62,21 @@ func (c *sshConn) Close() error {
 	// Both sides may initiate close simultaneously; if the remote end already
 	// closed the connection, treat it as a successful close.
 	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+// sessionCloser wraps an SSH session so closing it after the remote end has
+// already closed the channel is not an error. ssh.Session.Close returns io.EOF
+// once Wait has returned, which is the normal state after a clean shell exit.
+type sessionCloser struct {
+	io.Closer
+}
+
+func (c sessionCloser) Close() error {
+	err := c.Closer.Close()
+	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	return err
@@ -196,10 +212,12 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 	}
 
 	exitCode := 0
+	signal := ""
 	if err := sess.Run(command); err != nil {
 		var exitErr *ssh.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitStatus()
+			signal = exitErr.Signal()
 		} else {
 			return nil, fmt.Errorf("ssh exec: %w", err)
 		}
@@ -209,6 +227,7 @@ func ExecOverSSH(ctx context.Context, session *Session, command string, stdin io
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 		ExitCode: exitCode,
+		Signal:   signal,
 	}, nil
 }
 
@@ -227,7 +246,7 @@ func InteractiveShell(ctx context.Context, session *Session, envVars map[string]
 	if err != nil {
 		return fmt.Errorf("ssh session: %w", err)
 	}
-	defer closer.ErrorHandler(sess, &err)
+	defer closer.ErrorHandler(sessionCloser{sess}, &err)
 
 	// Put local terminal into raw mode so keystrokes pass through directly.
 	fd := int(os.Stdin.Fd())
@@ -267,7 +286,15 @@ func InteractiveShell(ctx context.Context, session *Session, envVars map[string]
 		return fmt.Errorf("start shell: %w", err)
 	}
 
-	return sess.Wait()
+	// A shell that exits non-zero is the user's shell reporting its last
+	// status, not a failure of the connection; pass it through like ssh does.
+	if err := sess.Wait(); err != nil {
+		if exitErr, ok := errors.AsType[*ssh.ExitError](err); ok {
+			return &RemoteExitError{Code: exitErr.ExitStatus(), Signal: exitErr.Signal()}
+		}
+		return fmt.Errorf("ssh shell: %w", err)
+	}
+	return nil
 }
 
 // sshAuth returns the SSH auth method for the session's identity file.
