@@ -123,21 +123,27 @@ func TestPoolStateMarshalFormat(t *testing.T) {
 	assert.Assert(t, m["repo_path"] != nil)
 }
 
-func TestPairReplacementIDs(t *testing.T) {
-	t.Run("pairs stale IDs and permits capacity additions", func(t *testing.T) {
-		got, err := pairReplacementIDs([]string{"stale-1", "stale-2"}, []string{"new-1", "new-2", "new-3"})
-		assert.NilError(t, err)
-		assert.DeepEqual(t, got, map[string]string{
-			"stale-1": "new-1",
-			"stale-2": "new-2",
-		})
-	})
+func TestPoolPersistStatePreservesStoredMetadata(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, savePoolState(dir, "validate", &poolState{
+		SidecarIDs:    []string{"old"},
+		RepoPath:      "/workspace/repo",
+		Image:         "snapshot-1",
+		LastSyncedRef: "deadbeef",
+	}))
+	pool := &Pool{
+		ids:     []string{"new"},
+		workDir: dir,
+		name:    "validate",
+	}
 
-	t.Run("rejects too few replacements", func(t *testing.T) {
-		got, err := pairReplacementIDs([]string{"stale-1", "stale-2"}, []string{"new-1"})
-		assert.Assert(t, got == nil)
-		assert.ErrorContains(t, err, "need 2, got 1")
-	})
+	assert.NilError(t, pool.persistState())
+	state, err := loadPoolState(dir, "validate")
+	assert.NilError(t, err)
+	assert.DeepEqual(t, state.SidecarIDs, []string{"new"})
+	assert.Equal(t, state.RepoPath, "/workspace/repo")
+	assert.Equal(t, state.Image, "snapshot-1")
+	assert.Equal(t, state.LastSyncedRef, "deadbeef")
 }
 
 type poolTestEnv struct {
@@ -186,6 +192,17 @@ func countPoolDeletes(cci *fakes.FakeCircleCI) int {
 	return n
 }
 
+func waitForPoolTest(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for pool state")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 const createSidecarPath = "/api/v3/sidecar/instances"
 const createSnapshotPath = "/api/v3/sidecar/snapshots"
 
@@ -196,7 +213,6 @@ func TestAssemblePool_CreatesAndSyncsAll(t *testing.T) {
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
-	assert.Equal(t, len(pool.ids), 2)
 
 	a, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
@@ -208,7 +224,7 @@ func TestAssemblePool_CreatesAndSyncsAll(t *testing.T) {
 
 	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 3)
 	assert.Equal(t, countPoolRequests(env.cci, "POST", createSnapshotPath), 1)
-	assert.Equal(t, countPoolDeletes(env.cci), 1)
+	waitForPoolTest(t, func() bool { return countPoolDeletes(env.cci) == 1 })
 }
 
 func TestAssemblePool_CreateFailure_ReturnsError(t *testing.T) {
@@ -221,15 +237,161 @@ func TestAssemblePool_CreateFailure_ReturnsError(t *testing.T) {
 	assert.Equal(t, countPoolDeletes(env.cci), 0)
 }
 
-func TestAssemblePool_PartialCreateFailure_CleansUp(t *testing.T) {
+func TestAssemblePool_AllCloneCreatesFail(t *testing.T) {
 	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
 	env.cci.CreateErrorAfter = 1
 
-	_, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
-	assert.Assert(t, err != nil)
-	assert.Equal(t, countPoolDeletes(env.cci), 1)
-	assert.Equal(t, len(env.cci.Sidecars), 0)
+	assert.NilError(t, err)
+	_, err = pool.Acquire(context.Background())
+	assert.ErrorContains(t, err, "create sidecar")
+	waitForPoolTest(t, func() bool { return countPoolDeletes(env.cci) == 1 })
+}
+
+func TestAssemblePool_PartialCloneFailureKeepsSuccessfulClone(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	env.cci.CreateErrorAfter = 2
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	waitForPoolTest(t, func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return pool.pendingCreates == 0
+	})
+	waitForPoolTest(t, func() bool { return countPoolDeletes(env.cci) == 1 })
+	pool.mu.Lock()
+	assert.DeepEqual(t, pool.ids, []string{entry.ID})
+	pool.mu.Unlock()
+}
+
+func TestAssemblePool_CloneIsAvailableBeforeAllCreatesFinish(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	blocked := make(chan struct{})
+	env.cci.CreateWait = map[int]<-chan struct{}{2: blocked}
+	t.Cleanup(func() {
+		select {
+		case <-blocked:
+		default:
+			close(blocked)
+		}
+	})
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	t.Cleanup(func() { pool.Close(context.Background()) })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, err := pool.Acquire(ctx)
+	assert.NilError(t, err)
+	assert.Equal(t, first.ID, "sidecar-new-3")
+
+	close(blocked)
+	second, err := pool.Acquire(ctx)
+	assert.NilError(t, err)
+	assert.Assert(t, first.ID != second.ID)
+	pool.Release(first)
+	pool.Release(second)
+}
+
+func TestPoolCloseKeepsClonesThatFinishWhileWaiting(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	blocked := make(chan struct{})
+	env.cci.CreateWait = map[int]<-chan struct{}{2: blocked, 3: blocked}
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		pool.Close(ctx)
+	}()
+	close(blocked)
+	<-closed
+
+	assert.NilError(t, ctx.Err())
+	assert.Equal(t, countPoolDeletes(env.cci), 1, "only the seed is deleted")
+	state, err := loadPoolState(env.workDir, "validate")
+	assert.NilError(t, err)
+	assert.Equal(t, len(state.SidecarIDs), 2, "clones are kept for reuse")
+}
+
+func TestPoolCloseCancelsCreatesWhenContextEnds(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	blocked := make(chan struct{})
+	env.cci.CreateWait = map[int]<-chan struct{}{2: blocked, 3: blocked}
+	t.Cleanup(func() { close(blocked) })
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pool.Close(ctx)
+	waitForPoolTest(t, func() bool { return countPoolDeletes(env.cci) == 1 })
+
+	waitForPoolTest(t, func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return pool.pendingCreates == 0
+	})
+}
+
+func TestPoolDestroyWaitsForCloneCreationBeforeReturning(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	blocked := make(chan struct{})
+	env.cci.CreateWait = map[int]<-chan struct{}{3: blocked}
+	t.Cleanup(func() { close(blocked) })
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	entry, err := pool.Acquire(ctx)
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.NilError(t, pool.Destroy(ctx))
+
+	// The seed and the finished clone are deleted before Destroy returns, so
+	// nothing is left behind when the process exits straight afterwards.
+	assert.Equal(t, countPoolDeletes(env.cci), 2)
+	_, err = loadPoolState(env.workDir, "validate")
+	assert.Assert(t, errors.Is(err, os.ErrNotExist))
+}
+
+func TestPoolDestroyKeepsUndeletedSidecarsInState(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+
+	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	env.cci.DeleteStatusCode = 500
+
+	err = pool.Destroy(context.Background())
+
+	assert.ErrorContains(t, err, "delete 1 sidecar(s)")
+	state, err := loadPoolState(env.workDir, "validate")
+	assert.NilError(t, err)
+	assert.DeepEqual(t, state.SidecarIDs, pool.ids)
 }
 
 func TestAssemblePool_SyncFailure_CleansUp(t *testing.T) {
@@ -252,8 +414,10 @@ func TestAssemblePool_StaleExisting_ReplacedAutomatically(t *testing.T) {
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, []string{"stale-sb-1", "stale-sb-2"}, "", nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
+	entries := drainPoolEntries(context.Background(), t, pool, 2)
+	releasePoolEntries(pool, entries)
 	assert.Equal(t, len(pool.ids), 2)
-	assert.Equal(t, countPoolDeletes(env.cci), 3)
+	waitForPoolTest(t, func() bool { return countPoolDeletes(env.cci) == 3 })
 }
 
 func TestAssemblePool_OutdatedExisting_ReplacedAutomatically(t *testing.T) {
@@ -380,6 +544,7 @@ func TestAssemblePool_FreshExistingRetriesProvisioningLag(t *testing.T) {
 	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "snapshot-1",
 		DefaultWorkspace("my-repo"), env.workDir, []string{"fresh-sb-1"}, "", map[string]bool{"fresh-sb-1": true}, func(iostream.Level, string) {})
 	assert.NilError(t, err)
+	t.Cleanup(func() { pool.Close(context.Background()) })
 	entry, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
 	pool.Release(entry)
@@ -414,6 +579,28 @@ func TestNewPoolRestoresCreationContext(t *testing.T) {
 	assert.Equal(t, entry.RepoPath, "/saved/workspace")
 }
 
+func TestNewPoolDeletesSurplusSidecarsFromState(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	assert.NilError(t, savePoolState(env.workDir, "mutate", &poolState{
+		SidecarIDs: []string{"existing-sb-1", "existing-sb-2", "existing-sb-3"},
+		Image:      "ubuntu:22.04",
+	}))
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:    1,
+		Name:    "mutate",
+		OrgID:   "org-1",
+		WorkDir: env.workDir,
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	t.Cleanup(func() { pool.Close(context.Background()) })
+
+	assert.Equal(t, countPoolRequests(env.cci, "DELETE", createSidecarPath+"/existing-sb-2"), 1)
+	assert.Equal(t, countPoolRequests(env.cci, "DELETE", createSidecarPath+"/existing-sb-3"), 1)
+	assert.DeepEqual(t, pool.ids, []string{"existing-sb-1"})
+}
+
 func TestNewPoolUsesConfiguredRepoPath(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
@@ -436,21 +623,28 @@ func TestNewPoolUsesConfiguredRepoPath(t *testing.T) {
 	assert.Equal(t, entry.RepoPath, "/custom/workspace")
 }
 
-func TestPool_Rebuild(t *testing.T) {
+func TestPool_Replace(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
 
 	pool := &Pool{
-		client:  env.cl,
-		orgID:   "org-1",
-		image:   "ubuntu:22.04",
-		name:    "validate",
-		workDir: env.workDir,
-		free:    make(chan *PoolEntry, 1),
+		client:     env.cl,
+		orgID:      "org-1",
+		image:      "ubuntu:22.04",
+		name:       "validate",
+		workDir:    env.workDir,
+		repoPath:   DefaultWorkspace("my-repo"),
+		free:       make(chan *PoolEntry, 1),
+		updates:    make(chan struct{}, 1),
+		checkedOut: 1,
 	}
-	dead := &PoolEntry{ID: "dead-sb-1", RepoPath: DefaultWorkspace("my-repo")}
+	dead := &PoolEntry{ID: "dead-sb-1", RepoPath: DefaultWorkspace("my-repo"), Client: env.cl}
+	pool.entries = []*PoolEntry{dead}
+	pool.ids = []string{dead.ID}
 
-	entry, err := pool.Rebuild(context.Background(), dead, func(iostream.Level, string) {})
+	err := pool.Replace(context.Background(), dead, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
 	assert.Assert(t, entry.ID != dead.ID)
 	assert.Assert(t, entry.Client != nil)
@@ -486,8 +680,9 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	pool, err := assemblePool(ctx, env.cl, n, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, noopStatus)
 	assert.NilError(t, err)
+	entries := drainPoolEntries(ctx, t, pool, n)
 	assert.Equal(t, len(pool.ids), n)
-	releasePoolEntries(pool, drainPoolEntries(ctx, t, pool, n))
+	releasePoolEntries(pool, entries)
 
 	runtime.GC()
 	time.Sleep(100 * time.Millisecond)

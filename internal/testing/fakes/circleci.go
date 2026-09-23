@@ -89,16 +89,17 @@ type FakeCircleCI struct {
 	RunStatusCode   int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
-	CollaborationsStatusCode int    // override for GET /me/collaborations
-	ListStatusCode           int    // override for GET /sidecar/instances
-	CreateStatusCode         int    // override for POST /sidecar/instances
-	CreateErrorAfter         int    // if > 0, fail creates after this many successes
-	DeleteStatusCode         int    // override for DELETE /sidecar/instances/:id
-	PruneStatusCode          int    // override for POST /sidecar/instances/prune
-	ExecStatusCode           int    // override for POST /sidecar/instances/:id/exec
-	ExecMessage              string // V3 error title when ExecStatusCode is set
-	CommandOutputStatusCode  int    // override for GET /sidecar/commands/:id/output
-	CommandOutputMessage     string // error message body when CommandOutputStatusCode is set
+	CollaborationsStatusCode int                     // override for GET /me/collaborations
+	ListStatusCode           int                     // override for GET /sidecar/instances
+	CreateStatusCode         int                     // override for POST /sidecar/instances
+	CreateErrorAfter         int                     // if > 0, fail creates after this many successes
+	CreateWait               map[int]<-chan struct{} // block the numbered create request until released
+	DeleteStatusCode         int                     // override for DELETE /sidecar/instances/:id
+	PruneStatusCode          int                     // override for POST /sidecar/instances/prune
+	ExecStatusCode           int                     // override for POST /sidecar/instances/:id/exec
+	ExecMessage              string                  // V3 error title when ExecStatusCode is set
+	CommandOutputStatusCode  int                     // override for GET /sidecar/commands/:id/output
+	CommandOutputMessage     string                  // error message body when CommandOutputStatusCode is set
 	// DropStreamsBeforeExit ends this many output streams after delivering their
 	// output but before the terminal event, so client resume can be exercised.
 	DropStreamsBeforeExit int
@@ -256,10 +257,18 @@ func (f *FakeCircleCI) handleCreateSidecar(c *gin.Context) {
 	f.sidecarCounter++
 	counter := f.sidecarCounter
 	statusCode := f.CreateStatusCode
+	wait := f.CreateWait[counter]
 	if f.CreateErrorAfter > 0 && counter > f.CreateErrorAfter {
 		statusCode = http.StatusInternalServerError
 	}
 	f.mu.Unlock()
+	if wait != nil {
+		select {
+		case <-wait:
+		case <-c.Request.Context().Done():
+			return
+		}
+	}
 	if statusCode != 0 {
 		c.JSON(statusCode, gin.H{"message": "API error"})
 		return
