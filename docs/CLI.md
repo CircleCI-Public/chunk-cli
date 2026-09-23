@@ -433,13 +433,17 @@ chunk
   GitHub — the notice simply appears on a later run.
 - The update check never delays a command: if the check has not finished by the
   time the command has, the notice is dropped rather than waited for. It is
-  skipped entirely in CI (`CI` set), under `go test`, and for `completion`,
+  skipped entirely in CI (`CI` set), when the user sets
+  `CHUNK_NO_UPDATE_CHECK`, under `go test`, and for `completion`,
   `receive-telemetry`, `upgrade`, and shell-completion requests, which either run
   on every keypress or report versions themselves. `watch` runs its own check and
   renders the notice in the TUI footer instead.
 - The notice suggests `brew upgrade chunk` when the running binary resolves into
   a Homebrew prefix, and `chunk upgrade` otherwise. `chunk upgrade` refuses to
   replace a Homebrew-managed binary in place.
+- The notice names both versions (`v0.7.180 → v0.7.186`) and links the new
+  release's GitHub page, so the reason to upgrade is one click away. The `watch`
+  footer keeps its one-line form: it has no room for a URL.
 
 ## Config keys
 

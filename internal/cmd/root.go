@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
+	"github.com/CircleCI-Public/chunk-cli/internal/version"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
@@ -341,5 +343,9 @@ func printUpdateNotice(cmd *cobra.Command) {
 		return
 	}
 
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s\nRun: %s\n", latest, upgrade.SelfUpgradeCommand())
+	// Release tags carry a "v" and the ldflags version does not, so the running
+	// version gets one to read as the same kind of thing as the tag beside it.
+	current := "v" + strings.TrimPrefix(version.Value, "v")
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "\nA new version of chunk is available: %s → %s\nRun: %s\nWhat's new: %s\n",
+		current, latest, upgrade.SelfUpgradeCommand(), upgrade.ReleaseURL(latest))
 }
