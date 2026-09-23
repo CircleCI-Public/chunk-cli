@@ -352,6 +352,22 @@ func SaveUserID(id uuid.UUID) error {
 	return Save(cfg)
 }
 
+// ClearUserID forgets the persisted CircleCI user UUID, so telemetry from
+// later runs is anonymous again. Called when the CircleCI credentials it was
+// derived from are removed: leaving it behind would keep attributing events to
+// a user who has logged out.
+func ClearUserID() error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	if cfg.CircleCIUserID == "" {
+		return nil
+	}
+	cfg.CircleCIUserID = ""
+	return Save(cfg)
+}
+
 // GetUserID returns the persisted CircleCI user UUID, or uuid.Nil if none has
 // been saved yet (e.g. the user has not authenticated) or the config cannot
 // be read. Errors are silently swallowed because this is a best-effort

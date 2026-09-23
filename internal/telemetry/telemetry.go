@@ -9,12 +9,19 @@
 // system, and the detected AI coding agent (if any) are ever collected — no
 // flag values, argument values, or other PII.
 //
+// Once the user authenticates, events also carry their CircleCI user UUID and
+// an identify call joins the anonymous IDs the install was reporting under to
+// that user, so the journey before logging in is not attributed to a
+// stranger. See Sender.Identify and IdentifyUser.
+//
 // Modeled on circleci-cli's internal/telemetry package.
 package telemetry
 
 import (
 	"errors"
 	"io"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,6 +34,10 @@ import (
 // silently drops events, so callers never need to nil-check it.
 type Sender struct {
 	dest destination
+
+	// mu guards meta, which SetUserID mutates mid-run when the user
+	// authenticates while a command is already in flight.
+	mu   sync.RWMutex
 	meta Meta
 
 	closed atomic.Bool
@@ -34,7 +45,9 @@ type Sender struct {
 
 type destination interface {
 	io.Closer
-	Enqueue(track analytics.Track) error
+	// Enqueue accepts any Segment message — a track for a command
+	// invocation, or an identify joining an anonymous ID to a user ID.
+	Enqueue(msg analytics.Message) error
 }
 
 // Config configures a Sender.
@@ -78,6 +91,30 @@ type Meta struct {
 	HostInfo *host.InfoStat
 	// Extra is forwarded to Context.Traits on every event (e.g. "agent", "is_tty").
 	Extra map[string]any
+}
+
+// anonymousID is the identifier events are attributed to before (and
+// alongside) any user ID: the session tracking ID when one is known, so every
+// invocation in an agent session shares it, and the per-install instance ID
+// otherwise.
+func (m *Meta) anonymousID() uuid.UUID {
+	if m.SessionTrackingID != uuid.Nil {
+		return m.SessionTrackingID
+	}
+	return m.InstanceID
+}
+
+// anonymousIDs returns every non-zero anonymous identifier this install
+// reports under, deduplicated: the current one plus, inside an agent session,
+// the instance ID that runs outside a session report under.
+func (m *Meta) anonymousIDs() []uuid.UUID {
+	ids := make([]uuid.UUID, 0, 2)
+	for _, id := range []uuid.UUID{m.anonymousID(), m.InstanceID} {
+		if id != uuid.Nil && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (m *Meta) toContext() *analytics.Context {
@@ -161,20 +198,57 @@ func (s *Sender) Track(eventName string, props map[string]any) error {
 		p.Set(key, val)
 	}
 
-	anonymousID := s.meta.InstanceID
-	if s.meta.SessionTrackingID != uuid.Nil {
-		anonymousID = s.meta.SessionTrackingID
-	}
+	s.mu.RLock()
+	meta := s.meta
+	s.mu.RUnlock()
+
 	track := analytics.Track{
 		Event:        eventName,
 		Timestamp:    time.Now(),
 		Properties:   p,
-		AnonymousId:  anonymousID.String(),
-		Context:      s.meta.toContext(),
+		AnonymousId:  meta.anonymousID().String(),
+		Context:      meta.toContext(),
 		Integrations: analytics.NewIntegrations().Enable("Amplitude"),
 	}
-	if s.meta.UserID != uuid.Nil {
-		track.UserId = s.meta.UserID.String()
+	if meta.UserID != uuid.Nil {
+		track.UserId = meta.UserID.String()
 	}
 	return s.dest.Enqueue(track)
+}
+
+// SetUserID attaches userID to every event this Sender reports from now on,
+// including the in-flight command_invocation. Safe to call on a nil Sender.
+func (s *Sender) SetUserID(userID uuid.UUID) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.meta.UserID = userID
+}
+
+// Identify sends a Segment identify joining this install's anonymous ID(s) to
+// userID. One call goes out per anonymous ID (session and/or instance), so
+// both the in-session and out-of-session histories join the user. No traits
+// are sent. Safe to call on a nil or closed Sender; uuid.Nil is a no-op.
+func (s *Sender) Identify(userID uuid.UUID) error {
+	if s == nil || userID == uuid.Nil || s.closed.Load() {
+		return nil
+	}
+
+	s.mu.RLock()
+	meta := s.meta
+	s.mu.RUnlock()
+
+	now := time.Now()
+	errs := make([]error, 0, 2)
+	for _, anonymousID := range meta.anonymousIDs() {
+		errs = append(errs, s.dest.Enqueue(analytics.Identify{
+			Timestamp:   now,
+			UserId:      userID.String(),
+			AnonymousId: anonymousID.String(),
+			Context:     meta.toContext(),
+		}))
+	}
+	return errors.Join(errs...)
 }

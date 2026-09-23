@@ -15,12 +15,18 @@ import (
 // fakeDestination records Enqueue calls synchronously so tests can assert on
 // them without spawning a subprocess or hitting the network.
 type fakeDestination struct {
-	tracks []analytics.Track
-	closed bool
+	tracks     []analytics.Track
+	identifies []analytics.Identify
+	closed     bool
 }
 
-func (f *fakeDestination) Enqueue(t analytics.Track) error {
-	f.tracks = append(f.tracks, t)
+func (f *fakeDestination) Enqueue(m analytics.Message) error {
+	switch msg := m.(type) {
+	case analytics.Track:
+		f.tracks = append(f.tracks, msg)
+	case analytics.Identify:
+		f.identifies = append(f.identifies, msg)
+	}
 	return nil
 }
 
@@ -248,4 +254,127 @@ func TestRecordForSubcommands_SkipsDisabledCommand(t *testing.T) {
 
 func TestFromContext_NoSenderAttached(t *testing.T) {
 	assert.Assert(t, FromContext(t.Context()) == nil)
+}
+
+func TestSender_SetUserID_AppliesToLaterEvents(t *testing.T) {
+	fake := &fakeDestination{}
+	userID := uuid.New()
+
+	s, err := NewSender(Config{
+		TestDestination: fake,
+		Metadata:        Meta{InstanceID: uuid.New()},
+	})
+	assert.NilError(t, err)
+
+	assert.NilError(t, s.Track("before_auth", nil))
+	s.SetUserID(userID)
+	assert.NilError(t, s.Track("after_auth", nil))
+
+	assert.Equal(t, len(fake.tracks), 2)
+	assert.Equal(t, fake.tracks[0].UserId, "")
+	assert.Equal(t, fake.tracks[1].UserId, userID.String())
+}
+
+func TestSender_Identify_JoinsInstanceIDToUser(t *testing.T) {
+	fake := &fakeDestination{}
+	instanceID := uuid.New()
+	userID := uuid.New()
+
+	s, err := NewSender(Config{
+		TestDestination: fake,
+		Metadata:        Meta{Version: "1.2.3", InstanceID: instanceID},
+	})
+	assert.NilError(t, err)
+
+	assert.NilError(t, s.Identify(userID))
+
+	assert.Equal(t, len(fake.identifies), 1)
+	id := fake.identifies[0]
+	assert.Equal(t, id.UserId, userID.String())
+	assert.Equal(t, id.AnonymousId, instanceID.String())
+	assert.Equal(t, id.Context.App.Name, "chunk-cli")
+	assert.Assert(t, !id.Timestamp.IsZero())
+}
+
+func TestSender_Identify_JoinsSessionAndInstanceIDs(t *testing.T) {
+	fake := &fakeDestination{}
+	instanceID := uuid.New()
+	sessionID := uuid.New()
+	userID := uuid.New()
+
+	s, err := NewSender(Config{
+		TestDestination: fake,
+		Metadata: Meta{
+			InstanceID:        instanceID,
+			SessionTrackingID: sessionID,
+		},
+	})
+	assert.NilError(t, err)
+
+	assert.NilError(t, s.Identify(userID))
+
+	assert.Equal(t, len(fake.identifies), 2, "both anonymous threads should join the user")
+	assert.Equal(t, fake.identifies[0].AnonymousId, sessionID.String())
+	assert.Equal(t, fake.identifies[1].AnonymousId, instanceID.String())
+	for _, id := range fake.identifies {
+		assert.Equal(t, id.UserId, userID.String())
+	}
+}
+
+func TestSender_Identify_NoUserIDIsNoop(t *testing.T) {
+	fake := &fakeDestination{}
+	s, err := NewSender(Config{
+		TestDestination: fake,
+		Metadata:        Meta{InstanceID: uuid.New()},
+	})
+	assert.NilError(t, err)
+
+	assert.NilError(t, s.Identify(uuid.Nil))
+	assert.Equal(t, len(fake.identifies), 0)
+}
+
+func TestSender_Identify_NilSenderIsSafe(t *testing.T) {
+	var s *Sender
+	assert.NilError(t, s.Identify(uuid.New()))
+	s.SetUserID(uuid.New())
+}
+
+func TestIdentifyUser_SetsUserIDOnCommandInvocation(t *testing.T) {
+	fake := &fakeDestination{}
+	instanceID := uuid.New()
+	userID := uuid.New()
+
+	s, err := NewSender(Config{
+		TestDestination: fake,
+		Metadata:        Meta{InstanceID: instanceID},
+	})
+	assert.NilError(t, err)
+
+	root := &cobra.Command{Use: "chunk"}
+	login := &cobra.Command{
+		Use: "login",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			IdentifyUser(cmd.Context(), userID)
+			return nil
+		},
+	}
+	root.AddCommand(login)
+	RecordForSubcommands(root)
+
+	root.SetContext(WithSender(context.Background(), s))
+	root.SetArgs([]string{"login"})
+	assert.NilError(t, root.Execute())
+
+	assert.Equal(t, len(fake.identifies), 1)
+	assert.Equal(t, fake.identifies[0].AnonymousId, instanceID.String())
+	assert.Equal(t, fake.identifies[0].UserId, userID.String())
+
+	assert.Equal(t, len(fake.tracks), 1)
+	assert.Equal(t, fake.tracks[0].Event, "command_invocation")
+	assert.Equal(t, fake.tracks[0].UserId, userID.String(),
+		"the invocation the user authenticated in should not report anonymously")
+}
+
+func TestIdentifyUser_NoSenderInContext(t *testing.T) {
+	IdentifyUser(context.Background(), uuid.New())
 }

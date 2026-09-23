@@ -14,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
@@ -307,6 +308,7 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 		if err := config.SaveUserID(userID); err != nil {
 			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))
 		}
+		telemetry.IdentifyUser(ctx, userID) // joins pre-auth history to this user
 	}
 
 	streams.ErrPrintln("")
@@ -519,6 +521,15 @@ func authRemoveCircleCI(io iostream.Streams, envSet, force, insecureStorage bool
 	} else {
 		if err := config.Clear("circleCIToken"); err != nil {
 			return &userError{msg: "Failed to remove CircleCI token.", err: err}
+		}
+	}
+
+	// Only clear once no token resolves anywhere: removing one source (e.g.
+	// the config file) can leave a working keychain token behind, and nothing
+	// re-persists the ID until an explicit `auth login`.
+	if after, err := config.ResolveCircleCI(false); err == nil && after.CircleCIToken == "" {
+		if err := config.ClearUserID(); err != nil {
+			io.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not clear stored CircleCI user ID: %v", err)))
 		}
 	}
 

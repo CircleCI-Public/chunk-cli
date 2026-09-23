@@ -224,6 +224,20 @@ install UUID is sent as `AnonymousId` (not `UserId`) to avoid mixing machine
 identifiers with real user IDs in shared event counts. When the user has
 authenticated, their CircleCI user UUID is also sent as `UserId`.
 
+When an auth flow validates a token, it persists the user UUID
+(`config.SaveUserID`) and calls `telemetry.IdentifyUser`. That attaches the
+user ID to the rest of the current run, and sends a Segment `identify` joining
+the anonymous history to the user: one for the current session tracking ID
+(if any) and one for the instance ID, which is the `AnonymousId` of every run
+made outside an agent session. `chunk auth remove circleci` clears the stored
+user ID once no CircleCI token resolves anywhere.
+
+Telemetry is flushed by `cmd.ExecuteRoot` rather than `PersistentPostRunE`,
+which cobra skips when `RunE` errors — otherwise a login followed by a failed
+command would lose its one-time identify. Buffered events reach the
+`receive-telemetry` subprocess as tagged `receiver.Message` envelopes; the
+receiver also accepts the older bare-track array.
+
 Every event's `Context` also carries the operating system (`runtime.GOOS`)
 and, if detected, the AI coding agent chunk-cli was invoked from (e.g.
 `claude-code`, `cursor`) — see `internal/telemetry/agent.go`'s

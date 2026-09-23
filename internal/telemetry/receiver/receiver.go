@@ -4,7 +4,6 @@
 package receiver
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,15 +19,18 @@ const (
 	EnvTelemetryEndpoint = "__CHUNK_TELEMETRY_ENDPOINT"
 )
 
-// Receive decodes a JSON array of analytics.Track events from in and
-// forwards them to Segment using the write key and endpoint from the
-// environment.
+// Receive decodes a JSON array of buffered messages from in and forwards them
+// to Segment using the write key and endpoint from the environment.
 func Receive(in io.Reader) (err error) {
 	writeKey := os.Getenv(EnvWriteKey)
 	endpoint := os.Getenv(EnvTelemetryEndpoint)
 
-	var messages []analytics.Track
-	if err := json.NewDecoder(in).Decode(&messages); err != nil {
+	data, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+	messages, err := decode(data)
+	if err != nil {
 		return err
 	}
 

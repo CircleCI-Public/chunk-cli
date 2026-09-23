@@ -589,3 +589,49 @@ func TestSessionTrackingID_DifferentInputsDifferentIDs(t *testing.T) {
 func TestSessionTrackingID_NonNil(t *testing.T) {
 	assert.Assert(t, SessionTrackingID("any-session") != uuid.Nil)
 }
+
+// --- user ID ---
+
+func TestSaveAndGetUserID_RoundTrips(t *testing.T) {
+	setupTempConfig(t)
+
+	assert.Equal(t, GetUserID(), uuid.Nil)
+
+	id := uuid.New()
+	assert.NilError(t, SaveUserID(id))
+	assert.Equal(t, GetUserID(), id)
+}
+
+func TestSaveUserID_OverwritesOnAccountSwitch(t *testing.T) {
+	setupTempConfig(t)
+
+	assert.NilError(t, SaveUserID(uuid.New()))
+	second := uuid.New()
+	assert.NilError(t, SaveUserID(second))
+	assert.Equal(t, GetUserID(), second)
+}
+
+func TestClearUserID(t *testing.T) {
+	setupTempConfig(t)
+
+	assert.NilError(t, SaveUserID(uuid.New()))
+	assert.NilError(t, ClearUserID())
+	assert.Equal(t, GetUserID(), uuid.Nil)
+}
+
+func TestClearUserID_WhenNoneStored(t *testing.T) {
+	setupTempConfig(t)
+	assert.NilError(t, ClearUserID())
+	assert.Equal(t, GetUserID(), uuid.Nil)
+}
+
+func TestGetUserID_IgnoresMalformedValue(t *testing.T) {
+	setupTempConfig(t)
+
+	cfg, err := Load()
+	assert.NilError(t, err)
+	cfg.CircleCIUserID = "not-a-uuid"
+	assert.NilError(t, Save(cfg))
+
+	assert.Equal(t, GetUserID(), uuid.Nil)
+}
