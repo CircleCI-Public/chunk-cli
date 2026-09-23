@@ -904,10 +904,13 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID st
 		HookCodex:   hook != nil && hook.codex,
 	}
 	// Forward local credentials only over the Unix socket (isolated to the local
-	// filesystem). Over TCP the remote daemon runs with its own credentials.
+	// filesystem). Over TCP the remote daemon runs with its own credentials and
+	// can provision its own sidecar when an org ID is provided.
 	if watchd.TCPRemoteAddr() == "" {
 		req.CircleCIToken = circleCIToken
 		req.Env = os.Environ()
+	} else {
+		req.OrgID = orgID
 	}
 	resp, err := watchd.RunValidate(req)
 	if err != nil {
