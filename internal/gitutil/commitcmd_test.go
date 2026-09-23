@@ -23,6 +23,11 @@ func TestIsCommitCommand(t *testing.T) {
 		{"git --no-pager commit", true},
 		{"GIT_AUTHOR_NAME=x git commit", true},
 		{"env FOO=1 git commit", true},
+		{"env -u GIT_AUTHOR_DATE git commit", true},
+		{"env -i git commit", true},
+		{"env -u FOO -u BAR git commit", true},
+		{"env --unset=FOO git commit", true},
+		{"env -C /tmp git commit", true},
 		{"/usr/bin/git commit", true},
 		{"(cd sub && git commit -m x)", true},
 

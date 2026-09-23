@@ -17,6 +17,17 @@ var gitOptsWithValue = map[string]bool{
 	"--super-prefix": true,
 }
 
+// envOptsWithValue are env(1) options that consume the next word as their
+// value, so that word is not the command being run.
+var envOptsWithValue = map[string]bool{
+	"-u":             true,
+	"--unset":        true,
+	"-C":             true,
+	"--chdir":        true,
+	"-S":             true,
+	"--split-string": true,
+}
+
 // IsCommitCommand reports whether a shell command line runs git commit in any
 // of its parts: "git commit", "cd x && git commit", "git -C dir commit",
 // "FOO=1 git commit".
@@ -47,10 +58,28 @@ func splitShellCommands(line string) []string {
 
 // runsGitCommit reports whether words, one simple command, invoke git commit.
 func runsGitCommit(words []string) bool {
-	// Leading VAR=value assignments and an env wrapper do not change which
-	// program runs.
-	for len(words) > 0 && (words[0] == "env" || isAssignment(words[0])) {
-		words = words[1:]
+	// Leading VAR=value assignments and an env wrapper (with its own flags)
+	// do not change which program runs.
+	seenEnv := false
+	for len(words) > 0 {
+		w := words[0]
+		if w == "env" {
+			seenEnv = true
+			words = words[1:]
+			continue
+		}
+		if isAssignment(w) {
+			words = words[1:]
+			continue
+		}
+		if seenEnv && strings.HasPrefix(w, "-") {
+			words = words[1:]
+			if envOptsWithValue[w] && len(words) > 0 {
+				words = words[1:]
+			}
+			continue
+		}
+		break
 	}
 	if len(words) == 0 || filepath.Base(words[0]) != "git" {
 		return false
