@@ -27,7 +27,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/analytics-go/v3"
-	"github.com/shirou/gopsutil/v4/host"
 )
 
 // Sender tracks anonymous command-usage events. A nil *Sender is valid and
@@ -85,10 +84,12 @@ type Meta struct {
 	// as UserId so events can be attributed to a real user.
 	UserID uuid.UUID
 
-	// HostInfo is the host info to associate with events. When non-nil, OS.Name,
-	// OS.Version, Device.Model (kernel arch), and Device.Type (platform family)
-	// are populated from it. Best-effort: may be nil when host detection fails.
-	HostInfo *host.InfoStat
+	// OSName, OSVersion, KernelArch, and PlatformFamily populate the Segment
+	// OS and Device context fields. Best-effort: zero values are sent as-is.
+	OSName         string
+	OSVersion      string
+	KernelArch     string
+	PlatformFamily string
 	// Extra is forwarded to Context.Traits on every event (e.g. "agent", "is_tty").
 	Extra map[string]any
 }
@@ -118,16 +119,6 @@ func (m *Meta) anonymousIDs() []uuid.UUID {
 }
 
 func (m *Meta) toContext() *analytics.Context {
-	var osInfo analytics.OSInfo
-	device := analytics.DeviceInfo{Id: m.InstanceID.String()}
-	if m.HostInfo != nil {
-		osInfo = analytics.OSInfo{
-			Name:    m.HostInfo.OS,
-			Version: m.HostInfo.PlatformVersion,
-		}
-		device.Model = m.HostInfo.KernelArch
-		device.Type = m.HostInfo.PlatformFamily
-	}
 	var traits map[string]any
 	for k, v := range m.Extra {
 		if s, ok := v.(string); ok && s == "" {
@@ -139,9 +130,13 @@ func (m *Meta) toContext() *analytics.Context {
 		traits[k] = v
 	}
 	return &analytics.Context{
-		App:    analytics.AppInfo{Name: "chunk-cli", Version: m.Version},
-		OS:     osInfo,
-		Device: device,
+		App: analytics.AppInfo{Name: "chunk-cli", Version: m.Version},
+		OS:  analytics.OSInfo{Name: m.OSName, Version: m.OSVersion},
+		Device: analytics.DeviceInfo{
+			Id:    m.InstanceID.String(),
+			Model: m.KernelArch,
+			Type:  m.PlatformFamily,
+		},
 		Traits: traits,
 	}
 }
