@@ -3,11 +3,9 @@ package sidecar
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -395,11 +393,7 @@ func bridgeConn(ctx context.Context, tcpConn net.Conn, sess *Session, errCh chan
 
 	dialOpts := &websocket.DialOptions{}
 	if strings.HasPrefix(wsURL, "wss://") {
-		dialOpts.HTTPClient = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // trust via SSH key, not TLS cert
-			},
-		}
+		dialOpts.HTTPClient = wssHTTPClient()
 	}
 
 	wsConn, resp, err := websocket.Dial(ctx, wsURL, dialOpts)

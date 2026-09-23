@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +52,33 @@ func TestToWebSocketURL(t *testing.T) {
 		assert.NilError(t, err, "input: %s", tc.in)
 		assert.Equal(t, got, tc.want, "input: %s", tc.in)
 	}
+}
+
+// TestWSSHTTPClientRespectsProxyFromEnvironment verifies that the transport
+// used to dial the sidecar's wss:// tunnel routes through HTTP_PROXY/
+// HTTPS_PROXY like the rest of the codebase, rather than defaulting to no
+// proxy the way a bare &http.Transport{} literal otherwise would.
+//
+// This checks wiring directly (via the Proxy field's function pointer)
+// instead of exercising a real dial with the env vars set: http.Transport
+// caches the parsed proxy environment for the lifetime of the process the
+// first time any transport's Proxy func is invoked, so a live end-to-end
+// check here would be liable to observe a stale cache poisoned by whichever
+// test happened to dial first.
+func TestWSSHTTPClientRespectsProxyFromEnvironment(t *testing.T) {
+	client := wssHTTPClient()
+
+	transport, ok := client.Transport.(*http.Transport)
+	assert.Assert(t, ok, "expected *http.Transport, got %T", client.Transport)
+	assert.Assert(t, transport.Proxy != nil, "expected Proxy to be set so HTTP_PROXY/HTTPS_PROXY are honored")
+	assert.Equal(t,
+		reflect.ValueOf(transport.Proxy).Pointer(),
+		reflect.ValueOf(http.ProxyFromEnvironment).Pointer(),
+		"expected Proxy to be http.ProxyFromEnvironment",
+	)
+
+	assert.Assert(t, transport.TLSClientConfig != nil)
+	assert.Assert(t, transport.TLSClientConfig.InsecureSkipVerify)
 }
 
 func TestTofuHostKeyCallback(t *testing.T) {

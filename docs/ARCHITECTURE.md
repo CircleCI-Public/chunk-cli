@@ -213,6 +213,7 @@ in `config.Resolve` and makes clients testable.
 | `CI` | telemetry, upgrade | Also disables anonymous usage telemetry and the update check (set by most CI systems) |
 | `CHUNK_NO_UPDATE_CHECK` | upgrade | Disable the new-version check and its notice (any non-empty value) |
 | `CHUNK_TELEMETRY_LOG` | telemetry | Log telemetry events to stderr instead of (or alongside) sending them |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | sidecar | Standard Go proxy env vars, honored when dialing the sidecar's WebSocket SSH tunnel (needed in devcontainers/networks where egress is proxy-only) |
 
 ## Telemetry (`internal/telemetry/`)
 
