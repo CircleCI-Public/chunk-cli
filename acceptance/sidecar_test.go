@@ -455,8 +455,7 @@ func TestSidecarsSshPassesThroughExitCode(t *testing.T) {
 
 	assert.Equal(t, result.ExitCode, 3, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
 	assert.Equal(t, result.Stdout, "partial output\n")
-	assert.Assert(t, !strings.Contains(result.Stderr, "error"),
-		"remote exit should not be reported as a chunk error: %s", result.Stderr)
+	assert.Equal(t, result.Stderr, "", "remote exit should not be reported as a chunk error")
 }
 
 func TestSidecarsExecWithArgs(t *testing.T) {
