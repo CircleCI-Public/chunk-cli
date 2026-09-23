@@ -17,6 +17,10 @@ const DefaultTestTimeout = 3 * time.Minute
 
 const cleanupTimeout = 30 * time.Second
 
+// replaceTimeout bounds provisioning and fully syncing a replacement for an
+// unusable worker, which takes far longer than a cleanup command.
+const replaceTimeout = 10 * time.Minute
+
 // maxOutputBytes bounds the amount of test output retained per mutation.
 // The mutate runner may execute many tests concurrently, so this needs to stay
 // small enough that N parallel mutations do not exhaust local memory.
@@ -131,10 +135,12 @@ func runWith(
 		go func(index int, m Mutation, entry *sidecar.PoolEntry, patch []byte) {
 			defer wg.Done()
 			killed, output, runErr, reusable := fn.run(ctx, entry, patch, testCmd, testTimeout)
-			if reusable {
+			// When the run is stopping, don't provision a replacement for an
+			// unusable worker: the next pool sync resets and cleans it.
+			if reusable || ctx.Err() != nil {
 				fn.release(entry)
 			} else {
-				replaceCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+				replaceCtx, cancel := context.WithTimeout(ctx, replaceTimeout)
 				replaceErr := fn.replace(replaceCtx, entry, report)
 				cancel()
 				if replaceErr != nil {
@@ -183,14 +189,30 @@ func validateBaseline(ctx context.Context, entry *sidecar.PoolEntry, testCmd str
 	code, output, err := execOnSidecar(testCtx, entry, fmt.Sprintf("cd %s && %s", sidecar.ShellEscape(entry.RepoPath), testCmd))
 	if err != nil {
 		if testCtx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("baseline test timed out after %s", testTimeout)
+			return &BaselineError{TimedOut: true, Timeout: testTimeout, Output: output}
 		}
 		return fmt.Errorf("run baseline test: %w", err)
 	}
 	if code != 0 {
-		return fmt.Errorf("baseline test failed (exit %d): %s", code, output)
+		return &BaselineError{ExitCode: code, Output: output}
 	}
 	return nil
+}
+
+// BaselineError reports that the test suite failed or timed out before any
+// mutation was applied, so mutation results would be meaningless.
+type BaselineError struct {
+	ExitCode int
+	Output   string
+	TimedOut bool
+	Timeout  time.Duration
+}
+
+func (e *BaselineError) Error() string {
+	if e.TimedOut {
+		return fmt.Sprintf("baseline test timed out after %s", e.Timeout)
+	}
+	return fmt.Sprintf("baseline test failed (exit %d)", e.ExitCode)
 }
 
 type tailBuffer struct {

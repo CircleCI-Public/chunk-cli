@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // Request is an individual HTTP request to be executed by Client.Call.
@@ -19,6 +20,7 @@ type Request struct {
 	headers   http.Header
 	query     url.Values
 	noTimeout bool
+	timeout   time.Duration
 }
 
 // URL returns the resolved URL (after RouteParams) or the raw route.
@@ -83,4 +85,11 @@ func Decoder(fn func(io.Reader) error) func(*Request) {
 // caller's context deadline applies. Use for long-lived streaming responses.
 func NoTimeout() func(*Request) {
 	return func(r *Request) { r.noTimeout = true }
+}
+
+// Timeout overrides the client-level timeout for this request. Use for
+// requests that legitimately take longer than ordinary API calls but must
+// still fail rather than hang when the server stalls.
+func Timeout(d time.Duration) func(*Request) {
+	return func(r *Request) { r.timeout = d }
 }

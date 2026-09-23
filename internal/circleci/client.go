@@ -146,6 +146,11 @@ func (c *Client) ListSidecars(ctx context.Context, orgID string, all bool) ([]Si
 	return sidecars, nil
 }
 
+// createSidecarTimeout bounds a single sidecar provisioning request.
+// Provisioning can outlast the ordinary API deadline, but a stalled server
+// must still surface as an error rather than hang the caller.
+const createSidecarTimeout = 5 * time.Minute
+
 func (c *Client) CreateSidecar(ctx context.Context, orgID, name, image string) (*Sidecar, error) {
 	var attrs sidecarAttrs
 	var refs orgUserRefs
@@ -156,7 +161,7 @@ func (c *Client) CreateSidecar(ctx context.Context, orgID, name, image string) (
 			References: orgRefs{Org: v3Ref{ID: orgID}},
 		}}),
 		hc.JSONDecoder(&env),
-		hc.NoTimeout(),
+		hc.Timeout(createSidecarTimeout),
 	))
 	if err != nil {
 		return nil, mapErr("create sidecar", err)

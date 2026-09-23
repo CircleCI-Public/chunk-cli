@@ -289,6 +289,7 @@ func TestAssemblePool_CloneIsAvailableBeforeAllCreatesFinish(t *testing.T) {
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
+	t.Cleanup(func() { pool.Close(context.Background()) })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	first, err := pool.Acquire(ctx)
@@ -303,7 +304,33 @@ func TestAssemblePool_CloneIsAvailableBeforeAllCreatesFinish(t *testing.T) {
 	pool.Release(second)
 }
 
-func TestPoolCloseCancelsOutstandingCloneCreates(t *testing.T) {
+func TestPoolCloseKeepsClonesThatFinishWhileWaiting(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	blocked := make(chan struct{})
+	env.cci.CreateWait = map[int]<-chan struct{}{2: blocked, 3: blocked}
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		pool.Close(ctx)
+	}()
+	close(blocked)
+	<-closed
+
+	assert.NilError(t, ctx.Err())
+	assert.Equal(t, countPoolDeletes(env.cci), 1, "only the seed is deleted")
+	state, err := loadPoolState(env.workDir, "validate")
+	assert.NilError(t, err)
+	assert.Equal(t, len(state.SidecarIDs), 2, "clones are kept for reuse")
+}
+
+func TestPoolCloseCancelsCreatesWhenContextEnds(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
 	blocked := make(chan struct{})
@@ -313,15 +340,58 @@ func TestPoolCloseCancelsOutstandingCloneCreates(t *testing.T) {
 	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
 		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
 	assert.NilError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	pool.Close(ctx)
-	assert.NilError(t, ctx.Err())
 	waitForPoolTest(t, func() bool { return countPoolDeletes(env.cci) == 1 })
 
-	pool.mu.Lock()
-	assert.Equal(t, pool.pendingCreates, 0)
-	pool.mu.Unlock()
+	waitForPoolTest(t, func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return pool.pendingCreates == 0
+	})
+}
+
+func TestPoolDestroyWaitsForCloneCreationBeforeReturning(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	blocked := make(chan struct{})
+	env.cci.CreateWait = map[int]<-chan struct{}{3: blocked}
+	t.Cleanup(func() { close(blocked) })
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	entry, err := pool.Acquire(ctx)
+	assert.NilError(t, err)
+	pool.Release(entry)
+
+	assert.NilError(t, pool.Destroy(ctx))
+
+	// The seed and the finished clone are deleted before Destroy returns, so
+	// nothing is left behind when the process exits straight afterwards.
+	assert.Equal(t, countPoolDeletes(env.cci), 2)
+	_, err = loadPoolState(env.workDir, "validate")
+	assert.Assert(t, errors.Is(err, os.ErrNotExist))
+}
+
+func TestPoolDestroyKeepsUndeletedSidecarsInState(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+
+	pool, err := assemblePool(context.Background(), env.cl, 1, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	env.cci.DeleteStatusCode = 500
+
+	err = pool.Destroy(context.Background())
+
+	assert.ErrorContains(t, err, "delete 1 sidecar(s)")
+	state, err := loadPoolState(env.workDir, "validate")
+	assert.NilError(t, err)
+	assert.DeepEqual(t, state.SidecarIDs, pool.ids)
 }
 
 func TestAssemblePool_SyncFailure_CleansUp(t *testing.T) {
@@ -507,6 +577,28 @@ func TestNewPoolRestoresCreationContext(t *testing.T) {
 
 	assert.Equal(t, pool.image, "snapshot-1")
 	assert.Equal(t, entry.RepoPath, "/saved/workspace")
+}
+
+func TestNewPoolDeletesSurplusSidecarsFromState(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	assert.NilError(t, savePoolState(env.workDir, "mutate", &poolState{
+		SidecarIDs: []string{"existing-sb-1", "existing-sb-2", "existing-sb-3"},
+		Image:      "ubuntu:22.04",
+	}))
+
+	pool, err := NewPool(context.Background(), env.cl, PoolOptions{
+		Size:    1,
+		Name:    "mutate",
+		OrgID:   "org-1",
+		WorkDir: env.workDir,
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	t.Cleanup(func() { pool.Close(context.Background()) })
+
+	assert.Equal(t, countPoolRequests(env.cci, "DELETE", createSidecarPath+"/existing-sb-2"), 1)
+	assert.Equal(t, countPoolRequests(env.cci, "DELETE", createSidecarPath+"/existing-sb-3"), 1)
+	assert.DeepEqual(t, pool.ids, []string{"existing-sb-1"})
 }
 
 func TestNewPoolUsesConfiguredRepoPath(t *testing.T) {

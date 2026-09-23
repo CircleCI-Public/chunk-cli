@@ -282,6 +282,9 @@ func (c *Client) Call(ctx context.Context, r Request) (int, error) {
 	}
 	if !r.noTimeout {
 		ctxTimeout := c.timeout
+		if r.timeout > 0 {
+			ctxTimeout = r.timeout
+		}
 		if c.retryOn429Budget > 0 {
 			ctxTimeout = c.retryOn429Budget + c.timeout // extend deadline to cover retry waits
 		}

@@ -602,3 +602,22 @@ func TestReloadToken_DoesNotBlockReadersDuringReload(t *testing.T) {
 	<-first
 	<-second
 }
+
+func TestRequestTimeoutOverridesClientTimeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	c := hc.New(hc.Config{BaseURL: srv.URL, Timeout: time.Hour})
+
+	start := time.Now()
+	_, err := c.Call(context.Background(), hc.NewRequest("GET", "/", hc.Timeout(50*time.Millisecond)))
+	assert.Assert(t, errors.Is(err, context.DeadlineExceeded), "got %v", err)
+	assert.Assert(t, time.Since(start) < 10*time.Second, "request timeout must replace the client timeout")
+}

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -138,23 +139,31 @@ against the test suite in parallel.`,
 				return fmt.Errorf("pool: %w", err)
 			}
 			defer func() {
-				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(cmd.Context()), cleanupTimeout)
-				defer cancel()
 				if destroyPool {
-					pool.Destroy(cleanupCtx)
+					cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(cmd.Context()), cleanupTimeout)
+					defer cancel()
+					if err := pool.Destroy(cleanupCtx); err != nil {
+						statusFn(iostream.LevelWarn, fmt.Sprintf("could not destroy pool: %v", err))
+					}
 					return
 				}
-				pool.Close(cleanupCtx)
+				// Waiting lets pending creates land in pool state for reuse;
+				// an interrupt cancels them instead.
+				closeCtx, cancel := context.WithTimeout(cmd.Context(), poolCloseTimeout)
+				defer cancel()
+				pool.Close(closeCtx)
 			}()
 
 			statusFn(iostream.LevelStep, fmt.Sprintf("Running %d mutations (test: %s)...", len(mutations), testCmd))
 
-			results, err := mutate.Run(cmd.Context(), pool, mutations, workDir, testCmd, testTimeout, statusFn)
-			if err != nil {
-				return fmt.Errorf("run: %w", err)
+			results, runErr := mutate.Run(cmd.Context(), pool, mutations, workDir, testCmd, testTimeout, statusFn)
+			errored := 0
+			if len(results) > 0 {
+				errored = printMutationResults(cmd, results)
 			}
-
-			errored := printMutationResults(cmd, results)
+			if runErr != nil {
+				return mutationScheduleError(runErr, testCmd)
+			}
 			return mutationRunError(errored)
 		},
 	}
@@ -170,6 +179,10 @@ against the test suite in parallel.`,
 }
 
 const cleanupTimeout = 30 * time.Second
+
+// poolCloseTimeout bounds how long a kept pool waits for pending sidecar
+// creates to finish before exiting.
+const poolCloseTimeout = 5 * time.Minute
 
 func mutationPoolSize(parallel, mutations int) int {
 	return min(parallel, mutations)
@@ -227,6 +240,31 @@ func printMutationResults(cmd *cobra.Command, results []mutate.Result) int {
 	}
 	cmd.Printf("\nkilled: %d / survived: %d / error: %d / total: %d\n", killed, survived, errored, killed+survived+errored)
 	return errored
+}
+
+// baselineDetailBytes caps how much failing baseline output is shown so the
+// message and suggestion are not buried under the full test log.
+const baselineDetailBytes = 4 << 10
+
+func mutationScheduleError(err error, testCmd string) error {
+	var baselineErr *mutate.BaselineError
+	if !errors.As(err, &baselineErr) {
+		return fmt.Errorf("run: %w", err)
+	}
+	if baselineErr.TimedOut {
+		return newUserError(fmt.Sprintf("Tests did not finish within %s before any mutation was applied.", baselineErr.Timeout)).
+			withSuggestion("Increase --test-timeout or use a faster --test-cmd.").
+			withoutDetail().
+			wrap(err)
+	}
+	output := baselineErr.Output
+	if len(output) > baselineDetailBytes {
+		output = "…" + output[len(output)-baselineDetailBytes:]
+	}
+	return newUserError("Tests fail before any mutation was applied.").
+		withDetail(output).
+		withSuggestion(fmt.Sprintf("Fix the failing tests so %q passes on an unmodified tree, then rerun.", testCmd)).
+		wrap(err)
 }
 
 func mutationRunError(errored int) error {

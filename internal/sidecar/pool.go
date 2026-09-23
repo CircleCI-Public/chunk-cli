@@ -137,6 +137,15 @@ func NewPool(
 		}
 	}
 	if len(existingIDs) > opts.Size {
+		// Surplus sidecars from the pool's own state would drop out of state
+		// untracked, so delete them. Caller-supplied IDs belong to the caller.
+		if len(opts.ExistingIDs) == 0 {
+			surplus := existingIDs[opts.Size:]
+			status(iostream.LevelInfo, fmt.Sprintf("deleting %d surplus pool sidecar(s)...", len(surplus)))
+			for _, id := range deleteSidecarsConcurrently(context.WithoutCancel(ctx), client, surplus) {
+				status(iostream.LevelWarn, fmt.Sprintf("could not delete surplus sidecar %s", id))
+			}
+		}
 		existingIDs = existingIDs[:opts.Size]
 	}
 
@@ -309,7 +318,8 @@ func deleteSidecars(client *circleci.Client, ids []string) {
 // Replace removes a checked-out, unusable entry and makes a freshly synced
 // replacement available to future Acquire calls.
 func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.StatusFunc) error {
-	_ = p.client.DeleteSidecar(ctx, dead.ID)
+	cleanupCtx := context.WithoutCancel(ctx)
+	_ = p.client.DeleteSidecar(cleanupCtx, dead.ID)
 
 	sc, err := Create(ctx, p.client, p.orgID, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
 	if err != nil {
@@ -319,7 +329,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 	}
 
 	if err := BundleSyncFanOut(ctx, p.client, []string{sc.ID}, dead.RepoPath, p.workDir, true, status); err != nil {
-		_ = p.client.DeleteSidecar(ctx, sc.ID)
+		_ = p.client.DeleteSidecar(cleanupCtx, sc.ID)
 		err = fmt.Errorf("replace: sync sidecar: %w", err)
 		p.retire(dead, err)
 		return err
@@ -549,15 +559,62 @@ func (p *Pool) Release(entry *PoolEntry) {
 	p.notifyUpdate()
 }
 
+// Close keeps the pool's sidecars for reuse. It lets in-flight creates finish
+// so their sidecars are recorded in pool state: a cancelled create may still
+// be provisioned server-side under an ID the client never learns. Creates
+// still pending when ctx ends are cancelled.
 func (p *Pool) Close(ctx context.Context) {
+	if !p.waitForBackground(ctx) {
+		p.cancelCreates()
+	}
+}
+
+// Destroy deletes every pool sidecar and clears pool state. Sidecars that
+// could not be deleted stay in pool state so a later run can retry them.
+func (p *Pool) Destroy(ctx context.Context) error {
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
+	p.cancelCreates()
+	// The creation collector deletes the seed and any clone that lands after
+	// closing, so wait for it before the process can exit.
+	p.waitForBackground(ctx)
+
+	p.mu.Lock()
+	ids := slices.Clone(p.ids)
+	p.mu.Unlock()
+	failed := deleteSidecarsConcurrently(ctx, p.client, ids)
+	p.notifyUpdate()
+	if len(failed) == 0 {
+		clearPoolState(p.workDir, p.name)
+		return nil
+	}
+
+	p.mu.Lock()
+	p.ids = failed
+	p.mu.Unlock()
+	if err := p.persistState(); err != nil {
+		return fmt.Errorf("delete %d sidecar(s) %v; save pool state: %w", len(failed), failed, err)
+	}
+	return fmt.Errorf("delete %d sidecar(s): %v", len(failed), failed)
+}
+
+func (p *Pool) cancelCreates() {
 	p.mu.Lock()
 	cancel := p.createCancel
-	createDone := p.createDone
-	syncDone := p.syncDone
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+}
+
+// waitForBackground waits for clone creation and background sync to finish.
+// It reports false if ctx ended first.
+func (p *Pool) waitForBackground(ctx context.Context) bool {
+	p.mu.Lock()
+	createDone := p.createDone
+	syncDone := p.syncDone
+	p.mu.Unlock()
 	for _, done := range []chan struct{}{createDone, syncDone} {
 		if done == nil {
 			continue
@@ -565,31 +622,42 @@ func (p *Pool) Close(ctx context.Context) {
 		select {
 		case <-done:
 		case <-ctx.Done():
-			return
+			return false
 		}
 	}
+	return true
 }
 
-func (p *Pool) Destroy(ctx context.Context) {
-	p.mu.Lock()
-	p.closed = true
-	ids := slices.Clone(p.ids)
-	cancel := p.createCancel
-	p.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-	clearPoolState(p.workDir, p.name)
+func deleteSidecarsConcurrently(ctx context.Context, client *circleci.Client, ids []string) []string {
+	var mu sync.Mutex
+	var failed []string
+	sem := make(chan struct{}, bundleSyncFanOutConcurrency)
+	var wg sync.WaitGroup
 	for _, id := range ids {
-		_ = p.client.DeleteSidecar(ctx, id)
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if err := client.DeleteSidecar(ctx, id); err != nil && !circleci.SidecarGone(err) {
+				mu.Lock()
+				failed = append(failed, id)
+				mu.Unlock()
+			}
+		}(id)
 	}
-	p.notifyUpdate()
+	wg.Wait()
+	slices.Sort(failed)
+	return failed
 }
 
 func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, freshIDs map[string]bool, prepared *preparedBundleSync, status iostream.StatusFunc) {
 	done := make(chan struct{})
 	p.mu.Lock()
 	p.syncDone = done
+	// Existing sidecars occupy the leading entries; snapshot them before clone
+	// creation can append to or retirement can shift p.entries.
+	entries := slices.Clone(p.entries[:len(sidecarIDs)])
 	p.mu.Unlock()
 
 	parallelism := len(sidecarIDs)
@@ -600,25 +668,32 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 	sem := make(chan struct{}, parallelism)
 	var wg sync.WaitGroup
 	for i, id := range sidecarIDs {
-		entry := p.entries[i]
 		wg.Add(1)
-		go func(i int, id string, entry *PoolEntry) {
+		go func(id string, entry *PoolEntry) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			err := syncPreparedSidecar(ctx, p.client, id, freshIDs[id], prepared)
 			if isStaleSyncError(err) {
-				entry, err = p.replaceStaleEntry(ctx, entry, prepared, status)
+				stale := entry
+				entry, err = p.replaceStaleEntry(ctx, stale, prepared, status)
 				if err == nil {
 					p.mu.Lock()
-					p.entries[i] = entry
-					p.ids[i] = entry.ID
+					index := slices.IndexFunc(p.entries, func(e *PoolEntry) bool { return e.ID == stale.ID })
+					if index >= 0 {
+						p.entries[index] = entry
+						p.ids[index] = entry.ID
+					}
 					p.mu.Unlock()
+					if index < 0 {
+						_ = p.client.DeleteSidecar(context.WithoutCancel(ctx), entry.ID)
+						entry, err = stale, fmt.Errorf("replace stale sidecar: %s is not a pool member", stale.ID)
+					}
 				}
 			}
 			p.finishSync(entry, err)
-		}(i, id, entry)
+		}(id, entries[i])
 	}
 
 	go func() {

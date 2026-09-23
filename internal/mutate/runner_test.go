@@ -136,12 +136,44 @@ func TestRunWithReplacesUnusableWorker(t *testing.T) {
 	assert.Equal(t, results[0].Error, "cleanup failed")
 }
 
+func TestRunWithSkipsReplacementWhenCancelled(t *testing.T) {
+	entry := &sidecar.PoolEntry{ID: "sidecar-1"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var replaced, released atomic.Int32
+	fn := runnerFuncs{
+		acquire: func(context.Context) (*sidecar.PoolEntry, error) { return entry, nil },
+		release: func(*sidecar.PoolEntry) { released.Add(1) },
+		replace: func(context.Context, *sidecar.PoolEntry, iostream.StatusFunc) error {
+			replaced.Add(1)
+			return nil
+		},
+		baseline: func(context.Context, *sidecar.PoolEntry, string, time.Duration) error { return nil },
+		patch:    func(string, Mutation) ([]byte, error) { return []byte("patch"), nil },
+		run: func(context.Context, *sidecar.PoolEntry, []byte, string, time.Duration) (bool, string, string, bool) {
+			cancel()
+			return false, "", "apply patch: context canceled", false
+		},
+	}
+
+	results, err := runWith(ctx, []Mutation{{ID: "MUT-001"}}, "/project", "task test", time.Second, func(iostream.Level, string) {}, fn)
+
+	assert.NilError(t, err)
+	assert.Equal(t, len(results), 1)
+	assert.Equal(t, replaced.Load(), int32(0))
+	assert.Equal(t, released.Load(), int32(2), "baseline and mutation worker are both released")
+}
+
 func TestValidateBaseline(t *testing.T) {
 	entry := mutationTestEntry(t, &fakes.ExecResponse{ExitCode: 1, Stderr: "tests failed\n"})
 
 	err := validateBaseline(context.Background(), entry, "task test", time.Second)
 
-	assert.ErrorContains(t, err, "baseline test failed (exit 1): tests failed")
+	var baselineErr *BaselineError
+	assert.Assert(t, errors.As(err, &baselineErr))
+	assert.Equal(t, baselineErr.ExitCode, 1)
+	assert.Assert(t, strings.Contains(baselineErr.Output, "tests failed"))
+	assert.ErrorContains(t, err, "baseline test failed (exit 1)")
 }
 
 func mutationTestEntry(t *testing.T, response *fakes.ExecResponse) *sidecar.PoolEntry {
