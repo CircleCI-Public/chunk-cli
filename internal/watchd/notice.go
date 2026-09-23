@@ -109,6 +109,47 @@ func ConflictStatus(rep ConflictReport) string {
 	return b.String()
 }
 
+// ClaimNotice renders the advisory an agent should be told about when another
+// session is actively validating overlapping paths. Returns "" when there are
+// no overlaps — the common case — so an agent that checks this field sees
+// nothing in the vast majority of turns and is not trained to skip it.
+//
+// The wording states plainly that this is informational and must not divert the
+// agent from its current task.
+func ClaimNotice(overlaps []ClaimState) string {
+	if len(overlaps) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Concurrent session advisory (informational — this does not block anything):\n")
+	for _, c := range overlaps {
+		age := roundAge(time.Since(c.ClaimedAt))
+		shortID := c.SessionID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		if len(c.Paths) == 0 {
+			fmt.Fprintf(&b, "session %s is validating this project (files unknown, claimed %s ago).\n", shortID, age)
+		} else {
+			fmt.Fprintf(&b, "session %s is validating %d file(s) in this project (claimed %s ago):", shortID, len(c.Paths), age)
+			limit := len(c.Paths)
+			if limit > 5 {
+				limit = 5
+			}
+			for _, p := range c.Paths[:limit] {
+				fmt.Fprintf(&b, "\n  %s", p)
+			}
+			if len(c.Paths) > 5 {
+				fmt.Fprintf(&b, "\n  ... and %d more", len(c.Paths)-5)
+			}
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\nDo not change course. Mention this to the user if relevant and continue with the current task.\n")
+	return b.String()
+}
+
 // roundAge renders a duration at the coarsest unit that still says something.
 // A notice reporting "3m14.882s" invites the reader to weigh a precision the
 // underlying poll interval does not have.

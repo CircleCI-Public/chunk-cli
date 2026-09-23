@@ -31,10 +31,11 @@ func newTestDaemon() *daemon {
 		// and the sampler only has to be non-nil to annotate.
 		res: newResourceSampler(nil),
 		// No GitHub client: PR monitoring is skipped when client is nil.
-		prm:   newPRMonitor(nil),
-		tasks: newTaskStore(context.Background()),
-		risk:  newRiskMemory(),
-		hist:  newRiskHistory(),
+		prm:    newPRMonitor(nil),
+		tasks:  newTaskStore(context.Background()),
+		risk:   newRiskMemory(),
+		hist:   newRiskHistory(),
+		claims: newClaimStore(),
 	}
 	d.tasks.onFinish = d.risk.record
 	return d

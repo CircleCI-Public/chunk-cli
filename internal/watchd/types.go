@@ -60,6 +60,19 @@ type CommandState struct {
 	Truncated   bool       `json:"truncated"`
 }
 
+// ClaimState describes one active validate claim held by a session.
+// It is advisory — no blocking is done based on it.
+type ClaimState struct {
+	SessionID   string `json:"session_id"`
+	ProjectRoot string `json:"project_root"`
+	// Paths are the repo-relative paths changed in this session's working tree,
+	// captured at claim registration time. Nil means the change could not be
+	// measured; treat as potentially overlapping anything in the project.
+	Paths     []string  `json:"paths,omitempty"`
+	ClaimedAt time.Time `json:"claimed_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // ConflictState is the daemon's answer to whether one project's branch still
 // merges cleanly into its merge target.
 //
@@ -149,6 +162,9 @@ type ProjectSnapshot struct {
 	// PR is the advisory PR state for the current branch. Nil when no open PR
 	// exists, or when GitHub credentials are not configured.
 	PR *PRState `json:"pr,omitempty"`
+	// ActiveClaims lists validate claims from all sessions currently active for
+	// this project. Nil when no sessions are validating.
+	ActiveClaims []ClaimState `json:"active_claims,omitempty"`
 }
 
 // ConflictReport is the response to a conflict query for one project root.

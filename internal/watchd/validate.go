@@ -102,11 +102,17 @@ type ValidateResponse struct {
 	// as one line. Empty when the caller never offered to be released, since
 	// then there was no decision to explain.
 	Reason string `json:"reason,omitempty"`
+	// ClaimWarning is an advisory when another session is actively validating
+	// overlapping paths. Empty in the common case (no overlap). Never a gate.
+	ClaimWarning string `json:"claim_warning,omitempty"`
 }
 
 // AsyncValidateResponse acknowledges an accepted async run.
 type AsyncValidateResponse struct {
 	TaskID string `json:"task_id"`
+	// ClaimWarning is an advisory when another session is actively validating
+	// overlapping paths. Empty in the common case (no overlap). Never a gate.
+	ClaimWarning string `json:"claim_warning,omitempty"`
 }
 
 // CollectResponse carries the finished results for a project.
@@ -139,10 +145,21 @@ func (d *daemon) handleAsyncValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Claim registration for cross-agent advisory. Nil paths: no assessRisk on
+	// the explicit --async path, so file-level granularity is unavailable here.
+	sessionID := session.IDFromSlice(req.Env)
+	var claimWarning string
+	if sessionID != "" {
+		overlaps := d.claims.overlapping(sessionID, req.ProjectRoot, nil)
+		d.claims.register(sessionID, req.ProjectRoot, nil)
+		claimWarning = ClaimNotice(overlaps)
+	}
+
 	// No risk summary: this is the explicit --async path, where the caller has
 	// already decided and nothing was judged. Nothing is recorded in history
 	// either, which keeps that record to the runs the daemon actually judged.
-	taskID, err := d.startValidateTask(req, nil)
+	onDone := func() { d.claims.release(sessionID, req.ProjectRoot) }
+	taskID, err := d.startValidateTask(req, nil, onDone)
 	if err != nil {
 		// Either the tree could not be fingerprinted, so staleness would be
 		// undetectable, or the project already has its cap of runs in flight.
@@ -150,13 +167,14 @@ func (d *daemon) handleAsyncValidate(w http.ResponseWriter, r *http.Request) {
 		// this run just cannot be taken asynchronously, and the caller is
 		// expected to run inline instead. The reason travels as the body so the
 		// caller can say which it was.
+		d.claims.release(sessionID, req.ProjectRoot)
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(AsyncValidateResponse{TaskID: taskID})
+	_ = json.NewEncoder(w).Encode(AsyncValidateResponse{TaskID: taskID, ClaimWarning: claimWarning})
 }
 
 // startValidateTask launches req in the background and returns its task ID.
@@ -166,7 +184,11 @@ func (d *daemon) handleAsyncValidate(w http.ResponseWriter, r *http.Request) {
 // still takes the lock, so two background runs queue behind each other exactly
 // as two synchronous ones do; what changes is who waits, not how many run at
 // once.
-func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (string, error) {
+//
+// onDone is called when the goroutine finishes its run. Pass a claim release
+// function to transfer claim ownership from the HTTP handler to the goroutine.
+// Nil is safe.
+func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary, onDone func()) (string, error) {
 	// Detached from the request: the caller is about to disconnect, and an async
 	// run that died with the connection that started it would be pointless. The
 	// store's parent context bounds it instead, so it ends with the daemon.
@@ -208,6 +230,9 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary) (stri
 
 	taskID, err := d.tasks.start(req.ProjectRoot, shadow != "", func(ctx context.Context) (int, string) {
 		defer cleanup()
+		if onDone != nil {
+			defer onDone()
+		}
 		// Serialised against every other validate run, async or not: two runs of
 		// the same commands in one tree would race over whatever they build.
 		d.validateMu.Lock()
@@ -323,6 +348,18 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sessionID := session.IDFromSlice(req.Env)
+
+	// Claim registration: check for overlap, register this session's claim.
+	// Release is handled explicitly — not via defer — so ownership can be
+	// transferred to the goroutine on the async path without an early release.
+	var claimWarning string
+	if sessionID != "" && req.ProjectRoot != "" {
+		overlaps := d.claims.overlapping(sessionID, req.ProjectRoot, nil)
+		d.claims.register(sessionID, req.ProjectRoot, nil)
+		claimWarning = ClaimNotice(overlaps)
+	}
+
 	// Decided before validateMu is taken, and deliberately so: a caller that has
 	// offered to be released must not first queue behind whatever run is already
 	// in flight, since that wait is the whole thing being avoided.
@@ -333,9 +370,18 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 		reason = decision.reason
 		summary := decision.risk
 		risk = &summary
+		// Re-register with real paths now that assessRisk has measured the tree,
+		// and re-check overlaps with those paths.
+		if sessionID != "" && len(decision.paths) > 0 {
+			d.claims.register(sessionID, req.ProjectRoot, decision.paths)
+			claimWarning = ClaimNotice(d.claims.overlapping(sessionID, req.ProjectRoot, decision.paths))
+		}
 		if decision.async {
-			if taskID, err := d.startValidateTask(req, risk); err == nil {
-				writeValidateJSON(w, ValidateResponse{TaskID: taskID, Reason: reason, Risk: risk})
+			// Transfer claim ownership to the goroutine: the handler returns
+			// immediately and must not release the claim before the run finishes.
+			onDone := func() { d.claims.release(sessionID, req.ProjectRoot) }
+			if taskID, err := d.startValidateTask(req, risk, onDone); err == nil {
+				writeValidateJSON(w, ValidateResponse{TaskID: taskID, Reason: reason, Risk: risk, ClaimWarning: claimWarning})
 				return
 			}
 			// The tree cannot be fingerprinted, so a background result could not be
@@ -349,8 +395,8 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	// disconnects mid-run. The result is buffered; partial runs under
 	// validateMu are worse than completing after the client is gone.
 	ctx := context.WithoutCancel(r.Context())
-	if id := session.IDFromSlice(req.Env); id != "" {
-		ctx = session.WithID(ctx, id)
+	if sessionID != "" {
+		ctx = session.WithID(ctx, sessionID)
 	}
 	if req.CircleCIToken != "" {
 		req.Env = append(append([]string(nil), req.Env...), "CIRCLE_TOKEN="+req.CircleCIToken)
@@ -358,8 +404,10 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	ctx = envctx.WithEnv(ctx, req.Env)
 
 	resp := d.runValidateNow(ctx, req, risk)
+	d.claims.release(sessionID, req.ProjectRoot)
 	resp.Reason = reason
 	resp.Risk = risk
+	resp.ClaimWarning = claimWarning
 	writeValidateJSON(w, resp)
 }
 
