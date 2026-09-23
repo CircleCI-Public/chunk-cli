@@ -282,7 +282,7 @@ func TestSender_Identify_JoinsInstanceIDToUser(t *testing.T) {
 
 	s, err := NewSender(Config{
 		TestDestination: fake,
-		Metadata:        Meta{Version: "1.2.3", InstanceID: instanceID, OS: "linux"},
+		Metadata:        Meta{Version: "1.2.3", InstanceID: instanceID},
 	})
 	assert.NilError(t, err)
 
