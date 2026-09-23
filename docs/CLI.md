@@ -202,6 +202,10 @@ chunk
 - Command placement is independent of `validation.sidecarImage`: explicit local
   commands stay local, while unspecified and explicitly remote commands use the
   managed sidecar pool. `--local` remains the whole-run local override.
+- A run of several commands starts with the local `role: autofix` ones, then the
+  remote batch, then the remaining local commands, keeping configured order
+  within each. The remote batch syncs the working tree when it starts, so a
+  formatter has to finish first for its rewrites to reach the gates.
 - **Snapshot selection.** When a sidecar has to be created and no
   `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
   picks one of the org's snapshots instead of booting the bare default image.

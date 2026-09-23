@@ -1426,3 +1426,135 @@ func TestReportDelegatedValidateTellsTheHookAboutABackgroundRun(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectHookReadsToolCommand(t *testing.T) {
+	hook := detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"git commit -m x"}}`))
+	assert.Equal(t, hook.toolCommand, "git commit -m x")
+
+	// Codex's unified exec may send argv rather than a command line, including a
+	// shell running one.
+	hook = detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":["bash","-lc","git commit -m x"]}}`))
+	assert.Assert(t, hook.skipsCommitGate() == false, "argv running git commit through a shell must run the gate")
+
+	hook = detectHook(strings.NewReader(`{"session_id":"s","hook_event_name":"Stop"}`))
+	assert.Equal(t, hook.toolCommand, "")
+}
+
+func TestSkipsCommitGate(t *testing.T) {
+	cases := []struct {
+		payload string
+		want    bool
+	}{
+		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"ls -la"}}`, true},
+		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":["ls","-la"]}}`, true},
+		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":"cd sub && git commit -m x"}}`, false},
+		// A command chunk cannot read runs the gate rather than risk missing a commit.
+		{`{"session_id":"s","hook_event_name":"PreToolUse"}`, false},
+		{`{"session_id":"s","hook_event_name":"PreToolUse","tool_input":{"command":42}}`, false},
+		// Only the commit gate is filtered; the Stop hook always runs.
+		{`{"session_id":"s","hook_event_name":"Stop","tool_input":{"command":"ls"}}`, false},
+	}
+	for _, tc := range cases {
+		hook := detectHook(strings.NewReader(tc.payload))
+		assert.Equal(t, hook.skipsCommitGate(), tc.want, tc.payload)
+	}
+	assert.Assert(t, !(*hookContext)(nil).skipsCommitGate())
+}
+
+// Codex has no per-entry "if", so its commit gate starts before every Bash
+// call. Anything but a git commit must end the run at once, writing nothing and
+// running nothing.
+func TestValidateCommitGateRunsOnlyForCommits(t *testing.T) {
+	for name, tc := range map[string]struct {
+		command string
+		wantRun bool
+	}{
+		"not a commit": {command: "ls -la", wantRun: false},
+		"commit":       {command: "git add . && git commit -m x", wantRun: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			isolateConfig(t)
+			marker := filepath.Join(t.TempDir(), "ran")
+			dir := hookProject(t, "touch "+marker)
+
+			payload, err := json.Marshal(map[string]any{
+				"session_id":      "test-session-001",
+				"hook_event_name": "PreToolUse",
+				"turn_id":         "turn-1",
+				"tool_name":       "Bash",
+				"tool_input":      map[string]string{"command": tc.command},
+			})
+			assert.NilError(t, err)
+
+			var outBuf, errBuf bytes.Buffer
+			root := newTestRootCmd()
+			root.SetOut(&outBuf)
+			root.SetErr(&errBuf)
+			root.SetIn(bytes.NewReader(payload))
+			root.SetArgs([]string{"validate", "--local", "--no-daemon", "--project", dir})
+			assert.NilError(t, root.Execute(), "stderr: %s", errBuf.String())
+
+			_, statErr := os.Stat(marker)
+			assert.Equal(t, statErr == nil, tc.wantRun, "stderr: %s", errBuf.String())
+			if !tc.wantRun {
+				assert.Equal(t, outBuf.String(), "")
+				assert.Equal(t, errBuf.String(), "")
+			}
+		})
+	}
+}
+
+// Codex runs hooks in the session's working directory, which may sit below the
+// project that holds .chunk/config.json.
+func TestHookProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	gitSetup(t, root, "main")
+	assert.NilError(t, config.SaveProjectConfig(root, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "true"}},
+	}))
+	sub := filepath.Join(root, "internal", "pkg")
+	assert.NilError(t, os.MkdirAll(sub, 0o755))
+
+	assert.Equal(t, hookProjectRoot(root), root)
+	assert.Equal(t, hookProjectRoot(sub), root)
+
+	// A project nested in a repository is found before the repository root.
+	nested := filepath.Join(root, "services", "api")
+	assert.NilError(t, config.SaveProjectConfig(nested, &config.ProjectConfig{
+		Commands: []config.Command{{Name: "test", Run: "true"}},
+	}))
+	assert.Equal(t, hookProjectRoot(nested), nested)
+
+	// With no config up to the git root, the search stops there and the
+	// directory is used as given.
+	other := t.TempDir()
+	gitSetup(t, other, "main")
+	otherSub := filepath.Join(other, "sub")
+	assert.NilError(t, os.MkdirAll(otherSub, 0o755))
+	assert.Equal(t, hookProjectRoot(otherSub), otherSub)
+}
+
+// A formatter has to run before the gates check the tree, wherever it sits in
+// the config: the remote batch syncs the tree when it starts, so a formatter
+// run after it would change nothing any gate saw.
+func TestRunValidationPlanRunsAutofixFirst(t *testing.T) {
+	workDir := t.TempDir()
+	plan := validate.Plan{
+		LocalCommands: []config.Command{
+			{Name: "lint", Run: "echo lint >> order"},
+			{Name: "format", Run: "echo format >> order", Role: config.RoleAutofix},
+			{Name: "test", Run: "echo test >> order"},
+		},
+	}
+
+	result, err := runValidationPlan(
+		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
+		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	assert.NilError(t, err)
+	assert.Equal(t, result, validate.Result{Passed: 3, Total: 3})
+	data, err := os.ReadFile(filepath.Join(workDir, "order"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(data), "format\nlint\ntest\n")
+}
