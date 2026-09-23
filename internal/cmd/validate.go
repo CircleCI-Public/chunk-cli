@@ -553,7 +553,16 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// before env loading, so that sync and env-resolve status events are
 	// captured. Wired for every run, sidecar or not: an empty sidecar_id is what
 	// files a run under a project's local row, not a reason to record nothing.
-	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, opts.attributionRoot(workDir), hook)
+	//
+	// Use the git root rather than workDir so the event log lands in the same
+	// data directory as sidecar state, which keys on the git top-level. A
+	// project whose .chunk sits below the git root would otherwise split its
+	// state across two data directories.
+	attributionDir := opts.attributionRoot(workDir)
+	if gitRoot := gitutil.TopLevelCtx(ctx, attributionDir); gitRoot != "" {
+		attributionDir = gitRoot
+	}
+	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, attributionDir, hook)
 	setupComplete := false
 	var setupErr error
 	defer func() {
@@ -770,17 +779,10 @@ func ensureRequestedValidateCommand(workDir, name, inlineCmd string, cfg *config
 // back unchanged: there is nowhere to write, so the run reports without
 // recording.
 func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, activeSidecar *sidecar.ActiveSidecar, workDir string, hook *hookContext) (iostream.StatusFunc, *eventlog.Recorder) {
-	// Keyed on workDir rather than sidecar.StateDir, which walks up from the
-	// process's own working directory and so answers for the wrong project under
-	// --project.
-	//
-	// workDir is only as good as what reached it, and two cases are known to
-	// leave it pointing elsewhere. A project whose .chunk lives below the git
-	// root keys its log here but its sidecar state under the root, splitting one
-	// project's state in two. And a daemon-delegated run without an explicit
-	// --project resolves workDir to the daemon's own working directory, because
-	// the request carries Args and Env but nothing about where the caller stood.
-	// Both file a run under a project that did not run it.
+	// Callers pass the git top-level (not their cwd) so the event log lands in
+	// the same data directory as sidecar state, which sidecar.StateDir also keys
+	// on the git top-level.  See the call site in runValidateCmdE for where the
+	// root is derived.
 	dataDir, err := config.ProjectDataDir(workDir)
 	if err != nil {
 		// A missing data dir leaves the recorder reporting without recording.
@@ -899,6 +901,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID st
 	req := watchd.ValidateRequest{
 		Args:        reqArgs,
 		ProjectRoot: workDir,
+		WorkDir:     workDir,
 		OrgID:       orgID,
 		AllowAsync:  mayRunInBackground(hook),
 		HookCodex:   hook != nil && hook.codex,

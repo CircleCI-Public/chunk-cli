@@ -48,7 +48,7 @@ func TestWorktreeModeRunsInASnapshotAndAttributesItBack(t *testing.T) {
 		args        []string
 	}
 	calls := make(chan call, 1)
-	d.runner = func(_ context.Context, projectRoot string, a []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(_ context.Context, projectRoot string, _ string, a []string, _ []string, _ io.Writer, _ io.Writer) int {
 		calls <- call{projectRoot, a}
 		return 0
 	}
@@ -76,7 +76,7 @@ func TestASnapshotResultSurvivesAnEditDuringTheRun(t *testing.T) {
 
 	release := make(chan struct{})
 	shadowSeen := make(chan string, 1)
-	d.runner = func(_ context.Context, projectRoot string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(_ context.Context, projectRoot string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
 		shadowSeen <- projectRoot
 		<-release
 		return 0
@@ -111,7 +111,7 @@ func TestALiveTreeVerdictIsStillDiscardedAfterAnEdit(t *testing.T) {
 
 	release := make(chan struct{})
 	started := make(chan struct{})
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int {
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
 		close(started)
 		<-release
 		return 0
@@ -138,7 +138,7 @@ func TestTheShadowIsRemovedWhenTheRunEnds(t *testing.T) {
 	writeSource(t, root, 10)
 
 	shadowSeen := make(chan string, 1)
-	d.runner = func(_ context.Context, projectRoot string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(_ context.Context, projectRoot string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
 		shadowSeen <- projectRoot
 		return 0
 	}
@@ -170,7 +170,7 @@ func TestTheLiveTreeIsUsedUnlessTheProjectAsksOtherwise(t *testing.T) {
 		args        []string
 	}
 	calls := make(chan call, 1)
-	d.runner = func(_ context.Context, projectRoot string, a []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(_ context.Context, projectRoot string, _ string, a []string, _ []string, _ io.Writer, _ io.Writer) int {
 		calls <- call{projectRoot, a}
 		return 0
 	}
@@ -190,7 +190,7 @@ func TestReleasingARunSupersedesTheOneInFlight(t *testing.T) {
 
 	release := make(chan struct{})
 	started := make(chan struct{}, 2)
-	d.runner = func(ctx context.Context, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(ctx context.Context, _ string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
 		started <- struct{}{}
 		select {
 		case <-release:
@@ -226,7 +226,7 @@ func TestASupersededRunOwesNothing(t *testing.T) {
 
 	release := make(chan struct{})
 	started := make(chan struct{}, 2)
-	d.runner = func(ctx context.Context, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(ctx context.Context, _ string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
 		started <- struct{}{}
 		select {
 		case <-release:
@@ -257,7 +257,7 @@ func TestASnapshotRunIsNotSuperseded(t *testing.T) {
 
 	release := make(chan struct{})
 	started := make(chan struct{}, 2)
-	d.runner = func(ctx context.Context, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(ctx context.Context, _ string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
 		started <- struct{}{}
 		select {
 		case <-release:

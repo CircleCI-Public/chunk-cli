@@ -15,19 +15,16 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 )
 
-// ValidateRunner runs a validate command in-process. projectRoot is the repo the
-// run applies to; args is os.Args[1:] from the caller (e.g. ["validate", "test",
-// "--remote"]); env is the caller's os.Environ(), which may differ from the
-// daemon's own environment. stdout and stderr capture the command output.
+// ValidateRunner runs a validate command in-process. projectRoot is the repo
+// the daemon uses for task tracking and state keying; workDir is the caller's
+// working directory, passed to the subprocess as --project so it can load
+// .chunk/config.json from the right location (workDir equals projectRoot unless
+// the .chunk directory sits below the git root, in which case workDir is the
+// subdirectory and projectRoot is the git top-level). When workDir is empty the
+// runner falls back to projectRoot. args is os.Args[1:] from the caller;
+// env is the caller's os.Environ(). stdout and stderr capture command output.
 // Returns the exit code.
-//
-// projectRoot is a parameter rather than something the runner works out for
-// itself because the daemon has no working directory worth trusting. One daemon
-// serves every repo on the machine — the socket is user-global — and it was
-// launched with whatever cwd the developer happened to be in at the time. An
-// implementation that resolves the project from its own cwd validates that repo
-// no matter which one the request was about.
-type ValidateRunner func(ctx context.Context, projectRoot string, args []string, env []string, stdout, stderr io.Writer) int
+type ValidateRunner func(ctx context.Context, projectRoot, workDir string, args []string, env []string, stdout, stderr io.Writer) int
 
 // ValidateRequest is the payload sent to POST /validate and POST
 // /validate/async.
@@ -74,6 +71,14 @@ type ValidateRequest struct {
 	// nothing. A daemon that predates this field ignores it instead, and the run
 	// goes ahead, just without Codex's quieter output.
 	HookCodex bool `json:"hook_codex,omitempty"`
+	// WorkDir is the caller's working directory, which the daemon passes to the
+	// subprocess as --project so it can load .chunk/config.json from the right
+	// location. It equals ProjectRoot for callers whose working directory is the
+	// git top-level; it differs when the .chunk directory sits below the git root.
+	//
+	// A daemon that predates this field ignores it and falls back to ProjectRoot,
+	// which is the caller's cwd and therefore also correct in the common case.
+	WorkDir string `json:"work_dir,omitempty"`
 }
 
 // runArgs is the command line the run is given: the caller's args, plus
@@ -253,7 +258,7 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary, onDon
 		if shadow != "" {
 			runRoot = shadow
 		}
-		exitCode := d.runner(ctx, runRoot, args, env, &stdout, &stderr)
+		exitCode := d.runner(ctx, runRoot, req.WorkDir, args, env, &stdout, &stderr)
 		if ctx.Err() != nil {
 			// Superseded, or the daemon is shutting down. The run concluded
 			// nothing, so nothing is recorded: a cancelled run is not a failed one,
@@ -430,7 +435,7 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *
 	}
 
 	var stdout, stderr bytes.Buffer
-	exitCode := d.runner(ctx, req.ProjectRoot, args, req.Env, &stdout, &stderr)
+	exitCode := d.runner(ctx, req.ProjectRoot, req.WorkDir, args, req.Env, &stdout, &stderr)
 
 	// Recorded from synchronous runs too, not just background ones. This is what
 	// clears a failure debt: a project that owes a blocking run gets one, and if

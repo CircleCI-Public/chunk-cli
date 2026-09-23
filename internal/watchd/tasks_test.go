@@ -747,7 +747,7 @@ func TestAsyncValidateEndpointAcceptsAndCollects(t *testing.T) {
 	t.Cleanup(d.tasks.stopAll)
 
 	release := make(chan struct{})
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int {
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
 		<-release
 		return 0
 	}
@@ -786,7 +786,7 @@ func TestAsyncValidateEndpointRefusesAnUnfingerprintableTree(t *testing.T) {
 	d := newTestDaemon()
 	t.Cleanup(d.tasks.stopAll)
 	var ran bool
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int {
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
 		ran = true
 		return 0
 	}
@@ -805,7 +805,7 @@ func TestAsyncValidateEndpointAcceptsATreeThatIsNotARepository(t *testing.T) {
 
 	d := newTestDaemon()
 	t.Cleanup(d.tasks.stopAll)
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
 
 	rec := serve(d, asyncReq(t, dir))
 	assert.Equal(t, rec.Code, http.StatusAccepted)
@@ -818,7 +818,7 @@ func TestAsyncValidateEndpointAcceptsATreeThatIsNotARepository(t *testing.T) {
 func TestAsyncValidateEndpointRequiresAProjectRoot(t *testing.T) {
 	d := newTestDaemon()
 	t.Cleanup(d.tasks.stopAll)
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
 
 	rec := serve(d, asyncReq(t, ""))
 	assert.Equal(t, rec.Code, http.StatusBadRequest)
@@ -861,7 +861,7 @@ func TestCollectEndpointDoesNotAcknowledgeWhenTheWriteFails(t *testing.T) {
 	root := gitRepo(t)
 	d := newTestDaemon()
 	t.Cleanup(d.tasks.stopAll)
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 1 }
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 1 }
 
 	rec := serve(d, asyncReq(t, root))
 	assert.Equal(t, rec.Code, http.StatusAccepted)
@@ -882,7 +882,7 @@ func TestCollectEndpointAcknowledgesAfterASuccessfulWrite(t *testing.T) {
 	root := gitRepo(t)
 	d := newTestDaemon()
 	t.Cleanup(d.tasks.stopAll)
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
 
 	rec := serve(d, asyncReq(t, root))
 	assert.Equal(t, rec.Code, http.StatusAccepted)
@@ -931,7 +931,7 @@ func TestAsyncValidateEndpointTellsTheRunnerWhichProject(t *testing.T) {
 	t.Cleanup(d.tasks.stopAll)
 
 	got := make(chan string, 1)
-	d.runner = func(_ context.Context, projectRoot string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(_ context.Context, projectRoot string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
 		got <- projectRoot
 		return 0
 	}
@@ -956,7 +956,7 @@ func TestValidateEndpointTellsTheRunnerWhichProject(t *testing.T) {
 	t.Cleanup(d.tasks.stopAll)
 
 	var ran string
-	d.runner = func(_ context.Context, projectRoot string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
+	d.runner = func(_ context.Context, projectRoot string, _ string, _ []string, _ []string, _ io.Writer, _ io.Writer) int {
 		ran = projectRoot
 		return 0
 	}
@@ -984,7 +984,7 @@ func TestValidateEndpointPassesHookCodexToTheRunner(t *testing.T) {
 			t.Cleanup(d.tasks.stopAll)
 
 			var ran []string
-			d.runner = func(_ context.Context, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
+			d.runner = func(_ context.Context, _ string, _ string, args []string, _ []string, _ io.Writer, _ io.Writer) int {
 				ran = args
 				return 0
 			}

@@ -221,7 +221,7 @@ func riskDaemon(t *testing.T, exitCode int) (*daemon, string, func() int) {
 
 	var mu sync.Mutex
 	runs := 0
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int {
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int {
 		mu.Lock()
 		runs++
 		mu.Unlock()
@@ -400,7 +400,7 @@ func TestAFreshRepoIsMeasuredWithoutGit(t *testing.T) {
 	gitInit(t, root)
 	d := newTestDaemon()
 	t.Cleanup(d.tasks.stopAll)
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
 	writeSource(t, root, 10)
 
 	resp := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{
@@ -417,7 +417,7 @@ func TestAFreshRepoIsMeasuredIncrementally(t *testing.T) {
 	gitInit(t, root)
 	d := newTestDaemon()
 	t.Cleanup(d.tasks.stopAll)
-	d.runner = func(context.Context, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
 
 	writeSource(t, root, 400)
 	first := decodeValidate(t, serve(d, validateReq(t, ValidateRequest{

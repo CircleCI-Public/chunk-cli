@@ -76,7 +76,7 @@ func authMessage(err error) string {
 // in-process by running a fresh cobra root command with the caller's env and
 // session ID seeded into the context.
 func makeValidateRunner() watchd.ValidateRunner {
-	return func(ctx context.Context, projectRoot string, args []string, env []string, stdout, stderr io.Writer) int {
+	return func(ctx context.Context, projectRoot, workDir string, args []string, env []string, stdout, stderr io.Writer) int {
 		// Seed the context with the caller's session ID before cobra's
 		// PersistentPreRunE runs, so IDFromEnv (which reads the daemon's own env)
 		// does not overwrite it.
@@ -99,8 +99,18 @@ func makeValidateRunner() watchd.ValidateRunner {
 		// validates repo A and reports A's exit code as B's answer. It goes last
 		// because cobra takes the final value, and the caller's own --project is
 		// already what the client resolved this from.
-		if projectRoot != "" {
-			runArgs = append(runArgs, "--project", projectRoot)
+		//
+		// Use workDir (the caller's original working directory) rather than
+		// projectRoot (the git top-level used for state keying) so the subprocess
+		// loads .chunk/config.json from the right location when the project's
+		// .chunk directory sits below the git root. Fall back to projectRoot for
+		// requests from older clients that did not send workDir.
+		target := workDir
+		if target == "" {
+			target = projectRoot
+		}
+		if target != "" {
+			runArgs = append(runArgs, "--project", target)
 		}
 		rootCmd.SetArgs(runArgs)
 		rootCmd.SetContext(ctx)
