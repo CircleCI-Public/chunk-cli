@@ -531,21 +531,28 @@ func TestNewPoolUsesConfiguredRepoPath(t *testing.T) {
 	assert.Equal(t, entry.RepoPath, "/custom/workspace")
 }
 
-func TestPool_Rebuild(t *testing.T) {
+func TestPool_Replace(t *testing.T) {
 	env := setupPoolTest(t)
 	t.Chdir(env.workDir)
 
 	pool := &Pool{
-		client:  env.cl,
-		orgID:   "org-1",
-		image:   "ubuntu:22.04",
-		name:    "validate",
-		workDir: env.workDir,
-		free:    make(chan *PoolEntry, 1),
+		client:     env.cl,
+		orgID:      "org-1",
+		image:      "ubuntu:22.04",
+		name:       "validate",
+		workDir:    env.workDir,
+		repoPath:   DefaultWorkspace("my-repo"),
+		free:       make(chan *PoolEntry, 1),
+		updates:    make(chan struct{}, 1),
+		checkedOut: 1,
 	}
-	dead := &PoolEntry{ID: "dead-sb-1", RepoPath: DefaultWorkspace("my-repo")}
+	dead := &PoolEntry{ID: "dead-sb-1", RepoPath: DefaultWorkspace("my-repo"), Client: env.cl}
+	pool.entries = []*PoolEntry{dead}
+	pool.ids = []string{dead.ID}
 
-	entry, err := pool.Rebuild(context.Background(), dead, func(iostream.Level, string) {})
+	err := pool.Replace(context.Background(), dead, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	entry, err := pool.Acquire(context.Background())
 	assert.NilError(t, err)
 	assert.Assert(t, entry.ID != dead.ID)
 	assert.Assert(t, entry.Client != nil)

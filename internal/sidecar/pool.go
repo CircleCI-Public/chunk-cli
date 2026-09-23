@@ -306,20 +306,73 @@ func deleteSidecars(client *circleci.Client, ids []string) {
 	}
 }
 
-func (p *Pool) Rebuild(ctx context.Context, dead *PoolEntry, status iostream.StatusFunc) (*PoolEntry, error) {
+// Replace removes a checked-out, unusable entry and makes a freshly synced
+// replacement available to future Acquire calls.
+func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.StatusFunc) error {
 	_ = p.client.DeleteSidecar(ctx, dead.ID)
 
 	sc, err := Create(ctx, p.client, p.orgID, fmt.Sprintf("%s-rebuilt-%d", p.name, time.Now().UTC().UnixNano()), p.image)
 	if err != nil {
-		return nil, fmt.Errorf("rebuild: create sidecar: %w", err)
+		err = fmt.Errorf("replace: create sidecar: %w", err)
+		p.retire(dead, err)
+		return err
 	}
 
 	if err := BundleSyncFanOut(ctx, p.client, []string{sc.ID}, dead.RepoPath, p.workDir, true, status); err != nil {
 		_ = p.client.DeleteSidecar(ctx, sc.ID)
-		return nil, fmt.Errorf("rebuild: sync: %w", err)
+		err = fmt.Errorf("replace: sync sidecar: %w", err)
+		p.retire(dead, err)
+		return err
 	}
 
-	return &PoolEntry{ID: sc.ID, RepoPath: dead.RepoPath, Client: p.client}, nil
+	replacement := &PoolEntry{ID: sc.ID, RepoPath: dead.RepoPath, Client: p.client}
+	if err := replaceActiveSidecars(context.WithoutCancel(ctx), map[string]string{dead.ID: replacement.ID}); err != nil {
+		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
+		err = fmt.Errorf("replace: update active state: %w", err)
+		p.retire(dead, err)
+		return err
+	}
+
+	p.mu.Lock()
+	index := slices.IndexFunc(p.entries, func(entry *PoolEntry) bool { return entry.ID == dead.ID })
+	if index < 0 {
+		p.mu.Unlock()
+		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
+		err = fmt.Errorf("replace: sidecar %s is not a pool member", dead.ID)
+		p.retire(dead, err)
+		return err
+	}
+	p.entries[index] = replacement
+	p.ids[index] = replacement.ID
+	if p.checkedOut > 0 {
+		p.checkedOut--
+	}
+	p.free <- replacement
+	p.mu.Unlock()
+	p.notifyUpdate()
+
+	if err := p.persistState(); err != nil {
+		clearPoolState(p.workDir, p.name)
+		status(iostream.LevelWarn, fmt.Sprintf("could not save pool state: %v", err))
+	}
+	status(iostream.LevelInfo, fmt.Sprintf("replacement sidecar: %s", replacement.ID))
+	return nil
+}
+
+func (p *Pool) retire(dead *PoolEntry, cause error) {
+	p.mu.Lock()
+	index := slices.IndexFunc(p.entries, func(entry *PoolEntry) bool { return entry.ID == dead.ID })
+	if index >= 0 {
+		p.entries = slices.Delete(p.entries, index, index+1)
+		p.ids = slices.Delete(p.ids, index, index+1)
+	}
+	if p.checkedOut > 0 {
+		p.checkedOut--
+	}
+	p.syncErr = errors.Join(p.syncErr, cause)
+	p.mu.Unlock()
+	_ = p.persistState()
+	p.notifyUpdate()
 }
 
 type cloneResult struct {
