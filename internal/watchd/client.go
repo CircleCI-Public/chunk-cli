@@ -401,6 +401,7 @@ func StartAsyncValidate(projectRoot string, args []string, circleCIToken string)
 		CircleCIToken: circleCIToken,
 		Env:           os.Environ(),
 		ProjectRoot:   projectRoot,
+		WorkDir:       projectRoot,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal async validate request: %w", err)

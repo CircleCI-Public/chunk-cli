@@ -389,7 +389,7 @@ func TestRunValidateTCP_DoesNotForwardCredentials(t *testing.T) {
 		env []string
 	}
 	got := make(chan captured, 1)
-	runner := ValidateRunner(func(_ context.Context, _ string, _ []string, env []string, stdout io.Writer, _ io.Writer) int {
+	runner := ValidateRunner(func(_ context.Context, _ string, _ string, _ []string, env []string, stdout io.Writer, _ io.Writer) int {
 		got <- captured{env: env}
 		_, _ = stdout.Write([]byte("ok"))
 		return 0

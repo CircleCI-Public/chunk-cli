@@ -42,7 +42,7 @@ func TestValidateRunnerValidatesTheRequestedProjectNotItsCwd(t *testing.T) {
 	t.Chdir(projectWithCommand(t, "ran-in-daemon-cwd"))
 
 	var stdout, stderr bytes.Buffer
-	code := makeValidateRunner()(context.Background(), requested,
+	code := makeValidateRunner()(context.Background(), requested, "",
 		[]string{"validate", "--local"}, os.Environ(), &stdout, &stderr)
 
 	assert.Equal(t, code, 0)
@@ -61,7 +61,7 @@ func TestValidateRunnerFallsBackToCwdWithoutAProjectRoot(t *testing.T) {
 	t.Chdir(projectWithCommand(t, "ran-in-daemon-cwd"))
 
 	var stdout, stderr bytes.Buffer
-	code := makeValidateRunner()(context.Background(), "",
+	code := makeValidateRunner()(context.Background(), "", "",
 		[]string{"validate", "--local"}, os.Environ(), &stdout, &stderr)
 
 	assert.Equal(t, code, 0)
@@ -80,7 +80,7 @@ func TestValidateRunnerOverridesACallerSuppliedProject(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
-	code := makeValidateRunner()(context.Background(), requested,
+	code := makeValidateRunner()(context.Background(), requested, "",
 		[]string{"validate", "--local", "--project", stale}, os.Environ(), &stdout, &stderr)
 
 	assert.Equal(t, code, 0)
@@ -96,10 +96,31 @@ func TestValidateRunnerReportsAnUnknownFlagAsBadArgs(t *testing.T) {
 	isolateConfig(t)
 
 	var stdout, stderr bytes.Buffer
-	code := makeValidateRunner()(context.Background(), t.TempDir(),
+	code := makeValidateRunner()(context.Background(), t.TempDir(), "",
 		[]string{"validate", "--no-such-flag"}, os.Environ(), &stdout, &stderr)
 
 	assert.Equal(t, code, ExitBadArgs)
 	assert.Assert(t, strings.Contains(stderr.String(), "no-such-flag"),
 		"the run should say what it rejected, got: %q", stderr.String())
+}
+
+// When the request carries a workDir (the caller's original cwd), the runner
+// uses it for --project so .chunk/config.json is found at the right location.
+// This matters when the .chunk directory sits below the git root: projectRoot
+// (the git top-level) and workDir (the .chunk parent) then differ, and
+// validating from projectRoot would fail to find the config.
+func TestValidateRunnerPrefersWorkDirOverProjectRootForProject(t *testing.T) {
+	isolateConfig(t)
+	workDir := projectWithCommand(t, "ran-in-workdir")
+	projectRoot := t.TempDir() // simulates the git root, no .chunk here
+	t.Chdir(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	code := makeValidateRunner()(context.Background(), projectRoot, workDir,
+		[]string{"validate", "--local"}, os.Environ(), &stdout, &stderr)
+
+	assert.Equal(t, code, 0)
+	combined := stdout.String() + stderr.String()
+	assert.Assert(t, strings.Contains(combined, "ran-in-workdir"),
+		"runner should use workDir for --project, got: %q", combined)
 }
