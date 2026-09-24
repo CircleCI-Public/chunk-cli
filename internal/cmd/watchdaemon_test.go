@@ -112,7 +112,7 @@ func TestValidateRunnerReportsAnUnknownFlagAsBadArgs(t *testing.T) {
 func TestValidateRunnerPrefersWorkDirOverProjectRootForProject(t *testing.T) {
 	isolateConfig(t)
 	workDir := projectWithCommand(t, "ran-in-workdir")
-	projectRoot := t.TempDir() // simulates the git root — no .chunk here
+	projectRoot := t.TempDir() // simulates the git root, no .chunk here
 	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
