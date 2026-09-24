@@ -174,7 +174,7 @@ func createFirstOrg(ctx context.Context, client *circleci.Client, streams iostre
 			code:       "org.create_failed",
 			msg:        fmt.Sprintf("Failed to create organization %q.", name),
 			suggestion: "Check whether the name is already taken, or try another with `chunk org create <name>`.",
-			err:        fmt.Errorf("create org: %w", err),
+			err:        err,
 		}
 	}
 	streams.ErrPrintln(ui.ErrSuccess(fmt.Sprintf("Organization %q created.", org.Name)))
@@ -200,19 +200,6 @@ func ensureOrgAfterSignup(ctx context.Context, streams iostream.Streams, baseURL
 	}
 	streams.ErrPrintln("")
 	if _, err := createFirstOrg(ctx, client, streams); err != nil {
-		var ue *userError
-		if errors.As(err, &ue) {
-			streams.ErrPrintln(ui.ErrWarning(ue.msg))
-			detail := ue.detail
-			if detail == "" {
-				detail = ue.Error()
-			}
-			if !ue.hideDetail && detail != "" {
-				streams.ErrPrintln(ui.Dim(detail))
-			}
-			streams.ErrPrintln("Suggestion: " + ue.suggestion)
-			return
-		}
-		streams.ErrPrintln(ui.ErrWarning(err.Error()))
+		warnUserError(streams, "", err)
 	}
 }

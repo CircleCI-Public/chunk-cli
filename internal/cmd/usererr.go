@@ -10,7 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // Exit codes for specific failure modes. Commands should return errors that
@@ -228,6 +230,28 @@ func (e *userError) HideDetail() bool { return e.hideDetail }
 // ErrorCode returns the namespaced error code, e.g. "auth.token_missing".
 // Empty string means no code was set.
 func (e *userError) ErrorCode() string { return e.code }
+
+// warnUserError reports err as a warning, for commands that carry on after a
+// failure instead of returning it. A userError is shown the way the root
+// command shows one: message, then detail unless hidden, then suggestion.
+func warnUserError(streams iostream.Streams, prefix string, err error) {
+	var ue *userError
+	if !errors.As(err, &ue) {
+		streams.ErrPrintln(ui.ErrWarning(prefix + err.Error()))
+		return
+	}
+	streams.ErrPrintln(ui.ErrWarning(prefix + ue.msg))
+	detail := ue.detail
+	if detail == "" {
+		detail = ue.Error()
+	}
+	if !ue.hideDetail && detail != "" {
+		streams.ErrPrintln(ui.Dim(detail))
+	}
+	if ue.suggestion != "" {
+		streams.ErrPrintln("Suggestion: " + ue.suggestion)
+	}
+}
 
 // UserExitCode returns the specific exit code for this error.
 // Distinct from ExitCode() (the silent-exit interface used by HookExitError).

@@ -635,3 +635,15 @@ func TestInstallCompletionBashWritesRCFile(t *testing.T) {
 	assert.Assert(t, strings.Contains(string(data), "source <(chunk completion bash)"))
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte(ui.Success("Completion installed."))))
 }
+
+func TestDetectOrgID_NoOrgs_NoTTYSuggestsOrgCreate(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "", ui.ErrNoTTY })
+	_, rc := newDetectOrgIDFake(t)
+
+	cfg := &config.ProjectConfig{}
+	streams, _, errOut := testStreams()
+	detectOrgID(context.Background(), rc, streams, cfg)
+	assert.Equal(t, cfg.OrgID, "")
+	assert.Assert(t, strings.Contains(errOut.String(), "Could not detect org ID: No organizations found."), errOut.String())
+	assert.Assert(t, strings.Contains(errOut.String(), "chunk org create"), errOut.String())
+}
