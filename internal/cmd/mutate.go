@@ -118,7 +118,7 @@ against the test suite in parallel.`,
 				return err
 			}
 
-			orgID, err = resolveOrgID(orgID, workDir, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
+			orgID, err = resolveOrgID(orgID, workDir, orgPicker(cmd.Context(), client, rc.CircleCITokenSource, io))
 			if err != nil {
 				return err
 			}

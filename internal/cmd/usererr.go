@@ -10,7 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 // Exit codes for specific failure modes. Commands should return errors that
@@ -80,6 +82,50 @@ func cannotCreateSidecar(orgID, source string, err error) error {
 			"'chunk config set orgID <id>' records the one this repo should use.\n" +
 			"If the org is correct, it may not have sidecars enabled yet, or your token may lack access to it.").
 		withExitCode(ExitAuthError).
+		wrap(err)
+}
+
+// sidecarCreateRejected phrases a sidecar creation the API refused as not
+// found or invalid, or returns nil for any other failure.
+//
+// Either the org or the snapshot image is the culprit, and both are often read
+// from .chunk/config.json rather than typed: a repo configured for one org,
+// cloned by someone who belongs only to another, 404s with nothing on screen
+// saying where either value came from. Naming both sources points at the file
+// to fix. An empty imageSource means chunk picked the image itself, which the
+// caller cannot have got wrong, so only the org is questioned.
+func sidecarCreateRejected(msg, orgID, orgSource, image, imageSource string, err error) error {
+	var se *circleci.StatusError
+	if !errors.As(err, &se) || (se.StatusCode != http.StatusBadRequest && se.StatusCode != http.StatusNotFound) {
+		return nil
+	}
+	detail := "Org " + orgID
+	if orgSource != "" {
+		detail += " (from " + orgSource + ")"
+	}
+	if image != "" && imageSource != "" {
+		detail += ", snapshot " + image + " (from " + imageSource + ")"
+	}
+	suggestion := "Confirm this is the right org: 'chunk org list' shows the ones you belong to, and " +
+		"'chunk config set orgID <id>' records the one this repo should use."
+	switch {
+	case image == "" || imageSource == "":
+	case imageSource == "--image":
+		suggestion += "\n--image requires a snapshot ID from this org. List them with 'chunk sidecar snapshot list', " +
+			"or create one with 'chunk sidecar snapshot create'."
+	default:
+		suggestion += "\nThe snapshot must belong to this org. List them with 'chunk sidecar snapshot list', " +
+			"and record one with 'chunk config set validation.sidecarImage <id>'."
+	}
+	exitCode := ExitAPIError
+	if se.StatusCode == http.StatusNotFound {
+		exitCode = ExitNotFound
+	}
+	return newUserError(msg).
+		withCode("sidecar.create_rejected").
+		withDetail(detail + ".").
+		withSuggestion(suggestion).
+		withExitCode(exitCode).
 		wrap(err)
 }
 
@@ -228,6 +274,28 @@ func (e *userError) HideDetail() bool { return e.hideDetail }
 // ErrorCode returns the namespaced error code, e.g. "auth.token_missing".
 // Empty string means no code was set.
 func (e *userError) ErrorCode() string { return e.code }
+
+// warnUserError reports err as a warning, for commands that carry on after a
+// failure instead of returning it. A userError is shown the way the root
+// command shows one: message, then detail unless hidden, then suggestion.
+func warnUserError(streams iostream.Streams, prefix string, err error) {
+	var ue *userError
+	if !errors.As(err, &ue) {
+		streams.ErrPrintln(ui.ErrWarning(prefix + err.Error()))
+		return
+	}
+	streams.ErrPrintln(ui.ErrWarning(prefix + ue.msg))
+	detail := ue.detail
+	if detail == "" {
+		detail = ue.Error()
+	}
+	if !ue.hideDetail && detail != "" {
+		streams.ErrPrintln(ui.Dim(detail))
+	}
+	if ue.suggestion != "" {
+		streams.ErrPrintln("Suggestion: " + ue.suggestion)
+	}
+}
 
 // UserExitCode returns the specific exit code for this error.
 // Distinct from ExitCode() (the silent-exit interface used by HookExitError).

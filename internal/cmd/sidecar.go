@@ -110,7 +110,7 @@ func orgSource(orgID, workDir string) string {
 	return source
 }
 
-func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string) func() (string, error) {
+func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string, streams iostream.Streams) func() (string, error) {
 	return func() (string, error) {
 		collabs, err := client.ListCollaborations(ctx)
 		if err != nil {
@@ -124,11 +124,7 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string)
 			}
 		}
 		if len(collabs) == 0 {
-			return "", &userError{
-				msg:        "No organizations found.",
-				suggestion: "Pass --org-id or join an organization in CircleCI.",
-				err:        fmt.Errorf("no organizations found for current user"),
-			}
+			return createFirstOrg(ctx, client, tokenSource, streams)
 		}
 		if len(collabs) == 1 {
 			return collabs[0].ID, nil
@@ -182,7 +178,7 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource, io))
 			if err != nil {
 				return err
 			}
@@ -248,24 +244,27 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource, io))
 			if err != nil {
 				return err
 			}
-			if image == "" {
+			// Where the image came from, for the error if it is rejected. Left
+			// empty when chunk picks one itself: a rejected image the caller
+			// chose is a mistake worth explaining, while a rejected one chunk
+			// chose is not something the caller can act on.
+			var imageSource string
+			if image != "" {
+				imageSource = "--image"
+			} else {
 				cfg, _ := config.LoadProjectConfig(cwd)
 				if cfg.HasSidecarImage() {
 					image = cfg.Validation.SidecarImage
+					imageSource = config.SourceProjectConfig
 				}
 			}
 			// Still unset: fall back to whichever of the org's snapshots fits
 			// this repo, so an unconfigured project gets a prepared environment
 			// instead of a bare image.
-			//
-			// Tracked separately from a user-supplied image: a rejected image the
-			// caller chose is a mistake worth explaining, while a rejected one
-			// chunk chose is not something the caller can act on.
-			imageChosenByUser := image != ""
 			if image == "" {
 				image = autoSelectSnapshotImage(cmd.Context(), client, resolvedOrgID, cwd, newStatusFunc(io), io)
 			}
@@ -274,11 +273,8 @@ func newSidecarCreateCmd() *cobra.Command {
 				if err := notAuthorized("create sidecars", rc.CircleCITokenSource, err); err != nil {
 					return err
 				}
-				var se *circleci.StatusError
-				if imageChosenByUser && errors.As(err, &se) && (se.StatusCode == 400 || se.StatusCode == 404) {
-					return newUserError("Could not create the sidecar.").
-						withSuggestion("--image requires a snapshot ID. Create one with 'chunk sidecar snapshot create'.").
-						wrap(err)
+				if err := sidecarCreateRejected("Could not create the sidecar.", resolvedOrgID, orgSource(orgID, cwd), image, imageSource, err); err != nil {
+					return err
 				}
 				return &userError{
 					msg:        "Could not create the sidecar.",
@@ -988,7 +984,7 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource, io))
 			if err != nil {
 				return err
 			}
@@ -1196,7 +1192,7 @@ func sidecarSetupResolveSidecar(
 	if name == "" {
 		name = randomSidecarName()
 	}
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource, streams))
 	if err != nil {
 		return "", "", err
 	}

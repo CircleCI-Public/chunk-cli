@@ -104,7 +104,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			if orgID == "" && cfg.OrgID != "" {
 				orgID = cfg.OrgID
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, rc.CircleCITokenSource))
+			resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, rc.CircleCITokenSource, streams))
 			if err != nil {
 				return err
 			}

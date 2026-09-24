@@ -309,6 +309,60 @@ func TestSidecarCreateAPIError403(t *testing.T) {
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit for 403 response")
 }
 
+func TestSidecarCreateNotFoundNamesConfigSources(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.CreateStatusCode = 404
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	err := config.SaveProjectConfig(workDir, &config.ProjectConfig{
+		OrgID:      "org-from-project",
+		Validation: &config.ValidationConfig{SidecarImage: "snap-from-project"},
+	})
+	assert.NilError(t, err)
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "create",
+		"--name", "missing-sidecar",
+	}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 5, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Org org-from-project (from Project config (.chunk/config.json))"),
+		"expected org source, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "snapshot snap-from-project (from Project config (.chunk/config.json))"),
+		"expected image source, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "chunk config set validation.sidecarImage"),
+		"expected config fix, got: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stderr, "--image requires"),
+		"did not pass --image, got: %s", result.Stderr)
+}
+
+func TestSidecarCreateNotFoundWithImageFlag(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.CreateStatusCode = 404
+	srv := httptest.NewServer(cci)
+	defer srv.Close()
+
+	env := testenv.NewTestEnv(t)
+	env.CircleCIURL = srv.URL
+
+	result := binary.RunCLI(t, []string{
+		"sidecar", "create",
+		"--org-id", "org-aaa",
+		"--image", "not-a-snapshot",
+	}, env, env.HomeDir)
+
+	assert.Equal(t, result.ExitCode, 5, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Org org-aaa (from --org-id), snapshot not-a-snapshot (from --image)"),
+		"expected sources, got: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "--image requires a snapshot ID from this org"),
+		"expected --image hint, got: %s", result.Stderr)
+}
+
 // --- create org picker paths ---
 
 func TestSidecarCreateCollaborationsAPIError(t *testing.T) {

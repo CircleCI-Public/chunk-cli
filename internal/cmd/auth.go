@@ -103,7 +103,13 @@ func authLogin(ctx context.Context, streams iostream.Streams, baseURL string, no
 		}
 	}
 
-	return saveCircleCIToken(ctx, token, streams, baseURL, insecureStorage)
+	if err := saveCircleCIToken(ctx, token, streams, baseURL, insecureStorage); err != nil {
+		return err
+	}
+	if signup {
+		ensureOrgAfterSignup(ctx, streams, baseURL, token)
+	}
+	return nil
 }
 
 func newAuthSetCmd() *cobra.Command {

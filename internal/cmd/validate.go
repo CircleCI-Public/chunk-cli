@@ -1523,7 +1523,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	// "Stop hook error:" banner even when everything then went fine.
 	statusFn := newStatusFunc(streams)
 	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource, streams))
 	if err != nil {
 		return false, image, err
 	}
@@ -1531,7 +1531,12 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	// Rather than boot the bare default image, look for one of the org's
 	// snapshots that fits this repo; autoSelectSnapshotImage returns "" (the
 	// old behaviour) when none does.
-	if image == "" {
+	// A passed-in image always comes from the project config; one chosen here
+	// is chunk's pick and gets no source.
+	var imageSource string
+	if image != "" {
+		imageSource = config.SourceProjectConfig
+	} else {
 		image = autoSelectSnapshotImage(ctx, client, resolvedOrgID, workDir, newStatusFunc(streams), streams)
 	}
 	sandboxName := sidecarAutoName(ctx, workDir)
@@ -1539,6 +1544,9 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	if err != nil {
 		if authErr := cannotCreateSidecar(resolvedOrgID, orgSource(orgID, workDir), err); authErr != nil {
 			return false, image, authErr
+		}
+		if rejectErr := sidecarCreateRejected("Could not create a sidecar.", resolvedOrgID, orgSource(orgID, workDir), image, imageSource, err); rejectErr != nil {
+			return false, image, rejectErr
 		}
 		return false, image, &userError{
 			msg:        "Could not create a sidecar.",

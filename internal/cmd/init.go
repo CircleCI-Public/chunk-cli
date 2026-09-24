@@ -481,10 +481,10 @@ func detectOrgID(ctx context.Context, rc config.ResolvedConfig, streams iostream
 		}
 		return
 	}
-	orgID, err := orgPicker(ctx, client, rc.CircleCITokenSource)()
+	orgID, err := orgPicker(ctx, client, rc.CircleCITokenSource, streams)()
 	if err != nil {
 		if !errors.Is(err, ui.ErrNoTTY) && !errors.Is(err, ui.ErrCancelled) {
-			streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect org ID: %v", err)))
+			warnUserError(streams, "Could not detect org ID: ", err)
 		}
 		return
 	}
