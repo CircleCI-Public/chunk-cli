@@ -1,7 +1,7 @@
 ---
 name: chunk-validate-config
 description: Use when the user says "chunk keeps making me wait", "stop chunk blocking every turn", "run my tests in the background", "configure background validation", "always validate my migrations", "don't wait for docs changes", "change the async validate threshold", or asks why a change blocked instead of being backgrounded. Reads and sets the asyncValidate* keys in .chunk/config.json.
-version: 1.0.0
+version: 1.1.0
 allowed-tools:
   - Bash(chunk config set:*)
   - Bash(chunk config show)
@@ -16,6 +16,46 @@ The daemon decides per change whether the agent waits for `chunk validate` or is
 released and told the answer on its next turn. These keys move that decision.
 Nothing here changes *whether* a change is validated — every change is, always.
 The only question is who waits.
+
+## Step 0 — Understand what the user wants
+
+Read the current config first, then ask:
+
+```bash
+cat .chunk/config.json
+```
+
+```
+AskUserQuestion:
+  header: "Validation behaviour"
+  question: "What would you like to change about how chunk validate blocks your turns?"
+  options:
+    - "Stop waiting so often — release me for most changes"
+      description: "Raise asyncValidateMaxLines or add file types to asyncValidateInert
+                    so smaller or prose-heavy diffs don't block."
+      → check git diff --name-only and ls-files output to see what the user changes most;
+        raise asyncValidateMaxLines or add relevant extensions to asyncValidateInert
+    - "Never wait — always background validation"
+      description: "asyncValidate always: every change is released immediately.
+                    Failures will arrive one turn late."
+      → chunk config set asyncValidate always
+    - "Always wait — never background validation"
+      description: "asyncValidate never: every change blocks until validation finishes."
+      → chunk config set asyncValidate never
+    - "Always wait for specific file types"
+      description: "Add extensions or file names to asyncValidateBlocking so they
+                    always block, even when the general mode is 'always'."
+      → ask user which extensions/names, then chunk config set asyncValidateBlocking
+    - "Validate in a snapshot worktree"
+      description: "asyncValidateWorktree true: background checks run against a
+                    snapshot so later edits can't stale the result.
+                    Not suitable if your checks need gitignored files like node_modules."
+      → confirm checks don't need gitignored files, then chunk config set asyncValidateWorktree true
+    - "Explain the current configuration to me"
+      → read .chunk/config.json and describe what each asyncValidate* key currently does
+```
+
+---
 
 ## What each key does
 

@@ -5,7 +5,7 @@ description: >-
   "mutate this code", "test mutation coverage", or "find surviving mutants".
   Runs a 4-stage mutation testing process: discovery, validation on parallel
   sidecars, production cross-reference, and risk assessment.
-version: 2.0.0
+version: 2.1.0
 ---
 
 # Chunk Mutate Skill
@@ -25,6 +25,30 @@ This prompt expects to be run in the context of a local clone of a VCS project. 
 Before any testing, ensure local dependencies are running (`docker compose up -d` or equivalent). On compose failure, check whether containers from another project are occupying ports and kill them.
 
 Stage 2 runs mutants on `chunk` sidecars, which needs `validation.sidecarImage` set in `.chunk/config.json`. Check it with `cat .chunk/config.json`. If it is missing, stop and tell the user to run the one-time setup in the `chunk-sidecar` skill (Step 3) first — booting a fresh unconfigured sidecar per mutant is slow enough to make the whole run impractical.
+
+## Step 0 — Scope the run
+
+Before discovery, ask the user what they want to target:
+
+```
+AskUserQuestion:
+  header: "Mutation scope"
+  question: "What should we run mutation testing on?"
+  options:
+    - "Entire codebase"  ← Recommended for a first run
+      description: "Discover and test mutations across all production code.
+                    Can take 20–60 minutes for large repos."
+      → proceed to Stage 1 with no path filter
+    - "Specific package or directory"
+      description: "Focus on one area (e.g. pkg/auth, internal/api).
+                    Faster and easier to act on the results."
+      → ask user for the path, then scope Stage 1 discovery to that subtree
+    - "Files changed in this branch"
+      description: "Only mutate code touched in the current branch — good for
+                    pre-merge coverage checks."
+      → run: git diff --name-only origin/main...HEAD
+        filter Stage 1 candidates to those files only
+```
 
 ## Never create VCS artifacts for a mutant
 
@@ -97,6 +121,29 @@ For each candidate mutation, working in your normal checkout one at a time:
 A patch is the output of `git diff` for that single mutation, captured before the revert.
 
 #### 2b — Sidecar run
+
+Before writing the variants file, report the survivor count from 2a and ask for approval:
+
+```
+AskUserQuestion:
+  header: "Approve sidecar run"
+  question: "Local triage found <N> surviving mutants. The sidecar run will boot up
+             to --parallel sidecars and may take several minutes. How would you
+             like to proceed?"
+  options:
+    - "Run with --parallel 5"  ← Recommended
+      description: "Boots 5 sidecars at a time. Balances speed and org resource usage."
+      → proceed with: chunk validate variants .chunk/variants.json --parallel 5
+    - "Run faster with --parallel 10"
+      description: "Boots 10 sidecars at a time. Use when the org has sufficient
+                    sidecar quota and you want results quickly."
+      → proceed with: chunk validate variants .chunk/variants.json --parallel 10
+    - "Run conservatively with --parallel 2"
+      description: "Low resource footprint. Good when the org has a tight quota."
+      → proceed with: chunk validate variants .chunk/variants.json --parallel 2
+    - "Cancel — review the survivors first"
+      → print the local survivor list and stop; let user decide whether to continue
+```
 
 Collect every local survivor into a single variants file at `.chunk/variants.json` (gitignored) — a JSON array of objects with `id`, `description`, and `patch`:
 

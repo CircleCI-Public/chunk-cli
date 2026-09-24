@@ -5,7 +5,7 @@ description: >-
   Use when the user says "debug CI", "why is CI failing", "fix CI failures",
   "find flaky tests", "what broke in CI", "check CircleCI", or asks about
   failing pipelines or build errors.
-version: 1.0.0
+version: 1.1.0
 allowed-tools:
   - ToolSearch
   - mcp__circleci-mcp-server__get_latest_pipeline_status
@@ -39,7 +39,16 @@ Determine which CircleCI project to investigate. Use one of these approaches in 
 
 1. **Local project context:** If the user is in a git repository, detect the project from the git remote URL and current branch. Read the git remote with `git remote get-url origin` and the branch with `git branch --show-current`.
 2. **User-provided URL:** If the user provides a CircleCI URL (pipeline, workflow, or job URL), use it directly.
-3. **Project listing:** Use `mcp__circleci-mcp-server__list_followed_projects` to show the user their projects and let them pick one.
+3. **Project listing:** Use `mcp__circleci-mcp-server__list_followed_projects` to fetch the user's followed projects, then present the list with AskUserQuestion so they can pick one:
+
+```
+AskUserQuestion:
+  header: "Select project"
+  question: "Which CircleCI project would you like to debug?"
+  options:
+    - <one option per followed project, formatted as "org/repo-name">
+      → use that project slug for subsequent tool calls
+```
 
 ## Step 2: Check pipeline status
 
@@ -95,7 +104,24 @@ Based on the collected information, provide:
 
 ## Step 7: Offer follow-up actions
 
-After diagnosis, offer to:
-- Look at the specific source code files that caused failures
-- Help fix the failing tests or code
-- Rerun the workflow if the failure appears to be flaky — use `mcp__circleci-mcp-server__rerun_workflow` with the `workflowId` from the Step 2 pipeline status output. Set `fromFailed: true` to rerun only from the failed job instead of rerunning the entire workflow.
+After diagnosis, ask what the user wants to do next:
+
+```
+AskUserQuestion:
+  header: "Next step"
+  question: "What would you like to do now?"
+  options:
+    - "Show me the relevant source code"
+      → read the files identified in the failure logs and show the relevant sections
+    - "Help me fix the failing tests or code"
+      → start an edit session targeting the files and lines identified in Step 6
+    - "Rerun the workflow from the failed job"
+      description: "Retriggers only the failed job — good for transient / flaky failures."
+      → call mcp__circleci-mcp-server__rerun_workflow with fromFailed: true
+         using the workflowId from the Step 2 pipeline status output
+    - "Rerun the entire workflow"
+      description: "Restarts the full workflow from the beginning."
+      → call mcp__circleci-mcp-server__rerun_workflow with fromFailed: false
+    - "I'm done"
+      → summarise findings and stop
+```
