@@ -382,7 +382,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 		return nil
 	}
 
-	// Guard: do not modify a symlink — it is managed by another tool (e.g.
+	// Guard: do not modify a symlink. It is managed by another tool (e.g.
 	// husky, lefthook). Overwriting the path would replace the symlink with a
 	// regular file, silently breaking the hook manager's setup.
 	linfo, lstatErr := os.Lstat(path)
@@ -390,7 +390,7 @@ func writeGitHook(gitCommonDir string, streams iostream.Streams) error {
 		return &userError{msg: "Could not stat .git/hooks/pre-commit.", suggestion: suggestionCheckPerms, err: fmt.Errorf("lstat pre-commit hook: %w", lstatErr)}
 	}
 	if lstatErr == nil && linfo.Mode()&os.ModeSymlink != 0 {
-		streams.ErrPrintf("%s\n", ui.Warning(".git/hooks/pre-commit is a symlink — skipping modification to avoid breaking your hook manager. Add `chunk validate` to the hook manually."))
+		streams.ErrPrintf("%s\n", ui.Warning(".git/hooks/pre-commit is a symlink; skipping modification to avoid breaking your hook manager. Add `chunk validate` to the hook manually."))
 		return nil
 	}
 

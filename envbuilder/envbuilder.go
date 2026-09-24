@@ -51,7 +51,7 @@ func fileExists(dir, name string) bool {
 }
 
 // safeCommandToken matches the characters legitimate package, module, and
-// workspace-member names use — npm scoped names, Maven module paths, Cargo
+// workspace-member names use: npm scoped names, Maven module paths, Cargo
 // and uv package names. These names are read from manifest files inside the
 // project being analyzed (package.json, pom.xml, Cargo.toml, pyproject.toml)
 // and get interpolated into a generated Dockerfile's CMD/RUN line, so a name

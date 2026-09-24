@@ -328,7 +328,7 @@ chunk
 - `sidecar ssh -- <cmd>` forwards stdin when the process stdin is a pipe, enabling
   patterns like `cat bundle | chunk sidecar ssh -- git fetch ...`.
 - **`sidecar ssh` exits with the remote status**, for both a command and an
-  interactive shell, and prints nothing of its own — the same as `ssh` and
+  interactive shell, and prints nothing of its own, the same as `ssh` and
   `sidecar exec`. A remote status can therefore coincide with one of chunk's own
   exit codes (2–5); chunk's own failures are the ones that print an error. A
   process killed by a signal additionally reports the signal on stderr.

@@ -472,7 +472,7 @@ func TestWriteGitHookSymlinkSkipped(t *testing.T) {
 	err := writeGitHook(filepath.Join(dir, ".git"), streams)
 	assert.NilError(t, err)
 
-	// Symlink must still be a symlink — not replaced by a regular file.
+	// Symlink must still be a symlink, not replaced by a regular file.
 	linfo, err := os.Lstat(hookPath)
 	assert.NilError(t, err)
 	assert.Assert(t, linfo.Mode()&os.ModeSymlink != 0, "pre-commit must still be a symlink")
