@@ -71,7 +71,10 @@ func record(cmd *cobra.Command) {
 // RecordNow reports a command_invocation event immediately: the full command
 // path, the sorted comma-joined names (never values) of flags the user set,
 // the outcome ("success" or "failure"), the wall-clock duration in
-// milliseconds, and — on failure — the Go type and message of the error.
+// milliseconds, and on failure the Go type of the error. The error's
+// message is deliberately never sent: this codebase's error-wrapping
+// convention (fmt.Errorf("...: %w", err)) means messages routinely embed
+// absolute file paths, which would violate the no-PII guarantee below.
 // chunk-cli events are distinguished from circleci-cli events via
 // Context.App.Name ("chunk-cli").
 func RecordNow(cmd *cobra.Command, err error, duration time.Duration) {
@@ -99,7 +102,6 @@ func RecordNow(cmd *cobra.Command, err error, duration time.Duration) {
 	}
 	if err != nil {
 		props["error_type"] = fmt.Sprintf("%T", err)
-		props["error_message"] = err.Error()
 	}
 
 	_ = tc.Track("command_invocation", props)

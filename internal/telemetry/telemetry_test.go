@@ -223,7 +223,8 @@ func TestRecordForSubcommands_TracksErrorOnFailure(t *testing.T) {
 	assert.Equal(t, fake.tracks[0].Properties["outcome"], "failure")
 	assert.Assert(t, fake.tracks[0].Properties["duration_ms"].(int64) >= 0)
 	assert.Equal(t, fake.tracks[0].Properties["error_type"], "*errors.errorString")
-	assert.Equal(t, fake.tracks[0].Properties["error_message"], "something went wrong")
+	_, hasErrMessage := fake.tracks[0].Properties["error_message"]
+	assert.Assert(t, !hasErrMessage, "error message must never be sent to telemetry; it can contain file paths and other PII")
 }
 
 func TestRecordForSubcommands_SkipsDisabledCommand(t *testing.T) {
