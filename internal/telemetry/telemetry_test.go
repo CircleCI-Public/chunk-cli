@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/analytics-go/v3"
-	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 )
@@ -42,15 +41,13 @@ func TestSender_Track(t *testing.T) {
 	s, err := NewSender(Config{
 		TestDestination: fake,
 		Metadata: Meta{
-			Version:    "1.2.3",
-			InstanceID: instanceID,
-			HostInfo: &host.InfoStat{
-				OS:              "linux",
-				PlatformFamily:  "debian",
-				PlatformVersion: "24.04",
-				KernelArch:      "x86_64",
-			},
-			Extra: map[string]any{"agent": agentClaudeCode},
+			Version:        "1.2.3",
+			InstanceID:     instanceID,
+			OSName:         "linux",
+			PlatformFamily: "debian",
+			OSVersion:      "24.04",
+			KernelArch:     "x86_64",
+			Extra:          map[string]any{"agent": agentClaudeCode},
 		},
 	})
 	assert.NilError(t, err)

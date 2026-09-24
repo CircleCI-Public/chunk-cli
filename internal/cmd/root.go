@@ -204,9 +204,11 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 	// it for telemetry-disabled commands (e.g. completion generation) avoids
 	// gopsutil's ioreg lookup, which fails under a restricted PATH such as
 	// Homebrew's sanitized completion-generation environment.
-	var hostInfo *host.InfoStat
+	var osName, osVersion, kernelArch, platformFamily string
 	if optedIn && !telemetry.IsTelemetryDisabled(cmd) {
-		hostInfo, _ = host.InfoWithContext(cmd.Context())
+		if info, _ := host.InfoWithContext(cmd.Context()); info != nil {
+			osName, osVersion, kernelArch, platformFamily = info.OS, info.PlatformVersion, info.KernelArch, info.PlatformFamily
+		}
 	}
 
 	tc, err := telemetry.NewSender(telemetry.Config{
@@ -219,7 +221,10 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 			InstanceID:        instanceID,
 			SessionTrackingID: sessionTrackingID,
 			UserID:            config.GetUserID(),
-			HostInfo:          hostInfo,
+			OSName:            osName,
+			OSVersion:         osVersion,
+			KernelArch:        kernelArch,
+			PlatformFamily:    platformFamily,
 			Extra:             agentExtra(),
 		},
 	})
