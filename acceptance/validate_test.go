@@ -569,7 +569,7 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 
 	// The pool's second member syncs synchronously while being created, so its
 	// failed SSH handshake (no real server behind AddKeyURL) surfaces here and
-	// aborts the run — proving the second sidecar was actually put to use
+	// aborts the run, proving the second sidecar was actually put to use
 	// rather than left idle. The first is left untouched by this failure: pool
 	// assembly errors out before reaching its (backgrounded) sync.
 	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-new-2/ssh/add-key")

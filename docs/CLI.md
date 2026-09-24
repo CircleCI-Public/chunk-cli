@@ -211,13 +211,13 @@ chunk
   one after another on a single one.** A batch with several remote commands
   (`test`, `lint`, `acceptance-test`, ...) uses up to `defaultValidateParallelism`
   (3) sidecars at once by default, each pulling the next unstarted command from
-  the list — matching how `mutate --parallel` and `validate variants --parallel`
+  the list, matching how `mutate --parallel` and `validate variants --parallel`
   already spread work across a pool. `--parallel <n>` overrides the cap in
   either direction; `PlanCommands` still clamps it to the number of remote
   commands actually selected, so a single-command run never provisions more
   than one. Sidecars a run creates to fill out that pool are kept for reuse by
-  later runs rather than torn down when a smaller run only needs one of them —
-  recreating a sidecar costs a full initial sync, so shrinking on every small
+  later runs rather than torn down when a smaller run only needs one of them.
+  Recreating a sidecar costs a full initial sync, so shrinking on every small
   run would make the common case pay for the parallel one.
 - **Snapshot selection.** When a sidecar has to be created and no
   `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
