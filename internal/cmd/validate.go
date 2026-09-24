@@ -181,7 +181,7 @@ func peekHookPayload(cmd *cobra.Command) *hookContext {
 
 // isSkippedCommitGate reports whether cmd is a commit gate run for a command
 // that is not a git commit (see skipsCommitGate). The root command asks before
-// its setup — telemetry, the update check, the daemon launch — since under
+// its setup (telemetry, the update check, the daemon launch) since under
 // Codex this is every Bash call the agent makes, and none of that is wanted
 // for a run that ends straight away.
 func isSkippedCommitGate(cmd *cobra.Command) bool {

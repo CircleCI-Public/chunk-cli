@@ -143,8 +143,8 @@ func Build(commands []config.Command) ([]byte, error) {
 
 // codexCommitStatusMessage is the spinner text for the Codex commit gate. Codex
 // cannot filter a hook on the command it is about to run, so the gate starts
-// before every Bash call and exits at once for anything but a git commit —
-// the text has to read right on both.
+// before every Bash call and exits at once for anything but a git commit.
+// The text has to read right on both.
 const codexCommitStatusMessage = "Running chunk validate if this is a commit"
 
 // codexCommitCommand is the Codex commit gate: every configured command, run in
@@ -159,8 +159,8 @@ const codexCommitCommand = "chunk validate"
 //   - Codex launches every matching hook for an event concurrently, so one entry
 //     per command would have a formatter rewriting files while lint and test
 //     read them. A single `chunk validate` runs them in sequence instead.
-//   - Codex has no per-entry "if", so the entry still carries CommitIfFilter —
-//     it is how Merge recognises chunk's entries — but chunk validate does the
+//   - Codex has no per-entry "if", so the entry still carries CommitIfFilter
+//     (it is how Merge recognises chunk's entries) but chunk validate does the
 //     filtering itself, from the command in the hook payload.
 //
 // Commands run as-is. Codex runs hooks in the session's working directory,
