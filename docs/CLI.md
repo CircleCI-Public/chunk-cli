@@ -76,6 +76,7 @@ chunk
 │   --cmd <command>                 # Run an inline command
 │   --save                          # Save --cmd to config
 │   --remote                        # Run using the active sidecar pool
+│   --parallel <n>                  # Max sidecars for remote commands (0: auto, up to 3)
 │   --mark-remote                   # Mark [name] (or all commands) remote in config, then exit
 │   --sidecar-id <id>               # Remote execution in specific sidecar
 │   --org-id <id>                   # Organization ID (used when creating a new sidecar)
@@ -206,6 +207,18 @@ chunk
   remote batch, then the remaining local commands, keeping configured order
   within each. The remote batch syncs the working tree when it starts, so a
   formatter has to finish first for its rewrites to reach the gates.
+- **Within the remote batch, independent commands run on separate sidecars, not
+  one after another on a single one.** A batch with several remote commands
+  (`test`, `lint`, `acceptance-test`, ...) uses up to `defaultValidateParallelism`
+  (3) sidecars at once by default, each pulling the next unstarted command from
+  the list — matching how `mutate --parallel` and `validate variants --parallel`
+  already spread work across a pool. `--parallel <n>` overrides the cap in
+  either direction; `PlanCommands` still clamps it to the number of remote
+  commands actually selected, so a single-command run never provisions more
+  than one. Sidecars a run creates to fill out that pool are kept for reuse by
+  later runs rather than torn down when a smaller run only needs one of them —
+  recreating a sidecar costs a full initial sync, so shrinking on every small
+  run would make the common case pay for the parallel one.
 - **Snapshot selection.** When a sidecar has to be created and no
   `validation.sidecarImage` is recorded (project-level or per-command), `chunk`
   picks one of the org's snapshots instead of booting the bare default image.

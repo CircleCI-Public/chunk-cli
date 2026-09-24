@@ -292,6 +292,7 @@ type validateOpts struct {
 	save           bool
 	remote         bool
 	local          bool
+	parallel       int
 	markRemote     bool
 	jsonOut        bool
 	inlineCmd      string
@@ -330,6 +331,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.remote, "remote", false, "Run all selected commands on a sidecar, overriding local placement")
 	cmd.Flags().BoolVar(&opts.local, "local", false, "Run commands locally instead of on sidecar")
 	cmd.MarkFlagsMutuallyExclusive("remote", "local")
+	cmd.Flags().IntVar(&opts.parallel, "parallel", 0, fmt.Sprintf("max sidecars to use for remote commands (0: auto, up to %d)", defaultValidateParallelism))
 	cmd.Flags().StringVar(&opts.sidecarID, "sidecar-id", "", "Sidecar ID for remote execution")
 	cmd.Flags().StringVar(&opts.orgID, "org-id", "", "Organization ID (used when creating a new sidecar)")
 	cmd.Flags().StringVar(&opts.workdir, "workdir", "", "Working directory on sidecar (reads from sidecar.json, defaults to /home/user/<repo>)")
@@ -673,6 +675,15 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	} else {
 		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, opts.attributionRoot(workDir), envVars, recorderCommandIDSetter(recorder), statusFn, streams)
 	}
+	// Saved after the plan runs, not right after the pool is built: a pool
+	// grown beyond one sidecar finishes cloning in the background while
+	// RunDistributed's workers wait to acquire them, so only once the run has
+	// actually used them are they all guaranteed to be reflected in pool.IDs().
+	if validatePool != nil {
+		if err := saveActivePoolState(ctx, validatePool, opts.orgID); err != nil {
+			statusFn(iostream.LevelWarn, fmt.Sprintf("could not save active sidecar: %v", err))
+		}
+	}
 	if execErr == nil && resultCache != nil {
 		if err := resultCache.Put(cacheKey, validate.CachedResult{CachedAt: time.Now()}); err != nil {
 			streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf("chunk validate: cache write failed: %v", err)))
@@ -706,7 +717,27 @@ func planValidationExecution(cfg *config.ProjectConfig, opts *validateOpts, name
 	case opts.local:
 		placement = validate.PlacementLocal
 	}
-	return validate.PlanCommands(commands, placement, 1)
+	return validate.PlanCommands(commands, placement, validateParallelism(opts.parallel, opts.sidecarID))
+}
+
+// defaultValidateParallelism caps how many sidecars a validate run uses at
+// once when --parallel is not set, so a config with many remote commands
+// does not silently fan out to one sidecar per command.
+const defaultValidateParallelism = 3
+
+// validateParallelism resolves the max sidecars a run may use. PlanCommands
+// still clamps this to the number of remote commands actually selected.
+//
+// An explicit --sidecar-id always forces exactly one: it names a single
+// target the caller chose, not a pool to grow around it.
+func validateParallelism(parallel int, explicitSidecarID string) int {
+	if explicitSidecarID != "" {
+		return 1
+	}
+	if parallel > 0 {
+		return parallel
+	}
+	return defaultValidateParallelism
 }
 
 func recorderCommandIDSetter(recorder *eventlog.Recorder) func(string) {
@@ -775,6 +806,25 @@ func prepareValidationTarget(
 	pool.Release(entry)
 	statusFn(iostream.LevelInfo, fmt.Sprintf("using sidecar %s for remote commands", entry.ID))
 	return pool, nil
+}
+
+// saveActivePoolState persists every sidecar id currently backing pool, so a
+// pool grown beyond one sidecar is reused in full on the next invocation
+// instead of only its first member. It reloads the active sidecar itself
+// rather than trusting a snapshot taken before the pool was built, since
+// prepareValidationTarget's local copy can diverge from it (a reload after
+// creating the first sidecar, or dropping it when an explicit --sidecar-id
+// does not belong to it) without that change reaching the caller.
+func saveActivePoolState(ctx context.Context, pool *sidecar.Pool, fallbackOrgID string) error {
+	next := sidecar.ActiveSidecar{SidecarIDs: pool.IDs(), OrgID: fallbackOrgID}
+	if active, _ := sidecar.LoadActive(ctx); active != nil {
+		next.Name = active.Name
+		next.Workspace = active.Workspace
+		if active.OrgID != "" {
+			next.OrgID = active.OrgID
+		}
+	}
+	return sidecar.SaveActive(ctx, next)
 }
 
 func checkHookAuth(hook *hookContext, needsSidecar bool, token string, streams iostream.Streams) error {

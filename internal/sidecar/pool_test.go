@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -225,6 +226,31 @@ func TestAssemblePool_CreatesAndSyncsAll(t *testing.T) {
 	assert.Equal(t, countPoolRequests(env.cci, "POST", createSidecarPath), 3)
 	assert.Equal(t, countPoolRequests(env.cci, "POST", createSnapshotPath), 1)
 	waitForPoolTest(t, func() bool { return countPoolDeletes(env.cci) == 1 })
+}
+
+// TestPoolIDs_ReflectsClonedMembersOnceAcquirable confirms IDs() reports every
+// member a caller can actually reach via Acquire, including ones grown by
+// cloning rather than reused from an existing sidecar. This is what a caller
+// persisting pool membership (e.g. validate's active-sidecar state) relies on.
+func TestPoolIDs_ReflectsClonedMembersOnceAcquirable(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "validate", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+
+	a, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	b, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(a)
+	pool.Release(b)
+
+	ids := pool.IDs()
+	assert.Equal(t, len(ids), 2)
+	assert.Assert(t, slices.Contains(ids, a.ID))
+	assert.Assert(t, slices.Contains(ids, b.ID))
 }
 
 func TestAssemblePool_CreateFailure_ReturnsError(t *testing.T) {
