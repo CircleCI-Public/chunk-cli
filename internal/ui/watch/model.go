@@ -177,6 +177,11 @@ type Model struct {
 	rightSelectedIdx int
 	toggledInvocs    map[time.Time]bool // invocations whose expand/collapse is flipped from default
 
+	// leftScrollOffset is the index of the first sidecar to render in the left
+	// pane. adjustLeftScroll keeps it in sync with selectedIdx after each
+	// navigation so rows above the viewport are reachable via arrow keys.
+	leftScrollOffset int
+
 	width      int
 	height     int
 	spinIdx    int
@@ -268,6 +273,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 			m.rightSelectedIdx = 0
+			m = m.adjustLeftScroll()
 		} else {
 			m.rightSelectedIdx++
 		}
@@ -278,6 +284,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 			m.rightSelectedIdx = 0
+			m = m.adjustLeftScroll()
 		} else if m.rightSelectedIdx > 0 {
 			m.rightSelectedIdx--
 		}
@@ -311,6 +318,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m = m.adjustLeftScroll()
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -335,6 +343,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.daemonErr = msg.err
+		m = m.adjustLeftScroll() // the error line costs the pane a row
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 
 	case outputMsg:
@@ -375,6 +384,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 		m.hasSpinner = anyRunning(m.sidecars)
+		m = m.adjustLeftScroll()
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 
 	case updateCheckMsg:
@@ -458,18 +468,25 @@ func (m Model) renderSeparator(st watchStyles) string {
 	return st.vdim(strings.Repeat("─", m.width)) + "\n"
 }
 
-func (m Model) renderBody(st watchStyles) string {
-	contentHeight := m.height - 4 // header + separator + footer + padding
+// contentHeight is how many lines the two panes get between the header and
+// the footer.
+func (m Model) contentHeight() int {
+	h := m.height - 4 // header + separator + footer + padding
 	// The footer grows by a line when the daemon is unreachable. Without handing
 	// that line back the message lands past the last row and is clipped at every
 	// terminal size, which is how a daemon that had died came to look like a
 	// dashboard that had merely gone quiet.
 	if m.daemonErr != nil {
-		contentHeight--
+		h--
 	}
-	if contentHeight < 1 {
-		contentHeight = 1
+	if h < 1 {
+		h = 1
 	}
+	return h
+}
+
+func (m Model) renderBody(st watchStyles) string {
+	contentHeight := m.contentHeight()
 
 	leftLines := m.renderSidecarPane(st, contentHeight)
 	rightLines := m.renderActivityPane(st, contentHeight)
@@ -520,7 +537,17 @@ func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
 }
 
 func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
-	lines := make([]string, 0, maxLines)
+	lines, _ := m.layoutSidecarPane(st, maxLines)
+	return lines
+}
+
+// layoutSidecarPane renders the sidecar pane and reports end, the index of the
+// first sidecar it had no room for (len(m.sidecars) when every row from
+// leftScrollOffset on was drawn). adjustLeftScroll scrolls by it, so the
+// viewport is judged by the rows actually drawn rather than an estimate of
+// their height.
+func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, end int) {
+	lines = make([]string, 0, maxLines)
 	add := func(s string) { lines = append(lines, s) }
 
 	if m.focusedPane == paneLeft {
@@ -535,7 +562,12 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 		add("")
 		add(st.dim("no sidecar activity"))
 		add(st.dim("in the last day"))
-		return lines
+		return lines, 0
+	}
+
+	// Show how many rows are hidden above the viewport.
+	if m.leftScrollOffset > 0 {
+		add("  " + st.vdim(fmt.Sprintf("↑ %d more", m.leftScrollOffset)))
 	}
 
 	var lastRepo string
@@ -546,7 +578,8 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 	lastGroup, haveGroup := groupKey{}, false
 
 	dropped := 0
-	for i, sc := range m.sidecars {
+	for i := m.leftScrollOffset; i < len(m.sidecars); i++ {
+		sc := m.sidecars[i]
 		// Cost the row before committing to it. A row is three to six lines and
 		// renderBody clips whatever runs past maxLines, so a row begun without the
 		// room to finish loses its tail — the sync state and age it exists to
@@ -645,7 +678,7 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 		// only clue that any were missing, and a dropped repo had none at all.
 		lines = append(lines, "  "+st.vdim(fmt.Sprintf("↓ %d more", dropped)))
 	}
-	return lines
+	return lines, len(m.sidecars) - dropped
 }
 
 // renderActivityPane renders the right-hand pane for the selected sidecar.
@@ -1552,6 +1585,39 @@ func (m Model) sidecarCapacity() int {
 		return 1
 	}
 	return paneHeight / linesPerSidecar
+}
+
+// adjustLeftScroll keeps the selected sidecar on screen in the left pane.
+// Rows vary in height — repo and group headers, snapshot and resource lines,
+// the scroll hints themselves — so no fixed page size predicts what fits. It
+// lays the pane out at the current height instead and moves the offset until
+// the selected row is drawn in full.
+func (m Model) adjustLeftScroll() Model {
+	if m.selectedIdx < m.leftScrollOffset {
+		m.leftScrollOffset = max(m.selectedIdx, 0)
+	}
+	for m.leftScrollOffset < m.selectedIdx && m.selectedIdx >= m.sidecarPaneEnd() {
+		m.leftScrollOffset++
+	}
+	// Scroll back up while that still draws every remaining row. Without it a
+	// list that shrinks, or a terminal that grows, leaves rows parked above the
+	// viewport with empty space under the last one.
+	for m.leftScrollOffset > 0 {
+		prev := m
+		prev.leftScrollOffset--
+		if prev.sidecarPaneEnd() < len(prev.sidecars) {
+			break
+		}
+		m = prev
+	}
+	return m
+}
+
+// sidecarPaneEnd is the index of the first sidecar the left pane has no room
+// for at the current offset and height.
+func (m Model) sidecarPaneEnd() int {
+	_, end := m.layoutSidecarPane(m.styles(), m.contentHeight())
+	return end
 }
 
 func anyRunning(sidecars []sidecarInfo) bool {

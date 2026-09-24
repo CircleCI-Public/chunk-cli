@@ -634,6 +634,109 @@ func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
 	assert.Assert(t, strings.Contains(pane, "1 more"), pane)
 }
 
+func TestRenderSidecarPane_scrolledShowsUpHintAndHidesScrolledRows(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "feat", lastActivity: now.Add(-2 * time.Minute)},
+		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main", lastActivity: now.Add(-time.Minute)},
+		{id: "id3", sessionID: "sessC", repoName: "repo-c", branch: "main", lastActivity: now},
+	})
+	m.leftScrollOffset = 1 // repo-a is scrolled off
+
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
+
+	assert.Assert(t, strings.Contains(pane, "↑ 1 more"), pane)
+	assert.Assert(t, !strings.Contains(pane, "repo-a"), pane)
+	assert.Assert(t, strings.Contains(pane, "repo-b"), pane)
+	assert.Assert(t, strings.Contains(pane, "repo-c"), pane)
+}
+
+// tallSidecars returns n sidecars that each sit in their own repo and carry a
+// snapshot and a resource sample, so every row costs more than linesPerSidecar.
+func tallSidecars(n int) []sidecarInfo {
+	now := time.Now()
+	sidecars := make([]sidecarInfo, n)
+	for i := range sidecars {
+		sidecars[i] = sidecarInfo{
+			id: fmt.Sprintf("s%d", i), repoName: fmt.Sprintf("repo-%d", i), branch: "main",
+			snapshotName: "snap", lastActivity: now,
+			resources: &watchd.Resources{SampledAt: now, CPUPercent: 5},
+		}
+	}
+	return sidecars
+}
+
+// selectionDrawn reports whether the selected row's ▶ marker made it into the
+// left pane as renderBody would lay it out.
+func selectionDrawn(m Model) bool {
+	pane := strings.Join(m.renderSidecarPane(m.styles(), m.contentHeight()), "\n")
+	return strings.Contains(pane, "▶")
+}
+
+func TestAdjustLeftScroll_keepsSelectionDrawnWhileNavigatingTallRows(t *testing.T) {
+	for _, height := range []int{18, 30, 40, 42} {
+		m := New(nil, false)
+		m.sidecars = tallSidecars(10)
+		m.height = height
+
+		for i := 0; i < len(m.sidecars); i++ {
+			assert.Assert(t, selectionDrawn(m), "height %d, down to %d", height, m.selectedIdx)
+			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			m = next.(Model)
+		}
+		for i := 0; i < len(m.sidecars); i++ {
+			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+			m = next.(Model)
+			assert.Assert(t, selectionDrawn(m), "height %d, up to %d", height, m.selectedIdx)
+		}
+		assert.Equal(t, m.leftScrollOffset, 0, "height %d", height)
+	}
+}
+
+func TestAdjustLeftScroll_noScrollWhenSelectionIsVisible(t *testing.T) {
+	m := New(nil, false)
+	m.sidecars = tallSidecars(10)
+	m.height = 40
+	m.leftScrollOffset = 2
+	m.selectedIdx = 3
+
+	m = m.adjustLeftScroll()
+
+	assert.Equal(t, m.leftScrollOffset, 2)
+}
+
+func TestAdjustLeftScroll_scrollsBackWhenListShrinks(t *testing.T) {
+	m := New(nil, false)
+	m.sidecars = tallSidecars(10)
+	m.height = 40
+	m.selectedIdx = 9
+	m = m.adjustLeftScroll()
+	assert.Assert(t, m.leftScrollOffset > 0)
+
+	// A poll ages most sidecars out; the three left all fit.
+	m.sidecars = m.sidecars[7:]
+	m.selectedIdx = 2
+	m = m.adjustLeftScroll()
+
+	assert.Equal(t, m.leftScrollOffset, 0)
+	pane := strings.Join(m.renderSidecarPane(m.styles(), m.contentHeight()), "\n")
+	assert.Assert(t, !strings.Contains(pane, "↑"), pane)
+}
+
+func TestUpdate_resizeKeepsSelectionDrawn(t *testing.T) {
+	m := New(nil, false)
+	m.sidecars = tallSidecars(10)
+	m.height = 80
+	m.selectedIdx = 7
+	m = m.adjustLeftScroll()
+	assert.Assert(t, selectionDrawn(m))
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = next.(Model)
+
+	assert.Assert(t, selectionDrawn(m))
+}
+
 func TestRenderSidecarPane_noOverflowHintWhenEverythingFits(t *testing.T) {
 	now := time.Now()
 	m := sessionModel("", []sidecarInfo{
