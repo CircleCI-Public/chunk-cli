@@ -136,7 +136,7 @@ func newValidateVariantsCmd() *cobra.Command {
 				Workspace: workspace,
 				CWD:       workDir,
 				Parallel:  parallel,
-				Commands:  variantCommands(cmds, workDir, timeout),
+				Commands:  variantCommands(cmd.Context(), cmds, workDir, timeout),
 				StatusFn:  statusFn,
 			})
 			if err != nil {
@@ -171,12 +171,12 @@ func newValidateVariantsCmd() *cobra.Command {
 // literal {{CHANGED_PACKAGES}} reaches the sidecar's shell, which exits non-zero
 // for a reason that has nothing to do with the code under test, and every variant
 // in the run would be recorded as a caught mutant.
-func variantCommands(cmds []config.Command, workDir string, defaultTimeout int) []variants.Command {
+func variantCommands(ctx context.Context, cmds []config.Command, workDir string, defaultTimeout int) []variants.Command {
 	out := make([]variants.Command, len(cmds))
 	for i, c := range cmds {
 		out[i] = variants.Command{
 			Name:    c.Name,
-			Run:     validate.ExpandCommand(workDir, c.Run),
+			Run:     validate.ExpandCommandCtx(ctx, workDir, c.Run),
 			Timeout: commandTimeout(c.Timeout, defaultTimeout),
 		}
 	}

@@ -115,7 +115,7 @@ func NewPool(
 		repoPath = state.RepoPath
 	}
 	if repoPath == "" {
-		_, repo, err := gitremote.DetectOrgAndRepo(opts.WorkDir)
+		_, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, opts.WorkDir)
 		if err != nil {
 			return nil, fmt.Errorf("pool: detect repo: %w", err)
 		}
@@ -241,7 +241,7 @@ func assemblePool(
 	if len(aliveExisting) > 0 {
 		status(iostream.LevelInfo, fmt.Sprintf("syncing to %d sidecars...", len(aliveExisting)))
 		var err error
-		prepared, err = prepareBundleSync(repoPath, workDir, existingSyncedRef, len(aliveExisting), status)
+		prepared, err = prepareBundleSync(ctx, repoPath, workDir, existingSyncedRef, len(aliveExisting), status)
 		if err != nil {
 			deleteSidecars(client, goodNew)
 			if cloneSeedID != "" {

@@ -184,7 +184,7 @@ func runRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 	}
 	maxWidth := commandutil.NameWidth(commands)
 	for i, c := range commands {
-		run := commandutil.ExpandCommand(localWorkDir, c.Run)
+		run := commandutil.ExpandCommandCtx(ctx, localWorkDir, c.Run)
 		status(iostream.LevelInfo, "$ "+run)
 		script := "cd " + shellEscape(dest) + " && " + run
 		start := time.Now()
@@ -263,8 +263,13 @@ func ExpandCommand(workDir, command string) string {
 	return commandutil.ExpandCommand(workDir, command)
 }
 
+// ExpandCommandCtx is ExpandCommand with cancellation support for git queries.
+func ExpandCommandCtx(ctx context.Context, workDir, command string) string {
+	return commandutil.ExpandCommandCtx(ctx, workDir, command)
+}
+
 func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, nameWidth int, envVars map[string]string, status iostream.StatusFunc, streams iostream.Streams) error {
-	command = ExpandCommand(workDir, command)
+	command = ExpandCommandCtx(ctx, workDir, command)
 	status(iostream.LevelInfo, "$ "+command)
 
 	if timeoutSec <= 0 {

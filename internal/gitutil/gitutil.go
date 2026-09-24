@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 )
 
 // RepoRoot returns the root directory of the current git repository
@@ -28,7 +29,13 @@ func RepoRoot(from string) (string, error) {
 // CurrentBranchIn returns the current git branch name for the repo rooted at dir.
 // Returns an error if in detached HEAD state or not in a git repo.
 func CurrentBranchIn(dir string) (string, error) {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	return CurrentBranchInCtx(context.Background(), dir)
+}
+
+// CurrentBranchInCtx returns the current git branch name for the repo rooted at
+// dir, honouring ctx for cancellation/timeout.
+func CurrentBranchInCtx(ctx context.Context, dir string) (string, error) {
+	out, err := (gitexec.Runner{Dir: dir}).Output(ctx, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("get current branch: %w", err)
 	}
@@ -58,9 +65,7 @@ func HeadRef(cwd string) (string, error) {
 // HeadRefCtx returns the SHA of the current HEAD commit in the repo at cwd,
 // honouring ctx for cancellation/timeout.
 func HeadRefCtx(ctx context.Context, cwd string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
+	out, err := (gitexec.Runner{Dir: cwd}).Output(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("resolve HEAD: %w", err)
 	}
@@ -74,8 +79,7 @@ func HeadRefCtx(ctx context.Context, cwd string) (string, error) {
 // TopLevelCtx returns the git repository root for dir, or "" if not in a git
 // repo, honouring ctx for cancellation/timeout.
 func TopLevelCtx(ctx context.Context, dir string) string {
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
+	out, err := (gitexec.Runner{Dir: dir}).Output(ctx, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return ""
 	}

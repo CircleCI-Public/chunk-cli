@@ -1,16 +1,16 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 )
@@ -28,21 +28,24 @@ func newHookCmd() *cobra.Command {
 	return cmd
 }
 
-func resolveHookRoot(override string) string {
-	if override != "" {
-		return override
+func resolveHookRoot(ctx context.Context, override string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err == nil {
-		if s := strings.TrimSpace(string(out)); s != "" {
-			return s
-		}
+	if override != "" {
+		return override, nil
+	}
+	if root := gitutil.TopLevelCtx(ctx, "."); root != "" {
+		return root, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "."
+		return ".", nil
 	}
-	return cwd
+	return cwd, nil
 }
 
 func newHookDisableCmd(projectDir *string) *cobra.Command {
@@ -51,7 +54,11 @@ func newHookDisableCmd(projectDir *string) *cobra.Command {
 		Short:        "Disable chunk validate hooks",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := filepath.Join(resolveHookRoot(*projectDir), ".chunk", "hooks-disabled")
+			root, err := resolveHookRoot(cmd.Context(), *projectDir)
+			if err != nil {
+				return fmt.Errorf("resolve hook root: %w", err)
+			}
+			p := filepath.Join(root, ".chunk", "hooks-disabled")
 			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 				return fmt.Errorf("create .chunk directory: %w", err)
 			}
@@ -71,7 +78,11 @@ func newHookEnableCmd(projectDir *string) *cobra.Command {
 		Short:        "Re-enable chunk validate hooks",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p := filepath.Join(resolveHookRoot(*projectDir), ".chunk", "hooks-disabled")
+			root, err := resolveHookRoot(cmd.Context(), *projectDir)
+			if err != nil {
+				return fmt.Errorf("resolve hook root: %w", err)
+			}
+			p := filepath.Join(root, ".chunk", "hooks-disabled")
 			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("remove hooks-disabled sentinel: %w", err)
 			}
@@ -89,7 +100,10 @@ func newHookStatusCmd(projectDir *string) *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			streams := iostream.FromCmd(cmd)
-			root := resolveHookRoot(*projectDir)
+			root, err := resolveHookRoot(cmd.Context(), *projectDir)
+			if err != nil {
+				return fmt.Errorf("resolve hook root: %w", err)
+			}
 			envDisabled := os.Getenv(config.EnvChunkHooksDisabled) != ""
 			if validate.HooksDisabled(root, envDisabled) {
 				streams.Println("disabled")

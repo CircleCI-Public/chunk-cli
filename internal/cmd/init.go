@@ -16,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/anthropic"
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/settings"
@@ -491,6 +492,20 @@ func detectOrgID(ctx context.Context, rc config.ResolvedConfig, streams iostream
 	streams.ErrPrintf("Org ID: %s\n", ui.Bold(orgID))
 }
 
+func detectVCS(ctx context.Context, workDir string, streams iostream.Streams, cfg *config.ProjectConfig) error {
+	org, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, workDir)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("detect VCS info: %w", ctxErr)
+		}
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect VCS info: %v", err)))
+		return nil
+	}
+	cfg.VCS = &config.VCSConfig{Org: org, Repo: repo}
+	streams.ErrPrintf("Detected repository: %s\n", ui.Bold(fmt.Sprintf("%s/%s", org, repo)))
+	return nil
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID bool
 	var projectDir string
@@ -516,15 +531,12 @@ hook config files.`,
 				}
 			}
 
-			gitCmd := exec.Command("git", "rev-parse", "--git-dir")
-			gitCmd.Dir = workDir
-			if err := gitCmd.Run(); err != nil {
+			git := gitexec.Runner{Dir: workDir}
+			if err := git.Run(ctx, "rev-parse", "--git-dir"); err != nil {
 				return &userError{msg: "Not a git repository.", suggestion: suggestionGitRepo, err: err}
 			}
 
-			gitCommonDirCmd := exec.Command("git", "rev-parse", "--git-common-dir")
-			gitCommonDirCmd.Dir = workDir
-			commonDirOut, err := gitCommonDirCmd.Output()
+			commonDirOut, err := git.Output(ctx, "rev-parse", "--git-common-dir")
 			if err != nil {
 				return &userError{msg: "Could not determine git directory.", err: fmt.Errorf("git rev-parse --git-common-dir: %w", err)}
 			}
@@ -551,12 +563,8 @@ hook config files.`,
 			}
 
 			// Step 1: VCS config from git remote
-			org, repo, err := gitremote.DetectOrgAndRepo(workDir)
-			if err != nil {
-				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect VCS info: %v", err)))
-			} else {
-				cfg.VCS = &config.VCSConfig{Org: org, Repo: repo}
-				streams.ErrPrintf("Detected repository: %s\n", ui.Bold(fmt.Sprintf("%s/%s", org, repo)))
+			if err := detectVCS(ctx, workDir, streams, cfg); err != nil {
+				return err
 			}
 
 			rc, rcErr := config.Resolve("", "", insecureStorage)

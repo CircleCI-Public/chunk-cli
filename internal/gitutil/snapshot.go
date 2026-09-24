@@ -1,13 +1,14 @@
 package gitutil
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/changeset"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 )
 
 // SnapshotTree captures the whole working state at dir as a git tree object and
@@ -109,9 +110,7 @@ func ChangesBetween(dir, base string) (changeset.Changes, error) {
 // gitOutEnv is gitOut with an explicit environment. A nil env inherits this
 // process's, as exec does.
 func gitOutEnv(dir string, env []string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = env
-	out, err := cmd.Output()
+	out, err := (gitexec.Runner{Dir: dir, Env: env}).Output(context.Background(), args...)
 	if err != nil {
 		return "", err
 	}

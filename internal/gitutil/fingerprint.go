@@ -1,16 +1,17 @@
 package gitutil
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/hashutil"
 )
 
@@ -191,7 +192,7 @@ func hashFile(h io.Writer, path string, remaining int64) (int64, error) {
 }
 
 func gitOut(dir string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	out, err := (gitexec.Runner{Dir: dir}).Output(context.Background(), args...)
 	if err != nil {
 		return "", err
 	}

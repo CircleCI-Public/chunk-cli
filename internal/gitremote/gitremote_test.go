@@ -1,7 +1,11 @@
 package gitremote_test
 
 import (
+	"context"
+	"errors"
 	"testing"
+
+	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
@@ -99,6 +103,24 @@ func TestDetectOrgAndRepo(t *testing.T) {
 	}
 }
 
+func TestURL(t *testing.T) {
+	dir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+
+	url, err := gitremote.URL(context.Background(), dir, "origin")
+	assert.NilError(t, err)
+	assert.Assert(t, url != "", "expected non-empty URL")
+	// Parse so the test passes regardless of whether git rewrites SSH to HTTPS.
+	org, repo, parseErr := gitremote.ParseRemoteURL(url)
+	assert.NilError(t, parseErr)
+	assert.Equal(t, org, "test-org")
+	assert.Equal(t, repo, "test-repo")
+}
+
+func TestURLReportsMissingRemote(t *testing.T) {
+	_, err := gitremote.URL(context.Background(), gitrepo.SetupGitRepo(t, "test-org", "test-repo"), "missing")
+	assert.Assert(t, err != nil)
+}
+
 func TestDetectOrgAndRepo_NoRemote(t *testing.T) {
 	// Use a temp dir with no git repo — should fail.
 	dir := t.TempDir()
@@ -107,4 +129,12 @@ func TestDetectOrgAndRepo_NoRemote(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when not in a git repo")
 	}
+}
+
+func TestDetectOrgAndRepoCtxHonoursCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := gitremote.DetectOrgAndRepoCtx(ctx, gitrepo.SetupGitRepo(t, "test-org", "test-repo"))
+	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
 }

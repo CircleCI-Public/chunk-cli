@@ -1,13 +1,14 @@
 package commandutil
 
 import (
+	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
@@ -42,11 +43,16 @@ func NameWidth(commands []config.Command) int {
 // paths whose source files appear in `git diff HEAD`.
 // Expands to "./..." when no .go files changed.
 func ExpandCommand(workDir, command string) string {
+	return ExpandCommandCtx(context.Background(), workDir, command)
+}
+
+// ExpandCommandCtx is ExpandCommand with cancellation support for git queries.
+func ExpandCommandCtx(ctx context.Context, workDir, command string) string {
 	if !strings.Contains(command, "{{CHANGED_PACKAGES}}") {
 		return command
 	}
 
-	out, err := exec.Command("git", "-C", workDir, "diff", "HEAD", "--name-only").Output()
+	out, err := (gitexec.Runner{Dir: workDir}).Output(ctx, "diff", "HEAD", "--name-only")
 	if err != nil {
 		return strings.ReplaceAll(command, "{{CHANGED_PACKAGES}}", "./...")
 	}
