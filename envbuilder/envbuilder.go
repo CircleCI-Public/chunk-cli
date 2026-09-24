@@ -50,6 +50,19 @@ func fileExists(dir, name string) bool {
 	return err == nil
 }
 
+// safeCommandToken matches the characters legitimate package, module, and
+// workspace-member names use — npm scoped names, Maven module paths, Cargo
+// and uv package names. These names are read from manifest files inside the
+// project being analyzed (package.json, pom.xml, Cargo.toml, pyproject.toml)
+// and get interpolated into a generated Dockerfile's CMD/RUN line, so a name
+// outside this charset is dropped rather than risking a shell metacharacter
+// from an untrusted checkout reaching a container build or run.
+var safeCommandToken = regexp.MustCompile(`^[A-Za-z0-9@/_.-]+$`)
+
+func isSafeCommandToken(s string) bool {
+	return s != "" && safeCommandToken.MatchString(s)
+}
+
 var indicatorFiles = map[string]string{
 	"pyproject.toml":   stackPython,
 	"setup.py":         stackPython,
@@ -1139,6 +1152,12 @@ func buildUVSyncCommand(dir string) string {
 			if memberName == "" {
 				memberName = filepath.Base(memberDir)
 			}
+			// memberName is interpolated with no quoting below; a name read
+			// from pyproject.toml (or a workspace directory name) that isn't a
+			// plain identifier is dropped rather than passed through.
+			if !isSafeCommandToken(memberName) {
+				continue
+			}
 			memberParts := make([]string, 0, 3+len(memberGroups))
 			memberParts = append(memberParts, "uv sync", "--package "+memberName, "--no-default-groups")
 			for _, g := range memberGroups {
@@ -1311,12 +1330,17 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 
 	case stackJava:
 		if fileExists(dir, "pom.xml") {
-			skipModules := detectMavenSkipModules(dir)
-			if len(skipModules) > 0 {
-				exclusions := make([]string, len(skipModules))
-				for i, m := range skipModules {
-					exclusions[i] = "!" + m
+			// Module names come from pom.xml <module> text and are quoted with
+			// literal single-quotes below, so a module name containing one would
+			// break out of the quoting; drop anything that isn't a plain path
+			// segment rather than risk that.
+			var exclusions []string
+			for _, m := range detectMavenSkipModules(dir) {
+				if isSafeCommandToken(m) {
+					exclusions = append(exclusions, "!"+m)
 				}
+			}
+			if len(exclusions) > 0 {
 				excludeArg := strings.Join(exclusions, ",")
 				install = "mvn install -DskipTests -pl '" + excludeArg + "' --also-make"
 				test = "mvn test -pl '" + excludeArg + "' --also-make"
@@ -1345,12 +1369,16 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 				// Some workspace members may use nightly-only `#![feature(...)]`
 				// attributes that fail to compile on stable Rust.  Detect and
 				// exclude those members so the remaining tests can still run.
-				nightlyMembers := rustNightlyExcludes(dir)
-				if len(nightlyMembers) > 0 {
-					excludeParts := make([]string, 0, len(nightlyMembers))
-					for _, name := range nightlyMembers {
+				// Member names come from each member's Cargo.toml [package].name
+				// and are interpolated with no quoting at all below, so an unsafe
+				// name is dropped rather than passed through as a --exclude value.
+				var excludeParts []string
+				for _, name := range rustNightlyExcludes(dir) {
+					if isSafeCommandToken(name) {
 						excludeParts = append(excludeParts, "--exclude "+name)
 					}
+				}
+				if len(excludeParts) > 0 {
 					test = "cargo test --workspace " + strings.Join(excludeParts, " ")
 				} else {
 					test = "cargo test --workspace"
@@ -1467,6 +1495,12 @@ func detectCommands(dir, stack string) (string, string, []string) { //nolint:goc
 				installParts := make([]string, 0, len(pkgDirs))
 				var testParts []string
 				for _, pkg := range pkgDirs {
+					// pkg is "pkgs/<dir-entry-name>" and is interpolated with no
+					// quoting below; an unsafe directory name is dropped rather
+					// than passed through to a shell command.
+					if !isSafeCommandToken(pkg) {
+						continue
+					}
 					installParts = append(installParts, "(cd "+pkg+" && dart pub get)")
 					// Only run dart test in packages that actually have a test/
 					// directory.  Conformance-test helper packages (e.g.
@@ -1694,7 +1728,7 @@ func findWorkspaceWithTest(dir, rootName string, patterns []string) string {
 				continue
 			}
 			if rootName == "" || pkg.Name == rootName {
-				if _, ok := pkg.Scripts["test"]; ok {
+				if _, ok := pkg.Scripts["test"]; ok && isSafeCommandToken(pkg.Name) {
 					return pkg.Name
 				}
 			}

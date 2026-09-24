@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	hc "github.com/CircleCI-Public/chunk-cli/internal/httpcl"
 )
@@ -1502,6 +1503,181 @@ func TestDetectDartPackages(t *testing.T) {
 		assert.NilError(t, os.MkdirAll(filepath.Join(dir, "pkgs", "no_pubspec"), 0755))
 		pkgs := detectDartPackages(dir)
 		assert.Equal(t, len(pkgs), 0)
+	})
+}
+
+// --- Dockerfile shell-injection guards ---
+//
+// envbuilder interpolates package/module/workspace-member names read from a
+// project's own manifest files (package.json, pom.xml, Cargo.toml,
+// pyproject.toml) directly into generated Dockerfile CMD/RUN lines. Those
+// names come from whatever branch happens to be checked out, so each site
+// must drop anything that isn't a plain identifier rather than interpolate
+// it. Each test below pins down one site with a crafted shell-metacharacter
+// payload, and a sibling case confirms a legitimate name still works.
+
+func TestIsSafeCommandToken(t *testing.T) {
+	t.Parallel()
+
+	safe := []string{"foo", "foo-bar", "foo_bar", "foo.bar", "@scope/name", "pkgs/sub-app"}
+	for _, s := range safe {
+		assert.Check(t, isSafeCommandToken(s), "expected %q to be accepted", s)
+	}
+
+	unsafe := []string{
+		"",
+		"foo'; touch pwned; echo '",
+		"foo && touch pwned",
+		"foo`touch pwned`",
+		"foo; touch pwned",
+		"foo touch pwned",
+		"foo\ntouch pwned",
+		"$(touch pwned)",
+	}
+	for _, s := range unsafe {
+		assert.Check(t, !isSafeCommandToken(s), "expected %q to be rejected", s)
+	}
+}
+
+func TestDetectCommands_MavenSkipModulesInjection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unsafe module name is dropped, falls back to plain commands", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pom.xml", `
+<project>
+  <modules>
+    <module>core</module>
+    <module>graal-native'; touch pwned; echo '</module>
+  </modules>
+</project>`)
+		install, test, _ := detectCommands(dir, stackJava)
+		assert.Check(t, !strings.Contains(install, "touch pwned"))
+		assert.Check(t, !strings.Contains(test, "touch pwned"))
+		assert.Check(t, cmp.Equal(install, "mvn install -DskipTests"))
+		assert.Check(t, cmp.Equal(test, "mvn test"))
+	})
+
+	t.Run("safe module name still excludes it", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pom.xml", `
+<project>
+  <modules>
+    <module>core</module>
+    <module>graal-native</module>
+  </modules>
+</project>`)
+		install, test, _ := detectCommands(dir, stackJava)
+		assert.Check(t, cmp.Equal(install, "mvn install -DskipTests -pl '!graal-native' --also-make"))
+		assert.Check(t, cmp.Equal(test, "mvn test -pl '!graal-native' --also-make"))
+	})
+}
+
+func TestDetectCommands_RustNightlyExcludeInjection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unsafe member name is dropped, falls back to no excludes", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "Cargo.toml", "[workspace]\nmembers = [\"bad\"]\n")
+		writeFile(t, dir, "bad/Cargo.toml", "[package]\nname = \"bad'; touch pwned; echo '\"\n")
+		writeFile(t, dir, "bad/src/lib.rs", "#![feature(async_closure)]\npub fn foo() {}\n")
+
+		_, test, _ := detectCommands(dir, stackRust)
+		assert.Check(t, !strings.Contains(test, "touch pwned"))
+		assert.Check(t, cmp.Equal(test, "cargo test --workspace"))
+	})
+
+	t.Run("safe member name still excludes it", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "Cargo.toml", "[workspace]\nmembers = [\"sub\"]\n")
+		writeFile(t, dir, "sub/Cargo.toml", "[package]\nname = \"sub-nightly\"\n")
+		writeFile(t, dir, "sub/src/lib.rs", "#![feature(async_closure)]\npub fn foo() {}\n")
+
+		_, test, _ := detectCommands(dir, stackRust)
+		assert.Check(t, cmp.Equal(test, "cargo test --workspace --exclude sub-nightly"))
+	})
+}
+
+func TestDetectNodeTestCommand_WorkspaceNameInjection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unsafe workspace package name is dropped, falls back to nx run-many", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"scripts":{},"devDependencies":{"nx":"1.0.0"},"workspaces":["packages/*"]}`)
+		writeFile(t, dir, "packages/evil/package.json", `{"name":"evil'; touch pwned; echo '","scripts":{"test":"jest"}}`)
+
+		got := detectNodeTestCommand(dir, "yarn")
+		assert.Check(t, !strings.Contains(got, "touch pwned"))
+		assert.Check(t, cmp.Equal(got, "yarn nx run-many --target=test"))
+	})
+
+	t.Run("safe workspace package name is used", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "package.json", `{"scripts":{},"devDependencies":{"nx":"1.0.0"},"workspaces":["packages/*"]}`)
+		writeFile(t, dir, "packages/app/package.json", `{"name":"app","scripts":{"test":"jest"}}`)
+
+		got := detectNodeTestCommand(dir, "yarn")
+		assert.Check(t, cmp.Equal(got, "yarn workspace app test"))
+	})
+}
+
+func TestBuildUVSyncCommand_WorkspaceMemberNameInjection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unsafe member name is dropped from the sync command", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pyproject.toml", "[tool.uv.workspace]\nmembers = [\"bad\"]\n")
+		writeFile(t, dir, "bad/pyproject.toml", `
+[project]
+name = "bad'; touch pwned; echo '"
+
+[dependency-groups]
+test = ["pytest"]
+`)
+		got := buildUVSyncCommand(dir)
+		assert.Check(t, !strings.Contains(got, "touch pwned"))
+		assert.Check(t, cmp.Equal(got, "uv sync"))
+	})
+
+	t.Run("safe member name still gets its own sync command", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pyproject.toml", "[tool.uv.workspace]\nmembers = [\"sub\"]\n")
+		writeFile(t, dir, "sub/pyproject.toml", `
+[project]
+name = "sub"
+
+[dependency-groups]
+test = ["pytest"]
+`)
+		got := buildUVSyncCommand(dir)
+		assert.Check(t, cmp.Equal(got, "uv sync && uv sync --package sub --no-default-groups --group test"))
+	})
+}
+
+func TestDetectCommands_DartPackageDirInjection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unsafe package directory name is dropped", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		writeFile(t, dir, "pkgs/evil pkg;touch pwned/pubspec.yaml", "name: evil\n")
+		writeFile(t, dir, "pkgs/evil pkg;touch pwned/test/foo_test.dart", "")
+		writeFile(t, dir, "pkgs/good/pubspec.yaml", "name: good\n")
+		writeFile(t, dir, "pkgs/good/test/foo_test.dart", "")
+
+		install, test, _ := detectCommands(dir, stackDart)
+		assert.Check(t, !strings.Contains(install, "touch pwned"))
+		assert.Check(t, !strings.Contains(test, "touch pwned"))
+		assert.Check(t, cmp.Equal(install, "(cd pkgs/good && dart pub get)"))
+		assert.Check(t, cmp.Equal(test, "(cd pkgs/good && dart test)"))
 	})
 }
 
