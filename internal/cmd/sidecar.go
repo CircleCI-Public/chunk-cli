@@ -124,7 +124,7 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string,
 			}
 		}
 		if len(collabs) == 0 {
-			return createFirstOrg(ctx, client, streams)
+			return createFirstOrg(ctx, client, tokenSource, streams)
 		}
 		if len(collabs) == 1 {
 			return collabs[0].ID, nil

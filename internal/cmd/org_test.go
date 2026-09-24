@@ -238,7 +238,7 @@ func TestCreateFirstOrg_CreatesNamedOrg(t *testing.T) {
 	client := newOrgClient(t, fakes.NewFakeCircleCI())
 
 	var errOut bytes.Buffer
-	id, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: &errOut})
+	id, err := createFirstOrg(context.Background(), client, "", iostream.Streams{Out: io.Discard, Err: &errOut})
 	assert.NilError(t, err)
 	assert.Equal(t, id, "org-new-1")
 	assert.Assert(t, strings.Contains(errOut.String(), `Organization "acme" created.`), errOut.String())
@@ -248,10 +248,11 @@ func TestCreateFirstOrg_NoTTYSuggestsOrgCreate(t *testing.T) {
 	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "", ui.ErrNoTTY })
 	client := newOrgClient(t, fakes.NewFakeCircleCI())
 
-	_, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: io.Discard})
+	_, err := createFirstOrg(context.Background(), client, "", iostream.Streams{Out: io.Discard, Err: io.Discard})
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Equal(t, ue.UserMessage(), "No organizations found.")
+	assert.Equal(t, ue.UserExitCode(), ExitNotFound)
 	assert.Assert(t, strings.Contains(ue.suggestion, "chunk org create"), ue.suggestion)
 }
 
@@ -259,7 +260,7 @@ func TestCreateFirstOrg_Cancelled(t *testing.T) {
 	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "", ui.ErrCancelled })
 	client := newOrgClient(t, fakes.NewFakeCircleCI())
 
-	_, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: io.Discard})
+	_, err := createFirstOrg(context.Background(), client, "", iostream.Streams{Out: io.Discard, Err: io.Discard})
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Equal(t, ue.UserMessage(), "No organization created.")
@@ -269,7 +270,7 @@ func TestCreateFirstOrg_EmptyName(t *testing.T) {
 	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "   ", nil })
 	client := newOrgClient(t, fakes.NewFakeCircleCI())
 
-	_, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: io.Discard})
+	_, err := createFirstOrg(context.Background(), client, "", iostream.Streams{Out: io.Discard, Err: io.Discard})
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Equal(t, ue.UserMessage(), "No organization created.")
@@ -281,10 +282,39 @@ func TestCreateFirstOrg_APIError(t *testing.T) {
 	fake.CreateOrgStatusCode = 422
 	client := newOrgClient(t, fake)
 
-	_, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: io.Discard})
+	_, err := createFirstOrg(context.Background(), client, "", iostream.Streams{Out: io.Discard, Err: io.Discard})
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue))
 	assert.Assert(t, strings.Contains(ue.UserMessage(), `"taken"`), ue.UserMessage())
+	assert.Assert(t, strings.Contains(ue.suggestion, "already taken"), ue.suggestion)
+	assert.Equal(t, ue.UserExitCode(), ExitAPIError)
+}
+
+func TestCreateFirstOrg_ServerErrorDoesNotBlameName(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "acme", nil })
+	fake := fakes.NewFakeCircleCI()
+	fake.CreateOrgStatusCode = 500
+	client := newOrgClient(t, fake)
+
+	_, err := createFirstOrg(context.Background(), client, "", iostream.Streams{Out: io.Discard, Err: io.Discard})
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue))
+	assert.Equal(t, ue.ErrorCode(), "org.create_failed")
+	assert.Assert(t, !strings.Contains(ue.suggestion, "taken"), ue.suggestion)
+	assert.Equal(t, ue.UserExitCode(), ExitAPIError)
+}
+
+func TestCreateFirstOrg_Unauthorized(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "acme", nil })
+	fake := fakes.NewFakeCircleCI()
+	fake.CreateOrgStatusCode = 403
+	client := newOrgClient(t, fake)
+
+	_, err := createFirstOrg(context.Background(), client, "", iostream.Streams{Out: io.Discard, Err: io.Discard})
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue))
+	assert.Equal(t, ue.ErrorCode(), "auth.not_authorized")
+	assert.Equal(t, ue.UserExitCode(), ExitAuthError)
 }
 
 func TestOrgPicker_NoOrgs_CreatesOrg(t *testing.T) {
