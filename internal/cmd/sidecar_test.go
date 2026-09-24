@@ -133,6 +133,7 @@ func TestOrgPicker_APIError(t *testing.T) {
 }
 
 func TestOrgPicker_NoOrgs(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "", ui.ErrNoTTY })
 	cci := fakes.NewFakeCircleCI()
 	client := newOrgPickerClient(t, cci)
 
