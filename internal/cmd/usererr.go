@@ -85,6 +85,50 @@ func cannotCreateSidecar(orgID, source string, err error) error {
 		wrap(err)
 }
 
+// sidecarCreateRejected phrases a sidecar creation the API refused as not
+// found or invalid, or returns nil for any other failure.
+//
+// Either the org or the snapshot image is the culprit, and both are often read
+// from .chunk/config.json rather than typed: a repo configured for one org,
+// cloned by someone who belongs only to another, 404s with nothing on screen
+// saying where either value came from. Naming both sources points at the file
+// to fix. An empty imageSource means chunk picked the image itself, which the
+// caller cannot have got wrong, so only the org is questioned.
+func sidecarCreateRejected(msg, orgID, orgSource, image, imageSource string, err error) error {
+	var se *circleci.StatusError
+	if !errors.As(err, &se) || (se.StatusCode != http.StatusBadRequest && se.StatusCode != http.StatusNotFound) {
+		return nil
+	}
+	detail := "Org " + orgID
+	if orgSource != "" {
+		detail += " (from " + orgSource + ")"
+	}
+	if image != "" && imageSource != "" {
+		detail += ", snapshot " + image + " (from " + imageSource + ")"
+	}
+	suggestion := "Confirm this is the right org: 'chunk org list' shows the ones you belong to, and " +
+		"'chunk config set orgID <id>' records the one this repo should use."
+	switch {
+	case image == "" || imageSource == "":
+	case imageSource == "--image":
+		suggestion += "\n--image requires a snapshot ID from this org. List them with 'chunk sidecar snapshot list', " +
+			"or create one with 'chunk sidecar snapshot create'."
+	default:
+		suggestion += "\nThe snapshot must belong to this org. List them with 'chunk sidecar snapshot list', " +
+			"and record one with 'chunk config set validation.sidecarImage <id>'."
+	}
+	exitCode := ExitAPIError
+	if se.StatusCode == http.StatusNotFound {
+		exitCode = ExitNotFound
+	}
+	return newUserError(msg).
+		withCode("sidecar.create_rejected").
+		withDetail(detail + ".").
+		withSuggestion(suggestion).
+		withExitCode(exitCode).
+		wrap(err)
+}
+
 // outdatedSidecarAPI maps an unsupported output format to guidance that points
 // the right way. The API is behind this binary, not ahead of it, so telling
 // someone to upgrade chunk would send them in exactly the wrong direction —
