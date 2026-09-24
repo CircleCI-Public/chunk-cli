@@ -559,6 +559,14 @@ func (p *Pool) Release(entry *PoolEntry) {
 	p.notifyUpdate()
 }
 
+// IDs returns the sidecar IDs currently backing the pool. A sidecar still
+// being created in the background is not yet included.
+func (p *Pool) IDs() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.ids)
+}
+
 // Close keeps the pool's sidecars for reuse. It lets in-flight creates finish
 // so their sidecars are recorded in pool state: a cancelled create may still
 // be provisioned server-side under an ID the client never learns. Creates

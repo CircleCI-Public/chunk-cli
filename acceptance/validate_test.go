@@ -546,26 +546,34 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 
 	reqs := cci.Recorder.AllRequests()
 
-	// A sidecar must have been created with the configured image.
+	// "install" and "test" are two independent remote commands, so validate
+	// grows the pool to match: one sidecar from resolveOrCreateSidecarID, and
+	// a second to fill the pool out. Both must carry the configured image.
 	createReqs := filterByPath(reqs, "/api/v3/sidecar/instances")
-	assert.Equal(t, len(createReqs), 1, "expected 1 create-sidecar request; got: %v", reqs)
+	assert.Equal(t, len(createReqs), 2, "expected 2 create-sidecar requests; got: %v", reqs)
 
-	var body map[string]any
-	assert.NilError(t, json.Unmarshal(createReqs[0].Body, &body))
-	envelope, ok := body["data"].(map[string]any)
-	assert.Assert(t, ok, "expected data envelope in response body")
-	attrs, ok := envelope["attributes"].(map[string]any)
-	assert.Assert(t, ok, "expected attributes in data envelope")
-	refs, ok := envelope["references"].(map[string]any)
-	assert.Assert(t, ok, "expected references in data envelope")
-	assert.Equal(t, attrs["image"], "my-snapshot-abc123", "expected sidecar image from config")
-	org, ok := refs["org"].(map[string]any)
-	assert.Assert(t, ok, "expected org in references")
-	assert.Equal(t, org["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
+	for _, req := range createReqs {
+		var body map[string]any
+		assert.NilError(t, json.Unmarshal(req.Body, &body))
+		envelope, ok := body["data"].(map[string]any)
+		assert.Assert(t, ok, "expected data envelope in response body")
+		attrs, ok := envelope["attributes"].(map[string]any)
+		assert.Assert(t, ok, "expected attributes in data envelope")
+		refs, ok := envelope["references"].(map[string]any)
+		assert.Assert(t, ok, "expected references in data envelope")
+		assert.Equal(t, attrs["image"], "my-snapshot-abc123", "expected sidecar image from config")
+		org, ok := refs["org"].(map[string]any)
+		assert.Assert(t, ok, "expected org in references")
+		assert.Equal(t, org["id"], "org-aaa", "expected org from CIRCLECI_ORG_ID")
+	}
 
-	// AddSSHKey must be called on the newly created sidecar — proves it was used.
-	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-new-1/ssh/add-key")
-	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for newly created sidecar; got: %v", reqs)
+	// The pool's second member syncs synchronously while being created, so its
+	// failed SSH handshake (no real server behind AddKeyURL) surfaces here and
+	// aborts the run, proving the second sidecar was actually put to use
+	// rather than left idle. The first is left untouched by this failure: pool
+	// assembly errors out before reaching its (backgrounded) sync.
+	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-new-2/ssh/add-key")
+	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for the pool's second sidecar; got: %v", reqs)
 }
 
 func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {

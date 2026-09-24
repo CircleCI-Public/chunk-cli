@@ -10,7 +10,13 @@ Quality checks that run automatically as Claude Code works.
 
 **Stop** — runs `chunk validate` after every session ends. Skips everything
 when the working tree is clean. When there are changes, it runs all configured
-commands so problems are surfaced before the agent stops working.
+commands so problems are surfaced before the agent stops working. This is the
+hook run most likely to have several independent remote commands (`test`,
+`lint`, `acceptance-test`, ...) in play at once, so it is also the one that
+benefits from `chunk validate` spreading them across more than one sidecar;
+see [CLI.md](CLI.md) for the `--parallel` flag and default. The commit-time
+`PreToolUse` entries below each name a single command already, so they run on
+whichever one sidecar is active either way.
 
 **UserPromptSubmit** — runs `chunk validate results`, which prints what
 background runs (`chunk validate --async`) concluded and then forgets them. It

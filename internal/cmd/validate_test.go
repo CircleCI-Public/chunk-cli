@@ -30,6 +30,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
@@ -207,6 +208,56 @@ func TestValidationRepoPath(t *testing.T) {
 	assert.Equal(t, validationRepoPath("/explicit/workspace", active), "/explicit/workspace")
 	assert.Equal(t, validationRepoPath("", active), "/saved/workspace")
 	assert.Equal(t, validationRepoPath("", nil), "")
+}
+
+// TestSaveActivePoolStatePersistsEveryMember guards the fix that lets a pool
+// grown beyond one sidecar be fully reused later: without it, only the first
+// member chunk validate ever created was remembered, so every run needing
+// more than one sidecar recreated the rest from scratch and orphaned the
+// previous run's extras.
+func TestSaveActivePoolStatePersistsEveryMember(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv(config.EnvHome, homeDir)
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+
+	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	t.Chdir(workDir)
+
+	pool, err := sidecar.NewPool(context.Background(), client, sidecar.PoolOptions{
+		Size:     2,
+		Name:     "validate",
+		OrgID:    "org-1",
+		Image:    "ubuntu:22.04",
+		WorkDir:  workDir,
+		RepoPath: sidecar.DefaultWorkspace("my-repo"),
+	}, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+
+	a, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	b, err := pool.Acquire(context.Background())
+	assert.NilError(t, err)
+	pool.Release(a)
+	pool.Release(b)
+
+	assert.NilError(t, saveActivePoolState(context.Background(), pool, "org-1"))
+
+	active, err := sidecar.LoadActive(context.Background())
+	assert.NilError(t, err)
+	assert.Equal(t, len(active.SidecarIDs), 2)
+	assert.Assert(t, slices.Contains(active.SidecarIDs, a.ID))
+	assert.Assert(t, slices.Contains(active.SidecarIDs, b.ID))
+	assert.Equal(t, active.OrgID, "org-1")
 }
 
 func TestOpenAPIExecPassesEnvVars(t *testing.T) {
@@ -406,6 +457,50 @@ func TestPlanValidationRemoteFlagOverridesLocalConfig(t *testing.T) {
 	assert.Equal(t, len(plan.LocalCommands), 0)
 	assert.DeepEqual(t, plan.RemoteCommands, cfg.Commands)
 	assert.Equal(t, plan.PoolSize, 1)
+}
+
+func TestValidateParallelism(t *testing.T) {
+	assert.Equal(t, validateParallelism(0, ""), defaultValidateParallelism)
+	assert.Equal(t, validateParallelism(1, ""), 1)
+	assert.Equal(t, validateParallelism(5, ""), 5)
+
+	// An explicit --sidecar-id names one target, not a pool to grow around it.
+	assert.Equal(t, validateParallelism(0, "sidecar-123"), 1)
+	assert.Equal(t, validateParallelism(5, "sidecar-123"), 1)
+}
+
+// TestPlanValidationExecutionSpreadsMultipleRemoteCommands confirms several
+// independent remote commands get more than one sidecar by default, and that
+// --parallel both raises and caps how many are used.
+func TestPlanValidationExecutionSpreadsMultipleRemoteCommands(t *testing.T) {
+	cfg := &config.ProjectConfig{Commands: []config.Command{
+		{Name: "test", Run: "task test"},
+		{Name: "acceptance-test", Run: "task acceptance-test"},
+		{Name: "lint", Run: "task lint"},
+		{Name: "format", Run: "task fmt", Local: true},
+	}}
+
+	t.Run("defaults to the cap when unset", func(t *testing.T) {
+		plan := planValidationExecution(cfg, &validateOpts{}, "")
+		assert.Equal(t, len(plan.RemoteCommands), 3)
+		assert.Equal(t, plan.PoolSize, defaultValidateParallelism)
+	})
+
+	t.Run("parallel flag raises the cap up to the remote command count", func(t *testing.T) {
+		plan := planValidationExecution(cfg, &validateOpts{parallel: 10}, "")
+		assert.Equal(t, plan.PoolSize, 3)
+	})
+
+	t.Run("parallel flag can also lower it", func(t *testing.T) {
+		plan := planValidationExecution(cfg, &validateOpts{parallel: 1}, "")
+		assert.Equal(t, plan.PoolSize, 1)
+	})
+
+	t.Run("explicit sidecar-id pins to one sidecar even with parallel set", func(t *testing.T) {
+		plan := planValidationExecution(cfg, &validateOpts{parallel: 10, sidecarID: "sidecar-123"}, "")
+		assert.Equal(t, len(plan.RemoteCommands), 3)
+		assert.Equal(t, plan.PoolSize, 1)
+	})
 }
 
 func TestValidateRejectsRemoteAndLocalFlagsTogether(t *testing.T) {

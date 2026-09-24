@@ -8,6 +8,13 @@
       "remote": true
     },
     {
+      "name": "acceptance-test",
+      "run": "task acceptance-test",
+      "role": "gate",
+      "timeout": 300,
+      "remote": true
+    },
+    {
       "name": "test-changed",
       "run": "task test -- {{CHANGED_PACKAGES}}",
       "timeout": 300
