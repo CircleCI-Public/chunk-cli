@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -62,6 +63,7 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 		streams.ErrPrintln(ui.ErrWarning(msg))
 	})
 	if err == nil {
+		backfillUserID(ctx, rc)
 		return client, nil
 	}
 	if !errors.Is(err, authprompt.ErrNeedsAuth) {
@@ -152,6 +154,39 @@ func ensureCircleCIClient(ctx context.Context, cmd *cobra.Command, rc config.Res
 			streams.ErrPrintln(ui.ErrWarning(msg))
 		},
 	})
+}
+
+// backfillUserIDTimeout bounds the /api/v2/me lookup so a slow API cannot
+// noticeably delay the command the user actually ran.
+const backfillUserIDTimeout = 3 * time.Second
+
+// backfillUserID persists and identifies the CircleCI user for an install that
+// authenticated without the user ID being saved: logins from before chunk
+// recorded it, tokens supplied via the environment, or a login whose
+// /api/v2/me lookup was rate limited. Without it those installs report
+// anonymously until the user happens to run `chunk auth login` again.
+//
+// It only runs while telemetry is on and no user ID is saved, so the lookup
+// happens once per install rather than on every command. Like the rest of
+// telemetry it is best-effort: any failure leaves the install anonymous and
+// the next command tries again.
+func backfillUserID(ctx context.Context, rc config.ResolvedConfig) {
+	if telemetry.FromContext(ctx) == nil || config.GetUserID() != uuid.Nil {
+		return
+	}
+	cfg, err := config.Load()
+	if err != nil || !config.IsTelemetry(cfg) {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, backfillUserIDTimeout)
+	defer cancel()
+	userID, err := authprompt.ValidateCircleCIToken(ctx, rc.CircleCIToken, rc.CircleCIBaseURL)
+	if err != nil || userID == uuid.Nil {
+		return
+	}
+	_ = config.SaveUserID(userID)
+	telemetry.IdentifyUser(ctx, userID)
 }
 
 func ensureAnthropicClient(ctx context.Context, cmd *cobra.Command, rc config.ResolvedConfig, streams iostream.Streams, prompter func(string) (string, error)) (*anthropic.Client, error) {

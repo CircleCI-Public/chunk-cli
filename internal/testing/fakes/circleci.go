@@ -89,6 +89,7 @@ type FakeCircleCI struct {
 	RunStatusCode   int // override status code for trigger run endpoint
 
 	// Per-endpoint status code overrides for testing error responses.
+	CurrentUserStatusCode    int                     // override for GET /me
 	CollaborationsStatusCode int                     // override for GET /me/collaborations
 	ListStatusCode           int                     // override for GET /sidecar/instances
 	CreateStatusCode         int                     // override for POST /sidecar/instances
@@ -181,6 +182,10 @@ func NewFakeCircleCI() *FakeCircleCI {
 
 func (f *FakeCircleCI) handleGetCurrentUser(c *gin.Context) {
 	if !f.requireToken(c) {
+		return
+	}
+	if f.CurrentUserStatusCode != 0 {
+		c.JSON(f.CurrentUserStatusCode, gin.H{"message": "API error"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"id": "00000000-0000-0000-0000-000000000123", "login": "testuser"})

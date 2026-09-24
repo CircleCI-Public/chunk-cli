@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -169,4 +170,95 @@ func TestAuthRemoveCircleCI_InsecureStorageKeepsUserIDWhileKeychainTokenAuthenti
 
 	assert.Equal(t, config.GetUserID(), userID,
 		"a user the keychain still authenticates should keep reporting as themselves")
+}
+
+// backfillFixture signs an install in with a token but no saved user ID, as an
+// install that logged in before chunk persisted the ID does, and attaches a
+// telemetry Sender recording what it reports.
+func backfillFixture(t *testing.T) (*fakes.FakeCircleCI, config.ResolvedConfig, context.Context, *trackingDestination) {
+	t.Helper()
+	isolateConfig(t)
+	// Telemetry is off under CI; these tests exercise the opted-in path.
+	for _, env := range []string{config.EnvChunkNoTelemetry, config.EnvNoAnalytics, config.EnvDoNotTrack, config.EnvCI} {
+		t.Setenv(env, "")
+	}
+
+	cci := fakes.NewFakeCircleCI()
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
+	t.Setenv(config.EnvCircleToken, "cci-env-token")
+	t.Setenv(config.EnvCircleCIToken, "")
+
+	rc, err := config.Resolve("", "", true)
+	assert.NilError(t, err)
+
+	dest := &trackingDestination{}
+	sender, err := telemetry.NewSender(telemetry.Config{
+		TestDestination: dest,
+		Metadata:        telemetry.Meta{InstanceID: uuid.New()},
+	})
+	assert.NilError(t, err)
+	return cci, rc, telemetry.WithSender(context.Background(), sender), dest
+}
+
+func currentUserRequests(cci *fakes.FakeCircleCI) int {
+	n := 0
+	for _, r := range cci.Recorder.AllRequests() {
+		if r.URL.Path == "/api/v2/me" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestEnsureCircleCIClient_BackfillsUserID(t *testing.T) {
+	_, rc, ctx, dest := backfillFixture(t)
+
+	_, err := ensureCircleCIClient(ctx, testCmd(), rc, discardStreams(), noTTYPrompter)
+	assert.NilError(t, err)
+
+	const wantUserID = "00000000-0000-0000-0000-000000000123"
+	assert.Equal(t, config.GetUserID().String(), wantUserID)
+	assert.Equal(t, len(dest.identifies), 1)
+	assert.Equal(t, dest.identifies[0].UserId, wantUserID)
+
+	assert.NilError(t, telemetry.FromContext(ctx).Track("command_invocation", nil))
+	assert.Equal(t, dest.tracks[0].UserId, wantUserID)
+}
+
+func TestEnsureCircleCIClient_KeepsSavedUserID(t *testing.T) {
+	cci, rc, ctx, dest := backfillFixture(t)
+	saved := uuid.New()
+	assert.NilError(t, config.SaveUserID(saved))
+
+	_, err := ensureCircleCIClient(ctx, testCmd(), rc, discardStreams(), noTTYPrompter)
+	assert.NilError(t, err)
+
+	assert.Equal(t, config.GetUserID(), saved)
+	assert.Equal(t, currentUserRequests(cci), 0, "a saved user ID should not be looked up again")
+	assert.Equal(t, len(dest.identifies), 0)
+}
+
+func TestEnsureCircleCIClient_NoBackfillWhenTelemetryOff(t *testing.T) {
+	cci, rc, ctx, dest := backfillFixture(t)
+	t.Setenv(config.EnvDoNotTrack, "1")
+
+	_, err := ensureCircleCIClient(ctx, testCmd(), rc, discardStreams(), noTTYPrompter)
+	assert.NilError(t, err)
+
+	assert.Equal(t, config.GetUserID(), uuid.Nil)
+	assert.Equal(t, currentUserRequests(cci), 0)
+	assert.Equal(t, len(dest.identifies), 0)
+}
+
+func TestEnsureCircleCIClient_BackfillFailureStaysAnonymous(t *testing.T) {
+	cci, rc, ctx, dest := backfillFixture(t)
+	cci.CurrentUserStatusCode = http.StatusTooManyRequests
+
+	_, err := ensureCircleCIClient(ctx, testCmd(), rc, discardStreams(), noTTYPrompter)
+	assert.NilError(t, err, "a failed lookup must not fail the command")
+
+	assert.Equal(t, config.GetUserID(), uuid.Nil, "nothing saved, so the next command retries")
+	assert.Equal(t, len(dest.identifies), 0)
 }
