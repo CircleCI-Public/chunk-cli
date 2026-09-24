@@ -217,7 +217,10 @@ chunk
   guessing the wrong prepared environment produces failures that look like the
   repo's own. Selection never fails a run: an unreachable snapshot API is
   warned about and treated as no match.
-- Telemetry is anonymous and opt-out. It's disabled by the
+- Telemetry is opt-out. Events are anonymous until you authenticate with
+  CircleCI; after that they include your CircleCI user ID, and earlier
+  anonymous events from the same install are linked to it. They never include
+  flag values, argument values, names or email addresses. It's disabled by the
   `CHUNK_NO_TELEMETRY` / `NO_ANALYTICS` / `DO_NOT_TRACK` / `CI` environment
   variables (first match wins, in that order), or `chunk config set telemetry false`.
 - **Org ID resolution** for `sidecar create`, `sidecar list`, and other sidecar
@@ -460,7 +463,7 @@ chunk
 | Key | Scope | Description |
 |-----|-------|-------------|
 | `model` | user config (`~/.config/chunk/config.json`) | Claude model override |
-| `telemetry` | user config (`~/.config/chunk/config.json`) | Anonymous usage telemetry (`true`/`false`, default: `true`) |
+| `telemetry` | user config (`~/.config/chunk/config.json`) | Usage telemetry, tied to your CircleCI user ID once authenticated (`true`/`false`, default: `true`) |
 | `notifications` | user config (`~/.config/chunk/config.json`) | OS desktop notification after validate completes (`true`/`false`, default: `false`) |
 | `orgID` | `.chunk/config.json` | CircleCI organization ID for sidecar subcommands |
 | `validation.sidecarImage` | `.chunk/config.json` | Snapshot or image ID for sidecar bootstrap and validate (unset: a matching org snapshot is selected automatically) |

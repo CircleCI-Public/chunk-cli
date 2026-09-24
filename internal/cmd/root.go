@@ -21,8 +21,7 @@ import (
 
 type updateCheckKey struct{}
 
-// writeKey is the Segment write key for chunk-cli's anonymous usage
-// telemetry. Segment write keys are not secret — they only allow sending
+// writeKey is the Segment write key for chunk-cli's usage telemetry. Segment write keys are not secret — they only allow sending
 // events, not reading data — so checking it into git, as circleci-cli does
 // (see internal/cmd/root/root.go there), is safe.
 //
@@ -91,9 +90,9 @@ Environment Variables:
                                   (read from CLAUDE_CODE_SESSION_ID when unset)
   NO_COLOR                        Disable colored output
   CI                              Disable interactive prompts (set by most CI systems); also disables telemetry
-  CHUNK_NO_TELEMETRY               Disable anonymous usage telemetry (any non-empty value)
-  NO_ANALYTICS                    Disable anonymous usage telemetry (any non-empty value)
-  DO_NOT_TRACK                    Disable anonymous usage telemetry (any non-empty value)
+  CHUNK_NO_TELEMETRY              Disable usage telemetry (any non-empty value)
+  NO_ANALYTICS                    Disable usage telemetry (any non-empty value)
+  DO_NOT_TRACK                    Disable usage telemetry (any non-empty value)
 
 Configuration:
   ~/.config/chunk/config.json     User credentials and settings ($XDG_CONFIG_HOME/chunk/config.json)

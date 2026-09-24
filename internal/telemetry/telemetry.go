@@ -1,4 +1,4 @@
-// Package telemetry sends anonymous command-usage events to Segment.
+// Package telemetry sends command-usage events to Segment.
 //
 // Telemetry is opt-out: it fires unless disabled via a well-known opt-out
 // environment variable or the persisted telemetry config preference (see
@@ -6,13 +6,17 @@
 // Only the command path, the names (never values) of flags the user set,
 // the outcome ("success"/"failure"), the wall-clock duration, the Go type and
 // message of any error, a per-install anonymous instance ID, the operating
-// system, and the detected AI coding agent (if any) are ever collected — no
-// flag values, argument values, or other PII.
+// system, the detected AI coding agent (if any), and — once the user has
+// authenticated — their CircleCI user UUID are ever collected. No flag values,
+// argument values, names, email addresses, or other PII.
 //
-// Once the user authenticates, events also carry their CircleCI user UUID and
-// an identify call joins the anonymous IDs the install was reporting under to
-// that user, so the journey before logging in is not attributed to a
-// stranger. See Sender.Identify and IdentifyUser.
+// Events are therefore anonymous only until the user authenticates. From then
+// on they carry the CircleCI user UUID, and an identify call joins the
+// anonymous IDs the install was reporting under to that user, so the journey
+// before logging in is not attributed to a stranger. An install that was
+// already authenticated before its user ID was recorded is backfilled the
+// next time it resolves a CircleCI client. See Sender.Identify and
+// IdentifyUser.
 //
 // Modeled on circleci-cli's internal/telemetry package.
 package telemetry
@@ -29,7 +33,7 @@ import (
 	"github.com/segmentio/analytics-go/v3"
 )
 
-// Sender tracks anonymous command-usage events. A nil *Sender is valid and
+// Sender tracks command-usage events. A nil *Sender is valid and
 // silently drops events, so callers never need to nil-check it.
 type Sender struct {
 	dest destination

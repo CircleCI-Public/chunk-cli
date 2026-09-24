@@ -41,7 +41,7 @@ chunk-cli/
     ├── secrets/               # Secret resolution (env var value expansion)
     ├── session/               # Which agent session this invocation belongs to
     ├── settings/              # .claude/settings.json build and merge
-    ├── telemetry/             # Anonymous usage telemetry (Segment)
+    ├── telemetry/             # Usage telemetry (Segment)
     │   └── receiver/          # Forwards buffered events to Segment (used by receive-telemetry)
     ├── testing/recorder/      # HTTP recorder for tests
     ├── tui/                   # Terminal UI components (confirm, input, select)
@@ -208,10 +208,10 @@ in `config.Resolve` and makes clients testable.
 | `XDG_CONFIG_HOME` | config | User config directory (default: `~/.config`) |
 | `XDG_DATA_HOME` | sidecar, validate | Per-project state directory, including the hook-mode validate result cache (default: `~/.local/share`) |
 | `XDG_STATE_HOME` | upgrade | User state directory for the 24 h update-check cache (default: `~/.local/state`) |
-| `CHUNK_NO_TELEMETRY` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
-| `NO_ANALYTICS` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
-| `DO_NOT_TRACK` | telemetry | Disable anonymous usage telemetry (any non-empty value) |
-| `CI` | telemetry, upgrade | Also disables anonymous usage telemetry and the update check (set by most CI systems) |
+| `CHUNK_NO_TELEMETRY` | telemetry | Disable usage telemetry (any non-empty value) |
+| `NO_ANALYTICS` | telemetry | Disable usage telemetry (any non-empty value) |
+| `DO_NOT_TRACK` | telemetry | Disable usage telemetry (any non-empty value) |
+| `CI` | telemetry, upgrade | Also disables usage telemetry and the update check (set by most CI systems) |
 | `CHUNK_NO_UPDATE_CHECK` | upgrade | Disable the new-version check and its notice (any non-empty value) |
 | `CHUNK_TELEMETRY_LOG` | telemetry | Log telemetry events to stderr instead of (or alongside) sending them |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | sidecar | Standard Go proxy env vars, honored when dialing the sidecar's WebSocket SSH tunnel (needed in devcontainers/networks where egress is proxy-only) |
@@ -234,6 +234,13 @@ the anonymous history to the user: one for the current session tracking ID
 (if any) and one for the instance ID, which is the `AnonymousId` of every run
 made outside an agent session. `chunk auth remove circleci` clears the stored
 user ID once no CircleCI token resolves anywhere.
+
+Installs that authenticated before the user ID was recorded (or via an
+environment variable token) have no saved ID, so `ensureCircleCIClient`
+backfills it: when a token resolves, telemetry is on and no ID is saved, it
+looks the user up once via `/api/v2/me` (3 s timeout), persists the ID and
+calls `telemetry.IdentifyUser`. A failed lookup leaves the install anonymous
+and is retried on the next command.
 
 Telemetry is flushed by `cmd.ExecuteRoot` rather than `PersistentPostRunE`,
 which cobra skips when `RunE` errors — otherwise a login followed by a failed
