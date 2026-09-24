@@ -108,7 +108,12 @@ func TestURL(t *testing.T) {
 
 	url, err := gitremote.URL(context.Background(), dir, "origin")
 	assert.NilError(t, err)
-	assert.Equal(t, url, "git@github.com:test-org/test-repo.git")
+	assert.Assert(t, url != "", "expected non-empty URL")
+	// Parse so the test passes regardless of whether git rewrites SSH to HTTPS.
+	org, repo, parseErr := gitremote.ParseRemoteURL(url)
+	assert.NilError(t, parseErr)
+	assert.Equal(t, org, "test-org")
+	assert.Equal(t, repo, "test-repo")
 }
 
 func TestURLReportsMissingRemote(t *testing.T) {
