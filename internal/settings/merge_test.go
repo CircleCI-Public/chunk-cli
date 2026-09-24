@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 )
 
 func TestMergeMinimalExisting(t *testing.T) {
@@ -817,4 +819,39 @@ func TestMergeCodexMalformedExisting(t *testing.T) {
 func TestMergeCodexMalformedGenerated(t *testing.T) {
 	_, err := MergeCodex([]byte(`{}`), []byte(`not json`))
 	assert.ErrorContains(t, err, "parse generated hooks")
+}
+
+// Hooks written by an older chunk init carry one commit gate entry per command.
+// Re-running init replaces them all with the single sequential entry, and keeps
+// the user's own entries in the group.
+func TestMergeCodexCollapsesPerCommandCommitGate(t *testing.T) {
+	existing := []byte(`{
+		"hooks": {
+			"PreToolUse": [{"matcher": "Bash", "hooks": [
+				{"type": "command", "if": "Bash(git commit*)", "command": "chunk validate format", "timeout": 30},
+				{"type": "command", "command": "audit-bash", "timeout": 5},
+				{"type": "command", "if": "Bash(git commit*)", "command": "chunk validate lint", "timeout": 60},
+				{"type": "command", "if": "Bash(git commit*)", "command": "chunk validate test", "timeout": 300}
+			]}]
+		}
+	}`)
+	generated, err := BuildCodex([]config.Command{
+		{Name: "format", Run: "task fmt", Timeout: 30},
+		{Name: "lint", Run: "task lint", Timeout: 60},
+		{Name: "test", Run: "task test", Timeout: 300},
+	})
+	assert.NilError(t, err)
+
+	result, err := MergeCodex(existing, generated)
+	assert.NilError(t, err)
+
+	var merged codexHooksJSON
+	assert.NilError(t, json.Unmarshal(result.Merged, &merged))
+	groups := merged.Hooks["PreToolUse"]
+	assert.Equal(t, len(groups), 1)
+	var commands []string
+	for _, e := range groups[0].Hooks {
+		commands = append(commands, e.Command)
+	}
+	assert.DeepEqual(t, commands, []string{"chunk validate", "audit-bash"})
 }

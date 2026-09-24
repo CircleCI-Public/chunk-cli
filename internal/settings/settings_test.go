@@ -123,31 +123,47 @@ func TestBuildCodexNoMetadata(t *testing.T) {
 	assert.Assert(t, !hasPerms, "BuildCodex must not include permissions")
 }
 
-func TestBuildCodexCommandIsChunkValidate(t *testing.T) {
-	// Codex pre-commit hooks call "chunk validate <name>" so they route through
-	// the daemon and result cache, matching Stop hook behavior.
+// codexCommitEntries returns the entries in the Codex commit gate group.
+func codexCommitEntries(t *testing.T, data []byte) []hookEntry {
+	t.Helper()
+	var s codexHooksJSON
+	assert.NilError(t, json.Unmarshal(data, &s))
+	groups := s.Hooks["PreToolUse"]
+	assert.Equal(t, len(groups), 1)
+	assert.Equal(t, groups[0].Matcher, CommitMatcher)
+	return groups[0].Hooks
+}
+
+// Codex launches every matching hook concurrently, so the commit gate is one
+// entry that runs the commands in sequence rather than one entry per command.
+func TestBuildCodexCommitGateIsOneSequentialEntry(t *testing.T) {
 	cmds := []config.Command{
-		{Name: "test", Run: "go test ./...", Timeout: 60},
+		{Name: "format", Run: "task fmt", Timeout: 30, Role: config.RoleAutofix},
+		{Name: "lint", Run: "task lint", Timeout: 60},
+		{Name: "test", Run: "task test", Timeout: 300},
 	}
 	data, err := BuildCodex(cmds)
 	assert.NilError(t, err)
 
-	var s map[string]interface{}
-	assert.NilError(t, json.Unmarshal(data, &s))
+	entries := codexCommitEntries(t, data)
+	assert.Equal(t, len(entries), 1)
+	assert.Equal(t, entries[0].Command, "chunk validate")
+	// Merge recognises chunk's entry by its "if", so it stays even though Codex
+	// does not act on it.
+	assert.Equal(t, entries[0].If, CommitIfFilter)
+	assert.Equal(t, entries[0].Timeout, 390, "timeout must cover every command in turn")
+}
 
-	hooks, ok := s["hooks"].(map[string]interface{})
-	assert.Assert(t, ok, "expected hooks map")
-	preToolUse, ok := hooks["PreToolUse"].([]interface{})
-	assert.Assert(t, ok && len(preToolUse) > 0, "expected PreToolUse array")
-	group, ok := preToolUse[0].(map[string]interface{})
-	assert.Assert(t, ok, "expected hook group to be a map")
-	entries, ok := group["hooks"].([]interface{})
-	assert.Assert(t, ok && len(entries) > 0, "expected hook entries")
-	entry, ok := entries[0].(map[string]interface{})
-	assert.Assert(t, ok, "expected hook entry to be a map")
+func TestBuildCodexCommitTimeoutIsCapped(t *testing.T) {
+	cmds := []config.Command{
+		{Name: "lint", Run: "task lint", Timeout: 400},
+		{Name: "test", Run: "task test", Timeout: 400},
+	}
+	data, err := BuildCodex(cmds)
+	assert.NilError(t, err)
 
-	cmd, _ := entry["command"].(string)
-	assert.Equal(t, cmd, "chunk validate test", "Codex hook must call chunk validate <name>")
+	entries := codexCommitEntries(t, data)
+	assert.Equal(t, entries[0].Timeout, 600)
 }
 
 func TestBuildCodexTimeoutDefaultsToSixty(t *testing.T) {
@@ -257,9 +273,8 @@ func TestBuildSetsStatusMessages(t *testing.T) {
 
 	data, err = BuildCodex(cmds)
 	assert.NilError(t, err)
-	assert.DeepEqual(t, statusMessages(t, data), map[string]string{
-		"chunk validate lint": "Running chunk validate lint before commit",
-		"chunk validate test": "Running chunk validate test before commit",
-		StopCommand:           "Running chunk validate",
-	})
+	var codex codexHooksJSON
+	assert.NilError(t, json.Unmarshal(data, &codex))
+	assert.Equal(t, codex.Hooks["PreToolUse"][0].Hooks[0].StatusMessage, "Running chunk validate if this is a commit")
+	assert.Equal(t, codex.Hooks["Stop"][0].Hooks[0].StatusMessage, "Running chunk validate")
 }

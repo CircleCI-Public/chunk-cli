@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -59,6 +60,9 @@ func newStatusFunc(streams iostream.Streams) iostream.StatusFunc {
 // whose answer may arrive after it has exited.
 const hookEventStop = "Stop"
 
+// hookEventPreToolUse is the hook_event_name of the commit gate.
+const hookEventPreToolUse = "PreToolUse"
+
 // hookContext holds the Claude Code hook payload fields.
 type hookContext struct {
 	sessionID      string
@@ -72,6 +76,21 @@ type hookContext struct {
 	// systemMessage as a warning rather than a note, so a run that has nothing
 	// wrong to report stays quiet there.
 	codex bool
+	// toolCommand is the shell command a PreToolUse payload is about to run,
+	// from tool_input.command. Empty for other events and other tools.
+	toolCommand string
+}
+
+// skipsCommitGate reports whether this is a PreToolUse run for a command that
+// is not a git commit. Claude Code filters those out with the entry's "if"
+// condition before chunk ever starts; Codex has no such field and runs the
+// commit gate before every Bash call, so chunk has to filter them itself.
+//
+// A payload whose command could not be read runs the gate: the gate exists to
+// hold back commits, and a run it did not need costs less than a commit it
+// missed.
+func (h *hookContext) skipsCommitGate() bool {
+	return h != nil && h.event == hookEventPreToolUse && h.toolCommand != "" && !gitutil.IsCommitCommand(h.toolCommand)
 }
 
 // hookResponse is the JSON hook response written to stdout.
@@ -129,12 +148,47 @@ func detectHook(r io.Reader) *hookContext {
 		StopHookActive bool   `json:"stop_hook_active"`
 		HookEventName  string `json:"hook_event_name"`
 		TurnID         string `json:"turn_id"`
+		ToolInput      struct {
+			Command string `json:"command"`
+		} `json:"tool_input"`
 	}
 	_ = json.NewDecoder(r).Decode(&p)
 	if p.SessionID == "" {
 		return nil
 	}
-	return &hookContext{sessionID: p.SessionID, stopHookActive: p.StopHookActive, event: p.HookEventName, codex: p.TurnID != ""}
+	return &hookContext{
+		sessionID:      p.SessionID,
+		stopHookActive: p.StopHookActive,
+		event:          p.HookEventName,
+		codex:          p.TurnID != "",
+		toolCommand:    p.ToolInput.Command,
+	}
+}
+
+// peekHookPayload decodes the hook payload on cmd's stdin without consuming
+// it: what it read is put back in front of the rest, so detectHook reads the
+// same payload again in RunE.
+func peekHookPayload(cmd *cobra.Command) *hookContext {
+	in := cmd.InOrStdin()
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		return nil
+	}
+	var buf bytes.Buffer
+	hook := detectHook(io.TeeReader(in, &buf))
+	cmd.SetIn(io.MultiReader(&buf, in))
+	return hook
+}
+
+// isSkippedCommitGate reports whether cmd is a commit gate run for a command
+// that is not a git commit (see skipsCommitGate). The root command asks before
+// its setup (telemetry, the update check, the daemon launch) since under
+// Codex this is every Bash call the agent makes, and none of that is wanted
+// for a run that ends straight away.
+func isSkippedCommitGate(cmd *cobra.Command) bool {
+	if cmd.Name() != "validate" || cmd.Parent() == nil || cmd.Parent().Parent() != nil {
+		return false
+	}
+	return peekHookPayload(cmd).skipsCommitGate()
 }
 
 // mayRunInBackground reports whether this run may be handed to the daemon and
@@ -415,6 +469,40 @@ func shouldUseDaemon(hook *hookContext, noDaemon bool) bool {
 	return hook == nil && !noDaemon && watchd.IsDaemonCompatible()
 }
 
+// resolveHookRun completes the hook context read from stdin and settles the
+// project it validates. A daemon subprocess has no payload of its own, so its
+// hook context arrives via flags.
+func resolveHookRun(hook *hookContext, opts *validateOpts, workDir string) (*hookContext, string) {
+	if hook != nil && opts.projectDir == "" {
+		workDir = hookProjectRoot(workDir)
+	}
+	if opts.hookSessionID != "" && hook == nil {
+		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive, codex: opts.hookCodex}
+	}
+	return hook, workDir
+}
+
+// hookProjectRoot returns the project a hook run validates, starting from dir:
+// the nearest directory at or above it holding .chunk/config.json, stopping at
+// the git root. Codex runs hooks in the session's working directory, which is
+// wherever Codex was started and may be a subdirectory of the project. Returns
+// dir when no config is found, so the run reports the missing config as usual.
+func hookProjectRoot(dir string) string {
+	for d := dir; ; {
+		if _, err := os.Stat(filepath.Join(d, ".chunk", "config.json")); err == nil {
+			return d
+		}
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return dir
+		}
+		d = parent
+	}
+}
+
 func maybeReturnCachedHookResult(
 	cmd *cobra.Command,
 	hook *hookContext,
@@ -457,10 +545,10 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	}
 
 	hook := detectHook(cmd.InOrStdin())
-	// When running as a daemon subprocess, hook context arrives via flags.
-	if opts.hookSessionID != "" && hook == nil {
-		hook = &hookContext{sessionID: opts.hookSessionID, stopHookActive: opts.stopHookActive, codex: opts.hookCodex}
+	if hook.skipsCommitGate() {
+		return nil // not a commit; stdout stays empty so the tool call goes ahead
 	}
+	hook, workDir = resolveHookRun(hook, opts, workDir)
 	ctx := cmd.Context()
 
 	// Delegate hook runs to the daemon before initHook so the subprocess prints
@@ -1224,11 +1312,24 @@ func runValidationPlan(
 	statusFn iostream.StatusFunc,
 	streams iostream.Streams,
 ) (validate.Result, error) {
+	if len(plan.RemoteCommands) > 0 && pool == nil {
+		return validate.Result{}, errors.New("remote validation requires a sidecar pool")
+	}
+	result := validate.Result{Total: len(plan.RemoteCommands) + len(plan.LocalCommands)}
+
+	// Local autofix commands go first, so what the gates check is the tree as
+	// the formatter leaves it. The remote batch syncs the tree when it starts:
+	// run after it, a formatter's rewrites would reach no gate at all.
+	autofix, local := splitAutofix(plan.LocalCommands)
+	var autofixErr error
+	if len(autofix) > 0 {
+		var passed int
+		passed, autofixErr = runLocalCommands(ctx, autofix, localWorkDir, envVars, statusFn, streams)
+		result.Passed += passed
+	}
+
 	var remote validate.DistributedRunResult
 	if len(plan.RemoteCommands) > 0 {
-		if pool == nil {
-			return validate.Result{}, errors.New("remote validation requires a sidecar pool")
-		}
 		remote = validate.RunDistributed(ctx, plan.RemoteCommands, validate.DistributedRunOptions[*sidecar.PoolEntry]{
 			Parallelism: plan.PoolSize,
 			Acquire:     pool.Acquire,
@@ -1245,19 +1346,36 @@ func runValidationPlan(
 		renderDistributedOutput(remote.Output, streams)
 	}
 
-	result := validate.Result{
-		Passed: remote.Passed,
-		Total:  len(plan.RemoteCommands) + len(plan.LocalCommands),
-	}
-	if len(plan.LocalCommands) == 0 {
-		return result, remote.Err
+	result.Passed += remote.Passed
+	if len(local) == 0 {
+		return result, errors.Join(autofixErr, remote.Err)
 	}
 
-	statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(plan.LocalCommands)))
-	localCfg := &config.ProjectConfig{Commands: plan.LocalCommands}
-	localResult, err := mapValidateError(validate.RunAll(ctx, localWorkDir, localCfg, envVars, statusFn, streams))
-	result.Passed += localResult.Passed
-	return result, errors.Join(remote.Err, err)
+	passed, err := runLocalCommands(ctx, local, localWorkDir, envVars, statusFn, streams)
+	result.Passed += passed
+	return result, errors.Join(autofixErr, remote.Err, err)
+}
+
+// splitAutofix separates autofix commands from the rest, keeping the configured
+// order within each.
+func splitAutofix(commands []config.Command) (autofix, rest []config.Command) {
+	for _, c := range commands {
+		if c.Role == config.RoleAutofix {
+			autofix = append(autofix, c)
+		} else {
+			rest = append(rest, c)
+		}
+	}
+	return autofix, rest
+}
+
+// runLocalCommands runs commands in order in the local working tree, returning
+// how many passed.
+func runLocalCommands(ctx context.Context, commands []config.Command, workDir string, envVars map[string]string, statusFn iostream.StatusFunc, streams iostream.Streams) (int, error) {
+	statusFn(iostream.LevelInfo, fmt.Sprintf("running locally: %s", commandNames(commands)))
+	localCfg := &config.ProjectConfig{Commands: commands}
+	r, err := mapValidateError(validate.RunAll(ctx, workDir, localCfg, envVars, statusFn, streams))
+	return r.Passed, err
 }
 
 func runPooledValidateCommand(

@@ -141,56 +141,76 @@ func Build(commands []config.Command) ([]byte, error) {
 	return json.MarshalIndent(s, "", "  ")
 }
 
+// codexCommitStatusMessage is the spinner text for the Codex commit gate. Codex
+// cannot filter a hook on the command it is about to run, so the gate starts
+// before every Bash call and exits at once for anything but a git commit.
+// The text has to read right on both.
+const codexCommitStatusMessage = "Running chunk validate if this is a commit"
+
+// codexCommitCommand is the Codex commit gate: every configured command, run in
+// sequence. Merge owns the entry by its CommitIfFilter, not by this string.
+const codexCommitCommand = "chunk validate"
+
 // BuildCodex generates .codex/hooks.json content from commands.
-// Produces the same hook structure as Build but without Claude Code-specific
-// metadata ($schema, _comment) and without a permissions block. Commands run
-// as-is; Codex sets CWD to the project root before invoking hooks.
+// Produces the same hook types as Build but without Claude Code-specific
+// metadata ($schema, _comment), without a permissions block, and with the
+// commit gate as a single entry:
+//
+//   - Codex launches every matching hook for an event concurrently, so one entry
+//     per command would have a formatter rewriting files while lint and test
+//     read them. A single `chunk validate` runs them in sequence instead.
+//   - Codex has no per-entry "if", so the entry still carries CommitIfFilter
+//     (it is how Merge recognises chunk's entries) but chunk validate does the
+//     filtering itself, from the command in the hook payload.
+//
+// Commands run as-is. Codex runs hooks in the session's working directory,
+// which may be a subdirectory of the project; chunk validate finds the project
+// from there when it runs as a hook.
 func BuildCodex(commands []config.Command) ([]byte, error) {
-	const maxStopTimeout = 600
-	stopTimeout := 30
-	hooks := make([]hookEntry, 0, len(commands))
+	const maxTimeout = 600
+	s := codexHooksJSON{}
+	if len(commands) == 0 {
+		return json.MarshalIndent(s, "", "  ")
+	}
+
+	commitTimeout := 0
 	for _, cmd := range commands {
 		timeout := cmd.Timeout
 		if timeout == 0 {
 			timeout = 60
 		}
-		stopTimeout += timeout
-		hooks = append(hooks, hookEntry{
-			Type:          "command",
-			If:            CommitIfFilter,
-			Command:       fmt.Sprintf("chunk validate %s", cmd.Name),
-			Timeout:       timeout,
-			StatusMessage: commitStatusMessage(cmd.Name),
-		})
+		commitTimeout += timeout
 	}
-	if stopTimeout > maxStopTimeout {
-		stopTimeout = maxStopTimeout
-	}
+	commitTimeout = min(commitTimeout, maxTimeout)
+	stopTimeout := min(30+commitTimeout, maxTimeout)
 
-	s := codexHooksJSON{}
-
-	if len(hooks) > 0 {
-
-		s.Hooks = map[string][]hookGroup{
-			"PreToolUse": {
-				{
-					Matcher: CommitMatcher,
-					Hooks:   hooks,
-				},
-			},
-			"Stop": {
-				{
-					Hooks: []hookEntry{
-						{
-							Type:          "command",
-							Command:       StopCommand,
-							Timeout:       stopTimeout,
-							StatusMessage: stopStatusMessage,
-						},
+	s.Hooks = map[string][]hookGroup{
+		"PreToolUse": {
+			{
+				Matcher: CommitMatcher,
+				Hooks: []hookEntry{
+					{
+						Type:          "command",
+						If:            CommitIfFilter,
+						Command:       codexCommitCommand,
+						Timeout:       commitTimeout,
+						StatusMessage: codexCommitStatusMessage,
 					},
 				},
 			},
-		}
+		},
+		"Stop": {
+			{
+				Hooks: []hookEntry{
+					{
+						Type:          "command",
+						Command:       StopCommand,
+						Timeout:       stopTimeout,
+						StatusMessage: stopStatusMessage,
+					},
+				},
+			},
+		},
 	}
 
 	return json.MarshalIndent(s, "", "  ")
