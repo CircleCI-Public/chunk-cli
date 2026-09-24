@@ -318,6 +318,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m = m.adjustLeftScroll()
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -342,6 +343,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.daemonErr = msg.err
+		m = m.adjustLeftScroll() // the error line costs the pane a row
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 
 	case outputMsg:
@@ -466,18 +468,25 @@ func (m Model) renderSeparator(st watchStyles) string {
 	return st.vdim(strings.Repeat("─", m.width)) + "\n"
 }
 
-func (m Model) renderBody(st watchStyles) string {
-	contentHeight := m.height - 4 // header + separator + footer + padding
+// contentHeight is how many lines the two panes get between the header and
+// the footer.
+func (m Model) contentHeight() int {
+	h := m.height - 4 // header + separator + footer + padding
 	// The footer grows by a line when the daemon is unreachable. Without handing
 	// that line back the message lands past the last row and is clipped at every
 	// terminal size, which is how a daemon that had died came to look like a
 	// dashboard that had merely gone quiet.
 	if m.daemonErr != nil {
-		contentHeight--
+		h--
 	}
-	if contentHeight < 1 {
-		contentHeight = 1
+	if h < 1 {
+		h = 1
 	}
+	return h
+}
+
+func (m Model) renderBody(st watchStyles) string {
+	contentHeight := m.contentHeight()
 
 	leftLines := m.renderSidecarPane(st, contentHeight)
 	rightLines := m.renderActivityPane(st, contentHeight)
@@ -528,7 +537,17 @@ func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
 }
 
 func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
-	lines := make([]string, 0, maxLines)
+	lines, _ := m.layoutSidecarPane(st, maxLines)
+	return lines
+}
+
+// layoutSidecarPane renders the sidecar pane and reports end, the index of the
+// first sidecar it had no room for (len(m.sidecars) when every row from
+// leftScrollOffset on was drawn). adjustLeftScroll scrolls by it, so the
+// viewport is judged by the rows actually drawn rather than an estimate of
+// their height.
+func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, end int) {
+	lines = make([]string, 0, maxLines)
 	add := func(s string) { lines = append(lines, s) }
 
 	if m.focusedPane == paneLeft {
@@ -543,7 +562,7 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 		add("")
 		add(st.dim("no sidecar activity"))
 		add(st.dim("in the last day"))
-		return lines
+		return lines, 0
 	}
 
 	// Show how many rows are hidden above the viewport.
@@ -659,7 +678,7 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 		// only clue that any were missing, and a dropped repo had none at all.
 		lines = append(lines, "  "+st.vdim(fmt.Sprintf("↓ %d more", dropped)))
 	}
-	return lines
+	return lines, len(m.sidecars) - dropped
 }
 
 // renderActivityPane renders the right-hand pane for the selected sidecar.
@@ -1568,48 +1587,37 @@ func (m Model) sidecarCapacity() int {
 	return paneHeight / linesPerSidecar
 }
 
-// adjustLeftScroll keeps m.selectedIdx visible in the left pane viewport.
-// It uses linesPerSidecar as a conservative row-height estimate so the
-// selection is never below the last visible row.
+// adjustLeftScroll keeps the selected sidecar on screen in the left pane.
+// Rows vary in height — repo and group headers, snapshot and resource lines,
+// the scroll hints themselves — so no fixed page size predicts what fits. It
+// lays the pane out at the current height instead and moves the offset until
+// the selected row is drawn in full.
 func (m Model) adjustLeftScroll() Model {
-	if len(m.sidecars) == 0 {
-		m.leftScrollOffset = 0
-		return m
-	}
-	// Scroll up: selection moved above the top of the viewport.
 	if m.selectedIdx < m.leftScrollOffset {
-		m.leftScrollOffset = m.selectedIdx
-		return m
+		m.leftScrollOffset = max(m.selectedIdx, 0)
 	}
-
-	// Page capacity: content height minus the pane's own title row and blank.
-	avail := m.height - 4 - 2
-	if m.daemonErr != nil {
-		avail-- // daemon-error line consumes a row
+	for m.leftScrollOffset < m.selectedIdx && m.selectedIdx >= m.sidecarPaneEnd() {
+		m.leftScrollOffset++
 	}
-	if m.leftScrollOffset > 0 {
-		avail-- // "↑ N more" hint consumes a row
-	}
-	if avail < linesPerSidecar {
-		avail = linesPerSidecar
-	}
-	pageSize := avail / linesPerSidecar
-	if pageSize < 1 {
-		pageSize = 1
-	}
-
-	// Scroll down: selection moved past the bottom of the viewport.
-	if m.selectedIdx >= m.leftScrollOffset+pageSize {
-		m.leftScrollOffset = m.selectedIdx - pageSize + 1
-	}
-	// Clamp to valid range.
-	if m.leftScrollOffset < 0 {
-		m.leftScrollOffset = 0
-	}
-	if m.leftScrollOffset >= len(m.sidecars) {
-		m.leftScrollOffset = len(m.sidecars) - 1
+	// Scroll back up while that still draws every remaining row. Without it a
+	// list that shrinks, or a terminal that grows, leaves rows parked above the
+	// viewport with empty space under the last one.
+	for m.leftScrollOffset > 0 {
+		prev := m
+		prev.leftScrollOffset--
+		if prev.sidecarPaneEnd() < len(prev.sidecars) {
+			break
+		}
+		m = prev
 	}
 	return m
+}
+
+// sidecarPaneEnd is the index of the first sidecar the left pane has no room
+// for at the current offset and height.
+func (m Model) sidecarPaneEnd() int {
+	_, end := m.layoutSidecarPane(m.styles(), m.contentHeight())
+	return end
 }
 
 func anyRunning(sidecars []sidecarInfo) bool {

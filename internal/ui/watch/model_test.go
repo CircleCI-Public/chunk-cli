@@ -651,59 +651,90 @@ func TestRenderSidecarPane_scrolledShowsUpHintAndHidesScrolledRows(t *testing.T)
 	assert.Assert(t, strings.Contains(pane, "repo-c"), pane)
 }
 
-func TestAdjustLeftScroll_scrollsDownWhenSelectionExceedsPage(t *testing.T) {
-	sidecars := make([]sidecarInfo, 10)
+// tallSidecars returns n sidecars that each sit in their own repo and carry a
+// snapshot and a resource sample, so every row costs more than linesPerSidecar.
+func tallSidecars(n int) []sidecarInfo {
+	now := time.Now()
+	sidecars := make([]sidecarInfo, n)
 	for i := range sidecars {
-		sidecars[i] = sidecarInfo{id: fmt.Sprintf("s%d", i), repoName: "r"}
+		sidecars[i] = sidecarInfo{
+			id: fmt.Sprintf("s%d", i), repoName: fmt.Sprintf("repo-%d", i), branch: "main",
+			snapshotName: "snap", lastActivity: now,
+			resources: &watchd.Resources{SampledAt: now, CPUPercent: 5},
+		}
 	}
-	m := New(nil, false)
-	m.sidecars = sidecars
-	m.height = 40 // avail = 40-4-2 = 34; pageSize = 34/6 = 5
-	m.selectedIdx = 7
-
-	m = m.adjustLeftScroll()
-
-	// Selection must be within the visible window [offset, offset+pageSize).
-	pageSize := (40 - 4 - 2) / linesPerSidecar
-	if m.selectedIdx < m.leftScrollOffset || m.selectedIdx >= m.leftScrollOffset+pageSize {
-		t.Errorf("selection %d not in [%d, %d)", m.selectedIdx, m.leftScrollOffset, m.leftScrollOffset+pageSize)
-	}
+	return sidecars
 }
 
-func TestAdjustLeftScroll_scrollsUpWhenSelectionMovesAboveOffset(t *testing.T) {
-	sidecars := make([]sidecarInfo, 10)
-	for i := range sidecars {
-		sidecars[i] = sidecarInfo{id: fmt.Sprintf("s%d", i), repoName: "r"}
-	}
-	m := New(nil, false)
-	m.sidecars = sidecars
-	m.height = 40
-	m.leftScrollOffset = 5
-	m.selectedIdx = 2
+// selectionDrawn reports whether the selected row's ▶ marker made it into the
+// left pane as renderBody would lay it out.
+func selectionDrawn(m Model) bool {
+	pane := strings.Join(m.renderSidecarPane(m.styles(), m.contentHeight()), "\n")
+	return strings.Contains(pane, "▶")
+}
 
-	m = m.adjustLeftScroll()
+func TestAdjustLeftScroll_keepsSelectionDrawnWhileNavigatingTallRows(t *testing.T) {
+	for _, height := range []int{18, 30, 40, 42} {
+		m := New(nil, false)
+		m.sidecars = tallSidecars(10)
+		m.height = height
 
-	if m.leftScrollOffset != 2 {
-		t.Errorf("want leftScrollOffset 2, got %d", m.leftScrollOffset)
+		for i := 0; i < len(m.sidecars); i++ {
+			assert.Assert(t, selectionDrawn(m), "height %d, down to %d", height, m.selectedIdx)
+			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			m = next.(Model)
+		}
+		for i := 0; i < len(m.sidecars); i++ {
+			next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+			m = next.(Model)
+			assert.Assert(t, selectionDrawn(m), "height %d, up to %d", height, m.selectedIdx)
+		}
+		assert.Equal(t, m.leftScrollOffset, 0, "height %d", height)
 	}
 }
 
 func TestAdjustLeftScroll_noScrollWhenSelectionIsVisible(t *testing.T) {
-	sidecars := make([]sidecarInfo, 10)
-	for i := range sidecars {
-		sidecars[i] = sidecarInfo{id: fmt.Sprintf("s%d", i), repoName: "r"}
-	}
 	m := New(nil, false)
-	m.sidecars = sidecars
+	m.sidecars = tallSidecars(10)
 	m.height = 40
 	m.leftScrollOffset = 2
 	m.selectedIdx = 3
 
 	m = m.adjustLeftScroll()
 
-	if m.leftScrollOffset != 2 {
-		t.Errorf("want leftScrollOffset unchanged at 2, got %d", m.leftScrollOffset)
-	}
+	assert.Equal(t, m.leftScrollOffset, 2)
+}
+
+func TestAdjustLeftScroll_scrollsBackWhenListShrinks(t *testing.T) {
+	m := New(nil, false)
+	m.sidecars = tallSidecars(10)
+	m.height = 40
+	m.selectedIdx = 9
+	m = m.adjustLeftScroll()
+	assert.Assert(t, m.leftScrollOffset > 0)
+
+	// A poll ages most sidecars out; the three left all fit.
+	m.sidecars = m.sidecars[7:]
+	m.selectedIdx = 2
+	m = m.adjustLeftScroll()
+
+	assert.Equal(t, m.leftScrollOffset, 0)
+	pane := strings.Join(m.renderSidecarPane(m.styles(), m.contentHeight()), "\n")
+	assert.Assert(t, !strings.Contains(pane, "↑"), pane)
+}
+
+func TestUpdate_resizeKeepsSelectionDrawn(t *testing.T) {
+	m := New(nil, false)
+	m.sidecars = tallSidecars(10)
+	m.height = 80
+	m.selectedIdx = 7
+	m = m.adjustLeftScroll()
+	assert.Assert(t, selectionDrawn(m))
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = next.(Model)
+
+	assert.Assert(t, selectionDrawn(m))
 }
 
 func TestRenderSidecarPane_noOverflowHintWhenEverythingFits(t *testing.T) {
