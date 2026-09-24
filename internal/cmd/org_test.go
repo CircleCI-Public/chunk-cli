@@ -330,3 +330,16 @@ func TestEnsureOrgAfterSignup_NoTTYWarns(t *testing.T) {
 	ensureOrgAfterSignup(context.Background(), iostream.Streams{Out: io.Discard, Err: &errOut}, srv.URL, "test-token")
 	assert.Assert(t, strings.Contains(errOut.String(), "chunk org create"), errOut.String())
 }
+
+func TestEnsureOrgAfterSignup_CreateFailedShowsCause(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "acme", nil })
+	fake := fakes.NewFakeCircleCI()
+	fake.CreateOrgStatusCode = 500
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	var errOut bytes.Buffer
+	ensureOrgAfterSignup(context.Background(), iostream.Streams{Out: io.Discard, Err: &errOut}, srv.URL, "test-token")
+	assert.Assert(t, strings.Contains(errOut.String(), `Failed to create organization "acme".`), errOut.String())
+	assert.Assert(t, strings.Contains(errOut.String(), "500"), errOut.String())
+}

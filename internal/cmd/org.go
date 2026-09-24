@@ -123,9 +123,10 @@ const suggestionNoOrgs = "Create one with `chunk org create <name>`, pass --org-
 
 // promptOrgName asks for the name of a new organization. It returns
 // ui.ErrNoTTY without printing anything when there is no terminal to prompt
-// on. Swapped out in tests.
+// on. The prompt renders to stdout, so a piped stdout counts as no terminal.
+// Swapped out in tests.
 var promptOrgName = func(streams iostream.Streams) (string, error) {
-	if nonInteractive() || !term.IsTerminal(int(os.Stdin.Fd())) {
+	if nonInteractive() || !term.IsTerminal(int(os.Stdin.Fd())) || ui.RequireStdoutTTY() != nil {
 		return "", ui.ErrNoTTY
 	}
 	streams.ErrPrintln("You don't belong to any CircleCI organizations yet. Let's create one.")
@@ -202,6 +203,13 @@ func ensureOrgAfterSignup(ctx context.Context, streams iostream.Streams, baseURL
 		var ue *userError
 		if errors.As(err, &ue) {
 			streams.ErrPrintln(ui.ErrWarning(ue.msg))
+			detail := ue.detail
+			if detail == "" {
+				detail = ue.Error()
+			}
+			if !ue.hideDetail && detail != "" {
+				streams.ErrPrintln(ui.Dim(detail))
+			}
 			streams.ErrPrintln("Suggestion: " + ue.suggestion)
 			return
 		}
