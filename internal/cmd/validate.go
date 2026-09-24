@@ -1523,7 +1523,7 @@ func resolveOrCreateSidecarID(ctx context.Context, client *circleci.Client, side
 	// "Stop hook error:" banner even when everything then went fine.
 	statusFn := newStatusFunc(streams)
 	statusFn(iostream.LevelInfo, "no active sidecar; creating one")
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource, streams))
 	if err != nil {
 		return false, image, err
 	}

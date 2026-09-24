@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -12,7 +14,9 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func TestOrgCreateHappyPath(t *testing.T) {
@@ -210,4 +214,119 @@ func TestOrgListRequiresAuth(t *testing.T) {
 
 	err := cmd.Execute()
 	assert.Assert(t, err != nil)
+}
+
+// stubPromptOrgName replaces the org name prompt for the duration of a test.
+func stubPromptOrgName(t *testing.T, fn func(iostream.Streams) (string, error)) {
+	t.Helper()
+	orig := promptOrgName
+	promptOrgName = fn
+	t.Cleanup(func() { promptOrgName = orig })
+}
+
+func newOrgClient(t *testing.T, fake *fakes.FakeCircleCI) *circleci.Client {
+	t.Helper()
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	return client
+}
+
+func TestCreateFirstOrg_CreatesNamedOrg(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "  acme  ", nil })
+	client := newOrgClient(t, fakes.NewFakeCircleCI())
+
+	var errOut bytes.Buffer
+	id, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: &errOut})
+	assert.NilError(t, err)
+	assert.Equal(t, id, "org-new-1")
+	assert.Assert(t, strings.Contains(errOut.String(), `Organization "acme" created.`), errOut.String())
+}
+
+func TestCreateFirstOrg_NoTTYSuggestsOrgCreate(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "", ui.ErrNoTTY })
+	client := newOrgClient(t, fakes.NewFakeCircleCI())
+
+	_, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: io.Discard})
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue))
+	assert.Equal(t, ue.UserMessage(), "No organizations found.")
+	assert.Assert(t, strings.Contains(ue.suggestion, "chunk org create"), ue.suggestion)
+}
+
+func TestCreateFirstOrg_Cancelled(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "", ui.ErrCancelled })
+	client := newOrgClient(t, fakes.NewFakeCircleCI())
+
+	_, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: io.Discard})
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue))
+	assert.Equal(t, ue.UserMessage(), "No organization created.")
+}
+
+func TestCreateFirstOrg_EmptyName(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "   ", nil })
+	client := newOrgClient(t, fakes.NewFakeCircleCI())
+
+	_, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: io.Discard})
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue))
+	assert.Equal(t, ue.UserMessage(), "No organization created.")
+}
+
+func TestCreateFirstOrg_APIError(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "taken", nil })
+	fake := fakes.NewFakeCircleCI()
+	fake.CreateOrgStatusCode = 422
+	client := newOrgClient(t, fake)
+
+	_, err := createFirstOrg(context.Background(), client, iostream.Streams{Out: io.Discard, Err: io.Discard})
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue))
+	assert.Assert(t, strings.Contains(ue.UserMessage(), `"taken"`), ue.UserMessage())
+}
+
+func TestOrgPicker_NoOrgs_CreatesOrg(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "acme", nil })
+	client := newOrgClient(t, fakes.NewFakeCircleCI())
+
+	id, err := orgPicker(context.Background(), client, "", iostream.Streams{Out: io.Discard, Err: io.Discard})()
+	assert.NilError(t, err)
+	assert.Equal(t, id, "org-new-1")
+}
+
+func TestEnsureOrgAfterSignup_NoOrgs(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "acme", nil })
+	srv := httptest.NewServer(fakes.NewFakeCircleCI())
+	t.Cleanup(srv.Close)
+
+	var errOut bytes.Buffer
+	ensureOrgAfterSignup(context.Background(), iostream.Streams{Out: io.Discard, Err: &errOut}, srv.URL, "test-token")
+	assert.Assert(t, strings.Contains(errOut.String(), `Organization "acme" created.`), errOut.String())
+}
+
+func TestEnsureOrgAfterSignup_HasOrgs(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) {
+		t.Fatal("must not prompt when the account already has an organization")
+		return "", nil
+	})
+	fake := fakes.NewFakeCircleCI()
+	fake.Collaborations = []fakes.Collaboration{{ID: "org-abc", Name: "existing"}}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	var errOut bytes.Buffer
+	ensureOrgAfterSignup(context.Background(), iostream.Streams{Out: io.Discard, Err: &errOut}, srv.URL, "test-token")
+	assert.Equal(t, errOut.String(), "")
+}
+
+func TestEnsureOrgAfterSignup_NoTTYWarns(t *testing.T) {
+	stubPromptOrgName(t, func(iostream.Streams) (string, error) { return "", ui.ErrNoTTY })
+	srv := httptest.NewServer(fakes.NewFakeCircleCI())
+	t.Cleanup(srv.Close)
+
+	var errOut bytes.Buffer
+	ensureOrgAfterSignup(context.Background(), iostream.Streams{Out: io.Discard, Err: &errOut}, srv.URL, "test-token")
+	assert.Assert(t, strings.Contains(errOut.String(), "chunk org create"), errOut.String())
 }

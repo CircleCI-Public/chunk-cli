@@ -110,7 +110,7 @@ func orgSource(orgID, workDir string) string {
 	return source
 }
 
-func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string) func() (string, error) {
+func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string, streams iostream.Streams) func() (string, error) {
 	return func() (string, error) {
 		collabs, err := client.ListCollaborations(ctx)
 		if err != nil {
@@ -124,11 +124,7 @@ func orgPicker(ctx context.Context, client *circleci.Client, tokenSource string)
 			}
 		}
 		if len(collabs) == 0 {
-			return "", &userError{
-				msg:        "No organizations found.",
-				suggestion: "Pass --org-id or join an organization in CircleCI.",
-				err:        fmt.Errorf("no organizations found for current user"),
-			}
+			return createFirstOrg(ctx, client, streams)
 		}
 		if len(collabs) == 1 {
 			return collabs[0].ID, nil
@@ -182,7 +178,7 @@ func newSidecarListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource, io))
 			if err != nil {
 				return err
 			}
@@ -248,7 +244,7 @@ func newSidecarCreateCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource, io))
 			if err != nil {
 				return err
 			}
@@ -988,7 +984,7 @@ func newSidecarSnapshotListCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("get working directory: %w", err)
 			}
-			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource))
+			resolvedOrgID, err := resolveOrgID(orgID, cwd, orgPicker(cmd.Context(), client, rc.CircleCITokenSource, io))
 			if err != nil {
 				return err
 			}
@@ -1196,7 +1192,7 @@ func sidecarSetupResolveSidecar(
 	if name == "" {
 		name = randomSidecarName()
 	}
-	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource))
+	resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, tokenSource, streams))
 	if err != nil {
 		return "", "", err
 	}
