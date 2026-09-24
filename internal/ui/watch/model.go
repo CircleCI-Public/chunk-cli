@@ -177,6 +177,11 @@ type Model struct {
 	rightSelectedIdx int
 	toggledInvocs    map[time.Time]bool // invocations whose expand/collapse is flipped from default
 
+	// leftScrollOffset is the index of the first sidecar to render in the left
+	// pane. adjustLeftScroll keeps it in sync with selectedIdx after each
+	// navigation so rows above the viewport are reachable via arrow keys.
+	leftScrollOffset int
+
 	width      int
 	height     int
 	spinIdx    int
@@ -268,6 +273,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 			m.rightSelectedIdx = 0
+			m = m.adjustLeftScroll()
 		} else {
 			m.rightSelectedIdx++
 		}
@@ -278,6 +284,7 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 			m.rightSelectedIdx = 0
+			m = m.adjustLeftScroll()
 		} else if m.rightSelectedIdx > 0 {
 			m.rightSelectedIdx--
 		}
@@ -375,6 +382,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 		m.hasSpinner = anyRunning(m.sidecars)
+		m = m.adjustLeftScroll()
 		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 
 	case updateCheckMsg:
@@ -538,6 +546,11 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 		return lines
 	}
 
+	// Show how many rows are hidden above the viewport.
+	if m.leftScrollOffset > 0 {
+		add("  " + st.vdim(fmt.Sprintf("↑ %d more", m.leftScrollOffset)))
+	}
+
 	var lastRepo string
 	shared := sharedWorktrees(m.sidecars)
 	sessions := sessionsPerWorktree(m.sidecars)
@@ -546,7 +559,8 @@ func (m Model) renderSidecarPane(st watchStyles, maxLines int) []string {
 	lastGroup, haveGroup := groupKey{}, false
 
 	dropped := 0
-	for i, sc := range m.sidecars {
+	for i := m.leftScrollOffset; i < len(m.sidecars); i++ {
+		sc := m.sidecars[i]
 		// Cost the row before committing to it. A row is three to six lines and
 		// renderBody clips whatever runs past maxLines, so a row begun without the
 		// room to finish loses its tail — the sync state and age it exists to
@@ -1552,6 +1566,50 @@ func (m Model) sidecarCapacity() int {
 		return 1
 	}
 	return paneHeight / linesPerSidecar
+}
+
+// adjustLeftScroll keeps m.selectedIdx visible in the left pane viewport.
+// It uses linesPerSidecar as a conservative row-height estimate so the
+// selection is never below the last visible row.
+func (m Model) adjustLeftScroll() Model {
+	if len(m.sidecars) == 0 {
+		m.leftScrollOffset = 0
+		return m
+	}
+	// Scroll up: selection moved above the top of the viewport.
+	if m.selectedIdx < m.leftScrollOffset {
+		m.leftScrollOffset = m.selectedIdx
+		return m
+	}
+
+	// Page capacity: content height minus the pane's own title row and blank.
+	avail := m.height - 4 - 2
+	if m.daemonErr != nil {
+		avail-- // daemon-error line consumes a row
+	}
+	if m.leftScrollOffset > 0 {
+		avail-- // "↑ N more" hint consumes a row
+	}
+	if avail < linesPerSidecar {
+		avail = linesPerSidecar
+	}
+	pageSize := avail / linesPerSidecar
+	if pageSize < 1 {
+		pageSize = 1
+	}
+
+	// Scroll down: selection moved past the bottom of the viewport.
+	if m.selectedIdx >= m.leftScrollOffset+pageSize {
+		m.leftScrollOffset = m.selectedIdx - pageSize + 1
+	}
+	// Clamp to valid range.
+	if m.leftScrollOffset < 0 {
+		m.leftScrollOffset = 0
+	}
+	if m.leftScrollOffset >= len(m.sidecars) {
+		m.leftScrollOffset = len(m.sidecars) - 1
+	}
+	return m
 }
 
 func anyRunning(sidecars []sidecarInfo) bool {

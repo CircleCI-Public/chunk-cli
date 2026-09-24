@@ -634,6 +634,78 @@ func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
 	assert.Assert(t, strings.Contains(pane, "1 more"), pane)
 }
 
+func TestRenderSidecarPane_scrolledShowsUpHintAndHidesScrolledRows(t *testing.T) {
+	now := time.Now()
+	m := sessionModel("", []sidecarInfo{
+		{id: "id1", sessionID: "sessA", repoName: "repo-a", branch: "feat", lastActivity: now.Add(-2 * time.Minute)},
+		{id: "id2", sessionID: "sessB", repoName: "repo-b", branch: "main", lastActivity: now.Add(-time.Minute)},
+		{id: "id3", sessionID: "sessC", repoName: "repo-c", branch: "main", lastActivity: now},
+	})
+	m.leftScrollOffset = 1 // repo-a is scrolled off
+
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
+
+	assert.Assert(t, strings.Contains(pane, "↑ 1 more"), pane)
+	assert.Assert(t, !strings.Contains(pane, "repo-a"), pane)
+	assert.Assert(t, strings.Contains(pane, "repo-b"), pane)
+	assert.Assert(t, strings.Contains(pane, "repo-c"), pane)
+}
+
+func TestAdjustLeftScroll_scrollsDownWhenSelectionExceedsPage(t *testing.T) {
+	sidecars := make([]sidecarInfo, 10)
+	for i := range sidecars {
+		sidecars[i] = sidecarInfo{id: fmt.Sprintf("s%d", i), repoName: "r"}
+	}
+	m := New(nil, false)
+	m.sidecars = sidecars
+	m.height = 40 // avail = 40-4-2 = 34; pageSize = 34/6 = 5
+	m.selectedIdx = 7
+
+	m = m.adjustLeftScroll()
+
+	// Selection must be within the visible window [offset, offset+pageSize).
+	pageSize := (40 - 4 - 2) / linesPerSidecar
+	if m.selectedIdx < m.leftScrollOffset || m.selectedIdx >= m.leftScrollOffset+pageSize {
+		t.Errorf("selection %d not in [%d, %d)", m.selectedIdx, m.leftScrollOffset, m.leftScrollOffset+pageSize)
+	}
+}
+
+func TestAdjustLeftScroll_scrollsUpWhenSelectionMovesAboveOffset(t *testing.T) {
+	sidecars := make([]sidecarInfo, 10)
+	for i := range sidecars {
+		sidecars[i] = sidecarInfo{id: fmt.Sprintf("s%d", i), repoName: "r"}
+	}
+	m := New(nil, false)
+	m.sidecars = sidecars
+	m.height = 40
+	m.leftScrollOffset = 5
+	m.selectedIdx = 2
+
+	m = m.adjustLeftScroll()
+
+	if m.leftScrollOffset != 2 {
+		t.Errorf("want leftScrollOffset 2, got %d", m.leftScrollOffset)
+	}
+}
+
+func TestAdjustLeftScroll_noScrollWhenSelectionIsVisible(t *testing.T) {
+	sidecars := make([]sidecarInfo, 10)
+	for i := range sidecars {
+		sidecars[i] = sidecarInfo{id: fmt.Sprintf("s%d", i), repoName: "r"}
+	}
+	m := New(nil, false)
+	m.sidecars = sidecars
+	m.height = 40
+	m.leftScrollOffset = 2
+	m.selectedIdx = 3
+
+	m = m.adjustLeftScroll()
+
+	if m.leftScrollOffset != 2 {
+		t.Errorf("want leftScrollOffset unchanged at 2, got %d", m.leftScrollOffset)
+	}
+}
+
 func TestRenderSidecarPane_noOverflowHintWhenEverythingFits(t *testing.T) {
 	now := time.Now()
 	m := sessionModel("", []sidecarInfo{
