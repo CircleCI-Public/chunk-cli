@@ -21,8 +21,8 @@ import (
 
 type updateCheckKey struct{}
 
-// writeKey is the Segment write key for chunk-cli's usage telemetry. Segment write keys are not secret — they only allow sending
-// events, not reading data — so checking it into git, as circleci-cli does
+// writeKey is the Segment write key for chunk-cli's usage telemetry. Segment write keys are not secret; they only allow sending
+// events, not reading data, so checking it into git, as circleci-cli does
 // (see internal/cmd/root/root.go there), is safe.
 //
 // Events sent with this key are tagged as chunk-cli invocations via

@@ -6,8 +6,8 @@
 // Only the command path, the names (never values) of flags the user set,
 // the outcome ("success"/"failure"), the wall-clock duration, the Go type and
 // message of any error, a per-install anonymous instance ID, the operating
-// system, the detected AI coding agent (if any), and — once the user has
-// authenticated — their CircleCI user UUID are ever collected. No flag values,
+// system, the detected AI coding agent (if any), and (once the user has
+// authenticated) their CircleCI user UUID are ever collected. No flag values,
 // argument values, names, email addresses, or other PII.
 //
 // Events are therefore anonymous only until the user authenticates. From then
