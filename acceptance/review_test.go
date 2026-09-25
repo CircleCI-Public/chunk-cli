@@ -143,3 +143,52 @@ func TestReviewFailedReviewExitsNonZero(t *testing.T) {
 	assert.Assert(t, strings.Contains(result.Stdout, "claude exited 1: overloaded"), "stdout: %s", result.Stdout)
 	assert.Assert(t, strings.Contains(result.Stderr, "1 of 1 review(s) failed"), "stderr: %s", result.Stderr)
 }
+
+type reviewReport struct {
+	Reviews []struct {
+		Prompt          string  `json:"prompt"`
+		SidecarID       string  `json:"sidecar_id"`
+		Output          string  `json:"output"`
+		Error           string  `json:"error"`
+		DurationSeconds float64 `json:"duration_seconds"`
+	} `json:"reviews"`
+	Failed int `json:"failed"`
+}
+
+func TestReviewJSON(t *testing.T) {
+	env, _, workDir := setupReviewProject(t,
+		&fakes.ExecResponse{CommandID: "cmd-1", Stdout: "No issues found.\n", Stderr: "progress noise\n"},
+		"api", "security")
+
+	result := binary.RunCLI(t, []string{"review", "--json"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	var report reviewReport
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), "stdout: %s", result.Stdout)
+	assert.Equal(t, report.Failed, 0)
+	assert.Equal(t, len(report.Reviews), 2)
+	for i, name := range []string{"api", "security"} {
+		r := report.Reviews[i]
+		assert.Equal(t, r.Prompt, name)
+		assert.Equal(t, r.Output, "No issues found.")
+		assert.Equal(t, r.Error, "")
+		assert.Assert(t, r.SidecarID != "")
+	}
+	assert.Assert(t, strings.Contains(result.Stderr, "Running 2 review(s)"), "progress belongs on stderr: %s", result.Stderr)
+}
+
+func TestReviewJSONFailedReview(t *testing.T) {
+	env, _, workDir := setupReviewProject(t,
+		&fakes.ExecResponse{CommandID: "cmd-1", Stdout: "partial", Stderr: "overloaded\n", ExitCode: 1}, "api")
+
+	result := binary.RunCLI(t, []string{"review", "--json"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	var report reviewReport
+	assert.NilError(t, json.Unmarshal([]byte(result.Stdout), &report), "stdout: %s", result.Stdout)
+	assert.Equal(t, report.Failed, 1)
+	assert.Equal(t, len(report.Reviews), 1)
+	assert.Equal(t, report.Reviews[0].Output, "partial")
+	assert.Equal(t, report.Reviews[0].Error, "claude exited 1: overloaded")
+	assert.Assert(t, strings.Contains(result.Stderr, "1 of 1 review(s) failed"), "stderr: %s", result.Stderr)
+}

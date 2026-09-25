@@ -19,7 +19,7 @@ import (
 
 func newReviewCmd() *cobra.Command {
 	var parallelism int
-	var destroyPool bool
+	var destroyPool, jsonOut bool
 	var orgID, image, model string
 	var timeout time.Duration
 
@@ -168,7 +168,13 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 					err:        err,
 				}
 			}
-			printReviews(streams, results)
+			if jsonOut {
+				if jsonErr := iostream.PrintJSON(streams.Out, newReviewReport(results)); jsonErr != nil {
+					return fmt.Errorf("write reviews: %w", jsonErr)
+				}
+			} else {
+				printReviews(streams, results)
+			}
 			if err != nil {
 				return &userError{msg: "The review pass stopped early.", err: err}
 			}
@@ -189,6 +195,7 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 	cmd.Flags().StringVar(&model, "model", "", "Claude model for reviews (default: Claude Code's default)")
 	cmd.Flags().DurationVar(&timeout, "timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
@@ -207,6 +214,36 @@ func printReviews(streams iostream.Streams, results []review.Result) {
 			streams.Println(r.Output)
 		}
 	}
+}
+
+// reviewReport is the --json output of a review pass. It is an object rather
+// than a bare list so later passes can report alongside the reviews without
+// changing their shape.
+type reviewReport struct {
+	Reviews []reviewJSON `json:"reviews"`
+	Failed  int          `json:"failed"`
+}
+
+type reviewJSON struct {
+	Prompt          string  `json:"prompt"`
+	SidecarID       string  `json:"sidecar_id"`
+	Output          string  `json:"output"`
+	Error           string  `json:"error,omitempty"`
+	DurationSeconds float64 `json:"duration_seconds"`
+}
+
+func newReviewReport(results []review.Result) reviewReport {
+	report := reviewReport{Reviews: make([]reviewJSON, 0, len(results)), Failed: countFailedReviews(results)}
+	for _, r := range results {
+		report.Reviews = append(report.Reviews, reviewJSON{
+			Prompt:          r.Prompt,
+			SidecarID:       r.SidecarID,
+			Output:          r.Output,
+			Error:           r.Error,
+			DurationSeconds: r.Duration.Round(time.Millisecond).Seconds(),
+		})
+	}
+	return report
 }
 
 func countFailedReviews(results []review.Result) int {
