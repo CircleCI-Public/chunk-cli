@@ -46,11 +46,11 @@ type Options struct {
 // Result is the outcome of one prompt in one pass. Output and Error are not
 // exclusive: a review that fails partway keeps what it produced.
 type Result struct {
-	Prompt    string        `json:"prompt"`
-	SidecarID string        `json:"sidecar_id"`
-	Output    string        `json:"output"`
-	Error     string        `json:"error,omitempty"`
-	Duration  time.Duration `json:"duration_ns"`
+	Prompt    string
+	SidecarID string
+	Output    string
+	Error     string
+	Duration  time.Duration
 }
 
 // Execer runs a shell script on a sidecar and streams its output.
