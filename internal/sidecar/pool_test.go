@@ -760,6 +760,37 @@ func TestPoolWaitSyncedReportsBeforeReturning(t *testing.T) {
 	assert.Assert(t, slices.Contains(msgs, "Synced 2 sidecars"), "got %q", msgs)
 }
 
+func TestPoolWaitSyncedReturnsSyncError(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	syncErr := errors.New("background sync failed")
+	pool := &Pool{syncDone: done, syncErr: syncErr}
+	assert.ErrorIs(t, pool.WaitSynced(t.Context()), syncErr)
+}
+
+// TestPoolWaitSyncedReportsPartialFailure pins why callers wait here rather
+// than acquiring every member: with one member held, Acquire never reports the
+// other member's failure, but WaitSynced does.
+func TestPoolWaitSyncedReportsPartialFailure(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	env.cci.CreateErrorAfter = 2
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "review", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	t.Cleanup(func() { pool.Close(context.Background()) })
+
+	entry, err := pool.Acquire(t.Context())
+	assert.NilError(t, err)
+	defer pool.Release(entry)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	assert.Assert(t, pool.WaitSynced(ctx) != nil)
+	assert.NilError(t, ctx.Err())
+}
+
 func TestPoolWaitSyncedHonoursCanceledContext(t *testing.T) {
 	done := make(chan struct{})
 	pool := &Pool{syncDone: done}

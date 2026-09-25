@@ -65,15 +65,16 @@ func ClientExec(ctx context.Context, entry *sidecar.PoolEntry, script string, en
 	return res.ExitCode, nil
 }
 
-// RunPass runs every prompt once, each on a sidecar checked out from pool, and
-// returns results in prompt order for every prompt that started. Per-prompt
-// failures are recorded in Result.Error; the returned error is for failures
-// that stop the pass itself.
+// RunPass runs every prompt once, each on a sidecar checked out with acquire
+// and returned with release (the pool's Acquire and Release), and returns
+// results in prompt order for every prompt that started. Per-prompt failures
+// are recorded in Result.Error; the returned error is for failures that stop
+// the pass itself.
 //
 // A missing claude binary stops the pass rather than being recorded per
 // prompt: every sidecar in a pool comes from one image, so it would fail every
 // review the same way.
-func RunPass(ctx context.Context, pool Acquirer, exec Execer, prompts []Prompt, opts Options) ([]Result, error) {
+func RunPass(ctx context.Context, acquire func(context.Context) (*sidecar.PoolEntry, error), release func(*sidecar.PoolEntry), exec Execer, prompts []Prompt, opts Options) ([]Result, error) {
 	if opts.Timeout <= 0 {
 		opts.Timeout = DefaultTimeout
 	}
@@ -89,7 +90,7 @@ func RunPass(ctx context.Context, pool Acquirer, exec Execer, prompts []Prompt, 
 	var wg sync.WaitGroup
 	var acquireErr error
 	for i, p := range prompts {
-		entry, err := pool.Acquire(ctx)
+		entry, err := acquire(ctx)
 		if err != nil {
 			acquireErr = fmt.Errorf("acquire sidecar for %s: %w", p.Name, err)
 			break
@@ -97,7 +98,7 @@ func RunPass(ctx context.Context, pool Acquirer, exec Execer, prompts []Prompt, 
 		wg.Add(1)
 		go func(i int, p Prompt, entry *sidecar.PoolEntry) {
 			defer wg.Done()
-			defer pool.Release(entry)
+			defer release(entry)
 			status(iostream.LevelInfo, fmt.Sprintf("reviewing %s on %s", p.Name, entry.ID))
 			r := runOne(ctx, exec, entry, p, opts)
 			results[i] = r
