@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -726,4 +727,43 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	assert.Assert(t, afterSecond <= baseline+5,
 		"goroutine accumulation on second pool run: baseline=%d after=%d delta=%d",
 		baseline, afterSecond, afterSecond-baseline)
+}
+
+// TestPoolWaitSyncedReportsBeforeReturning confirms that once WaitSynced
+// returns, the pool has already reported that every member synced, so callers
+// can print their own progress after it.
+func TestPoolWaitSyncedReportsBeforeReturning(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+
+	var mu sync.Mutex
+	var msgs []string
+	status := func(_ iostream.Level, msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		msgs = append(msgs, msg)
+	}
+	pool, err := assemblePool(context.Background(), env.cl, 2, "review", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, []string{"existing-sb-1", "existing-sb-2"}, "", nil, status)
+	assert.NilError(t, err)
+
+	a, err := pool.Acquire(t.Context())
+	assert.NilError(t, err)
+	b, err := pool.Acquire(t.Context())
+	assert.NilError(t, err)
+	pool.Release(a)
+	pool.Release(b)
+	assert.NilError(t, pool.WaitSynced(t.Context()))
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Assert(t, slices.Contains(msgs, "Synced 2 sidecars"), "got %q", msgs)
+}
+
+func TestPoolWaitSyncedHonoursCanceledContext(t *testing.T) {
+	done := make(chan struct{})
+	pool := &Pool{syncDone: done}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	assert.ErrorIs(t, pool.WaitSynced(ctx), context.Canceled)
 }
