@@ -29,6 +29,8 @@ func newCompletionCmd() *cobra.Command {
 	cmd.AddCommand(newCompletionUninstallCmd())
 	cmd.AddCommand(newCompletionZshCmd())
 	cmd.AddCommand(newCompletionBashCmd())
+	cmd.AddCommand(newCompletionFishCmd())
+	cmd.AddCommand(newCompletionPowerShellCmd())
 	return cmd
 }
 
@@ -193,6 +195,46 @@ func newCompletionBashCmd() *cobra.Command {
 			}
 			defer func() { _ = closeOut() }()
 			return cmd.Root().GenBashCompletion(w)
+		},
+	}
+	telemetry.DisableTelemetry(cmd)
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Write completion script to this file instead of stdout")
+	return cmd
+}
+
+func newCompletionFishCmd() *cobra.Command {
+	var outputPath string
+	cmd := &cobra.Command{
+		Use:    "fish",
+		Short:  "Generate fish completion script",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			w, closeOut, err := openCompletionOutput(outputPath, iostream.FromCmd(cmd).Out)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = closeOut() }()
+			return cmd.Root().GenFishCompletion(w, true)
+		},
+	}
+	telemetry.DisableTelemetry(cmd)
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Write completion script to this file instead of stdout")
+	return cmd
+}
+
+func newCompletionPowerShellCmd() *cobra.Command {
+	var outputPath string
+	cmd := &cobra.Command{
+		Use:    "powershell",
+		Short:  "Generate PowerShell completion script",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			w, closeOut, err := openCompletionOutput(outputPath, iostream.FromCmd(cmd).Out)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = closeOut() }()
+			return cmd.Root().GenPowerShellCompletionWithDesc(w)
 		},
 	}
 	telemetry.DisableTelemetry(cmd)

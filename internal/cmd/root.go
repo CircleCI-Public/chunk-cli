@@ -107,6 +107,7 @@ Configuration:
 	rootCmd.AddCommand(newBuildPromptCmd())
 	rootCmd.AddCommand(newSkillCmd())
 	rootCmd.AddCommand(newCompletionCmd())
+	rootCmd.AddCommand(newManCmd())
 	rootCmd.AddCommand(newSidecarCmd())
 	rootCmd.AddCommand(newPruneCmd())
 	rootCmd.AddCommand(newTaskCmd())
