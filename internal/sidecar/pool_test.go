@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -726,4 +727,74 @@ func TestPool_100Sidecars_NoGoroutineLeak(t *testing.T) {
 	assert.Assert(t, afterSecond <= baseline+5,
 		"goroutine accumulation on second pool run: baseline=%d after=%d delta=%d",
 		baseline, afterSecond, afterSecond-baseline)
+}
+
+// TestPoolWaitSyncedReportsBeforeReturning confirms that once WaitSynced
+// returns, the pool has already reported that every member synced, so callers
+// can print their own progress after it.
+func TestPoolWaitSyncedReportsBeforeReturning(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+
+	var mu sync.Mutex
+	var msgs []string
+	status := func(_ iostream.Level, msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		msgs = append(msgs, msg)
+	}
+	pool, err := assemblePool(context.Background(), env.cl, 2, "review", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, []string{"existing-sb-1", "existing-sb-2"}, "", nil, status)
+	assert.NilError(t, err)
+
+	a, err := pool.Acquire(t.Context())
+	assert.NilError(t, err)
+	b, err := pool.Acquire(t.Context())
+	assert.NilError(t, err)
+	pool.Release(a)
+	pool.Release(b)
+	assert.NilError(t, pool.WaitSynced(t.Context()))
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Assert(t, slices.Contains(msgs, "Synced 2 sidecars"), "got %q", msgs)
+}
+
+func TestPoolWaitSyncedReturnsSyncError(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	syncErr := errors.New("background sync failed")
+	pool := &Pool{syncDone: done, syncErr: syncErr}
+	assert.ErrorIs(t, pool.WaitSynced(t.Context()), syncErr)
+}
+
+// TestPoolWaitSyncedReportsPartialFailure pins why callers wait here rather
+// than acquiring every member: with one member held, Acquire never reports the
+// other member's failure, but WaitSynced does.
+func TestPoolWaitSyncedReportsPartialFailure(t *testing.T) {
+	env := setupPoolTest(t)
+	t.Chdir(env.workDir)
+	env.cci.CreateErrorAfter = 2
+
+	pool, err := assemblePool(context.Background(), env.cl, 2, "review", "org-1", "ubuntu:22.04",
+		DefaultWorkspace("my-repo"), env.workDir, nil, "", nil, func(iostream.Level, string) {})
+	assert.NilError(t, err)
+	t.Cleanup(func() { pool.Close(context.Background()) })
+
+	entry, err := pool.Acquire(t.Context())
+	assert.NilError(t, err)
+	defer pool.Release(entry)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	assert.Assert(t, pool.WaitSynced(ctx) != nil)
+	assert.NilError(t, ctx.Err())
+}
+
+func TestPoolWaitSyncedHonoursCanceledContext(t *testing.T) {
+	done := make(chan struct{})
+	pool := &Pool{syncDone: done}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	assert.ErrorIs(t, pool.WaitSynced(ctx), context.Canceled)
 }
