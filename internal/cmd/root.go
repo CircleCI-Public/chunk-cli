@@ -112,6 +112,7 @@ Configuration:
 	rootCmd.AddCommand(newTaskCmd())
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newMutateCmd())
+	rootCmd.AddCommand(newReviewCmd())
 	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newConflictsCmd())
 	rootCmd.AddCommand(newUpgradeCmd())
