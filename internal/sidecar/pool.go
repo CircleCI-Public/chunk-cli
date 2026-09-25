@@ -616,6 +616,17 @@ func (p *Pool) cancelCreates() {
 	}
 }
 
+// WaitSynced waits for clone creation and background sync to finish, including
+// the status they report on completion. Acquire can hand out a member as soon
+// as its own sync ends, before the pool reports that every sync has; callers
+// that want that report to precede their own output wait here first.
+func (p *Pool) WaitSynced(ctx context.Context) error {
+	if !p.waitForBackground(ctx) {
+		return ctx.Err()
+	}
+	return nil
+}
+
 // waitForBackground waits for clone creation and background sync to finish.
 // It reports false if ctx ended first.
 func (p *Pool) waitForBackground(ctx context.Context) bool {
