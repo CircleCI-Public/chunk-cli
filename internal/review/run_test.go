@@ -30,6 +30,11 @@ func newSafePool(ids ...string) *safePool {
 }
 
 func (p *safePool) Acquire(ctx context.Context) (*sidecar.PoolEntry, error) {
+	// A released entry and a cancelled context can both be ready; select
+	// would pick either, so a cancelled context must win deterministically.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	select {
 	case e := <-p.free:
 		return e, nil
@@ -118,8 +123,8 @@ func TestRunPassAcquireFailureKeepsStartedResults(t *testing.T) {
 	exec := func(context.Context, *sidecar.PoolEntry, string, map[string]string, circleci.OutputFn) (int, error) {
 		return 0, nil
 	}
-	// One sidecar, held by the first review until the context is cancelled,
-	// so the second prompt can never acquire one.
+	// One sidecar; the first review cancels the context, so the second
+	// prompt can never acquire one.
 	pool := newSafePool("sb-1")
 	blocking := func(ctx context.Context, e *sidecar.PoolEntry, s string, env map[string]string, out circleci.OutputFn) (int, error) {
 		cancel()
