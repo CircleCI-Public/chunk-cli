@@ -143,18 +143,14 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 				pool.Close(closeCtx)
 			}()
 
-			if err := review.WaitReady(ctx, pool, size); err != nil {
+			// Waiting also keeps the pool's "Synced" line, reported from
+			// another goroutine, from landing among the reviews' progress.
+			if err := review.WaitReady(ctx, pool.WaitSynced); err != nil {
 				return &userError{msg: "The review sidecar pool did not become ready.", err: err}
-			}
-			// Every member is synced by now, but the pool reports it from
-			// another goroutine; without this its "Synced" line can land
-			// among the reviews' progress.
-			if err := pool.WaitSynced(ctx); err != nil {
-				return err
 			}
 
 			statusFn(iostream.LevelStep, fmt.Sprintf("Running %d review(s)...", len(prompts)))
-			results, err := review.RunPass(ctx, pool, review.ClientExec, prompts, review.Options{
+			results, err := review.RunPass(ctx, pool.Acquire, pool.Release, review.ClientExec, prompts, review.Options{
 				APIKey:   rc.AnthropicAPIKey,
 				Model:    model,
 				Timeout:  timeout,

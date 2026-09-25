@@ -3,8 +3,6 @@ package review
 import (
 	"context"
 	"fmt"
-
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // PoolName is the sidecar pool name for reviews. It keys the persisted pool
@@ -12,32 +10,18 @@ import (
 // same run — picks up the same warm sidecars instead of booting new ones.
 const PoolName = "review"
 
-// Acquirer is the part of *sidecar.Pool that reviews need.
-type Acquirer interface {
-	Acquire(ctx context.Context) (*sidecar.PoolEntry, error)
-	Release(entry *sidecar.PoolEntry)
-}
-
-// WaitReady blocks until all n pool members are synced and free, then returns
-// them to the pool.
+// WaitReady blocks until the pool's background clone creation and sync have
+// finished, via waitSynced (the pool's WaitSynced), and reports any member
+// that failed.
 //
 // sidecar.NewPool returns as soon as its members exist, while reused members
 // may still be syncing in the background. Waiting here makes a failed sync
 // surface before any review starts, rather than as one review failing partway
-// through a pass.
-func WaitReady(ctx context.Context, pool Acquirer, n int) error {
-	entries := make([]*sidecar.PoolEntry, 0, n)
-	defer func() {
-		for _, e := range entries {
-			pool.Release(e)
-		}
-	}()
-	for range n {
-		e, err := pool.Acquire(ctx)
-		if err != nil {
-			return fmt.Errorf("wait for sidecar %d of %d: %w", len(entries)+1, n, err)
-		}
-		entries = append(entries, e)
+// through a pass. It holds no members while waiting: the pool reports a failed
+// member through Acquire only once nothing is checked out.
+func WaitReady(ctx context.Context, waitSynced func(context.Context) error) error {
+	if err := waitSynced(ctx); err != nil {
+		return fmt.Errorf("wait for sidecar pool: %w", err)
 	}
 	return nil
 }

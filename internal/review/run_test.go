@@ -68,7 +68,7 @@ func TestRunPass(t *testing.T) {
 		return 0, nil
 	}
 
-	results, err := RunPass(context.Background(), pool, exec, []Prompt{
+	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{
 		{Name: "a", Body: "it's \"quoted\" $(rm -rf /)"},
 		{Name: "b", Body: "fail please"},
 	}, Options{APIKey: "sk-test"})
@@ -92,7 +92,8 @@ func TestRunPassClaudeMissingStopsPass(t *testing.T) {
 		return exitNotFound, nil
 	}
 
-	_, err := RunPass(context.Background(), newSafePool("sb-1", "sb-2"), exec,
+	pool := newSafePool("sb-1", "sb-2")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}, {Name: "c", Body: "z"}}, Options{})
 	assert.Assert(t, errors.Is(err, ErrClaudeMissing), "got %v", err)
 }
@@ -104,7 +105,8 @@ func TestRunPassTimeout(t *testing.T) {
 		return 0, ctx.Err()
 	}
 
-	results, err := RunPass(context.Background(), newSafePool("sb-1"), exec,
+	pool := newSafePool("sb-1")
+	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "slow", Body: "x"}}, Options{Timeout: 10 * time.Millisecond})
 	assert.NilError(t, err)
 	assert.Equal(t, results[0].Error, "timed out after 10ms")
@@ -124,7 +126,7 @@ func TestRunPassAcquireFailureKeepsStartedResults(t *testing.T) {
 		return exec(ctx, e, s, env, out)
 	}
 
-	results, err := RunPass(ctx, pool, blocking, []Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}}, Options{})
+	results, err := RunPass(ctx, pool.Acquire, pool.Release, blocking, []Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}}, Options{})
 	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
 	assert.Equal(t, len(results), 1)
 	assert.Equal(t, results[0].Prompt, "a")
