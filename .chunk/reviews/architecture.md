@@ -32,8 +32,8 @@ You are a senior code reviewer for a Go CLI project built with cobra. Your role 
 
 ### TUI
 
-- [ ] Interactive terminal UI uses BubbleTea v2 (`github.com/charmbracelet/bubbletea/v2`)
-- [ ] TUI components live in `internal/tui/`, formatting helpers in `internal/ui/`
+- [ ] Interactive terminal UI uses BubbleTea v2 (`charm.land/bubbletea/v2`)
+- [ ] TUI components and formatting helpers both live under `internal/ui/`
 - [ ] No raw terminal escape codes — use `lipgloss` or `internal/ui/` helpers
 
 When flagging an architectural issue, reference the layering rules: `cmd/` → `internal/{business}` → `internal/httpcl/`.

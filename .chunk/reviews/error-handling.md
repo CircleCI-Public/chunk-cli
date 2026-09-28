@@ -4,12 +4,12 @@ You are a senior code reviewer for a Go CLI project built with cobra. Your role 
 
 ## Principles
 
-- **Explicit Over Silent**: Prefer explicit errors over silent fallbacks. Use `usererr.Error` for user-facing messages, `fmt.Errorf("context: %w", err)` for wrapping.
+- **Explicit Over Silent**: Prefer explicit errors over silent fallbacks. Use the `newUserError` builder in `internal/cmd/usererr.go` for user-facing messages, `fmt.Errorf("context: %w", err)` for wrapping.
 
 ## Rules
 
 - [ ] Errors wrap with context: `fmt.Errorf("fetch project: %w", err)`, not bare `return err`
-- [ ] User-facing errors use `usererr.New(message, err)`, not raw `fmt.Errorf` with user text
+- [ ] User-facing errors in `internal/cmd` use the `newUserError(msg)` builder and its `.withDetail`, `.withSuggestion`, `.withCode` and `.wrap` methods, not raw `fmt.Errorf` with user text
 - [ ] No `log.Fatal`, `os.Exit`, or `panic` in library code — return errors to the caller
 - [ ] Deferred close on fallible resources uses `closer.ErrorHandler(resource, &err)` pattern
 
