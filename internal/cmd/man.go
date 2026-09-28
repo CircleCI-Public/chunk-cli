@@ -18,7 +18,7 @@ func newManCmd() *cobra.Command {
 		Use:    "man",
 		Short:  "Generate man page",
 		Hidden: true,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			if outputPath == "" {
 				return fmt.Errorf("--output is required")
 			}

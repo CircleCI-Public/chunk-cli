@@ -83,8 +83,9 @@ install_cli() {
 			|| fail "Could not reach GitHub to determine the latest version."
 		tag="${effective_url##*/}"
 		VERSION="${tag#v}"
-		[ -n "$VERSION" ] && [ "$VERSION" != "latest" ] \
-			|| fail "Could not determine the latest version. Set VERSION explicitly and re-run."
+		if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
+			fail "Could not determine the latest version. Set VERSION explicitly and re-run."
+		fi
 	fi
 	info "Installing Chunk CLI ${BOLD}v${VERSION}${RESET} (${OS}/${ARCH})"
 
@@ -108,7 +109,8 @@ install_cli() {
 
 	# --- verify SHA-256 -----------------------------------------------------
 	info "Verifying checksum"
-	expected=$(grep " ${ARCHIVE}\$" "${SCRATCH}/${CHECKSUMS}" | awk '{print $1}')
+	# No match must fall through to the check below, not trip errexit.
+	expected=$(grep " ${ARCHIVE}\$" "${SCRATCH}/${CHECKSUMS}" | awk '{print $1}') || true
 	[ -n "$expected" ] || fail "No checksum entry for ${ARCHIVE} in ${CHECKSUMS}."
 	if command -v sha256sum >/dev/null 2>&1; then
 		actual=$(sha256sum "${SCRATCH}/${ARCHIVE}" | awk '{print $1}')
