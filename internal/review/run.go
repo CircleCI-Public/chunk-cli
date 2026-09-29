@@ -22,8 +22,10 @@ const DefaultTimeout = 15 * time.Minute
 // so hitting this means something went wrong, not that the review was thorough.
 const maxOutputBytes = 256 * 1024
 
-// exitNotFound is the shell's exit code when a command is not on PATH.
-const exitNotFound = 127
+// exitClaudeMissing is the review script's exit code for claude not being on
+// PATH. Not the shell's own 127, which claude also exits with when something it
+// shelled out to is missing: that is one broken review, not a dead pass.
+const exitClaudeMissing = 97
 
 // ErrClaudeMissing is returned when a sidecar has no claude binary.
 var ErrClaudeMissing = errors.New("claude is not installed on the sidecar")
@@ -167,7 +169,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		return r.fail(fmt.Errorf("timed out after %s", opts.Timeout))
 	case err != nil:
 		return r.fail(fmt.Errorf("exec: %w", err))
-	case code == exitNotFound:
+	case code == exitClaudeMissing:
 		return r.fail(ErrClaudeMissing)
 	case code != 0:
 		return r.fail(exitError(code, stderr.String()))
@@ -202,5 +204,5 @@ func claudeScript(repoPath, prompt, model string) string {
 	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
 command -v claude >/dev/null 2>&1 || exit %d
 cd %s && echo %s | base64 -d | %s`,
-		exitNotFound, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
+		exitClaudeMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
 }
