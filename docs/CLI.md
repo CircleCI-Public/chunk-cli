@@ -278,6 +278,15 @@ chunk
   history only** — uncommitted work in the tree is invisible to it. A detached
   HEAD, a repo with no recorded default branch, and a branch that is itself the
   merge target all produce "no answer" rather than a clean bill of health.
+- **`watch` can show a remote daemon.** With `CHUNK_WATCHD_REMOTE_ADDR` and
+  `CHUNK_WATCHD_TCP_TOKEN` set, `watch` reads the daemon at that TCP address instead
+  of the local socket, and never starts a local daemon. The header names the
+  daemon (`local` or `remote host:port`) and turns red with `unreachable` when the
+  last poll failed; a rejected token says so and names `CHUNK_WATCHD_TCP_TOKEN`.
+  The local machine's working directory and project registry describe different
+  repos than the daemon's, so they are not used: the default is every project the
+  daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
+  host**, sent as typed. `--focus` with no path is an error in this mode.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

@@ -317,6 +317,20 @@ JSON over a Unix socket at `~/.chunk/watchd/watchd.sock`
 | `CHUNK_WATCHD_REMOTE_ADDR` | _(local socket)_ | Connect to a remote daemon at this TCP address instead of the local socket (e.g. `127.0.0.1:7777` via an SSH tunnel) |
 | `CHUNK_WATCHD_TCP_TOKEN` | _(required when TCP is enabled)_ | Bearer token required on every TCP request; set the same value on the daemon and all clients. TCP traffic is not encrypted — use an SSH tunnel (`ssh -L`) when the daemon is not on loopback. |
 
+### Remote viewing
+
+`chunk watch` is a pure client of `/snapshot` and `/output`; it opens no local
+state, so it works unchanged against a daemon reached over TCP. What differs:
+
+- `EnsureRunning` / `EnsureLaunched` are no-ops when `CHUNK_WATCHD_REMOTE_ADDR`
+  is set. A remote daemon is managed where it runs.
+- Project filters are matched on the daemon's host. `snapshot` accepts a root by
+  its own spelling or its symlink-resolved one, because a remote viewer can only
+  type a path as it knows it and that need not be the daemon's key.
+- A 401 surfaces as `watchd.ErrUnauthorized` and an unreachable address is
+  reported with the address in the message (`requestError`), so the header
+  (`Connection.Label`) and footer say which daemon failed and why.
+
 Beyond that it owns three things that outlive the processes they came from.
 
 ### Command output buffering

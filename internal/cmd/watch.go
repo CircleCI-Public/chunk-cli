@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
@@ -44,6 +45,9 @@ func newWatchCmd() *cobra.Command {
 			}
 
 			daemonArgs := []string{watchCmdName, watchDaemonSubcmd}
+			if watchd.CurrentConnection().Remote != "" {
+				return runRemoteWatch(cmd, focus, args)
+			}
 			if err := watchd.EnsureRunning(daemonArgs); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
@@ -112,6 +116,49 @@ func newWatchCmd() *cobra.Command {
 	_ = cmd.Flags().MarkDeprecated("all", "watching all known projects is now the default; use --focus to watch only the current directory")
 	cmd.AddCommand(newWatchDaemonCmd())
 	return cmd
+}
+
+// runRemoteWatch runs the dashboard against a daemon on another machine
+// (CHUNK_WATCHD_REMOTE_ADDR).
+//
+// Nothing about the local machine is used to pick what to show. The daemon
+// tracks its own projects at its own paths, so this machine's working directory,
+// git root and project registry describe a different set of repos; sending them
+// as a filter would match nothing and leave an empty dashboard that looks like a
+// quiet one. The default is therefore everything the daemon tracks. Paths given
+// as arguments are taken as paths on the daemon's host and sent as typed.
+func runRemoteWatch(cmd *cobra.Command, focus bool, args []string) error {
+	if watchd.TCPToken() == "" {
+		// A daemon only listens on TCP with a token, so a client without one
+		// cannot be talking to a working daemon. Say so before the dashboard
+		// clears the screen and a 401 becomes an unexplained red header.
+		return newUserError("CHUNK_WATCHD_REMOTE_ADDR is set but CHUNK_WATCHD_TCP_TOKEN is not.").
+			withCode("watch.remote_token_missing").
+			withSuggestion("Set CHUNK_WATCHD_TCP_TOKEN to the token the remote daemon was started with.").
+			withoutDetail()
+	}
+	if focus && len(args) == 0 {
+		return newUserError("--focus needs at least one path on the remote daemon's host.").
+			withCode("command.invalid_args").
+			withSuggestion("Run: chunk watch --focus /path/on/the/daemon/host, or drop --focus to watch every project the daemon tracks.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	m := watch.New(remoteProjects(args), len(args) == 0)
+	p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
+	_, err := p.Run()
+	return err
+}
+
+// remoteProjects turns paths on the daemon's host into dashboard entries.
+// They are cleaned but not resolved: resolving would consult this machine's
+// filesystem about a path that lives on another one.
+func remoteProjects(paths []string) []watch.ProjectEntry {
+	entries := make([]watch.ProjectEntry, 0, len(paths))
+	for _, p := range paths {
+		entries = append(entries, watch.ProjectEntry{ProjectRoot: path.Clean(p)})
+	}
+	return entries
 }
 
 // watchRoots returns the directories the dashboard should watch: the current

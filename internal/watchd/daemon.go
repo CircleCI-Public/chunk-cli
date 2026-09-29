@@ -400,39 +400,43 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 	// is only worth holding while someone is looking at it.
 	d.res.touch()
 
+	// Resolved before the lock: resolving touches the filesystem.
+	wants := make([]string, len(roots))
+	for i, r := range roots {
+		wants[i] = canonicalRoot(r)
+	}
+
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	filter := make(map[string]bool, len(roots))
-	for _, r := range roots {
-		filter[r] = true
+	// A requested root matches a project by its own spelling or by its
+	// symlink-resolved one. The second matters for a remote viewer: it can only
+	// type a path as it knows it on the daemon's host, and that need not be the
+	// spelling the daemon keys the project by (a symlinked home, /tmp on darwin).
+	if len(roots) == 0 {
+		projects := make([]ProjectSnapshot, 0, len(d.projects))
+		for _, ps := range d.projects {
+			projects = append(projects, ps.snap)
+		}
+		// Map iteration is random; sort by root so project rows stay stable
+		// between polls when watchAll mode requests all projects.
+		sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
+		return Snapshot{Projects: projects, AuthError: d.authError}
 	}
 
-	var projects []ProjectSnapshot
-	for _, ps := range d.projects {
-		if len(filter) > 0 && !filter[ps.root] {
-			continue
-		}
-		projects = append(projects, ps.snap)
-	}
-
-	if len(roots) > 0 {
-		ordered := make([]ProjectSnapshot, 0, len(roots))
-		byRoot := make(map[string]ProjectSnapshot, len(projects))
-		for _, p := range projects {
-			byRoot[p.Root] = p
-		}
-		for _, r := range roots {
-			if p, ok := byRoot[r]; ok {
-				ordered = append(ordered, p)
+	ordered := make([]ProjectSnapshot, 0, len(roots))
+	seen := make(map[string]bool, len(roots))
+	for i, r := range roots {
+		for _, ps := range d.projects {
+			if seen[ps.root] || (ps.root != r && ps.canonRoot != wants[i]) {
+				continue
 			}
+			seen[ps.root] = true
+			ordered = append(ordered, ps.snap)
+			break
 		}
-		return Snapshot{Projects: ordered, AuthError: d.authError}
 	}
-	// Map iteration is random; sort by root so project rows stay stable
-	// between polls when watchAll mode requests all projects.
-	sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-	return Snapshot{Projects: projects, AuthError: d.authError}
+	return Snapshot{Projects: ordered, AuthError: d.authError}
 }
 
 // fillMissingOrg gives sidecars whose state recorded no org the project's org.

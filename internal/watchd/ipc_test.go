@@ -226,11 +226,22 @@ func TestSnapshotReportsAuthErrorWhenCredentialsAreMissing(t *testing.T) {
 // TCP, and verify that the bearer-token guard is enforced.
 func startTestDaemonTCP(t *testing.T, token string) string {
 	t.Helper()
+	return startTestDaemonTCPWith(t, token, nil)
+}
+
+// startTestDaemonTCPWith is startTestDaemonTCP with a hook that runs after the
+// isolated environment is in place and before the daemon's first poll, so a test
+// can register projects the daemon will discover on that poll.
+func startTestDaemonTCPWith(t *testing.T, token string, before func()) string {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "wd-tcp")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	t.Setenv("CHUNK_WATCHD_DIR", dir)
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if before != nil {
+		before()
+	}
 
 	// Bind on :0 to get a free port, then keep the listener open and pass it
 	// directly into the daemon. Closing it first and re-opening by address
