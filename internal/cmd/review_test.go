@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
@@ -73,4 +75,31 @@ func TestCredentialRejectedFromConfigFileNamesTheFile(t *testing.T) {
 	assert.Equal(t, ue.msg, "Anthropic rejected the API key in config file (/home/u/.config/chunk/config.json).")
 	assert.Assert(t, strings.Contains(ue.suggestion, "--insecure-storage"), "suggestion: %s", ue.suggestion)
 	assert.Equal(t, ue.exitCode, ExitAuthError)
+}
+
+func TestPrintReviews(t *testing.T) {
+	var out bytes.Buffer
+	printReviews(iostream.Streams{Out: &out, Err: &bytes.Buffer{}}, []review.Result{
+		{
+			Prompt:  "correctness",
+			Summary: "Two problems.",
+			Findings: []review.Finding{
+				{File: "main.go", Line: 12, Severity: review.SeverityHigh, Confidence: 90, Claim: "nil map write", FailureScenario: "empty config panics"},
+				{File: "go.mod", Severity: review.SeverityLow, Confidence: 40, Claim: "stale toolchain", FailureScenario: "builds use an old Go"},
+			},
+		},
+		{Prompt: "clean", Summary: "Nothing found.", Findings: []review.Finding{}},
+		{Prompt: "broken", SidecarID: "sb-2", Error: "claude exited 1", Output: "partial"},
+	})
+
+	want := "## correctness\n\n" +
+		"Two problems.\n" +
+		"\n- **high** `main.go:12` nil map write (confidence 90%)\n  empty config panics\n" +
+		"\n- **low** `go.mod` stale toolchain (confidence 40%)\n  builds use an old Go\n" +
+		"\n## clean\n\n" +
+		"Nothing found.\n" +
+		"\n## broken\n\n" +
+		"_Review failed on sb-2: claude exited 1_\n\n" +
+		"partial\n"
+	assert.Equal(t, out.String(), want)
 }

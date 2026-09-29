@@ -24,6 +24,11 @@ func writePrompts(t *testing.T, dir string, names ...string) {
 	}
 }
 
+// claudeResult is what claude prints with --output-format json for a review
+// answering "One bug." with one finding at main.go:12.
+const claudeResult = `{"type":"result","subtype":"success","is_error":false,"structured_output":{"summary":"One bug.",` +
+	`"findings":[{"file":"main.go","line":12,"severity":"high","confidence":90,"claim":"nil map write","failure_scenario":"empty config panics"}]}}` + "\n"
+
 func TestReviewNoDefaultDir(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
@@ -81,7 +86,7 @@ func setupReviewProject(t *testing.T, resp *fakes.ExecResponse, prompts ...strin
 
 func TestReviewRunsEachPromptOnPool(t *testing.T) {
 	env, cci, workDir := setupReviewProject(t,
-		&fakes.ExecResponse{CommandID: "cmd-1", Stdout: "No issues found.\n", Stderr: "progress noise\n"},
+		&fakes.ExecResponse{CommandID: "cmd-1", Stdout: claudeResult, Stderr: "progress noise\n"},
 		"api", "security", "style")
 
 	result := binary.RunCLI(t, []string{"review", "--parallelism", "2"}, env, workDir)
@@ -90,7 +95,9 @@ func TestReviewRunsEachPromptOnPool(t *testing.T) {
 	for _, name := range []string{"## api", "## security", "## style"} {
 		assert.Assert(t, strings.Contains(result.Stdout, name), "stdout: %s", result.Stdout)
 	}
-	assert.Equal(t, strings.Count(result.Stdout, "No issues found."), 3, "stdout: %s", result.Stdout)
+	assert.Equal(t, strings.Count(result.Stdout, "One bug."), 3, "stdout: %s", result.Stdout)
+	assert.Equal(t, strings.Count(result.Stdout, "- **high** `main.go:12` nil map write (confidence 90%)\n  empty config panics"), 3,
+		"stdout: %s", result.Stdout)
 	assert.Assert(t, !strings.Contains(result.Stdout, "progress noise"), "stdout: %s", result.Stdout)
 	assert.Assert(t, strings.Index(result.Stdout, "## api") < strings.Index(result.Stdout, "## style"))
 
@@ -141,7 +148,7 @@ func execEnv(t *testing.T, cci *fakes.FakeCircleCI) map[string]string {
 }
 
 func TestReviewUsesOAuthTokenWhenNoAPIKey(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: "findings"}, "api")
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: claudeResult}, "api")
 	env.AnthropicKey = ""
 	env.Extra["CLAUDE_CODE_OAUTH_TOKEN"] = "sk-ant-oat01-tok"
 
@@ -156,7 +163,7 @@ func TestReviewUsesOAuthTokenWhenNoAPIKey(t *testing.T) {
 
 // An API key wins, so nothing changes for anyone who already has one.
 func TestReviewAPIKeyBeatsOAuthToken(t *testing.T) {
-	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: "findings"}, "api")
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: claudeResult}, "api")
 	env.Extra["CLAUDE_CODE_OAUTH_TOKEN"] = "sk-ant-oat01-tok"
 
 	result := binary.RunCLI(t, []string{"review"}, env, workDir)
@@ -219,8 +226,17 @@ func TestReviewFailedReviewExitsNonZero(t *testing.T) {
 
 type reviewReport struct {
 	Reviews []struct {
-		Prompt          string  `json:"prompt"`
-		SidecarID       string  `json:"sidecar_id"`
+		Prompt    string `json:"prompt"`
+		SidecarID string `json:"sidecar_id"`
+		Summary   string `json:"summary"`
+		Findings  []struct {
+			File            string `json:"file"`
+			Line            int    `json:"line"`
+			Severity        string `json:"severity"`
+			Confidence      int    `json:"confidence"`
+			Claim           string `json:"claim"`
+			FailureScenario string `json:"failure_scenario"`
+		} `json:"findings"`
 		Output          string  `json:"output"`
 		Error           string  `json:"error"`
 		DurationSeconds float64 `json:"duration_seconds"`
@@ -230,7 +246,7 @@ type reviewReport struct {
 
 func TestReviewJSON(t *testing.T) {
 	env, _, workDir := setupReviewProject(t,
-		&fakes.ExecResponse{CommandID: "cmd-1", Stdout: "No issues found.\n", Stderr: "progress noise\n"},
+		&fakes.ExecResponse{CommandID: "cmd-1", Stdout: claudeResult, Stderr: "progress noise\n"},
 		"api", "security")
 
 	result := binary.RunCLI(t, []string{"review", "--json"}, env, workDir)
@@ -243,7 +259,16 @@ func TestReviewJSON(t *testing.T) {
 	for i, name := range []string{"api", "security"} {
 		r := report.Reviews[i]
 		assert.Equal(t, r.Prompt, name)
-		assert.Equal(t, r.Output, "No issues found.")
+		assert.Equal(t, r.Summary, "One bug.")
+		assert.Equal(t, len(r.Findings), 1)
+		f := r.Findings[0]
+		assert.Equal(t, f.File, "main.go")
+		assert.Equal(t, f.Line, 12)
+		assert.Equal(t, f.Severity, "high")
+		assert.Equal(t, f.Confidence, 90)
+		assert.Equal(t, f.Claim, "nil map write")
+		assert.Equal(t, f.FailureScenario, "empty config panics")
+		assert.Equal(t, r.Output, "")
 		assert.Equal(t, r.Error, "")
 		assert.Assert(t, r.SidecarID != "")
 	}
@@ -263,5 +288,6 @@ func TestReviewJSONFailedReview(t *testing.T) {
 	assert.Equal(t, len(report.Reviews), 1)
 	assert.Equal(t, report.Reviews[0].Output, "partial")
 	assert.Equal(t, report.Reviews[0].Error, "claude exited 1: overloaded")
+	assert.Assert(t, report.Reviews[0].Findings == nil, "a failed review has no findings")
 	assert.Assert(t, strings.Contains(result.Stderr, "1 of 1 review(s) failed"), "stderr: %s", result.Stderr)
 }

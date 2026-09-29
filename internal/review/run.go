@@ -20,8 +20,9 @@ import (
 // so this is minutes rather than the seconds a single API call would take.
 const DefaultTimeout = 15 * time.Minute
 
-// maxOutputBytes caps what is kept of one review's output. A review is prose,
-// so hitting this means something went wrong, not that the review was thorough.
+// maxOutputBytes caps what is kept of one review's output. Findings are a few
+// kilobytes of JSON, so hitting this means something went wrong, not that the
+// review was thorough.
 const maxOutputBytes = 256 * 1024
 
 // exitClaudeMissing is the review script's exit code for claude not being on
@@ -93,11 +94,14 @@ type Options struct {
 	ProgressFn func(ProgressEvent) // optional; called on each prompt state change
 }
 
-// Result is the outcome of one prompt in one pass. Output and Error are not
-// exclusive: a review that fails partway keeps what it produced.
+// Result is the outcome of one prompt in one pass. Summary and Findings are
+// set for a review that succeeded. Output is what claude printed, kept only
+// when a review fails, so the failure can be diagnosed.
 type Result struct {
 	Prompt    string
 	SidecarID string
+	Summary   string
+	Findings  []Finding
 	Output    string
 	Error     string
 	Duration  time.Duration
@@ -224,30 +228,55 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
 	var stdout, stderr strings.Builder
+	var truncated bool
 	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model), claudeEnv(opts), func(stream string, data []byte) {
 		buf := &stdout
 		if stream == circleci.StreamStderr {
 			buf = &stderr
 		}
-		if buf.Len() < maxOutputBytes {
-			buf.Write(data[:min(len(data), maxOutputBytes-buf.Len())])
+		room := maxOutputBytes - buf.Len()
+		if len(data) > room && buf == &stdout {
+			truncated = true
 		}
+		buf.Write(data[:min(len(data), max(room, 0))])
 	})
-	r.Output = strings.TrimSpace(stdout.String())
 	r.Duration = time.Since(start)
+	output := strings.TrimSpace(stdout.String())
+	// Raw output is kept only to diagnose a failed review.
+	fail := func(err error) runResult {
+		r.Output = output
+		return r.fail(err)
+	}
+	if err := runErr(ctx, opts.Timeout, code, err, output, stderr.String()); err != nil {
+		return fail(err)
+	}
+	// Cut-off JSON would otherwise surface as a baffling decode error.
+	if truncated {
+		return fail(fmt.Errorf("output exceeded %d bytes", maxOutputBytes))
+	}
+	out, err := parseReport(output)
+	if err != nil {
+		return fail(err)
+	}
+	r.Summary, r.Findings = out.Summary, out.Findings
+	return r
+}
+
+// runErr is why a review's claude run failed, or nil when it exited cleanly.
+func runErr(ctx context.Context, timeout time.Duration, code int, err error, stdout, stderr string) error {
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
-		return r.fail(fmt.Errorf("timed out after %s", opts.Timeout))
+		return fmt.Errorf("timed out after %s", timeout)
 	case err != nil:
-		return r.fail(fmt.Errorf("exec: %w", err))
+		return fmt.Errorf("exec: %w", err)
 	case code == exitClaudeMissing:
-		return r.fail(ErrClaudeMissing)
-	case code != 0 && credentialRejected(r.Output, stderr.String()):
-		return r.fail(ErrCredentialRejected)
+		return ErrClaudeMissing
+	case code != 0 && credentialRejected(stdout, stderr):
+		return ErrCredentialRejected
 	case code != 0:
-		return r.fail(exitError(code, stderr.String()))
+		return exitError(code, stdout, stderr)
 	}
-	return r
+	return nil
 }
 
 // credentialRejected reports whether claude failed to authenticate. Both
@@ -257,26 +286,39 @@ func credentialRejected(stdout, stderr string) bool {
 	return credentialRejectedRe.MatchString(stdout) || credentialRejectedRe.MatchString(stderr)
 }
 
-// stderrTail is how much of stderr a failed review reports.
-const stderrTail = 2000
+// errorTail is how much of an error message a failed review reports.
+const errorTail = 2000
 
-func exitError(code int, stderr string) error {
-	stderr = strings.TrimSpace(stderr)
-	if stderr == "" {
+// exitError describes a claude run that exited non-zero. Claude's JSON output
+// reports its own errors, such as an overloaded API, in the result on stdout,
+// so that is preferred: stderr can carry unrelated warnings. Stderr is the
+// fallback for failures that happen before claude can report anything.
+func exitError(code int, stdout, stderr string) error {
+	var msg string
+	if env, err := parseEnvelope(stdout); err == nil && env.IsError {
+		msg = strings.TrimSpace(env.Result)
+	}
+	if msg == "" {
+		msg = strings.TrimSpace(stderr)
+	}
+	if msg == "" {
 		return fmt.Errorf("claude exited %d", code)
 	}
-	if len(stderr) > stderrTail {
-		stderr = "…" + stderr[len(stderr)-stderrTail:]
+	if len(msg) > errorTail {
+		msg = "…" + msg[len(msg)-errorTail:]
 	}
-	return fmt.Errorf("claude exited %d: %s", code, stderr)
+	return fmt.Errorf("claude exited %d: %s", code, msg)
 }
 
-// claudeScript builds the shell script that runs one review. The prompt is
-// piped in base64-encoded, so no quoting in it can reach the shell. Claude
-// Code's native installer puts claude in ~/.local/bin, which a non-login sh
-// does not have on PATH.
+// claudeScript builds the shell script that runs one review, answering with
+// findings matching findingsSchema. The prompt is piped in base64-encoded, so
+// no quoting in it can reach the shell. Claude Code's native installer puts
+// claude in ~/.local/bin, which a non-login sh does not have on PATH.
 func claudeScript(repoPath, prompt, model string) string {
-	args := []string{"claude", "-p", "--output-format", "text", "--allowedTools", strings.Join(allowedTools, ",")}
+	args := []string{
+		"claude", "-p", "--output-format", "json", "--json-schema", findingsSchema,
+		"--allowedTools", strings.Join(allowedTools, ","),
+	}
 	if model != "" {
 		args = append(args, "--model", model)
 	}

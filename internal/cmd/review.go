@@ -261,11 +261,27 @@ func printReviews(streams iostream.Streams, results []review.Result) {
 		streams.Printf("## %s\n\n", r.Prompt)
 		if r.Error != "" {
 			streams.Printf("_Review failed on %s: %s_\n\n", r.SidecarID, r.Error)
+			if r.Output != "" {
+				streams.Println(r.Output)
+			}
+			continue
 		}
-		if r.Output != "" {
-			streams.Println(r.Output)
+		if r.Summary != "" {
+			streams.Println(r.Summary)
+		}
+		for _, f := range r.Findings {
+			streams.Printf("\n- **%s** `%s` %s (confidence %d%%)\n  %s\n", f.Severity, findingLocation(f), f.Claim, f.Confidence, f.FailureScenario)
 		}
 	}
+}
+
+// findingLocation is where a finding points: file:line, or just the file for
+// a finding about the file as a whole.
+func findingLocation(f review.Finding) string {
+	if f.Line == 0 {
+		return f.File
+	}
+	return fmt.Sprintf("%s:%d", f.File, f.Line)
 }
 
 // reviewReport is the --json output of a review pass. It is an object rather
@@ -276,12 +292,16 @@ type reviewReport struct {
 	Failed  int          `json:"failed"`
 }
 
+// reviewJSON is one review. Findings is null for a review that failed, so it
+// cannot be mistaken for one that found nothing; Output is set only then.
 type reviewJSON struct {
-	Prompt          string  `json:"prompt"`
-	SidecarID       string  `json:"sidecar_id"`
-	Output          string  `json:"output"`
-	Error           string  `json:"error,omitempty"`
-	DurationSeconds float64 `json:"duration_seconds"`
+	Prompt          string           `json:"prompt"`
+	SidecarID       string           `json:"sidecar_id"`
+	Summary         string           `json:"summary,omitempty"`
+	Findings        []review.Finding `json:"findings"`
+	Output          string           `json:"output,omitempty"`
+	Error           string           `json:"error,omitempty"`
+	DurationSeconds float64          `json:"duration_seconds"`
 }
 
 func newReviewReport(results []review.Result) reviewReport {
@@ -290,6 +310,8 @@ func newReviewReport(results []review.Result) reviewReport {
 		report.Reviews = append(report.Reviews, reviewJSON{
 			Prompt:          r.Prompt,
 			SidecarID:       r.SidecarID,
+			Summary:         r.Summary,
+			Findings:        r.Findings,
 			Output:          r.Output,
 			Error:           r.Error,
 			DurationSeconds: r.Duration.Round(time.Millisecond).Seconds(),
