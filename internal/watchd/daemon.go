@@ -359,13 +359,7 @@ func (d *daemon) updateProject(ps *projectState) {
 	}
 
 	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
-	if orgID, _ := config.ResolveOrgID(ps.root); orgID != "" {
-		for i := range sidecars {
-			if sidecars[i].OrgID == "" {
-				sidecars[i].OrgID = orgID
-			}
-		}
-	}
+	fillMissingOrg(sidecars, ps.root)
 	// Same background context as the PR fetch below: the list must survive this
 	// poll returning.
 	d.live.maybeRefresh(context.Background(), sidecars)
@@ -439,4 +433,25 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 	// between polls when watchAll mode requests all projects.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
 	return Snapshot{Projects: projects, AuthError: d.authError}
+}
+
+// fillMissingOrg gives sidecars whose state recorded no org the project's org.
+// The config is only read when one needs it: it is a disk read, and this runs
+// every poll.
+func fillMissingOrg(sidecars []SidecarState, root string) {
+	orgID := ""
+	resolved := false
+	for i := range sidecars {
+		if sidecars[i].OrgID != "" {
+			continue
+		}
+		if !resolved {
+			orgID, _ = config.ResolveOrgID(root)
+			resolved = true
+		}
+		if orgID == "" {
+			return
+		}
+		sidecars[i].OrgID = orgID
+	}
 }

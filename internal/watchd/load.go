@@ -178,7 +178,7 @@ func projectRepoName(root string) string {
 	return filepath.Base(mainRoot)
 }
 
-// annotateActivity fills LastActivity, LastOp, LastLevel, and Running on each
+// annotateActivity fills LastActivity, LastOp, and Running on each
 // sidecar from the most recent matching event.
 func annotateActivity(sidecars []SidecarState, events []eventlog.Event) {
 	for i := range sidecars {
@@ -190,7 +190,6 @@ func annotateActivity(sidecars []SidecarState, events []eventlog.Event) {
 			}
 			sc.LastActivity = e.Ts
 			sc.LastOp = e.Op
-			sc.LastLevel = e.Level
 			if e.Level != levelDone && e.Level != levelError && time.Since(e.Ts) < RunningTimeout {
 				sc.Running = true
 			}

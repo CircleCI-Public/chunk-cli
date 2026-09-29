@@ -161,3 +161,31 @@ func waitIdle(t *testing.T, l *livenessChecker) {
 	}
 	t.Fatal("fetch still in flight")
 }
+
+func TestReconcileDistrustsAListThatHasGoneStale(t *testing.T) {
+	var calls atomic.Int32
+	l := newLivenessChecker(staticList(&calls, "live"))
+	l.fetch(context.Background(), "org")
+
+	// The API has stopped answering since: a list this old must not keep
+	// vouching for a sidecar that may have expired in the meantime.
+	old := l.lists["org"]
+	old.fetchedAt = time.Now().Add(-2 * listMaxAge)
+	l.lists["org"] = old
+
+	got := l.reconcile([]SidecarState{
+		{ID: "live", OrgID: "org", FileMtime: time.Now().Add(-time.Hour)},
+		{ID: "gone", OrgID: "org", FileMtime: time.Now().Add(-time.Hour)},
+	})
+	assert.DeepEqual(t, ids(got), []string{"live", "gone"})
+	assert.Check(t, !got[0].Verified)
+}
+
+func TestFillMissingOrgKeepsRecordedOrgs(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CIRCLECI_ORG_ID", "env-org")
+	sidecars := []SidecarState{{ID: "a", OrgID: "recorded"}, {ID: "b"}}
+	fillMissingOrg(sidecars, root)
+	assert.Equal(t, sidecars[0].OrgID, "recorded")
+	assert.Equal(t, sidecars[1].OrgID, "env-org")
+}

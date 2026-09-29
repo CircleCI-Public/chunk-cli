@@ -9,11 +9,17 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 )
 
-// LivenessInterval is the minimum time between sidecar list fetches for one
+// livenessInterval is the minimum time between sidecar list fetches for one
 // org. A state file newer than the last fetch forces an early one, so a sidecar
 // created mid-interval is confirmed on the next poll rather than half a minute
 // later.
-const LivenessInterval = 30 * time.Second
+const livenessInterval = 30 * time.Second
+
+// listMaxAge is how long a fetched list is trusted. Past it the list counts as
+// missing, so a sidecar is no longer called confirmed on the strength of an
+// answer the API has since stopped repeating (offline, revoked token). Several
+// intervals long, so one slow or failed fetch does not flip every row.
+const listMaxAge = 5 * time.Minute
 
 // listFn returns the IDs of every sidecar that currently exists in orgID.
 type listFn func(ctx context.Context, orgID string) (map[string]bool, error)
@@ -57,6 +63,7 @@ type livenessChecker struct {
 	lists     map[string]orgList // keyed by org ID; present only after a successful fetch
 	lastFetch map[string]time.Time
 	inflight  map[string]bool
+	failing   map[string]bool // orgs whose last fetch failed, so a failure logs once
 }
 
 func newLivenessChecker(list listFn) *livenessChecker {
@@ -65,6 +72,7 @@ func newLivenessChecker(list listFn) *livenessChecker {
 		lists:     make(map[string]orgList),
 		lastFetch: make(map[string]time.Time),
 		inflight:  make(map[string]bool),
+		failing:   make(map[string]bool),
 	}
 }
 
@@ -91,7 +99,7 @@ func (l *livenessChecker) maybeRefresh(ctx context.Context, sidecars []SidecarSt
 		if l.inflight[org] {
 			continue
 		}
-		if time.Since(last) < LivenessInterval && !mtime.After(last) {
+		if time.Since(last) < livenessInterval && !mtime.After(last) {
 			continue
 		}
 		l.inflight[org] = true
@@ -114,9 +122,14 @@ func (l *livenessChecker) fetch(ctx context.Context, org string) {
 	// every poll. The previous list, if any, stays in place.
 	l.lastFetch[org] = started
 	if err != nil {
-		log.Printf("watchd: list sidecars for org %s: %v", org, err)
+		// Logged when it starts failing, not on every retry.
+		if !l.failing[org] {
+			log.Printf("watchd: list sidecars for org %s: %v", org, err)
+		}
+		l.failing[org] = true
 		return
 	}
+	delete(l.failing, org)
 	l.lists[org] = orgList{ids: ids, fetchedAt: started}
 }
 
@@ -132,6 +145,9 @@ func (l *livenessChecker) reconcile(sidecars []SidecarState) []SidecarState {
 	kept := sidecars[:0]
 	for _, sc := range sidecars {
 		list, ok := l.lists[sc.OrgID]
+		if ok && time.Since(list.fetchedAt) > listMaxAge {
+			ok = false
+		}
 		switch {
 		case !ok || sc.OrgID == "":
 			// Nothing to judge it against.

@@ -46,7 +46,6 @@ type SidecarState struct {
 	Verified     bool        `json:"verified,omitempty"`
 	LastActivity time.Time   `json:"last_activity"`
 	LastOp       eventlog.Op `json:"last_op"`
-	LastLevel    string      `json:"last_level"`
 	Running      bool        `json:"running"`
 	// Resources is the most recent resource sample, or nil when none has
 	// arrived — sampling only runs while a dashboard is attached.
