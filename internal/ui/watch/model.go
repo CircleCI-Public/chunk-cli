@@ -122,7 +122,7 @@ type sidecarInfo struct {
 	verified     bool
 	lastActivity time.Time
 	lastOp       eventlog.Op
-	lastLevel    string // level of the most recent event ("done", "error", etc.)
+	lastResult   string // how the last validate run ended: levelDone, levelError, or "" for none
 	// resources is the latest resource sample, nil when the daemon has none.
 	resources *watchd.Resources
 }
@@ -506,7 +506,7 @@ func (m Model) renderBody(st watchStyles) string {
 }
 
 // rowStatus is the one-line state a sidecar row reports: what it is doing now,
-// or, when idle, how its last run ended. Split out of renderSidecarPane so
+// or, when idle, how its last validate run ended. Split out of renderSidecarPane so
 // neither grows past the complexity limit.
 func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
 	switch {
@@ -518,7 +518,7 @@ func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
 		// alive either; calling it idle would claim more than is known.
 		return st.muted("? unconfirmed")
 	}
-	switch sc.lastLevel {
+	switch sc.lastResult {
 	case levelDone:
 		return st.success(ui.IconOK+" idle") + st.muted(" · last passed")
 	case levelError:

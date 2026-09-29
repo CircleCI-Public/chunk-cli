@@ -67,7 +67,7 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 				fileMtime:    sc.FileMtime,
 				lastActivity: sc.LastActivity,
 				lastOp:       sc.LastOp,
-				lastLevel:    sc.LastLevel,
+				lastResult:   lastValidateResult(p.Events, sc.ID),
 				running:      sc.Running || commandRunning(p.Commands, sc.ID),
 				verified:     sc.Verified,
 				resources:    sc.Resources,
@@ -100,4 +100,24 @@ func commandRunning(commands []watchd.CommandState, sidecarID string) bool {
 		}
 	}
 	return false
+}
+
+// lastValidateResult is the level of the most recent validate run to finish on
+// sidecarID — levelDone or levelError — or "" when none has in the retained
+// events. The sidecar's last event will not do: a sync finishes "done" too, so
+// a failed run followed by a sync would read as a pass.
+func lastValidateResult(events []eventlog.Event, sidecarID string) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		e := events[i]
+		if e.SidecarID != sidecarID || e.Op != eventlog.OpValidate {
+			continue
+		}
+		if _, _, ok := e.Outcome(); !ok {
+			continue
+		}
+		if e.Level == levelDone || e.Level == levelError {
+			return e.Level
+		}
+	}
+	return ""
 }

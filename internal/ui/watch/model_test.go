@@ -310,9 +310,9 @@ func TestRowStatus(t *testing.T) {
 	}{
 		{"running shows the op", sidecarInfo{running: true, verified: true, lastOp: eventlog.OpValidate}, string(eventlog.OpValidate) + "..."},
 		{"running wins over unconfirmed", sidecarInfo{running: true, lastOp: eventlog.OpValidate}, string(eventlog.OpValidate) + "..."},
-		{"unconfirmed is not called idle", sidecarInfo{lastLevel: levelDone}, "? unconfirmed"},
-		{"idle after a pass", sidecarInfo{verified: true, lastLevel: levelDone}, "idle · last passed"},
-		{"idle after a failure", sidecarInfo{verified: true, lastLevel: levelError}, "idle · last failed"},
+		{"unconfirmed is not called idle", sidecarInfo{lastResult: levelDone}, "? unconfirmed"},
+		{"idle after a pass", sidecarInfo{verified: true, lastResult: levelDone}, "idle · last passed"},
+		{"idle after a failure", sidecarInfo{verified: true, lastResult: levelError}, "idle · last failed"},
 		{"idle with no runs", sidecarInfo{verified: true}, "idle"},
 	}
 	for _, tc := range tests {
@@ -936,6 +936,45 @@ func TestConvertSnapshot_projectWithOnlyLocalRunsIsEmpty(t *testing.T) {
 
 	assert.Equal(t, len(msg.sidecars), 0)
 	assert.Equal(t, len(msg.projects), 1)
+}
+
+// A sync finishes "done" as well, so a failed run followed by a sync must still
+// read as failed, and a sidecar that has only ever synced has no result at all.
+func TestConvertSnapshot_resultComesFromTheLastValidateRun(t *testing.T) {
+	now := time.Now()
+	ev := func(ago time.Duration, id string, op eventlog.Op, level string, final bool) eventlog.Event {
+		return eventlog.Event{Ts: now.Add(-ago), SidecarID: id, Op: op, Level: level, Final: final}
+	}
+	snap := watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+		Root: "/repo", Branch: "main", RepoName: "repo",
+		Sidecars: []watchd.SidecarState{
+			{ID: "failed-then-synced", Verified: true, LastActivity: now},
+			{ID: "only-synced", Verified: true, LastActivity: now},
+			{ID: "passed", Verified: true, LastActivity: now},
+		},
+		Events: []eventlog.Event{
+			ev(10*time.Minute, "failed-then-synced", eventlog.OpValidate, levelError, true),
+			ev(5*time.Minute, "failed-then-synced", eventlog.OpSync, levelDone, false),
+			ev(5*time.Minute, "only-synced", eventlog.OpSync, levelDone, false),
+			// The newest finished run wins, and a step from a run still in
+			// flight does not clear it.
+			ev(4*time.Minute, "passed", eventlog.OpValidate, levelError, true),
+			ev(3*time.Minute, "passed", eventlog.OpValidate, levelDone, true),
+			ev(2*time.Minute, "passed", eventlog.OpValidate, "step", false),
+		},
+	}}}
+
+	msg := convertSnapshot(snap, New(nil, true))
+
+	got := map[string]string{}
+	for _, sc := range msg.sidecars {
+		got[sc.id] = sc.lastResult
+	}
+	assert.DeepEqual(t, got, map[string]string{
+		"failed-then-synced": levelError,
+		"only-synced":        "",
+		"passed":             levelDone,
+	})
 }
 
 func TestConvertSnapshot_carriesVerifiedAndRunningCommands(t *testing.T) {
