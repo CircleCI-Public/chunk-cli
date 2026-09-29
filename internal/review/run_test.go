@@ -94,13 +94,31 @@ func TestRunPass(t *testing.T) {
 func TestRunPassClaudeMissingStopsPass(t *testing.T) {
 	t.Parallel()
 	exec := func(context.Context, *sidecar.PoolEntry, string, map[string]string, circleci.OutputFn) (int, error) {
-		return exitNotFound, nil
+		return exitClaudeMissing, nil
 	}
 
 	pool := newSafePool("sb-1", "sb-2")
 	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
 		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}, {Name: "c", Body: "z"}}, Options{})
 	assert.Assert(t, errors.Is(err, ErrClaudeMissing), "got %v", err)
+}
+
+func TestRunPassShellNotFoundIsOneFailedReview(t *testing.T) {
+	t.Parallel()
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, _ map[string]string, _ circleci.OutputFn) (int, error) {
+		if promptOf(t, script) == "x" {
+			return 127, nil
+		}
+		return 0, nil
+	}
+
+	pool := newSafePool("sb-1", "sb-2")
+	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}}, Options{})
+	assert.NilError(t, err)
+	assert.Equal(t, len(results), 2)
+	assert.Equal(t, results[0].Error, "claude exited 127")
+	assert.Equal(t, results[1].Error, "")
 }
 
 func TestRunPassTimeout(t *testing.T) {

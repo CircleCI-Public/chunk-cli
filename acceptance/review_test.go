@@ -125,12 +125,25 @@ func TestReviewNoAnthropicKey(t *testing.T) {
 }
 
 func TestReviewClaudeMissing(t *testing.T) {
-	env, _, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", ExitCode: 127}, "api", "security")
+	// 97 is the review script's own exit code for claude not being on PATH.
+	env, _, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", ExitCode: 97}, "api", "security")
 
 	result := binary.RunCLI(t, []string{"review"}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
 	assert.Assert(t, strings.Contains(result.Stderr, "Claude Code is not installed"), "stderr: %s", result.Stderr)
+}
+
+// A 127 comes from claude shelling out to something missing, not from claude
+// being absent, so it fails that review without stopping the pass.
+func TestReviewShellNotFoundIsNotClaudeMissing(t *testing.T) {
+	env, _, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", ExitCode: 127}, "api", "security")
+
+	result := binary.RunCLI(t, []string{"review"}, env, workDir)
+
+	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
+	assert.Assert(t, !strings.Contains(result.Stderr, "Claude Code is not installed"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "claude exited 127"), "stderr: %s", result.Stderr)
 }
 
 func TestReviewFailedReviewExitsNonZero(t *testing.T) {
