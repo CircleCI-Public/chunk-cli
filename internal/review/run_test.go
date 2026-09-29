@@ -216,3 +216,35 @@ func TestClaudeScript(t *testing.T) {
 	assert.Assert(t, !strings.Contains(script, "Edit"), script)
 	assert.Equal(t, promptOf(t, script), "hi")
 }
+
+func TestRunPassForwardsACustomBaseURL(t *testing.T) {
+	t.Parallel()
+	var gotEnv map[string]string
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn) (int, error) {
+		gotEnv = env
+		return 0, nil
+	}
+
+	pool := newSafePool("sb-1")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}},
+		Options{Credential: Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}, BaseURL: "https://llm-gateway.example"})
+	assert.NilError(t, err)
+	assert.Equal(t, gotEnv["ANTHROPIC_BASE_URL"], "https://llm-gateway.example")
+}
+
+func TestRunPassOmitsTheDefaultBaseURL(t *testing.T) {
+	t.Parallel()
+	var gotEnv map[string]string
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn) (int, error) {
+		gotEnv = env
+		return 0, nil
+	}
+
+	pool := newSafePool("sb-1")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}},
+		Options{Credential: Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}, BaseURL: "https://api.anthropic.com/"})
+	assert.NilError(t, err)
+	assert.Equal(t, len(gotEnv), 1)
+}

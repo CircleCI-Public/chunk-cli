@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -19,6 +20,9 @@ import (
 // setupTimeout bounds the whole flow. It is a browser round trip with a human
 // in it, not a request.
 const setupTimeout = 5 * time.Minute
+
+// tokenPrefix starts every token `claude setup-token` prints.
+const tokenPrefix = "sk-ant-oat" //nolint:gosec // a prefix, not a credential
 
 // tokenRe matches the token `claude setup-token` prints.
 var tokenRe = regexp.MustCompile(`sk-ant-oat[0-9]{2}-[A-Za-z0-9_-]{20,}`)
@@ -66,8 +70,10 @@ func SetupToken(ctx context.Context, streams iostream.Streams, prompter func(str
 	return prompter("Token")
 }
 
-// redactWriter forwards whole lines to w with any token blanked, so a captured
-// setup-token flow still shows its prompts and authorize URL.
+// redactWriter forwards output to w with any token blanked, so a captured
+// setup-token flow still shows its prompts and authorize URL. Text is held back
+// only from where a token could start, so a prompt claude leaves the cursor on
+// reaches the terminal while claude waits for input.
 type redactWriter struct {
 	w    io.Writer
 	line bytes.Buffer
@@ -79,6 +85,9 @@ func (r *redactWriter) Write(p []byte) (int, error) {
 		i := bytes.IndexByte(p, '\n')
 		if i < 0 {
 			r.line.Write(p)
+			if err := r.emitSafe(); err != nil {
+				return 0, err
+			}
 			break
 		}
 		r.line.Write(p[:i+1])
@@ -97,6 +106,32 @@ func (r *redactWriter) Flush() error {
 		return nil
 	}
 	return r.emit()
+}
+
+// emitSafe forwards the pending text up to the first place a token could
+// start, keeping the rest until a newline or more text settles it.
+func (r *redactWriter) emitSafe() error {
+	line := r.line.String()
+	safe := tokenStart(line)
+	if safe == 0 {
+		return nil
+	}
+	r.line.Reset()
+	r.line.WriteString(line[safe:])
+	_, err := io.WriteString(r.w, line[:safe])
+	return err
+}
+
+// tokenStart returns the index of the first place in s a token starts or could
+// start once more text arrives, or len(s) when there is none.
+func tokenStart(s string) int {
+	for i := range len(s) {
+		rest := s[i:]
+		if strings.HasPrefix(rest, tokenPrefix) || strings.HasPrefix(tokenPrefix, rest) {
+			return i
+		}
+	}
+	return len(s)
 }
 
 func (r *redactWriter) emit() error {

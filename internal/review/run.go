@@ -63,9 +63,12 @@ var allowedTools = []string{
 // Options configures one review pass.
 type Options struct {
 	Credential Credential
-	Model      string        // optional; claude's default when empty
-	Timeout    time.Duration // per review; DefaultTimeout when zero
-	StatusFn   iostream.StatusFunc
+	// BaseURL is forwarded to claude when it is not Anthropic's own, so a
+	// credential issued by a gateway is sent to that gateway.
+	BaseURL  string
+	Model    string        // optional; claude's default when empty
+	Timeout  time.Duration // per review; DefaultTimeout when zero
+	StatusFn iostream.StatusFunc
 }
 
 // Result is the outcome of one prompt in one pass. Output and Error are not
@@ -96,9 +99,9 @@ func ClientExec(ctx context.Context, entry *sidecar.PoolEntry, script string, en
 // are recorded in Result.Error; the returned error is for failures that stop
 // the pass itself.
 //
-// A missing claude binary stops the pass rather than being recorded per
-// prompt: every sidecar in a pool comes from one image, so it would fail every
-// review the same way.
+// A missing claude binary or a rejected credential stops the pass rather than
+// being recorded per prompt: every sidecar in a pool shares one image and one
+// credential, so either would fail every review the same way.
 func RunPass(ctx context.Context, acquire func(context.Context) (*sidecar.PoolEntry, error), release func(*sidecar.PoolEntry), exec Execer, prompts []Prompt, opts Options) ([]Result, error) {
 	if opts.Timeout <= 0 {
 		opts.Timeout = DefaultTimeout
@@ -174,9 +177,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
 	var stdout, stderr strings.Builder
-	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model), map[string]string{
-		opts.Credential.EnvVar: opts.Credential.Value,
-	}, func(stream string, data []byte) {
+	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model), claudeEnv(opts), func(stream string, data []byte) {
 		buf := &stdout
 		if stream == circleci.StreamStderr {
 			buf = &stderr
@@ -237,4 +238,17 @@ func claudeScript(repoPath, prompt, model string) string {
 command -v claude >/dev/null 2>&1 || exit %d
 cd %s && echo %s | base64 -d | %s`,
 		exitClaudeMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
+}
+
+// defaultBaseURL is where claude sends requests when no base URL is set.
+const defaultBaseURL = "https://api.anthropic.com"
+
+// claudeEnv is the environment each review runs with: only the credential, and
+// the base URL when it points somewhere other than Anthropic.
+func claudeEnv(opts Options) map[string]string {
+	env := map[string]string{opts.Credential.EnvVar: opts.Credential.Value}
+	if opts.BaseURL != "" && strings.TrimRight(opts.BaseURL, "/") != defaultBaseURL {
+		env["ANTHROPIC_BASE_URL"] = opts.BaseURL
+	}
+	return env
 }

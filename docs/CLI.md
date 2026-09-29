@@ -11,9 +11,9 @@ chunk
 │   │   --no-browser                # Print the login URL instead of opening a browser
 │   ├── signup                      # Sign up for a new CircleCI account via browser
 │   │   --no-browser                # Print the signup URL instead of opening a browser
-│   ├── set <provider>               # Store credential (circleci | anthropic | github)
+│   ├── set <provider>               # Store credential (circleci | anthropic | anthropic-oauth | github)
 │   ├── status                      # Check authentication status (CircleCI, Anthropic, GitHub)
-│   └── remove <provider>           # Remove stored credential (circleci | anthropic | github)
+│   └── remove <provider>           # Remove stored credential (circleci | anthropic | anthropic-oauth | github)
 │
 ├── org                             # Manage CircleCI organizations
 │   └── create <name>               # Create a new standalone CircleCI organization

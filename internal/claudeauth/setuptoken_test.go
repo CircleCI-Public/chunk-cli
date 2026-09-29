@@ -108,7 +108,7 @@ func TestRedactWriterReportsEveryByteConsumed(t *testing.T) {
 }
 
 // A token split across two writes still has to be redacted, so the writer
-// cannot forward a partial line eagerly.
+// holds back a partial line from where a token could start.
 func TestRedactWriterRedactsAcrossWrites(t *testing.T) {
 	var out strings.Builder
 	r := &redactWriter{w: &out}
@@ -120,4 +120,28 @@ func TestRedactWriterRedactsAcrossWrites(t *testing.T) {
 	assert.NilError(t, r.Flush())
 
 	assert.Equal(t, out.String(), "[token redacted]\n")
+}
+
+// A prompt with no newline has to reach the terminal while claude waits on
+// stdin, not only once claude exits.
+func TestRedactWriterForwardsAPromptBeforeItsNewline(t *testing.T) {
+	var out strings.Builder
+	r := &redactWriter{w: &out}
+
+	_, err := r.Write([]byte("Paste code here > "))
+	assert.NilError(t, err)
+	assert.Equal(t, out.String(), "Paste code here > ")
+}
+
+func TestRedactWriterHoldsBackAPossibleTokenStart(t *testing.T) {
+	var out strings.Builder
+	r := &redactWriter{w: &out}
+
+	_, err := r.Write([]byte("token: sk-an"))
+	assert.NilError(t, err)
+	assert.Equal(t, out.String(), "token: ")
+
+	_, err = r.Write([]byte(fakeToken[len("sk-an"):] + "\n"))
+	assert.NilError(t, err)
+	assert.Equal(t, out.String(), "token: [token redacted]\n")
 }

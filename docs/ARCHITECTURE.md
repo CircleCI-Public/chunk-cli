@@ -194,7 +194,8 @@ in `config.Resolve` and makes clients testable.
 | Variable | Used by | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | anthropic, config, validate | Anthropic authentication |
-| `ANTHROPIC_BASE_URL` | anthropic, validate | API endpoint override |
+| `ANTHROPIC_BASE_URL` | anthropic, review, validate | API endpoint override |
+| `CLAUDE_CODE_OAUTH_TOKEN` | config, review | Claude subscription authentication for reviews |
 | `GITHUB_TOKEN` | github | GitHub authentication |
 | `GITHUB_API_URL` | github, upgrade | GitHub API endpoint override (also used by the update check) |
 | `CIRCLE_TOKEN` / `CIRCLECI_TOKEN` | circleci | CircleCI authentication |

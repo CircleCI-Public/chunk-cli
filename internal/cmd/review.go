@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -92,7 +93,7 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 			// review fails, and the pool would bill for nothing.
 			cred, credSource, credErr := reviewCredential(rc)
 			if credErr != nil {
-				if err := setupClaudeCredential(ctx, cmd, streams, rc, credErr); err != nil {
+				if err := setupClaudeCredential(ctx, cmd, streams, rc, jsonOut, credErr); err != nil {
 					return err
 				}
 				rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
@@ -155,6 +156,7 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 			statusFn(iostream.LevelStep, fmt.Sprintf("Running %d review(s)...", len(prompts)))
 			results, err := review.RunPass(ctx, pool.Acquire, pool.Release, review.ClientExec, prompts, review.Options{
 				Credential: cred,
+				BaseURL:    rc.AnthropicBaseURL,
 				Model:      model,
 				Timeout:    timeout,
 				StatusFn:   statusFn,
@@ -277,13 +279,24 @@ func reviewCredential(rc config.ResolvedConfig) (review.Credential, string, erro
 }
 
 // credentialRejected reports a credential Anthropic refused, clearing it first
-// when it was one we stored. A credential from the environment is the user's to
-// fix, so it is only named.
+// when it was one we stored in the keychain. A credential from the environment
+// is the user's to fix, so it is only named, and a key in the config file is
+// pointed at rather than rewritten.
 func credentialRejected(cred review.Credential, source, baseURL string, err error) error {
-	if source != keyring.SourceKeychain {
+	if strings.HasPrefix(source, "Environment") {
 		return &userError{
 			msg:        fmt.Sprintf("Anthropic rejected the credential in %s.", cred.EnvVar),
 			suggestion: "Replace it, or unset it to use a stored credential instead.",
+			exitCode:   ExitAuthError,
+			hideDetail: true,
+			err:        err,
+		}
+	}
+
+	if source != keyring.SourceKeychain {
+		return &userError{
+			msg:        fmt.Sprintf("Anthropic rejected the API key in %s.", strings.ToLower(source[:1])+source[1:]),
+			suggestion: "Run 'chunk auth set anthropic --insecure-storage' to replace it, or 'chunk auth remove anthropic --insecure-storage' to remove it.",
 			exitCode:   ExitAuthError,
 			hideDetail: true,
 			err:        err,
@@ -315,9 +328,11 @@ func credentialRejected(cred review.Credential, source, baseURL string, err erro
 
 // setupClaudeCredential offers to mint a subscription token when nothing is
 // stored. A non-interactive run gets credErr back untouched: there is nobody to
-// complete the browser flow.
-func setupClaudeCredential(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, rc config.ResolvedConfig, credErr error) error {
-	if nonInteractive() {
+// complete the browser flow. So does a --json run, whose stdout the setup's
+// output would corrupt, and an --insecure-storage run, which cannot store the
+// token.
+func setupClaudeCredential(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, rc config.ResolvedConfig, jsonOut bool, credErr error) error {
+	if nonInteractive() || jsonOut || insecureStorageFlag(cmd) {
 		return credErr
 	}
 	streams.ErrPrintln(ui.Warning("No Claude credential found."))
@@ -325,5 +340,5 @@ func setupClaudeCredential(ctx context.Context, cmd *cobra.Command, streams iost
 	if err != nil || !mint {
 		return credErr
 	}
-	return authSetAnthropicOAuth(ctx, streams, rc.AnthropicBaseURL, false, false, insecureStorageFlag(cmd))
+	return authSetAnthropicOAuth(ctx, streams, rc.AnthropicBaseURL, false, false, false)
 }
