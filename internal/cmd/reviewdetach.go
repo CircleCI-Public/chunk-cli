@@ -99,6 +99,10 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 		return err
 	}
 
+	if err := checkNoActiveRun(ctx, req.client, req.workDir); err != nil {
+		return err
+	}
+
 	statusFn(iostream.LevelStep, "Preparing the primary sidecar...")
 	pool, err := sidecar.NewPool(ctx, req.client, sidecar.PoolOptions{
 		Size:    1,
@@ -326,7 +330,9 @@ func newReviewResultsCmd() *cobra.Command {
 	return cmd
 }
 
-func printDetachedResults(ctx context.Context, client *circleci.Client, streams iostream.Streams, st detachedState, jsonOut bool) error {
+// execRead runs the read script for a detached run on its primary sidecar and
+// returns what it printed and its exit code.
+func execRead(ctx context.Context, client *circleci.Client, st detachedState) (string, int, error) {
 	var stdout bytes.Buffer
 	res, err := client.Exec(ctx, st.SidecarID, "sh", []string{"-c", review.ReadScript(st.RunDir)}, nil,
 		func(stream string, data []byte) {
@@ -335,17 +341,52 @@ func printDetachedResults(ctx context.Context, client *circleci.Client, streams 
 			}
 		})
 	if err != nil {
+		return "", 0, err
+	}
+	return stdout.String(), res.ExitCode, nil
+}
+
+// checkNoActiveRun refuses to start a detached review while this project's
+// previous one is still running on its primary sidecar. The two would share the
+// primary's checkout and reviewer pool, and the new run would replace the local
+// record of the old one, so its report could no longer be fetched. If the
+// previous run cannot be read, for instance because its sidecar has expired,
+// there is nothing left to protect and a new run may start.
+func checkNoActiveRun(ctx context.Context, client *circleci.Client, workDir string) error {
+	st, err := loadDetachedState(workDir)
+	if err != nil {
+		return nil
+	}
+	out, code, err := execRead(ctx, client, st)
+	if err != nil || code != 0 {
+		return nil
+	}
+	status, err := review.ParseRead(out)
+	if err != nil || status.State != review.RunRunning {
+		return nil
+	}
+	return &userError{
+		msg: fmt.Sprintf("A detached review is still running on sidecar %s (started %s ago).",
+			st.SidecarID, time.Since(st.StartedAt).Round(time.Second)),
+		suggestion: "Read it with 'chunk review results', or wait for it to finish before starting another.",
+		hideDetail: true,
+	}
+}
+
+func printDetachedResults(ctx context.Context, client *circleci.Client, streams iostream.Streams, st detachedState, jsonOut bool) error {
+	out, code, err := execRead(ctx, client, st)
+	if err != nil {
 		return &userError{
 			msg:        fmt.Sprintf("Could not reach the primary sidecar %s.", st.SidecarID),
 			suggestion: "It may have expired. Run 'chunk review --detach' to start again.",
 			err:        err,
 		}
 	}
-	if res.ExitCode != 0 {
+	if code != 0 {
 		return &userError{msg: "Could not read the review from the primary sidecar.", hideDetail: true,
-			err: fmt.Errorf("exit %d", res.ExitCode)}
+			err: fmt.Errorf("exit %d", code)}
 	}
-	status, err := review.ParseRead(stdout.String())
+	status, err := review.ParseRead(out)
 	if err != nil {
 		return &userError{msg: "Could not read the review from the primary sidecar.", err: err}
 	}

@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -9,7 +12,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
 func TestRelativePromptsDir(t *testing.T) {
@@ -83,4 +88,54 @@ func TestDetachedFailure(t *testing.T) {
 	err = detachedFailure(failed, review.RunStatus{State: review.RunDone})
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Assert(t, strings.Contains(ue.msg, "1 of 2 review(s) failed"), ue.msg)
+}
+
+func TestCheckNoActiveRun(t *testing.T) {
+	// The previous run is described to the guard by what its primary sidecar
+	// prints when asked, so each case fakes that answer.
+	tests := []struct {
+		name      string
+		saved     bool
+		stdout    string
+		exitCode  int
+		statusErr int
+		wantBusy  bool
+	}{
+		{name: "no previous run", saved: false},
+		{name: "previous run is still going", saved: true, stdout: "STATUS running\nworking\n", wantBusy: true},
+		{name: "previous run finished", saved: true, stdout: "STATUS done 0\n{}\n"},
+		{name: "previous run died", saved: true, stdout: "STATUS died\n"},
+		{name: "previous run is gone from the sidecar", saved: true, stdout: "STATUS missing\n"},
+		{name: "primary sidecar expired", saved: true, statusErr: http.StatusNotFound},
+		{name: "primary could not be read", saved: true, stdout: "STATUS running\n", exitCode: 1},
+		{name: "unintelligible answer", saved: true, stdout: "hello\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cci := fakes.NewFakeCircleCI()
+			cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-1", Stdout: tt.stdout, ExitCode: tt.exitCode}
+			cci.ExecStatusCode = tt.statusErr
+			srv := httptest.NewServer(cci)
+			t.Cleanup(srv.Close)
+			client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+			assert.NilError(t, err)
+
+			work := t.TempDir()
+			if tt.saved {
+				assert.NilError(t, saveDetachedState(work, detachedState{
+					SidecarID: "sc-1", RunDir: "/home/user/.chunk-review/r", StartedAt: time.Now().Add(-time.Minute),
+				}))
+			}
+
+			err = checkNoActiveRun(context.Background(), client, work)
+			if !tt.wantBusy {
+				assert.NilError(t, err)
+				return
+			}
+			var ue *userError
+			assert.Assert(t, errors.As(err, &ue), "got %v", err)
+			assert.Assert(t, strings.Contains(ue.msg, "still running on sidecar sc-1"), ue.msg)
+			assert.Assert(t, strings.Contains(ue.suggestion, "chunk review results"), ue.suggestion)
+		})
+	}
 }
