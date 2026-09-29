@@ -12,7 +12,7 @@ jobs:
     # snapd, which needs systemd and won't run inside a container.
     machine:
       image: ubuntu-2604:current
-    resource_class: medium
+    resource_class: large
     steps:
       - checkout
       - run: circleci run github.com/circleci-functions/setup-go@v0.5.1-684fd5b -- --version-file go.mod

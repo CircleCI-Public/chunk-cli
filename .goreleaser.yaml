@@ -199,7 +199,9 @@ snapcrafts:
     license: MIT
     grade: devel
     confinement: strict
-    publish: true
+    # Build the snap but don't upload it until the `chunk` name is
+    # registered in the Snap Store and we decide to publish there.
+    publish: false
     # devel-grade snaps can only be released to edge/beta, never
     # candidate/stable. Pin the channels until grade becomes stable.
     channel_templates:
