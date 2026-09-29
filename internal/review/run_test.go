@@ -6,6 +6,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -172,6 +174,41 @@ func TestRunPassSuccessfulReviewQuotingA401(t *testing.T) {
 	assert.Equal(t, results[0].Error, "")
 }
 
+func TestRunPassClaudeMissingNoSpuriousFailures(t *testing.T) {
+	t.Parallel()
+	// One goroutine returns exitClaudeMissing immediately; the rest block until the
+	// context is canceled. The context-canceled results must be attributed to
+	// ErrClaudeMissing, not shown as generic "exec: context canceled" failures.
+	var first atomic.Bool
+	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn) (int, error) {
+		if first.CompareAndSwap(false, true) {
+			return exitClaudeMissing, nil
+		}
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+
+	pool := newSafePool("sb-1", "sb-2", "sb-3")
+	var mu sync.Mutex
+	var failedEvents []string
+	record := func(e ProgressEvent) {
+		if e.State == StateFailed {
+			mu.Lock()
+			failedEvents = append(failedEvents, e.Prompt+": "+e.Error)
+			mu.Unlock()
+		}
+	}
+
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}, {Name: "c", Body: "z"}},
+		Options{ProgressFn: record})
+	assert.Assert(t, errors.Is(err, ErrClaudeMissing), "got %v", err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, len(failedEvents), 0, "expected no StateFailed events when claude is missing, got: %v", failedEvents)
+}
+
 func TestRunPassTimeout(t *testing.T) {
 	t.Parallel()
 	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn) (int, error) {
@@ -204,6 +241,57 @@ func TestRunPassAcquireFailureKeepsStartedResults(t *testing.T) {
 	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
 	assert.Equal(t, len(results), 1)
 	assert.Equal(t, results[0].Prompt, "a")
+}
+
+func TestRunPassProgressFn(t *testing.T) {
+	t.Parallel()
+	pool := newSafePool("sb-1", "sb-2")
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, _ map[string]string, out circleci.OutputFn) (int, error) {
+		out(circleci.StreamStdout, []byte("ok"))
+		if promptOf(t, script) == "fail" {
+			return 1, nil
+		}
+		return 0, nil
+	}
+
+	type ev struct {
+		prompt string
+		state  PromptState
+	}
+	var mu sync.Mutex
+	var events []ev
+	record := func(e ProgressEvent) {
+		mu.Lock()
+		events = append(events, ev{e.Prompt, e.State})
+		mu.Unlock()
+	}
+
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "pass", Body: "x"}, {Name: "fail", Body: "fail"}},
+		Options{ProgressFn: record})
+	assert.NilError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Both prompts must appear as queued before any running event.
+	queued := map[string]bool{}
+	for _, e := range events {
+		if e.state == StateQueued {
+			queued[e.prompt] = true
+		}
+	}
+	assert.Assert(t, queued["pass"] && queued["fail"], "want both prompts queued, got %v", events)
+
+	// Each prompt must end in a terminal state.
+	terminal := map[string]PromptState{}
+	for _, e := range events {
+		if e.state == StateDone || e.state == StateFailed {
+			terminal[e.prompt] = e.state
+		}
+	}
+	assert.Equal(t, terminal["pass"], StateDone)
+	assert.Equal(t, terminal["fail"], StateFailed)
 }
 
 func TestClaudeScript(t *testing.T) {
