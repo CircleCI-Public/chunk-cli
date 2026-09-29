@@ -17,19 +17,22 @@ func renderResources(st watchStyles, r *watchd.Resources) string {
 	if r == nil || r.SampledAt.IsZero() {
 		return ""
 	}
-	cpu := fmt.Sprintf("cpu %3.0f%%", r.CPUPercent)
+	// Single spaces and unpadded numbers: the row is indented into a
+	// leftPaneWidth pane, and the padded form ran to 31 columns, clipping the
+	// disk figure off every row.
+	cpu := fmt.Sprintf("cpu %.0f%%", r.CPUPercent)
 	mem := "mem —"
 	if r.MemLimitBytes > 0 {
 		pct := float64(r.MemUsedBytes) / float64(r.MemLimitBytes) * 100
-		mem = fmt.Sprintf("mem %3.0f%%", pct)
+		mem = fmt.Sprintf("mem %.0f%%", pct)
 	} else if r.MemUsedBytes > 0 {
 		mem = "mem " + humanBytes(r.MemUsedBytes)
 	}
 
-	line := cpu + "  " + mem
+	line := cpu + " " + mem
 	if r.DiskTotalBytes > 0 {
 		pct := float64(r.DiskUsedBytes) / float64(r.DiskTotalBytes) * 100
-		line += fmt.Sprintf("  disk %3.0f%%", pct)
+		line += fmt.Sprintf(" disk %.0f%%", pct)
 	}
 
 	if stale(r.SampledAt) {
