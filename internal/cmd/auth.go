@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/claudeauth"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
@@ -22,7 +23,10 @@ import (
 const (
 	providerCircleCI  = "circleci"
 	providerAnthropic = "anthropic"
-	providerGitHub    = "github"
+	// providerAnthropicOAuth is the long-lived Claude subscription token, which
+	// claude reads from CLAUDE_CODE_OAUTH_TOKEN. Keychain only.
+	providerAnthropicOAuth = "anthropic-oauth"
+	providerGitHub         = "github"
 )
 
 func newAuthCmd() *cobra.Command {
@@ -118,7 +122,7 @@ func newAuthSetCmd() *cobra.Command {
 		Use:       "set <provider>",
 		Short:     "Store credentials for a provider",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{providerCircleCI, providerAnthropic, providerGitHub},
+		ValidArgs: []string{providerCircleCI, providerAnthropic, providerAnthropicOAuth, providerGitHub},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -131,13 +135,16 @@ func newAuthSetCmd() *cobra.Command {
 			case providerAnthropic:
 				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
 				return authSetAnthropic(cmd.Context(), io, rc.AnthropicBaseURL, envSet, force, insecureStorage)
+			case providerAnthropicOAuth:
+				envSet := strings.HasPrefix(rc.ClaudeOAuthTokenSource, "Environment")
+				return authSetAnthropicOAuth(cmd.Context(), io, rc.AnthropicBaseURL, envSet, force, insecureStorage)
 			case providerGitHub:
 				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
 				return authSetGitHub(cmd.Context(), io, rc.GitHubAPIURL, envSet, force, insecureStorage)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
-					detail: "Valid providers: circleci, anthropic, github.",
+					detail: "Valid providers: circleci, anthropic, anthropic-oauth, github.",
 					errMsg: fmt.Sprintf("unknown provider %q", provider),
 				}
 			}
@@ -197,7 +204,7 @@ func authSetCircleCI(ctx context.Context, io iostream.Streams, baseURL string, e
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return &userError{
-			msg:        "Token cannot be empty.",
+			msg:        msgEmptyToken,
 			suggestion: "Create a token at https://app.circleci.com/settings/user/tokens",
 			errMsg:     "empty circleci token",
 		}
@@ -280,12 +287,132 @@ func authSetAnthropic(ctx context.Context, io iostream.Streams, baseURL string, 
 	}
 
 	if err := authprompt.SaveAnthropicKey(key, baseURL, insecureStorage); err != nil {
-		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
+		return &userError{msg: msgCouldNotSaveCredentials, suggestion: configFilePermHint, err: err}
 	}
 
 	io.Println("")
 	printSaved(io, "Anthropic API key", insecureStorage)
 	io.Println(ui.Dim("You can now run code reviews with: chunk build-prompt"))
+	return nil
+}
+
+func authSetAnthropicOAuth(ctx context.Context, io iostream.Streams, baseURL string, envSet, force, insecureStorage bool) error {
+	if insecureStorage {
+		return &userError{
+			msg:        "A Claude subscription token can only be stored in the system keychain.",
+			suggestion: "Drop --insecure-storage, or set " + config.EnvClaudeOAuthToken + " instead.",
+			errMsg:     "oauth token needs the keychain",
+		}
+	}
+
+	io.Println("")
+	io.Println(ui.Bold("Chunk CLI - Claude Subscription Setup"))
+	io.Println("")
+	io.Println("This runs 'claude setup-token' to mint a long-lived token from your")
+	io.Println("Claude subscription, so reviews on sidecars authenticate as you.")
+	printSaveHint(io, "Token", insecureStorage)
+	io.Println("")
+	if envSet {
+		io.Println(ui.Warning("A Claude token is set in environment variables (" + config.EnvClaudeOAuthToken + ")."))
+		io.Println(ui.Dim("Environment variables take precedence over stored config."))
+		io.Println("")
+	}
+
+	if hasStoredClaudeOAuthToken(baseURL) {
+		io.Printf("A Claude token is already stored in the keychain.\n")
+		if !force {
+			if nonInteractive() {
+				return errNoForce("replace Claude token")
+			}
+			replace, err := ui.Confirm("Do you want to replace it?", false)
+			if errors.Is(err, ui.ErrNoTTY) {
+				return errNoForce("replace Claude token")
+			}
+			if err != nil || !replace {
+				io.Println("Keeping existing token.")
+				return nil
+			}
+		}
+	}
+
+	token, err := claudeauth.SetupToken(ctx, io, ui.PromptHidden)
+	switch {
+	case errors.Is(err, claudeauth.ErrNotInstalled):
+		return &userError{
+			msg:        "Claude Code is not installed locally, so a token cannot be minted.",
+			suggestion: "Install it from https://claude.com/claude-code, or set " + config.EnvClaudeOAuthToken + " instead.",
+			exitCode:   ExitAuthError,
+			err:        err,
+		}
+	case errors.Is(err, ui.ErrNoTTY):
+		return newUserError("Cannot mint a Claude token without an interactive terminal.").
+			withCode("auth.claude_token_required").
+			withSuggestion("Run 'claude setup-token' yourself and set " + config.EnvClaudeOAuthToken + ".").
+			withExitCode(ExitAuthError).
+			wrap(err)
+	case errors.Is(err, ui.ErrCancelled):
+		return nil
+	case err != nil:
+		return &userError{msg: "Could not mint a Claude token.", err: err}
+	}
+
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return &userError{
+			msg:        msgEmptyToken,
+			suggestion: "Run 'claude setup-token' and check it prints a token.",
+			errMsg:     "empty claude token",
+		}
+	}
+
+	// Not validated before storing, unlike the API key: the count-tokens probe
+	// authprompt uses sends x-api-key, which a bearer token is not. A review
+	// that Anthropic refuses clears the token and says so.
+	if err := authprompt.SaveClaudeOAuthToken(token, baseURL); err != nil {
+		return &userError{msg: msgCouldNotSaveCredentials, err: err}
+	}
+
+	io.Println("")
+	printSaved(io, "Claude subscription token", insecureStorage)
+	io.Println(ui.Dim("You can now run reviews on sidecars with: chunk review"))
+	return nil
+}
+
+func authRemoveAnthropicOAuth(io iostream.Streams, baseURL string, envSet, force bool) error {
+	if !hasStoredClaudeOAuthToken(baseURL) {
+		io.Println(ui.Warning("No Claude token stored."))
+		if envSet {
+			io.Println("Note: " + config.EnvClaudeOAuthToken + " is set in your environment variables.")
+			io.Println("To remove it, unset the environment variable.")
+			io.Println("")
+		}
+		return nil
+	}
+
+	io.Println("")
+	io.Println("This will remove your stored Claude subscription token from the system keychain.")
+	if !force {
+		if nonInteractive() {
+			return errNoForce("remove Claude token")
+		}
+		confirmed, err := ui.Confirm("Are you sure?", false)
+		if errors.Is(err, ui.ErrNoTTY) {
+			return errNoForce("remove Claude token")
+		}
+		if err != nil || !confirmed {
+			io.Println("Keeping stored token.")
+			return nil
+		}
+	}
+
+	if err := keyring.Delete(keyring.ServiceAnthropicOAuth(baseURL)); err != nil {
+		return &userError{msg: "Could not remove the stored Claude token.", err: err}
+	}
+
+	io.Println(ui.Success("Claude subscription token removed successfully."))
+	if envSet {
+		io.Println(ui.Warning("Note: " + config.EnvClaudeOAuthToken + " is still set in your environment variables."))
+	}
 	return nil
 }
 
@@ -383,6 +510,18 @@ func newAuthStatusCmd() *cobra.Command {
 			}
 			io.Println("")
 
+			// Claude subscription section. Shown without validation: the
+			// count-tokens probe used above sends x-api-key, not a bearer token.
+			io.Println(ui.Bold("Claude subscription"))
+			if rc.ClaudeOAuthToken == "" {
+				io.Println("  Not set")
+				io.Println(ui.Dim("  Run `chunk auth set anthropic-oauth` to configure."))
+			} else {
+				io.Printf("  Source: %s\n", rc.ClaudeOAuthTokenSource)
+				io.Printf("  Token:  %s\n", config.MaskKey(rc.ClaudeOAuthToken))
+			}
+			io.Println("")
+
 			// GitHub section
 			io.Println(ui.Bold("GitHub"))
 			if rc.GitHubToken == "" {
@@ -425,7 +564,7 @@ func newAuthRemoveCmd() *cobra.Command {
 		Use:       "remove <provider>",
 		Short:     "Remove stored credentials",
 		Args:      cobra.ExactArgs(1),
-		ValidArgs: []string{providerCircleCI, providerAnthropic, providerGitHub},
+		ValidArgs: []string{providerCircleCI, providerAnthropic, providerAnthropicOAuth, providerGitHub},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 			rc, _ := config.Resolve("", "", insecureStorage)
@@ -438,13 +577,16 @@ func newAuthRemoveCmd() *cobra.Command {
 			case providerAnthropic:
 				envSet := strings.HasPrefix(rc.AnthropicAPIKeySource, "Environment")
 				return authRemoveAnthropic(io, envSet, force, insecureStorage)
+			case providerAnthropicOAuth:
+				envSet := strings.HasPrefix(rc.ClaudeOAuthTokenSource, "Environment")
+				return authRemoveAnthropicOAuth(io, rc.AnthropicBaseURL, envSet, force)
 			case providerGitHub:
 				envSet := strings.HasPrefix(rc.GitHubTokenSource, "Environment")
 				return authRemoveGitHub(io, envSet, force, insecureStorage)
 			default:
 				return &userError{
 					msg:    fmt.Sprintf("Unknown provider %q.", provider),
-					detail: "Valid providers: circleci, anthropic, github.",
+					detail: "Valid providers: circleci, anthropic, anthropic-oauth, github.",
 					errMsg: fmt.Sprintf("unknown provider %q", provider),
 				}
 			}
@@ -470,6 +612,13 @@ func hasStoredAnthropicKey(insecureStorage bool, baseURL string) bool {
 	}
 	cfg, _ := config.Load()
 	return cfg.AnthropicAPIKey != ""
+}
+
+// hasStoredClaudeOAuthToken has no insecure-storage branch: the token is only
+// ever written to the keychain.
+func hasStoredClaudeOAuthToken(baseURL string) bool {
+	_, err := keyring.Get(keyring.ServiceAnthropicOAuth(baseURL))
+	return err == nil
 }
 
 func hasStoredGitHubToken(insecureStorage bool, baseURL string) bool {
@@ -666,7 +815,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return &userError{
-			msg:        "Token cannot be empty.",
+			msg:        msgEmptyToken,
 			suggestion: "Create a token at https://github.com/settings/tokens",
 			errMsg:     "empty github token",
 		}
@@ -682,7 +831,7 @@ func authSetGitHub(ctx context.Context, io iostream.Streams, baseURL string, env
 	}
 
 	if err := authprompt.SaveGitHubToken(token, baseURL, insecureStorage); err != nil {
-		return &userError{msg: "Could not save credentials.", suggestion: configFilePermHint, err: err}
+		return &userError{msg: msgCouldNotSaveCredentials, suggestion: configFilePermHint, err: err}
 	}
 
 	io.Println("")

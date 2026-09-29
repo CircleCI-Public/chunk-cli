@@ -55,6 +55,7 @@ const (
 	EnvCircleCIBaseURL    = "CIRCLECI_BASE_URL"
 	EnvAnthropicAPIKey    = "ANTHROPIC_API_KEY"
 	EnvAnthropicBaseURL   = "ANTHROPIC_BASE_URL"
+	EnvClaudeOAuthToken   = "CLAUDE_CODE_OAUTH_TOKEN"
 	EnvGitHubToken        = "GITHUB_TOKEN"
 	EnvGitHubAPIURL       = "GITHUB_API_URL"
 	EnvModel              = "CODE_REVIEW_CLI_MODEL"
@@ -91,6 +92,7 @@ type EnvVars struct {
 	CircleCIBaseURL  string `env:"CIRCLECI_BASE_URL,default=https://circleci.com"`
 	AnthropicAPIKey  string `env:"ANTHROPIC_API_KEY"`
 	AnthropicBaseURL string `env:"ANTHROPIC_BASE_URL,default=https://api.anthropic.com"`
+	ClaudeOAuthToken string `env:"CLAUDE_CODE_OAUTH_TOKEN"`
 	GitHubToken      string `env:"GITHUB_TOKEN"`
 	GitHubAPIURL     string `env:"GITHUB_API_URL,default=https://api.github.com"`
 	Model            string `env:"CODE_REVIEW_CLI_MODEL"`
@@ -144,20 +146,22 @@ type UserConfig struct {
 
 // ResolvedConfig holds the final resolved values with their sources.
 type ResolvedConfig struct {
-	AnthropicAPIKey       string
-	AnthropicAPIKeySource string
-	AnthropicBaseURL      string
-	CircleCIToken         string
-	CircleCITokenSource   string
-	CircleCIBaseURL       string
-	GitHubToken           string
-	GitHubTokenSource     string
-	GitHubAPIURL          string
-	Model                 string
-	ModelSource           string
-	AnalyzeModel          string
-	PromptModel           string
-	Notifications         bool
+	AnthropicAPIKey        string
+	AnthropicAPIKeySource  string
+	AnthropicBaseURL       string
+	ClaudeOAuthToken       string
+	ClaudeOAuthTokenSource string
+	CircleCIToken          string
+	CircleCITokenSource    string
+	CircleCIBaseURL        string
+	GitHubToken            string
+	GitHubTokenSource      string
+	GitHubAPIURL           string
+	Model                  string
+	ModelSource            string
+	AnalyzeModel           string
+	PromptModel            string
+	Notifications          bool
 }
 
 // configFileSource returns a source label that includes the actual config file
@@ -202,6 +206,23 @@ func resolveAnthropicAPIKey(flagAPIKey string, env EnvVars, cfg UserConfig, inse
 		if apiKey, err := keyring.Get(keyring.ServiceAnthropic(env.AnthropicBaseURL)); err == nil {
 			return apiKey, keyring.SourceKeychain
 		}
+	}
+	return "", ""
+}
+
+// resolveClaudeOAuthToken resolves the long-lived Claude subscription token
+// from the environment, then the keychain. It has no config-file rung: the
+// token is a bearer credential for the user's subscription and has no business
+// in a plaintext file. Under insecure storage only the environment is read.
+func resolveClaudeOAuthToken(env EnvVars, insecureStorage bool) (string, string) {
+	if env.ClaudeOAuthToken != "" {
+		return env.ClaudeOAuthToken, "Environment variable (" + EnvClaudeOAuthToken + ")"
+	}
+	if insecureStorage {
+		return "", ""
+	}
+	if token, err := keyring.Get(keyring.ServiceAnthropicOAuth(env.AnthropicBaseURL)); err == nil {
+		return token, keyring.SourceKeychain
 	}
 	return "", ""
 }
@@ -405,6 +426,7 @@ func Resolve(flagAPIKey, flagModel string, insecureStorage bool) (ResolvedConfig
 	}
 	rc.CircleCIToken, rc.CircleCITokenSource = resolveCircleCIToken(env, cfg, insecureStorage)
 	rc.AnthropicAPIKey, rc.AnthropicAPIKeySource = resolveAnthropicAPIKey(flagAPIKey, env, cfg, insecureStorage)
+	rc.ClaudeOAuthToken, rc.ClaudeOAuthTokenSource = resolveClaudeOAuthToken(env, insecureStorage)
 	rc.GitHubToken, rc.GitHubTokenSource = resolveGitHubToken(env, cfg, insecureStorage)
 
 	switch {
