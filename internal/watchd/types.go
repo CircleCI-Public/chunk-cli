@@ -36,10 +36,16 @@ type SidecarState struct {
 	FileMtime    time.Time `json:"file_mtime"`
 	// Workspace is the sidecar-side repo path, used to sample disk usage where
 	// the work actually happens rather than wherever a shell starts.
-	Workspace    string      `json:"workspace,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	// OrgID is the org the sidecar lives in: the one its state file records, or
+	// the project's org for state written before that was recorded.
+	OrgID string `json:"org_id,omitempty"`
+	// Verified reports that the API's sidecar list confirmed this sidecar
+	// exists. Sidecars the list has confirmed gone never reach a snapshot, so
+	// false means only that nothing has confirmed it yet.
+	Verified     bool        `json:"verified,omitempty"`
 	LastActivity time.Time   `json:"last_activity"`
 	LastOp       eventlog.Op `json:"last_op"`
-	LastLevel    string      `json:"last_level"`
 	Running      bool        `json:"running"`
 	// Resources is the most recent resource sample, or nil when none has
 	// arrived — sampling only runs while a dashboard is attached.

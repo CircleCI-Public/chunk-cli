@@ -282,13 +282,12 @@ chunk
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a
   `project-root` breadcrumb in the same data directory) whether or not a daemon
-  is running and whether or not a sidecar is involved. The daemon discovers
-  projects from those breadcrumbs and replays each log from the start, so a run
-  made with no dashboard open — a `--local` run, or one in a repo that has never
-  had a sidecar — is there in full the next time `watch` opens, under the
-  project's `local` row. (Remote command *output* is the exception: it is
-  registered with the daemon live and buffered in memory, keyed by the same
-  project root, so it too is only listed for a project that has been registered.)
+  is running. The daemon discovers projects from those breadcrumbs and replays
+  each log from the start, so a sidecar run made with no dashboard open is there
+  in full the next time `watch` opens. A purely local run has no sidecar, so it
+  gets no row. (Remote command *output* is the exception: it is registered with
+  the daemon live and buffered in memory, keyed by the same project root, so it
+  too is only listed for a project that has been registered.)
 - **`watch` can show a command's output.** In the activity pane, an invocation
   marked `▤` has output the daemon still holds; `Enter` opens a scrollback view
   of it. A command that is still running tails live — the pane polls every 200 ms

@@ -54,6 +54,22 @@ func TestLoadSidecars_carriesSessionID(t *testing.T) {
 	assert.Equal(t, got["id3"], "")
 }
 
+func TestLoadSidecars_carriesOrgID(t *testing.T) {
+	dir := t.TempDir()
+	root := t.TempDir()
+
+	// The org is what liveness is checked against; state written before it was
+	// recorded is left empty for the daemon to fill from the project config.
+	writeSidecarJSON(t, dir, "sidecar.sessA.json", `{"sidecar_id":"id1","org_id":"org-1"}`)
+	writeSidecarJSON(t, dir, "sidecar.json", `{"sidecar_id":"id2"}`)
+
+	got := map[string]string{}
+	for _, ss := range loadSidecars(dir, root, "") {
+		got[ss.ID] = ss.OrgID
+	}
+	assert.DeepEqual(t, got, map[string]string{"id1": "org-1", "id2": ""})
+}
+
 func TestLoadSidecarsExpandsActivePoolMembers(t *testing.T) {
 	dir := t.TempDir()
 	root := t.TempDir()

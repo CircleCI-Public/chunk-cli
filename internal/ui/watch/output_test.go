@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
@@ -303,6 +304,18 @@ func TestRenderResources(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The line is drawn indented two columns into the left pane. A typical reading
+// has to fit whole, or the disk figure — last on the line — is what gets clipped.
+func TestRenderResourcesFitsTheSidecarPane(t *testing.T) {
+	r := &watchd.Resources{
+		CPUPercent: 42, MemUsedBytes: 512, MemLimitBytes: 1024,
+		DiskUsedBytes: 51, DiskTotalBytes: 100, SampledAt: time.Now(),
+	}
+	got := renderResources(newWatchStyles(false), r)
+	assert.Check(t, lipgloss.Width(got) <= leftPaneWidth-2, "%q is %d columns", got, lipgloss.Width(got))
+	assert.Check(t, cmp.Contains(got, "disk 51%"))
 }
 
 // TestStaleBudgetOutlivesAPollCycle guards the relationship that makes the

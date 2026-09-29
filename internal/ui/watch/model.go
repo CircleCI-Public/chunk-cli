@@ -30,10 +30,6 @@ const (
 	levelDone  = "done"
 	levelError = "error"
 
-	// localRunnerName labels the synthesised row for validate runs that happened
-	// locally rather than on a sidecar.
-	localRunnerName = "local"
-
 	// levelAbandoned is not an event level: it marks an invocation whose process
 	// died before writing a terminal event, so nothing will ever close it.
 	levelAbandoned = "abandoned"
@@ -103,16 +99,12 @@ type ProjectEntry struct {
 	ProjectRoot string
 }
 
-// sidecarInfo holds display state for one sidecar or the local runner.
-// id == "" identifies the local (non-sidecar) runner for a project.
-// sidecarIDs lists every sidecar UUID (and "" for local runs) whose events
-// should appear in this entry's activity pane; populated by mergeBranches.
+// sidecarInfo holds display state for one sidecar.
 type sidecarInfo struct {
-	id         string
-	sidecarIDs []string // all IDs to match when filtering events
-	name       string
-	// sessionID is the agent session owning this sidecar, empty for the local
-	// runner and for state written before sidecars were session-scoped. Several
+	id   string
+	name string
+	// sessionID is the agent session owning this sidecar, empty for state
+	// written outside a session or before sidecars were session-scoped. Several
 	// sessions can hold sidecars for one worktree, so this is what distinguishes
 	// two otherwise identical rows.
 	sessionID    string
@@ -124,9 +116,13 @@ type sidecarInfo struct {
 	snapshotName string    // name of the active snapshot for this project, if any
 	fileMtime    time.Time // mtime of the sidecar state file (fallback when no events yet)
 	running      bool
+	// verified reports that the API confirmed the sidecar exists. Sidecars it
+	// has confirmed gone never get this far, so false means unconfirmed: the
+	// daemon has no credentials, no org to ask about, or no answer yet.
+	verified     bool
 	lastActivity time.Time
 	lastOp       eventlog.Op
-	lastLevel    string // level of the most recent event ("done", "error", etc.)
+	lastResult   string // how the last validate run ended: levelDone, levelError, or "" for none
 	// resources is the latest resource sample, nil when the daemon has none.
 	resources *watchd.Resources
 }
@@ -220,8 +216,8 @@ type Model struct {
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
-// sidecar ID (UUID) or the local runner (id == ""), so the first dataMsg
-// always falls back to index 0 — the most recently active sidecar.
+// sidecar ID (UUID), so the first dataMsg always falls back to index 0 — the
+// most recently active sidecar.
 const noSelection = "\x00"
 
 // New creates a Model ready to run. When watchAll is true (the default for
@@ -432,12 +428,7 @@ func (m Model) render() string {
 }
 
 func (m Model) renderHeader(st watchStyles) string {
-	n := 0
-	for _, sc := range m.sidecars {
-		if sc.id != "" {
-			n++
-		}
-	}
+	n := len(m.sidecars)
 	count := fmt.Sprintf("%d sidecar", n)
 	if n != 1 {
 		count += "s"
@@ -515,24 +506,25 @@ func (m Model) renderBody(st watchStyles) string {
 }
 
 // rowStatus is the one-line state a sidecar row reports: what it is doing now,
-// or how its tree compares to the sidecar's. Split out of renderSidecarPane so
+// or, when idle, how its last validate run ended. Split out of renderSidecarPane so
 // neither grows past the complexity limit.
 func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
 	switch {
 	case sc.running:
 		frame := spinFrames[m.spinIdx%len(spinFrames)]
 		return st.running(frame + " " + string(sc.lastOp) + "...")
-	case sc.id == "": // local runner — no sync state
-		switch sc.lastLevel {
-		case levelDone:
-			return st.success(ui.IconOK + " passed")
-		case levelError:
-			return st.err(ui.IconFail + " failed")
-		default:
-			return st.muted("no runs yet")
-		}
+	case !sc.verified:
+		// Kept because nothing has shown it gone, but nothing has shown it
+		// alive either; calling it idle would claim more than is known.
+		return st.muted("? unconfirmed")
+	}
+	switch sc.lastResult {
+	case levelDone:
+		return st.success(ui.IconOK+" idle") + st.muted(" · last passed")
+	case levelError:
+		return st.err(ui.IconFail+" idle") + st.muted(" · last failed")
 	default:
-		return st.muted("synced via rsync")
+		return st.muted("idle")
 	}
 }
 
@@ -558,10 +550,10 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 	add("")
 
 	if len(m.sidecars) == 0 {
-		add(st.muted("nothing recent"))
+		add(st.muted("no sidecars"))
 		add("")
-		add(st.dim("no sidecar activity"))
-		add(st.dim("in the last day"))
+		add(st.dim("none of your projects"))
+		add(st.dim("has a live sidecar"))
 		return lines, 0
 	}
 
@@ -572,7 +564,6 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 
 	var lastRepo string
 	shared := sharedWorktrees(m.sidecars)
-	sessions := sessionsPerWorktree(m.sidecars)
 	ambiguous := ambiguousBranches(m.sidecars)
 	dirLabels := worktreeLabels(m.sidecars, ambiguous)
 	lastGroup, haveGroup := groupKey{}, false
@@ -624,7 +615,7 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 			// looking for, and squeezing the count onto the same line would
 			// truncate a normal-length branch name to nothing.
 			addRow("  " + st.emphasis(truncate(label, leftPaneWidth-2)))
-			addRow("  " + st.vdim(fmt.Sprintf("%d sessions", sessions[group])))
+			addRow("  " + st.vdim(fmt.Sprintf("%d sessions", shared[group])))
 		}
 		lastGroup, haveGroup = group, true
 
@@ -728,7 +719,7 @@ func (m Model) renderActivityPane(st watchStyles, maxLines int) []string {
 		sc := m.sidecars[m.selectedIdx]
 		if sc.projectIdx < len(m.events) {
 			for _, e := range m.events[sc.projectIdx] {
-				if hasSidecarID(sc.sidecarIDs, e.SidecarID) {
+				if e.SidecarID == sc.id {
 					filtered = append(filtered, e)
 				}
 			}
@@ -847,7 +838,7 @@ func (m Model) currentInvocGroups() []invocationGroup {
 	var filtered []eventlog.Event
 	if sc.projectIdx < len(m.events) {
 		for _, e := range m.events[sc.projectIdx] {
-			if hasSidecarID(sc.sidecarIDs, e.SidecarID) {
+			if e.SidecarID == sc.id {
 				filtered = append(filtered, e)
 			}
 		}
@@ -1218,7 +1209,7 @@ func sortByActivity(sidecars []sidecarInfo, ownSession string) {
 }
 
 // groupKey identifies one worktree: every row sharing it is a different session
-// (or the local runner) working in the same directory on the same branch.
+// working in the same directory on the same branch.
 type groupKey struct {
 	repoName   string
 	branch     string
@@ -1231,28 +1222,12 @@ func groupOf(sc sidecarInfo) groupKey {
 
 // sharedWorktrees counts the rows in each worktree group, so the pane can tell
 // a branch owned by one session from one several sessions are working in.
-//
-// mergeBranches has already folded the local runner into a real sidecar row
-// wherever both exist, so a group holding more than one row means two sidecars
-// claim the same worktree — which, now that sidecars are session-scoped, means
-// two sessions.
+// Every row is a sidecar and sidecars are session-scoped, so a group holding
+// more than one row is that many sessions in the same worktree.
 func sharedWorktrees(sidecars []sidecarInfo) map[groupKey]int {
 	counts := make(map[groupKey]int, len(sidecars))
 	for _, sc := range sidecars {
 		counts[groupOf(sc)]++
-	}
-	return counts
-}
-
-// sessionsPerWorktree counts the sessions in each group — one per sidecar. The
-// local runner occupies a row but is not a session, so a worktree with two
-// sessions and a local run reads "2 sessions" over three rows rather than three.
-func sessionsPerWorktree(sidecars []sidecarInfo) map[groupKey]int {
-	counts := make(map[groupKey]int, len(sidecars))
-	for _, sc := range sidecars {
-		if sc.id != "" {
-			counts[groupOf(sc)]++
-		}
 	}
 	return counts
 }
@@ -1390,14 +1365,11 @@ func (m Model) rowLabel(sc sidecarInfo, multi bool, dirLabel string) string {
 	// not be mistaken for the viewer's own.
 	switch sc.sessionID {
 	case "":
-		// The local runner, or sidecar state written outside a session or before
-		// sessions existed. sidecarDisplayName prefers the full UUID, which does
-		// not fit beside the short session labels this row sits next to, so
-		// abbreviate it the same way; the full value stays on the detail line.
-		if sc.id != "" {
-			return "○ " + shortUUID(sc.id)
-		}
-		return "○ " + sidecarDisplayName(sc.name, sc.id)
+		// Sidecar state written outside a session or before sessions existed.
+		// The full UUID does not fit beside the short session labels this row
+		// sits next to, so abbreviate it the same way; the full value stays on
+		// the detail line.
+		return "○ " + shortUUID(sc.id)
 	case m.ownSession:
 		return "● this session"
 	default:
@@ -1413,81 +1385,6 @@ func shortUUID(id string) string {
 		return id[:8]
 	}
 	return id
-}
-
-// mergeBranches collapses entries with the same (repoName, branch, projectIdx) into
-// one. The first-seen entry (most recently active after sortByActivity) is the
-// primary; subsequent entries contribute their sidecarIDs to the merged set.
-// When the primary is a local-only entry (id == "") and a real sidecar is seen
-// later, the sidecar's identity and sync state are promoted onto the primary so
-// the left pane shows sync status rather than pass/fail.
-func mergeBranches(sidecars []sidecarInfo) []sidecarInfo {
-	// A local validate run belongs to the worktree, not to any session in it. With
-	// one session holding the worktree that distinction is invisible and folding
-	// the local row in buys a cleaner pane. With several, the fold would credit
-	// one session with runs another developer — or no agent at all — made, so
-	// those groups keep the local row separate.
-	realPerGroup := map[groupKey]int{}
-	for _, sc := range sidecars {
-		if sc.id != "" {
-			realPerGroup[groupOf(sc)]++
-		}
-	}
-
-	seen := map[groupKey]int{}
-	result := make([]sidecarInfo, 0, len(sidecars))
-	for _, sc := range sidecars {
-		k := groupOf(sc)
-		if idx, ok := seen[k]; !ok {
-			result = append(result, sc)
-			seen[k] = len(result) - 1
-		} else {
-			// Only merge when one entry is a local runner (id == ""). Two real
-			// sidecars on the same branch belong to different sessions and must
-			// stay separate so they are distinguishable in the left pane.
-			//
-			// This guard, not the key, is what keeps sessions apart. Adding
-			// sessionID to the key instead would stop the local runner — which
-			// has no session — from ever merging into the sidecar row it belongs
-			// to, leaving a duplicate "local" row under every branch.
-			if result[idx].id != "" && sc.id != "" {
-				result = append(result, sc)
-				seen[k] = len(result) - 1
-				continue
-			}
-			// One of the pair is the local runner. Fold it in only where a single
-			// session holds the worktree; see realPerGroup above.
-			if realPerGroup[k] > 1 {
-				result = append(result, sc)
-				seen[k] = len(result) - 1
-				continue
-			}
-			result[idx].sidecarIDs = append(result[idx].sidecarIDs, sc.sidecarIDs...)
-			// Promote a real sidecar over a local-only primary so the left pane
-			// shows sync state rather than a pass/fail badge. The session comes
-			// with it: the row now stands for that sidecar, and leaving the
-			// session behind would strip the "this session" label off the
-			// viewer's own row whenever local activity happened to sort first.
-			if result[idx].id == "" && sc.id != "" {
-				result[idx].id = sc.id
-				result[idx].name = sc.name
-				result[idx].sessionID = sc.sessionID
-				result[idx].snapshotName = sc.snapshotName
-				result[idx].fileMtime = sc.fileMtime
-			}
-		}
-	}
-	return result
-}
-
-// hasSidecarID reports whether id is in the ids slice.
-func hasSidecarID(ids []string, id string) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
-		}
-	}
-	return false
 }
 
 // effectiveActivity is the sidecar's last event time, falling back to the mtime
@@ -1517,74 +1414,30 @@ func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
 	return sidecars[idx].id
 }
 
-const (
-	// activeWindow is how recently a sidecar must have been active to be shown.
-	activeWindow = time.Hour
-	// fallbackWindow bounds how far back the pane reaches when nothing has been
-	// active within activeWindow.
-	fallbackWindow = 24 * time.Hour
-	// linesPerSidecar is the worst-case row cost of one sidecar in the sidecar
-	// pane: name, snapshot, sidecar id, status, age, and the divider to the next
-	// row. A shared worktree adds two more for its group header, so this is a
-	// floor rather than an exact figure; renderSidecarPane drops whatever does
-	// not fit and says so, so an optimistic count costs a "more" hint, not a
-	// half-drawn row.
-	linesPerSidecar = 6
-	// defaultCapacity is used until the first WindowSizeMsg gives a real height.
-	defaultCapacity = 5
-)
+// staleAfter bounds how long an unconfirmed sidecar keeps its row. A confirmed
+// sidecar is shown however long it has been idle — it is still running, and
+// still costing money — but one the API has not vouched for is only as good as
+// its state file, and a file nobody has touched in a day is more likely
+// leftover than live.
+const staleAfter = 24 * time.Hour
 
-// filterSidecars keeps every sidecar active within activeWindow, with no
-// per-project cap, however many that is. When nothing has been active that
-// recently it falls back to the most recent sidecars, enough to fill the pane
-// and reaching back no further than fallbackWindow, so an idle dashboard still
-// shows you where you left off. sidecars must already be sorted by recency.
-func filterSidecars(sidecars []sidecarInfo, capacity int) []sidecarInfo {
+// filterSidecars keeps every sidecar the API has confirmed, and unconfirmed
+// ones only while they have been active within staleAfter.
+func filterSidecars(sidecars []sidecarInfo) []sidecarInfo {
 	now := time.Now()
-
-	var active []sidecarInfo
+	var kept []sidecarInfo
 	for _, sc := range sidecars {
-		if within(now, sc, activeWindow) {
-			active = append(active, sc)
+		if sc.verified || within(now, sc, staleAfter) {
+			kept = append(kept, sc)
 		}
 	}
-	if len(active) > 0 {
-		return active
-	}
-
-	if capacity < 1 {
-		capacity = 1
-	}
-	var recent []sidecarInfo
-	for _, sc := range sidecars {
-		if len(recent) >= capacity {
-			break
-		}
-		if within(now, sc, fallbackWindow) {
-			recent = append(recent, sc)
-		}
-	}
-	return recent
+	return kept
 }
 
 // within reports whether the sidecar was active no longer than window ago.
 func within(now time.Time, sc sidecarInfo, window time.Duration) bool {
 	eff := effectiveActivity(sc)
 	return !eff.IsZero() && now.Sub(eff) <= window
-}
-
-// sidecarCapacity is how many sidecars the left pane can render at the current
-// terminal height. It mirrors renderBody's content height, less the pane title
-// and the blank line under it.
-func (m Model) sidecarCapacity() int {
-	if m.height <= 0 {
-		return defaultCapacity
-	}
-	paneHeight := m.height - 4 - 2
-	if paneHeight < linesPerSidecar {
-		return 1
-	}
-	return paneHeight / linesPerSidecar
 }
 
 // adjustLeftScroll keeps the selected sidecar on screen in the left pane.

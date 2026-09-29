@@ -84,6 +84,9 @@ type daemon struct {
 	// claims tracks which sessions are actively validating which paths, for
 	// advisory cross-agent coordination.
 	claims *claimStore
+	// live drops sidecars the API no longer lists, so the dashboard shows only
+	// the ones that exist.
+	live *livenessChecker
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -162,6 +165,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		prm:       newPRMonitor(ghClient),
 		prov:      prov,
 		claims:    newClaimStore(),
+		live:      newLivenessChecker(listFor(client)),
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.
@@ -355,6 +359,11 @@ func (d *daemon) updateProject(ps *projectState) {
 	}
 
 	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
+	fillMissingOrg(sidecars, ps.root)
+	// Same background context as the PR fetch below: the list must survive this
+	// poll returning.
+	d.live.maybeRefresh(context.Background(), sidecars)
+	sidecars = d.live.reconcile(sidecars)
 	annotateActivity(sidecars, ps.events)
 	d.res.annotate(sidecars)
 
@@ -424,4 +433,25 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 	// between polls when watchAll mode requests all projects.
 	sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
 	return Snapshot{Projects: projects, AuthError: d.authError}
+}
+
+// fillMissingOrg gives sidecars whose state recorded no org the project's org.
+// The config is only read when one needs it: it is a disk read, and this runs
+// every poll.
+func fillMissingOrg(sidecars []SidecarState, root string) {
+	orgID := ""
+	resolved := false
+	for i := range sidecars {
+		if sidecars[i].OrgID != "" {
+			continue
+		}
+		if !resolved {
+			orgID, _ = config.ResolveOrgID(root)
+			resolved = true
+		}
+		if orgID == "" {
+			return
+		}
+		sidecars[i].OrgID = orgID
+	}
 }
