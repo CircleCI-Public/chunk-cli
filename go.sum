@@ -120,8 +120,6 @@ github.com/bkielbasa/cyclop v1.2.3 h1:faIVMIGDIANuGPWH031CZJTi2ymOQBULs9H21HSMa5
 github.com/bkielbasa/cyclop v1.2.3/go.mod h1:kHTwA9Q0uZqOADdupvcFJQtp/ksSnytRMe8ztxG8Fuo=
 github.com/blizzy78/varnamelen v0.8.0 h1:oqSblyuQvFsW1hbBHh1zfwrKe3kcSj0rnXkKzsQ089M=
 github.com/blizzy78/varnamelen v0.8.0/go.mod h1:V9TzQZ4fLJ1DSrjVDfl89H7aMnTvKkApdHeyESmyR7k=
-github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869 h1:DDGfHa7BWjL4YnC6+E63dPcxHo2sUxDIu8g3QgEJdRY=
-github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869/go.mod h1:Ekp36dRnpXw/yCqJaO+ZrUyxD+3VXMFFr56k5XYrpB4=
 github.com/bombsimon/wsl/v4 v4.7.0 h1:1Ilm9JBPRczjyUs6hvOPKvd7VL1Q++PL8M0SXBDf+jQ=
 github.com/bombsimon/wsl/v4 v4.7.0/go.mod h1:uV/+6BkffuzSAVYD+yGyld1AChO7/EuLrCF/8xTiapg=
 github.com/bombsimon/wsl/v5 v5.9.0 h1:WCrgZ7RQnZO5oEwbVTlYgBdU3wL294kR1BSWV8vTfsU=
@@ -619,10 +617,8 @@ github.com/sashamelentyev/usestdlibvars v1.29.0 h1:8J0MoRrw4/NAXtjQqTHrbW9NN+3iM
 github.com/sashamelentyev/usestdlibvars v1.29.0/go.mod h1:8PpnjHMk5VdeWlVb4wCdrB8PNbLqZ3wBZTZWkrpZZL8=
 github.com/securego/gosec/v2 v2.29.0 h1:pF2HSLcnY5voqpxQumEe0O5YAAbvF4Syu4qeIewpLyc=
 github.com/securego/gosec/v2 v2.29.0/go.mod h1:47C7ej+L2bC1NOxteU2aCGnCi4cZaoKzRt5y9plIvuY=
-github.com/segmentio/analytics-go/v3 v3.3.0 h1:8VOMaVGBW03pdBrj1CMFfY9o/rnjJC+1wyQHlVxjw5o=
-github.com/segmentio/analytics-go/v3 v3.3.0/go.mod h1:p8owAF8X+5o27jmvUognuXxdtqvSGtD0ZrfY2kcS9bE=
-github.com/segmentio/backo-go v1.0.0 h1:kbOAtGJY2DqOR0jfRkYEorx/b18RgtepGtY3+Cpe6qA=
-github.com/segmentio/backo-go v1.0.0/go.mod h1:kJ9mm9YmoWSkk+oQ+5Cj8DEoRCX2JT6As4kEtIIOp1M=
+github.com/segmentio/analytics-go/v3 v3.4.0 h1:8ACTF5ggK3W70b+kHId5SyxyWGYZ1sdgd/e8tb8jMRM=
+github.com/segmentio/analytics-go/v3 v3.4.0/go.mod h1:l0qTADX69i/7AuXvN3tg0QMfcW4Oe6YN5VgsgqGaAPI=
 github.com/sergi/go-diff v1.2.0 h1:XU+rvMAioB0UC3q1MFrIQy4Vo5/4VsRDQQXHsEya6xQ=
 github.com/sergi/go-diff v1.2.0/go.mod h1:STckp+ISIX8hZLjrqAeVduY0gWCT9IjLuqbuNXdaHfM=
 github.com/sethvargo/go-envconfig/v2 v2.0.0 h1:LYemMAcGZzti3XYlEM3xCr+dt+HIoEQHlrkE+pJ2ZIM=
