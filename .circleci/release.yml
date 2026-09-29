@@ -8,11 +8,23 @@ parameters:
 
 jobs:
   release:
-    docker:
-      - image: cimg/go:1.26
+    # A machine executor rather than a Docker image: snapcraft installs via
+    # snapd, which needs systemd and won't run inside a container.
+    machine:
+      image: ubuntu-2604:current
     resource_class: medium
     steps:
       - checkout
+      - run: circleci run github.com/circleci-functions/setup-go@v0.5.1-684fd5b -- --version-file go.mod
+      - run:
+          name: Add Go bin to PATH
+          command: echo 'export PATH="$(go env GOPATH)/bin:$PATH"' >> "$BASH_ENV"
+      - run:
+          name: Install snapcraft
+          command: |
+            sudo apt update --yes
+            sudo apt install snapd --yes
+            sudo snap install snapcraft --classic
       - run:
           name: Install goreleaser
           command: go install github.com/goreleaser/goreleaser/v2@latest
