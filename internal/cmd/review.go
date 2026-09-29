@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -17,6 +18,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/reviewprogress"
 )
 
 func newReviewCmd() *cobra.Command {
@@ -153,24 +155,33 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 				return &userError{msg: "The review sidecar pool did not become ready.", err: err}
 			}
 
-			statusFn(iostream.LevelStep, fmt.Sprintf("Running %d review(s)...", len(prompts)))
-			results, err := review.RunPass(ctx, pool.Acquire, pool.Release, review.ClientExec, prompts, review.Options{
+			opts := review.Options{
 				Credential: cred,
 				BaseURL:    rc.AnthropicBaseURL,
 				Model:      model,
 				Timeout:    timeout,
-				StatusFn:   statusFn,
-			})
-			if errors.Is(err, review.ErrClaudeMissing) {
+			}
+			var (
+				results []review.Result
+				passErr error
+			)
+			if jsonOut || ui.RequireStdoutTTY() != nil {
+				statusFn(iostream.LevelStep, fmt.Sprintf("Running %d review(s)...", len(prompts)))
+				opts.StatusFn = statusFn
+				results, passErr = review.RunPass(ctx, pool.Acquire, pool.Release, review.ClientExec, prompts, opts)
+			} else {
+				results, passErr = runReviewTUI(ctx, pool, prompts, size, opts)
+			}
+			if errors.Is(passErr, review.ErrClaudeMissing) {
 				return &userError{
 					msg:        "Claude Code is not installed on the review sidecars.",
 					suggestion: "Install it in the sidecar image (see 'chunk sidecar env build') and pass --image, or set validation.sidecarImage.",
 					hideDetail: true,
-					err:        err,
+					err:        passErr,
 				}
 			}
-			if errors.Is(err, review.ErrCredentialRejected) {
-				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, err)
+			if errors.Is(passErr, review.ErrCredentialRejected) {
+				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, passErr)
 			}
 			if jsonOut {
 				if jsonErr := iostream.PrintJSON(streams.Out, newReviewReport(results)); jsonErr != nil {
@@ -179,8 +190,8 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 			} else {
 				printReviews(streams, results)
 			}
-			if err != nil {
-				return &userError{msg: "The review pass stopped early.", err: err}
+			if passErr != nil {
+				return &userError{msg: "The review pass stopped early.", err: passErr}
 			}
 			if failed := countFailedReviews(results); failed > 0 {
 				return &userError{
@@ -201,6 +212,43 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
+}
+
+// runReviewTUI runs the review pass with a BubbleTea progress display.
+// It blocks until the pass completes or the user quits.
+func runReviewTUI(ctx context.Context, pool *sidecar.Pool, prompts []review.Prompt, poolSize int, opts review.Options) ([]review.Result, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	m := reviewprogress.New(prompts, poolSize, cancel)
+	prog := tea.NewProgram(m, tea.WithContext(ctx))
+
+	opts.ProgressFn = func(e review.ProgressEvent) {
+		prog.Send(reviewprogress.ProgressMsg(e))
+	}
+
+	type passResult struct {
+		results []review.Result
+		err     error
+	}
+	doneCh := make(chan passResult, 1)
+
+	go func() {
+		r, err := review.RunPass(ctx, pool.Acquire, pool.Release, review.ClientExec, prompts, opts)
+		doneCh <- passResult{r, err}
+		prog.Send(reviewprogress.DoneMsg{Err: err})
+	}()
+
+	// Run also returns an error when the user quits, which cancels ctx
+	// first, so only an error with ctx still live is a display failure.
+	_, tuiErr := prog.Run()
+	quit := ctx.Err() != nil || errors.Is(tuiErr, tea.ErrInterrupted)
+	cancel()
+	done := <-doneCh
+	if tuiErr != nil && !quit {
+		return done.results, fmt.Errorf("run review progress display: %w", tuiErr)
+	}
+	return done.results, done.err
 }
 
 // printReviews writes each review to stdout as a markdown section, in prompt
