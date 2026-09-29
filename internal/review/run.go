@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -60,15 +61,36 @@ var allowedTools = []string{
 	"Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git status:*)",
 }
 
+// PromptState is the lifecycle state of one review in a pass.
+type PromptState int
+
+// Prompt lifecycle states.
+const (
+	StateQueued  PromptState = iota // waiting for a sidecar
+	StateRunning                    // executing on a sidecar
+	StateDone                       // completed successfully
+	StateFailed                     // completed with error
+)
+
+// ProgressEvent reports a state change for one prompt.
+type ProgressEvent struct {
+	Prompt    string
+	SidecarID string
+	State     PromptState
+	Duration  time.Duration
+	Error     string
+}
+
 // Options configures one review pass.
 type Options struct {
 	Credential Credential
 	// BaseURL is forwarded to claude when it is not Anthropic's own, so a
 	// credential issued by a gateway is sent to that gateway.
-	BaseURL  string
-	Model    string        // optional; claude's default when empty
-	Timeout  time.Duration // per review; DefaultTimeout when zero
-	StatusFn iostream.StatusFunc
+	BaseURL    string
+	Model      string        // optional; claude's default when empty
+	Timeout    time.Duration // per review; DefaultTimeout when zero
+	StatusFn   iostream.StatusFunc
+	ProgressFn func(ProgressEvent) // optional; called on each prompt state change
 }
 
 // Result is the outcome of one prompt in one pass. Output and Error are not
@@ -111,8 +133,21 @@ func RunPass(ctx context.Context, acquire func(context.Context) (*sidecar.PoolEn
 		status = func(iostream.Level, string) {}
 	}
 
+	progress := opts.ProgressFn
+	if progress == nil {
+		progress = func(ProgressEvent) {}
+	}
+	// Emit queued state for all prompts so callers have a complete initial list.
+	for _, p := range prompts {
+		progress(ProgressEvent{Prompt: p.Name, State: StateQueued})
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// The first fatal error, so reviews canceled because of it report it
+	// rather than a bare "context canceled".
+	var fatalErr atomic.Pointer[error]
 
 	results := make([]runResult, len(prompts))
 	var wg sync.WaitGroup
@@ -128,14 +163,26 @@ func RunPass(ctx context.Context, acquire func(context.Context) (*sidecar.PoolEn
 			defer wg.Done()
 			defer release(entry)
 			status(iostream.LevelInfo, fmt.Sprintf("reviewing %s on %s", p.Name, entry.ID))
+			progress(ProgressEvent{Prompt: p.Name, SidecarID: entry.ID, State: StateRunning})
 			r := runOne(ctx, exec, entry, p, opts)
+			// If context was canceled because another review hit a fatal error,
+			// attribute this result to the same root cause so no spurious
+			// "context canceled" failures are shown alongside the real error.
+			if r.err != nil && !fatal(r.err) && errors.Is(r.err, context.Canceled) {
+				if ferr := fatalErr.Load(); ferr != nil {
+					r = r.fail(*ferr)
+				}
+			}
 			results[i] = r
 			switch {
 			case fatal(r.err):
+				fatalErr.CompareAndSwap(nil, &r.err)
 				cancel()
 			case r.err != nil:
+				progress(ProgressEvent{Prompt: p.Name, SidecarID: entry.ID, State: StateFailed, Duration: r.Duration, Error: r.Error})
 				status(iostream.LevelWarn, fmt.Sprintf("%s: %s", p.Name, r.Error))
 			default:
+				progress(ProgressEvent{Prompt: p.Name, SidecarID: entry.ID, State: StateDone, Duration: r.Duration})
 				status(iostream.LevelDone, fmt.Sprintf("%s reviewed in %s", p.Name, r.Duration.Round(time.Second)))
 			}
 		}(i, p, entry)
