@@ -41,7 +41,9 @@ With --detach the whole review runs on a primary sidecar instead of here, so
 you can close your laptop: the primary runs chunk review with its own pool, and
 the report is left in a run directory on it. --detach installs the latest
 released chunk on the primary; pass --chunk-binary with a Linux build to use
-that instead.`,
+that instead. With --detach, --image and --destroy-pool apply to the primary's
+reviewer sidecars; the primary itself is kept so that 'chunk review results' can
+read the report.`,
 		// Hidden until passes repeat and check for convergence.
 		Hidden:       true,
 		SilenceUsage: true,
@@ -128,7 +130,7 @@ that instead.`,
 			if detach {
 				return runReviewDetached(ctx, newDetachRequest(args, detachFlags{
 					client: client, streams: streams, workDir: workDir, orgID: resolvedOrgID,
-					image: image, chunkBinary: chunkBinary, rc: rc, cred: cred,
+					image: image, destroyPool: destroyPool, chunkBinary: chunkBinary, rc: rc, cred: cred,
 					parallelism: size, model: model, timeout: timeout, jsonOut: jsonOut,
 				}))
 			}

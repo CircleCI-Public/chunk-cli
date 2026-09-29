@@ -30,6 +30,7 @@ type detachRequest struct {
 	promptsDir  string // as given on the command line; empty for the default
 	orgID       string
 	image       string
+	destroyPool bool
 	chunkBinary string // Linux chunk build to upload; empty to install the latest release
 	circleToken string
 	parallelism int
@@ -46,6 +47,7 @@ type detachFlags struct {
 	workDir     string
 	orgID       string
 	image       string
+	destroyPool bool
 	chunkBinary string
 	rc          config.ResolvedConfig
 	cred        review.Credential
@@ -64,6 +66,7 @@ func newDetachRequest(args []string, f detachFlags) detachRequest {
 		workDir:     f.workDir,
 		orgID:       f.orgID,
 		image:       f.image,
+		destroyPool: f.destroyPool,
 		chunkBinary: f.chunkBinary,
 		circleToken: f.rc.CircleCIToken,
 		parallelism: f.parallelism,
@@ -128,6 +131,8 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 		Parallelism: req.parallelism,
 		Model:       req.model,
 		Timeout:     req.timeout,
+		Image:       req.image,
+		DestroyPool: req.destroyPool,
 		Install:     review.InstallRelease,
 	}
 	if req.chunkBinary != "" {
@@ -152,6 +157,13 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 	if err != nil {
 		return &userError{msg: "Could not start the review on the primary sidecar.", err: err}
 	}
+	if res.ExitCode == review.ExitBadBinary {
+		return &userError{
+			msg:        "The chunk on the primary sidecar cannot run.",
+			suggestion: "It must be a Linux build for the sidecar's architecture: GOOS=linux GOARCH=amd64 go build -o dist/chunk-linux . && chunk review --detach --chunk-binary dist/chunk-linux",
+			hideDetail: true,
+		}
+	}
 	if res.ExitCode == review.ExitNoReview {
 		return &userError{
 			msg:        "The chunk installed on the primary sidecar has no review command.",
@@ -167,11 +179,10 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 		}
 	}
 
-	lines := strings.Fields(stdout.String())
-	if len(lines) == 0 {
+	runDir := lastLine(stdout.String())
+	if runDir == "" {
 		return &userError{msg: "The primary sidecar did not report where the review is running.", hideDetail: true}
 	}
-	runDir := lines[len(lines)-1]
 
 	if err := saveDetachedState(req.workDir, detachedState{SidecarID: entry.ID, RunDir: runDir, StartedAt: time.Now()}); err != nil {
 		// The review is already running; losing the shortcut must not hide that.
@@ -185,6 +196,13 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 	req.streams.Printf("It keeps running if you close this terminal. To read it later:\n")
 	req.streams.Printf("  chunk review results\n")
 	return nil
+}
+
+// lastLine returns the last non-empty line of out, trimmed. The run directory
+// is the script's last line, and a whole line keeps a path with spaces intact.
+func lastLine(out string) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // relativePromptsDir turns the prompts directory argument into a path inside
@@ -339,6 +357,12 @@ func printDetachedResults(ctx context.Context, client *circleci.Client, streams 
 			suggestion: "Run 'chunk review --detach' to start again.",
 			hideDetail: true,
 		}
+	case review.RunDied:
+		return &userError{
+			msg:        "The review on the primary sidecar stopped before it finished.",
+			suggestion: "Its process is gone and it left no exit code, so the sidecar may have restarted. Run 'chunk review --detach' to start again." + logSuffix(status.Body),
+			hideDetail: true,
+		}
 	case review.RunRunning:
 		streams.Printf("Still running (started %s ago).\n", time.Since(st.StartedAt).Round(time.Second))
 		if log := strings.TrimSpace(status.Body); log != "" {
@@ -357,7 +381,10 @@ func printDetachedResults(ctx context.Context, client *circleci.Client, streams 
 		}
 	}
 	if jsonOut {
-		return iostream.PrintJSON(streams.Out, report)
+		if err := iostream.PrintJSON(streams.Out, report); err != nil {
+			return fmt.Errorf("write reviews: %w", err)
+		}
+		return detachedFailure(report, status)
 	}
 	results := make([]review.Result, 0, len(report.Reviews))
 	for _, r := range report.Reviews {
@@ -370,6 +397,13 @@ func printDetachedResults(ctx context.Context, client *circleci.Client, streams 
 		})
 	}
 	printReviews(streams, results)
+	return detachedFailure(report, status)
+}
+
+// detachedFailure turns a finished run into the error the local 'chunk review'
+// would have returned: failed reviews, or a run that exited nonzero even though
+// its report shows no failures, such as a pass that stopped early.
+func detachedFailure(report reviewReport, status review.RunStatus) error {
 	if report.Failed > 0 {
 		return &userError{
 			msg:        fmt.Sprintf("%d of %d review(s) failed.", report.Failed, len(report.Reviews)),
@@ -377,5 +411,22 @@ func printDetachedResults(ctx context.Context, client *circleci.Client, streams 
 			hideDetail: true,
 		}
 	}
+	if status.ExitCode != 0 {
+		return &userError{
+			msg:        fmt.Sprintf("The review exited with code %d.", status.ExitCode),
+			suggestion: "Log from the primary sidecar:" + logSuffix(status.Log),
+			errMsg:     "review exited nonzero",
+			hideDetail: true,
+		}
+	}
 	return nil
+}
+
+// logSuffix formats the tail of a run's log for a suggestion, or nothing if empty.
+func logSuffix(log string) string {
+	log = strings.TrimSpace(log)
+	if log == "" {
+		return ""
+	}
+	return "\n" + log
 }

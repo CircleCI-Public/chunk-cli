@@ -3,10 +3,13 @@ package cmd
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
 func TestRelativePromptsDir(t *testing.T) {
@@ -55,4 +58,29 @@ func TestDetachedStateRoundTrip(t *testing.T) {
 	info, err := os.Stat(detachedStatePath(work))
 	assert.NilError(t, err)
 	assert.Equal(t, info.Mode().Perm(), os.FileMode(0o600))
+}
+
+func TestLastLine(t *testing.T) {
+	assert.Equal(t, lastLine("/home/u/.chunk-review/r\n"), "/home/u/.chunk-review/r")
+	assert.Equal(t, lastLine("installing...\ndone\n/home/my user/.chunk-review/r\n"), "/home/my user/.chunk-review/r")
+	assert.Equal(t, lastLine("\n\n"), "")
+	assert.Equal(t, lastLine(""), "")
+}
+
+func TestDetachedFailure(t *testing.T) {
+	clean := reviewReport{Reviews: make([]reviewJSON, 2)}
+
+	assert.NilError(t, detachedFailure(clean, review.RunStatus{State: review.RunDone}))
+
+	// A report with no failures does not hide a run that exited nonzero.
+	err := detachedFailure(clean, review.RunStatus{State: review.RunDone, ExitCode: 3, Log: "stopped early\n"})
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Assert(t, strings.Contains(ue.msg, "exited with code 3"), ue.msg)
+	assert.Assert(t, strings.Contains(ue.suggestion, "stopped early"), ue.suggestion)
+
+	failed := reviewReport{Failed: 1, Reviews: make([]reviewJSON, 2)}
+	err = detachedFailure(failed, review.RunStatus{State: review.RunDone})
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Assert(t, strings.Contains(ue.msg, "1 of 2 review(s) failed"), ue.msg)
 }
