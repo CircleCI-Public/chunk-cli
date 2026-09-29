@@ -181,11 +181,30 @@ func TestReconcileDistrustsAListThatHasGoneStale(t *testing.T) {
 	assert.Check(t, !got[0].Verified)
 }
 
+func TestReconcileKeepsSidecarsWhoseOrgWasInferred(t *testing.T) {
+	var calls atomic.Int32
+	l := newLivenessChecker(staticList(&calls, "live"))
+	l.fetch(context.Background(), "org")
+
+	// The org setting may have changed since these were created, so the list
+	// can vouch for one but not rule the other out.
+	written := time.Now().Add(-time.Hour)
+	got := l.reconcile([]SidecarState{
+		{ID: "live", OrgID: "org", orgInferred: true, FileMtime: written},
+		{ID: "elsewhere", OrgID: "org", orgInferred: true, FileMtime: written},
+	})
+	assert.DeepEqual(t, ids(got), []string{"live", "elsewhere"})
+	assert.Check(t, got[0].Verified)
+	assert.Check(t, !got[1].Verified)
+}
+
 func TestFillMissingOrgKeepsRecordedOrgs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CIRCLECI_ORG_ID", "env-org")
 	sidecars := []SidecarState{{ID: "a", OrgID: "recorded"}, {ID: "b"}}
 	fillMissingOrg(sidecars, root)
 	assert.Equal(t, sidecars[0].OrgID, "recorded")
+	assert.Check(t, !sidecars[0].orgInferred)
 	assert.Equal(t, sidecars[1].OrgID, "env-org")
+	assert.Check(t, sidecars[1].orgInferred)
 }
