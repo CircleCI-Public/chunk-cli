@@ -283,7 +283,7 @@ Variables from `--env` flags take precedence over those in `--env-file`. `.env.l
 chunk watch
 ```
 
-The dashboard refreshes every 5 seconds. The left pane lists your sidecars grouped by project, showing sync state and last activity time. The right pane shows the activity log — sync, validate, exec, and setup events — for the selected sidecar.
+The dashboard refreshes every 5 seconds. The left pane lists the sidecars that actually exist, grouped by project: the daemon checks each one against the CircleCI API and drops any that have expired or been deleted. Each row shows what the sidecar is doing — running a command, or idle along with how its last run ended — and its last activity time. A sidecar the API hasn't confirmed yet (for example, when you're not authenticated) is shown as `unconfirmed`. The right pane shows the activity log — sync, validate, exec, and setup events — for the selected sidecar.
 
 ```
 chunk watch  1 sidecar  main@a3f9e12                      15:04:32
@@ -292,7 +292,7 @@ chunk watch  1 sidecar  main@a3f9e12                      15:04:32
                        │
 ── chunk-cli           │ 14:58:01  sync      ✓  done
 ▶ my-sidecar           │ 14:55:12  validate  ✓  done
-  synced via rsync     │ 14:52:44  sync      ✓  done
+  ✓ idle · last passed │ 14:52:44  sync      ✓  done
   6m ago               │
 ──────────────────────────────────────────────────────────────────
   ↑/↓ j/k  select  ·  q  quit
@@ -306,10 +306,10 @@ chunk watch --focus           # current directory only
 chunk watch /path/to/other    # add another project
 ```
 
-You don't have to have the dashboard open at the time. Every `chunk validate` run
-records its results to disk — including a purely local run, in a project that has
-never had a sidecar — so runs you made with no dashboard open are waiting for you
-the next time you open one, under a `local` row for the project.
+You don't have to have the dashboard open at the time. Every sidecar `chunk validate`
+run records its results to disk, so runs you made with no dashboard open are waiting
+for you the next time you open one. Purely local runs have no sidecar, so they don't
+get a row.
 
 `watch` requires a TTY — it will not run in a non-interactive shell (CI, pipes).
 

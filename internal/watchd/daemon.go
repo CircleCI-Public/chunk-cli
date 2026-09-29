@@ -84,6 +84,9 @@ type daemon struct {
 	// claims tracks which sessions are actively validating which paths, for
 	// advisory cross-agent coordination.
 	claims *claimStore
+	// live drops sidecars the API no longer lists, so the dashboard shows only
+	// the ones that exist.
+	live *livenessChecker
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -162,6 +165,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		prm:       newPRMonitor(ghClient),
 		prov:      prov,
 		claims:    newClaimStore(),
+		live:      newLivenessChecker(listFor(client)),
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.
@@ -355,6 +359,17 @@ func (d *daemon) updateProject(ps *projectState) {
 	}
 
 	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
+	if orgID, _ := config.ResolveOrgID(ps.root); orgID != "" {
+		for i := range sidecars {
+			if sidecars[i].OrgID == "" {
+				sidecars[i].OrgID = orgID
+			}
+		}
+	}
+	// Same background context as the PR fetch below: the list must survive this
+	// poll returning.
+	d.live.maybeRefresh(context.Background(), sidecars)
+	sidecars = d.live.reconcile(sidecars)
 	annotateActivity(sidecars, ps.events)
 	d.res.annotate(sidecars)
 

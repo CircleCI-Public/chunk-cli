@@ -262,120 +262,68 @@ func TestSortByActivity_keepsProjectsGrouped(t *testing.T) {
 	}
 }
 
-func TestFilterSidecars_noPerProjectCap(t *testing.T) {
+func TestFilterSidecars_keepsEveryConfirmedSidecar(t *testing.T) {
 	now := time.Now()
+	// Confirmed sidecars are still running however long they have sat idle, so
+	// none of them is filtered for age — not even one with no activity at all.
 	sidecars := []sidecarInfo{
-		{id: "s1", projectName: "p", lastActivity: now.Add(-1 * time.Minute)},
-		{id: "s2", projectName: "p", lastActivity: now.Add(-2 * time.Minute)},
-		{id: "s3", projectName: "p", lastActivity: now.Add(-3 * time.Minute)},
-		{id: "s4", projectName: "p", lastActivity: now.Add(-4 * time.Minute)},
+		{id: "busy", verified: true, lastActivity: now.Add(-time.Minute)},
+		{id: "idle-for-days", verified: true, lastActivity: now.Add(-72 * time.Hour)},
+		{id: "never-used", verified: true},
 	}
 
-	sortByActivity(sidecars, "")
-	got := filterSidecars(sidecars, 2)
+	got := filterSidecars(sidecars)
 
-	if len(got) != 4 {
-		t.Fatalf("want all 4 sidecars, got %d", len(got))
-	}
-	for i, id := range []string{"s1", "s2", "s3", "s4"} {
-		if got[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
-		}
+	want := []string{"busy", "idle-for-days", "never-used"}
+	assert.Equal(t, len(got), len(want))
+	for i, id := range want {
+		assert.Equal(t, got[i].id, id, "position %d", i)
 	}
 }
 
-func TestFilterSidecars_dropsInactive(t *testing.T) {
+func TestFilterSidecars_dropsStaleUnconfirmedSidecars(t *testing.T) {
 	now := time.Now()
 	sidecars := []sidecarInfo{
-		{id: "recent", projectName: "p", lastActivity: now.Add(-59 * time.Minute)},
-		{id: "just-aged-out", projectName: "p", lastActivity: now.Add(-61 * time.Minute)},
-		{id: "mtime-recent", projectName: "q", fileMtime: now.Add(-10 * time.Minute)},
-		{id: "mtime-old", projectName: "q", fileMtime: now.Add(-25 * time.Hour)},
-		{id: "no-activity-at-all", projectName: "r"},
+		{id: "recent", lastActivity: now.Add(-23 * time.Hour)},
+		{id: "mtime-recent", fileMtime: now.Add(-10 * time.Minute)},
+		{id: "too-old", lastActivity: now.Add(-25 * time.Hour)},
+		{id: "mtime-old", fileMtime: now.Add(-25 * time.Hour)},
+		{id: "no-activity-at-all"},
 	}
 
-	got := filterSidecars(sidecars, 10)
+	got := filterSidecars(sidecars)
 
 	want := []string{"recent", "mtime-recent"}
-	if len(got) != len(want) {
-		t.Fatalf("want %d sidecars, got %d", len(want), len(got))
-	}
+	assert.Equal(t, len(got), len(want))
 	for i, id := range want {
-		if got[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
-		}
+		assert.Equal(t, got[i].id, id, "position %d", i)
 	}
 }
 
-func TestFilterSidecars_fallsBackToPaneFullOfRecent(t *testing.T) {
-	now := time.Now()
-	// Nothing inside the hour, so the fallback fills the pane by recency.
-	sidecars := []sidecarInfo{
-		{id: "h2", projectName: "a", lastActivity: now.Add(-2 * time.Hour)},
-		{id: "h3", projectName: "b", lastActivity: now.Add(-3 * time.Hour)},
-		{id: "h4", projectName: "c", lastActivity: now.Add(-4 * time.Hour)},
-		{id: "yesterday", projectName: "d", lastActivity: now.Add(-25 * time.Hour)},
-	}
-
-	got := filterSidecars(sidecars, 2)
-
-	if len(got) != 2 {
-		t.Fatalf("want 2 sidecars (pane capacity), got %d", len(got))
-	}
-	for i, id := range []string{"h2", "h3"} {
-		if got[i].id != id {
-			t.Errorf("position %d: want %s, got %s", i, id, got[i].id)
-		}
-	}
-}
-
-func TestFilterSidecars_fallbackStopsAtOneDay(t *testing.T) {
-	now := time.Now()
-	sidecars := []sidecarInfo{
-		{id: "just-inside", projectName: "a", lastActivity: now.Add(-23 * time.Hour)},
-		{id: "too-old", projectName: "b", lastActivity: now.Add(-25 * time.Hour)},
-	}
-
-	got := filterSidecars(sidecars, 10)
-
-	if len(got) != 1 || got[0].id != "just-inside" {
-		t.Fatalf("want only just-inside, got %v", got)
-	}
-}
-
-func TestFilterSidecars_activeSetIgnoresCapacity(t *testing.T) {
-	now := time.Now()
-	var sidecars []sidecarInfo
-	for i := range 8 {
-		sidecars = append(sidecars, sidecarInfo{
-			id: fmt.Sprintf("s%d", i), projectName: "p",
-			lastActivity: now.Add(-time.Duration(i) * time.Minute),
-		})
-	}
-
-	// All eight are inside the hour, so none are dropped to fit the pane.
-	if got := filterSidecars(sidecars, 2); len(got) != 8 {
-		t.Fatalf("want all 8 active pool members, got %d", len(got))
-	}
-}
-
-func TestSidecarCapacity(t *testing.T) {
+func TestRowStatus(t *testing.T) {
+	m := New(nil, false)
+	st := newWatchStyles(false)
 	tests := []struct {
-		name   string
-		height int
-		want   int
+		name string
+		sc   sidecarInfo
+		want string
 	}{
-		{"unset height", 0, defaultCapacity},
-		{"tiny terminal", 8, 1},
-		{"40 rows", 40, 5},
-		{"80 rows", 80, 12},
+		{"running shows the op", sidecarInfo{running: true, verified: true, lastOp: eventlog.OpValidate}, string(eventlog.OpValidate) + "..."},
+		{"running wins over unconfirmed", sidecarInfo{running: true, lastOp: eventlog.OpValidate}, string(eventlog.OpValidate) + "..."},
+		{"unconfirmed is not called idle", sidecarInfo{lastLevel: levelDone}, "? unconfirmed"},
+		{"idle after a pass", sidecarInfo{verified: true, lastLevel: levelDone}, "idle · last passed"},
+		{"idle after a failure", sidecarInfo{verified: true, lastLevel: levelError}, "idle · last failed"},
+		{"idle with no runs", sidecarInfo{verified: true}, "idle"},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := New(nil, false)
-			m.height = tt.height
-			if got := m.sidecarCapacity(); got != tt.want {
-				t.Errorf("height %d: want %d, got %d", tt.height, tt.want, got)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := m.rowStatus(st, tc.sc)
+			// Split on the separator: the two halves are styled separately.
+			for _, part := range strings.Split(tc.want, " · ") {
+				assert.Assert(t, strings.Contains(got, part), "got %q, want %q", got, tc.want)
+			}
+			if !strings.Contains(tc.want, "last") {
+				assert.Assert(t, !strings.Contains(got, "last"), "got %q", got)
 			}
 		})
 	}
@@ -408,15 +356,14 @@ func TestUpdate_selectionFollowsSidecarID(t *testing.T) {
 }
 
 func TestUpdate_initialSelectionPicksMostRecent(t *testing.T) {
-	// On first entry, New() has no selection. Even when a local runner (id="")
-	// is in the list with older activity, the freshest sidecar must be selected.
+	// On first entry, New() has no selection, so the freshest sidecar must be
+	// selected.
 	now := time.Now()
 	m := New(nil, false)
 
 	next, _ := m.Update(dataMsg{sidecars: []sidecarInfo{
 		{id: "newest", lastActivity: now.Add(-1 * time.Minute)},
 		{id: "older", lastActivity: now.Add(-30 * time.Minute)},
-		{id: "", name: "local", lastActivity: now.Add(-45 * time.Minute)},
 	}})
 	m = next.(Model)
 
@@ -628,9 +575,9 @@ func TestRenderSidecarPane_dropsWholeRowsRatherThanCuttingOne(t *testing.T) {
 	// losing its sync badge and age.
 	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 9), "\n")
 
-	// A complete row ends in an age line, so one age line per sync badge means
+	// A complete row ends in an age line, so one age line per status line means
 	// no row was cut part-way through.
-	assert.Equal(t, strings.Count(pane, "synced via rsync"), strings.Count(pane, "ago"), pane)
+	assert.Equal(t, strings.Count(pane, "unconfirmed"), strings.Count(pane, "ago"), pane)
 	assert.Assert(t, strings.Contains(pane, "1 more"), pane)
 }
 
@@ -876,22 +823,6 @@ func TestSortByActivity_pinningDoesNotJumpGroups(t *testing.T) {
 	assert.Equal(t, sidecars[0].id, "busy")
 }
 
-func TestRenderSidecarPane_localRunnerIsNotCountedAsASession(t *testing.T) {
-	now := time.Now()
-	m := sessionModel("", []sidecarInfo{
-		{id: "id1", sessionID: "sessA", repoName: "r", branch: "main", lastActivity: now},
-		{id: "id2", sessionID: "sessB", repoName: "r", branch: "main", lastActivity: now.Add(-1 * time.Minute)},
-		{id: "", name: localRunnerName, repoName: "r", branch: "main", lastActivity: now.Add(-2 * time.Minute)},
-	})
-
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-
-	// Three rows, but only two of them are sessions.
-	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
-	assert.Assert(t, !strings.Contains(pane, "3 sessions"), pane)
-	assert.Assert(t, strings.Contains(pane, "○ "+localRunnerName), pane)
-}
-
 func TestRowLabel(t *testing.T) {
 	m := New(nil, false)
 	m.ownSession = "mine1234-abcd"
@@ -908,7 +839,6 @@ func TestRowLabel(t *testing.T) {
 		{"alone with no branch falls back to the identifier", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-1"}, false, "", "11111111-aaaa-bbbb-cccc-000000000001"},
 		{"own session is called out", sidecarInfo{id: "x", branch: "main", sessionID: "mine1234-abcd"}, true, "", "● this session"},
 		{"other session is shortened", sidecarInfo{id: "x", branch: "main", sessionID: "theirs99-abcd"}, true, "", "○ theirs99"},
-		{"local runner keeps its name", sidecarInfo{id: "", name: localRunnerName, branch: "main"}, true, "", "○ " + localRunnerName},
 		{"pre-session state is abbreviated too", sidecarInfo{id: "11111111-aaaa-bbbb-cccc-000000000001", name: "sc-legacy", branch: "main"}, true, "", "○ 11111111"},
 	}
 	for _, tc := range tests {
@@ -975,23 +905,63 @@ func TestConvertSnapshot_carriesSessionID(t *testing.T) {
 	assert.Equal(t, got["id2"], "sessB")
 }
 
-// A local validate run belongs to the worktree, not to any one agent. Folding
-// its events into a session's row makes the pane claim another session ran them.
-func TestConvertSnapshot_localRunIsNotAttributedToASession(t *testing.T) {
+// A local validate run has no sidecar, so it gets no row — neither one of its
+// own nor a share of a session's.
+func TestConvertSnapshot_localRunGetsNoRow(t *testing.T) {
 	now := time.Now()
-	snap := twoSessionSnapshot(now.Add(-5*time.Minute), now.Add(-2*time.Minute), now.Add(-1*time.Minute))
-	m := New(nil, false)
-	m.height = 60
+	msg := convertSnapshot(
+		twoSessionSnapshot(now.Add(-10*time.Minute), now.Add(-11*time.Minute), now),
+		New(nil, true))
 
-	msg := convertSnapshot(snap, m)
-
+	got := map[string]string{}
 	for _, sc := range msg.sidecars {
-		if sc.sessionID == "" {
-			continue // the local row itself, or unattributed state
-		}
-		assert.Assert(t, !hasSidecarID(sc.sidecarIDs, ""),
-			"session %q absorbed the local run: ids=%v", sc.sessionID, sc.sidecarIDs)
+		got[sc.id] = sc.sessionID
 	}
+	assert.DeepEqual(t, got, map[string]string{"idA": "sessA", "idB": "sessB"})
+
+	m := sessionModel("sessA", msg.sidecars)
+	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
+	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
+	assert.Assert(t, !strings.Contains(pane, "local"), pane)
+}
+
+func TestConvertSnapshot_projectWithOnlyLocalRunsIsEmpty(t *testing.T) {
+	now := time.Now()
+	snap := watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+		Root: "/repo", Branch: "main", RepoName: "repo",
+		Events: []eventlog.Event{{Ts: now, Op: eventlog.OpValidate, Level: levelDone}},
+	}}}
+
+	msg := convertSnapshot(snap, New(nil, true))
+
+	assert.Equal(t, len(msg.sidecars), 0)
+	assert.Equal(t, len(msg.projects), 1)
+}
+
+func TestConvertSnapshot_carriesVerifiedAndRunningCommands(t *testing.T) {
+	now := time.Now()
+	snap := watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+		Root: "/repo", Branch: "main", RepoName: "repo",
+		Sidecars: []watchd.SidecarState{
+			{ID: "busy", Verified: true, LastActivity: now},
+			{ID: "quiet", Verified: true, LastActivity: now},
+		},
+		// The event log has gone quiet, but the daemon is still streaming a
+		// command on busy, so busy is running.
+		Commands: []watchd.CommandState{
+			{CommandID: "c1", SidecarID: "busy", Running: true},
+			{CommandID: "c2", SidecarID: "quiet", Running: false},
+		},
+	}}}
+
+	msg := convertSnapshot(snap, New(nil, true))
+
+	byID := map[string]sidecarInfo{}
+	for _, sc := range msg.sidecars {
+		byID[sc.id] = sc
+	}
+	assert.Assert(t, byID["busy"].verified && byID["busy"].running)
+	assert.Assert(t, byID["quiet"].verified && !byID["quiet"].running)
 }
 
 // twoSessionSnapshot builds a daemon snapshot for one worktree driven by two
@@ -1019,7 +989,7 @@ func twoSessionSnapshot(aAt, bAt, localAt time.Time) watchd.Snapshot {
 
 // The unit tests above set m.sidecars directly, so they cannot catch a merge
 // that collapses two sessions into one row. This drives the real path —
-// convertSnapshot → sortByActivity → mergeBranches → filterSidecars — and
+// convertSnapshot → sortByActivity → filterSidecars — and
 // asserts both sessions survive it with their identities intact.
 func TestConvertSnapshot_twoSessionsSurviveTheMerge(t *testing.T) {
 	now := time.Now()
@@ -1033,66 +1003,6 @@ func TestConvertSnapshot_twoSessionsSurviveTheMerge(t *testing.T) {
 	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
 	assert.Assert(t, strings.Contains(pane, "this session"), pane)
 	assert.Assert(t, strings.Contains(pane, "sessB"), pane)
-}
-
-// oneSessionSnapshot builds a snapshot for a worktree held by a single session,
-// with the local run fresher than the sidecar so the local row leads its group.
-func oneSessionSnapshot(sidecarAt, localAt time.Time) watchd.Snapshot {
-	ev := func(ts time.Time, sidecarID string) eventlog.Event {
-		return eventlog.Event{Ts: ts, SidecarID: sidecarID, Op: eventlog.OpValidate,
-			Level: levelDone, Msg: "1/1 passed"}
-	}
-	return watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
-		Root:     "/repo",
-		Branch:   "main",
-		RepoName: "repo",
-		Sidecars: []watchd.SidecarState{
-			{ID: "idA", Name: "repo-sessA", SessionID: "sessA", RepoName: "repo", LastActivity: sidecarAt},
-		},
-		Events: []eventlog.Event{ev(sidecarAt, "idA"), ev(localAt, "")},
-	}}}
-}
-
-// A local run fresher than the sidecar makes the local row lead its group, so
-// mergeBranches promotes the sidecar onto it. The promotion has to carry the
-// session, or the activity pane stops naming it. Only a worktree held by one
-// session folds the local row in at all — see the test below for the other case.
-func TestConvertSnapshot_promotionKeepsTheSession(t *testing.T) {
-	now := time.Now()
-	msg := convertSnapshot(oneSessionSnapshot(now.Add(-10*time.Minute), now), New(nil, true))
-
-	assert.Equal(t, len(msg.sidecars), 1)
-	assert.Equal(t, msg.sidecars[0].id, "idA")
-	assert.Equal(t, msg.sidecars[0].sessionID, "sessA")
-
-	m := sessionModel("sessA", msg.sidecars)
-	m.selectedIdx = 0
-	m.width = 120
-	pane := strings.Join(m.renderActivityPane(newWatchStyles(false), 20), "\n")
-	assert.Assert(t, strings.Contains(pane, "this session"), pane)
-}
-
-// Two sessions plus a local run: the local row belongs to neither session, so it
-// stays a row of its own. The worktree then shows three rows described as two
-// sessions, and no session is credited with the local run.
-func TestConvertSnapshot_localRowStaysSeparateWhenSessionsShareAWorktree(t *testing.T) {
-	now := time.Now()
-	msg := convertSnapshot(
-		twoSessionSnapshot(now.Add(-10*time.Minute), now.Add(-11*time.Minute), now),
-		New(nil, true))
-
-	assert.Equal(t, len(msg.sidecars), 3)
-	sessions := map[string]string{}
-	for _, sc := range msg.sidecars {
-		sessions[sc.id] = sc.sessionID
-	}
-	assert.Equal(t, sessions["idA"], "sessA")
-	assert.Equal(t, sessions["idB"], "sessB")
-
-	m := sessionModel("sessA", msg.sidecars)
-	pane := strings.Join(m.renderSidecarPane(newWatchStyles(false), 40), "\n")
-	assert.Assert(t, strings.Contains(pane, "2 sessions"), pane)
-	assert.Assert(t, strings.Contains(pane, "this session"), pane)
 }
 
 // outcomeOf tests

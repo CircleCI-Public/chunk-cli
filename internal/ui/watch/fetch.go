@@ -1,9 +1,6 @@
 package watch
 
 import (
-	"path/filepath"
-	"time"
-
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
@@ -26,9 +23,10 @@ func fetchFromDaemon(m Model) (dataMsg, error) {
 }
 
 // convertSnapshot maps a watchd.Snapshot to the dataMsg the model expects.
-// The daemon has already annotated sidecars with activity; this function
-// handles TUI-side concerns: synthesising local-runner entries, ordering,
-// branch merging, and filtering.
+// The daemon has already annotated sidecars with activity and dropped the ones
+// the API no longer lists; this function handles TUI-side concerns: ordering
+// and filtering. Only sidecars get rows — a validate run that happened locally
+// has no sidecar to show.
 func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 	n := len(snap.Projects)
 	projects := make([]ProjectEntry, 0, n)
@@ -58,7 +56,6 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		for _, sc := range p.Sidecars {
 			allSidecars = append(allSidecars, sidecarInfo{
 				id:           sc.ID,
-				sidecarIDs:   []string{sc.ID},
 				name:         sc.Name,
 				sessionID:    sc.SessionID,
 				projectName:  sc.ProjectName,
@@ -71,42 +68,15 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 				lastActivity: sc.LastActivity,
 				lastOp:       sc.LastOp,
 				lastLevel:    sc.LastLevel,
-				running:      sc.Running,
+				running:      sc.Running || commandRunning(p.Commands, sc.ID),
+				verified:     sc.Verified,
 				resources:    sc.Resources,
 			})
 		}
-
-		// Synthesise a local-runner entry; its activity comes from events
-		// where SidecarID is "" (local validate runs, not sidecar ones).
-		local := sidecarInfo{
-			id:          "",
-			sidecarIDs:  []string{""},
-			name:        localRunnerName,
-			projectName: filepath.Base(p.Root),
-			repoName:    p.RepoName,
-			projectPath: p.Root,
-			branch:      p.Branch,
-			projectIdx:  i,
-		}
-		for j := len(p.Events) - 1; j >= 0; j-- {
-			e := p.Events[j]
-			if e.SidecarID != "" {
-				continue
-			}
-			local.lastActivity = e.Ts
-			local.lastOp = e.Op
-			local.lastLevel = e.Level
-			if e.Level != levelDone && e.Level != levelError && time.Since(e.Ts) < runningTimeout {
-				local.running = true
-			}
-			break
-		}
-		allSidecars = append(allSidecars, local)
 	}
 
 	sortByActivity(allSidecars, m.ownSession)
-	allSidecars = mergeBranches(allSidecars)
-	allSidecars = filterSidecars(allSidecars, m.sidecarCapacity())
+	allSidecars = filterSidecars(allSidecars)
 
 	return dataMsg{
 		projects: projects,
@@ -118,4 +88,16 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		commands: allCommandsByProject,
 		authErr:  snap.AuthError,
 	}
+}
+
+// commandRunning reports whether the daemon is still streaming a command on
+// sidecarID. Unlike the event log, which can only say a run went quiet without
+// finishing, this is known to be in flight.
+func commandRunning(commands []watchd.CommandState, sidecarID string) bool {
+	for _, c := range commands {
+		if c.SidecarID == sidecarID && c.Running {
+			return true
+		}
+	}
+	return false
 }

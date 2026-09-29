@@ -36,7 +36,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 	repoName := projectRepoName(root)
 	idx := map[string]int{}
 	var result []SidecarState
-	appendState := func(id, name, sessionID, workspace string, mtime time.Time) {
+	appendState := func(id, name, sessionID, workspace, orgID string, mtime time.Time) {
 		if id == "" {
 			return
 		}
@@ -53,6 +53,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 			SnapshotName: snapshotName,
 			FileMtime:    mtime,
 			Workspace:    workspace,
+			OrgID:        orgID,
 		}
 		if duplicate {
 			result[at] = state
@@ -77,7 +78,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 			mtime = fi.ModTime()
 		}
 		for i, id := range as.SidecarIDs {
-			appendState(id, sidecarName(as.Name, i, len(as.SidecarIDs)), as.SessionID, as.Workspace, mtime)
+			appendState(id, sidecarName(as.Name, i, len(as.SidecarIDs)), as.SessionID, as.Workspace, as.OrgID, mtime)
 		}
 	}
 
@@ -106,7 +107,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 				}
 				continue
 			}
-			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", pool.RepoPath, mtime)
+			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", pool.RepoPath, "", mtime)
 		}
 	}
 	return result

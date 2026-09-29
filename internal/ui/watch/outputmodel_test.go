@@ -29,7 +29,6 @@ func modelWithInvocation(t *testing.T, cmds []watchd.CommandState) Model {
 		height: 40,
 		sidecars: []sidecarInfo{{
 			id:         "sc-1",
-			sidecarIDs: []string{"sc-1"},
 			projectIdx: 0,
 		}},
 		events:      [][]eventlog.Event{events},
@@ -465,7 +464,7 @@ func TestCommandForInvocationUsesTheSidecarItIsGiven(t *testing.T) {
 
 	// A row holding a different sidecar matches nothing, whatever is selected.
 	other := *sel
-	other.sidecarIDs = []string{"sc-elsewhere"}
+	other.id = "sc-elsewhere"
 	assert.Check(t, cmp.Nil(m.commandForInvocation(other, groups[0])),
 		"the answer must follow the row passed in, not m.selectedIdx")
 }

@@ -53,7 +53,7 @@ func (m Model) commandForInvocation(sc sidecarInfo, g invocationGroup) *watchd.C
 	var best *watchd.CommandState
 	for i := range m.commands[sc.projectIdx] {
 		cs := &m.commands[sc.projectIdx][i]
-		if !hasSidecarID(sc.sidecarIDs, cs.SidecarID) {
+		if cs.SidecarID != sc.id {
 			continue
 		}
 		// Submitted within the invocation's span, allowing a small margin at the
