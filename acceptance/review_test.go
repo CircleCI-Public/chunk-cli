@@ -112,16 +112,76 @@ func TestReviewRunsEachPromptOnPool(t *testing.T) {
 	assert.Equal(t, len(state.SidecarIDs), 2)
 }
 
-func TestReviewNoAnthropicKey(t *testing.T) {
+func TestReviewNoCredential(t *testing.T) {
 	env, cci, workDir := setupReviewProject(t, nil, "api")
 	env.AnthropicKey = ""
 
 	result := binary.RunCLI(t, []string{"review"}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "No Anthropic API key"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "No Claude credential"), "stderr: %s", result.Stderr)
 	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0,
 		"no sidecar should boot without a key")
+}
+
+// execEnv decodes the env map from the first exec request the CLI sent.
+func execEnv(t *testing.T, cci *fakes.FakeCircleCI) map[string]string {
+	t.Helper()
+	var req struct {
+		Env map[string]string `json:"env"`
+	}
+	for _, r := range cci.Recorder.AllRequests() {
+		if strings.Contains(r.URL.Path, "/exec") {
+			assert.NilError(t, json.Unmarshal(r.Body, &req))
+			return req.Env
+		}
+	}
+	t.Fatal("no exec request recorded")
+	return nil
+}
+
+func TestReviewUsesOAuthTokenWhenNoAPIKey(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: "findings"}, "api")
+	env.AnthropicKey = ""
+	env.Extra["CLAUDE_CODE_OAUTH_TOKEN"] = "sk-ant-oat01-tok"
+
+	result := binary.RunCLI(t, []string{"review"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	got := execEnv(t, cci)
+	assert.Equal(t, got["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat01-tok")
+	_, hasKey := got["ANTHROPIC_API_KEY"]
+	assert.Assert(t, !hasKey, "env: %v", got)
+}
+
+// An API key wins, so nothing changes for anyone who already has one.
+func TestReviewAPIKeyBeatsOAuthToken(t *testing.T) {
+	env, cci, workDir := setupReviewProject(t, &fakes.ExecResponse{CommandID: "cmd-1", Stdout: "findings"}, "api")
+	env.Extra["CLAUDE_CODE_OAUTH_TOKEN"] = "sk-ant-oat01-tok"
+
+	result := binary.RunCLI(t, []string{"review"}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stderr: %s", result.Stderr)
+
+	got := execEnv(t, cci)
+	assert.Equal(t, got["ANTHROPIC_API_KEY"], env.AnthropicKey)
+	_, hasToken := got["CLAUDE_CODE_OAUTH_TOKEN"]
+	assert.Assert(t, !hasToken, "env: %v", got)
+}
+
+// One rejected credential fails every review the same way, so the pass stops
+// rather than reporting the same 401 once per prompt.
+func TestReviewCredentialRejected(t *testing.T) {
+	env, _, workDir := setupReviewProject(t, &fakes.ExecResponse{
+		CommandID: "cmd-1",
+		Stdout:    "Failed to authenticate. API Error: 401 API key is invalid.",
+		ExitCode:  1,
+	}, "api", "security")
+
+	result := binary.RunCLI(t, []string{"review"}, env, workDir)
+
+	assert.Equal(t, result.ExitCode, 3, "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "ANTHROPIC_API_KEY"), "stderr: %s", result.Stderr)
+	assert.Assert(t, !strings.Contains(result.Stderr, "2 of 2 review(s) failed"), "stderr: %s", result.Stderr)
 }
 
 func TestReviewClaudeMissing(t *testing.T) {

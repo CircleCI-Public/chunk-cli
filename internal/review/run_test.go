@@ -60,9 +60,9 @@ func promptOf(t *testing.T, script string) string {
 func TestRunPass(t *testing.T) {
 	t.Parallel()
 	pool := newSafePool("sb-1")
-	var gotKey string
+	var gotEnv map[string]string
 	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, env map[string]string, out circleci.OutputFn) (int, error) {
-		gotKey = env["ANTHROPIC_API_KEY"]
+		gotEnv = env
 		if promptOf(t, script) == "fail please" {
 			out(circleci.StreamStdout, []byte("partial"))
 			out(circleci.StreamStderr, []byte("rate limited\n"))
@@ -76,9 +76,10 @@ func TestRunPass(t *testing.T) {
 	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{
 		{Name: "a", Body: "it's \"quoted\" $(rm -rf /)"},
 		{Name: "b", Body: "fail please"},
-	}, Options{APIKey: "sk-test"})
+	}, Options{Credential: Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}})
 	assert.NilError(t, err)
-	assert.Equal(t, gotKey, "sk-test")
+	assert.Equal(t, len(gotEnv), 1)
+	assert.Equal(t, gotEnv["ANTHROPIC_API_KEY"], "sk-test")
 	assert.Equal(t, len(results), 2)
 
 	assert.Equal(t, results[0].Prompt, "a")
@@ -119,6 +120,56 @@ func TestRunPassShellNotFoundIsOneFailedReview(t *testing.T) {
 	assert.Equal(t, len(results), 2)
 	assert.Equal(t, results[0].Error, "claude exited 127")
 	assert.Equal(t, results[1].Error, "")
+}
+
+func TestRunPassSendsOnlyTheGivenCredential(t *testing.T) {
+	t.Parallel()
+	var gotEnv map[string]string
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn) (int, error) {
+		gotEnv = env
+		return 0, nil
+	}
+
+	pool := newSafePool("sb-1")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}},
+		Options{Credential: Credential{EnvVar: "CLAUDE_CODE_OAUTH_TOKEN", Value: "sk-ant-oat01-tok"}})
+	assert.NilError(t, err)
+	assert.Equal(t, len(gotEnv), 1)
+	assert.Equal(t, gotEnv["CLAUDE_CODE_OAUTH_TOKEN"], "sk-ant-oat01-tok")
+	_, hasKey := gotEnv["ANTHROPIC_API_KEY"]
+	assert.Assert(t, !hasKey, "env: %v", gotEnv)
+}
+
+func TestRunPassCredentialRejectedStopsPass(t *testing.T) {
+	t.Parallel()
+	// The 401 lands on stdout, while stderr carries an unrelated warning.
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn) (int, error) {
+		out(circleci.StreamStderr, []byte("workspace has not been trusted\n"))
+		out(circleci.StreamStdout, []byte("Failed to authenticate. API Error: 401 OAuth access token is invalid.\n"))
+		return 1, nil
+	}
+
+	pool := newSafePool("sb-1", "sb-2")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}, {Name: "c", Body: "z"}}, Options{})
+	assert.Assert(t, errors.Is(err, ErrCredentialRejected), "got %v", err)
+}
+
+// A review that merely quotes a 401 is not an authentication failure, so the
+// pass must not be cut short by it.
+func TestRunPassSuccessfulReviewQuotingA401(t *testing.T) {
+	t.Parallel()
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn) (int, error) {
+		out(circleci.StreamStdout, []byte("the handler failed to authenticate and returns 401\n"))
+		return 0, nil
+	}
+
+	pool := newSafePool("sb-1")
+	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}}, Options{})
+	assert.NilError(t, err)
+	assert.Equal(t, results[0].Error, "")
 }
 
 func TestRunPassTimeout(t *testing.T) {
@@ -164,4 +215,36 @@ func TestClaudeScript(t *testing.T) {
 	assert.Assert(t, strings.Contains(script, "Bash(git diff:*)"), script)
 	assert.Assert(t, !strings.Contains(script, "Edit"), script)
 	assert.Equal(t, promptOf(t, script), "hi")
+}
+
+func TestRunPassForwardsACustomBaseURL(t *testing.T) {
+	t.Parallel()
+	var gotEnv map[string]string
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn) (int, error) {
+		gotEnv = env
+		return 0, nil
+	}
+
+	pool := newSafePool("sb-1")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}},
+		Options{Credential: Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}, BaseURL: "https://llm-gateway.example"})
+	assert.NilError(t, err)
+	assert.Equal(t, gotEnv["ANTHROPIC_BASE_URL"], "https://llm-gateway.example")
+}
+
+func TestRunPassOmitsTheDefaultBaseURL(t *testing.T) {
+	t.Parallel()
+	var gotEnv map[string]string
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn) (int, error) {
+		gotEnv = env
+		return 0, nil
+	}
+
+	pool := newSafePool("sb-1")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}},
+		Options{Credential: Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "sk-test"}, BaseURL: "https://api.anthropic.com/"})
+	assert.NilError(t, err)
+	assert.Equal(t, len(gotEnv), 1)
 }

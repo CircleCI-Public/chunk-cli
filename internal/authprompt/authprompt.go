@@ -173,6 +173,13 @@ func SaveAnthropicKey(key, baseURL string, insecureStorage bool) error {
 	return nil
 }
 
+// SaveClaudeOAuthToken persists the long-lived Claude subscription token in the
+// keychain. Unlike the API key there is no insecure-storage fallback: a bearer
+// token for the user's subscription does not belong in a plaintext file.
+func SaveClaudeOAuthToken(token, baseURL string) error {
+	return keyring.Set(keyring.ServiceAnthropicOAuth(baseURL), token)
+}
+
 // SaveGitHubToken persists a GitHub token. When insecureStorage is false it uses
 // the system keychain; when true it falls back to the config file.
 func SaveGitHubToken(token, baseURL string, insecureStorage bool) error {

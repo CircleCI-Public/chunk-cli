@@ -169,6 +169,7 @@ See [docs/CLI.md](docs/CLI.md) for the full command and flag reference.
 | Variable | Description |
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Anthropic API key (required for `build-prompt`; optional for `init`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude subscription token from `claude setup-token` (for `review`, when no API key is set) |
 | `GITHUB_TOKEN` | GitHub PAT with `repo` scope (for `build-prompt`) |
 | `CIRCLE_TOKEN` | CircleCI personal API token (for `sidecar` and `task`) |
 

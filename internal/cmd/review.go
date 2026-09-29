@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
@@ -87,14 +89,16 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 			}
 
 			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
-			// Checked before any sidecar boots: without a key every review
-			// fails, and the pool would bill for nothing.
-			if rc.AnthropicAPIKey == "" {
-				return &userError{
-					msg:        "No Anthropic API key found; reviews run Claude on each sidecar.",
-					suggestion: "Run 'chunk auth set anthropic' or set ANTHROPIC_API_KEY.",
-					errMsg:     "anthropic api key not found",
-					hideDetail: true,
+			// Checked before any sidecar boots: without a credential every
+			// review fails, and the pool would bill for nothing.
+			cred, credSource, credErr := reviewCredential(rc)
+			if credErr != nil {
+				if err := setupClaudeCredential(ctx, cmd, streams, rc, jsonOut, credErr); err != nil {
+					return err
+				}
+				rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
+				if cred, credSource, credErr = reviewCredential(rc); credErr != nil {
+					return credErr
 				}
 			}
 			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
@@ -151,10 +155,11 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 
 			statusFn(iostream.LevelStep, fmt.Sprintf("Running %d review(s)...", len(prompts)))
 			results, err := review.RunPass(ctx, pool.Acquire, pool.Release, review.ClientExec, prompts, review.Options{
-				APIKey:   rc.AnthropicAPIKey,
-				Model:    model,
-				Timeout:  timeout,
-				StatusFn: statusFn,
+				Credential: cred,
+				BaseURL:    rc.AnthropicBaseURL,
+				Model:      model,
+				Timeout:    timeout,
+				StatusFn:   statusFn,
 			})
 			if errors.Is(err, review.ErrClaudeMissing) {
 				return &userError{
@@ -163,6 +168,9 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 					hideDetail: true,
 					err:        err,
 				}
+			}
+			if errors.Is(err, review.ErrCredentialRejected) {
+				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, err)
 			}
 			if jsonOut {
 				if jsonErr := iostream.PrintJSON(streams.Out, newReviewReport(results)); jsonErr != nil {
@@ -250,4 +258,87 @@ func countFailedReviews(results []review.Result) int {
 		}
 	}
 	return n
+}
+
+// reviewCredential picks the credential reviews authenticate with, preferring
+// an API key so nothing changes for anyone who already has one. The source is
+// returned so a rejected credential can be cleared from wherever it came from.
+func reviewCredential(rc config.ResolvedConfig) (review.Credential, string, error) {
+	switch {
+	case rc.AnthropicAPIKey != "":
+		return review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: rc.AnthropicAPIKey}, rc.AnthropicAPIKeySource, nil
+	case rc.ClaudeOAuthToken != "":
+		return review.Credential{EnvVar: config.EnvClaudeOAuthToken, Value: rc.ClaudeOAuthToken}, rc.ClaudeOAuthTokenSource, nil
+	}
+	return review.Credential{}, "", &userError{
+		msg:        "No Claude credential found; reviews run Claude on each sidecar.",
+		suggestion: "Run 'chunk auth set anthropic-oauth' to use your Claude subscription, or 'chunk auth set anthropic' for an API key.",
+		errMsg:     "no claude credential found",
+		hideDetail: true,
+	}
+}
+
+// credentialRejected reports a credential Anthropic refused, clearing it first
+// when it was one we stored in the keychain. A credential from the environment
+// is the user's to fix, so it is only named, and a key in the config file is
+// pointed at rather than rewritten.
+func credentialRejected(cred review.Credential, source, baseURL string, err error) error {
+	if strings.HasPrefix(source, "Environment") {
+		return &userError{
+			msg:        fmt.Sprintf("Anthropic rejected the credential in %s.", cred.EnvVar),
+			suggestion: "Replace it, or unset it to use a stored credential instead.",
+			exitCode:   ExitAuthError,
+			hideDetail: true,
+			err:        err,
+		}
+	}
+
+	if source != keyring.SourceKeychain {
+		return &userError{
+			msg:        fmt.Sprintf("Anthropic rejected the API key in %s.", strings.ToLower(source[:1])+source[1:]),
+			suggestion: "Run 'chunk auth set anthropic --insecure-storage' to replace it, or 'chunk auth remove anthropic --insecure-storage' to remove it.",
+			exitCode:   ExitAuthError,
+			hideDetail: true,
+			err:        err,
+		}
+	}
+
+	service := keyring.ServiceAnthropic
+	suggestion := "Run 'chunk auth set anthropic' to store a new key, then run the review again."
+	if cred.EnvVar == config.EnvClaudeOAuthToken {
+		service = keyring.ServiceAnthropicOAuth
+		suggestion = "Run 'chunk auth set anthropic-oauth' to mint a new token, then run the review again."
+	}
+	if delErr := keyring.Delete(service(baseURL)); delErr != nil {
+		return &userError{
+			msg:        "Anthropic rejected the stored credential, which could not be removed.",
+			suggestion: suggestion,
+			exitCode:   ExitAuthError,
+			err:        delErr,
+		}
+	}
+	return &userError{
+		msg:        "Anthropic rejected the stored credential, so it has been removed.",
+		suggestion: suggestion,
+		exitCode:   ExitAuthError,
+		hideDetail: true,
+		err:        err,
+	}
+}
+
+// setupClaudeCredential offers to mint a subscription token when nothing is
+// stored. A non-interactive run gets credErr back untouched: there is nobody to
+// complete the browser flow. So does a --json run, whose stdout the setup's
+// output would corrupt, and an --insecure-storage run, which cannot store the
+// token.
+func setupClaudeCredential(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, rc config.ResolvedConfig, jsonOut bool, credErr error) error {
+	if nonInteractive() || jsonOut || insecureStorageFlag(cmd) {
+		return credErr
+	}
+	streams.ErrPrintln(ui.Warning("No Claude credential found."))
+	mint, err := ui.Confirm("Mint one from your Claude subscription now?", true)
+	if err != nil || !mint {
+		return credErr
+	}
+	return authSetAnthropicOAuth(ctx, streams, rc.AnthropicBaseURL, false, false, false)
 }

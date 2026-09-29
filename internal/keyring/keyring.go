@@ -28,6 +28,12 @@ func ServiceAnthropic(baseURL string) string {
 	return servicePrefix + "anthropic:" + strings.TrimRight(baseURL, "/")
 }
 
+// ServiceAnthropicOAuth returns the keychain service key for the long-lived
+// Claude subscription token used for the given Anthropic base URL.
+func ServiceAnthropicOAuth(baseURL string) string {
+	return servicePrefix + "anthropic-oauth:" + strings.TrimRight(baseURL, "/")
+}
+
 // ServiceGitHub returns the keychain service key for the given GitHub API URL.
 func ServiceGitHub(baseURL string) string {
 	return servicePrefix + "github:" + strings.TrimRight(baseURL, "/")

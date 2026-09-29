@@ -9,6 +9,8 @@ const (
 	msgHomeNotSet               = "HOME environment variable is not set."
 	errMsgHomeNotSet            = "HOME not set"
 	msgValidateNotConfigured    = "No validate commands configured."
+	msgEmptyToken               = "Token cannot be empty."
+	msgCouldNotSaveCredentials  = "Could not save credentials."
 
 	suggestionCheckPerms   = "Check file permissions."
 	suggestionNetworkRetry = "Check your network connection and try again."

@@ -22,6 +22,7 @@ func setupTempConfig(t *testing.T) string {
 	t.Setenv(EnvCircleToken, "")
 	t.Setenv(EnvCircleCIToken, "")
 	t.Setenv(EnvAnthropicAPIKey, "")
+	t.Setenv(EnvClaudeOAuthToken, "")
 	t.Setenv(EnvGitHubToken, "")
 	return dir
 }
@@ -460,6 +461,51 @@ func TestResolveCircleCI_ConfigFile(t *testing.T) {
 	assert.Assert(t, strings.Contains(rc.CircleCITokenSource, p), "expected source to contain config path %s, got: %s", p, rc.CircleCITokenSource)
 	assert.Equal(t, rc.AnthropicAPIKey, "")
 	assert.Equal(t, rc.GitHubToken, "")
+}
+
+func TestResolve_ClaudeOAuthTokenFromEnv(t *testing.T) {
+	setupTempConfig(t)
+	t.Setenv(EnvClaudeOAuthToken, "oat-from-env")
+	assert.NilError(t, keyring.Set(keyring.ServiceAnthropicOAuth("https://api.anthropic.com"), "oat-from-keychain"))
+
+	rc, err := Resolve("", "", false)
+	assert.NilError(t, err)
+	assert.Equal(t, rc.ClaudeOAuthToken, "oat-from-env")
+	assert.Equal(t, rc.ClaudeOAuthTokenSource, "Environment variable ("+EnvClaudeOAuthToken+")")
+}
+
+func TestResolve_ClaudeOAuthTokenFromKeychain(t *testing.T) {
+	setupTempConfig(t)
+	assert.NilError(t, keyring.Set(keyring.ServiceAnthropicOAuth("https://api.anthropic.com"), "oat-from-keychain"))
+
+	rc, err := Resolve("", "", false)
+	assert.NilError(t, err)
+	assert.Equal(t, rc.ClaudeOAuthToken, "oat-from-keychain")
+	assert.Equal(t, rc.ClaudeOAuthTokenSource, keyring.SourceKeychain)
+}
+
+// The token has no config-file rung, so a plaintext key cannot shadow it and a
+// config file holding one is simply ignored.
+func TestResolve_ClaudeOAuthTokenIgnoresConfigFile(t *testing.T) {
+	dir := setupTempConfig(t)
+	path := filepath.Join(dir, "chunk", "config.json")
+	assert.NilError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	assert.NilError(t, os.WriteFile(path, []byte(`{"claudeOAuthToken":"oat-from-file"}`), 0o600))
+
+	rc, err := Resolve("", "", false)
+	assert.NilError(t, err)
+	assert.Equal(t, rc.ClaudeOAuthToken, "")
+	assert.Equal(t, rc.ClaudeOAuthTokenSource, "")
+}
+
+func TestResolve_ClaudeOAuthTokenSkipsKeychainWhenInsecureStorage(t *testing.T) {
+	setupTempConfig(t)
+	assert.NilError(t, keyring.Set(keyring.ServiceAnthropicOAuth("https://api.anthropic.com"), "oat-from-keychain"))
+
+	rc, err := Resolve("", "", true)
+	assert.NilError(t, err)
+	assert.Equal(t, rc.ClaudeOAuthToken, "")
+	assert.Equal(t, rc.ClaudeOAuthTokenSource, "")
 }
 
 func TestResolve_ReadsKeychainWhenSecureStorage(t *testing.T) {

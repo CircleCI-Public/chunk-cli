@@ -74,6 +74,7 @@ Credentials are stored in your system keychain by default. Pass `--insecure-stor
 | Variable | Used by |
 |---|---|
 | `ANTHROPIC_API_KEY` | `build-prompt`, `init` |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `review` (when no API key is set) |
 | `GITHUB_TOKEN` | `build-prompt` |
 | `CIRCLE_TOKEN` | `sidecar`, `task` |
 | `CIRCLECI_ORG_ID` | `sidecar` (optional; overrides `orgID` in `.chunk/config.json`) |

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,28 @@ const exitClaudeMissing = 97
 // ErrClaudeMissing is returned when a sidecar has no claude binary.
 var ErrClaudeMissing = errors.New("claude is not installed on the sidecar")
 
+// ErrCredentialRejected is returned when Anthropic rejects the credential.
+var ErrCredentialRejected = errors.New("anthropic rejected the credential")
+
+// credentialRejectedRe matches claude's own authentication failure, which reads
+// the same for a revoked API key and a stale subscription token.
+var credentialRejectedRe = regexp.MustCompile(`(?i)failed to authenticate.*\b401\b`)
+
+// fatal reports whether an error fails every review the same way, so the pass
+// should stop rather than run the rest and report identical failures. Every
+// sidecar in a pool shares one image and one credential.
+func fatal(err error) bool {
+	return errors.Is(err, ErrClaudeMissing) || errors.Is(err, ErrCredentialRejected)
+}
+
+// Credential is the Claude credential a review authenticates with. EnvVar is
+// the variable claude reads it from, so only one of the two is ever sent and a
+// stale one cannot shadow the other.
+type Credential struct {
+	EnvVar string
+	Value  string
+}
+
 // allowedTools limits reviewers to reading the repository. A review reports
 // findings; it has no business editing the tree the next pass reviews.
 var allowedTools = []string{
@@ -39,7 +62,10 @@ var allowedTools = []string{
 
 // Options configures one review pass.
 type Options struct {
-	APIKey   string
+	Credential Credential
+	// BaseURL is forwarded to claude when it is not Anthropic's own, so a
+	// credential issued by a gateway is sent to that gateway.
+	BaseURL  string
 	Model    string        // optional; claude's default when empty
 	Timeout  time.Duration // per review; DefaultTimeout when zero
 	StatusFn iostream.StatusFunc
@@ -73,9 +99,9 @@ func ClientExec(ctx context.Context, entry *sidecar.PoolEntry, script string, en
 // are recorded in Result.Error; the returned error is for failures that stop
 // the pass itself.
 //
-// A missing claude binary stops the pass rather than being recorded per
-// prompt: every sidecar in a pool comes from one image, so it would fail every
-// review the same way.
+// A missing claude binary or a rejected credential stops the pass rather than
+// being recorded per prompt: every sidecar in a pool shares one image and one
+// credential, so either would fail every review the same way.
 func RunPass(ctx context.Context, acquire func(context.Context) (*sidecar.PoolEntry, error), release func(*sidecar.PoolEntry), exec Execer, prompts []Prompt, opts Options) ([]Result, error) {
 	if opts.Timeout <= 0 {
 		opts.Timeout = DefaultTimeout
@@ -105,7 +131,7 @@ func RunPass(ctx context.Context, acquire func(context.Context) (*sidecar.PoolEn
 			r := runOne(ctx, exec, entry, p, opts)
 			results[i] = r
 			switch {
-			case errors.Is(r.err, ErrClaudeMissing):
+			case fatal(r.err):
 				cancel()
 			case r.err != nil:
 				status(iostream.LevelWarn, fmt.Sprintf("%s: %s", p.Name, r.Error))
@@ -118,8 +144,8 @@ func RunPass(ctx context.Context, acquire func(context.Context) (*sidecar.PoolEn
 
 	out := make([]Result, 0, len(results))
 	for _, r := range results {
-		if errors.Is(r.err, ErrClaudeMissing) {
-			return nil, ErrClaudeMissing
+		if fatal(r.err) {
+			return nil, r.err
 		}
 		// Prompts never started, because acquiring a sidecar failed, have no
 		// result to report.
@@ -151,9 +177,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
 	var stdout, stderr strings.Builder
-	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model), map[string]string{
-		"ANTHROPIC_API_KEY": opts.APIKey,
-	}, func(stream string, data []byte) {
+	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model), claudeEnv(opts), func(stream string, data []byte) {
 		buf := &stdout
 		if stream == circleci.StreamStderr {
 			buf = &stderr
@@ -171,10 +195,19 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		return r.fail(fmt.Errorf("exec: %w", err))
 	case code == exitClaudeMissing:
 		return r.fail(ErrClaudeMissing)
+	case code != 0 && credentialRejected(r.Output, stderr.String()):
+		return r.fail(ErrCredentialRejected)
 	case code != 0:
 		return r.fail(exitError(code, stderr.String()))
 	}
 	return r
+}
+
+// credentialRejected reports whether claude failed to authenticate. Both
+// streams are checked: the 401 lands on stdout, while stderr can carry
+// unrelated warnings.
+func credentialRejected(stdout, stderr string) bool {
+	return credentialRejectedRe.MatchString(stdout) || credentialRejectedRe.MatchString(stderr)
 }
 
 // stderrTail is how much of stderr a failed review reports.
@@ -205,4 +238,17 @@ func claudeScript(repoPath, prompt, model string) string {
 command -v claude >/dev/null 2>&1 || exit %d
 cd %s && echo %s | base64 -d | %s`,
 		exitClaudeMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
+}
+
+// defaultBaseURL is where claude sends requests when no base URL is set.
+const defaultBaseURL = "https://api.anthropic.com"
+
+// claudeEnv is the environment each review runs with: only the credential, and
+// the base URL when it points somewhere other than Anthropic.
+func claudeEnv(opts Options) map[string]string {
+	env := map[string]string{opts.Credential.EnvVar: opts.Credential.Value}
+	if opts.BaseURL != "" && strings.TrimRight(opts.BaseURL, "/") != defaultBaseURL {
+		env["ANTHROPIC_BASE_URL"] = opts.BaseURL
+	}
+	return env
 }
