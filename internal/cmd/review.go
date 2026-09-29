@@ -23,8 +23,8 @@ import (
 
 func newReviewCmd() *cobra.Command {
 	var parallelism int
-	var destroyPool, jsonOut bool
-	var orgID, image, model string
+	var destroyPool, jsonOut, detach bool
+	var orgID, image, model, chunkBinary string
 	var timeout time.Duration
 
 	cmd := &cobra.Command{
@@ -35,7 +35,13 @@ each on its own sidecar synced with the working tree. The directory defaults
 to .chunk/reviews in the project.
 
 The sidecars form one pool that is reused across review passes and across
-runs; pass --destroy-pool to delete it when the run ends.`,
+runs; pass --destroy-pool to delete it when the run ends.
+
+With --detach the whole review runs on a primary sidecar instead of here, so
+you can close your laptop: the primary runs chunk review with its own pool, and
+the report is left in a run directory on it. --detach installs the latest
+released chunk on the primary; pass --chunk-binary with a Linux build to use
+that instead.`,
 		// Hidden until passes repeat and check for convergence.
 		Hidden:       true,
 		SilenceUsage: true,
@@ -119,6 +125,13 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 			}
 
 			size := review.PoolSize(parallelism, len(prompts))
+			if detach {
+				return runReviewDetached(ctx, newDetachRequest(args, detachFlags{
+					client: client, streams: streams, workDir: workDir, orgID: resolvedOrgID,
+					image: image, chunkBinary: chunkBinary, rc: rc, cred: cred,
+					parallelism: size, model: model, timeout: timeout, jsonOut: jsonOut,
+				}))
+			}
 			statusFn := newStatusFunc(streams)
 			statusFn(iostream.LevelStep, fmt.Sprintf("Preparing pool of %d sidecar(s) for %d prompt(s)...", size, len(prompts)))
 
@@ -211,6 +224,9 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 	cmd.Flags().DurationVar(&timeout, "timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&detach, "detach", false, "run the review on a primary sidecar and return, so this machine can close")
+	cmd.AddCommand(newReviewResultsCmd())
+	cmd.Flags().StringVar(&chunkBinary, "chunk-binary", "", "Linux chunk build to upload with --detach (default: install the latest release)")
 	return cmd
 }
 
