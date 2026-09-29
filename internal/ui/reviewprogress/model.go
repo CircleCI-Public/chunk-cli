@@ -126,6 +126,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case DoneMsg:
 		m.RunErr = msg.Err
+		// A pass stopped by a fatal error leaves rows it never reported on;
+		// settle them so the final frame doesn't show them still in flight.
+		if msg.Err != nil {
+			for i := range m.rows {
+				if r := &m.rows[i]; r.state == review.StateQueued || r.state == review.StateRunning {
+					r.state = review.StateFailed
+					r.errMsg = msg.Err.Error()
+				}
+			}
+		}
 		return m, tea.Quit
 
 	case spinMsg:
@@ -207,9 +217,11 @@ func (m Model) render() string {
 		case review.StateFailed:
 			icon = st.Err.Render(ui.IconFail)
 			nameStr = st.Err.Render(paddedName)
-			errTxt := r.errMsg
-			if len(errTxt) > maxErrLen {
-				errTxt = errTxt[:maxErrLen-1] + "…"
+			// Errors can carry multi-line stderr; keep the row on one line
+			// and cut on a rune boundary.
+			errTxt := strings.Join(strings.Fields(r.errMsg), " ")
+			if rs := []rune(errTxt); len(rs) > maxErrLen {
+				errTxt = string(rs[:maxErrLen-1]) + "…"
 			}
 			detail = st.Err.Render(errTxt)
 		}

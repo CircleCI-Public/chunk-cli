@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"gotest.tools/v3/assert"
@@ -54,6 +55,32 @@ func TestDoneMsgQuits(t *testing.T) {
 	m := New(basePrompts(), 2, func() {})
 	_, cmd := m.Update(DoneMsg{})
 	assert.Assert(t, cmd != nil, "DoneMsg should return tea.Quit cmd")
+}
+
+func TestDoneMsgWithErrorSettlesUnfinishedRows(t *testing.T) {
+	m := send(New(basePrompts(), 1, func() {}),
+		ProgressMsg(review.ProgressEvent{Prompt: "api-design", SidecarID: "sb-abc123", State: review.StateRunning}),
+		DoneMsg{Err: review.ErrClaudeMissing},
+	)
+
+	for _, r := range m.rows {
+		assert.Equal(t, r.state, review.StateFailed, "row %s", r.name)
+		assert.Equal(t, r.errMsg, review.ErrClaudeMissing.Error())
+	}
+	assert.Assert(t, !strings.Contains(m.render(), "running"))
+}
+
+func TestRenderFailedErrorStaysOnOneLine(t *testing.T) {
+	m := send(New(basePrompts(), 2, func() {}),
+		tea.WindowSizeMsg{Width: 80, Height: 24},
+		ProgressMsg(review.ProgressEvent{Prompt: "api-design", State: review.StateFailed,
+			Error: "claude exited 1: warning: foo\nError: " + strings.Repeat("é", 60)}),
+	)
+
+	got := m.render()
+	assert.Assert(t, !strings.Contains(got, "\nError:"), "error text broke onto a new line:\n%s", got)
+	assert.Assert(t, strings.Contains(got, "warning: foo Error:"))
+	assert.Assert(t, utf8.ValidString(got))
 }
 
 func TestQuitKeyCancels(t *testing.T) {

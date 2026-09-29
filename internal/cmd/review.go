@@ -239,10 +239,15 @@ func runReviewTUI(ctx context.Context, pool *sidecar.Pool, prompts []review.Prom
 		prog.Send(reviewprogress.DoneMsg{Err: err})
 	}()
 
-	if _, tuiErr := prog.Run(); tuiErr != nil {
-		cancel()
-	}
+	// Run also returns an error when the user quits, which cancels ctx
+	// first, so only an error with ctx still live is a display failure.
+	_, tuiErr := prog.Run()
+	quit := ctx.Err() != nil || errors.Is(tuiErr, tea.ErrInterrupted)
+	cancel()
 	done := <-doneCh
+	if tuiErr != nil && !quit {
+		return done.results, fmt.Errorf("run review progress display: %w", tuiErr)
+	}
 	return done.results, done.err
 }
 
