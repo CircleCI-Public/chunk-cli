@@ -10,6 +10,7 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/binary"
 	testenv "github.com/CircleCI-Public/chunk-cli/internal/testing/env"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
@@ -110,6 +111,35 @@ func TestReviewRunsEachPromptOnPool(t *testing.T) {
 	}
 	assert.NilError(t, json.Unmarshal(data, &state))
 	assert.Equal(t, len(state.SidecarIDs), 2)
+
+	// The dashboard matches activity to a sidecar row on SidecarID alone, so
+	// every pool member has to carry the reviews it ran.
+	events := readEventLog(t, env, workDir)
+	byID := map[string][]eventlog.Event{}
+	for _, e := range events {
+		assert.Equal(t, e.Op, eventlog.OpReview, "msg: %s", e.Msg)
+		byID[e.SidecarID] = append(byID[e.SidecarID], e)
+	}
+	assert.Equal(t, len(byID), 2, "three reviews across two sidecars should name both")
+	var closed int
+	for _, id := range state.SidecarIDs {
+		for _, e := range byID[id] {
+			if _, _, ok := e.Outcome(); ok {
+				closed++
+			}
+		}
+	}
+	assert.Equal(t, closed, 3, "each review closes its own run")
+}
+
+// readEventLog returns every event the CLI wrote for projectRoot.
+func readEventLog(t *testing.T, e *testenv.TestEnv, projectRoot string) []eventlog.Event {
+	t.Helper()
+	log, err := eventlog.Open(projectDataDir(t, e, projectRoot))
+	assert.NilError(t, err)
+	events, err := log.Recent(100)
+	assert.NilError(t, err)
+	return events
 }
 
 func TestReviewNoCredential(t *testing.T) {

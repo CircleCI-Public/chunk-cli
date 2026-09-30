@@ -107,6 +107,11 @@ type Options struct {
 	// AllowedTools overrides the read-only tool set. Empty means read-only, which
 	// is what every review uses.
 	AllowedTools []string
+	// OnSubmitted is called once per prompt with the remote command ID, as soon
+	// as the exec is accepted and before its output is streamed. It is how a
+	// caller registers the run for output replay, which has to happen while the
+	// command is still in flight.
+	OnSubmitted func(entry *sidecar.PoolEntry, prompt, commandID string)
 }
 
 // Result is the outcome of one prompt in one pass. Output and Error are not
@@ -123,14 +128,24 @@ type Result struct {
 	Parsed Parsed
 }
 
-// Execer runs a shell script on a sidecar and streams its output.
-type Execer func(ctx context.Context, entry *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn) (exitCode int, err error)
+// Execer runs a shell script on a sidecar and streams its output. onSubmitted,
+// when non-nil, is called with the command ID between submission and streaming.
+type Execer func(ctx context.Context, entry *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(commandID string)) (exitCode int, err error)
 
-// ClientExec runs scripts through the pool entry's CircleCI client.
-func ClientExec(ctx context.Context, entry *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn) (int, error) {
-	res, err := entry.Client.Exec(ctx, entry.ID, "sh", []string{"-c", script}, env, onOutput)
+// ClientExec runs scripts through the pool entry's CircleCI client. Submit and
+// stream are kept apart so onSubmitted sees the command ID: the caller needs it
+// before the command ends, not after.
+func ClientExec(ctx context.Context, entry *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
+	commandID, err := entry.Client.SubmitExec(ctx, entry.ID, "sh", []string{"-c", script}, env)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("submit: %w", err)
+	}
+	if onSubmitted != nil {
+		onSubmitted(commandID)
+	}
+	res, err := entry.Client.StreamOutput(ctx, commandID, "", onOutput)
+	if err != nil {
+		return 0, fmt.Errorf("stream output: %w", err)
 	}
 	return res.ExitCode, nil
 }
@@ -252,7 +267,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	if len(tools) == 0 {
 		tools = allowedTools
 	}
-	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, body, opts.Model, tools), claudeEnv(opts), func(stream string, data []byte) {
+	onOutput := func(stream string, data []byte) {
 		buf := &stdout
 		if stream == circleci.StreamStderr {
 			buf = &stderr
@@ -260,7 +275,12 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		if buf.Len() < maxOutputBytes {
 			buf.Write(data[:min(len(data), maxOutputBytes-buf.Len())])
 		}
-	})
+	}
+	var onSubmitted func(string)
+	if opts.OnSubmitted != nil {
+		onSubmitted = func(commandID string) { opts.OnSubmitted(entry, p.Name, commandID) }
+	}
+	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, body, opts.Model, tools), claudeEnv(opts), onOutput, onSubmitted)
 	r.Output = strings.TrimSpace(stdout.String())
 	r.Duration = time.Since(start)
 	switch {

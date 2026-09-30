@@ -174,11 +174,14 @@ A prompts directory named "results" must be passed as ./results, since
 				return &userError{msg: "The review sidecar pool did not become ready.", err: err}
 			}
 
+			activity := newReviewActivity(ctx, workDir)
 			opts := review.Options{
-				Credential: cred,
-				BaseURL:    rc.AnthropicBaseURL,
-				Model:      model,
-				Timeout:    timeout,
+				Credential:  cred,
+				BaseURL:     rc.AnthropicBaseURL,
+				Model:       model,
+				Timeout:     timeout,
+				ProgressFn:  activity.progress,
+				OnSubmitted: activity.submitted,
 			}
 			var (
 				results []review.Result
@@ -191,6 +194,7 @@ A prompts directory named "results" must be passed as ./results, since
 			} else {
 				results, passErr = runReviewTUI(ctx, pool, prompts, size, opts)
 			}
+			activity.finish(passErr)
 			if errors.Is(passErr, review.ErrClaudeMissing) {
 				return &userError{
 					msg:        "Claude Code is not installed on the review sidecars.",
@@ -268,7 +272,14 @@ func runReviewTUI(ctx context.Context, pool *sidecar.Pool, prompts []review.Prom
 	m := reviewprogress.New(prompts, poolSize, cancel)
 	prog := tea.NewProgram(m, tea.WithContext(ctx))
 
+	// Chains rather than replaces: the caller's ProgressFn files the pass in the
+	// event log, and dropping it here would make a pass run under the display
+	// invisible to the dashboard.
+	record := opts.ProgressFn
 	opts.ProgressFn = func(e review.ProgressEvent) {
+		if record != nil {
+			record(e)
+		}
 		prog.Send(reviewprogress.ProgressMsg(e))
 	}
 

@@ -314,10 +314,13 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 			return resp.ExitCode, nil
 		}
 	}
-	return func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn) (int, error) {
+	return func(ctx context.Context, pe *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
 		commandID, err := submit(ctx, pe, script, env)
 		if err != nil {
 			return 0, fmt.Errorf("submit: %w", err)
+		}
+		if onSubmitted != nil {
+			onSubmitted(commandID)
 		}
 		// An empty name means the command is bookkeeping, not worth a log pane.
 		if name := attribute(pe.ID, commandID); name != "" {

@@ -159,7 +159,7 @@ func runScript(ctx context.Context, exec review.Execer, pe *sidecar.PoolEntry, s
 			return
 		}
 		out.Write(data)
-	})
+	}, nil)
 	switch {
 	case err != nil:
 		return "", err

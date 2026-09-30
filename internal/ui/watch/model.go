@@ -1141,6 +1141,8 @@ func opTag(st watchStyles, op eventlog.Op) string {
 		return "setup   "
 	case eventlog.OpHook:
 		return "hook    "
+	case eventlog.OpReview:
+		return "review  "
 	default:
 		return st.muted(fmt.Sprintf("%-8s", string(op)))
 	}
