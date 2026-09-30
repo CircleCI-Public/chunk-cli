@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
@@ -43,7 +44,10 @@ the report is left in a run directory on it. --detach installs the latest
 released chunk on the primary; pass --chunk-binary with a Linux build to use
 that instead. With --detach, --image and --destroy-pool apply to the primary's
 reviewer sidecars; the primary itself is kept so that 'chunk review results' can
-read the report.`,
+read the report.
+
+A prompts directory named "results" must be passed as ./results, since
+'chunk review results' reads a detached review's report.`,
 		// Hidden until passes repeat and check for convergence.
 		Hidden:       true,
 		SilenceUsage: true,
@@ -230,6 +234,29 @@ read the report.`,
 	cmd.AddCommand(newReviewResultsCmd())
 	cmd.Flags().StringVar(&chunkBinary, "chunk-binary", "", "Linux chunk build to upload with --detach (default: install the latest release)")
 	return cmd
+}
+
+// newReviewPool creates or reuses a pool for a review, turning a rejected
+// creation into the not-authorized error. what names the pool in messages.
+func newReviewPool(ctx context.Context, client *circleci.Client, opts sidecar.PoolOptions, what, tokenSource string, statusFn iostream.StatusFunc) (*sidecar.Pool, error) {
+	pool, err := sidecar.NewPool(ctx, client, opts, statusFn)
+	if err != nil {
+		if authErr := notAuthorized("create sidecars", tokenSource, err); authErr != nil {
+			return nil, authErr
+		}
+		return nil, &userError{msg: fmt.Sprintf("Could not prepare the %s.", what), err: err}
+	}
+	return pool, nil
+}
+
+// waitPoolReady blocks until the pool's sidecars are synced. Waiting also keeps
+// the pool's "Synced" line, reported from another goroutine, from landing among
+// later output.
+func waitPoolReady(ctx context.Context, pool *sidecar.Pool, what string) error {
+	if err := review.WaitReady(ctx, pool.WaitSynced); err != nil {
+		return &userError{msg: fmt.Sprintf("The %s did not become ready.", what), err: err}
+	}
+	return nil
 }
 
 // runReviewTUI runs the review pass with a BubbleTea progress display.

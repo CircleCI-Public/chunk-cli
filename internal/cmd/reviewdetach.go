@@ -16,6 +16,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -33,6 +34,7 @@ type detachRequest struct {
 	destroyPool bool
 	chunkBinary string // Linux chunk build to upload; empty to install the latest release
 	circleToken string
+	tokenSource string // where circleToken came from, for auth errors
 	parallelism int
 	model       string
 	timeout     time.Duration
@@ -69,6 +71,7 @@ func newDetachRequest(args []string, f detachFlags) detachRequest {
 		destroyPool: f.destroyPool,
 		chunkBinary: f.chunkBinary,
 		circleToken: f.rc.CircleCIToken,
+		tokenSource: f.rc.CircleCITokenSource,
 		parallelism: f.parallelism,
 		model:       f.model,
 		timeout:     f.timeout,
@@ -104,22 +107,22 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 	}
 
 	statusFn(iostream.LevelStep, "Preparing the primary sidecar...")
-	pool, err := sidecar.NewPool(ctx, req.client, sidecar.PoolOptions{
+	pool, err := newReviewPool(ctx, req.client, sidecar.PoolOptions{
 		Size:    1,
 		Name:    review.PrimaryPoolName,
 		OrgID:   req.orgID,
 		Image:   req.image,
 		WorkDir: req.workDir,
-	}, statusFn)
+	}, "primary sidecar", req.tokenSource, statusFn)
 	if err != nil {
-		return &userError{msg: "Could not prepare the primary sidecar.", err: err}
+		return err
 	}
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), poolCloseTimeout)
 	defer cancel()
 	defer pool.Close(closeCtx)
 
-	if err := review.WaitReady(ctx, pool.WaitSynced); err != nil {
-		return &userError{msg: "The primary sidecar did not become ready.", err: err}
+	if err := waitPoolReady(ctx, pool, "primary sidecar"); err != nil {
+		return err
 	}
 	entry, err := pool.Acquire(ctx)
 	if err != nil {
@@ -470,4 +473,44 @@ func logSuffix(log string) string {
 		return ""
 	}
 	return "\n" + log
+}
+
+// checkPromptsSynced refuses a detached review whose prompts the primary would
+// not receive. Sync carries tracked and untracked files but not ignored ones, so
+// a prompts directory that is ignored, or partly so, is present here and absent
+// there. want is the number of prompts loaded locally.
+func checkPromptsSynced(ctx context.Context, workDir, dir string, want int) error {
+	out, err := (gitexec.Runner{Dir: workDir}).Output(ctx, "ls-files", "--cached", "--others", "--exclude-standard", "--", dir)
+	if err != nil {
+		// Not a git checkout the sync could use either; it reports that itself.
+		return nil
+	}
+	got := 0
+	for _, f := range strings.Split(string(out), "\n") {
+		if f == "" || filepath.Dir(f) != filepath.Clean(relToWork(workDir, dir)) {
+			continue
+		}
+		if review.IsPromptFile(f) {
+			got++
+		}
+	}
+	if got >= want {
+		return nil
+	}
+	return newUserError("Some review prompts would not reach the primary sidecar.").
+		withCode("command.invalid_args").
+		withSuggestion(fmt.Sprintf("Only files git tracks or could track are synced, and %s has ignored prompts. Stop ignoring them, or run without --detach.", dir)).
+		withExitCode(ExitBadArgs).
+		withoutDetail()
+}
+
+func relToWork(workDir, dir string) string {
+	if !filepath.IsAbs(dir) {
+		return dir
+	}
+	rel, err := filepath.Rel(workDir, dir)
+	if err != nil {
+		return dir
+	}
+	return rel
 }

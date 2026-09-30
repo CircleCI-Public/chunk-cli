@@ -29,6 +29,11 @@ type Prompt struct {
 	Body string
 }
 
+// IsPromptFile reports whether name has an extension that LoadPrompts reads.
+func IsPromptFile(name string) bool {
+	return slices.Contains(promptExts, strings.ToLower(filepath.Ext(name)))
+}
+
 // LoadPrompts reads every prompt file directly inside dir, sorted by name so
 // runs are reproducible. Subdirectories are not descended into, and files that
 // are empty after trimming whitespace are skipped rather than run as blank

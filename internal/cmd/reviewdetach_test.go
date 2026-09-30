@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -138,4 +140,25 @@ func TestCheckNoActiveRun(t *testing.T) {
 			assert.Assert(t, strings.Contains(ue.suggestion, "chunk review results"), ue.suggestion)
 		})
 	}
+}
+
+func TestCheckPromptsSynced(t *testing.T) {
+	work := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = work
+		out, err := cmd.CombinedOutput()
+		assert.NilError(t, err, string(out))
+	}
+	run("init", "-q")
+	assert.NilError(t, os.WriteFile(filepath.Join(work, ".gitignore"), []byte("ignored/\n"), 0o644))
+	for _, p := range []string{"prompts/a.md", "ignored/b.md"} {
+		assert.NilError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(p)), 0o755))
+		assert.NilError(t, os.WriteFile(filepath.Join(work, p), []byte("review"), 0o644))
+	}
+
+	ctx := context.Background()
+	assert.NilError(t, checkPromptsSynced(ctx, work, filepath.Join(work, "prompts"), 1))
+	assert.Assert(t, checkPromptsSynced(ctx, work, filepath.Join(work, "ignored"), 1) != nil)
 }
