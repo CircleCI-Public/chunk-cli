@@ -453,5 +453,6 @@ func fillMissingOrg(sidecars []SidecarState, root string) {
 			return
 		}
 		sidecars[i].OrgID = orgID
+		sidecars[i].orgInferred = true
 	}
 }

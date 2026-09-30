@@ -97,6 +97,18 @@ func TestLoadSidecars_readsPoolState(t *testing.T) {
 	assert.Equal(t, result[1].Name, "validate-2")
 }
 
+func TestLoadSidecars_readsPoolOrg(t *testing.T) {
+	dataDir := t.TempDir()
+	root := t.TempDir()
+	chunkDir := filepath.Join(root, ".chunk")
+	assert.NilError(t, os.Mkdir(chunkDir, 0o755))
+	writeSidecarJSON(t, chunkDir, "validate-pool.json", `{"sidecar_ids":["id1"],"org_id":"pool-org"}`)
+
+	result := loadSidecars(dataDir, root, "")
+	assert.Equal(t, len(result), 1)
+	assert.Equal(t, result[0].OrgID, "pool-org")
+}
+
 func TestLoadSidecars_deduplicatesActiveAndPoolState(t *testing.T) {
 	dataDir := t.TempDir()
 	root := t.TempDir()
