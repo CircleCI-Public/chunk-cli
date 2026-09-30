@@ -38,9 +38,13 @@ type DistributedRunOptions[T any] struct {
 	Acquire     func(context.Context) (T, error)
 	Release     func(T)
 	WorkerName  func(T) string
-	Run         func(context.Context, T, config.Command, iostream.StatusFunc, iostream.Streams) DistributedJobResult
-	Status      iostream.StatusFunc
-	Streams     iostream.Streams
+	// WorkerStatus is the reporter for one worker's own events, so a command is
+	// attributed to the worker that ran it rather than to the run as a whole.
+	// Status is used when nil.
+	WorkerStatus func(T) iostream.StatusFunc
+	Run          func(context.Context, T, config.Command, iostream.StatusFunc, iostream.Streams) DistributedJobResult
+	Status       iostream.StatusFunc
+	Streams      iostream.Streams
 }
 
 type distributedJob struct {
@@ -49,12 +53,11 @@ type distributedJob struct {
 }
 
 type distributedJobResult struct {
-	index      int
-	command    config.Command
-	workerName string
-	stdout     string
-	stderr     string
-	result     DistributedJobResult
+	index   int
+	command config.Command
+	stdout  string
+	stderr  string
+	result  DistributedJobResult
 }
 
 // RunDistributed schedules commands in configuration order onto the next
@@ -79,15 +82,20 @@ func RunDistributed[T any](ctx context.Context, commands []config.Command, opts 
 	close(jobs)
 
 	results := make(chan distributedJobResult, len(commands)+parallelism)
+	// One mutex for every reporter, per-worker ones included: they are separate
+	// sinks but one terminal, so a line from one must not land inside another's.
 	var statusMu sync.Mutex
-	status := func(level iostream.Level, message string) {
-		if opts.Status == nil {
-			return
+	serialized := func(fn iostream.StatusFunc) iostream.StatusFunc {
+		return func(level iostream.Level, message string) {
+			if fn == nil {
+				return
+			}
+			statusMu.Lock()
+			defer statusMu.Unlock()
+			fn(level, message)
 		}
-		statusMu.Lock()
-		defer statusMu.Unlock()
-		opts.Status(level, message)
 	}
+	status := serialized(opts.Status)
 
 	var workers sync.WaitGroup
 	for range parallelism {
@@ -105,6 +113,10 @@ func RunDistributed[T any](ctx context.Context, commands []config.Command, opts 
 			if opts.WorkerName != nil {
 				workerName = opts.WorkerName(worker)
 			}
+			workerStatus := status
+			if opts.WorkerStatus != nil {
+				workerStatus = serialized(opts.WorkerStatus(worker))
+			}
 			for {
 				select {
 				case <-ctx.Done():
@@ -113,8 +125,8 @@ func RunDistributed[T any](ctx context.Context, commands []config.Command, opts 
 					if !ok {
 						return
 					}
-					status(iostream.LevelInfo, fmt.Sprintf("running on %s: %s", workerName, job.command.Name))
-					results <- runDistributedJob(ctx, worker, workerName, job, parallelism > 1, opts)
+					workerStatus(iostream.LevelInfo, fmt.Sprintf("running on %s: %s", workerName, job.command.Name))
+					results <- runDistributedJob(ctx, worker, job, workerStatus, parallelism > 1, opts)
 				}
 			}
 		}()
@@ -122,32 +134,33 @@ func RunDistributed[T any](ctx context.Context, commands []config.Command, opts 
 
 	workers.Wait()
 	close(results)
-	return collectDistributedResults(commands, results, ctx.Err(), status)
+	return collectDistributedResults(commands, results, ctx.Err())
 }
 
-func runDistributedJob[T any](ctx context.Context, worker T, workerName string, job distributedJob, buffered bool, opts DistributedRunOptions[T]) distributedJobResult {
+// runDistributedJob runs one command and reports it through status as it goes.
+// Output is buffered so two commands' bytes cannot interleave, but their status
+// lines are not: a pooled run that said nothing until every worker finished
+// left a developer watching a blank terminal, and attributed nothing to the
+// worker that was running.
+func runDistributedJob[T any](ctx context.Context, worker T, job distributedJob, status iostream.StatusFunc, buffered bool, opts DistributedRunOptions[T]) distributedJobResult {
 	streams := opts.Streams
-	status := opts.Status
-	if status == nil {
-		status = func(iostream.Level, string) {}
-	}
 	var stdout, stderr strings.Builder
 	if buffered {
 		streams = iostream.Streams{Out: &stdout, Err: &stderr}
-		status = func(iostream.Level, string) {}
 	}
 	result := opts.Run(ctx, worker, job.command, status, streams)
 	return distributedJobResult{
-		index:      job.index,
-		command:    job.command,
-		workerName: workerName,
-		stdout:     stdout.String(),
-		stderr:     stderr.String(),
-		result:     result,
+		index:   job.index,
+		command: job.command,
+		stdout:  stdout.String(),
+		stderr:  stderr.String(),
+		result:  result,
 	}
 }
 
-func collectDistributedResults(commands []config.Command, results <-chan distributedJobResult, contextErr error, status iostream.StatusFunc) DistributedRunResult {
+// collectDistributedResults aggregates the jobs in configuration order. It
+// reports nothing: each command was already reported by the worker that ran it.
+func collectDistributedResults(commands []config.Command, results <-chan distributedJobResult, contextErr error) DistributedRunResult {
 	ordered := make([]distributedJobResult, len(commands))
 	completed := make([]bool, len(commands))
 	completedCount := 0
@@ -170,11 +183,6 @@ func collectDistributedResults(commands []config.Command, results <-chan distrib
 		result.Err = errors.Join(result.Err, job.result.Err)
 		if job.stdout != "" || job.stderr != "" {
 			result.Output = append(result.Output, DistributedRunOutput{Command: job.command, Stdout: job.stdout, Stderr: job.stderr})
-		}
-		if job.result.Err != nil {
-			status(iostream.LevelWarn, fmt.Sprintf("%s failed on %s: %v", job.command.Name, job.workerName, job.result.Err))
-		} else {
-			status(iostream.LevelDone, fmt.Sprintf("%s passed on %s", job.command.Name, job.workerName))
 		}
 	}
 	if contextErr != nil && completedCount < len(commands) {

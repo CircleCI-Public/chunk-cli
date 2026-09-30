@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -674,7 +675,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if err := saveInlineValidateCommand(workDir, name, opts.inlineCmd, opts.save, streams); err != nil {
 		execErr = err
 	} else {
-		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, recorderCommandIDSetter(recorder), statusFn, streams)
+		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, recorderCommandIDSetter(recorder), newPoolRecorders(recorder), statusFn, streams)
 	}
 	// Saved after the plan runs, not right after the pool is built: a pool
 	// grown beyond one sidecar finishes cloning in the background while
@@ -947,6 +948,42 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	_ = sidecar.RegisterProjectRoot(dataDir, workDir)
 	recorder := eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
 	return recorder.Status, recorder
+}
+
+// poolRecorders hands out one event-log reporter per pool sidecar. They share
+// the run's log, so its mutex serialises the concurrent workers' appends, and
+// each closes its own commands: the dashboard matches an event to a sidecar row
+// on SidecarID alone, so a pooled run recorded under one representative ID puts
+// every command on one row and leaves the rest of the pool blank.
+type poolRecorders struct {
+	run *eventlog.Recorder
+
+	mu   sync.Mutex
+	byID map[string]iostream.StatusFunc
+}
+
+// newPoolRecorders returns nil when there is no log to record in, which status
+// tolerates.
+func newPoolRecorders(run *eventlog.Recorder) *poolRecorders {
+	if run == nil {
+		return nil
+	}
+	return &poolRecorders{run: run, byID: map[string]iostream.StatusFunc{}}
+}
+
+// status returns the reporter for one sidecar, creating it on first use.
+func (p *poolRecorders) status(sidecarID string) iostream.StatusFunc {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	fn, ok := p.byID[sidecarID]
+	if !ok {
+		fn = p.run.For(sidecarID, "").PerCommand()
+		p.byID[sidecarID] = fn
+	}
+	return fn
 }
 
 // failBeforeRun closes the event-log entry when setup fails before commands run.
@@ -1361,6 +1398,7 @@ func runValidationPlan(
 	projectRoot string,
 	envVars map[string]string,
 	setCommandID func(string),
+	recorders *poolRecorders,
 	statusFn iostream.StatusFunc,
 	streams iostream.Streams,
 ) (validate.Result, error) {
@@ -1388,6 +1426,9 @@ func runValidationPlan(
 			Release:     pool.Release,
 			WorkerName: func(entry *sidecar.PoolEntry) string {
 				return "sidecar " + entry.ID
+			},
+			WorkerStatus: func(entry *sidecar.PoolEntry) iostream.StatusFunc {
+				return recorders.status(entry.ID)
 			},
 			Run: func(ctx context.Context, entry *sidecar.PoolEntry, command config.Command, status iostream.StatusFunc, commandStreams iostream.Streams) validate.DistributedJobResult {
 				return runPooledValidateCommand(ctx, entry, command, rc.CircleCIToken, localWorkDir, projectRoot, envVars, setCommandID, status, commandStreams)
