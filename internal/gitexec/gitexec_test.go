@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -52,7 +53,10 @@ func TestRunnerUsesDir(t *testing.T) {
 
 	out, err := runner.Output(context.Background(), "rev-parse", "--show-toplevel")
 	assert.NilError(t, err)
-	assert.Equal(t, strings.TrimSpace(string(out)), dir)
+	// git reports the resolved path; macOS temp dirs sit behind a symlink.
+	want, err := filepath.EvalSymlinks(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, strings.TrimSpace(string(out)), want)
 
 	assert.NilError(t, runner.Run(context.Background(), "branch", "runner-test"))
 	out, err = runner.Output(context.Background(), "show-ref", "--verify", "refs/heads/runner-test")

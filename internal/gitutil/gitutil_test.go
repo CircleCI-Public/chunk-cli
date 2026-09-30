@@ -171,7 +171,10 @@ func TestTopLevelCtx(t *testing.T) {
 	subdir := filepath.Join(dir, "one", "two")
 	assert.NilError(t, os.MkdirAll(subdir, 0o755))
 
-	assert.Equal(t, TopLevelCtx(context.Background(), subdir), dir)
+	// git reports the resolved path; macOS temp dirs sit behind a symlink.
+	want, err := filepath.EvalSymlinks(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, TopLevelCtx(context.Background(), subdir), want)
 	noRepo := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(noRepo))
 	assert.Equal(t, TopLevelCtx(context.Background(), noRepo), "")
