@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,8 +19,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 func TestPooledValidateRegistersSubmittedCommand(t *testing.T) {
@@ -106,4 +112,81 @@ func TestPooledValidateReportsMissingWorkspace(t *testing.T) {
 	ue, ok := errors.AsType[*userError](result.Err)
 	assert.Assert(t, ok)
 	assert.Equal(t, ue.ErrorCode(), "sidecar.workspace_missing")
+}
+
+// A project whose .chunk sits below the git root registers its commands under
+// the git top-level, because that is the root the daemon discovers from the
+// project breadcrumb and buckets buffered output by. Registered under the cwd
+// instead, the watch TUI never shows the output marker and the pane for that
+// command cannot be opened.
+func TestValidateRegistersCommandUnderTheGitRoot(t *testing.T) {
+	regs := captureRegistrations(t)
+
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	t.Setenv(config.EnvChunkSessionID, "")
+	t.Setenv(session.EnvClaudeSessionID, "")
+	t.Setenv(config.EnvAnthropicBaseURL, unroutableBaseURL)
+	t.Setenv(config.EnvGitHubAPIURL, unroutableBaseURL)
+
+	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(home, ".ssh", "chunk_ai"))
+	sshSrv := fakes.NewSSHServer(t, pubKey)
+	sshSrv.SetResult("", 0)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.AddKeyURL = sshSrv.Addr()
+	cci.ExecResponse = &fakes.ExecResponse{CommandID: "cmd-1"}
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+	t.Setenv(config.EnvCircleCIBaseURL, srv.URL)
+	t.Setenv(config.EnvCircleToken, "fake-token")
+
+	gitRoot := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	workDir := filepath.Join(gitRoot, "sub")
+	assert.NilError(t, os.MkdirAll(workDir, 0o755))
+	t.Chdir(workDir)
+	assert.NilError(t, config.SaveProjectConfig(workDir, &config.ProjectConfig{
+		OrgID:    "org-1",
+		Commands: []config.Command{{Name: "test", Run: "true", Remote: true}},
+	}))
+
+	var outBuf, errBuf lockedBuf
+	root := newTestRootCmd()
+	root.SetOut(&outBuf)
+	root.SetErr(&errBuf)
+	root.SetArgs([]string{"validate", "--project", workDir})
+	assert.NilError(t, root.Execute(), "stderr: %s", errBuf.String())
+
+	canonical, err := filepath.EvalSymlinks(gitRoot)
+	assert.NilError(t, err)
+
+	select {
+	case reg := <-regs:
+		assert.Equal(t, config.CanonicalProjectRoot(reg.ProjectRoot), canonical,
+			"the command was registered under a root the daemon does not track")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the remote validation command was not registered")
+	}
+}
+
+// lockedBuf stands in for the process stderr a run shares with the pool's
+// background sync. Both write concurrently, which a file tolerates and a plain
+// bytes.Buffer does not.
+type lockedBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
