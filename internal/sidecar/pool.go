@@ -52,6 +52,7 @@ type Pool struct {
 type poolState struct {
 	SidecarIDs    []string `json:"sidecar_ids"`
 	RepoPath      string   `json:"repo_path"`
+	OrgID         string   `json:"org_id,omitempty"`
 	Image         string   `json:"image,omitempty"`
 	LastSyncedRef string   `json:"last_synced_ref,omitempty"`
 }
@@ -491,6 +492,7 @@ func (p *Pool) persistState() error {
 	state := &poolState{
 		SidecarIDs:    slices.Clone(p.ids),
 		RepoPath:      p.repoPath,
+		OrgID:         p.orgID,
 		Image:         p.image,
 		LastSyncedRef: p.lastSyncedRef,
 	}
@@ -503,6 +505,9 @@ func (p *Pool) persistState() error {
 	if stored != nil {
 		if state.RepoPath == "" {
 			state.RepoPath = stored.RepoPath
+		}
+		if state.OrgID == "" {
+			state.OrgID = stored.OrgID
 		}
 		if state.Image == "" {
 			state.Image = stored.Image

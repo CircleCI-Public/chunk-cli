@@ -91,6 +91,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 		var pool struct {
 			SidecarIDs []string `json:"sidecar_ids"`
 			RepoPath   string   `json:"repo_path"`
+			OrgID      string   `json:"org_id,omitempty"`
 		}
 		if json.Unmarshal(data, &pool) != nil {
 			continue
@@ -107,7 +108,7 @@ func loadSidecars(dataDir, root, snapshotName string) []SidecarState {
 				}
 				continue
 			}
-			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", pool.RepoPath, "", mtime)
+			appendState(id, sidecarName(name, i, len(pool.SidecarIDs)), "", pool.RepoPath, pool.OrgID, mtime)
 		}
 	}
 	return result

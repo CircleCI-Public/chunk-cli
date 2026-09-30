@@ -153,6 +153,8 @@ func (l *livenessChecker) reconcile(sidecars []SidecarState) []SidecarState {
 			// Nothing to judge it against.
 		case list.ids[sc.ID]:
 			sc.Verified = true
+		case sc.orgInferred:
+			// Possibly the wrong org's list; absence from it proves nothing.
 		case list.fetchedAt.After(sc.FileMtime):
 			// Gone. A list older than the state file may simply predate the
 			// sidecar, so only a newer one is taken as proof.
