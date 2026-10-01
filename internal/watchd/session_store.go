@@ -180,7 +180,7 @@ func (s *sessionStore) forProject(root string) []Session {
 	return out
 }
 
-// cancel asks a session to stop. It reports whether the session exists and was
+// cancelSession asks a session to stop. It reports whether the session exists and was
 // still going; cancelling an ended session is not an error worth a status code.
 func (s *sessionStore) cancelSession(id string) (found, wasActive bool) {
 	e := s.get(id)
