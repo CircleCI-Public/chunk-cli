@@ -1460,6 +1460,20 @@ func fakeValidateDaemon(t *testing.T, build string) <-chan watchd.ValidateReques
 	return reqs
 }
 
+// The daemon boots the run's sidecar before the subprocess starts, so the image
+// a --no-daemon run would use has to travel in the request.
+func TestRunValidateViaDaemonForwardsSidecarImage(t *testing.T) {
+	reqs := fakeValidateDaemon(t, watchd.BuildID())
+
+	var outBuf, errBuf bytes.Buffer
+	err := runValidateViaDaemon(t.TempDir(), []string{"validate", "test"}, "", "org-1", "snap-test", nil,
+		iostream.Streams{Out: &outBuf, Err: &errBuf})
+	assert.NilError(t, err)
+
+	req := <-reqs
+	assert.Equal(t, req.SidecarImage, "snap-test")
+}
+
 // The daemon subprocess learns it is under Codex only from the request, so the
 // client must say so for a Codex payload and only for one. It says so in a field
 // and never as a flag: a remote daemon's build cannot be checked, and one that
@@ -1476,7 +1490,7 @@ func TestRunValidateViaDaemonForwardsCodex(t *testing.T) {
 			reqs := fakeValidateDaemon(t, watchd.BuildID())
 
 			var outBuf, errBuf bytes.Buffer
-			err := runValidateViaDaemon(t.TempDir(), []string{"validate"}, "", "", tc.hook,
+			err := runValidateViaDaemon(t.TempDir(), []string{"validate"}, "", "", "", tc.hook,
 				iostream.Streams{Out: &outBuf, Err: &errBuf})
 			assert.NilError(t, err)
 
