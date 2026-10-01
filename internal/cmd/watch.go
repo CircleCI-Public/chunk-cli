@@ -44,10 +44,11 @@ func newWatchCmd() *cobra.Command {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			daemonArgs := []string{watchCmdName, watchDaemonSubcmd}
 			if watchd.CurrentConnection().Remote != "" {
 				return runRemoteWatch(cmd, focus, args)
 			}
+
+			daemonArgs := []string{watchCmdName, watchDaemonSubcmd}
 			if err := watchd.EnsureRunning(daemonArgs); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
