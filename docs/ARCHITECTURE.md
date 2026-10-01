@@ -644,9 +644,13 @@ Consequences worth knowing:
 - The synced `.git` directory carries branch and remote-tracking refs, so the
   sidecar mirrors them without the ref-fixup scripts bundle sync needed.
 - Each pool member opens its own SSH proxy and walks the tree, where bundle sync
-  built once and sent N times. Concurrency is capped by `syncFanOutConcurrency`.
-  If fan-out cost across a pool of 4-8 proves significant, revisit here
-  deliberately rather than reintroducing bundle sync in one caller.
+  built once and sent N times. Concurrency is capped by `syncFanOutConcurrency`,
+  currently 8, so a pool that size or smaller syncs every member at once.
+  Measured on this repo against warm sidecars: fan-out to 4 cost 1.01x a single
+  sync (10.2s against 10.1s) and to 8 cost 1.13x (10.3s against 9.1s). Wall time
+  is dominated by the per-sidecar round trip, not by repeating the walk, so the
+  N-times cost bundle sync avoided does not show up until a pool exceeds
+  `syncFanOutConcurrency`.
 - Pool tests replace `poolSync`, since rsync cannot run against the fake SSH
   server.
 
