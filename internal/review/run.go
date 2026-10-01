@@ -61,6 +61,15 @@ var allowedTools = []string{
 	"Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git status:*)",
 }
 
+// EditTools is the tool set of a run that fixes code rather than reviewing it:
+// everything a review can do plus Edit and Write. It is used only for the apply
+// pass, whose result is a diff that a person reads before anything leaves the
+// daemon, and never for a review.
+var EditTools = []string{
+	"Read", "Grep", "Glob", "Edit", "Write",
+	"Bash(git diff:*)", "Bash(git status:*)",
+}
+
 // PromptState is the lifecycle state of one review in a pass.
 type PromptState int
 
@@ -91,6 +100,13 @@ type Options struct {
 	Timeout    time.Duration // per review; DefaultTimeout when zero
 	StatusFn   iostream.StatusFunc
 	ProgressFn func(ProgressEvent) // optional; called on each prompt state change
+	// StructuredFindings asks each review to end with a JSON block of findings
+	// (see FindingsInstructions) and parses it into Result.Parsed. Off, prompts
+	// run exactly as written and Result.Parsed stays empty.
+	StructuredFindings bool
+	// AllowedTools overrides the read-only tool set. Empty means read-only, which
+	// is what every review uses.
+	AllowedTools []string
 }
 
 // Result is the outcome of one prompt in one pass. Output and Error are not
@@ -101,6 +117,10 @@ type Result struct {
 	Output    string
 	Error     string
 	Duration  time.Duration
+	// Parsed holds the structured findings read from Output when
+	// Options.StructuredFindings is set. Output itself is left as Claude wrote
+	// it, so nothing is lost when parsing finds nothing.
+	Parsed Parsed
 }
 
 // Execer runs a shell script on a sidecar and streams its output.
@@ -224,7 +244,15 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
 	var stdout, stderr strings.Builder
-	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model), claudeEnv(opts), func(stream string, data []byte) {
+	body := p.Body
+	if opts.StructuredFindings {
+		body += FindingsInstructions
+	}
+	tools := opts.AllowedTools
+	if len(tools) == 0 {
+		tools = allowedTools
+	}
+	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, body, opts.Model, tools), claudeEnv(opts), func(stream string, data []byte) {
 		buf := &stdout
 		if stream == circleci.StreamStderr {
 			buf = &stderr
@@ -246,6 +274,9 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		return r.fail(ErrCredentialRejected)
 	case code != 0:
 		return r.fail(exitError(code, stderr.String()))
+	}
+	if opts.StructuredFindings {
+		r.Parsed = ParseFindings(r.Output)
 	}
 	return r
 }
@@ -276,7 +307,12 @@ func exitError(code int, stderr string) error {
 // Code's native installer puts claude in ~/.local/bin, which a non-login sh
 // does not have on PATH.
 func claudeScript(repoPath, prompt, model string) string {
-	args := []string{"claude", "-p", "--output-format", "text", "--allowedTools", strings.Join(allowedTools, ",")}
+	return claudeScriptWithTools(repoPath, prompt, model, allowedTools)
+}
+
+// claudeScriptWithTools is claudeScript with an explicit tool allowlist.
+func claudeScriptWithTools(repoPath, prompt, model string, tools []string) string {
+	args := []string{"claude", "-p", "--output-format", "text", "--allowedTools", strings.Join(tools, ",")}
 	if model != "" {
 		args = append(args, "--model", model)
 	}

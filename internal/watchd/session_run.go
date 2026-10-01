@@ -269,6 +269,9 @@ func (d *daemon) runReviews(ctx context.Context, entry *sessionEntry, ridx int, 
 		Model:      req.Model,
 		Timeout:    time.Duration(req.TimeoutSeconds) * time.Second,
 		ProgressFn: func(ev review.ProgressEvent) { entry.applyProgress(ridx, ev) },
+		// Fixes are chosen from findings a program can read. The prose review is
+		// still asked for and still kept.
+		StructuredFindings: true,
 	}
 	exec := d.execerFor(root, func(sidecarID, commandID string) string {
 		return entry.attribute(ridx, sidecarID, commandID)
@@ -434,15 +437,48 @@ func (e *sessionEntry) finishReviews(ridx int, results []review.Result) {
 	defer e.mu.Unlock()
 	rd := &e.details[ridx]
 	rd.Results = rd.Results[:0]
+	var all []review.Finding
 	for _, r := range results {
-		rd.Results = append(rd.Results, ReviewResult{
+		res := ReviewResult{
 			Prompt:     r.Prompt,
 			SidecarID:  r.SidecarID,
 			Output:     truncateOutput(r.Output),
 			Error:      r.Error,
 			DurationMS: r.Duration.Milliseconds(),
-		})
+		}
+		if r.Parsed.Found {
+			res.Output = truncateOutput(r.Parsed.Prose)
+			res.FindingsParsed = true
+			res.FindingsDropped = r.Parsed.Dropped
+			for i, f := range r.Parsed.Findings {
+				f.Prompt = r.Prompt
+				f.ID = fmt.Sprintf("%s-%d", r.Prompt, i+1)
+				res.Findings = append(res.Findings, f)
+			}
+		}
+		if i := e.reviewIndexLocked(ridx, r.Prompt); i >= 0 {
+			e.s.Rounds[ridx].Reviews[i].Findings = len(res.Findings)
+		}
+		all = append(all, res.Findings...)
+		rd.Results = append(rd.Results, res)
 	}
+	// The round's counts are of distinct findings: several reviews flagging the
+	// same line count once.
+	unique := review.DedupeFindings(all)
+	e.s.Rounds[ridx].Findings = len(unique)
+	e.s.Rounds[ridx].Worth = len(worthChanging(unique))
+}
+
+// worthChanging keeps the findings serious enough to fix: severity high or
+// medium.
+func worthChanging(findings []review.Finding) []review.Finding {
+	var out []review.Finding
+	for _, f := range findings {
+		if f.WorthChanging() {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // endRound closes a round in state with a note.
