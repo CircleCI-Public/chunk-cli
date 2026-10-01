@@ -123,7 +123,7 @@ func DetachScript(s DetachSpec) string {
 // DetachEnv is the environment the primary's review runs with: the credentials
 // its own chunk needs to create the reviewer sidecars and to run Claude on them.
 func DetachEnv(circleCIToken string, opts Options) map[string]string {
-	env := claudeEnv(opts)
+	env := Env(opts.Credential, opts.BaseURL)
 	env[config.EnvCircleCIToken] = circleCIToken
 	return env
 }

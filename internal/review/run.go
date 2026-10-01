@@ -30,13 +30,10 @@ const maxOutputBytes = 256 * 1024
 // a truncated result would not decode at all.
 const maxStructuredOutputBytes = 8 << 20
 
-// exitClaudeMissing is the review script's exit code for claude not being on
-// PATH. Not the shell's own 127, which claude also exits with when something it
-// shelled out to is missing: that is one broken review, not a dead pass.
-const exitClaudeMissing = ExitClaudeMissing
-
 // ExitClaudeMissing is the exit code a script running claude on a sidecar uses
-// for claude not being on PATH, so every caller reports it the same way.
+// for claude not being on PATH, so every caller reports it the same way. Not
+// the shell's own 127, which claude also exits with when something it shelled
+// out to is missing: that is one broken review, not a dead pass.
 const ExitClaudeMissing = 97
 
 // ErrClaudeMissing is returned when a sidecar has no claude binary.
@@ -295,7 +292,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	if opts.OnSubmitted != nil {
 		onSubmitted = func(commandID string) { opts.OnSubmitted(entry, p.Name, commandID) }
 	}
-	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, p.Body, opts.Model, tools, opts.StructuredFindings), claudeEnv(opts), onOutput, onSubmitted)
+	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, p.Body, opts.Model, tools, opts.StructuredFindings), Env(opts.Credential, opts.BaseURL), onOutput, onSubmitted)
 	r.Output = strings.TrimSpace(stdout.String())
 	r.Duration = time.Since(start)
 	switch {
@@ -303,9 +300,9 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		return r.fail(fmt.Errorf("timed out after %s", opts.Timeout))
 	case err != nil:
 		return r.fail(fmt.Errorf("exec: %w", err))
-	case code == exitClaudeMissing:
+	case code == ExitClaudeMissing:
 		return r.fail(ErrClaudeMissing)
-	case code != 0 && credentialRejected(r.Output, stderr.String()):
+	case code != 0 && CredentialRejected(r.Output, stderr.String()):
 		return r.fail(ErrCredentialRejected)
 	case code != 0:
 		return r.fail(exitError(code, stderr.String()))
@@ -326,16 +323,10 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	return r
 }
 
-// CredentialRejected reports whether claude's output shows it failed to
-// authenticate, for other callers that run claude on a sidecar.
-func CredentialRejected(stdout, stderr string) bool {
-	return credentialRejected(stdout, stderr)
-}
-
-// credentialRejected reports whether claude failed to authenticate. Both
+// CredentialRejected reports whether claude failed to authenticate. Both
 // streams are checked: the 401 lands on stdout, while stderr can carry
 // unrelated warnings.
-func credentialRejected(stdout, stderr string) bool {
+func CredentialRejected(stdout, stderr string) bool {
 	return credentialRejectedRe.MatchString(stdout) || credentialRejectedRe.MatchString(stderr)
 }
 
@@ -374,17 +365,11 @@ func claudeScriptWithTools(repoPath, prompt, model string, tools []string, struc
 	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
 command -v claude >/dev/null 2>&1 || exit %d
 cd %s && echo %s | base64 -d | %s`,
-		exitClaudeMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
+		ExitClaudeMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
 }
 
 // defaultBaseURL is where claude sends requests when no base URL is set.
 const defaultBaseURL = "https://api.anthropic.com"
-
-// claudeEnv is the environment each review runs with: only the credential, and
-// the base URL when it points somewhere other than Anthropic.
-func claudeEnv(opts Options) map[string]string {
-	return Env(opts.Credential, opts.BaseURL)
-}
 
 // Env is the environment claude runs with on a sidecar: only the credential,
 // and the base URL when it points somewhere other than Anthropic.

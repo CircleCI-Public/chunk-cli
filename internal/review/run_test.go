@@ -136,7 +136,7 @@ func TestRunPassWithoutOnSubmittedPassesNilHook(t *testing.T) {
 func TestRunPassClaudeMissingStopsPass(t *testing.T) {
 	t.Parallel()
 	exec := func(context.Context, *sidecar.PoolEntry, string, map[string]string, circleci.OutputFn, func(string)) (int, error) {
-		return exitClaudeMissing, nil
+		return ExitClaudeMissing, nil
 	}
 
 	pool := newSafePool("sb-1", "sb-2")
@@ -215,13 +215,13 @@ func TestRunPassSuccessfulReviewQuotingA401(t *testing.T) {
 
 func TestRunPassClaudeMissingNoSpuriousFailures(t *testing.T) {
 	t.Parallel()
-	// One goroutine returns exitClaudeMissing immediately; the rest block until the
+	// One goroutine returns ExitClaudeMissing immediately; the rest block until the
 	// context is canceled. The context-canceled results must be attributed to
 	// ErrClaudeMissing, not shown as generic "exec: context canceled" failures.
 	var first atomic.Bool
 	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
 		if first.CompareAndSwap(false, true) {
-			return exitClaudeMissing, nil
+			return ExitClaudeMissing, nil
 		}
 		<-ctx.Done()
 		return 0, ctx.Err()
