@@ -153,6 +153,20 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
+├── session                         # (hidden) Pre-PR review session on the local watch daemon
+│   ├── start                       # Start a session for the current project
+│   │   --project <path>            # Project to review (default: the enclosing git repository)
+│   │   --prompts <dir>             # Review prompts, relative to the project (default: .chunk/reviews)
+│   │   --rounds <n>                # Rounds at most (default and maximum: 3)
+│   │   --parallelism <n>           # Sandboxes reviewing at once (default: 5)
+│   │   --model <name>              # Claude model
+│   │   --timeout <duration>        # Max time for each Claude run (default: 15m)
+│   │   --detach                    # Print the session ID and return
+│   │   --json                      # Output as JSON
+│   ├── attach <id>                 # Follow a session until it ends or pauses
+│   ├── cancel <id>                 # Stop a session
+│   └── list                        # List the daemon's sessions
+│
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
 │
@@ -287,6 +301,16 @@ chunk
   repos than the daemon's, so they are not used: the default is every project the
   daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
   host**, sent as typed. `--focus` with no path is an error in this mode.
+- **`session` runs on the local daemon, in the background.** `chunk session start`
+  registers the current git repository with the daemon, starts the daemon if it
+  is not running, and starts a session; it follows the session until it ends
+  (Ctrl-C detaches, `--detach` returns at once). The session belongs to the
+  daemon: only `cancel` stops it. It uses the *daemon's* Claude and CircleCI
+  credentials, resolved when it started, and it is refused when
+  `CHUNK_WATCHD_REMOTE_ADDR` is set, since a session works on this machine's
+  files. The project needs a git remote named `origin` (the sandboxes clone from
+  it); `start` fails up front without one. A project has one active
+  session at a time. Sessions are kept in memory: a daemon restart loses the record. In-process `chunk review` is unchanged.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

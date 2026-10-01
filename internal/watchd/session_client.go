@@ -74,6 +74,16 @@ func sessionCall(method, path string, in, out any) error {
 	return nil
 }
 
+// StartSession asks the daemon to start a session and returns its ID without
+// waiting for it.
+func StartSession(req SessionRequest) (string, error) {
+	var resp SessionStartResponse
+	if err := sessionCall(http.MethodPost, "/session", req, &resp); err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
 // FetchSession returns one session with the text of its reviews.
 func FetchSession(id string) (SessionDetail, error) {
 	var detail SessionDetail

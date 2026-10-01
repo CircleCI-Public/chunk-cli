@@ -390,10 +390,13 @@ Design constraints worth preserving:
 A session is the daemon's record of one pre-PR run for a project: the work is
 reviewed by agents in sandboxes, the findings worth changing are fixed, and the
 loop goes round again. The daemon is the **local** one (Unix socket); sessions
-work on files on this machine. This section covers the record and the API that
-serves it; running a session is added on top of it.
+work on files on this machine. `chunk session` is the CLI for it and
+`chunk watch` shows it live.
 
 ```
+POST /session              {project_root, prompts_dir?, parallelism?, model?, timeout_seconds?, max_rounds?}
+                           → 202 {id}   (409 a session is active, 404 unknown project,
+                                         400 bad prompts, 503 no credential)
 GET  /session[?root=<path>] → {sessions: [Session...]}, newest first
 GET  /session/{id}         → SessionDetail: the session plus each round's review text
 POST /session/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
@@ -417,8 +420,10 @@ changed (`fix`: files and line counts), and a note on why the loop ended.
   start (`daemonReviewConfig`) and passes it in with `watchd.WithReview`. It is
   put only in the environment of a Claude command; it is not logged and not in
   any snapshot or session detail. A missing one is reported as
-  `Snapshot.ReviewAuthError`.
+  `Snapshot.ReviewAuthError` and refuses `POST /session` with 503.
 - **One active session per project.** Two would fight over the same files.
+- **Prompts come from the project** (`.chunk/reviews`): `prompts_dir` must be
+  relative and may not leave the project.
 - **Detach is not cancel.** A viewer disconnecting changes nothing; the session
   belongs to the daemon.
 - **In memory only.** Like async validate tasks, a daemon restart loses the

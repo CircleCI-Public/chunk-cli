@@ -14,6 +14,11 @@ import (
 // are evicted, so a live session is never lost.
 const MaxSessionsPerProject = 10
 
+// maxReviewOutput caps the prose kept for one review. Claude's own output is
+// already bounded by the review package; this is the daemon's separate bound on
+// how much of it stays in memory per finished round.
+const maxReviewOutput = 128 * 1024
+
 // sessionEntry is one session and the machinery that owns it.
 type sessionEntry struct {
 	mu      sync.Mutex
@@ -77,6 +82,26 @@ func (e *sessionEntry) detail() SessionDetail {
 		d.Details[i] = RoundDetail{Number: rd.Number, Results: slices.Clone(rd.Results)}
 	}
 	return d
+}
+
+// reviewIndexLocked finds a review of a round by name, or -1.
+func (e *sessionEntry) reviewIndexLocked(round int, name string) int {
+	for i := range e.s.Rounds[round].Reviews {
+		if e.s.Rounds[round].Reviews[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// stageLocked returns the stage with the given ID.
+func (e *sessionEntry) stageLocked(id StageID) *Stage {
+	for i := range e.s.Stages {
+		if e.s.Stages[i].ID == id {
+			return &e.s.Stages[i]
+		}
+	}
+	return nil
 }
 
 // sessionStore holds every session. Like the task store it lives in memory only:
@@ -216,4 +241,17 @@ func (s *sessionStore) stopAll() {
 	for _, e := range entries {
 		<-e.done
 	}
+}
+
+// truncateOutput keeps at most maxReviewOutput bytes of a review's prose,
+// cutting on a rune boundary and saying so.
+func truncateOutput(s string) string {
+	if len(s) <= maxReviewOutput {
+		return s
+	}
+	cut := maxReviewOutput
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return s[:cut] + "\n[review output truncated]"
 }
