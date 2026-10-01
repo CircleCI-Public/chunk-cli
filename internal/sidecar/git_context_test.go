@@ -14,11 +14,6 @@ func canceledContext() context.Context {
 	return ctx
 }
 
-func TestCreateBundleHonoursCanceledContext(t *testing.T) {
-	_, err := createBundle(canceledContext(), "", t.TempDir())
-	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)
-}
-
 func TestGeneratePatchHonoursCanceledContext(t *testing.T) {
 	_, err := generatePatch(canceledContext(), "HEAD", t.TempDir())
 	assert.Assert(t, errors.Is(err, context.Canceled), "got %v", err)

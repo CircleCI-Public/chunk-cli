@@ -217,7 +217,7 @@ The sections below cover the sidecar workflow in more detail. Skip them until yo
 
 ### Syncing
 
-`chunk sidecar sync` uses git bundle by default — the first sync sends a full bundle of HEAD, and subsequent syncs send only the new commits since the last sync (`<lastRef>..HEAD`). Uncommitted working-tree changes are applied on top as a patch. The branch does not need to be pushed to GitHub.
+`chunk sidecar sync` mirrors your working tree to the sidecar with rsync over an SSH tunnel, skipping files matched by `.gitignore`. Uncommitted changes are included and later syncs transfer only what changed. The branch does not need to be pushed to GitHub.
 
 ```bash
 chunk sidecar sync

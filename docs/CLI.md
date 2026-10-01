@@ -394,10 +394,9 @@ chunk
 - `chunk init` uses Claude to auto-detect the test command for the project.
   It generates `.claude/settings.json` with pre-commit hooks. It never touches
   CircleCI — tokens are prompted inline only when a command actually needs them.
-- `sidecar sync` sends a full git bundle on first use, then incremental bundles
-  (`<lastRef>..HEAD`) on subsequent syncs. The branch does not need to be pushed
-  to GitHub. Pass `--checkout` to fall back to the git checkout/patch approach
-  (requires the branch to be pushed).
+- `sidecar sync` mirrors the working tree to the sidecar with rsync, honouring
+  `.gitignore`. The branch does not need to be pushed to GitHub. Pooled
+  `validate` and `review` use the same mechanism.
 - `sidecar current` prints the owning session (`session <8 chars>`) alongside the
   name and ID. A sidecar keeps the name it was created with, and adoption transfers
   it without renaming, so the name often carries the session that created it rather

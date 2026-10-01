@@ -166,7 +166,7 @@ func TestValidateRegistersCommandUnderTheGitRoot(t *testing.T) {
 
 	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(home, ".ssh", "chunk_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
-	sshSrv.SetResult("", 0)
+	useLocalSidecar(t, sshSrv)
 
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = sshSrv.Addr()

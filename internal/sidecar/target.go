@@ -3,7 +3,6 @@ package sidecar
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -63,13 +62,6 @@ func (t Target) ResolveWorkspace(ctx context.Context, cwd string) (string, error
 	return ResolveWorkspace(ctx, t.Workdir, repo)
 }
 
-func (t Target) Sync(ctx context.Context, cwd string, useBundle bool, status iostream.StatusFunc) error {
-	if useBundle {
-		return BundleSync(ctx, t.Client, t.SidecarID, t.Workdir, cwd, t.RetryOn404, status)
-	}
-	return syncCheckout(ctx, t.Client, t.SidecarID, t.Workdir, cwd, status)
-}
-
 func (t Target) ExecRunner(ctx context.Context, cwd string, envVars map[string]string, streams iostream.Streams) (func(context.Context, string) (string, string, int, error), string, error) {
 	dest, err := t.ResolveWorkspace(ctx, cwd)
 	if err != nil {
@@ -122,50 +114,4 @@ func (t Target) ReadyExecRunner(ctx context.Context, cwd string, envVars map[str
 		return nil, "", err
 	}
 	return execFn, dest, nil
-}
-
-func syncCheckout(ctx context.Context, client *circleci.Client, sidecarID, workdir, cwd string, status iostream.StatusFunc) error {
-	session, err := OpenSession(ctx, client, sidecarID, false)
-	if err != nil {
-		return err
-	}
-
-	org, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
-	if err != nil {
-		return &NoOriginRemoteError{Err: err}
-	}
-
-	repoPath, err := ResolveWorkspace(ctx, workdir, repo)
-	if err != nil {
-		return err
-	}
-
-	if err := persistWorkspace(ctx, repoPath); err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
-	}
-
-	err = syncWorkspace(ctx, status, org, repo, repoPath, session)
-	if err == nil {
-		status(iostream.LevelDone, "Synced")
-		return nil
-	}
-	if !errors.Is(err, errApplyFailed) {
-		return err
-	}
-
-	status(iostream.LevelWarn, fmt.Sprintf("Local %s/%s drifted from remote: %s (%s) - attempting clean",
-		org, repo, repoPath, err))
-
-	if result, err := ExecOverSSH(ctx, session, "rm -rf "+ShellEscape(repoPath), nil, nil); err != nil {
-		return fmt.Errorf("sync: rm %s: %w", repoPath, err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("sync: rm %s: %s", repoPath, result.Stderr)
-	}
-
-	if err := syncWorkspace(ctx, status, org, repo, repoPath, session); err != nil {
-		return fmt.Errorf("sync retry: %w", err)
-	}
-
-	status(iostream.LevelDone, "Synced")
-	return nil
 }

@@ -624,6 +624,32 @@ GET  /validate/collect?root=<path>                 → {tasks}
   `ChangesBetween` then errors and the assessment falls back to `HEAD`, which
   reads larger and so errs towards blocking.
 
+## Sidecar Sync Strategy (`internal/sidecar/`)
+
+**Everything syncs with rsync.** `RsyncSync` / `RsyncSyncEphemeral` back
+`chunk sidecar sync`, variants and `chunk factory`; `rsyncPoolSidecar` backs the
+sidecar pool (seed, fan-out, stale replacement, dead-sidecar replacement), and so
+pooled `chunk validate` and `chunk review`. All of them funnel into `rsyncTo`.
+
+The git-bundle strategy and the checkout/patch strategy are gone. #539 removed
+them, #564 (pool primitives) brought bundle sync back by accident because the
+pool branch predated #539, and the pool was moved to rsync afterwards. Do not add
+a second sync strategy without changing this section.
+
+Consequences worth knowing:
+
+- rsync is stateless, so the pool no longer records a `last_synced_ref`; there is
+  no incremental-bundle bookkeeping. Old pool state files that still carry the key
+  load fine.
+- The synced `.git` directory carries branch and remote-tracking refs, so the
+  sidecar mirrors them without the ref-fixup scripts bundle sync needed.
+- Each pool member opens its own SSH proxy and walks the tree, where bundle sync
+  built once and sent N times. Concurrency is capped by `syncFanOutConcurrency`.
+  If fan-out cost across a pool of 4-8 proves significant, revisit here
+  deliberately rather than reintroducing bundle sync in one caller.
+- Pool tests replace `poolSync`, since rsync cannot run against the fake SSH
+  server.
+
 ## Data Flow: merge conflict advisories
 
 The `watchd` daemon answers "does this branch still merge cleanly?" out of band,

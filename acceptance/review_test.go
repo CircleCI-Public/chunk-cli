@@ -65,7 +65,7 @@ func setupReviewProject(t *testing.T, resp *fakes.ExecResponse, prompts ...strin
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
 	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(sshDir, "chunk_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
-	sshSrv.SetResult("", 0)
+	useLocalSidecar(t, env, sshSrv)
 
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = sshSrv.Addr()
