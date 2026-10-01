@@ -232,6 +232,16 @@ type ReviewResult struct {
 	Output     string `json:"output,omitempty"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
+	// Findings are the structured findings parsed from the review, each with an
+	// ID unique within the round. Empty when the review gave none or gave prose
+	// only; FindingsParsed tells the two apart.
+	Findings []review.Finding `json:"findings,omitempty"`
+	// FindingsParsed reports that a findings block was found, even an empty one.
+	// False means the review is prose only, the fallback everything copes with.
+	FindingsParsed bool `json:"findings_parsed"`
+	// FindingsDropped counts entries in the block that were unusable or over the
+	// cap.
+	FindingsDropped int `json:"findings_dropped,omitempty"`
 }
 
 // RoundDetail is the text of one round.
