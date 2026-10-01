@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -25,7 +26,11 @@ const poolCloseTimeout = 30 * time.Second
 // sidecar.Pool that RunPass needs, as fields, so a test can supply a fake
 // without booting anything.
 type ReviewPool struct {
-	Acquire   func(context.Context) (*sidecar.PoolEntry, error)
+	Acquire func(context.Context) (*sidecar.PoolEntry, error)
+	// AcquireID checks out one member by sidecar ID, failing with
+	// sidecar.ErrNotPoolMember when the pool cannot hand it out. Nil means the
+	// pool cannot pin members, and any member is used instead.
+	AcquireID func(context.Context, string) (*sidecar.PoolEntry, error)
 	Release   func(*sidecar.PoolEntry)
 	WaitReady func(context.Context) error
 	Close     func(context.Context)
@@ -35,9 +40,17 @@ type ReviewPool struct {
 type ReviewPoolSpec struct {
 	// Root is the tracked project; its config decides org and image.
 	Root string
-	// WorkDir is the tree synced to the sandboxes: the user's project itself.
+	// WorkDir is the tree synced to the sandboxes: the user's project itself,
+	// or a factory session's worktree.
 	WorkDir string
 	Size    int
+	// Name names the pool; empty means review.PoolName.
+	Name string
+	// StateRoot is where the pool's state is kept; empty means WorkDir. A
+	// factory session keeps it out of the worktree, whose contents are the work.
+	StateRoot string
+	// Image overrides the project's configured sidecar image.
+	Image string
 }
 
 // SubmitFunc submits a script on a pool member and returns its command ID.
@@ -61,8 +74,11 @@ type ReviewConfig struct {
 	// The fields below are test seams. Left nil, the daemon builds a real pool
 	// from its CircleCI client and talks to the sandbox through it.
 	NewPool func(ctx context.Context, spec ReviewPoolSpec) (*ReviewPool, error)
-	Submit  SubmitFunc
-	Stream  StreamFunc
+	// DeletePool deletes a pool's sidecars and its state, for a factory session
+	// that has finished with them.
+	DeletePool func(ctx context.Context, spec ReviewPoolSpec) error
+	Submit     SubmitFunc
+	Stream     StreamFunc
 }
 
 // Option customizes RunDaemon.
@@ -163,46 +179,127 @@ func sessionPromptsDir(root, rel string) (string, error) {
 	return dir, nil
 }
 
+// sessionPlan is what a session runs, settled when it is accepted.
+type sessionPlan struct {
+	req SessionRequest
+	// root is the project the daemon tracks.
+	root      string
+	prompts   []review.Prompt
+	commands  []config.Command
+	maxRounds int
+	// workDir is the session's worktree and stateRoot its directory, where its
+	// pool keeps state; both are set once the worktree exists.
+	workDir   string
+	stateRoot string
+}
+
+// poolSpec is the pool the session's turns and rounds draw from: one member
+// per review, capped at the requested parallelism, and one more for the
+// implementer, which also runs validation.
+func (p *sessionPlan) poolSpec() ReviewPoolSpec {
+	return ReviewPoolSpec{
+		Root:      p.root,
+		WorkDir:   p.workDir,
+		Size:      review.PoolSize(p.req.Parallelism, len(p.prompts)) + 1,
+		Name:      factoryPoolName,
+		StateRoot: p.stateRoot,
+		Image:     p.req.Image,
+	}
+}
+
+// scopedPrompts are the review prompts as the reviewers are given them. The
+// prompt files are written for a developer's branch; in a session the change
+// is the implementer's uncommitted work on top of where the user started.
+func (p *sessionPlan) scopedPrompts() []review.Prompt {
+	out := make([]review.Prompt, len(p.prompts))
+	for i, pr := range p.prompts {
+		out[i] = review.Prompt{Name: pr.Name, Body: reviewScope + pr.Body}
+	}
+	return out
+}
+
+// reviewScope tells each reviewer what the change under review is.
+const reviewScope = "The change under review is the uncommitted work in this repository: run " +
+	"`git diff HEAD` to see it, including new files. Committed history is the baseline and is not under review.\n\n"
+
 // startSession validates a request, records a session and starts it in the
 // background. It returns as soon as the session is accepted.
 func (d *daemon) startSession(req SessionRequest) (Session, error) {
 	if msg := d.reviewAuthError(); msg != "" {
 		return Session{}, apiErr(http.StatusServiceUnavailable, "%s", msg)
 	}
+	if strings.TrimSpace(req.Task) == "" {
+		return Session{}, apiErr(http.StatusBadRequest, "a session needs a task")
+	}
 	ps := d.lookupProject(req.ProjectRoot)
 	if ps == nil {
 		return Session{}, apiErr(http.StatusNotFound, "the watch daemon is not tracking %q", req.ProjectRoot)
 	}
-	dir, err := sessionPromptsDir(ps.root, req.PromptsDir)
-	if err != nil {
-		return Session{}, apiErr(http.StatusBadRequest, "%v", err)
-	}
-	prompts, err := review.LoadPrompts(dir)
-	switch {
-	case errors.Is(err, review.ErrNoPrompts):
-		return Session{}, apiErr(http.StatusBadRequest, "no prompts found in %s", dir)
-	case err != nil:
-		return Session{}, apiErr(http.StatusBadRequest, "read prompts: %v", err)
+	plan := &sessionPlan{req: req, root: ps.root}
+	if err := plan.load(); err != nil {
+		return Session{}, err
 	}
 
-	entry, ctx, busy := d.sessions.add(Session{
+	entry, ctx := d.sessions.add(Session{
 		ProjectRoot: ps.root,
 		Branch:      currentBranch(ps.root),
 		HeadSHA:     headRef(ps.root),
+		Task:        req.Task,
 	})
-	if busy != "" {
-		return Session{}, apiErr(http.StatusConflict, "%s", busy)
-	}
-	go d.executeSession(ctx, entry, prompts, req)
+	go d.executeSession(ctx, entry, plan)
 	return entry.snapshot(), nil
 }
 
+// load reads what the session checks the work with, and refuses a request
+// that cannot run.
+func (p *sessionPlan) load() error {
+	if p.req.MaxRounds < 0 || p.req.MaxRounds > MaxRounds {
+		return apiErr(http.StatusBadRequest, "a session runs between 1 and %d rounds", MaxRounds)
+	}
+	p.maxRounds = DefaultRounds
+	if p.req.MaxRounds > 0 {
+		p.maxRounds = p.req.MaxRounds
+	}
+
+	dir, err := sessionPromptsDir(p.root, p.req.PromptsDir)
+	if err != nil {
+		return apiErr(http.StatusBadRequest, "%v", err)
+	}
+	prompts, err := review.LoadPrompts(dir)
+	// The work can be checked by validation alone, so the default prompts
+	// directory is optional; one that was named is not.
+	optional := p.req.PromptsDir == ""
+	switch {
+	case optional && (errors.Is(err, review.ErrNoPrompts) || errors.Is(err, fs.ErrNotExist)):
+	case errors.Is(err, review.ErrNoPrompts):
+		return apiErr(http.StatusBadRequest, "no prompts found in %s", dir)
+	case err != nil:
+		return apiErr(http.StatusBadRequest, "read prompts: %v", err)
+	}
+	p.prompts = prompts
+
+	if !p.req.NoValidate {
+		cfg, err := config.LoadProjectConfig(p.root)
+		switch {
+		case err == nil:
+			p.commands = validationCommands(cfg.Commands)
+		case !errors.Is(err, fs.ErrNotExist):
+			return apiErr(http.StatusBadRequest, "load project config: %v", err)
+		}
+	}
+	if len(p.prompts) == 0 && len(p.commands) == 0 {
+		return apiErr(http.StatusBadRequest,
+			"nothing to check the work with: add review prompts to %s, or validation commands with 'chunk init'", review.DefaultDir)
+	}
+	return nil
+}
+
 // executeSession runs a session and settles it. It always closes entry.done.
-func (d *daemon) executeSession(ctx context.Context, entry *sessionEntry, prompts []review.Prompt, req SessionRequest) {
+func (d *daemon) executeSession(ctx context.Context, entry *sessionEntry, plan *sessionPlan) {
 	defer close(entry.done)
 	defer entry.cancel()
 
-	err := d.runLoop(ctx, entry, prompts, req)
+	err := d.runFactory(ctx, entry, plan)
 	d.settleSession(entry, err)
 }
 
@@ -216,14 +313,14 @@ func (p roundPool) close(ctx context.Context) {
 }
 
 // openRoundPool opens the sandbox pool for one round and waits for it to be
-// ready. The pool is named and persisted per project, so a later round reuses
-// the same warm sandboxes and only has to sync what changed.
-func (d *daemon) openRoundPool(ctx context.Context, root string, prompts int, req SessionRequest) (roundPool, error) {
+// ready. The pool is named and persisted, so a later round reuses the same warm
+// sandboxes and only has to sync what changed.
+func (d *daemon) openRoundPool(ctx context.Context, plan *sessionPlan) (roundPool, error) {
 	newPool := d.rcfg.NewPool
 	if newPool == nil {
 		newPool = d.defaultReviewPool
 	}
-	pool, err := newPool(ctx, ReviewPoolSpec{Root: root, WorkDir: root, Size: review.PoolSize(req.Parallelism, prompts)})
+	pool, err := newPool(ctx, plan.poolSpec())
 	if err != nil {
 		return roundPool{}, fmt.Errorf("prepare sandbox pool: %w", err)
 	}
@@ -236,7 +333,11 @@ func (d *daemon) openRoundPool(ctx context.Context, root string, prompts int, re
 }
 
 // runReviews runs every review prompt once, in parallel on the round's pool.
-func (d *daemon) runReviews(ctx context.Context, entry *sessionEntry, ridx int, root string, prompts []review.Prompt, req SessionRequest, pool roundPool) ([]review.Result, error) {
+func (d *daemon) runReviews(ctx context.Context, entry *sessionEntry, ridx int, plan *sessionPlan, pool roundPool) ([]review.Result, error) {
+	if len(plan.prompts) == 0 {
+		return nil, nil
+	}
+	req := plan.req
 	opts := review.Options{
 		Credential: d.rcfg.Credential,
 		BaseURL:    d.rcfg.BaseURL,
@@ -247,14 +348,22 @@ func (d *daemon) runReviews(ctx context.Context, entry *sessionEntry, ridx int, 
 		// still asked for and still kept.
 		StructuredFindings: true,
 	}
-	exec := d.execerFor(root, func(sidecarID, commandID string) string {
+	exec := d.execerFor(plan.root, func(sidecarID, commandID string) string {
 		return entry.attribute(ridx, sidecarID, commandID)
 	})
-	return review.RunPass(ctx, pool.Acquire, pool.Release, exec, prompts, opts)
+	return review.RunPass(ctx, pool.Acquire, pool.Release, exec, plan.scopedPrompts(), opts)
+}
+
+// defaultDeletePool deletes a session's pool sidecars and its state.
+func (d *daemon) defaultDeletePool(ctx context.Context, spec ReviewPoolSpec) error {
+	if d.client == nil {
+		return nil
+	}
+	return sidecar.DeletePool(ctx, d.client, spec.StateRoot, spec.Name)
 }
 
 // defaultReviewPool builds a real pool the way `chunk review` does: named so its
-// state persists in the project and a later round reuses the warm sandboxes.
+// state persists and a later round reuses the warm sandboxes.
 func (d *daemon) defaultReviewPool(ctx context.Context, spec ReviewPoolSpec) (*ReviewPool, error) {
 	cfg, err := config.LoadProjectConfig(spec.Root)
 	if err != nil {
@@ -267,25 +376,31 @@ func (d *daemon) defaultReviewPool(ctx context.Context, spec ReviewPoolSpec) (*R
 	if orgID == "" {
 		return nil, errors.New("no CircleCI org ID configured for this project")
 	}
-	image := ""
-	if cfg.Validation != nil {
+	image := spec.Image
+	if image == "" && cfg.Validation != nil {
 		image = cfg.Validation.SidecarImage
 	}
+	name := spec.Name
+	if name == "" {
+		name = review.PoolName
+	}
 	status := func(_ iostream.Level, msg string) {
-		log.Printf("watchd: session pool (%s): %s", spec.Root, msg)
+		log.Printf("watchd: session pool %s (%s): %s", name, spec.WorkDir, msg)
 	}
 	pool, err := sidecar.NewPool(ctx, d.client, sidecar.PoolOptions{
-		Size:    spec.Size,
-		Name:    review.PoolName,
-		OrgID:   orgID,
-		Image:   image,
-		WorkDir: spec.WorkDir,
+		Size:      spec.Size,
+		Name:      name,
+		OrgID:     orgID,
+		Image:     image,
+		WorkDir:   spec.WorkDir,
+		StateRoot: spec.StateRoot,
 	}, status)
 	if err != nil {
 		return nil, err
 	}
 	return &ReviewPool{
 		Acquire:   pool.Acquire,
+		AcquireID: pool.AcquireID,
 		Release:   pool.Release,
 		WaitReady: pool.WaitSynced,
 		Close:     pool.Close,
@@ -341,29 +456,21 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 	}
 }
 
-// beginRound adds the next round with its reviews queued, and returns its index.
-func (e *sessionEntry) beginRound(prompts []review.Prompt) int {
+// beginRound adds the next round with its reviews and validation commands
+// queued, and returns its index.
+func (e *sessionEntry) beginRound(prompts []review.Prompt, commands []config.Command) int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	r := Round{Number: e.nextNumberLocked(), State: RoundReviewing, StartedAt: time.Now()}
+	r := Round{Number: len(e.s.Rounds) + 1, State: RoundReviewing, StartedAt: time.Now()}
 	for _, p := range prompts {
 		r.Reviews = append(r.Reviews, ReviewPrompt{Name: p.Name, State: PromptQueued})
+	}
+	for _, c := range commands {
+		r.Reviews = append(r.Reviews, ReviewPrompt{Name: c.Name, Kind: CheckValidate, State: PromptQueued})
 	}
 	e.s.Rounds = append(e.s.Rounds, r)
 	e.details = append(e.details, RoundDetail{Number: r.Number})
 	return len(e.s.Rounds) - 1
-}
-
-// nextNumberLocked is the number of the next round: one more than the rounds
-// already counted. A superseded round is retried, not counted.
-func (e *sessionEntry) nextNumberLocked() int {
-	n := 1
-	for _, r := range e.s.Rounds {
-		if r.State != RoundSuperseded {
-			n++
-		}
-	}
-	return n
 }
 
 // applyProgress records one review's state change from RunPass.
@@ -410,8 +517,9 @@ func (e *sessionEntry) attribute(ridx int, sidecarID, commandID string) string {
 	return fmt.Sprintf("round %d review: %s", e.s.Rounds[ridx].Number, name)
 }
 
-// finishReviews stores a round's review results.
-func (e *sessionEntry) finishReviews(ridx int, results []review.Result) {
+// finishReviews stores a round's review results, and the results of its
+// validation commands, which come already in the record's form.
+func (e *sessionEntry) finishReviews(ridx int, results []review.Result, validation []ReviewResult) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	rd := &e.details[ridx]
@@ -434,6 +542,10 @@ func (e *sessionEntry) finishReviews(ridx int, results []review.Result) {
 		if i := e.reviewIndexLocked(ridx, r.Prompt); i >= 0 {
 			e.s.Rounds[ridx].Reviews[i].Findings = len(res.Findings)
 		}
+		all = append(all, res.Findings...)
+		rd.Results = append(rd.Results, res)
+	}
+	for _, res := range validation {
 		all = append(all, res.Findings...)
 		rd.Results = append(rd.Results, res)
 	}
@@ -484,7 +596,9 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 
 	now := time.Now()
 	entry.s.EndedAt = &now
-	stage := entry.stageLocked(StageReviewLoop)
+	// The stage the session was in is the one that ended it; any after it that
+	// were waiting their turn never ran.
+	stage := entry.activeStageLocked()
 	switch {
 	case entry.cancelled:
 		entry.s.State = SessionCancelled
@@ -496,6 +610,12 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 	default:
 		entry.s.State = SessionDone
 		stage.State, stage.Note = StageDone, entry.loopNote
+		entry.s.Outcome = entry.outcome
+	}
+	for i := range entry.s.Stages {
+		if st := &entry.s.Stages[i]; st.State == StagePending {
+			st.State = StageSkipped
+		}
 	}
 
 	// Anything still in flight when the session ended did not finish; say so
@@ -507,15 +627,24 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 	if reason == "" {
 		reason = "did not finish"
 	}
+	settleFix := func(fix *RoundFix) {
+		// A turn stopped by a cancel failed with whatever the stop made of it
+		// ("context canceled" from three layers down): that is the cancel again.
+		if fix != nil && (fix.State == FixRunning || (entry.cancelled && fix.State == FixFailed)) {
+			fix.State, fix.Error, fix.Activity = FixFailed, reason, ""
+		}
+	}
+	settleFix(entry.s.Implement)
 	for ri := range entry.s.Rounds {
 		r := &entry.s.Rounds[ri]
-		if r.State == RoundDone || r.State == RoundFailed || r.State == RoundSuperseded {
+		if r.State == RoundDone || r.State == RoundFailed {
 			continue
 		}
 		r.State, r.EndedAt = RoundFailed, &now
 		if r.Note == "" {
 			r.Note = reason
 		}
+		settleFix(r.Fix)
 		for i := range r.Reviews {
 			p := &r.Reviews[i]
 			switch {
@@ -528,4 +657,17 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 			}
 		}
 	}
+}
+
+// activeStageLocked is the stage the session is in: the first running one,
+// else the review loop.
+func (e *sessionEntry) activeStageLocked() *Stage {
+	for i := range e.s.Stages {
+		switch e.s.Stages[i].State {
+		case StageRunning:
+			return &e.s.Stages[i]
+		case StageNotBuilt, StagePending, StageDone, StageFailed, StageSkipped:
+		}
+	}
+	return e.stageLocked(StageReviewLoop)
 }

@@ -2,7 +2,6 @@ package watchd
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -29,22 +28,21 @@ type sessionEntry struct {
 	// it is reported as cancelled rather than as whatever error the stop made.
 	cancelled bool
 	done      chan struct{}
-	// resume wakes a paused session. Buffered so a resume that arrives a moment
-	// before the session starts waiting is not lost.
-	resume chan struct{}
-	// leftTree is the user's working tree as the session last left it, after the
-	// most recent fix; loopNote is why the review loop ended. Both are
-	// internal: the record shows their consequences.
-	leftTree string
+	// loopNote is why the loop ended and outcome how; both go on the record once
+	// the session settles.
 	loopNote string
+	outcome  Outcome
 	// sidecarReview maps a sandbox to the review currently running on it, so a
 	// command submitted there can be attributed to its review.
 	sidecarReview map[string]string
+	// worker is the sidecar the implementer works on, kept for every turn so its
+	// Claude session, claudeSession, can be resumed there.
+	worker        string
+	claudeSession string
 }
 
 func cloneSession(s Session) Session {
 	out := s
-	out.PausedPaths = slices.Clone(s.PausedPaths)
 	out.Stages = slices.Clone(s.Stages)
 	out.Rounds = make([]Round, len(s.Rounds))
 	for i, r := range s.Rounds {
@@ -54,23 +52,24 @@ func cloneSession(s Session) Session {
 			ended := *r.EndedAt
 			out.Rounds[i].EndedAt = &ended
 		}
-		if r.Fix != nil {
-			fix := *r.Fix
-			fix.Files = slices.Clone(r.Fix.Files)
-			fix.FindingIDs = slices.Clone(r.Fix.FindingIDs)
-			out.Rounds[i].Fix = &fix
-		}
+		out.Rounds[i].Fix = cloneFix(r.Fix)
 	}
-	if s.Restore != nil {
-		rp := *s.Restore
-		rp.Paths = slices.Clone(s.Restore.Paths)
-		out.Restore = &rp
-	}
+	out.Implement = cloneFix(s.Implement)
 	if s.EndedAt != nil {
 		ended := *s.EndedAt
 		out.EndedAt = &ended
 	}
 	return out
+}
+
+func cloneFix(f *RoundFix) *RoundFix {
+	if f == nil {
+		return nil
+	}
+	fix := *f
+	fix.Files = slices.Clone(f.Files)
+	fix.FindingIDs = slices.Clone(f.FindingIDs)
+	return &fix
 }
 
 func (e *sessionEntry) snapshot() Session {
@@ -91,8 +90,14 @@ func (e *sessionEntry) detail() SessionDetail {
 
 // reviewIndexLocked finds a review of a round by name, or -1.
 func (e *sessionEntry) reviewIndexLocked(round int, name string) int {
-	for i := range e.s.Rounds[round].Reviews {
-		if e.s.Rounds[round].Reviews[i].Name == name {
+	return e.checkIndexLocked(round, "", name)
+}
+
+// checkIndexLocked finds a check of a round by kind and name, or -1. A review
+// and a validation command may share a name.
+func (e *sessionEntry) checkIndexLocked(round int, kind CheckKind, name string) int {
+	for i, c := range e.s.Rounds[round].Reviews {
+		if c.Kind == kind && c.Name == name {
 			return i
 		}
 	}
@@ -110,8 +115,8 @@ func (e *sessionEntry) stageLocked(id StageID) *Stage {
 }
 
 // sessionStore holds every session. Like the task store it lives in memory only:
-// a daemon restart forgets sessions. What a session changed in the user's files
-// is not forgotten: the restore point is a git ref.
+// a daemon restart forgets sessions. Their work is not forgotten: it is on a
+// branch.
 type sessionStore struct {
 	parent context.Context
 
@@ -131,17 +136,11 @@ func newSessionStore(parent context.Context) *sessionStore {
 	}
 }
 
-// add creates a running entry for s. If the project already has a session that
-// has not ended — running, or paused and waiting — it creates nothing and says
-// why. One at a time per project: two sessions would fight over the same files.
-func (s *sessionStore) add(sess Session) (*sessionEntry, context.Context, string) {
+// add creates a running entry for sess. Sessions do not conflict with each
+// other or with the user: each works in a worktree of its own.
+func (s *sessionStore) add(sess Session) (*sessionEntry, context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, id := range s.byProject[sess.ProjectRoot] {
-		if other := s.sessions[id]; other != nil && !other.snapshot().State.Finished() {
-			return nil, nil, fmt.Sprintf("a session is already active for this project (session %s)", id)
-		}
-	}
 	sess.ID = uuid.NewString()
 	sess.State = SessionRunning
 	sess.Stages = newStages()
@@ -151,13 +150,12 @@ func (s *sessionStore) add(sess Session) (*sessionEntry, context.Context, string
 		s:             sess,
 		cancel:        cancel,
 		done:          make(chan struct{}),
-		resume:        make(chan struct{}, 1),
 		sidecarReview: make(map[string]string),
 	}
 	s.sessions[sess.ID] = entry
 	s.byProject[sess.ProjectRoot] = append(s.byProject[sess.ProjectRoot], sess.ID)
 	s.evictLocked(sess.ProjectRoot)
-	return entry, ctx, ""
+	return entry, ctx
 }
 
 // evictLocked drops the oldest finished sessions until the project is within

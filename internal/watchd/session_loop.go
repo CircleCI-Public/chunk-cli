@@ -4,250 +4,304 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
-// loopState is what the review loop remembers between rounds.
-type loopState struct {
-	// expected is the user's working tree as the session last saw it: at the
-	// start, then as it left it after each round's fixes. If the files are not
-	// this when the session is about to look at or change them, they moved
-	// underneath it.
-	expected string
-	// touched are the files the session's fixes have changed so far.
-	touched []string
-}
+// factoryPoolName names a session's sandbox pool. Its state is kept in the
+// session's directory, so every session has a pool of its own.
+const factoryPoolName = "factory"
 
-// outcome of one round, for the loop to act on.
-type outcome int
-
-const (
-	roundAdvanced outcome = iota // fixes applied; go round again if rounds remain
-	roundStopped                 // nothing left worth changing; the loop is finished
-	roundRestart                 // files changed underneath; paused and resumed, so run it again
-)
-
-// runLoop runs up to MaxRounds rounds of {reviews in parallel, a sandbox agent
-// fixes what is worth changing, the fixes land in the user's working tree}, and
-// stops early once a round finds nothing worth changing.
-//
-// "Worth changing" is severity high or medium. Before it looks at the files and
-// before it writes to them, the loop checks they are still as it left them; if
-// not it pauses (see pauseSession) rather than overwrite anything.
-func (d *daemon) runLoop(ctx context.Context, entry *sessionEntry, prompts []review.Prompt, req SessionRequest) error {
-	root := entry.snapshot().ProjectRoot
-	maxRounds := MaxRounds
-	if req.MaxRounds > 0 && req.MaxRounds < MaxRounds {
-		maxRounds = req.MaxRounds
-	}
-
-	tree, err := treeNow(root)
+// runFactory runs a session in a worktree of its own: it makes the worktree,
+// runs the loop there, and on the way out, however the loop ended, commits the
+// work to the session's branch, removes the worktree and deletes the pool.
+func (d *daemon) runFactory(ctx context.Context, entry *sessionEntry, plan *sessionPlan) error {
+	id := entry.snapshot().ID
+	dir, err := sessionDir(id)
 	if err != nil {
 		return err
 	}
-	st := &loopState{expected: tree}
-
-	for done := 0; done < maxRounds; {
-		now, err := treeNow(root)
-		if err != nil {
-			return err
-		}
-		if now != st.expected {
-			// Changed between rounds: wait for the user to say what to do.
-			if st.expected, err = d.pauseSession(ctx, entry, root, st.expected, now); err != nil {
-				return err
-			}
-			continue
-		}
-
-		out, reason, err := d.runRound(ctx, entry, root, prompts, req, st)
-		if err != nil {
-			return err
-		}
-		switch out {
-		case roundStopped:
-			entry.finishLoop(reason)
-			return nil
-		case roundAdvanced:
-			done++
-		case roundRestart:
-			// The round was abandoned and does not count.
-		}
+	path, branch, err := createWorktree(ctx, plan.root, id, dir)
+	if err != nil {
+		return err
 	}
-	entry.finishLoop(fmt.Sprintf("stopped after %d round(s)", maxRounds))
+	plan.workDir, plan.stateRoot = path, dir
+	entry.setWork(path, branch)
+
+	err = d.runLoop(ctx, entry, plan)
+	if finishErr := d.finishSession(ctx, entry, plan, branch); finishErr != nil && err == nil {
+		err = finishErr
+	}
+	return err
+}
+
+// finishSession commits the work, removes the worktree and deletes the
+// session's sidecars. It gets its own deadline: the session's context may
+// already be cancelled, and the work must be kept regardless.
+func (d *daemon) finishSession(ctx context.Context, entry *sessionEntry, plan *sessionPlan, branch string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), worktreeFinishTimeout)
+	defer cancel()
+
+	deletePool := d.rcfg.DeletePool
+	if deletePool == nil {
+		deletePool = d.defaultDeletePool
+	}
+	if err := deletePool(ctx, plan.poolSpec()); err != nil {
+		log.Printf("watchd: session %s: delete sidecars: %v", entry.snapshot().ID, err)
+	}
+
+	snap := entry.snapshot()
+	snap.Outcome = entry.pendingOutcome()
+	commit, kept, err := finishWorktree(ctx, plan.root, plan.workDir, branch, commitMessage(snap))
+	if err != nil {
+		// The worktree is left where it is, with the work in it.
+		return fmt.Errorf("keep the work: %w (it is still in %s)", err, plan.workDir)
+	}
+	entry.finishWork(commit, kept)
 	return nil
 }
 
-// failedReviews counts the reviews that ended in an error.
-func failedReviews(results []review.Result) int {
-	n := 0
-	for _, r := range results {
-		if r.Error != "" {
-			n++
+// runLoop has the implementer write the task, then runs up to plan.maxRounds
+// rounds of {checks in parallel, the implementer fixes what is worth changing,
+// the fixes land in the worktree}, and stops early once a round's checks all
+// pass.
+//
+// "Worth changing" is a review finding of severity high or medium, or a
+// validation command that failed.
+func (d *daemon) runLoop(ctx context.Context, entry *sessionEntry, plan *sessionPlan) error {
+	changed, err := d.runImplement(ctx, entry, plan)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		entry.finishLoop("the implementer made no changes", OutcomeNoChange)
+		return nil
+	}
+	entry.startStage(StageImplement, StageReviewLoop)
+
+	for range plan.maxRounds {
+		stop, err := d.runRound(ctx, entry, plan)
+		if err != nil {
+			return err
+		}
+		if stop != nil {
+			entry.finishLoop(stop.reason, stop.outcome)
+			return nil
 		}
 	}
-	return n
+	entry.finishLoop(fmt.Sprintf("stopped after %d round(s)", plan.maxRounds), OutcomeExhausted)
+	return nil
 }
 
-// runRound runs one round. The returned reason is why the loop is over, when the
-// outcome is roundStopped.
-func (d *daemon) runRound(ctx context.Context, entry *sessionEntry, root string, prompts []review.Prompt, req SessionRequest, st *loopState) (outcome, string, error) {
-	ridx := entry.beginRound(prompts)
-	pool, err := d.openRoundPool(ctx, root, len(prompts), req)
+// runImplement runs the implementer's first turn, which writes the task, and
+// applies what it wrote to the worktree. It reports whether anything changed.
+func (d *daemon) runImplement(ctx context.Context, entry *sessionEntry, plan *sessionPlan) (bool, error) {
+	pool, err := d.openRoundPool(ctx, plan)
 	if err != nil {
-		return 0, "", err
+		return false, err
+	}
+	defer pool.close(ctx)
+	worker, err := d.acquireWorker(ctx, entry, pool)
+	if err != nil {
+		return false, err
+	}
+	defer pool.Release(worker)
+
+	entry.startImplement()
+	patch, err := d.implementerTurn(ctx, entry, implementTurn, plan, worker, plan.req.Task, "implement")
+	if err != nil {
+		entry.failFix(implementTurn, err)
+		return false, fmt.Errorf("implement: %w", err)
+	}
+	if strings.TrimSpace(patch) == "" {
+		entry.endFix(implementTurn, FixEmpty, nil)
+		return false, nil
+	}
+	files, err := d.applyTurn(ctx, entry, 0, plan, patch)
+	if err != nil {
+		entry.failFix(implementTurn, err)
+		return false, err
+	}
+	entry.endFix(implementTurn, FixApplied, files)
+	return true, nil
+}
+
+// loopStop is why the loop is over.
+type loopStop struct {
+	reason  string
+	outcome Outcome
+}
+
+// runRound runs one round. It returns a loopStop when the loop is over.
+func (d *daemon) runRound(ctx context.Context, entry *sessionEntry, plan *sessionPlan) (*loopStop, error) {
+	ridx := entry.beginRound(plan.prompts, plan.commands)
+	pool, err := d.openRoundPool(ctx, plan)
+	if err != nil {
+		return nil, err
 	}
 	defer pool.close(ctx)
 
-	results, err := d.runReviews(ctx, entry, ridx, root, prompts, req, pool)
-	entry.finishReviews(ridx, results)
+	// The implementer keeps its sidecar from round to round. Validation runs
+	// there while the reviews run on the others, and the fixes are made there.
+	worker, err := d.acquireWorker(ctx, entry, pool)
 	if err != nil {
-		return 0, "", err
+		return nil, err
+	}
+	defer pool.Release(worker)
+
+	var (
+		wg         sync.WaitGroup
+		validation []ReviewResult
+	)
+	if len(plan.commands) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			validation = d.runValidation(ctx, entry, ridx, plan, worker)
+		}()
+	}
+	results, err := d.runReviews(ctx, entry, ridx, plan, pool)
+	wg.Wait()
+	entry.finishReviews(ridx, results, validation)
+	if err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return 0, "", err
+		return nil, err
 	}
 
-	// A review that failed found nothing, which is not the same as finding
-	// nothing wrong. If none of them ran, there is no round to call clean.
-	failed := failedReviews(results)
-	if len(results) > 0 && failed == len(results) {
-		err := fmt.Errorf("every review failed: %s", results[0].Error)
+	// A check that failed to run found nothing, which is not the same as
+	// finding nothing wrong. If none of them ran, there is no round to call
+	// clean.
+	failed, first := checkErrors(results, validation)
+	total := len(results) + len(validation)
+	if total > 0 && failed == total {
+		err := fmt.Errorf("every check failed to run: %s", first)
 		entry.endRound(ridx, RoundFailed, err.Error())
-		return 0, "", err
+		return nil, err
 	}
 
 	worth := entry.worthFindings(ridx)
 	if len(worth) == 0 {
-		reason := "no findings worth changing"
 		if failed > 0 {
-			reason = fmt.Sprintf("%s (%d of %d reviews failed)", reason, failed, len(results))
+			// Nothing to fix, but the checks that could not run have not shown
+			// the work is clean, so the next round checks the same work again.
+			entry.endRound(ridx, RoundDone, fmt.Sprintf("nothing to fix, but %d of %d checks could not run; checking again", failed, total))
+			return nil, nil
 		}
-		entry.endRound(ridx, RoundDone, reason)
-		return roundStopped, reason, nil
+		entry.endRound(ridx, RoundDone, "every check passed")
+		return &loopStop{reason: "every check passed", outcome: OutcomePassed}, nil
 	}
 
 	entry.startFix(ridx, worth)
-	patch, err := d.fixOnSandbox(ctx, entry, ridx, root, pool, worth, req)
+	label := fmt.Sprintf("round %d fix", entry.roundNumber(ridx))
+	patch, err := d.implementerTurn(ctx, entry, ridx, plan, worker, feedbackPrompt(plan.req.Task, worth), label)
 	if err != nil {
 		entry.failFix(ridx, err)
-		return 0, "", fmt.Errorf("fix: %w", err)
+		return nil, fmt.Errorf("fix: %w", err)
 	}
 	if strings.TrimSpace(patch) == "" {
 		entry.endFix(ridx, FixEmpty, nil)
-		entry.endRound(ridx, RoundDone, "the agent made no changes")
-		return roundStopped, "the agent made no changes", nil
-	}
-	if err := checkPatchPaths(patch); err != nil {
-		entry.failFix(ridx, err)
-		return 0, "", err
-	}
-
-	// The reviewers and the fixer saw the files as they were when the round
-	// began. If the user has edited since, the patch is against files that no
-	// longer exist; applying it could overwrite their work.
-	now, err := treeNow(root)
-	if err != nil {
-		return 0, "", err
-	}
-	if now != st.expected {
-		entry.supersede(ridx, "files changed while the round ran; it will run again")
-		if st.expected, err = d.pauseSession(ctx, entry, root, st.expected, now); err != nil {
-			return 0, "", err
-		}
-		return roundRestart, "", nil
+		entry.endRound(ridx, RoundDone, "the implementer made no changes")
+		return &loopStop{reason: "the implementer made no changes for what the checks found", outcome: OutcomeStuck}, nil
 	}
 
 	entry.setRoundState(ridx, RoundApplying)
-	if err := d.applyFixes(ctx, entry, ridx, root, patch, st); err != nil {
+	files, err := d.applyTurn(ctx, entry, entry.roundNumber(ridx), plan, patch)
+	if err != nil {
 		entry.failFix(ridx, err)
-		return 0, "", err
+		return nil, err
 	}
+	entry.endFix(ridx, FixApplied, files)
 	entry.endRound(ridx, RoundDone, "")
-	return roundAdvanced, "", nil
+	return nil, nil
 }
 
-// applyFixes saves the restore point if this is the first change, then writes
-// the patch into the user's working tree.
-func (d *daemon) applyFixes(ctx context.Context, entry *sessionEntry, ridx int, root, patch string, st *loopState) error {
-	snap := entry.snapshot()
-	patchPath, err := savePatch(snap.ID, snap.Rounds[ridx].Number, patch)
-	if err != nil {
-		return err
+// checkErrors counts a round's checks that could not run, and gives the first
+// one's error.
+func checkErrors(results []review.Result, validation []ReviewResult) (n int, first string) {
+	errs := make([]string, 0, len(results)+len(validation))
+	for _, r := range results {
+		errs = append(errs, r.Error)
 	}
-	if snap.Restore == nil {
-		// Before the first byte is written: the tree is exactly st.expected.
-		rp, err := saveRestorePoint(ctx, root, snap.ID, st.expected)
-		if err != nil {
-			return fmt.Errorf("could not save a restore point, so nothing was changed: %w", err)
+	for _, r := range validation {
+		errs = append(errs, r.Error)
+	}
+	for _, e := range errs {
+		if e == "" {
+			continue
 		}
-		entry.setRestore(rp)
+		if n == 0 {
+			first = e
+		}
+		n++
 	}
-
-	files, err := applyPatchToTree(ctx, root, patchPath)
-	if err != nil {
-		return err
-	}
-	for _, f := range files {
-		st.touched = appendUnique(st.touched, f.Path)
-	}
-	after, err := treeNow(root)
-	if err != nil {
-		return err
-	}
-	st.expected = after
-	entry.recordFix(ridx, files, st.touched, after)
-	return nil
+	return n, first
 }
 
-func appendUnique(list []string, s string) []string {
-	for _, v := range list {
-		if v == s {
-			return list
+// acquireWorker checks out the implementer's sidecar. Every turn runs on the
+// same one, so it can resume the Claude session of the turn before. If that
+// sidecar is gone from the pool, any member takes its place and the next turn
+// starts a new Claude session there.
+func (d *daemon) acquireWorker(ctx context.Context, entry *sessionEntry, pool roundPool) (*sidecar.PoolEntry, error) {
+	if id := entry.workerID(); id != "" && pool.AcquireID != nil {
+		pe, err := pool.AcquireID(ctx, id)
+		if err == nil {
+			return pe, nil
+		}
+		if !errors.Is(err, sidecar.ErrNotPoolMember) {
+			return nil, fmt.Errorf("acquire the implementer's sandbox: %w", err)
 		}
 	}
-	return append(list, s)
+	pe, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire the implementer's sandbox: %w", err)
+	}
+	entry.setWorker(pe.ID)
+	return pe, nil
 }
 
-// pauseSession stops the session until the user decides, because the files
-// changed underneath it. It returns the working tree to adopt as the new
-// baseline once resumed. Nothing is overwritten while it waits.
-func (d *daemon) pauseSession(ctx context.Context, entry *sessionEntry, root, expected, now string) (string, error) {
-	paths, err := changedBetween(ctx, root, expected, now)
+// implementerTurn runs one implementer turn on the worker and returns its
+// patch. A turn after the first continues the first turn's Claude session, so
+// feedback arrives with the context of the work so far.
+func (d *daemon) implementerTurn(ctx context.Context, entry *sessionEntry, ridx int, plan *sessionPlan, worker *sidecar.PoolEntry, prompt, label string) (string, error) {
+	a := review.ImplementAgent(label, prompt)
+	a.Model = plan.req.Model
+	if plan.req.ImplementTimeoutSeconds > 0 {
+		a.Timeout = time.Duration(plan.req.ImplementTimeoutSeconds) * time.Second
+	}
+	a.SessionID, a.Resume = entry.claudeSessionFor(worker.ID)
+
+	patch, res, err := d.editOnSandbox(ctx, entry, ridx, plan.root, worker, a, label)
+	// The Claude session exists once claude has started it, even if the turn
+	// then failed, so the next turn resumes it rather than starts it again.
+	if res.SessionID != "" {
+		entry.setClaudeSession(res.SessionID)
+	}
 	if err != nil {
 		return "", err
 	}
-	entry.pause(pauseReason(paths), paths)
-
-	select {
-	case <-entry.resume:
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-	// Adopt whatever the files are now, not what they were when paused: the user
-	// may have kept editing while deciding.
-	latest, err := treeNow(root)
-	if err != nil {
+	if err := checkPatchPaths(patch); err != nil {
 		return "", err
 	}
-	entry.unpause()
-	return latest, nil
+	return patch, nil
 }
 
-// pauseReason describes what changed, for a person to read.
-func pauseReason(paths []string) string {
-	const show = 5
-	shown := paths
-	more := ""
-	if len(paths) > show {
-		shown = paths[:show]
-		more = fmt.Sprintf(" and %d more", len(paths)-show)
+// applyTurn writes a turn's patch into the worktree and returns the files it
+// changed. The patch is kept in the session's directory as well.
+func (d *daemon) applyTurn(ctx context.Context, entry *sessionEntry, number int, plan *sessionPlan, patch string) ([]FileChange, error) {
+	patchPath, err := savePatch(entry.snapshot().ID, number, patch)
+	if err != nil {
+		return nil, err
 	}
-	return "files changed while the session was running: " + strings.Join(shown, ", ") + more
+	return applyPatchToTree(ctx, plan.workDir, patchPath)
 }
 
 // ---- session record updates ------------------------------------------------
@@ -275,6 +329,73 @@ func (e *sessionEntry) setRoundState(ridx int, state RoundState) {
 	e.mu.Unlock()
 }
 
+func (e *sessionEntry) setWork(path, branch string) {
+	e.mu.Lock()
+	e.s.WorkDir, e.s.WorkBranch = path, branch
+	e.mu.Unlock()
+}
+
+// finishWork records where the work ended up once the worktree is gone.
+func (e *sessionEntry) finishWork(commit string, kept bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.s.WorkDir, e.s.WorkCommit = "", commit
+	if !kept {
+		e.s.WorkBranch = ""
+	}
+}
+
+func (e *sessionEntry) workerID() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.worker
+}
+
+// setWorker makes id the implementer's sidecar. A new one has no Claude session
+// to resume.
+func (e *sessionEntry) setWorker(id string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.worker != id {
+		e.worker, e.claudeSession = id, ""
+	}
+}
+
+// claudeSessionFor is the Claude session a turn on sidecarID uses, and whether
+// it continues one already started there.
+func (e *sessionEntry) claudeSessionFor(sidecarID string) (string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.worker == sidecarID && e.claudeSession != "" {
+		return e.claudeSession, true
+	}
+	return uuid.NewString(), false
+}
+
+func (e *sessionEntry) setClaudeSession(id string) {
+	e.mu.Lock()
+	e.claudeSession = id
+	e.mu.Unlock()
+}
+
+// startStage ends one stage and starts the next.
+func (e *sessionEntry) startStage(done, next StageID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if st := e.stageLocked(done); st != nil {
+		st.State = StageDone
+	}
+	if st := e.stageLocked(next); st != nil {
+		st.State = StageRunning
+	}
+}
+
+func (e *sessionEntry) startImplement() {
+	e.mu.Lock()
+	e.s.Implement = &RoundFix{State: FixRunning}
+	e.mu.Unlock()
+}
+
 func (e *sessionEntry) startFix(ridx int, findings []review.Finding) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -286,135 +407,56 @@ func (e *sessionEntry) startFix(ridx int, findings []review.Finding) {
 	e.s.Rounds[ridx].State = RoundFixing
 }
 
-func (e *sessionEntry) endFix(ridx int, state FixState, files []FileChange) {
+// updateFix changes the fix record ridx names under the lock: a round's, or for
+// implementTurn the first turn's. A record not yet started is left alone.
+func (e *sessionEntry) updateFix(ridx int, fn func(*RoundFix)) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	fix := e.s.Rounds[ridx].Fix
-	fix.State, fix.Files = state, files
-	for _, f := range files {
-		fix.Insertions += f.Insertions
-		fix.Deletions += f.Deletions
+	fix := e.s.Implement
+	if ridx >= 0 {
+		fix = e.s.Rounds[ridx].Fix
 	}
+	if fix != nil {
+		fn(fix)
+	}
+}
+
+// updateCheck changes a round's validation command record under the lock.
+func (e *sessionEntry) updateCheck(ridx int, name string, fn func(*ReviewPrompt)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if i := e.checkIndexLocked(ridx, CheckValidate, name); i >= 0 {
+		fn(&e.s.Rounds[ridx].Reviews[i])
+	}
+}
+
+func (e *sessionEntry) endFix(ridx int, state FixState, files []FileChange) {
+	e.updateFix(ridx, func(fix *RoundFix) {
+		fix.State, fix.Files = state, files
+		fix.Insertions, fix.Deletions = 0, 0
+		for _, f := range files {
+			fix.Insertions += f.Insertions
+			fix.Deletions += f.Deletions
+		}
+	})
 }
 
 func (e *sessionEntry) failFix(ridx int, err error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if fix := e.s.Rounds[ridx].Fix; fix != nil {
-		fix.State, fix.Error = FixFailed, err.Error()
-	}
+	e.updateFix(ridx, func(fix *RoundFix) {
+		fix.State, fix.Error, fix.Activity = FixFailed, err.Error(), ""
+	})
 }
 
-// supersede marks a round abandoned because the files moved under it.
-func (e *sessionEntry) supersede(ridx int, note string) {
+// finishLoop records why the loop ended, to be shown on the stage, and how.
+func (e *sessionEntry) finishLoop(reason string, o Outcome) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	now := time.Now()
-	r := &e.s.Rounds[ridx]
-	r.State, r.Note, r.EndedAt = RoundSuperseded, note, &now
-	if r.Fix != nil && r.Fix.State == FixRunning {
-		r.Fix.State, r.Fix.Error = FixFailed, "not applied: files changed"
-	}
-}
-
-// recordFix stores what a round's fixes did to the files, and where the files
-// stood afterwards.
-func (e *sessionEntry) recordFix(ridx int, files []FileChange, touched []string, after string) {
-	e.endFix(ridx, FixApplied, files)
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.leftTree = after
-	if e.s.Restore != nil {
-		e.s.Restore.Paths = append([]string(nil), touched...)
-	}
-}
-
-func (e *sessionEntry) setRestore(rp RestorePoint) {
-	e.mu.Lock()
-	e.s.Restore = &rp
+	e.loopNote, e.outcome = reason, o
 	e.mu.Unlock()
 }
 
-// pause puts the session in the paused state.
-func (e *sessionEntry) pause(reason string, paths []string) {
+// pendingOutcome is how the loop ended, before the session settles.
+func (e *sessionEntry) pendingOutcome() Outcome {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.s.State = SessionPaused
-	e.s.PauseReason, e.s.PausedPaths = reason, paths
-	if st := e.stageLocked(StageReviewLoop); st != nil {
-		st.State, st.Note = StagePaused, reason
-	}
-}
-
-func (e *sessionEntry) unpause() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.s.State = SessionRunning
-	e.s.PauseReason, e.s.PausedPaths = "", nil
-	if st := e.stageLocked(StageReviewLoop); st != nil {
-		st.State, st.Note = StageRunning, ""
-	}
-}
-
-// finishLoop records why the loop ended, to be shown on the stage.
-func (e *sessionEntry) finishLoop(reason string) {
-	e.mu.Lock()
-	e.loopNote = reason
-	e.mu.Unlock()
-}
-
-// resumeSession wakes a paused session so it adopts the files as they are now
-// and runs the round again.
-func (d *daemon) resumeSession(id string) error {
-	entry := d.sessions.get(id)
-	if entry == nil {
-		return apiErr(http.StatusNotFound, "no such session")
-	}
-	if entry.snapshot().State != SessionPaused {
-		return apiErr(http.StatusConflict, "the session is not paused")
-	}
-	select {
-	case entry.resume <- struct{}{}:
-	default: // a resume is already on its way
-	}
-	return nil
-}
-
-// restoreFiles undoes everything a session changed in the working tree, using
-// the restore point it saved before the first change.
-//
-// It refuses while the session is still going, since the loop would be writing
-// to the same files, and refuses to overwrite edits the user made after the
-// session left the files unless asked to force it.
-func (d *daemon) restoreFiles(ctx context.Context, id string, force bool) (RestoreResult, error) {
-	entry := d.sessions.get(id)
-	if entry == nil {
-		return RestoreResult{}, apiErr(http.StatusNotFound, "no such session")
-	}
-	entry.mu.Lock()
-	sess := cloneSession(entry.s)
-	left := entry.leftTree
-	entry.mu.Unlock()
-
-	switch {
-	case !sess.State.Finished():
-		return RestoreResult{}, apiErr(http.StatusConflict, "the session is still %s; cancel it first", sess.State)
-	case sess.Restore == nil:
-		return RestoreResult{}, apiErr(http.StatusConflict, "this session did not change any files")
-	case sess.Restore.Restored:
-		return RestoreResult{}, apiErr(http.StatusConflict, "this session was already restored")
-	}
-
-	paths, err := restoreSession(ctx, sess.ProjectRoot, *sess.Restore, sess.Restore.Paths, left, force)
-	var edited *EditedSinceError
-	if errors.As(err, &edited) {
-		return RestoreResult{}, apiErr(http.StatusConflict, "%s", edited.Error())
-	}
-	if err != nil {
-		return RestoreResult{}, apiErr(http.StatusInternalServerError, "%v", err)
-	}
-	entry.mu.Lock()
-	entry.s.Restore.Restored = true
-	entry.mu.Unlock()
-	return RestoreResult{Paths: paths}, nil
+	return e.outcome
 }

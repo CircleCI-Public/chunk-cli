@@ -2,7 +2,6 @@ package review
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"regexp"
@@ -61,22 +60,6 @@ type Credential struct {
 	Value  string
 }
 
-// allowedTools limits reviewers to reading the repository. A review reports
-// findings; it has no business editing the tree the next pass reviews.
-var allowedTools = []string{
-	"Read", "Grep", "Glob",
-	"Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git status:*)",
-}
-
-// EditTools is the tool set of a run that fixes code rather than reviewing it:
-// everything a review can do plus Edit and Write. It is used only for the apply
-// pass, whose result is a diff that a person reads before anything leaves the
-// daemon, and never for a review.
-var EditTools = []string{
-	"Read", "Grep", "Glob", "Edit", "Write",
-	"Bash(git diff:*)", "Bash(git status:*)",
-}
-
 // PromptState is the lifecycle state of one review in a pass.
 type PromptState int
 
@@ -112,9 +95,6 @@ type Options struct {
 	// in Result.Output. A review whose answer has no structured output fails.
 	// Off, Result.Parsed stays empty.
 	StructuredFindings bool
-	// AllowedTools overrides the read-only tool set. Empty means read-only, which
-	// is what every review uses.
-	AllowedTools []string
 	// OnSubmitted is called once per prompt with the remote command ID, as soon
 	// as the exec is accepted and before its output is streamed. It is how a
 	// caller registers the run for output replay, which has to happen while the
@@ -258,61 +238,20 @@ func (r runResult) fail(err error) runResult {
 
 func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt, opts Options) runResult {
 	r := runResult{Result: Result{Prompt: p.Name, SidecarID: entry.ID}}
-	start := time.Now()
-
-	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
-	defer cancel()
-
-	// Stdout is the review. Stderr is kept only to explain a failure, so
-	// claude's progress noise never lands in the review text.
-	var stdout, stderr strings.Builder
-	// Only stdout carries the JSON result, so only it gets the larger cap; stderr
-	// is read for a short tail and stays small.
-	stdoutLimit := maxOutputBytes
+	a := Agent{Name: p.Name, Prompt: p.Body, Model: opts.Model, Timeout: opts.Timeout}
 	if opts.StructuredFindings {
-		stdoutLimit = maxStructuredOutputBytes
+		a.Schema = FindingsSchema
 	}
-	stdoutCut := false
-	tools := opts.AllowedTools
-	if len(tools) == 0 {
-		tools = allowedTools
-	}
-	onOutput := func(stream string, data []byte) {
-		buf, limit := &stdout, stdoutLimit
-		if stream == circleci.StreamStderr {
-			buf, limit = &stderr, maxOutputBytes
-		}
-		room := max(limit-buf.Len(), 0)
-		if len(data) > room && buf == &stdout {
-			stdoutCut = true
-		}
-		buf.Write(data[:min(len(data), room)])
-	}
-	var onSubmitted func(string)
+	var hooks AgentHooks
 	if opts.OnSubmitted != nil {
-		onSubmitted = func(commandID string) { opts.OnSubmitted(entry, p.Name, commandID) }
+		hooks.OnSubmitted = func(commandID string) { opts.OnSubmitted(entry, p.Name, commandID) }
 	}
-	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, p.Body, opts.Model, tools, opts.StructuredFindings), Env(opts.Credential, opts.BaseURL), onOutput, onSubmitted)
-	r.Output = strings.TrimSpace(stdout.String())
-	r.Duration = time.Since(start)
-	switch {
-	case ctx.Err() == context.DeadlineExceeded:
-		return r.fail(fmt.Errorf("timed out after %s", opts.Timeout))
-	case err != nil:
-		return r.fail(fmt.Errorf("exec: %w", err))
-	case code == ExitClaudeMissing:
-		return r.fail(ErrClaudeMissing)
-	case code != 0 && CredentialRejected(r.Output, stderr.String()):
-		return r.fail(ErrCredentialRejected)
-	case code != 0:
-		return r.fail(exitError(code, stderr.String()))
+	res := RunAgent(ctx, exec, entry, a, opts.Credential, opts.BaseURL, hooks)
+	r.Output, r.Duration = res.Output, res.Duration
+	if res.Err != nil {
+		return r.fail(res.Err)
 	}
 	if opts.StructuredFindings {
-		// A result cut at the cap cannot decode; say why instead of reporting
-		// malformed JSON.
-		if stdoutCut {
-			return r.fail(fmt.Errorf("claude's result is over %d bytes", stdoutLimit))
-		}
 		parsed, err := ParseFindings(r.Output)
 		if err != nil {
 			return r.fail(err)
@@ -342,30 +281,6 @@ func exitError(code int, stderr string) error {
 		stderr = "…" + stderr[len(stderr)-stderrTail:]
 	}
 	return fmt.Errorf("claude exited %d: %s", code, stderr)
-}
-
-// claudeScriptWithTools builds the shell script that runs one review, with an
-// explicit tool allowlist and, when structured is set, claude's JSON result
-// constrained by FindingsSchema. The prompt is piped in base64-encoded, so no
-// quoting in it can reach the shell. Claude Code's native installer puts claude
-// in ~/.local/bin, which a non-login sh does not have on PATH.
-func claudeScriptWithTools(repoPath, prompt, model string, tools []string, structured bool) string {
-	format := "text"
-	if structured {
-		format = "json"
-	}
-	args := []string{"claude", "-p", "--output-format", format, "--allowedTools", strings.Join(tools, ",")}
-	if structured {
-		args = append(args, "--json-schema", FindingsSchema)
-	}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(prompt))
-	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
-command -v claude >/dev/null 2>&1 || exit %d
-cd %s && echo %s | base64 -d | %s`,
-		ExitClaudeMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
 }
 
 // defaultBaseURL is where claude sends requests when no base URL is set.

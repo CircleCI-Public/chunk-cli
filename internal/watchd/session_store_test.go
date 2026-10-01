@@ -18,22 +18,15 @@ func finish(e *sessionEntry, state SessionState) {
 	close(e.done)
 }
 
-func TestSessionStoreAllowsOneActiveSessionPerProject(t *testing.T) {
+// Sessions work in worktrees of their own, so any number may run on a project.
+func TestSessionStoreRunsSessionsSideBySide(t *testing.T) {
 	store := newSessionStore(t.Context())
 
-	first, _, busy := store.add(Session{ProjectRoot: "/p"})
-	assert.Equal(t, busy, "")
+	first, _ := store.add(Session{ProjectRoot: "/p"})
 	assert.Equal(t, len(first.snapshot().Stages), len(newStages()))
-
-	_, _, busy = store.add(Session{ProjectRoot: "/p"})
-	assert.Assert(t, busy != "", "a second session on the same project must be refused")
-
-	_, _, busy = store.add(Session{ProjectRoot: "/other"})
-	assert.Equal(t, busy, "", "another project is independent")
-
-	finish(first, SessionDone)
-	_, _, busy = store.add(Session{ProjectRoot: "/p"})
-	assert.Equal(t, busy, "", "an ended session no longer blocks the project")
+	second, _ := store.add(Session{ProjectRoot: "/p"})
+	assert.Assert(t, first.snapshot().ID != second.snapshot().ID)
+	assert.Equal(t, len(store.forProject("/p")), 2)
 }
 
 func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {
@@ -41,8 +34,7 @@ func TestSessionStoreKeepsTheNewestFinishedSessionsNewestFirst(t *testing.T) {
 
 	var ids []string
 	for range MaxSessionsPerProject + 3 {
-		e, _, busy := store.add(Session{ProjectRoot: "/p"})
-		assert.Equal(t, busy, "")
+		e, _ := store.add(Session{ProjectRoot: "/p"})
 		ids = append(ids, e.snapshot().ID)
 		finish(e, SessionDone)
 	}
@@ -60,8 +52,7 @@ func TestSessionAPIListsGetsAndCancels(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	entry, ctx, busy := d.sessions.add(Session{ProjectRoot: "/p"})
-	assert.Equal(t, busy, "")
+	entry, ctx := d.sessions.add(Session{ProjectRoot: "/p"})
 	id := entry.snapshot().ID
 	// Cancelling cancels the entry's context; settle it as a run would.
 	go func() {

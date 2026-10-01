@@ -87,7 +87,7 @@ type daemon struct {
 	// live drops sidecars the API no longer lists, so the dashboard shows only
 	// the ones that exist.
 	live *livenessChecker
-	// sessions holds pre-PR sessions, and rcfg what the daemon needs to run one.
+	// sessions holds factory sessions, and rcfg what the daemon needs to run one.
 	sessions *sessionStore
 	rcfg     ReviewConfig
 }

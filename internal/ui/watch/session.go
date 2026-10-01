@@ -15,7 +15,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
-// sessionInfo is one pre-PR session with the project it belongs to.
+// sessionInfo is one factory session with the project it belongs to.
 type sessionInfo struct {
 	s          watchd.Session
 	label      string
@@ -25,9 +25,8 @@ type sessionInfo struct {
 // sessionPane is the dashboard's view of the daemon's sessions.
 //
 // The sessions belong to the daemon, not to this dashboard. Quitting the
-// dashboard detaches from them and they carry on; the only things that change a
-// session are the explicit keys here: resume (safe: it only continues) and the
-// confirmed cancel.
+// dashboard detaches from them and they carry on; the only thing that changes a
+// session is the explicit, confirmed cancel here.
 type sessionPane struct {
 	sel    int // index into Model.sessions
 	round  int // round under the cursor
@@ -39,19 +38,10 @@ type sessionPane struct {
 	note string
 }
 
-// sessionActionMsg reports the outcome of a resume or cancel request.
+// sessionActionMsg reports the outcome of a cancel request.
 type sessionActionMsg struct {
 	note string
 	err  error
-}
-
-func resumeSessionCmd(id string) tea.Cmd {
-	return func() tea.Msg {
-		if err := watchd.ResumeSession(id); err != nil {
-			return sessionActionMsg{err: err}
-		}
-		return sessionActionMsg{note: "resumed: reviewing your files as they are now"}
-	}
 }
 
 func cancelSessionCmd(id string) tea.Cmd {
@@ -130,8 +120,6 @@ func (m Model) updateSessionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if msg.Mod == tea.ModCtrl {
 			return m, tea.Quit
 		}
-		m.sessionView = &p
-		return m.resumeSelected(&p, sel)
 	case tea.KeyEscape, 'r':
 		m.sessionView = nil
 		return m, nil
@@ -172,15 +160,6 @@ func lastRound(sessions []sessionInfo, i int) int {
 	return max(len(sessions[i].s.Rounds)-1, 0)
 }
 
-// resumeSelected continues a paused session. It does nothing for any other.
-func (m Model) resumeSelected(p *sessionPane, sel *sessionInfo) (tea.Model, tea.Cmd) {
-	if sel == nil || sel.s.State != watchd.SessionPaused {
-		return m, nil
-	}
-	p.note = "resuming…"
-	return m, resumeSessionCmd(sel.s.ID)
-}
-
 // requestSessionCancel implements the two-press cancel. The first press asks,
 // the second on the same session sends the request. A deliberate second key is
 // the only way the dashboard stops a session.
@@ -212,30 +191,30 @@ func (m Model) openReviewOutput() (tea.Model, tea.Cmd) {
 		p.note = "no output yet for " + rv.Name
 		return m, nil
 	}
-	return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", sel.s.Rounds[p.round].Number, rv.Name), rv.State == watchd.PromptRunning)
+	kind := "review"
+	if rv.Kind == watchd.CheckValidate {
+		kind = string(watchd.CheckValidate)
+	}
+	return m.openOutput(rv.CommandID, fmt.Sprintf("round %d %s: %s", sel.s.Rounds[p.round].Number, kind, rv.Name), rv.State == watchd.PromptRunning)
 }
 
-// openFixOutput opens the log of the round's fixing agent, found among the
-// project's buffered commands by name.
+// openFixOutput opens the log of the implementer's turn in the round under the
+// cursor, or of its first turn when that round has none.
 func (m Model) openFixOutput() (tea.Model, tea.Cmd) {
 	sel := m.selectedSession()
 	p := m.sessionView
-	if sel == nil || p.round >= len(sel.s.Rounds) || sel.projectIdx >= len(m.commands) {
+	if sel == nil {
 		return m, nil
 	}
-	name := fmt.Sprintf("round %d fix", sel.s.Rounds[p.round].Number)
-	var found *watchd.CommandState
-	for i := range m.commands[sel.projectIdx] {
-		c := &m.commands[sel.projectIdx][i]
-		if c.Name == name && (found == nil || c.SubmittedAt.After(found.SubmittedAt)) {
-			found = c
-		}
+	fix, name := sel.s.Implement, "implement"
+	if p.round < len(sel.s.Rounds) && sel.s.Rounds[p.round].Fix != nil {
+		fix, name = sel.s.Rounds[p.round].Fix, fmt.Sprintf("round %d fix", sel.s.Rounds[p.round].Number)
 	}
-	if found == nil {
-		p.note = "no fix output for this round"
+	if fix == nil || fix.CommandID == "" {
+		p.note = "no implementer output yet"
 		return m, nil
 	}
-	return m.openOutput(found.CommandID, name, found.Running)
+	return m.openOutput(fix.CommandID, name, fix.State == watchd.FixRunning)
 }
 
 // openOutput opens the output pane for a buffered command.
@@ -245,7 +224,7 @@ func (m Model) openOutput(commandID, name string, running bool) (tea.Model, tea.
 	return m, tea.Batch(fetchOutput(commandID, 0), outputTick(m.outputSeq))
 }
 
-// withSessionAction folds a resume or cancel result into the view's note.
+// withSessionAction folds a cancel result into the view's note.
 func (m Model) withSessionAction(msg sessionActionMsg) Model {
 	if m.sessionView == nil {
 		return m
@@ -262,6 +241,7 @@ func (m Model) withSessionAction(msg sessionActionMsg) Model {
 
 // stageLabels name the stages of the flow for display.
 var stageLabels = map[watchd.StageID]string{
+	watchd.StageImplement:  "Implement",
 	watchd.StageReviewLoop: "Review loop",
 	watchd.StageRebase:     "Rebase onto main",
 	watchd.StageCI:         "CI run",
@@ -274,8 +254,6 @@ var stageLabels = map[watchd.StageID]string{
 func (m Model) sessionTag(st watchStyles) string {
 	for _, s := range m.sessions {
 		switch s.s.State {
-		case watchd.SessionPaused:
-			return st.warning(ui.IconWarn+" session paused") + "  "
 		case watchd.SessionRunning:
 			return st.running(spinFrames[m.spinIdx%len(spinFrames)]+" session running") + "  "
 		case watchd.SessionDone, watchd.SessionFailed, watchd.SessionCancelled:
@@ -289,8 +267,6 @@ func (m Model) sessionStateIcon(st watchStyles, s watchd.SessionState) string {
 	switch s {
 	case watchd.SessionRunning:
 		return st.running(spinFrames[m.spinIdx%len(spinFrames)])
-	case watchd.SessionPaused:
-		return st.warning(ui.IconWarn)
 	case watchd.SessionDone:
 		return st.success(ui.IconOK)
 	case watchd.SessionFailed:
@@ -309,8 +285,6 @@ func (m Model) stageIcon(st watchStyles, s watchd.StageState) string {
 		return st.success(ui.IconOK)
 	case watchd.StageFailed:
 		return st.err(ui.IconFail)
-	case watchd.StagePaused:
-		return st.warning(ui.IconWarn)
 	case watchd.StageNotBuilt, watchd.StagePending, watchd.StageSkipped:
 		return st.vdim("·")
 	}
@@ -323,8 +297,6 @@ func stageText(st watchStyles, s watchd.Stage) string {
 		return st.vdim("not built yet")
 	case watchd.StageFailed:
 		return st.err(truncate(strings.Join(strings.Fields(s.Note), " "), 90))
-	case watchd.StagePaused:
-		return st.warning("paused")
 	case watchd.StageRunning:
 		return st.muted("running")
 	case watchd.StageDone:
@@ -347,8 +319,11 @@ func sessionElapsed(s watchd.Session) time.Duration {
 
 func sessionTitle(info sessionInfo) string {
 	parts := []string{info.label}
+	if task := strings.TrimSpace(info.s.Task); task != "" {
+		parts = append(parts, truncate(strings.SplitN(task, "\n", 2)[0], 60))
+	}
 	if info.s.Branch != "" {
-		parts = append(parts, info.s.Branch)
+		parts = append(parts, "from "+info.s.Branch)
 	}
 	if info.s.HeadSHA != "" {
 		parts = append(parts, info.s.HeadSHA[:min(7, len(info.s.HeadSHA))])
@@ -360,8 +335,12 @@ func sessionTitle(info sessionInfo) string {
 func reviewRows(round watchd.Round) []reviewprogress.Row {
 	rows := make([]reviewprogress.Row, 0, len(round.Reviews))
 	for _, p := range round.Reviews {
+		name := p.Name
+		if p.Kind == watchd.CheckValidate {
+			name = "$ " + name
+		}
 		rows = append(rows, reviewprogress.Row{
-			Name:      p.Name,
+			Name:      name,
 			SidecarID: p.SidecarID,
 			State:     p.State.Progress(),
 			Duration:  time.Duration(p.DurationMS) * time.Millisecond,
@@ -374,17 +353,15 @@ func reviewRows(round watchd.Round) []reviewprogress.Row {
 func roundStateText(st watchStyles, r watchd.Round) string {
 	switch r.State {
 	case watchd.RoundReviewing:
-		return st.running("reviewing")
+		return st.running("checking")
 	case watchd.RoundFixing:
 		return st.running("fixing")
 	case watchd.RoundApplying:
-		return st.running("applying fixes to your files")
+		return st.running("applying fixes")
 	case watchd.RoundDone:
 		return st.muted("done")
 	case watchd.RoundFailed:
 		return st.err("failed")
-	case watchd.RoundSuperseded:
-		return st.warning("abandoned: your files changed")
 	}
 	return string(r.State)
 }
@@ -410,35 +387,58 @@ func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, review
 	}
 
 	if f := r.Fix; f != nil {
-		lines = append(lines, "        "+m.fixLine(st, f))
-		const showFiles = 5
-		for i, file := range f.Files {
-			if i == showFiles {
-				lines = append(lines, "          "+st.vdim(fmt.Sprintf("… and %d more", len(f.Files)-showFiles)))
-				break
-			}
-			lines = append(lines, "          "+st.muted(file.Path)+"  "+st.success(fmt.Sprintf("+%d", file.Insertions))+" "+st.err(fmt.Sprintf("−%d", file.Deletions)))
-		}
-		if f.Error != "" {
-			lines = append(lines, "          "+st.err(truncate(strings.Join(strings.Fields(f.Error), " "), 100)))
-		}
+		lines = append(lines, m.renderTurn(st, f, "fixing the findings worth changing", "fixes applied")...)
 	}
-	if r.Note != "" && r.State != watchd.RoundSuperseded {
+	if r.Note != "" {
 		lines = append(lines, "        "+st.vdim(r.Note))
 	}
 	return lines
 }
 
-func (m Model) fixLine(st watchStyles, f *watchd.RoundFix) string {
+// renderTurn draws an implementer turn: how it is going and what it changed.
+func (m Model) renderTurn(st watchStyles, f *watchd.RoundFix, doing, done string) []string {
+	lines := []string{"        " + m.fixLine(st, f, doing, done)}
+	if f.State == watchd.FixRunning && f.Activity != "" {
+		lines = append(lines, "          "+st.vdim(truncate(f.Activity, 100)))
+	}
+	const showFiles = 5
+	for i, file := range f.Files {
+		if i == showFiles {
+			lines = append(lines, "          "+st.vdim(fmt.Sprintf("… and %d more", len(f.Files)-showFiles)))
+			break
+		}
+		lines = append(lines, "          "+st.muted(file.Path)+"  "+st.success(fmt.Sprintf("+%d", file.Insertions))+" "+st.err(fmt.Sprintf("−%d", file.Deletions)))
+	}
+	if f.Error != "" {
+		lines = append(lines, "          "+st.err(truncate(strings.Join(strings.Fields(f.Error), " "), 100)))
+	}
+	return lines
+}
+
+func (m Model) fixLine(st watchStyles, f *watchd.RoundFix, doing, done string) string {
 	switch f.State {
 	case watchd.FixRunning:
-		return st.running(spinFrames[m.spinIdx%len(spinFrames)]) + " " + st.muted("fixing the findings worth changing")
+		return st.running(spinFrames[m.spinIdx%len(spinFrames)]) + " " + st.muted(doing)
 	case watchd.FixApplied:
-		return st.success(ui.IconOK) + " " + st.muted(fmt.Sprintf("fixes applied to your files: %d file%s, +%d −%d", len(f.Files), plural(len(f.Files)), f.Insertions, f.Deletions))
+		return st.success(ui.IconOK) + " " + st.muted(fmt.Sprintf("%s: %d file%s, +%d −%d", done, len(f.Files), plural(len(f.Files)), f.Insertions, f.Deletions))
 	case watchd.FixEmpty:
-		return st.muted("the agent made no changes")
+		return st.muted("the implementer made no changes")
 	case watchd.FixFailed:
-		return st.err(ui.IconFail + " fix not applied")
+		return st.err(ui.IconFail + " not applied")
+	}
+	return ""
+}
+
+// workNote says where a session's work is: on its branch, once committed, or in
+// its worktree while it runs.
+func workNote(s watchd.Session) string {
+	switch {
+	case s.WorkCommit != "" && s.WorkBranch != "":
+		return fmt.Sprintf("work committed on %s (%s)", s.WorkBranch, s.WorkCommit[:min(7, len(s.WorkCommit))])
+	case s.WorkDir != "":
+		return "working on " + s.WorkBranch + " in " + s.WorkDir
+	case s.State.Finished() && s.WorkBranch != "":
+		return "nothing committed; your uncommitted changes are on " + s.WorkBranch
 	}
 	return ""
 }
@@ -450,24 +450,15 @@ func plural(n int) string {
 	return "s"
 }
 
-// renderSessionLines draws the selected session: header, restore point, pause
-// banner, and the timeline of stages with the review loop's rounds inside.
+// renderSessionLines draws the selected session: header, where its work is,
+// and the timeline of stages with the implementer's first turn and the review
+// loop's rounds inside.
 func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRound, reviewSel int) (lines []string, selStart, selEnd int) {
 	s := info.s
 	lines = append(lines, fmt.Sprintf(" ▶ %s  %s  %s  %s",
 		m.sessionStateIcon(st, s.State), st.emphasis(sessionTitle(info)), st.muted(string(s.State)), st.dim(ui.FormatDuration(sessionElapsed(s)))))
-	if rp := s.Restore; rp != nil {
-		note := fmt.Sprintf("restore point saved · %d file%s changed · undo with: chunk session restore %s", len(rp.Paths), plural(len(rp.Paths)), s.ID[:min(8, len(s.ID))])
-		if rp.Restored {
-			note = "restored: everything the session changed has been put back"
-		}
+	if note := workNote(s); note != "" {
 		lines = append(lines, "   "+st.vdim(note))
-	}
-	if s.State == watchd.SessionPaused {
-		lines = append(lines, "",
-			"   "+st.warning(ui.IconWarn+" Paused: "+truncate(s.PauseReason, 110)),
-			"   "+st.muted("Your files changed while the session was working, so it stopped instead of overwriting them."),
-			"   "+st.vdim("c")+" "+st.dim("continue with your files as they are now")+"  "+st.vdim("·")+"  "+st.vdim("x x")+" "+st.dim("cancel the session"))
 	}
 	if s.Error != "" {
 		lines = append(lines, "   "+st.err(truncate(strings.Join(strings.Fields(s.Error), " "), 110)))
@@ -476,6 +467,9 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
 
 	for _, stage := range s.Stages {
 		lines = append(lines, fmt.Sprintf("   %s %-18s %s", m.stageIcon(st, stage.State), stageLabels[stage.ID], stageText(st, stage)))
+		if stage.ID == watchd.StageImplement && s.Implement != nil {
+			lines = append(lines, m.renderTurn(st, s.Implement, "implementing", "implemented")...)
+		}
 		if stage.ID != watchd.StageReviewLoop {
 			continue
 		}
@@ -494,7 +488,7 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
 // round stays on screen.
 func (m Model) renderSessionBody(st watchStyles, height int) []string {
 	if len(m.sessions) == 0 {
-		lines := []string{"", "  " + st.muted("No sessions yet."), "  " + st.dim("Start one with: chunk session start")}
+		lines := []string{"", "  " + st.muted("No sessions yet."), "  " + st.dim(`Start one with: chunk factory "<task>"`)}
 		if m.reviewAuthErr != "" {
 			lines = append(lines, "", "  "+st.warning(ui.IconWarn+" "+m.reviewAuthErr))
 		}
@@ -521,7 +515,7 @@ func (m Model) renderSessionFooter(st watchStyles) string {
 		{"Tab", "round"},
 		{"←/→", "review"},
 		{"Enter", "output"},
-		{"f", "fix output"},
+		{"f", "implementer output"},
 		{"x", "cancel"},
 		{"Esc", "back"},
 		{"q", "detach"},

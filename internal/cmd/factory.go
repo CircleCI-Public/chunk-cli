@@ -4,350 +4,440 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
+// sessionPollInterval is how often an attached `chunk factory` asks the daemon
+// how the session is going.
+const sessionPollInterval = time.Second
+
+// maxSessionPollFailures is how many polls in a row may fail before an attached
+// command gives up. The session is on the daemon and keeps going either way.
+const maxSessionPollFailures = 5
+
 func newFactoryCmd() *cobra.Command {
-	var attempts, reviewers int
-	var keepSidecars, noValidate bool
-	var orgID, image, model, reviewsDir string
-	var implementTimeout, reviewTimeout time.Duration
-
+	var (
+		projectDir, reviewsDir, model, image string
+		parallelism, rounds                  int
+		implementTimeout, reviewTimeout      time.Duration
+		noValidate, detach, jsonOut          bool
+	)
 	cmd := &cobra.Command{
-		Use:   "factory <prompt>",
-		Short: "Implement a prompt on a sidecar, then review and validate it until it passes",
-		Long: `Send a prompt to an implementer agent running on a sidecar, then loop:
-review its work with each prompt in the reviews directory, each on its own
-sidecar, and run the project's validation commands, feeding failures back to
-the implementer until every check passes or attempts run out.
+		Use:   "factory <task>",
+		Short: "Implement a task on a sidecar, then review, validate and fix it until it passes",
+		Long: `Start a session on the local watch daemon that sends the task to an
+implementer agent running on a sidecar, then loops: review its work with each
+prompt in the reviews directory, each on a sidecar of its own, and run the
+project's validation commands on the implementer's sidecar, and send what they
+find back to the implementer, until every check passes or rounds run out.
 
-The implementer's work is written as a patch under .chunk/factory, to be
-applied with git apply to the tree the run started from.`,
-		// Hidden until the workshop build settles.
+The session works in a git worktree of its own, starting from your files as
+they are, uncommitted changes included, and commits its work to a branch named
+chunk/factory/<id>. Your checkout is never touched, so you can keep working.
+
+The session belongs to the daemon: Ctrl-C detaches and it keeps running. Follow
+it with 'chunk factory attach <id>' or 'chunk watch', and stop it with
+'chunk factory cancel <id>'.`,
+		// Hidden until the rest of the flow (rebase, CI, approval, PR) exists.
 		Hidden:       true,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
 				return nil
 			}
-			return newUserError("Pass the prompt as one argument.").
+			return newUserError("Pass the task as one argument.").
 				withCode("command.invalid_args").
 				withSuggestion(`Quote it: chunk factory "add a --verbose flag"`).
 				withExitCode(ExitBadArgs).
 				withoutDetail()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			streams := iostream.FromCmd(cmd)
-			status := newStatusFunc(streams)
-			if attempts < 1 {
-				return newUserError("--attempts must be at least 1.").
+			if rounds < 0 || rounds > watchd.MaxRounds {
+				return newUserError(fmt.Sprintf("--rounds must be between 1 and %d.", watchd.MaxRounds)).
 					withCode("command.invalid_args").
 					withExitCode(ExitBadArgs).
 					withoutDetail()
 			}
-
-			workDir, err := os.Getwd()
+			if err := requireLocalDaemon(); err != nil {
+				return err
+			}
+			root, err := sessionProjectRoot(cmd.Context(), projectDir)
 			if err != nil {
 				return err
 			}
-			cfg, err := config.LoadProjectConfig(workDir)
+			if err := watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd}); err != nil {
+				return &userError{msg: "Could not start the watch daemon.", err: err}
+			}
+			id, err := watchd.StartSession(watchd.SessionRequest{
+				ProjectRoot:             root,
+				Task:                    args[0],
+				PromptsDir:              reviewsDir,
+				Parallelism:             parallelism,
+				Model:                   model,
+				Image:                   image,
+				TimeoutSeconds:          int(reviewTimeout / time.Second),
+				ImplementTimeoutSeconds: int(implementTimeout / time.Second),
+				MaxRounds:               rounds,
+				NoValidate:              noValidate,
+			})
 			if err != nil {
-				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err}
+				return sessionError(err)
 			}
-			prompts, commands, err := factoryChecks(workDir, reviewsDir, cfg, noValidate)
-			if err != nil {
-				return err
+			streams := iostream.FromCmd(cmd)
+			if detach {
+				return printSessionID(streams, id, jsonOut)
 			}
-
-			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
-			cred, credSource, credErr := reviewCredential(rc)
-			if credErr != nil {
-				return credErr
-			}
-			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
-			if err != nil {
-				return err
-			}
-			if orgID == "" {
-				orgID = cfg.OrgID
-			}
-			resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, rc.CircleCITokenSource, streams))
-			if err != nil {
-				return err
-			}
-			if image == "" {
-				image = resolveImage("", cfg)
-			}
-			_, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, workDir)
-			if err != nil {
-				return &userError{msg: "Could not tell which repository this is from its origin remote.", err: err}
-			}
-
-			if len(prompts) == 0 {
-				reviewers = 0
-			} else if reviewers <= 0 || reviewers > len(prompts) {
-				reviewers = len(prompts)
-			}
-			status(iostream.LevelStep, fmt.Sprintf("Creating an implementer sidecar and %d reviewer sidecar(s)...", reviewers))
-			impl, revs, err := factory.Provision(ctx, client, resolvedOrgID, image, sidecar.DefaultWorkspace(repo), reviewers, status)
-			if err != nil {
-				if authErr := notAuthorized("create sidecars", rc.CircleCITokenSource, err); authErr != nil {
-					return authErr
-				}
-				return &userError{msg: "Could not create the factory's sidecars.", err: err}
-			}
-			all := append([]*sidecar.PoolEntry{impl}, revs...)
-			defer func() {
-				if keepSidecars {
-					ids := make([]string, len(all))
-					for i, e := range all {
-						ids[i] = e.ID
-					}
-					status(iostream.LevelInfo, "kept sidecars: "+strings.Join(ids, " "))
-					return
-				}
-				if err := factory.Teardown(client, all); err != nil {
-					status(iostream.LevelWarn, fmt.Sprintf("could not delete sidecars: %v", err))
-					status(iostream.LevelInfo, "Delete them with 'chunk sidecar delete', or wait for them to expire.")
-				}
-			}()
-
-			relay, err := factory.NewRelay(client, status)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = relay.Close() }()
-
-			steps := &factory.Sidecars{
-				Client: client,
-				Exec:   review.ClientExec,
-				Implementer: &factory.Implementer{
-					Exec: review.ClientExec, Entry: impl, Credential: cred, BaseURL: rc.AnthropicBaseURL,
-					Model: model, Timeout: implementTimeout,
-					OnActivity: func(a factory.Activity) { printActivity(status, a) },
-				},
-				Reviewers: revs,
-				Relay:     relay,
-				Prompts:   prompts,
-				Review: review.Options{
-					Credential: cred, BaseURL: rc.AnthropicBaseURL, Model: model, Timeout: reviewTimeout,
-					StructuredFindings: true,
-					ProgressFn:         func(e review.ProgressEvent) { printReviewProgress(status, e) },
-				},
-				Commands: commands,
-				Status:   status,
-				OnCheck:  func(c factory.Check) { printCheck(status, c) },
-			}
-
-			status(iostream.LevelStep, "Syncing your working tree to the implementer...")
-			if err := steps.Prepare(ctx, workDir); err != nil {
-				return &userError{msg: "Could not set up the implementer's workspace.", err: err}
-			}
-
-			loop := factory.Loop{Attempts: attempts, OnEvent: func(e factory.Event) { printEvent(status, attempts, e) }}
-			outcome, loopErr := loop.Run(ctx, steps, args[0])
-			// Whatever the implementer got to is kept, even when the loop
-			// failed partway, so the work is not lost with the sidecars.
-			saveFactoryPatch(ctx, steps, workDir, status, streams)
-			if errors.Is(loopErr, review.ErrCredentialRejected) {
-				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, loopErr)
-			}
-			if loopErr != nil {
-				return factoryLoopError(loopErr)
-			}
-			return reportOutcome(status, outcome)
+			streams.ErrPrintf("Session %s started on the watch daemon. Ctrl-C detaches; it keeps running.\n", id)
+			return followSession(cmd.Context(), streams, id, jsonOut)
 		},
 	}
-
-	cmd.Flags().IntVar(&attempts, "attempts", 3, "most rounds of review and validation")
-	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
-	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
-	cmd.Flags().BoolVar(&noValidate, "no-validate", false, "skip the project's validation commands")
-	cmd.Flags().BoolVar(&keepSidecars, "keep-sidecars", false, "leave the sidecars running when the run ends")
-	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
-	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
+	cmd.Flags().StringVar(&projectDir, "project", "", "Project to work on (default: the git repository containing the current directory)")
+	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("Directory of review prompts, relative to the project (default: %s)", review.DefaultDir))
+	cmd.Flags().IntVar(&rounds, "rounds", 0, fmt.Sprintf("Rounds of review, validation and fixes to run at most (default %d, maximum %d)", watchd.DefaultRounds, watchd.MaxRounds))
+	cmd.Flags().IntVar(&parallelism, "parallelism", 5, "Maximum sidecars reviewing at once (0: one per prompt)")
+	cmd.Flags().BoolVar(&noValidate, "no-validate", false, "Skip the project's validation commands")
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
-	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
-	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
+	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
+	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", review.DefaultImplementTimeout, "Max time for each implementer turn")
+	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "Max time for each review")
+	cmd.Flags().BoolVar(&detach, "detach", false, "Print the session ID and return without following it")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.AddCommand(
+		newFactoryAttachCmd(),
+		newFactoryCancelCmd(),
+		newFactoryListCmd(),
+	)
 	return cmd
 }
 
-// factoryChecks loads what the implementer's work is checked with: the review
-// prompts and, unless noValidate, the validation commands. Having neither is an
-// error, since the loop would then pass whatever the implementer wrote.
-func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noValidate bool) ([]review.Prompt, []config.Command, error) {
-	explicit := reviewsDir != ""
-	if !explicit {
-		reviewsDir = filepath.Join(workDir, review.DefaultDir)
-	}
-	prompts, err := review.LoadPrompts(reviewsDir)
-	switch {
-	case err == nil:
-	case !explicit && (errors.Is(err, review.ErrNoPrompts) || errors.Is(err, os.ErrNotExist)):
-		// The default directory is optional: validation commands alone may do.
-	case errors.Is(err, review.ErrNoPrompts):
-		return nil, nil, &userError{msg: fmt.Sprintf("No review prompts found in %s.", reviewsDir), suggestion: "Add one .md or .txt file per review.", err: err}
-	default:
-		return nil, nil, &userError{msg: fmt.Sprintf("Could not read review prompts from %s.", reviewsDir), err: err}
-	}
-	var commands []config.Command
-	if !noValidate {
-		commands = factory.ValidationCommands(cfg.Commands)
-	}
-	if len(prompts) == 0 && len(commands) == 0 {
-		return nil, nil, &userError{
-			msg:        "Nothing to check the implementer's work with.",
-			suggestion: fmt.Sprintf("Add review prompts to %s, or validation commands with 'chunk init'.", review.DefaultDir),
-			hideDetail: true,
-		}
-	}
-	return prompts, commands, nil
-}
-
-// saveFactoryPatch writes the implementer's work, if any, to a patch under
-// .chunk/factory. It runs on the way out, after a failure too, so it gets its
-// own deadline rather than the run's possibly canceled context.
-func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir string, status iostream.StatusFunc, streams iostream.Streams) {
-	path := filepath.Join(workDir, ".chunk", "factory", time.Now().UTC().Format("20060102-150405")+".patch")
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	defer cancel()
-	change, err := steps.WritePatch(ctx, path)
-	if err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("could not save the implementer's work: %v", err))
-		return
-	}
-	if change.Empty() {
-		return
-	}
-	status(iostream.LevelDone, fmt.Sprintf("Saved %s to %s", change.Stat, path))
-	streams.ErrPrintf("  Apply it with: git apply %s\n", path)
-}
-
-func factoryLoopError(err error) error {
-	if errors.Is(err, review.ErrClaudeMissing) {
-		return &userError{
-			msg:        "Claude Code is not installed on the factory's sidecars.",
-			suggestion: "Install it in the sidecar image (see 'chunk sidecar env build') and pass --image, or set validation.sidecarImage.",
-			hideDetail: true,
-			err:        err,
-		}
-	}
-	return &userError{msg: "The factory stopped early.", err: err}
-}
-
-func printEvent(status iostream.StatusFunc, attempts int, e factory.Event) {
-	switch e.Kind {
-	case factory.EventImplementing:
-		if e.Round == 1 {
-			status(iostream.LevelStep, "Implementing...")
-			return
-		}
-		status(iostream.LevelStep, fmt.Sprintf("Round %d/%d: fixing failed checks...", e.Round, attempts))
-	case factory.EventImplemented:
-		status(iostream.LevelDone, fmt.Sprintf("implementer finished in %s ($%.2f)", e.Turn.Duration.Round(time.Second), e.Turn.CostUSD))
-		if e.Turn.Summary != "" {
-			status(iostream.LevelInfo, oneLineSummary(e.Turn.Summary))
-		}
-	case factory.EventCollected:
-		if e.Change.Empty() {
-			status(iostream.LevelWarn, "no changes")
-			return
-		}
-		status(iostream.LevelInfo, e.Change.Stat)
-	case factory.EventChecking:
-		status(iostream.LevelStep, fmt.Sprintf("Round %d/%d: reviewing and validating...", e.Round, attempts))
-	case factory.EventChecked:
-		passed := 0
-		for _, c := range e.Checks {
-			if c.Status == factory.StatusPassed {
-				passed++
+func newFactoryAttachCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:          "attach <id>",
+		Short:        "Follow a session until it ends",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireLocalDaemon(); err != nil {
+				return err
 			}
-		}
-		status(iostream.LevelInfo, fmt.Sprintf("%d of %d checks passed", passed, len(e.Checks)))
+			return followSession(cmd.Context(), iostream.FromCmd(cmd), args[0], jsonOut)
+		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
 }
 
-func printActivity(status iostream.StatusFunc, a factory.Activity) {
-	if a.Tool == "" {
-		return
-	}
-	status(iostream.LevelInfo, fmt.Sprintf("  %s %s", a.Tool, oneLineSummary(a.Detail)))
-}
-
-func printReviewProgress(status iostream.StatusFunc, e review.ProgressEvent) {
-	switch e.State {
-	case review.StateQueued:
-	case review.StateRunning:
-		status(iostream.LevelInfo, fmt.Sprintf("  review %s started on %s", e.Prompt, e.SidecarID))
-	case review.StateFailed:
-		status(iostream.LevelWarn, fmt.Sprintf("  review %s could not run: %s", e.Prompt, e.Error))
-	case review.StateDone:
-		status(iostream.LevelInfo, fmt.Sprintf("  review %s finished in %s", e.Prompt, e.Duration.Round(time.Second)))
-	}
-}
-
-func printCheck(status iostream.StatusFunc, c factory.Check) {
-	switch c.Status {
-	case factory.StatusPassed:
-		status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, c.Duration.Round(time.Second)))
-	case factory.StatusFailed:
-		status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, c.Duration.Round(time.Second)))
-	case factory.StatusErrored:
-		status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
-	}
-}
-
-// reportOutcome prints how the last round's checks came out and returns an
-// error unless they all passed.
-func reportOutcome(status iostream.StatusFunc, o factory.Outcome) error {
-	for _, c := range o.Checks {
-		if c.Kind != factory.KindReview {
-			continue
-		}
-		switch c.Status {
-		case factory.StatusPassed:
-			status(iostream.LevelDone, fmt.Sprintf("review %s: no findings", c.Name))
-		case factory.StatusFailed:
-			status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", c.Name, len(c.Findings)))
-			for _, f := range c.Findings {
-				status(iostream.LevelInfo, fmt.Sprintf("  [%s] %s:%d %s", f.Severity, f.File, f.Line, oneLineSummary(f.Body)))
+func newFactoryCancelCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "cancel <id>",
+		Short:        "Stop a session; the work so far is still committed to its branch",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireLocalDaemon(); err != nil {
+				return err
 			}
-		case factory.StatusErrored:
-			status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", c.Name, c.Error))
-		}
+			if err := watchd.CancelSession(args[0]); err != nil {
+				return sessionError(err)
+			}
+			iostream.FromCmd(cmd).ErrPrintf("Cancel requested for session %s.\n", args[0])
+			return nil
+		},
 	}
-	switch o.Result {
-	case factory.ResultPassed:
-		status(iostream.LevelDone, fmt.Sprintf("All checks passed after %d round(s).", o.Rounds))
+}
+
+func newFactoryListCmd() *cobra.Command {
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:          "list",
+		Short:        "List the daemon's sessions",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := requireLocalDaemon(); err != nil {
+				return err
+			}
+			sessions, err := watchd.ListSessions("")
+			if err != nil {
+				return sessionError(err)
+			}
+			streams := iostream.FromCmd(cmd)
+			if jsonOut {
+				return iostream.PrintJSON(streams.Out, watchd.SessionList{Sessions: sessions})
+			}
+			if len(sessions) == 0 {
+				streams.ErrPrintln(`No sessions. Start one with: chunk factory "<task>"`)
+				return nil
+			}
+			for _, s := range sessions {
+				state := string(s.State)
+				if s.Outcome != "" {
+					state += " (" + string(s.Outcome) + ")"
+				}
+				streams.Printf("%s  %-22s  %-34s  %s\n", s.ID, state, s.WorkBranch, firstLine(s.Task, 60))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+// requireLocalDaemon refuses to run when the environment points at a remote
+// daemon. A session works on a checkout on this machine, so it belongs to the
+// local daemon; a remote daemon would be working on a different checkout.
+func requireLocalDaemon() error {
+	if watchd.CurrentConnection().Remote == "" {
 		return nil
-	case factory.ResultNoChange:
-		return &userError{msg: "The implementer made no changes.", hideDetail: true, errMsg: "no changes"}
-	case factory.ResultStuck:
-		return &userError{msg: fmt.Sprintf("The implementer stopped changing the code after round %d, with checks still failing.", o.Rounds), hideDetail: true, errMsg: "stuck"}
-	case factory.ResultExhausted:
 	}
-	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", o.Rounds), hideDetail: true, errMsg: "attempts exhausted"}
+	return newUserError("Factory sessions run on the local watch daemon, but CHUNK_WATCHD_REMOTE_ADDR is set.").
+		withCode("command.invalid_args").
+		withSuggestion("Unset CHUNK_WATCHD_REMOTE_ADDR to use this command.").
+		withExitCode(ExitBadArgs).
+		withoutDetail()
 }
 
-// oneLineSummary collapses text to one line short enough for a status line.
-func oneLineSummary(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 160 {
-		return s[:157] + "..."
+// sessionProjectRoot names the project to work on: the git repository
+// containing projectDir (or the working directory), registered so the daemon
+// can find it.
+func sessionProjectRoot(ctx context.Context, projectDir string) (string, error) {
+	dir := projectDir
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("determine working directory: %w", err)
+		}
+		dir = wd
 	}
-	return s
+	top := gitutil.TopLevelCtx(ctx, dir)
+	if top == "" {
+		return "", newUserError(fmt.Sprintf("%s is not inside a git repository.", dir)).
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	// The sidecar pool works out which repository to clone from the origin
+	// remote. Without one it fails deep inside pool setup with a git exit code,
+	// so say so here, before anything is registered or started.
+	if _, err := gitremote.URL(ctx, top, "origin"); err != nil {
+		return "", newUserError("This project has no git remote named origin.").
+			withSuggestion("Add one with: git remote add origin <url>").
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			wrap(err)
+	}
+	root := config.CanonicalProjectRoot(top)
+	dataDir, err := config.ProjectDataDir(root)
+	if err != nil {
+		return "", fmt.Errorf("data dir for %s: %w", root, err)
+	}
+	// Registration is how the daemon learns a project exists.
+	if err := sidecar.RegisterProjectRoot(dataDir, root); err != nil {
+		return "", fmt.Errorf("register project %s: %w", root, err)
+	}
+	return root, nil
+}
+
+func printSessionID(streams iostream.Streams, id string, jsonOut bool) error {
+	if jsonOut {
+		return iostream.PrintJSON(streams.Out, map[string]string{"id": id})
+	}
+	streams.Println(id)
+	streams.ErrPrintf("Follow it with: chunk factory attach %s   Stop it with: chunk factory cancel %s\n", id, id)
+	return nil
+}
+
+// sessionError renders a failure talking to the session API.
+func sessionError(err error) error {
+	var refused *watchd.SessionRefused
+	switch {
+	case errors.Is(err, watchd.ErrDaemonUnavailable):
+		return newUserError("The watch daemon is not reachable.").
+			withSuggestion("Start it with 'chunk watch'.").
+			wrap(err)
+	case errors.As(err, &refused):
+		e := newUserError(refused.Message).withoutDetail()
+		if refused.Status == http.StatusNotFound {
+			e = e.withSuggestion("The daemon tracks projects it has seen; check the path or the session ID.")
+		}
+		return e
+	}
+	return fmt.Errorf("talk to the watch daemon: %w", err)
+}
+
+// followSession polls a session, reporting what changes, until it ends. Ctrl-C
+// detaches; the session carries on.
+func followSession(ctx context.Context, streams iostream.Streams, id string, jsonOut bool) error {
+	rep := newSessionReporter(newStatusFunc(streams))
+	failures := 0
+	ticker := time.NewTicker(sessionPollInterval)
+	defer ticker.Stop()
+	for {
+		detail, err := watchd.FetchSession(id)
+		var refused *watchd.SessionRefused
+		switch {
+		case errors.As(err, &refused):
+			return sessionError(err)
+		case err != nil:
+			if failures++; failures >= maxSessionPollFailures {
+				return newUserError("Lost contact with the watch daemon.").
+					withSuggestion(fmt.Sprintf("The session may still be running. Reattach with: chunk factory attach %s", id)).
+					wrap(err)
+			}
+		default:
+			failures = 0
+			rep.report(detail.Session)
+			if detail.State.Finished() {
+				return finishSession(streams, detail, jsonOut)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			streams.ErrPrintf("Detached. Session %s keeps running on the daemon (chunk factory attach %s, or cancel %s).\n", id, id, id)
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+// finishSession prints where a session ended up and maps anything short of
+// passing to an error.
+func finishSession(streams iostream.Streams, detail watchd.SessionDetail, jsonOut bool) error {
+	if jsonOut {
+		if err := iostream.PrintJSON(streams.Out, detail); err != nil {
+			return err
+		}
+		return sessionOutcomeError(detail.Session)
+	}
+	if fix := detail.Implement; fix != nil {
+		streams.Printf("implement: %s\n", turnSummary(fix))
+	}
+	for _, r := range detail.Rounds {
+		line := fmt.Sprintf("round %d: %d finding(s), %d worth changing", r.Number, r.Findings, r.Worth)
+		if r.Fix != nil {
+			line += "; fix: " + turnSummary(r.Fix)
+		}
+		if r.Note != "" {
+			line += " — " + r.Note
+		}
+		streams.Println(line)
+	}
+	s := detail.Session
+	switch {
+	case s.WorkCommit != "" && s.WorkBranch != "":
+		streams.Printf("The work is committed on %s. Take it with: git merge %s\n", s.WorkBranch, s.WorkBranch)
+	case s.WorkDir != "":
+		streams.Printf("The work could not be committed; it is still in %s.\n", s.WorkDir)
+	}
+	return sessionOutcomeError(s)
+}
+
+// sessionOutcomeError is the error a finished session returns, or nil when its
+// checks all passed.
+func sessionOutcomeError(s watchd.Session) error {
+	switch s.State {
+	case watchd.SessionCancelled:
+		return newUserError("The session was cancelled.").withoutDetail()
+	case watchd.SessionFailed:
+		return &userError{msg: "The session failed: " + s.Error, hideDetail: true, errMsg: "session failed"}
+	case watchd.SessionRunning, watchd.SessionDone:
+	}
+	switch s.Outcome {
+	case watchd.OutcomePassed:
+		return nil
+	case watchd.OutcomeNoChange:
+		return &userError{msg: "The implementer made no changes.", hideDetail: true, errMsg: "no changes"}
+	case watchd.OutcomeStuck:
+		return &userError{msg: "The implementer stopped changing the code with checks still failing.", hideDetail: true, errMsg: "stuck"}
+	case watchd.OutcomeExhausted:
+	}
+	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", len(s.Rounds)), hideDetail: true, errMsg: "rounds exhausted"}
+}
+
+func turnSummary(f *watchd.RoundFix) string {
+	switch f.State {
+	case watchd.FixApplied:
+		return fmt.Sprintf("changed %d file(s) (+%d -%d)", len(f.Files), f.Insertions, f.Deletions)
+	case watchd.FixEmpty:
+		return "no changes"
+	case watchd.FixFailed:
+		return "failed: " + f.Error
+	case watchd.FixRunning:
+		if f.Activity != "" {
+			return firstLine(f.Activity, 120)
+		}
+	}
+	return string(f.State)
+}
+
+// firstLine collapses the first line of s to at most n bytes.
+func firstLine(s string, n int) string {
+	line := strings.TrimSpace(strings.SplitN(strings.TrimSpace(s), "\n", 2)[0])
+	if len(line) > n {
+		return line[:n-3] + "..."
+	}
+	return line
+}
+
+// sessionReporter turns successive snapshots of a session into status lines,
+// one each time something it follows changes. 'chunk watch' shows the rest.
+type sessionReporter struct {
+	status iostream.StatusFunc
+	seen   map[string]string
+}
+
+func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
+	return &sessionReporter{status: status, seen: map[string]string{}}
+}
+
+func (r *sessionReporter) report(s watchd.Session) {
+	if s.Implement != nil {
+		r.say("implement", iostream.LevelInfo, "implementer: "+turnSummary(s.Implement))
+	}
+	for _, round := range s.Rounds {
+		prefix := fmt.Sprintf("round %d", round.Number)
+		r.say(prefix, iostream.LevelStep, fmt.Sprintf("%s: %s", prefix, round.State))
+		for _, c := range round.Reviews {
+			if c.State == watchd.PromptDone || c.State == watchd.PromptFailed {
+				r.say(prefix+"/"+string(c.Kind)+"/"+c.Name, iostream.LevelInfo, checkLine(c))
+			}
+		}
+		if round.Fix != nil {
+			r.say(prefix+"/fix", iostream.LevelInfo, "implementer: "+turnSummary(round.Fix))
+		}
+	}
+}
+
+// say reports line under key unless it is what key last said.
+func (r *sessionReporter) say(key string, level iostream.Level, line string) {
+	if r.seen[key] == line {
+		return
+	}
+	r.seen[key] = line
+	r.status(level, line)
+}
+
+func checkLine(c watchd.ReviewPrompt) string {
+	name := "  review " + c.Name
+	if c.Kind == watchd.CheckValidate {
+		name = "  $ " + c.Name
+	}
+	if c.State == watchd.PromptFailed {
+		return name + " could not run: " + c.Error
+	}
+	return fmt.Sprintf("%s: %d finding(s)", name, c.Findings)
 }

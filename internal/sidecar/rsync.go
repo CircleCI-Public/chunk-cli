@@ -3,7 +3,6 @@ package sidecar
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -132,104 +131,6 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 
 	status(iostream.LevelDone, "Synced")
 	return nil
-}
-
-// RsyncPull copies a sidecar's workspace at repoPath into localDir, the reverse
-// of RsyncSyncEphemeral: localDir ends up mirroring the workspace, .git
-// included, minus files git ignores there. The workspace must be a git repo. Anything in localDir that
-// is not in the workspace is deleted, so localDir must be a directory chunk owns.
-func RsyncPull(ctx context.Context,
-	client *circleci.Client, sidecarID, repoPath, localDir string,
-	status iostream.StatusFunc) error {
-
-	if repoPath == "" || localDir == "" {
-		return fmt.Errorf("rsync pull: workspace and local directory are required")
-	}
-	sess, err := OpenSession(ctx, client, sidecarID, false)
-	if err != nil {
-		return fmt.Errorf("rsync pull: open session: %w", err)
-	}
-	if err := ensureRemoteRsync(ctx, sess); err != nil {
-		return err
-	}
-
-	status(iostream.LevelInfo, fmt.Sprintf("Pulling workspace %s...", repoPath))
-	excludes, err := ignoredPaths(ctx, sess, repoPath)
-	if err != nil {
-		return err
-	}
-	excludeFile, err := writeExcludeFile(excludes)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(excludeFile) }()
-
-	flags := []string{"--archive", "--delete", "--exclude-from=" + excludeFile}
-	src := strings.TrimRight(repoPath, "/") + "/"
-	dst := strings.TrimRight(localDir, "/") + "/"
-	if err := runRsync(ctx, sess, flags, remotePath(src), dst); err != nil {
-		return err
-	}
-	status(iostream.LevelDone, "Pulled")
-	return nil
-}
-
-// ignoredPaths asks git on the sidecar which paths in repoPath it ignores,
-// each anchored to the workspace root so it excludes that path alone. Git
-// answers rather than rsync reading .gitignore itself: rsync's merge only
-// approximates git's rules, missing .git/info/exclude and the global excludes
-// file, and the sidecar's rsync would have to parse it as the sender.
-func ignoredPaths(ctx context.Context, sess *Session, repoPath string) ([]string, error) {
-	cmd := "git -C " + ShellEscape(repoPath) + " ls-files -z --others --ignored --exclude-standard --directory"
-	result, err := ExecOverSSH(ctx, sess, cmd, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("rsync pull: list ignored files: %w", err)
-	}
-	if result.ExitCode != 0 {
-		return nil, fmt.Errorf("rsync pull: list ignored files: exit %d: %s", result.ExitCode, result.Stderr)
-	}
-	var paths []string
-	// -z keeps git from quoting paths with unusual characters, which would
-	// then match nothing.
-	for _, p := range strings.Split(result.Stdout, "\x00") {
-		if p != "" {
-			paths = append(paths, "/"+escapeRsyncPattern(p))
-		}
-	}
-	return paths, nil
-}
-
-// escapeRsyncPattern makes rsync match path literally. rsync reads an exclude
-// containing *, ? or [ as a wildcard pattern, where a backslash escapes the
-// next character; without one of those, a backslash is literal.
-func escapeRsyncPattern(path string) string {
-	if !strings.ContainsAny(path, "*?[") {
-		return path
-	}
-	var b strings.Builder
-	for _, r := range path {
-		if strings.ContainsRune(`*?[\`, r) {
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// writeExcludeFile writes patterns, one per line, to a temporary file for
-// rsync's --exclude-from and returns its path.
-func writeExcludeFile(patterns []string) (string, error) {
-	f, err := os.CreateTemp("", "chunk-rsync-exclude-")
-	if err != nil {
-		return "", fmt.Errorf("rsync pull: create exclude file: %w", err)
-	}
-	_, werr := f.WriteString(strings.Join(patterns, "\n") + "\n")
-	cerr := f.Close()
-	if err := errors.Join(werr, cerr); err != nil {
-		_ = os.Remove(f.Name())
-		return "", fmt.Errorf("rsync pull: write exclude file: %w", err)
-	}
-	return f.Name(), nil
 }
 
 // mirrorFlags make an rsync destination an exact copy of the source, minus

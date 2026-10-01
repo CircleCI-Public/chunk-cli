@@ -176,7 +176,7 @@ type ProjectSnapshot struct {
 	// ActiveClaims lists validate claims from all sessions currently active for
 	// this project. Nil when no sessions are validating.
 	ActiveClaims []ClaimState `json:"active_claims,omitempty"`
-	// Sessions lists this project's pre-PR sessions, newest first. State only:
+	// Sessions lists this project's factory sessions, newest first. State only:
 	// the text of a review is fetched on demand through GET /session/{id}.
 	Sessions []Session `json:"sessions,omitempty"`
 }

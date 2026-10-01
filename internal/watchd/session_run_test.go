@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -68,6 +69,17 @@ func (f *fakeBackend) config() ReviewConfig {
 					case <-ctx.Done():
 						return nil, ctx.Err()
 					}
+				},
+				// Members are all free when a turn or round asks for its own.
+				AcquireID: func(_ context.Context, id string) (*sidecar.PoolEntry, error) {
+					for range len(free) {
+						e := <-free
+						if e.ID == id {
+							return e, nil
+						}
+						free <- e
+					}
+					return nil, sidecar.ErrNotPoolMember
 				},
 				Release:   func(e *sidecar.PoolEntry) { free <- e },
 				WaitReady: func(context.Context) error { return nil },
@@ -136,18 +148,13 @@ func newSessionDaemon(t *testing.T, backend *fakeBackend) (*daemon, string) {
 	return d, root
 }
 
-// waitForSession waits until the session has ended or paused.
+// waitForSession waits until the session has ended.
 func waitForSession(t *testing.T, d *daemon, id string) SessionDetail {
 	t.Helper()
 	entry := d.sessions.get(id)
 	assert.Assert(t, entry != nil, "no session %s", id)
-	waitUntil(t, "session to settle", func() bool {
-		st := entry.snapshot().State
-		return st != SessionRunning
-	})
-	if entry.snapshot().State != SessionPaused {
-		<-entry.done
-	}
+	waitUntil(t, "session to settle", func() bool { return entry.snapshot().State.Finished() })
+	<-entry.done
 	return entry.detail()
 }
 
@@ -163,25 +170,19 @@ func waitUntil(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-func TestSessionRecordsTheRoundAndEveryStageOfTheFlow(t *testing.T) {
-	d, root := newSessionDaemon(t, &fakeBackend{})
+func TestSessionRecordsTheTurnsAndRoundsWithTheirLogs(t *testing.T) {
+	r := newLoopRig(t)
+	r.implement = writesHello(t)
 
-	sess, err := d.startSession(SessionRequest{ProjectRoot: root})
+	sess, err := r.d.startSession(SessionRequest{ProjectRoot: r.root, Task: "say hello"})
 	assert.NilError(t, err)
 	assert.Equal(t, sess.Branch, "main")
 	assert.Equal(t, len(sess.HeadSHA), 40)
-	detail := waitForSession(t, d, sess.ID)
+	assert.Equal(t, sess.Task, "say hello")
+	detail := waitForSession(t, r.d, sess.ID)
 
-	assert.Equal(t, detail.State, SessionDone)
-	// The whole flow is on the record from the start; only the loop is built.
-	var stages []string
-	for _, s := range detail.Stages {
-		stages = append(stages, string(s.ID)+"="+string(s.State))
-	}
-	assert.DeepEqual(t, stages, []string{
-		"review_loop=done", "rebase=not_built", "ci=not_built", "approval=not_built", "pr=not_built",
-	})
-
+	assert.Equal(t, detail.State, SessionDone, detail.Error)
+	assert.Assert(t, detail.Implement.CommandID != "" && detail.Implement.SidecarID != "")
 	assert.Equal(t, len(detail.Rounds), 1)
 	round := detail.Rounds[0]
 	assert.Equal(t, round.Number, 1)
@@ -190,67 +191,71 @@ func TestSessionRecordsTheRoundAndEveryStageOfTheFlow(t *testing.T) {
 	for _, p := range round.Reviews {
 		assert.Equal(t, p.State, PromptDone, p.Name)
 		assert.Assert(t, p.SidecarID != "" && p.CommandID != "", "review %s has no sandbox or command", p.Name)
+		assert.Assert(t, p.SidecarID != detail.Implement.SidecarID, "reviews run beside the implementer, not on its sidecar")
 	}
 	assert.Equal(t, len(detail.Details[0].Results), 2)
 
-	// Each review's log is reachable through the output store.
-	cmds := d.out.commandsFor(root)
-	assert.Equal(t, len(cmds), 2)
-	for _, c := range cmds {
-		assert.Assert(t, strings.HasPrefix(c.Name, "round 1 review: "), c.Name)
+	// Each Claude run's log is reachable through the output store.
+	var names []string
+	for _, c := range r.d.out.commandsFor(r.root) {
+		names = append(names, c.Name)
 	}
+	slices.Sort(names)
+	assert.DeepEqual(t, names, []string{"implement", "round 1 review: bugs", "round 1 review: style"})
 }
 
 func TestSessionSnapshotHasStateButNeitherTextNorCredential(t *testing.T) {
-	d, root := newSessionDaemon(t, &fakeBackend{respond: func(string) (string, int) { return reviewOutput(t, "LONG-REVIEW-PROSE"), 0 }})
-	sess, err := d.startSession(SessionRequest{ProjectRoot: root})
-	assert.NilError(t, err)
-	waitForSession(t, d, sess.ID)
-	d.poll()
+	r := newLoopRig(t)
+	r.implement = writesHello(t)
+	r.review = func(string) string { return reviewOutput(t, "LONG-REVIEW-PROSE") }
+	detail := r.start(SessionRequest{})
+	r.d.poll()
 
-	snap := d.snapshot(nil)
+	snap := r.d.snapshot(nil)
 	assert.Equal(t, len(snap.Projects[0].Sessions), 1)
 	raw, err := json.Marshal(snap)
 	assert.NilError(t, err)
 	assert.Assert(t, !strings.Contains(string(raw), "LONG-REVIEW-PROSE"), "review text leaked into the snapshot")
 	assert.Assert(t, !strings.Contains(string(raw), testSecret), "credential leaked into the snapshot")
 
-	detailRaw, err := json.Marshal(d.sessions.get(sess.ID).detail())
+	detailRaw, err := json.Marshal(r.d.sessions.get(detail.ID).detail())
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(detailRaw), "LONG-REVIEW-PROSE"))
 	assert.Assert(t, !strings.Contains(string(detailRaw), testSecret), "credential leaked into the session detail")
 }
 
-func TestSessionCancelStopsReviewsAndMarksThemCancelled(t *testing.T) {
+func TestSessionCancelStopsTheImplementerAndRemovesTheWorktree(t *testing.T) {
 	d, root := newSessionDaemon(t, &fakeBackend{block: true})
-	sess, err := d.startSession(SessionRequest{ProjectRoot: root})
+	sess, err := d.startSession(SessionRequest{ProjectRoot: root, Task: "x"})
 	assert.NilError(t, err)
-	waitUntil(t, "a review to be running", func() bool {
-		rounds := d.sessions.get(sess.ID).snapshot().Rounds
-		return len(rounds) > 0 && len(rounds[0].Reviews) > 0 && rounds[0].Reviews[0].State == PromptRunning
+	waitUntil(t, "the implementer to be running", func() bool {
+		impl := d.sessions.get(sess.ID).snapshot().Implement
+		return impl != nil && impl.State == FixRunning
 	})
 
-	// A second session for the same project is refused while one is active.
-	_, err = d.startSession(SessionRequest{ProjectRoot: root})
-	var ae *apiError
-	assert.Assert(t, errors.As(err, &ae), "got %v", err)
-	assert.Equal(t, ae.status, http.StatusConflict)
+	// Another session on the same project runs beside it.
+	other, err := d.startSession(SessionRequest{ProjectRoot: root, Task: "y"})
+	assert.NilError(t, err)
 
-	found, active := d.sessions.cancelSession(sess.ID)
-	assert.Assert(t, found && active)
+	for _, id := range []string{sess.ID, other.ID} {
+		found, _ := d.sessions.cancelSession(id)
+		assert.Assert(t, found)
+	}
 	detail := waitForSession(t, d, sess.ID)
+	waitForSession(t, d, other.ID)
 
 	assert.Equal(t, detail.State, SessionCancelled)
 	assert.Equal(t, detail.Stages[0].State, StageFailed)
+	assert.Equal(t, detail.Stages[1].State, StageSkipped)
+	assert.Equal(t, detail.Implement.State, FixFailed)
+	assert.Equal(t, detail.Implement.Error, "cancelled")
 	assert.Assert(t, detail.EndedAt != nil)
-	for _, p := range detail.Rounds[0].Reviews {
-		assert.Equal(t, p.State, PromptFailed)
-		assert.Equal(t, p.Error, "cancelled")
-	}
+	assert.Equal(t, detail.WorkDir, "", "the worktree is removed on the way out")
+	assert.Equal(t, strings.Count(git(t, root, "worktree", "list"), "\n"), 0, "only the user's own checkout is left")
 	// Cancelling again, or an unknown session, is harmless.
-	_, active = d.sessions.cancelSession(sess.ID)
+	_, active := d.sessions.cancelSession(sess.ID)
 	assert.Assert(t, !active)
-	found, _ = d.sessions.cancelSession("nope")
+	found, _ := d.sessions.cancelSession("nope")
 	assert.Assert(t, !found)
 }
 
@@ -262,10 +267,12 @@ func TestSessionRefusesRequestsItCannotStart(t *testing.T) {
 		req    SessionRequest
 		status int
 	}{
-		"unknown project":   {SessionRequest{ProjectRoot: t.TempDir()}, http.StatusNotFound},
-		"absolute prompts":  {SessionRequest{ProjectRoot: root, PromptsDir: "/etc"}, http.StatusBadRequest},
-		"escaping prompts":  {SessionRequest{ProjectRoot: root, PromptsDir: "../elsewhere"}, http.StatusBadRequest},
-		"no prompts in dir": {SessionRequest{ProjectRoot: root, PromptsDir: "empty"}, http.StatusBadRequest},
+		"no task":           {SessionRequest{ProjectRoot: root}, http.StatusBadRequest},
+		"unknown project":   {SessionRequest{ProjectRoot: t.TempDir(), Task: "x"}, http.StatusNotFound},
+		"absolute prompts":  {SessionRequest{ProjectRoot: root, Task: "x", PromptsDir: "/etc"}, http.StatusBadRequest},
+		"escaping prompts":  {SessionRequest{ProjectRoot: root, Task: "x", PromptsDir: "../elsewhere"}, http.StatusBadRequest},
+		"no prompts in dir": {SessionRequest{ProjectRoot: root, Task: "x", PromptsDir: "empty"}, http.StatusBadRequest},
+		"too many rounds":   {SessionRequest{ProjectRoot: root, Task: "x", MaxRounds: MaxRounds + 1}, http.StatusBadRequest},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -279,7 +286,7 @@ func TestSessionRefusesRequestsItCannotStart(t *testing.T) {
 	// Without a credential no session starts, and the reason is the daemon's own.
 	d.rcfg.Credential = review.Credential{}
 	d.rcfg.AuthError = "no Claude credential — run: chunk auth set anthropic-oauth"
-	_, err := d.startSession(SessionRequest{ProjectRoot: root})
+	_, err := d.startSession(SessionRequest{ProjectRoot: root, Task: "x"})
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae))
 	assert.Equal(t, ae.status, http.StatusServiceUnavailable)
@@ -302,21 +309,23 @@ func TestSessionAPIRoundTripOverTheSocket(t *testing.T) {
 
 	startTestDaemonWithReview(t, backend.config())
 
-	id, err := StartSession(SessionRequest{ProjectRoot: root})
+	id, err := StartSession(SessionRequest{ProjectRoot: root, Task: "x"})
 	assert.NilError(t, err)
 	var detail SessionDetail
 	waitUntil(t, "session to end", func() bool {
 		detail, err = FetchSession(id)
 		return err == nil && detail.State.Finished()
 	})
-	assert.Equal(t, detail.State, SessionDone)
+	// The fake sandbox cannot run the implementer's bookkeeping, so the session
+	// fails; what matters here is that it went there and back.
+	assert.Equal(t, detail.Task, "x")
 
 	all, err := ListSessions("")
 	assert.NilError(t, err)
 	assert.Equal(t, len(all), 1)
 
 	// A refusal is a readable answer, not "daemon unavailable".
-	_, err = StartSession(SessionRequest{ProjectRoot: t.TempDir()})
+	_, err = StartSession(SessionRequest{ProjectRoot: t.TempDir(), Task: "x"})
 	var refused *SessionRefused
 	assert.Assert(t, errors.As(err, &refused), "got %v", err)
 	assert.Equal(t, refused.Status, http.StatusNotFound)

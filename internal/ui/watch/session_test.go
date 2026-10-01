@@ -23,7 +23,9 @@ import (
 func liveSession(id string, state watchd.SessionState, started time.Time) sessionInfo {
 	return sessionInfo{label: "repo", s: watchd.Session{
 		ID: id, State: state, StartedAt: started, Branch: "feature", HeadSHA: "0123456789abcdef",
+		Task: "add a --verbose flag", WorkBranch: "chunk/factory/" + id, WorkDir: "/tmp/wt-" + id,
 		Stages: []watchd.Stage{
+			{ID: watchd.StageImplement, State: watchd.StageDone},
 			{ID: watchd.StageReviewLoop, State: watchd.StageRunning},
 			{ID: watchd.StageRebase, State: watchd.StageNotBuilt},
 			{ID: watchd.StageCI, State: watchd.StageNotBuilt},
@@ -57,32 +59,34 @@ func TestCollectSessionsPutsLiveOnesFirstThenNewest(t *testing.T) {
 	ended := now
 	done := watchd.Session{ID: "done-new", State: watchd.SessionDone, StartedAt: now, EndedAt: &ended}
 	old := watchd.Session{ID: "done-old", State: watchd.SessionDone, StartedAt: now.Add(-time.Hour), EndedAt: &ended}
-	paused := watchd.Session{ID: "paused", State: watchd.SessionPaused, StartedAt: now.Add(-2 * time.Hour)}
+	running := watchd.Session{ID: "running", State: watchd.SessionRunning, StartedAt: now.Add(-2 * time.Hour)}
 
 	got := collectSessions([]watchd.ProjectSnapshot{
 		{Root: "/a", RepoName: "a", Sessions: []watchd.Session{old, done}},
-		{Root: "/b", Sessions: []watchd.Session{paused}},
+		{Root: "/b", Sessions: []watchd.Session{running}},
 	})
 
-	assert.Equal(t, got[0].s.ID, "paused", "a session waiting on the user comes first")
+	assert.Equal(t, got[0].s.ID, "running", "a live session comes first")
 	assert.Equal(t, got[1].s.ID, "done-new")
 	assert.Equal(t, got[2].s.ID, "done-old")
 	assert.Equal(t, got[0].label, "b", "a project with no repo name falls back to its directory")
 }
 
-// The view must show the whole flow, what the fixes changed, and why it paused.
-func TestSessionViewShowsTheTimelineFixesAndPauseAndFitsTheScreen(t *testing.T) {
-	s := liveSession("sess-1", watchd.SessionPaused, time.Now().Add(-time.Minute))
-	s.s.PauseReason = "files changed while the session was running: mine.txt"
-	s.s.Restore = &watchd.RestorePoint{Ref: "refs/chunk/restore/sess-1", Paths: []string{"app.go"}}
+// The view must show the whole flow, what the turns changed, and where the
+// work is.
+func TestSessionViewShowsTheTimelineTurnsAndWorkAndFitsTheScreen(t *testing.T) {
+	s := liveSession("sess-1", watchd.SessionRunning, time.Now().Add(-time.Minute))
+	s.s.Implement = &watchd.RoundFix{State: watchd.FixApplied, Insertions: 10,
+		Files: []watchd.FileChange{{Path: "main.go", Insertions: 10}}}
 	s.s.Rounds = []watchd.Round{{
 		Number: 1, State: watchd.RoundDone, Findings: 3, Worth: 1,
-		Reviews: []watchd.ReviewPrompt{{Name: "bugs", State: watchd.PromptDone}, {Name: "style", State: watchd.PromptDone}},
+		Reviews: []watchd.ReviewPrompt{{Name: "bugs", State: watchd.PromptDone}, {Name: "test", Kind: watchd.CheckValidate, State: watchd.PromptDone}},
 		Fix: &watchd.RoundFix{State: watchd.FixApplied, Insertions: 4, Deletions: 1,
 			Files: []watchd.FileChange{{Path: "app.go", Insertions: 4, Deletions: 1}}},
 	}, {
 		Number: 2, State: watchd.RoundReviewing,
 		Reviews: []watchd.ReviewPrompt{{Name: "bugs", State: watchd.PromptRunning, SidecarID: "sc-1"}},
+		Fix:     &watchd.RoundFix{State: watchd.FixRunning, Activity: "Edit app.go"},
 	}}
 	for _, height := range []int{14, 24, 50} {
 		m := sessModel(s)
@@ -95,13 +99,13 @@ func TestSessionViewShowsTheTimelineFixesAndPauseAndFitsTheScreen(t *testing.T) 
 			continue
 		}
 		assert.Equal(t, strings.Count(out, "not built yet"), 4, "rebase, CI, approval and PR are shown as not built:\n%s", out)
-		for _, want := range []string{"mine.txt", "app.go", "Round 1", "Round 2", "bugs", "chunk session restore sess-1"} {
+		for _, want := range []string{"add a --verbose flag", "main.go", "app.go", "Round 1", "Round 2", "bugs", "$ test", "Edit app.go", "chunk/factory/sess-1"} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}
 	}
 }
 
-func TestSessionViewKeysQuitDetachesCancelNeedsConfirmationResumeOnlyWhenPaused(t *testing.T) {
+func TestSessionViewKeysQuitDetachesAndCancelNeedsConfirmation(t *testing.T) {
 	m := sessModel(
 		liveSession("run-1", watchd.SessionRunning, time.Now()),
 		liveSession("run-2", watchd.SessionRunning, time.Now().Add(-time.Minute)),
@@ -120,21 +124,12 @@ func TestSessionViewKeysQuitDetachesCancelNeedsConfirmationResumeOnlyWhenPaused(
 	_, cmd = press(m, 'x')
 	assert.Assert(t, cmd != nil, "the second x on the same session sends the cancel")
 
-	// Resume does nothing for a session that is not paused.
-	_, cmd = press(m, 'c')
-	assert.Assert(t, cmd == nil)
-
 	// q leaves the dashboard, and Esc only goes back.
 	_, cmd = press(m, 'q')
 	_, isQuit := cmd().(tea.QuitMsg)
 	assert.Assert(t, isQuit)
 	m, cmd = press(m, tea.KeyEscape)
 	assert.Assert(t, m.sessionView == nil && cmd == nil)
-
-	paused := sessModel(liveSession("p", watchd.SessionPaused, time.Now()))
-	paused, _ = press(paused, 'r')
-	_, cmd = press(paused, 'c')
-	assert.Assert(t, cmd != nil, "a paused session can be continued")
 }
 
 // Against a real daemon: the dashboard sees a session started elsewhere, quitting
@@ -201,7 +196,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	})
 	waitForCond(t, "daemon", watchd.IsDaemonRunning)
 
-	id, err := watchd.StartSession(watchd.SessionRequest{ProjectRoot: root})
+	id, err := watchd.StartSession(watchd.SessionRequest{ProjectRoot: root, Task: "add a flag"})
 	assert.NilError(t, err)
 	state := func() watchd.SessionState {
 		d, fetchErr := watchd.FetchSession(id)

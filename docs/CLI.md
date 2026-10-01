@@ -153,22 +153,23 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
-├── session                         # (hidden) Pre-PR review session on the local watch daemon
-│   ├── start                       # Start a session for the current project
-│   │   --project <path>            # Project to review (default: the enclosing git repository)
-│   │   --prompts <dir>             # Review prompts, relative to the project (default: .chunk/reviews)
-│   │   --rounds <n>                # Rounds at most (default and maximum: 3)
-│   │   --parallelism <n>           # Sandboxes reviewing at once (default: 5)
-│   │   --model <name>              # Claude model
-│   │   --timeout <duration>        # Max time for each Claude run (default: 15m)
-│   │   --detach                    # Print the session ID and return
+├── factory <task>                  # (hidden) Implement a task on a sidecar, then review, validate and fix it until it passes
+│   --project <path>                # Project to work on (default: the enclosing git repository)
+│   --reviews <dir>                 # Review prompts, relative to the project (default: .chunk/reviews)
+│   --rounds <n>                    # Rounds of checks and fixes at most (default: 3, maximum: 10)
+│   --parallelism <n>               # Sidecars reviewing at once (default: 5)
+│   --no-validate                   # Skip the project's validation commands
+│   --model <name>                  # Claude model
+│   --image <id>                    # Snapshot image ID (default: validation.sidecarImage)
+│   --implement-timeout <duration>  # Max time for each implementer turn (default: 30m)
+│   --review-timeout <duration>     # Max time for each review (default: 15m)
+│   --detach                        # Print the session ID and return
+│   --json                          # Output as JSON
+│   ├── attach <id>                 # Follow a session until it ends
 │   │   --json                      # Output as JSON
-│   ├── attach <id>                 # Follow a session until it ends or pauses
-│   ├── cancel <id>                 # Stop a session
-│   ├── resume <id>                 # Continue a paused session with your files as they are now
-│   ├── restore <id>                # Undo everything the session changed in your working tree
-│   │   --force                     # Also overwrite files you edited after the session changed them
+│   ├── cancel <id>                 # Stop a session; the work so far is still committed
 │   └── list                        # List the daemon's sessions
+│       --json                      # Output as JSON
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
 │   --focus                         # Watch only the current directory instead of all known projects
@@ -304,34 +305,47 @@ chunk
   repos than the daemon's, so they are not used: the default is every project the
   daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
   host**, sent as typed. `--focus` with no path is an error in this mode.
-- **`session` runs on the local daemon, in the background.** `chunk session start`
-  registers the current git repository with the daemon, starts the daemon if it
-  is not running, and starts a session; it follows the session until it ends
-  (Ctrl-C detaches, `--detach` returns at once). The session belongs to the
-  daemon: only `cancel` stops it. It uses the *daemon's* Claude and CircleCI
+- **`factory` runs on the local daemon, in the background.** `chunk factory
+  "<task>"` registers the current git repository with the daemon, starts the
+  daemon if it is not running, and starts a session; it follows the session until
+  it ends (Ctrl-C detaches, `--detach` returns at once). The session belongs to
+  the daemon: only `cancel` stops it. It uses the *daemon's* Claude and CircleCI
   credentials, resolved when it started, and it is refused when
-  `CHUNK_WATCHD_REMOTE_ADDR` is set, since a session works on this machine's
-  files. The project needs a git remote named `origin` (the sandboxes clone from
-  it); `start` fails up front without one. A project has one active
-  session at a time. A session runs up to three
-  rounds of {review, sandbox agent fixes what is high or medium severity, the
-  fixes are applied **directly to your working tree**} and stops early when a
-  round finds nothing worth changing. Before the first fix it saves a restore
-  point, so `chunk session restore <id>` puts every file the session changed back
-  (it leaves your other files alone and refuses to discard edits you made after
-  the session left a file, unless `--force`). If your files change while a round
-  runs, the session **pauses** instead of overwriting them; `resume` takes your
-  files as they are and goes again, `cancel` ends it. It never touches the
-  index, commits, or pushes. Sessions are kept in memory:
-  a daemon restart loses the record. In-process `chunk review` is unchanged.
-- **`watch` shows the daemon's sessions live.** The header notes a session running
-  or paused, and `r` opens the session view: a timeline of the whole flow — the
-  review loop with each round (its reviews, drawn by the same renderer as
-  `chunk review`, the findings and how many are worth changing, and what the
-  round's fixes changed in your files: file list and line counts), then Rebase,
-  CI, Approval and Open pull request, shown as "not built yet". A paused session
-  shows why (which files changed under it) and `c` continues it. `Enter` opens a
-  review's live log, `f` the round's fix log, `Tab` picks the round, `↑/↓` the
+  `CHUNK_WATCHD_REMOTE_ADDR` is set, since a session works on a checkout on this
+  machine. The project needs a git remote named `origin` (the sidecars clone
+  from it); the command fails up front without one.
+- **A session never touches your checkout.** It works in a git worktree of its
+  own, starting from your files as they are when it starts: uncommitted changes
+  are committed on its branch first as a baseline, so they are the starting point
+  and not part of the work. The implementer, Claude Code on a sidecar, writes the
+  task there; then up to `--rounds` rounds of {every review prompt on a sidecar of
+  its own and the project's validation commands on the implementer's sidecar, in
+  parallel; the implementer fixes what is worth changing} follow. A finding is
+  worth changing when its severity is high or medium; a validation command that
+  exits non-zero is high, with its output as the finding. The loop stops when a
+  round's checks all ran and found nothing worth changing (`passed`), when the
+  implementer changes nothing (`no_change` on the first turn, `stuck` later), or
+  when rounds run out (`exhausted`). A check that could not run is not a pass:
+  the next round checks the same work again. Every turn runs on the same sidecar
+  and resumes the first turn's Claude session. However the session ends,
+  cancelled included, the work is committed to `chunk/factory/<id>` and the
+  worktree removed; take it with `git merge chunk/factory/<id>`. A session that
+  changed nothing leaves no branch (unless the branch holds your uncommitted
+  baseline). Any number of sessions can run on a project at once. The command
+  exits 0 only when the checks passed. Sessions are kept in memory: a daemon
+  restart loses the record, but not the branch.
+- **`factory` needs something to check with.** Prompts in `.chunk/reviews` (or
+  `--reviews`, which must exist), validation commands from `chunk init`, or both.
+  Validation commands with the `autofix` role, marked `local`, or using `{{`
+  templates are not run.
+- **`watch` shows the daemon's sessions live.** The header notes a session
+  running, and `r` opens the session view: a timeline of the whole flow — the
+  implementer's first turn (what it is doing as it does it, and the files it
+  changed), the review loop with each round (its reviews and validation commands,
+  drawn by the same renderer as `chunk review`, the findings and how many are
+  worth changing, and what the round's fixes changed), then Rebase, CI, Approval
+  and Open pull request, shown as "not built yet". `Enter` opens a check's live
+  log, `f` the implementer's log for the round, `Tab` picks the round, `↑/↓` the
   session. **`q` only detaches**: the session belongs to the daemon and carries
   on. The one key that stops it is `x`, and it needs a second `x` on the same
   session to confirm.

@@ -42,8 +42,15 @@ func TestSessionCountsDistinctFindingsAndThoseWorthChanging(t *testing.T) {
 		review.Finding{File: "a.go", Line: 3, Severity: "low", Body: "naming"},
 		review.Finding{File: "a.go", Line: 4, Severity: "info", Body: "note"},
 	)
-	// The agent that is asked to fix them changes nothing, which ends the loop.
-	r := newLoopRig(t, func(string) string { return out }, func(string) {})
+	// The implementer writes once, and changes nothing when asked to fix them,
+	// which ends the loop.
+	r := newLoopRig(t)
+	r.implement = func(sandbox, prompt string) {
+		if !strings.Contains(prompt, "Findings:") {
+			put(t, sandbox, "a.go", "package a\n")
+		}
+	}
+	r.review = func(string) string { return out }
 	detail := r.start(SessionRequest{})
 
 	// Both prompts report the same four findings; the round counts them once.
@@ -61,10 +68,10 @@ func TestSessionCountsDistinctFindingsAndThoseWorthChanging(t *testing.T) {
 // A review whose answer has no structured output is a failed review, not a
 // prose-only one: nothing it said can be acted on.
 func TestSessionFailsAReviewWithoutStructuredOutput(t *testing.T) {
-	d, root := newSessionDaemon(t, &fakeBackend{respond: func(string) (string, int) { return "Just prose, nothing structured.", 0 }})
-	sess, err := d.startSession(SessionRequest{ProjectRoot: root})
-	assert.NilError(t, err)
-	detail := waitForSession(t, d, sess.ID)
+	r := newLoopRig(t)
+	r.implement = writesHello(t)
+	r.review = func(string) string { return "Just prose, nothing structured." }
+	detail := r.start(SessionRequest{})
 
 	assert.Equal(t, detail.Rounds[0].Findings, 0)
 	res := detail.Details[0].Results[0]

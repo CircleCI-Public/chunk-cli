@@ -335,7 +335,7 @@ func TestRunPassProgressFn(t *testing.T) {
 
 func TestClaudeScript(t *testing.T) {
 	t.Parallel()
-	script := claudeScriptWithTools("/home/user/my repo", "hi", "claude-sonnet-5", allowedTools, false)
+	script := Agent{Prompt: "hi", Model: "claude-sonnet-5"}.script("/home/user/my repo")
 	assert.Assert(t, strings.Contains(script, "cd '/home/user/my repo'"), script)
 	assert.Assert(t, strings.Contains(script, "'claude' '-p' '--output-format' 'text'"), script)
 	assert.Assert(t, strings.Contains(script, "'--model' 'claude-sonnet-5'"), script)
@@ -346,7 +346,7 @@ func TestClaudeScript(t *testing.T) {
 
 func TestClaudeScriptStructuredAsksForTheFindingsSchema(t *testing.T) {
 	t.Parallel()
-	script := claudeScriptWithTools("/home/user/repo", "hi", "", allowedTools, true)
+	script := Agent{Prompt: "hi", Schema: FindingsSchema}.script("/home/user/repo")
 	assert.Assert(t, strings.Contains(script, "'claude' '-p' '--output-format' 'json'"), script)
 	assert.Assert(t, strings.Contains(script, "'--json-schema' "+sidecar.ShellEscape(FindingsSchema)), script)
 	assert.Equal(t, promptOf(t, script), "hi", "the prompt is sent as written")

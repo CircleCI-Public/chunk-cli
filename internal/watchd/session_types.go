@@ -6,36 +6,55 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
-// MaxRounds is how many review-and-fix rounds one session runs at most.
-const MaxRounds = 3
+// DefaultRounds is how many rounds of checks and fixes a session runs unless
+// asked for a different number.
+const DefaultRounds = 3
+
+// MaxRounds is how many rounds a session may be asked to run.
+const MaxRounds = 10
 
 // SessionState is where a whole session stands.
 type SessionState string
 
 // Session states.
 const (
-	SessionRunning SessionState = "running"
-	// SessionPaused means the session stopped on its own and is waiting for a
-	// person: the files changed underneath it. PauseReason says what.
-	SessionPaused    SessionState = "paused"
+	SessionRunning   SessionState = "running"
 	SessionDone      SessionState = "done"
 	SessionFailed    SessionState = "failed"
 	SessionCancelled SessionState = "cancelled"
 )
 
-// Finished reports whether the session has ended for good. A paused session has
-// not: it is waiting.
+// Finished reports whether the session has ended.
 func (s SessionState) Finished() bool {
-	return s != SessionRunning && s != SessionPaused
+	return s != SessionRunning
 }
 
-// StageID names one stage of the whole pre-PR flow.
+// Outcome is how a session's loop ended, once it has.
+type Outcome string
+
+// Outcomes.
+const (
+	// OutcomePassed means the last round's checks all ran and found nothing
+	// worth changing.
+	OutcomePassed Outcome = "passed"
+	// OutcomeExhausted means rounds ran out with something still to change.
+	OutcomeExhausted Outcome = "exhausted"
+	// OutcomeStuck means the implementer made no changes for the findings it was
+	// given, so another round would check the same code again.
+	OutcomeStuck Outcome = "stuck"
+	// OutcomeNoChange means the implementer's first turn changed nothing.
+	OutcomeNoChange Outcome = "no_change"
+)
+
+// StageID names one stage of the whole flow.
 type StageID string
 
-// The stages, in order. Only the review loop is built; the rest are on the
-// record from the start so the dashboard can show where the flow is going, and
-// so building one is filling in its Stage and not changing the record's shape.
+// The stages, in order. Only the implementer's turn and the loop are built; the
+// rest are on the record from the start so the dashboard can show where the
+// flow is going, and so building one is filling in its Stage and not changing
+// the record's shape.
 const (
+	StageImplement  StageID = "implement"
 	StageReviewLoop StageID = "review_loop"
 	StageRebase     StageID = "rebase"
 	StageCI         StageID = "ci"
@@ -53,7 +72,6 @@ const (
 	StageNotBuilt StageState = "not_built"
 	StagePending  StageState = "pending"
 	StageRunning  StageState = "running"
-	StagePaused   StageState = "paused"
 	StageDone     StageState = "done"
 	StageFailed   StageState = "failed"
 	StageSkipped  StageState = "skipped"
@@ -67,7 +85,7 @@ type Stage struct {
 	Note string `json:"note,omitempty"`
 }
 
-// RoundState is where one review-and-fix round stands.
+// RoundState is where one round of checks and fixes stands.
 type RoundState string
 
 // Round states.
@@ -77,12 +95,9 @@ const (
 	RoundApplying  RoundState = "applying"
 	RoundDone      RoundState = "done"
 	RoundFailed    RoundState = "failed"
-	// RoundSuperseded marks a round abandoned because the files changed under it;
-	// the round is run again against the new files.
-	RoundSuperseded RoundState = "superseded"
 )
 
-// FixState is where the fix half of a round stands.
+// FixState is where an implementer turn stands.
 type FixState string
 
 // Fix states.
@@ -94,47 +109,66 @@ const (
 	FixFailed FixState = "failed"
 )
 
-// FileChange is one file a round's fixes changed in the working tree.
+// FileChange is one file an implementer turn changed.
 type FileChange struct {
 	Path       string `json:"path"`
 	Insertions int    `json:"insertions"`
 	Deletions  int    `json:"deletions"`
 }
 
-// RoundFix is what a round's fixes did to the user's files.
+// RoundFix is one implementer turn and what it did to the work: the first
+// turn, which implements the task, or a round's, which fixes what the checks
+// found.
 type RoundFix struct {
-	State      FixState     `json:"state"`
+	State     FixState `json:"state"`
+	SidecarID string   `json:"sidecar_id,omitempty"`
+	// CommandID names the buffered output of the turn's Claude run.
+	CommandID string `json:"command_id,omitempty"`
+	// Activity is the latest thing the implementer did, such as "Edit main.go",
+	// while the turn runs; Summary is what it said it did when it finished.
+	Activity   string       `json:"activity,omitempty"`
+	Summary    string       `json:"summary,omitempty"`
 	Files      []FileChange `json:"files,omitempty"`
 	Insertions int          `json:"insertions,omitempty"`
 	Deletions  int          `json:"deletions,omitempty"`
-	// FindingIDs are the findings the agent was asked to fix.
+	// FindingIDs are the findings the implementer was asked to fix.
 	FindingIDs []string `json:"finding_ids,omitempty"`
 	Error      string   `json:"error,omitempty"`
 }
 
-// ReviewPrompt is one review's progress inside a round. It carries state only:
-// what the review said is fetched on demand through SessionDetail, the way
-// command output is fetched through /output, so a snapshot stays small however
-// much Claude wrote.
+// CheckKind tells a round's checks apart: reviews, and the project's
+// validation commands.
+type CheckKind string
+
+// CheckValidate marks a validation command. A command that exits non-zero is
+// done, with one finding: its output. One that could not run at all failed.
+const CheckValidate CheckKind = "validate"
+
+// ReviewPrompt is one check's progress inside a round: a review, or a
+// validation command. It carries state only: what the check said is fetched on
+// demand through SessionDetail, the way command output is fetched through
+// /output, so a snapshot stays small however much was written.
 type ReviewPrompt struct {
-	Name      string         `json:"name"`
+	Name string `json:"name"`
+	// Kind is CheckValidate for a validation command; empty means a review.
+	Kind      CheckKind      `json:"kind,omitempty"`
 	State     PromptRunState `json:"state"`
 	SidecarID string         `json:"sidecar_id,omitempty"`
-	// CommandID names the buffered output of this review's Claude run, readable
+	// CommandID names the buffered output of this check's run, readable
 	// through /output while it runs and after.
 	CommandID  string `json:"command_id,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Error      string `json:"error,omitempty"`
-	// Findings counts the structured findings parsed from this review's output.
+	// Findings counts the findings the check gave.
 	Findings int `json:"findings,omitempty"`
 }
 
-// PromptRunState is where one review of a round stands. The values match
+// PromptRunState is where one check of a round stands. The values match
 // review.PromptState one for one, spelled out so they read in JSON and survive
 // the enum being reordered.
 type PromptRunState string
 
-// Review states.
+// Check states.
 const (
 	PromptQueued  PromptRunState = "queued"
 	PromptRunning PromptRunState = "running"
@@ -159,13 +193,13 @@ func (s PromptRunState) Progress() review.PromptState {
 	return review.StateQueued
 }
 
-// Round is one pass of reviewing the work and fixing what the reviews found.
+// Round is one pass of checking the work and fixing what the checks found.
 type Round struct {
 	Number  int            `json:"number"`
 	State   RoundState     `json:"state"`
 	Reviews []ReviewPrompt `json:"reviews"`
-	// Findings counts every finding the round's reviews reported; Worth counts
-	// the ones worth changing (severity high or medium).
+	// Findings counts every finding the round's checks reported; Worth counts
+	// the ones worth changing (severity high or medium, or a failed command).
 	Findings int       `json:"findings"`
 	Worth    int       `json:"worth"`
 	Fix      *RoundFix `json:"fix,omitempty"`
@@ -175,48 +209,49 @@ type Round struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// RestorePoint is the saved state a session can be undone to.
-type RestorePoint struct {
-	// Ref is the git ref that holds the snapshot, so it survives garbage
-	// collection and a daemon restart.
-	Ref     string    `json:"ref"`
-	HeadSHA string    `json:"head_sha"`
-	SavedAt time.Time `json:"saved_at"`
-	// Paths are the files the session's fixes changed: what a restore puts back.
-	Paths    []string `json:"paths,omitempty"`
-	Restored bool     `json:"restored,omitempty"`
-}
-
-// Session is the record of one pre-PR session: the review loop, and the stages
-// that will follow it. It holds state only; text is in SessionDetail.
+// Session is the record of one session: an implementer on a sidecar writes
+// the task in a worktree of its own, rounds of review, validation and fixes
+// follow, and the work is committed to a branch. It holds state only; text is
+// in SessionDetail.
 type Session struct {
 	ID          string `json:"id"`
 	ProjectRoot string `json:"project_root"`
-	Branch      string `json:"branch,omitempty"`
-	HeadSHA     string `json:"head_sha,omitempty"`
+	// Branch and HeadSHA are where the user's checkout was when the session
+	// started: what the work is based on.
+	Branch  string `json:"branch,omitempty"`
+	HeadSHA string `json:"head_sha,omitempty"`
+
+	// Task is what the session was asked to implement.
+	Task string `json:"task"`
+	// WorkDir is the worktree the session works in, while it exists.
+	WorkDir string `json:"work_dir,omitempty"`
+	// WorkBranch is the branch the session's work is committed to. It is
+	// cleared if the session ends with nothing to keep.
+	WorkBranch string `json:"work_branch,omitempty"`
+	// WorkCommit is the commit holding the work, once made.
+	WorkCommit string `json:"work_commit,omitempty"`
 
 	State SessionState `json:"state"`
-	// PauseReason says why a paused session is waiting, and PausedPaths which
-	// files changed underneath it.
-	PauseReason string   `json:"pause_reason,omitempty"`
-	PausedPaths []string `json:"paused_paths,omitempty"`
-	Error       string   `json:"error,omitempty"`
+	Error string       `json:"error,omitempty"`
+	// Outcome is how the loop ended, once it has.
+	Outcome Outcome `json:"outcome,omitempty"`
 
 	// Stages is always the full flow, in order.
 	Stages []Stage `json:"stages"`
-	Rounds []Round `json:"rounds"`
-	// Restore is nil until the first fix is about to change the user's files.
-	Restore *RestorePoint `json:"restore,omitempty"`
+	// Implement is the implementer's first turn.
+	Implement *RoundFix `json:"implement,omitempty"`
+	Rounds    []Round   `json:"rounds"`
 
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// newStages returns the full flow for a session that is starting: the review
-// loop running and every later stage not built.
+// newStages returns the full flow for a session that is starting: the
+// implementer's turn running and every later stage waiting or not built.
 func newStages() []Stage {
 	return []Stage{
-		{ID: StageReviewLoop, State: StageRunning},
+		{ID: StageImplement, State: StageRunning},
+		{ID: StageReviewLoop, State: StagePending},
 		{ID: StageRebase, State: StageNotBuilt},
 		{ID: StageCI, State: StageNotBuilt},
 		{ID: StageApproval, State: StageNotBuilt},
@@ -224,15 +259,18 @@ func newStages() []Stage {
 	}
 }
 
-// ReviewResult is one review's full output.
+// ReviewResult is one check's full output.
 type ReviewResult struct {
-	Prompt    string `json:"prompt"`
-	SidecarID string `json:"sidecar_id,omitempty"`
-	// Output is Claude's prose, capped at maxReviewOutput.
+	Prompt string `json:"prompt"`
+	// Kind is CheckValidate for a validation command; empty means a review.
+	Kind      CheckKind `json:"kind,omitempty"`
+	SidecarID string    `json:"sidecar_id,omitempty"`
+	// Output is Claude's prose, or the tail of a command's output, capped at
+	// maxReviewOutput.
 	Output     string `json:"output,omitempty"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
-	// Findings are the structured findings the review gave, each with an ID
+	// Findings are the structured findings the check gave, each with an ID
 	// unique within the round. Empty when it gave none or failed; Error tells
 	// the two apart.
 	Findings []review.Finding `json:"findings,omitempty"`
@@ -246,7 +284,7 @@ type RoundDetail struct {
 	Results []ReviewResult `json:"results,omitempty"`
 }
 
-// SessionDetail is a session plus the text of its reviews.
+// SessionDetail is a session plus the text of its checks.
 type SessionDetail struct {
 	Session
 	Details []RoundDetail `json:"details,omitempty"`
@@ -256,30 +294,27 @@ type SessionDetail struct {
 type SessionRequest struct {
 	// ProjectRoot is a project the daemon tracks. Required.
 	ProjectRoot string `json:"project_root"`
+	// Task is what to implement. Required.
+	Task string `json:"task"`
 	// PromptsDir is a directory of review prompts relative to the project root;
-	// empty means .chunk/reviews. Absolute paths and paths that leave the
+	// empty means .chunk/reviews, which may be missing when validation commands
+	// are enough to check the work. Absolute paths and paths that leave the
 	// project are refused.
 	PromptsDir  string `json:"prompts_dir,omitempty"`
 	Parallelism int    `json:"parallelism,omitempty"`
 	Model       string `json:"model,omitempty"`
+	// Image overrides the project's configured sidecar image.
+	Image string `json:"image,omitempty"`
 	// TimeoutSeconds bounds each review; zero means review.DefaultTimeout.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
-	// MaxRounds lowers the number of rounds; zero or more than MaxRounds means
-	// MaxRounds.
+	// ImplementTimeoutSeconds bounds each implementer turn; zero means
+	// review.DefaultImplementTimeout.
+	ImplementTimeoutSeconds int `json:"implement_timeout_seconds,omitempty"`
+	// MaxRounds is the most rounds of checks to run; zero means DefaultRounds.
+	// More than MaxRounds is refused.
 	MaxRounds int `json:"max_rounds,omitempty"`
-}
-
-// RestoreRequest asks to undo a session's changes.
-type RestoreRequest struct {
-	// Force restores even files that were edited after the session changed them,
-	// discarding those edits.
-	Force bool `json:"force,omitempty"`
-}
-
-// RestoreResult lists the files a restore put back (or removed, if the session
-// had created them).
-type RestoreResult struct {
-	Paths []string `json:"paths"`
+	// NoValidate leaves the project's validation commands out of the checks.
+	NoValidate bool `json:"no_validate,omitempty"`
 }
 
 // SessionStartResponse answers an accepted POST /session.

@@ -149,7 +149,7 @@ type dataMsg struct {
 	headRefs []string
 	commands [][]watchd.CommandState
 	authErr  string
-	// sessions are the daemon's pre-PR sessions, and reviewAuthErr its reason for
+	// sessions are the daemon's factory sessions, and reviewAuthErr its reason for
 	// being unable to start one.
 	sessions      []sessionInfo
 	reviewAuthErr string
@@ -222,7 +222,7 @@ type Model struct {
 	// whether the last poll reached it.
 	conn watchd.Connection
 
-	// sessions are the daemon's pre-PR sessions across projects, and sessionView
+	// sessions are the daemon's factory sessions across projects, and sessionView
 	// the open session view, nil when the dashboard is showing sidecars.
 	sessions      []sessionInfo
 	sessionView   *sessionPane

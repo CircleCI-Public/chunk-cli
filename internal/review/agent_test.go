@@ -1,4 +1,4 @@
-package factory
+package review
 
 import (
 	"context"
@@ -14,14 +14,13 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
 // localExec runs scripts with sh on this machine, as a sidecar would, with
 // HOME pointed at home so a fake claude can be installed where the scripts
 // look for it.
-func localExec(home string) review.Execer {
+func localExec(home string) Execer {
 	return func(ctx context.Context, _ *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, _ func(string)) (int, error) {
 		cmd := exec.CommandContext(ctx, "sh", "-c", script)
 		cmd.Env = append(os.Environ(), "HOME="+home)
@@ -59,42 +58,38 @@ func (w writerFn) Write(b []byte) (int, error) {
 }
 
 // installFakeClaude puts a claude on the scripts' PATH that records its
-// arguments and stdin, then runs body.
+// arguments, stdin and environment, then runs body.
 func installFakeClaude(t *testing.T, home, body string) {
 	t.Helper()
 	bin := filepath.Join(home, ".local", "bin")
 	assert.NilError(t, os.MkdirAll(bin, 0o755))
-	script := "#!/bin/sh\nprintf '%s\\n--end--\\n' \"$*\" >> \"$HOME/args\"\ncat >> \"$HOME/stdin\"\n" + body + "\n"
+	script := "#!/bin/sh\nprintf '%s\\n--end--\\n' \"$*\" >> \"$HOME/args\"\ncat >> \"$HOME/stdin\"\necho \"IS_SANDBOX=$IS_SANDBOX\" >> \"$HOME/env\"\n" + body + "\n"
 	assert.NilError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755))
 }
 
-const streamOK = `printf '%s\n' '{"type":"system","subtype":"init","session_id":"s"}' \
+const streamOK = `printf '%s\n' '{"type":"system","subtype":"init","session_id":"s-1"}' \
  '{"type":"assistant","message":{"content":[{"type":"text","text":"Adding the flag."},{"type":"tool_use","name":"Edit","input":{"file_path":"main.go"}}]}}' \
  '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}]}}' \
  '{"type":"result","subtype":"success","is_error":false,"result":"Added --verbose.","total_cost_usd":0.42}'`
 
-func newImplementer(t *testing.T, claudeBody string) (*Implementer, string, *[]Activity) {
+func runImplement(t *testing.T, claudeBody string, a Agent) (AgentResult, string, []Activity) {
 	t.Helper()
 	home := t.TempDir()
 	installFakeClaude(t, home, claudeBody)
 	var acts []Activity
-	im := &Implementer{
-		Exec:       localExec(home),
-		Entry:      &sidecar.PoolEntry{ID: "impl", RepoPath: t.TempDir()},
-		Credential: review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},
-		OnActivity: func(a Activity) { acts = append(acts, a) },
-	}
-	return im, home, &acts
+	res := RunAgent(context.Background(), localExec(home), &sidecar.PoolEntry{ID: "impl", RepoPath: t.TempDir()}, a,
+		Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"}, "",
+		AgentHooks{OnActivity: func(act Activity) { acts = append(acts, act) }})
+	return res, home, acts
 }
 
-func TestImplementerRunsAndReportsActivity(t *testing.T) {
-	im, home, acts := newImplementer(t, streamOK)
+func TestRunAgentStreamsActivityAndResult(t *testing.T) {
+	res, home, acts := runImplement(t, streamOK, ImplementAgent("implement", "add a --verbose flag"))
 
-	turn, err := im.Run(context.Background(), "add a --verbose flag")
-	assert.NilError(t, err)
-	assert.Equal(t, turn.Summary, "Added --verbose.")
-	assert.Equal(t, turn.CostUSD, 0.42)
-	assert.DeepEqual(t, *acts, []Activity{
+	assert.NilError(t, res.Err)
+	assert.Equal(t, res.Output, "Added --verbose.")
+	assert.Equal(t, res.SessionID, "s-1")
+	assert.DeepEqual(t, acts, []Activity{
 		{Detail: "Adding the flag."},
 		{Tool: "Edit", Detail: "main.go"},
 		{Tool: "Bash", Detail: "go test ./..."},
@@ -103,29 +98,38 @@ func TestImplementerRunsAndReportsActivity(t *testing.T) {
 	stdin, err := os.ReadFile(filepath.Join(home, "stdin"))
 	assert.NilError(t, err)
 	assert.Equal(t, string(stdin), "add a --verbose flag")
+	env, err := os.ReadFile(filepath.Join(home, "env"))
+	assert.NilError(t, err)
+	assert.Equal(t, strings.TrimSpace(string(env)), "IS_SANDBOX=1")
 }
 
-// TestImplementerResumesItsSession guards the feedback rounds: each must
-// continue the first turn's conversation, not start a fresh one without the
-// context of the work it is fixing.
-func TestImplementerResumesItsSession(t *testing.T) {
-	im, home, _ := newImplementer(t, streamOK)
+func TestImplementAgentScript(t *testing.T) {
+	t.Parallel()
+	a := ImplementAgent("implement", "p")
+	a.SessionID = "abc"
+	script := a.script("/repo")
+	assert.Assert(t, strings.Contains(script, "'--output-format' 'stream-json' '--verbose'"), script)
+	assert.Assert(t, strings.Contains(script, "'--dangerously-skip-permissions'"), script)
+	assert.Assert(t, strings.Contains(script, "Bash(git commit:*)"), "git commits are disallowed: %s", script)
+	assert.Assert(t, !strings.Contains(script, "--allowedTools"), script)
+	assert.Assert(t, strings.Contains(script, "'--session-id' 'abc'"), script)
 
-	_, err := im.Run(context.Background(), "first")
-	assert.NilError(t, err)
-	_, err = im.Run(context.Background(), "fix it")
-	assert.NilError(t, err)
-
-	args, err := os.ReadFile(filepath.Join(home, "args"))
-	assert.NilError(t, err)
-	lines := strings.Split(strings.TrimSuffix(string(args), "--end--\n"), "--end--\n")
-	assert.Equal(t, len(lines), 2)
-	assert.Assert(t, strings.Contains(lines[0], "--session-id "+im.sessionID), lines[0])
-	assert.Assert(t, strings.Contains(lines[1], "--resume "+im.sessionID), lines[1])
-	assert.Assert(t, strings.Contains(lines[0], "Bash(git commit:*)"), "git commits are disallowed: %s", lines[0])
+	// A later turn continues the conversation rather than starting a new one
+	// without the context of the work it is fixing.
+	a.Resume = true
+	script = a.script("/repo")
+	assert.Assert(t, strings.Contains(script, "'--resume' 'abc'"), script)
+	assert.Assert(t, !strings.Contains(script, "--session-id"), script)
 }
 
-func TestImplementerFailures(t *testing.T) {
+func TestAgentScriptWithItsOwnTools(t *testing.T) {
+	t.Parallel()
+	script := Agent{Prompt: "p", AllowedTools: []string{"Read", "Edit", "Write"}}.script("/repo")
+	assert.Assert(t, strings.Contains(script, "'--allowedTools' 'Read,Edit,Write'"), script)
+	assert.Assert(t, !strings.Contains(script, "--dangerously-skip-permissions"), script)
+}
+
+func TestRunAgentStreamFailures(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
@@ -135,12 +139,17 @@ func TestImplementerFailures(t *testing.T) {
 		{
 			name: "error result",
 			body: `echo '{"type":"result","is_error":true,"result":"API overloaded"}'; exit 1`,
-			want: "implementer exited 1: API overloaded",
+			want: "claude exited 1: API overloaded",
+		},
+		{
+			name: "error result exiting zero",
+			body: `echo '{"type":"result","is_error":true,"result":"max turns"}'`,
+			want: "claude reported an error: max turns",
 		},
 		{
 			name: "credential rejected",
 			body: `echo '{"type":"result","is_error":true,"result":"Failed to authenticate. API Error: 401"}'; exit 1`,
-			is:   review.ErrCredentialRejected,
+			is:   ErrCredentialRejected,
 		},
 		{
 			name: "no result",
@@ -150,33 +159,46 @@ func TestImplementerFailures(t *testing.T) {
 		{
 			name: "stderr only",
 			body: `echo boom >&2; exit 2`,
-			want: "implementer exited 2: boom",
+			want: "claude exited 2: boom",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			im, _, _ := newImplementer(t, tc.body)
-			_, err := im.Run(context.Background(), "p")
+			res, _, _ := runImplement(t, tc.body, ImplementAgent("implement", "p"))
 			if tc.is != nil {
-				assert.Assert(t, errors.Is(err, tc.is), "got %v", err)
+				assert.Assert(t, errors.Is(res.Err, tc.is), "got %v", res.Err)
 				return
 			}
-			assert.ErrorContains(t, err, tc.want)
+			assert.ErrorContains(t, res.Err, tc.want)
 		})
 	}
 }
 
-func TestImplementerReportsMissingClaude(t *testing.T) {
+// TestRunAgentKeepsTheSessionOfAFailedRun guards resuming after a failure: the
+// session exists once claude has started it, so the next turn must continue it.
+func TestRunAgentKeepsTheSessionOfAFailedRun(t *testing.T) {
+	res, _, _ := runImplement(t, `echo '{"type":"system","session_id":"s-9"}'; exit 1`, ImplementAgent("implement", "p"))
+	assert.Assert(t, res.Err != nil)
+	assert.Equal(t, res.SessionID, "s-9")
+}
+
+func TestRunAgentReportsMissingClaude(t *testing.T) {
 	home := t.TempDir()
-	im := &Implementer{Exec: localExec(home), Entry: &sidecar.PoolEntry{RepoPath: t.TempDir()}}
 	t.Setenv("PATH", "/usr/bin:/bin")
-	_, err := im.Run(context.Background(), "p")
-	assert.Assert(t, errors.Is(err, review.ErrClaudeMissing), "got %v", err)
+	res := RunAgent(context.Background(), localExec(home), &sidecar.PoolEntry{RepoPath: t.TempDir()}, ImplementAgent("implement", "p"), Credential{EnvVar: "K", Value: "v"}, "", AgentHooks{})
+	assert.Assert(t, errors.Is(res.Err, ErrClaudeMissing), "got %v", res.Err)
+}
+
+func TestRunAgentRefusesStreamWithSchema(t *testing.T) {
+	t.Parallel()
+	res := RunAgent(context.Background(), nil, &sidecar.PoolEntry{}, Agent{Stream: true, Schema: "{}"}, Credential{}, "", AgentHooks{})
+	assert.ErrorContains(t, res.Err, "cannot both stream")
 }
 
 // TestStreamParserReassemblesSplitLines covers output arriving in chunks that
 // cut lines anywhere, as the exec stream delivers it.
 func TestStreamParserReassemblesSplitLines(t *testing.T) {
+	t.Parallel()
 	var acts []Activity
 	p := &streamParser{onActivity: func(a Activity) { acts = append(acts, a) }}
 	stream := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"a.go"}}]}}` + "\n" +
@@ -191,6 +213,7 @@ func TestStreamParserReassemblesSplitLines(t *testing.T) {
 }
 
 func TestStreamParserDropsOversizedLines(t *testing.T) {
+	t.Parallel()
 	p := &streamParser{}
 	p.write([]byte(`{"type":"user","x":"` + strings.Repeat("a", maxLineBytes) + `"}` + "\n"))
 	p.write([]byte(`{"type":"result","result":"ok"}` + "\n"))

@@ -385,111 +385,117 @@ Design constraints worth preserving:
   Resolution is deferred to first use because it can read the OS keychain, and the
   daemon starts on every `chunk watch` whether or not anything needs a token.
 
-### Pre-PR sessions
+### Factory sessions
 
-A session is the daemon's record of one pre-PR run for a project: the work is
-reviewed by agents in sandboxes, the findings worth changing are fixed, and the
-loop goes round again. The daemon is the **local** one (Unix socket); sessions
-work on files on this machine. `chunk session` is the CLI for it and
-`chunk watch` shows it live.
+A session is the daemon's record of one `chunk factory` run: an implementer
+agent on a sidecar writes a task, reviewers and the project's validation
+commands check it, the implementer fixes what they find, and the loop goes
+round again. The daemon is the **local** one (Unix socket); a session works on a
+checkout on this machine. `chunk factory` is the CLI for it and `chunk watch`
+shows it live.
 
 ```
-POST /session              {project_root, prompts_dir?, parallelism?, model?, timeout_seconds?, max_rounds?}
-                           → 202 {id}   (409 a session is active, 404 unknown project,
-                                         400 bad prompts, 503 no credential)
+POST /session              {project_root, task, prompts_dir?, parallelism?, model?, image?,
+                            timeout_seconds?, implement_timeout_seconds?, max_rounds?, no_validate?}
+                           → 202 {id}   (404 unknown project, 400 no task, bad prompts,
+                                         too many rounds or nothing to check with,
+                                         503 no credential)
 GET  /session[?root=<path>] → {sessions: [Session...]}, newest first
-GET  /session/{id}         → SessionDetail: the session plus each round's review text
+GET  /session/{id}         → SessionDetail: the session plus each round's check text
 POST /session/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
-POST /session/{id}/resume  → 202; only for a paused session (409 otherwise)
-POST /session/{id}/restore {force?} → {paths}; only for an ended session that changed
-                             files (409 otherwise, or if files were edited since)
 GET  /snapshot             → each project carries `sessions` (state only), and the
                              top level a `review_auth_error`
 ```
 
 **The record.** `Session` holds `stages` (always the full flow, in order:
-`review_loop`, `rebase`, `ci`, `approval`, `pr`), `rounds`, and a `restore` point.
-Stage states are `not_built | pending | running | paused | done | failed |
-skipped`; only `review_loop` is implemented, the rest are `not_built` and shown
-as "not built yet". Building a later stage means filling in its `Stage` — the
-record does not change shape. A `Round` carries its reviews (the same
-`ReviewPrompt` rows `chunk review` draws), finding counts, what its fixes
-changed (`fix.files[]`: `path`, `insertions`, `deletions`; the totals are
-`fix.insertions` and `fix.deletions`), and a note on why the loop ended.
+`implement`, `review_loop`, `rebase`, `ci`, `approval`, `pr`), the first turn
+(`implement`), `rounds`, where the work is (`work_dir` while the worktree exists,
+`work_branch`, `work_commit`) and, once the loop ends, its `outcome`
+(`passed | exhausted | stuck | no_change`). Stage states are `not_built | pending
+| running | done | failed | skipped`; only `implement` and `review_loop` are
+built, the rest are `not_built` and shown as "not built yet". Building a later
+stage means filling in its `Stage` — the record does not change shape. A `Round`
+carries its checks (the same `ReviewPrompt` rows `chunk review` draws, with
+`kind: validate` for a validation command), finding counts, the implementer's
+turn (`fix`: its sidecar, command, latest activity, summary, cost, and
+`files[]` with `path`, `insertions`, `deletions`), and a note on why it ended.
 
-- **State in snapshots, text on demand.** Snapshots hold state only; review text
-  is in `GET /session/{id}`, as command output is in `/output`. Every Claude
-  command is registered with the output store, so its live log is readable.
-- **Credentials.** `cmd/watchdaemon.go` resolves the Claude credential once at
-  start (`daemonReviewConfig`) and passes it in with `watchd.WithReview`. It is
-  put only in the environment of a Claude command; it is not logged and not in
-  any snapshot or session detail. A missing one is reported as
-  `Snapshot.ReviewAuthError` and refuses `POST /session` with 503.
-- **Structured findings.** Sessions set `review.Options.StructuredFindings`,
-  which runs each review with `--output-format json --json-schema
+- **One way to run Claude on a sidecar.** `review.RunAgent` runs a
+  `review.Agent`: a prompt, an optional appended system prompt, the tools it may
+  use (`AllowedTools`, `DisallowedTools`, or `SkipPermissions` for everything but
+  the disallowed), an optional `--json-schema`, `Stream` for stream-json (live
+  activity and the Claude session ID), and `SessionID`/`Resume`. Reviewing and
+  implementing are different `Agent` values, not different code: a review is
+  `ReviewTools` with `FindingsSchema`; the implementer is `review.ImplementAgent`
+  — every tool, git commands that would hide its work from the working tree
+  disallowed, streaming, and a system prompt telling it to leave the work
+  uncommitted. Failure is classified the same way for both (`ErrClaudeMissing`,
+  `ErrCredentialRejected`, timeouts, exit codes).
+- **The worktree** (`session_worktree.go`). `createWorktree` snapshots the user's
+  working tree (`gitutil.SnapshotTree`: tracked files as on disk and untracked
+  files not ignored; ignored files are not included) and, if it differs from
+  `HEAD`, commits it on top of `HEAD` as the baseline. The worktree is added under
+  the daemon's directory (`sessions/<id>/worktree`) on a new branch
+  `chunk/factory/<id8>` at that commit. The user's checkout, index and HEAD are
+  never touched. `finishWorktree` runs on every exit, cancel included, with its
+  own deadline: it commits whatever is in the worktree (as `chunk`, no hooks, no
+  signing), removes the worktree, and deletes the branch only if nothing at all
+  was done on it. If committing fails the worktree is left in place and the
+  session fails naming it.
+- **The pool.** Each session has its own named pool (`factory`), whose state is
+  kept in the session's directory rather than in the worktree, so it never shows
+  up as work. It is one member per review prompt (capped by `parallelism`) plus
+  one for the implementer. Every turn and round opens it, which syncs the
+  worktree — HEAD by bundle, uncommitted work by patch — to every member; members
+  persist between rounds so only what changed is sent. `sidecar.DeletePool`
+  deletes its sidecars when the session ends.
+- **The implementer keeps its sidecar.** The first turn takes any member and the
+  session remembers it; every later turn and every round's validation takes that
+  member back with `Pool.AcquireID`, and the turn resumes the first turn's Claude
+  session (`--resume`). If the member is gone from the pool another takes its
+  place and the next turn starts a new Claude session. Each feedback prompt
+  restates the task, so a fresh session still knows what the work is for.
+- **Turns are a diff against what the implementer was given.** In the sandbox,
+  `baselineScript` records the tree before the turn and `diffScript` diffs it
+  against the tree after (with flags that keep the sandbox's git config, which
+  the implementer can change, from shaping the patch) and then reverses it,
+  leaving the sandbox as the sync left it. Those two scripts run without the
+  credential. `checkPatchPaths` refuses a patch that touches `.git/` or anything
+  outside the repository; CI definitions are allowed, since the task may be about
+  CI and the result is a branch for the developer to read. The patch is saved in
+  the session's directory, `git apply --check`ed, and applied to the worktree,
+  so one that does not fit changes nothing.
+- **Structured findings.** Reviews run with `--output-format json --json-schema
   review.FindingsSchema`: `{review, findings:[{file,line,severity,body,patch?}]}`,
   severity one of high/medium/low/info. Claude Code validates the answer against
   the schema itself; `review.ParseFindings` reads `structured_output` from the
-  result, and a result without one (an error, or retries exhausted) fails that
-  review. The prose is the `review` field. The content is still untrusted:
-  entries with no file or body, or a path that is absolute or climbs out of the
-  repo, are dropped and counted; at most 50 are kept. A round counts *distinct*
-  findings (`DedupeFindings`) and, of those, the ones **worth changing**:
-  severity high or medium. In-process `chunk review` does not ask for findings,
-  so its prompts and output are unchanged.
-- **The loop.** `runLoop` runs up to `MaxRounds` (3) rounds. A round is: all
-  review prompts in parallel on pooled sandboxes; if any distinct finding is
-  worth changing (severity high or medium) one sandbox agent, with edit tools,
-  fixes exactly those; the fix is brought back as a patch and applied straight to
-  the user's working tree. The loop stops early when a round has nothing worth
-  changing, or when the agent changes nothing. Each round opens its pool through
-  the same named, persisted pool, so later rounds reuse the warm sandboxes and
-  the pool re-syncs only what changed.
-- **Fixes are a diff against what the reviewers saw.** In the sandbox,
-  `baselineScript` records the tree before the agent runs and `diffScript` diffs
-  it against the tree after (and then reverses the diff, leaving the sandbox as
-  it found it). The user's own uncommitted work, which was synced into the
-  sandbox, is in both trees and so never in the patch. Those two scripts run
-  without the credential. `checkPatchPaths` refuses a patch that touches `.git/`,
-  `.github/workflows/`, `.github/actions/`, `.circleci/` or anything outside the
-  repository.
-- **Restore point** (`saveRestorePoint`). Before the first byte is written, the
-  daemon snapshots the user's working tree (`gitutil.SnapshotTree`: a git tree
-  object built with a throwaway index) into a commit held by the ref
-  `refs/chunk/restore/<session-id>`. It covers every tracked file as it is on disk
-  (staged and unstaged edits alike) and every untracked file that is not ignored.
-  It does **not** cover ignored files, and it does not record the index: a
-  session writes files only (`git apply`, never `--index`), so staging is left as
-  the user had it. If the restore point cannot be saved nothing is written.
-  `chunk session restore <id>` puts back exactly the files the fixes changed
-  (`git restore --source=<ref> --worktree`; files the session created are
-  removed), and refuses, listing them, if any of those files were edited after the
-  session left them unless `--force`. The ref outlives the daemon, so after a
-  restart the session record is gone but the undo is still
-  `git restore --source=refs/chunk/restore/<session-id> --worktree -- <paths>`
-  (`git for-each-ref refs/chunk/restore` lists them). Refs are not removed
-  automatically.
-- **Changed underneath.** The loop remembers the tree it last saw (`expected`): at
-  the start, then as it left it after each round's fixes. Before it starts a round
-  and again immediately before it applies a patch, it snapshots the working tree
-  and compares. A difference means the user edited while the sandboxes worked, so
-  the patch is for files that no longer exist: the round is marked superseded,
-  nothing is written, and the session **pauses** (`state: paused`,
-  `pause_reason`, `paused_paths`, stage `review_loop: paused`). `chunk session
-  resume <id>` (or the dashboard) adopts the files as they are now and runs the
-  round again; `cancel` ends the session. Ignored files and timestamps do not
-  count as changes; any content change to a tracked or untracked file does.
-  A patch is also `git apply --check`ed first, so one that does not fit changes
-  nothing at all.
-- **One active session per project.** Two would fight over the same files.
+  result, and a result without one fails that review. The content is still
+  untrusted: entries with no file or body, or a path that is absolute or climbs
+  out of the repo, are dropped and counted; at most 50 are kept. Each review
+  prompt is prefixed with the scope: the change is the uncommitted work, `git
+  diff HEAD`. A round counts *distinct* findings (`DedupeFindings`) and, of
+  those, the ones **worth changing**: severity high or medium.
+- **Validation commands are checks.** The project's commands (minus `autofix`,
+  `local`, and templated ones) run one after another on the implementer's
+  sidecar while the reviews run on the others. One that exits non-zero, or runs
+  past its timeout, is a high-severity finding whose body is the tail of its
+  output; one that could not run at all failed to run, like a review that
+  errored.
+- **The loop.** After the first turn, `runLoop` runs up to `max_rounds` (default
+  3, at most 10). A round with findings worth changing sends them, with the task,
+  to the implementer; one with none, where every check ran, ends the loop
+  `passed`. A round where some checks could not run and the rest found nothing
+  ends with the work checked again next round; one where no check ran fails the
+  session. An implementer turn that changes nothing ends the loop.
+- **Sessions run side by side.** Each has its own worktree, branch and pool.
 - **Prompts come from the project** (`.chunk/reviews`): `prompts_dir` must be
   relative and may not leave the project.
 - **Detach is not cancel.** A viewer disconnecting changes nothing; the session
   belongs to the daemon.
 - **In memory only.** Like async validate tasks, a daemon restart loses the
-  session record (the last 10 per project are kept while it runs). What a
-  session changed in the user's files is not lost with it: the restore point is a
-  git ref.
+  session record (the last 10 per project are kept while it runs). The work is
+  not lost with it: it is on a branch, or in the worktree under the daemon's
+  directory if the daemon died mid-session.
 
 ### Resource sampling
 

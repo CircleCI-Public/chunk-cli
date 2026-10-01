@@ -107,20 +107,6 @@ func ListSessions(root string) ([]Session, error) {
 	return list.Sessions, nil
 }
 
-// ResumeSession continues a paused session with the files as they are now.
-func ResumeSession(id string) error {
-	return sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/resume", nil, nil)
-}
-
-// RestoreSession undoes everything a session changed in the working tree.
-func RestoreSession(id string, force bool) (RestoreResult, error) {
-	var res RestoreResult
-	if err := sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/restore", RestoreRequest{Force: force}, &res); err != nil {
-		return RestoreResult{}, err
-	}
-	return res, nil
-}
-
 // CancelSession stops a session. It is the only thing that does: a viewer that
 // quits merely detaches.
 func CancelSession(id string) error {

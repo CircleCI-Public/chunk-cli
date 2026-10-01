@@ -31,6 +31,7 @@ type Pool struct {
 	entries       []*PoolEntry
 	client        *circleci.Client
 	workDir       string
+	stateRoot     string
 	orgID         string
 	image         string
 	name          string
@@ -59,11 +60,15 @@ type poolState struct {
 
 // PoolOptions describes the resources and persisted identity of a pool.
 type PoolOptions struct {
-	Size        int
-	Name        string
-	OrgID       string
-	Image       string
-	WorkDir     string
+	Size    int
+	Name    string
+	OrgID   string
+	Image   string
+	WorkDir string
+	// StateRoot is the directory whose .chunk holds the pool's state file.
+	// Empty means WorkDir. A pool syncing a tree it must not write into, such as
+	// a worktree whose contents are the work, keeps its state elsewhere.
+	StateRoot   string
 	RepoPath    string
 	ExistingIDs []string
 	FreshIDs    []string
@@ -110,7 +115,11 @@ func NewPool(
 	if opts.Size < 1 {
 		return nil, errors.New("pool size must be positive")
 	}
-	state, _ := loadPoolState(opts.WorkDir, opts.Name)
+	stateRoot := opts.StateRoot
+	if stateRoot == "" {
+		stateRoot = opts.WorkDir
+	}
+	state, _ := loadPoolState(stateRoot, opts.Name)
 	repoPath := opts.RepoPath
 	if repoPath == "" && state != nil {
 		repoPath = state.RepoPath
@@ -154,14 +163,14 @@ func NewPool(
 	for _, id := range opts.FreshIDs {
 		freshIDs[id] = true
 	}
-	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, existingIDs, lastSyncedRef, freshIDs, status)
+	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, stateRoot, existingIDs, lastSyncedRef, freshIDs, status)
 }
 
 func assemblePool(
 	ctx context.Context,
 	client *circleci.Client,
 	n int,
-	name, orgID, image, repoPath, workDir string,
+	name, orgID, image, repoPath, workDir, stateRoot string,
 	existingIDs []string,
 	lastSyncedRef string,
 	freshIDs map[string]bool,
@@ -283,6 +292,7 @@ func assemblePool(
 		entries:        entries,
 		client:         client,
 		workDir:        workDir,
+		stateRoot:      stateRoot,
 		orgID:          orgID,
 		image:          image,
 		name:           name,
@@ -363,7 +373,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 	p.notifyUpdate()
 
 	if err := p.persistState(); err != nil {
-		clearPoolState(p.workDir, p.name)
+		clearPoolState(p.stateBase(), p.name)
 		status(iostream.LevelWarn, fmt.Sprintf("could not save pool state: %v", err))
 	}
 	status(iostream.LevelInfo, fmt.Sprintf("replacement sidecar: %s", replacement.ID))
@@ -498,7 +508,7 @@ func (p *Pool) persistState() error {
 	}
 	p.mu.Unlock()
 
-	stored, err := loadPoolState(p.workDir, p.name)
+	stored, err := loadPoolState(p.stateBase(), p.name)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -516,7 +526,15 @@ func (p *Pool) persistState() error {
 			state.LastSyncedRef = stored.LastSyncedRef
 		}
 	}
-	return savePoolState(p.workDir, p.name, state)
+	return savePoolState(p.stateBase(), p.name, state)
+}
+
+// stateBase is the directory whose .chunk holds the pool's state file.
+func (p *Pool) stateBase() string {
+	if p.stateRoot != "" {
+		return p.stateRoot
+	}
+	return p.workDir
 }
 
 func (p *Pool) Acquire(ctx context.Context) (*PoolEntry, error) {
@@ -547,6 +565,55 @@ func (p *Pool) Acquire(ctx context.Context) (*PoolEntry, error) {
 		}
 	}
 }
+
+// AcquireID checks out the member with the given sidecar ID, waiting while it
+// is in use or still syncing. It is how a caller keeps one piece of work on the
+// same sidecar across passes. It fails with ErrNotPoolMember once the member
+// cannot become free: it is not in the pool, or its sync failed.
+func (p *Pool) AcquireID(ctx context.Context, id string) (*PoolEntry, error) {
+	for {
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return nil, errors.New("pool is destroyed")
+		}
+		if !slices.Contains(p.ids, id) {
+			p.mu.Unlock()
+			return nil, ErrNotPoolMember
+		}
+		var found *PoolEntry
+		for range len(p.free) {
+			e := <-p.free
+			if found == nil && e.ID == id {
+				found = e
+				continue
+			}
+			p.free <- e
+		}
+		if found != nil {
+			p.checkedOut++
+			p.mu.Unlock()
+			return found, nil
+		}
+		// Every sync has ended, the member is not free and nobody holds it: its
+		// sync failed, and it will never be handed out.
+		if p.pendingSyncs == 0 && p.pendingCreates == 0 && p.checkedOut == 0 {
+			p.mu.Unlock()
+			return nil, ErrNotPoolMember
+		}
+		p.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-p.updates:
+		}
+	}
+}
+
+// ErrNotPoolMember is returned by AcquireID for a sidecar the pool cannot hand
+// out: it was never a member, was replaced, or failed to sync.
+var ErrNotPoolMember = errors.New("sidecar is not an available pool member")
 
 func (p *Pool) Release(entry *PoolEntry) {
 	p.mu.Lock()
@@ -599,7 +666,7 @@ func (p *Pool) Destroy(ctx context.Context) error {
 	failed := deleteSidecarsConcurrently(ctx, p.client, ids)
 	p.notifyUpdate()
 	if len(failed) == 0 {
-		clearPoolState(p.workDir, p.name)
+		clearPoolState(p.stateBase(), p.name)
 		return nil
 	}
 
@@ -607,6 +674,30 @@ func (p *Pool) Destroy(ctx context.Context) error {
 	p.ids = failed
 	p.mu.Unlock()
 	if err := p.persistState(); err != nil {
+		return fmt.Errorf("delete %d sidecar(s) %v; save pool state: %w", len(failed), failed, err)
+	}
+	return fmt.Errorf("delete %d sidecar(s): %v", len(failed), failed)
+}
+
+// DeletePool deletes the sidecars recorded in a pool's state and clears the
+// state, without opening the pool: for a caller that has finished with a pool
+// it closed earlier. Sidecars that could not be deleted stay in the state so a
+// later call can retry them. A pool with no state is not an error.
+func DeletePool(ctx context.Context, client *circleci.Client, stateRoot, name string) error {
+	state, err := loadPoolState(stateRoot, name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read pool state: %w", err)
+	}
+	failed := deleteSidecarsConcurrently(ctx, client, state.SidecarIDs)
+	if len(failed) == 0 {
+		clearPoolState(stateRoot, name)
+		return nil
+	}
+	state.SidecarIDs = failed
+	if err := savePoolState(stateRoot, name, state); err != nil {
 		return fmt.Errorf("delete %d sidecar(s) %v; save pool state: %w", len(failed), failed, err)
 	}
 	return fmt.Errorf("delete %d sidecar(s): %v", len(failed), failed)

@@ -2,14 +2,12 @@ package watchd
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"gotest.tools/v3/assert"
 )
@@ -78,137 +76,6 @@ func writePatch(t *testing.T, patch string) string {
 	return p
 }
 
-func paths(files []FileChange) []string {
-	var out []string
-	for _, f := range files {
-		out = append(out, f.Path)
-	}
-	return out
-}
-
-func TestRestoreUndoesEverythingTheFixesChangedAndNothingElse(t *testing.T) {
-	root := userRepo(t)
-	before, err := treeNow(root)
-	assert.NilError(t, err)
-	head := git(t, root, "rev-parse", "HEAD")
-	indexBefore := git(t, root, "ls-files", "--stage")
-
-	rp, err := saveRestorePoint(t.Context(), root, "sess-1", before)
-	assert.NilError(t, err)
-	assert.Equal(t, rp.HeadSHA, head)
-
-	patch := patchFor(t, root, func(d string) {
-		put(t, d, "tracked.txt", "t1\n")             // tracked, unmodified by the user
-		put(t, d, "staged.txt", "s3 edited again\n") // staged edit plus unstaged edit
-		put(t, d, "untracked.txt", "u1\n")           // never committed
-		assert.NilError(t, os.Remove(filepath.Join(d, "gone.txt")))
-		put(t, d, "new/dir/created.txt", "c\n") // a file in a new directory
-	})
-	files, err := applyPatchToTree(t.Context(), root, writePatch(t, patch))
-	assert.NilError(t, err)
-	got := paths(files)
-	slices.Sort(got)
-	assert.DeepEqual(t, got, []string{"gone.txt", "new/dir/created.txt", "staged.txt", "tracked.txt", "untracked.txt"})
-
-	// The fixes are in the working tree...
-	assert.Equal(t, read(t, root, "tracked.txt"), "t1\n")
-	assert.Equal(t, read(t, root, "staged.txt"), "s3 edited again\n")
-	assert.Assert(t, !exists(root, "gone.txt"))
-	assert.Assert(t, exists(root, "new/dir/created.txt"))
-	// ...and only there: the index and HEAD are exactly as the user left them.
-	assert.Equal(t, git(t, root, "ls-files", "--stage"), indexBefore)
-	assert.Equal(t, git(t, root, "rev-parse", "HEAD"), head)
-	assert.Equal(t, read(t, root, "ignored.log"), "ig\n")
-
-	left, err := treeNow(root)
-	assert.NilError(t, err)
-	restored, err := restoreSession(t.Context(), root, rp, paths(files), left, false)
-	assert.NilError(t, err)
-	assert.Equal(t, len(restored), 5)
-
-	// Every byte is back: tracked, staged-plus-unstaged, deleted, untracked and
-	// created files alike.
-	after, err := treeNow(root)
-	assert.NilError(t, err)
-	assert.Equal(t, after, before, "the working tree must be exactly as it was before the first fix")
-	assert.Equal(t, read(t, root, "staged.txt"), "s2 edited\n")
-	assert.Equal(t, git(t, root, "ls-files", "--stage"), indexBefore, "restoring does not touch the index")
-	assert.Assert(t, !exists(root, "new"), "the directory the fixes created is removed too")
-	assert.Equal(t, read(t, root, "ignored.log"), "ig\n")
-}
-
-func TestRestorePointSurvivesAsAGitRefThatShowsInNoBranchList(t *testing.T) {
-	root := userRepo(t)
-	before, err := treeNow(root)
-	assert.NilError(t, err)
-
-	rp, err := saveRestorePoint(t.Context(), root, "sess-2", before)
-	assert.NilError(t, err)
-
-	assert.Equal(t, rp.Ref, "refs/chunk/restore/sess-2")
-	assert.Equal(t, git(t, root, "rev-parse", rp.Ref+"^{tree}"), before)
-	assert.Equal(t, git(t, root, "branch", "--list"), "* main")
-	assert.Equal(t, git(t, root, "tag", "--list"), "")
-	// The documented manual undo works without the daemon.
-	put(t, root, "tracked.txt", "damaged\n")
-	git(t, root, "restore", "--source="+rp.Ref, "--worktree", "--", "tracked.txt")
-	assert.Equal(t, read(t, root, "tracked.txt"), "t0\n")
-}
-
-func TestRestoreRefusesToDiscardEditsMadeAfterTheSessionUnlessForced(t *testing.T) {
-	root := userRepo(t)
-	before, err := treeNow(root)
-	assert.NilError(t, err)
-	rp, err := saveRestorePoint(t.Context(), root, "sess-3", before)
-	assert.NilError(t, err)
-	patch := patchFor(t, root, func(d string) {
-		put(t, d, "tracked.txt", "t1\n")
-		assert.NilError(t, os.Remove(filepath.Join(d, "gone.txt")))
-	})
-	files, err := applyPatchToTree(t.Context(), root, writePatch(t, patch))
-	assert.NilError(t, err)
-	left, err := treeNow(root)
-	assert.NilError(t, err)
-
-	// The user keeps working: one file the session changed, one it never touched.
-	put(t, root, "tracked.txt", "mine\n")
-	put(t, root, "unrelated.txt", "also mine\n")
-
-	_, err = restoreSession(t.Context(), root, rp, paths(files), left, false)
-	var edited *EditedSinceError
-	assert.Assert(t, errors.As(err, &edited), "got %v", err)
-	assert.DeepEqual(t, edited.Paths, []string{"tracked.txt"})
-	assert.Assert(t, errors.Is(err, ErrEditedSince))
-	assert.Equal(t, read(t, root, "tracked.txt"), "mine\n", "their edit survives a refused restore")
-	assert.Assert(t, !exists(root, "gone.txt"), "a refused restore writes nothing at all")
-
-	_, err = restoreSession(t.Context(), root, rp, paths(files), left, true)
-	assert.NilError(t, err)
-	assert.Equal(t, read(t, root, "tracked.txt"), "t0\n")
-	assert.Equal(t, read(t, root, "gone.txt"), "g0\n")
-	assert.Equal(t, read(t, root, "unrelated.txt"), "also mine\n", "a file the session never touched is never touched by a restore")
-}
-
-func TestRestoreLeavesEditsToFilesTheSessionNeverChangedWithoutForce(t *testing.T) {
-	root := userRepo(t)
-	before, err := treeNow(root)
-	assert.NilError(t, err)
-	rp, err := saveRestorePoint(t.Context(), root, "sess-4", before)
-	assert.NilError(t, err)
-	patch := patchFor(t, root, func(d string) { put(t, d, "tracked.txt", "t1\n") })
-	files, err := applyPatchToTree(t.Context(), root, writePatch(t, patch))
-	assert.NilError(t, err)
-	left, err := treeNow(root)
-	assert.NilError(t, err)
-
-	put(t, root, "untracked.txt", "edited later\n")
-
-	_, err = restoreSession(t.Context(), root, rp, paths(files), left, false)
-	assert.NilError(t, err, "edits to other files are no reason to refuse")
-	assert.Equal(t, read(t, root, "tracked.txt"), "t0\n")
-	assert.Equal(t, read(t, root, "untracked.txt"), "edited later\n")
-}
-
 // A patch that does not fit must change nothing, not even the files it does fit.
 func TestApplyingAPatchThatNoLongerFitsChangesNothing(t *testing.T) {
 	root := userRepo(t)
@@ -228,39 +95,6 @@ func TestApplyingAPatchThatNoLongerFitsChangesNothing(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, after, before, "no file may be half-fixed")
 	assert.Equal(t, read(t, root, "tracked.txt"), "t0\n")
-}
-
-// Noticing that the user's files moved must not cry wolf, and must not miss.
-func TestTreeNowChangesWithContentAndNotWithNoise(t *testing.T) {
-	root := userRepo(t)
-	base, err := treeNow(root)
-	assert.NilError(t, err)
-
-	again, err := treeNow(root)
-	assert.NilError(t, err)
-	assert.Equal(t, again, base, "an untouched tree has a stable identity")
-
-	put(t, root, "ignored.log", "changed but ignored\n")
-	later := time.Now().Add(time.Hour)
-	assert.NilError(t, os.Chtimes(filepath.Join(root, "tracked.txt"), later, later))
-	noisy, err := treeNow(root)
-	assert.NilError(t, err)
-	assert.Equal(t, noisy, base, "ignored files and timestamps are not changes")
-
-	for name, change := range map[string]func(){
-		"edit a tracked file":     func() { put(t, root, "tracked.txt", "edited\n") },
-		"edit an untracked file":  func() { put(t, root, "untracked.txt", "edited\n") },
-		"add an untracked file":   func() { put(t, root, "brand-new.txt", "x\n") },
-		"delete a file":           func() { assert.NilError(t, os.Remove(filepath.Join(root, "gone.txt"))) },
-		"edit again, same status": func() { put(t, root, "staged.txt", "s9 changed again\n") },
-	} {
-		prev, err := treeNow(root)
-		assert.NilError(t, err)
-		change()
-		next, err := treeNow(root)
-		assert.NilError(t, err)
-		assert.Assert(t, prev != next, "%s must change the tree", name)
-	}
 }
 
 // The two scripts that run in the sandbox are plain shell and git, so they run
@@ -304,11 +138,14 @@ func TestSandboxScriptsCaptureOnlyTheAgentsChangesAndLeaveTheSandboxAsTheyFoundI
 	assert.Equal(t, read(t, root, "staged.txt"), "s2 edited\n")
 }
 
-func TestCheckPatchPathsRefusesCIConfigGitInternalsAndOutsideThePatch(t *testing.T) {
+// The task may be about CI, so CI definitions are the implementer's to change;
+// git's own directory and anything outside the repository never are.
+func TestCheckPatchPathsRefusesGitInternalsAndOutsideThePatch(t *testing.T) {
 	diff := func(p string) string { return "diff --git a/" + p + " b/" + p + "\n" }
-	assert.NilError(t, checkPatchPaths(diff("src/a.go")))
-	assert.NilError(t, checkPatchPaths(diff(".githubish/x")))
-	for _, bad := range []string{".github/workflows/x.yml", ".github/actions/y/action.yml", ".circleci/config.yml", ".git/hooks/pre-commit", "../outside.txt", "a/../../b.txt"} {
+	for _, ok := range []string{"src/a.go", ".githubish/x", ".github/workflows/x.yml", ".circleci/config.yml"} {
+		assert.NilError(t, checkPatchPaths(diff(ok)), ok)
+	}
+	for _, bad := range []string{".git/hooks/pre-commit", ".git/config", "../outside.txt", "a/../../b.txt"} {
 		assert.Assert(t, checkPatchPaths(diff(bad)) != nil, bad)
 	}
 }
@@ -344,19 +181,4 @@ func TestAppliedFixesCarryLineCountsPerFileInJSON(t *testing.T) {
 	for _, f := range decoded.Files {
 		assert.Assert(t, f["insertions"] != nil && f["deletions"] != nil, "file %v lacks line counts", f["path"])
 	}
-}
-
-// git C-quotes a non-ASCII path in the diff header, which puts the whole name
-// behind a quote and out of reach of header parsing. The apply path checks the
-// names git reports for the patch itself, where they are never quoted.
-func TestApplyRefusesADeniedPathTheDiffHeaderQuotes(t *testing.T) {
-	const denied = ".circleci/t\u00e9st.yml"
-	root := userRepo(t)
-	patch := patchFor(t, root, func(d string) { put(t, d, denied, "jobs: {}\n") })
-	assert.Assert(t, strings.Contains(patch, `"a/`), patch)
-	assert.NilError(t, checkPatchPaths(patch), "a quoted header is what the header check cannot read")
-
-	_, err := applyPatchToTree(t.Context(), root, writePatch(t, patch))
-	assert.ErrorContains(t, err, "may not edit")
-	assert.Assert(t, !exists(root, denied), "nothing is written when a path is refused")
 }
