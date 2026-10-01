@@ -180,7 +180,7 @@ func RsyncPull(ctx context.Context,
 // approximates git's rules, missing .git/info/exclude and the global excludes
 // file, and the sidecar's rsync would have to parse it as the sender.
 func ignoredPaths(ctx context.Context, sess *Session, repoPath string) ([]string, error) {
-	cmd := "git -C " + ShellEscape(repoPath) + " ls-files --others --ignored --exclude-standard --directory"
+	cmd := "git -C " + ShellEscape(repoPath) + " ls-files -z --others --ignored --exclude-standard --directory"
 	result, err := ExecOverSSH(ctx, sess, cmd, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rsync pull: list ignored files: %w", err)
@@ -189,7 +189,9 @@ func ignoredPaths(ctx context.Context, sess *Session, repoPath string) ([]string
 		return nil, fmt.Errorf("rsync pull: list ignored files: exit %d: %s", result.ExitCode, result.Stderr)
 	}
 	var paths []string
-	for _, p := range strings.Split(result.Stdout, "\n") {
+	// -z keeps git from quoting paths with unusual characters, which would
+	// then match nothing.
+	for _, p := range strings.Split(result.Stdout, "\x00") {
 		if p != "" {
 			paths = append(paths, "/"+escapeRsyncPattern(p))
 		}
