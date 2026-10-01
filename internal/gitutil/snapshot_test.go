@@ -2,9 +2,11 @@ package gitutil
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gotest.tools/v3/assert"
 
@@ -156,4 +158,27 @@ func TestSnapshotTreeNotARepoIsUnusable(t *testing.T) {
 
 	_, err := SnapshotTree(t.TempDir())
 	assert.Assert(t, err != nil, "a non-repo dir must not produce a snapshot")
+}
+
+// A snapshot must describe the files and nothing else. git's index carries a
+// stat cache, and whether git trusts it for a given entry depends on the index
+// file's own mtime - so a snapshot built on a copy of the real index can report
+// content the file no longer has, and two snapshots of one unchanged tree taken
+// either side of an mtime tick can disagree. The session loop pauses on any
+// difference between what it last saw and what is there now, and overwrites what
+// it believes it put there, so a snapshot that is not a function of the files
+// alone either stalls the loop or loses the user's work.
+func TestSnapshotTreeIsStableAcrossAnMtimeTick(t *testing.T) {
+	t.Parallel()
+
+	dir := setupRepo(t)
+	writeFile(t, dir, "a.txt", "one\n")
+	add := exec.Command("git", "add", "a.txt")
+	add.Dir = dir
+	assert.NilError(t, add.Run())
+	writeFile(t, dir, "a.txt", "two\n") // same size as the staged content
+
+	first := snapshot(t, dir)
+	time.Sleep(1100 * time.Millisecond) // past the coarsest mtime granularity
+	assert.Equal(t, snapshot(t, dir), first, "the same files gave two different trees")
 }

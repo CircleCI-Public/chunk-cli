@@ -206,32 +206,6 @@ func (d *daemon) executeSession(ctx context.Context, entry *sessionEntry, prompt
 	d.settleSession(entry, err)
 }
 
-// runLoop runs the review loop.
-//
-// This version reviews once and stops: fixing what the reviews found, and
-// going round again, is built on top of the record in later changes.
-func (d *daemon) runLoop(ctx context.Context, entry *sessionEntry, prompts []review.Prompt, req SessionRequest) error {
-	root := entry.snapshot().ProjectRoot
-	ridx := entry.beginRound(prompts)
-
-	pool, err := d.openRoundPool(ctx, root, len(prompts), req)
-	if err != nil {
-		return err
-	}
-	defer pool.close(ctx)
-
-	results, err := d.runReviews(ctx, entry, ridx, root, prompts, req, pool)
-	entry.finishReviews(ridx, results)
-	if err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	entry.endRound(ridx, RoundDone, "reviewed once; fixing is not built yet")
-	return nil
-}
-
 // roundPool is a round's sandboxes.
 type roundPool struct{ *ReviewPool }
 
@@ -345,15 +319,17 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 		if err != nil {
 			return 0, fmt.Errorf("submit: %w", err)
 		}
-		name := attribute(pe.ID, commandID)
-		d.out.register(CommandReg{
-			CommandID:   commandID,
-			SidecarID:   pe.ID,
-			ProjectRoot: root,
-			Op:          "review",
-			Name:        name,
-			SubmittedAt: time.Now(),
-		}, streamFor(pe.Client))
+		// An empty name means the command is bookkeeping, not worth a log pane.
+		if name := attribute(pe.ID, commandID); name != "" {
+			d.out.register(CommandReg{
+				CommandID:   commandID,
+				SidecarID:   pe.ID,
+				ProjectRoot: root,
+				Op:          "review",
+				Name:        name,
+				SubmittedAt: time.Now(),
+			}, streamFor(pe.Client))
+		}
 		code, err := stream(ctx, pe, commandID, onOutput)
 		if err != nil {
 			return 0, fmt.Errorf("stream output: %w", err)
@@ -520,10 +496,7 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 		stage.State, stage.Note = StageFailed, entry.s.Error
 	default:
 		entry.s.State = SessionDone
-		stage.State = StageDone
-		if n := len(entry.s.Rounds); n > 0 {
-			stage.Note = entry.s.Rounds[n-1].Note
-		}
+		stage.State, stage.Note = StageDone, entry.loopNote
 	}
 
 	// Anything still in flight when the session ended did not finish; say so

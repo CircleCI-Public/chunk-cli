@@ -174,3 +174,23 @@ func TestSessionStartWithoutAnOriginRemoteFailsBeforeAnySandboxWork(t *testing.T
 	assert.Assert(t, strings.Contains(ue.Suggestion(), "git remote add origin"))
 	assert.Equal(t, ue.exitCode, ExitBadArgs)
 }
+
+func TestSessionRestoreAndResumeExplainWhyTheyCannotRun(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	startSessionDaemon(t, fakeSessionConfig("Looks good."))
+	project := sessionProject(t)
+	out, err := runSessionCmd(t, "start", "--detach", "--json", "--project", project)
+	assert.NilError(t, err)
+	var started map[string]string
+	assert.NilError(t, json.Unmarshal([]byte(out), &started))
+	_, err = runSessionCmd(t, "attach", started["id"], "--json")
+	assert.NilError(t, err)
+
+	// Nothing was found, so nothing was changed and there is nothing to restore.
+	_, err = runSessionCmd(t, "restore", started["id"])
+	assert.ErrorContains(t, err, "did not change any files")
+	// And a session that is not paused cannot be resumed.
+	_, err = runSessionCmd(t, "resume", started["id"])
+	assert.ErrorContains(t, err, "not paused")
+}

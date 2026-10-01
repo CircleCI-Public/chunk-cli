@@ -21,11 +21,16 @@ import (
 // either, since the state worth comparing against is usually the last one that
 // passed its checks rather than the last one somebody committed.
 //
-// Nothing about the developer's repository moves. The index is a throwaway copy
-// in a temp file (GIT_INDEX_FILE), so no staging is touched, and HEAD and the
-// working tree are never written. The copy is seeded from the real index for its
-// stat cache: without it every file would be re-hashed on every call, which on a
-// large repo is the difference between milliseconds and seconds.
+// Nothing about the developer's repository moves. The index is a throwaway one
+// in a temp directory (GIT_INDEX_FILE), so no staging is touched, and HEAD and
+// the working tree are never written.
+//
+// That index is never seeded from the repository's own. Copying it would bring
+// its stat cache along, and git trusts that cache for any file whose size and
+// mtime still match — so a snapshot could report content the file no longer has,
+// two snapshots of one unchanged tree could disagree, and an edit that keeps a
+// file's size inside one mtime tick could go unseen. Hashing from cold is also
+// no slower in practice, since seeding costs a copy of the whole index.
 //
 // It does write blob and tree objects into .git/objects. They are unreferenced,
 // so git's own gc collects them in its own time — which is also why a snapshot
@@ -33,25 +38,14 @@ import (
 // gets an error from ChangesBetween and should fall back to measuring against
 // HEAD.
 func SnapshotTree(dir string) (string, error) {
-	gitDir, err := gitOut(dir, "rev-parse", "--absolute-git-dir")
+	// The index must not exist yet: git rejects an empty file as a malformed one.
+	tmp, err := os.MkdirTemp("", "chunk-index-")
 	if err != nil {
-		return "", fmt.Errorf("resolve git dir: %w", err)
+		return "", fmt.Errorf("create temp index dir: %w", err)
 	}
+	defer func() { _ = os.RemoveAll(tmp) }()
 
-	tmp, err := os.CreateTemp("", "chunk-index-")
-	if err != nil {
-		return "", fmt.Errorf("create temp index: %w", err)
-	}
-	indexPath := tmp.Name()
-	_ = tmp.Close()
-	defer func() { _ = os.Remove(indexPath) }()
-
-	// Best-effort: a missing or unreadable index costs speed, not correctness.
-	if data, err := os.ReadFile(filepath.Join(strings.TrimSpace(gitDir), "index")); err == nil {
-		_ = os.WriteFile(indexPath, data, 0o600)
-	}
-
-	env := append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(tmp, "index"))
 	if _, err := gitOutEnv(dir, env, "add", "-A"); err != nil {
 		return "", fmt.Errorf("stage working tree: %w", err)
 	}

@@ -32,6 +32,11 @@ type sessionEntry struct {
 	// resume wakes a paused session. Buffered so a resume that arrives a moment
 	// before the session starts waiting is not lost.
 	resume chan struct{}
+	// leftTree is the user's working tree as the session last left it, after the
+	// most recent fix; loopNote is why the review loop ended. Both are
+	// internal: the record shows their consequences.
+	leftTree string
+	loopNote string
 	// sidecarReview maps a sandbox to the review currently running on it, so a
 	// command submitted there can be attributed to its review.
 	sidecarReview map[string]string
