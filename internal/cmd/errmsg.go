@@ -15,4 +15,5 @@ const (
 	suggestionCheckPerms   = "Check file permissions."
 	suggestionNetworkRetry = "Check your network connection and try again."
 	suggestionGitRepo      = "Run this command from inside a git repo."
+	suggestionRunInit      = "Run 'chunk init' first."
 )
