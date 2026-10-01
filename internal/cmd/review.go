@@ -85,7 +85,7 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 			if err != nil {
 				return &userError{
 					msg:        msgValidateNotConfigured,
-					suggestion: "Run 'chunk init' first.",
+					suggestion: suggestionRunInit,
 					err:        err,
 				}
 			}

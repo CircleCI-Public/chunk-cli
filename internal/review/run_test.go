@@ -296,13 +296,20 @@ func TestRunPassProgressFn(t *testing.T) {
 
 func TestClaudeScript(t *testing.T) {
 	t.Parallel()
-	script := claudeScript("/home/user/my repo", "hi", "claude-sonnet-5")
+	script := claudeScript("/home/user/my repo", "hi", "claude-sonnet-5", "")
 	assert.Assert(t, strings.Contains(script, "cd '/home/user/my repo'"), script)
 	assert.Assert(t, strings.Contains(script, "'claude' '-p' '--output-format' 'text'"), script)
 	assert.Assert(t, strings.Contains(script, "'--model' 'claude-sonnet-5'"), script)
 	assert.Assert(t, strings.Contains(script, "Bash(git diff:*)"), script)
 	assert.Assert(t, !strings.Contains(script, "Edit"), script)
 	assert.Equal(t, promptOf(t, script), "hi")
+}
+
+func TestClaudeScriptWithJSONSchema(t *testing.T) {
+	t.Parallel()
+	script := claudeScript("/repo", "hi", "", `{"type":"object"}`)
+	assert.Assert(t, strings.Contains(script, `'--output-format' 'json' '--json-schema' '{"type":"object"}'`), script)
+	assert.Assert(t, !strings.Contains(script, "Edit"), script)
 }
 
 func TestRunPassForwardsACustomBaseURL(t *testing.T) {

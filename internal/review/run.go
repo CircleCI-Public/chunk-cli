@@ -86,8 +86,11 @@ type Options struct {
 	Credential Credential
 	// BaseURL is forwarded to claude when it is not Anthropic's own, so a
 	// credential issued by a gateway is sent to that gateway.
-	BaseURL    string
-	Model      string        // optional; claude's default when empty
+	BaseURL string
+	Model   string // optional; claude's default when empty
+	// JSONSchema, when set, has claude return JSON matching it instead of
+	// prose. Result.Output is then claude's JSON result envelope.
+	JSONSchema string
 	Timeout    time.Duration // per review; DefaultTimeout when zero
 	StatusFn   iostream.StatusFunc
 	ProgressFn func(ProgressEvent) // optional; called on each prompt state change
@@ -224,7 +227,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
 	var stdout, stderr strings.Builder
-	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model), claudeEnv(opts), func(stream string, data []byte) {
+	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model, opts.JSONSchema), ClaudeEnv(opts), func(stream string, data []byte) {
 		buf := &stdout
 		if stream == circleci.StreamStderr {
 			buf = &stderr
@@ -242,18 +245,23 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		return r.fail(fmt.Errorf("exec: %w", err))
 	case code == exitClaudeMissing:
 		return r.fail(ErrClaudeMissing)
-	case code != 0 && credentialRejected(r.Output, stderr.String()):
+	case code != 0 && CredentialRejected(r.Output, stderr.String()):
 		return r.fail(ErrCredentialRejected)
 	case code != 0:
-		return r.fail(exitError(code, stderr.String()))
+		detail := stderr.String()
+		// In JSON mode claude reports its own errors in the stdout envelope.
+		if strings.TrimSpace(detail) == "" && opts.JSONSchema != "" {
+			detail = r.Output
+		}
+		return r.fail(exitError(code, detail))
 	}
 	return r
 }
 
-// credentialRejected reports whether claude failed to authenticate. Both
+// CredentialRejected reports whether claude failed to authenticate. Both
 // streams are checked: the 401 lands on stdout, while stderr can carry
 // unrelated warnings.
-func credentialRejected(stdout, stderr string) bool {
+func CredentialRejected(stdout, stderr string) bool {
 	return credentialRejectedRe.MatchString(stdout) || credentialRejectedRe.MatchString(stderr)
 }
 
@@ -275,8 +283,12 @@ func exitError(code int, stderr string) error {
 // piped in base64-encoded, so no quoting in it can reach the shell. Claude
 // Code's native installer puts claude in ~/.local/bin, which a non-login sh
 // does not have on PATH.
-func claudeScript(repoPath, prompt, model string) string {
-	args := []string{"claude", "-p", "--output-format", "text", "--allowedTools", strings.Join(allowedTools, ",")}
+func claudeScript(repoPath, prompt, model, jsonSchema string) string {
+	args := []string{"claude", "-p", "--output-format", "text"}
+	if jsonSchema != "" {
+		args = []string{"claude", "-p", "--output-format", "json", "--json-schema", jsonSchema}
+	}
+	args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
 	if model != "" {
 		args = append(args, "--model", model)
 	}
@@ -290,9 +302,9 @@ cd %s && echo %s | base64 -d | %s`,
 // defaultBaseURL is where claude sends requests when no base URL is set.
 const defaultBaseURL = "https://api.anthropic.com"
 
-// claudeEnv is the environment each review runs with: only the credential, and
+// ClaudeEnv is the environment each claude run gets: only the credential, and
 // the base URL when it points somewhere other than Anthropic.
-func claudeEnv(opts Options) map[string]string {
+func ClaudeEnv(opts Options) map[string]string {
 	env := map[string]string{opts.Credential.EnvVar: opts.Credential.Value}
 	if opts.BaseURL != "" && strings.TrimRight(opts.BaseURL, "/") != defaultBaseURL {
 		env["ANTHROPIC_BASE_URL"] = opts.BaseURL
