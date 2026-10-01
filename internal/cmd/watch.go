@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path"
@@ -61,52 +62,11 @@ func newWatchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			seen := map[string]bool{}
-			var entries []watch.ProjectEntry
-			for _, root := range roots {
-				abs, err := filepath.Abs(root)
-				if err != nil {
-					return fmt.Errorf("watch: invalid path %q: %w", root, err)
-				}
-				if gitRoot := gitutil.TopLevelCtx(cmd.Context(), abs); gitRoot != "" {
-					// Canonicalised because --focus sends these roots to the daemon as a
-					// filter, and the daemon keys projects by the canonical spelling. Git
-					// happens to answer with a resolved path on darwin, so a mismatch here
-					// would be invisible on one platform and an empty dashboard on another.
-					abs = config.CanonicalProjectRoot(gitRoot)
-				} else {
-					// Skip non-git paths: nothing to watch and no sidecar to find.
-					continue
-				}
-				if seen[abs] {
-					continue
-				}
-				seen[abs] = true
-
-				dataDir, err := config.ProjectDataDir(abs)
-				if err != nil {
-					return fmt.Errorf("watch: data dir for %s: %w", abs, err)
-				}
-
-				// Register this project so future runs discover it.
-				_ = sidecar.RegisterProjectRoot(dataDir, abs)
-
-				el, err := eventlog.Open(dataDir)
-				if err != nil {
-					return fmt.Errorf("watch: event log for %s: %w", abs, err)
-				}
-
-				entries = append(entries, watch.ProjectEntry{
-					Log:         el,
-					DataDir:     dataDir,
-					ProjectRoot: abs,
-				})
+			m, err := localDashboard(cmd.Context(), roots, !focus)
+			if err != nil {
+				return err
 			}
-
-			m := watch.New(entries, !focus).WithDaemonArgs(daemonArgs)
-			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
-			_, err = p.Run()
+			_, err = tea.NewProgram(m, tea.WithContext(cmd.Context())).Run()
 			return err
 		},
 	}
@@ -117,6 +77,56 @@ func newWatchCmd() *cobra.Command {
 	_ = cmd.Flags().MarkDeprecated("all", "watching all known projects is now the default; use --focus to watch only the current directory")
 	cmd.AddCommand(newWatchDaemonCmd())
 	return cmd
+}
+
+// localDashboard builds the dashboard over roots against the local daemon,
+// registering each project so future runs find it. watchAll keeps it looking
+// for projects that appear while it runs.
+func localDashboard(ctx context.Context, roots []string, watchAll bool) (watch.Model, error) {
+	seen := map[string]bool{}
+	var entries []watch.ProjectEntry
+	for _, root := range roots {
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			return watch.Model{}, fmt.Errorf("watch: invalid path %q: %w", root, err)
+		}
+		if gitRoot := gitutil.TopLevelCtx(ctx, abs); gitRoot != "" {
+			// Canonicalised because --focus sends these roots to the daemon as a
+			// filter, and the daemon keys projects by the canonical spelling. Git
+			// happens to answer with a resolved path on darwin, so a mismatch here
+			// would be invisible on one platform and an empty dashboard on another.
+			abs = config.CanonicalProjectRoot(gitRoot)
+		} else {
+			// Skip non-git paths: nothing to watch and no sidecar to find.
+			continue
+		}
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+
+		dataDir, err := config.ProjectDataDir(abs)
+		if err != nil {
+			return watch.Model{}, fmt.Errorf("watch: data dir for %s: %w", abs, err)
+		}
+
+		// Register this project so future runs discover it.
+		_ = sidecar.RegisterProjectRoot(dataDir, abs)
+
+		el, err := eventlog.Open(dataDir)
+		if err != nil {
+			return watch.Model{}, fmt.Errorf("watch: event log for %s: %w", abs, err)
+		}
+
+		entries = append(entries, watch.ProjectEntry{
+			Log:         el,
+			DataDir:     dataDir,
+			ProjectRoot: abs,
+		})
+	}
+
+	daemonArgs := []string{watchCmdName, watchDaemonSubcmd}
+	return watch.New(entries, watchAll).WithDaemonArgs(daemonArgs), nil
 }
 
 // runRemoteWatch runs the dashboard against a daemon on another machine

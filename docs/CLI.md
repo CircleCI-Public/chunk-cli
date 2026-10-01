@@ -163,7 +163,8 @@ chunk
 │   │   --timeout <duration>        # Max time for each Claude run (default: 15m)
 │   │   --detach                    # Print the session ID and return
 │   │   --json                      # Output as JSON
-│   ├── attach <id>                 # Follow a session until it ends or pauses
+│   ├── attach <id>                 # Follow a session (the watch dashboard on a terminal)
+│   │   --json                      # Follow until it ends or pauses, then print it as JSON
 │   ├── cancel <id>                 # Stop a session
 │   ├── resume <id>                 # Continue a paused session with your files as they are now
 │   ├── restore <id>                # Undo everything the session changed in your working tree
@@ -306,8 +307,12 @@ chunk
   host**, sent as typed. `--focus` with no path is an error in this mode.
 - **`session` runs on the local daemon, in the background.** `chunk session start`
   registers the current git repository with the daemon, starts the daemon if it
-  is not running, and starts a session; it follows the session until it ends
-  (Ctrl-C detaches, `--detach` returns at once). The session belongs to the
+  is not running, and starts a session. On a terminal it then opens the `watch`
+  dashboard with the new session selected (as does `attach`); leaving the
+  dashboard detaches, and prints the session's summary if it has ended or
+  paused. Without a terminal, or with `--json`, it prints the session's progress
+  until it ends or pauses instead (Ctrl-C detaches). `--detach` returns at once
+  with the ID. The session belongs to the
   daemon: only `cancel` stops it. It uses the *daemon's* Claude and CircleCI
   credentials, resolved when it started, and it is refused when
   `CHUNK_WATCHD_REMOTE_ADDR` is set, since a session works on this machine's
@@ -324,17 +329,21 @@ chunk
   files as they are and goes again, `cancel` ends it. It never touches the
   index, commits, or pushes. Sessions are kept in memory:
   a daemon restart loses the record. In-process `chunk review` is unchanged.
-- **`watch` shows the daemon's sessions live.** The header notes a session running
-  or paused, and `r` opens the session view: a timeline of the whole flow — the
-  review loop with each round (its reviews, drawn by the same renderer as
-  `chunk review`, the findings and how many are worth changing, and what the
-  round's fixes changed in your files: file list and line counts), then Rebase,
-  CI, Approval and Open pull request, shown as "not built yet". A paused session
-  shows why (which files changed under it) and `c` continues it. `Enter` opens a
-  review's live log, `f` the round's fix log, `Tab` picks the round, `↑/↓` the
-  session. **`q` only detaches**: the session belongs to the daemon and carries
-  on. The one key that stops it is `x`, and it needs a second `x` on the same
-  session to confirm.
+- **`watch` shows the daemon's sessions live.** When the daemon has any, a
+  "review sessions" section sits above the sidecars in the left pane: every live
+  session, then the newest finished ones, up to four rows (the rest are counted,
+  and `chunk session list` has them). `↑/↓` moves through one list, sessions then
+  sidecars, and on opening the dashboard selects a session in flight if there is
+  one. With a session selected the right pane shows its timeline in place of
+  sidecar activity: the review loop with each round (its reviews, drawn by the
+  same renderer as `chunk review`, the findings and how many are worth changing,
+  and what the round's fixes changed in your files: file list and line counts),
+  then Rebase, CI, Approval and Open pull request, shown as "not built yet". In
+  the right pane `↑/↓` moves through the reviews of every round, `Enter` opens a
+  review's live log and `f` the round's fix log. A paused session shows why
+  (which files changed under it) and `c` continues it. **`q` only detaches**:
+  the session belongs to the daemon and carries on. The one key that stops it is
+  `x`, and it needs a second `x` on the same session to confirm.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -15,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
@@ -31,9 +33,11 @@ func newSessionCmd() *cobra.Command {
 		Use:   "session",
 		Short: "Run and follow a pre-PR review session on the local watch daemon",
 		Long: `A session reviews the work in the current project and applies the fixes,
-in the background, on the local watch daemon. See 'chunk watch' to follow it
-live. The session belongs to the daemon: attaching and detaching never changes
-what it does, and only 'cancel' stops it.`,
+in the background, on the local watch daemon. On a terminal, 'start' and
+'attach' open the 'chunk watch' dashboard with the session selected; otherwise,
+or with --json, they print its progress until it ends or pauses. The session
+belongs to the daemon: attaching and detaching never changes what it does, and
+only 'cancel' stops it.`,
 		// Hidden until the rest of the flow (rebase, CI, approval, PR) exists.
 		Hidden: true,
 	}
@@ -86,6 +90,9 @@ func newSessionStartCmd() *cobra.Command {
 			if detach {
 				return printSessionID(streams, id, jsonOut)
 			}
+			if !jsonOut && ui.RequireStdoutTTY() == nil {
+				return watchSession(cmd, streams, id, root)
+			}
 			streams.ErrPrintf("Session %s started on the watch daemon. Ctrl-C detaches; it keeps running.\n", id)
 			return followSession(cmd.Context(), streams, id, jsonOut)
 		},
@@ -105,14 +112,22 @@ func newSessionAttachCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:          "attach <session-id>",
-		Short:        "Follow a session until it ends or pauses",
+		Short:        "Follow a session: the watch dashboard on a terminal, status lines otherwise",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireLocalDaemon(); err != nil {
 				return err
 			}
-			return followSession(cmd.Context(), iostream.FromCmd(cmd), args[0], jsonOut)
+			streams := iostream.FromCmd(cmd)
+			if !jsonOut && ui.RequireStdoutTTY() == nil {
+				wd, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("determine working directory: %w", err)
+				}
+				return watchSession(cmd, streams, args[0], wd)
+			}
+			return followSession(cmd.Context(), streams, args[0], jsonOut)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
@@ -329,11 +344,51 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 		}
 		select {
 		case <-ctx.Done():
-			streams.ErrPrintf("Detached. Session %s keeps running on the daemon (chunk session attach %s, or cancel %s).\n", id, id, id)
+			printDetached(streams, id)
 			return nil
 		case <-ticker.C:
 		}
 	}
+}
+
+// watchSession opens the watch dashboard with the session selected, over the
+// project in dir and every other one chunk knows, then says where the session
+// stands once the reader leaves.
+func watchSession(cmd *cobra.Command, streams iostream.Streams, id, dir string) error {
+	// Checked before the screen clears: an unknown ID would otherwise open a
+	// dashboard that never selects anything.
+	if _, err := watchd.FetchSession(id); err != nil {
+		return sessionError(err)
+	}
+	roots, err := watchRoots(dir, false, nil)
+	if err != nil {
+		return err
+	}
+	m, err := localDashboard(cmd.Context(), roots, true)
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	if _, err := tea.NewProgram(m.WithSession(id), tea.WithContext(ctx)).Run(); err != nil && ctx.Err() == nil {
+		return fmt.Errorf("run watch dashboard: %w", err)
+	}
+	return reportLeftSession(streams, id)
+}
+
+// reportLeftSession says where a session stands once the dashboard has closed:
+// how it ended or why it paused, the same as following it would have, or that
+// it carries on without the reader.
+func reportLeftSession(streams iostream.Streams, id string) error {
+	detail, err := watchd.FetchSession(id)
+	if err != nil || (!detail.State.Finished() && detail.State != watchd.SessionPaused) {
+		printDetached(streams, id)
+		return nil
+	}
+	return finishSession(streams, detail, false)
+}
+
+func printDetached(streams iostream.Streams, id string) {
+	streams.ErrPrintf("Detached. Session %s keeps running on the daemon (chunk session attach %s, or cancel %s).\n", id, id, id)
 }
 
 // finishSession prints where a session ended up and maps failure to an error.

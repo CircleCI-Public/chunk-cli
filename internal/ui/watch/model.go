@@ -222,10 +222,15 @@ type Model struct {
 	// whether the last poll reached it.
 	conn watchd.Connection
 
-	// sessions are the daemon's pre-PR sessions across projects, and sessionView
-	// the open session view, nil when the dashboard is showing sidecars.
-	sessions      []sessionInfo
-	sessionView   *sessionPane
+	// sessions are the daemon's pre-PR sessions across projects, live first.
+	// sessionSel is the ID of the one selected in the left pane, "" when a
+	// sidecar is selected, and sessPane the state of acting on it.
+	sessions   []sessionInfo
+	sessionSel string
+	sessPane   sessionPane
+	// focusSession is a session to select as soon as a poll lists it, set by
+	// WithSession; "" once it has been selected.
+	focusSession  string
 	reviewAuthErr string
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
@@ -268,6 +273,14 @@ func (m Model) WithConnection(conn watchd.Connection) Model {
 	return m
 }
 
+// WithSession returns a copy of m that opens with the session id selected, for
+// a caller that has just started or attached to it. It is selected on the first
+// poll that lists it, and from then on the selection is the reader's.
+func (m Model) WithSession(id string) Model {
+	m.focusSession = id
+	return m
+}
+
 // WithDaemonArgs returns a copy of m that can relaunch the watch daemon when a
 // poll finds it gone. subArgs is the argv the daemon is started with, the same
 // one passed to watchd.EnsureRunning.
@@ -283,34 +296,32 @@ func (m Model) Init() tea.Cmd {
 // updateDashboardKey handles keys for the two-pane dashboard, when no output
 // pane is open. Split out of Update so neither grows past the complexity limit.
 func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Any key withdraws a pending cancel and clears the last action's note, so
+	// only an x pressed straight after another x cancels.
+	wasConfirm := m.sessPane.confirm
+	m.sessPane.confirm, m.sessPane.note = "", ""
+	if sel := m.selectedSession(); sel != nil {
+		if next, cmd, handled := m.updateSessionKey(msg, sel, wasConfirm); handled {
+			return next, cmd
+		}
+	}
+
 	switch msg.Code {
 	case 'q', tea.KeyEscape:
 		return m, tea.Quit
-	case 'r':
-		return m.openSessions(), nil
 	case tea.KeyRight, 'l':
 		m.focusedPane = paneRight
 	case tea.KeyLeft, 'h':
 		m.focusedPane = paneLeft
 	case 's', tea.KeyDown:
 		if m.focusedPane == paneLeft {
-			if m.selectedIdx < len(m.sidecars)-1 {
-				m.selectedIdx++
-			}
-			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-			m.rightSelectedIdx = 0
-			m = m.adjustLeftScroll()
+			m = m.moveLeftSelection(1)
 		} else {
 			m.rightSelectedIdx++
 		}
 	case 'w', tea.KeyUp:
 		if m.focusedPane == paneLeft {
-			if m.selectedIdx > 0 {
-				m.selectedIdx--
-			}
-			m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-			m.rightSelectedIdx = 0
-			m = m.adjustLeftScroll()
+			m = m.moveLeftSelection(-1)
 		} else if m.rightSelectedIdx > 0 {
 			m.rightSelectedIdx--
 		}
@@ -354,9 +365,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.output != nil {
 			return m.updateOutputKey(msg)
 		}
-		if m.sessionView != nil {
-			return m.updateSessionKey(msg)
-		}
 		return m.updateDashboardKey(msg)
 
 	case tea.MouseClickMsg:
@@ -398,6 +406,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchOutput(m.output.commandID, m.output.offset), outputTick(msg.seq))
 
 	case dataMsg:
+		firstPoll := m.selectedID == noSelection
 		m.daemonErr = nil
 		m.projects = msg.projects
 		m.sidecars = msg.sidecars
@@ -409,8 +418,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.authErr = msg.authErr
 		m.sessions = msg.sessions
 		m.reviewAuthErr = msg.reviewAuthErr
-		if m.sessionView != nil {
-			m.sessionView.sel = min(m.sessionView.sel, max(len(m.sessions)-1, 0))
+		switch {
+		case m.focusSession != "":
+			if i := listedSessionIndex(m.sessions, m.focusSession); i >= 0 {
+				m = m.selectSession(i)
+				m.focusSession = ""
+			}
+		case firstPoll && len(m.sessions) > 0 && !m.sessions[0].s.State.Finished():
+			// A session in flight is what the dashboard was most likely opened
+			// to follow.
+			m = m.selectSession(0)
+		case m.sessionSel != "" && m.sessionIndex() < 0:
+			// The session is gone (the daemon restarted) or no longer listed.
+			m.sessionSel, m.sessPane = "", sessionPane{}
 		}
 		// Sidecars are re-sorted by recency each poll, so track the selection
 		// by id. An unknown id (first poll, or the sidecar aged out) falls back
@@ -468,9 +488,6 @@ func (m Model) render() string {
 	if m.output != nil {
 		return m.renderHeader(st) + m.renderSeparator(st) + m.renderOutputPane(st)
 	}
-	if m.sessionView != nil {
-		return m.renderSessionView(st)
-	}
 	return m.renderHeader(st) +
 		m.renderSeparator(st) +
 		m.renderBody(st) +
@@ -497,7 +514,7 @@ func (m Model) renderHeader(st watchStyles) string {
 
 	clock := time.Now().Format("15:04:05")
 	title := st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
-	right := m.sessionTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
+	right := m.connectionTag(st) + "  " + st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -532,6 +549,10 @@ func (m Model) contentHeight() int {
 	if m.daemonErr != nil {
 		h--
 	}
+	// So does a pending cancel's confirmation or an action's note.
+	if m.sessPane.confirm != "" || m.sessPane.note != "" {
+		h--
+	}
 	if h < 1 {
 		h = 1
 	}
@@ -542,7 +563,12 @@ func (m Model) renderBody(st watchStyles) string {
 	contentHeight := m.contentHeight()
 
 	leftLines := m.renderSidecarPane(st, contentHeight)
-	rightLines := m.renderActivityPane(st, contentHeight)
+	var rightLines []string
+	if sel := m.selectedSession(); sel != nil {
+		rightLines = m.renderSessionPane(st, *sel, contentHeight)
+	} else {
+		rightLines = m.renderActivityPane(st, contentHeight)
+	}
 
 	var b strings.Builder
 	for i := 0; i < contentHeight; i++ {
@@ -562,9 +588,15 @@ func (m Model) renderBody(st watchStyles) string {
 		// Clip rather than let a long line wrap: the two panes are drawn as one
 		// fixed-height block, so a line that wraps shifts everything below it and
 		// the layout no longer matches the height it was built for.
-		b.WriteString(" " + lPad + " " + div + " " + clip(r, m.width-leftPaneWidth-4) + "\n")
+		b.WriteString(" " + lPad + " " + div + " " + clip(r, m.rightPaneWidth()) + "\n")
 	}
 	return b.String()
+}
+
+// rightPaneWidth is the width of the right pane: the terminal less a leading
+// space, the left pane, and the divider with a space either side.
+func (m Model) rightPaneWidth() int {
+	return m.width - leftPaneWidth - 4
 }
 
 // rowStatus is the one-line state a sidecar row reports: what it is doing now,
@@ -604,7 +636,12 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 	lines = make([]string, 0, maxLines)
 	add := func(s string) { lines = append(lines, s) }
 
-	if m.focusedPane == paneLeft {
+	// The sessions are pinned above the sidecars, and their lines count against
+	// the budget the sidecar rows are fitted to.
+	lines = append(lines, m.renderSessionSection(st)...)
+	sessionSelected := m.selectedSession() != nil
+
+	if m.focusedPane == paneLeft && !sessionSelected {
 		add(st.emphasis("sidecars"))
 	} else {
 		add(st.vdim("sidecars"))
@@ -681,7 +718,7 @@ func (m Model) layoutSidecarPane(st watchStyles, maxLines int) (lines []string, 
 		}
 		lastGroup, haveGroup = group, true
 
-		selected := i == m.selectedIdx
+		selected := i == m.selectedIdx && !sessionSelected
 		nameLine := truncate(m.rowLabel(sc, multi, dirLabel), leftPaneWidth-3)
 
 		if selected {
@@ -789,8 +826,7 @@ func (m Model) renderActivityPane(st watchStyles, maxLines int) []string {
 	}
 
 	if len(filtered) == 0 {
-		// right pane width: total - 1 leading space - leftPaneWidth - 1 space - 1 divider - 1 space
-		rightWidth := m.width - leftPaneWidth - 4
+		rightWidth := m.rightPaneWidth()
 		logoMaxWidth := 0
 		for _, l := range logoLines {
 			if w := lipgloss.Width(l); w > logoMaxWidth {
@@ -930,6 +966,9 @@ func (m Model) toggleSelectedInvoc() Model {
 func (m Model) withMouseClick(x, y int) Model {
 	if x <= leftPaneWidth+2 {
 		return m // click is in left pane or on divider
+	}
+	if m.selectedSession() != nil {
+		return m // the right pane is a session, not invocations to toggle
 	}
 	contentLine := y - 4 // 2 header rows + 2 activity title/blank rows
 	if contentLine < 0 {
@@ -1173,25 +1212,32 @@ func iconAndMsg(st watchStyles, e eventlog.Event) (string, string) {
 	}
 }
 
-func (m Model) renderFooter(st watchStyles) string {
-	var keys []struct{ key, action string }
-	if m.focusedPane == paneLeft {
-		keys = []struct{ key, action string }{
-			{"↑/↓ w/s", "select"},
-			{"→", "runs"},
-			{"r", "sessions"},
-			{"q", "quit"},
-		}
-	} else {
-		keys = []struct{ key, action string }{
-			{"↑/↓ w/s", "navigate"},
-			{"Enter", "output"},
-			{"Space", "toggle"},
-			{"←", "sidecars"},
-			{"r", "sessions"},
-			{"q", "quit"},
-		}
+// footerKey is one key hint in the footer.
+type footerKey struct{ key, action string }
+
+// footerKeys are the hints for the focused pane and what is selected in it.
+func (m Model) footerKeys() []footerKey {
+	const upDown = "↑/↓ w/s"
+	sel := m.selectedSession()
+	var keys []footerKey
+	switch {
+	case m.focusedPane == paneLeft && sel != nil:
+		keys = []footerKey{{upDown, "select"}, {"→", "reviews"}}
+	case m.focusedPane == paneLeft:
+		keys = []footerKey{{upDown, "select"}, {"→", "runs"}}
+	case sel != nil:
+		keys = []footerKey{{upDown, "review"}, {"Enter", "output"}, {"f", "fix output"}, {"←", "back"}}
+	default:
+		keys = []footerKey{{upDown, "navigate"}, {"Enter", "output"}, {"Space", "toggle"}, {"←", "sidecars"}}
 	}
+	if sel != nil {
+		keys = append(keys, sessionKeys(sel.s)...)
+	}
+	return append(keys, footerKey{"q", "quit"})
+}
+
+func (m Model) renderFooter(st watchStyles) string {
+	keys := m.footerKeys()
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		parts = append(parts, st.vdim(k.key)+" "+st.dim(k.action))
@@ -1215,6 +1261,10 @@ func (m Model) renderFooter(st watchStyles) string {
 	switch {
 	case m.authErr != "":
 		notice = st.warning(ui.IconWarn + " " + m.authErr)
+	case m.reviewAuthErr != "" && len(m.sessions) > 0:
+		// Only alongside sessions: the command that starts them is still hidden,
+		// and a warning about it would nag everyone else.
+		notice = st.warning(ui.IconWarn + " " + m.reviewAuthErr)
 	case m.updateAvailable != "":
 		notice = "↑ " + m.updateAvailable + "  " + st.dim(m.upgradeCmd)
 	}
@@ -1225,6 +1275,9 @@ func (m Model) renderFooter(st watchStyles) string {
 	}
 
 	footer := st.vdim(strings.Repeat("─", m.width)) + "\n" + "  " + bar + "\n"
+	if line := m.sessionFooterLine(st); line != "" {
+		footer += "  " + clip(line, m.width-2) + "\n"
+	}
 	if m.daemonErr != nil {
 		footer += "  " + st.err("daemon unavailable: "+m.daemonErr.Error()) + "\n"
 	}
@@ -1484,6 +1537,29 @@ func selectedSidecarID(sidecars []sidecarInfo, idx int) string {
 		return ""
 	}
 	return sidecars[idx].id
+}
+
+// moveLeftSelection moves the left pane's selection by delta through one list:
+// the listed sessions, then the sidecars.
+func (m Model) moveLeftSelection(delta int) Model {
+	n := visibleSessions(m.sessions)
+	total := n + len(m.sidecars)
+	if total == 0 {
+		return m
+	}
+	pos := n + m.selectedIdx
+	if i := m.sessionIndex(); i >= 0 {
+		pos = i
+	}
+	pos = min(max(pos+delta, 0), total-1)
+	m.rightSelectedIdx = 0
+	if pos < n {
+		return m.selectSession(pos)
+	}
+	m.sessionSel, m.sessPane = "", sessionPane{}
+	m.selectedIdx = pos - n
+	m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
+	return m.adjustLeftScroll()
 }
 
 // staleAfter bounds how long an unconfirmed sidecar keeps its row. A confirmed

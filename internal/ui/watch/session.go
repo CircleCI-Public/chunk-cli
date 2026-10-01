@@ -6,14 +6,20 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/reviewprogress"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
+
+// maxSessionRows bounds the review sessions the left pane lists. Every live
+// session is listed regardless; finished ones fill the rest, newest first.
+// Finished sessions pile up until the daemon restarts, and `chunk session
+// list` has the full record.
+const maxSessionRows = 4
 
 // sessionInfo is one pre-PR session with the project it belongs to.
 type sessionInfo struct {
@@ -22,16 +28,16 @@ type sessionInfo struct {
 	projectIdx int // index into Model.projects, for finding the session's commands
 }
 
-// sessionPane is the dashboard's view of the daemon's sessions.
+// sessionPane is the dashboard's state for the selected review session.
 //
 // The sessions belong to the daemon, not to this dashboard. Quitting the
 // dashboard detaches from them and they carry on; the only things that change a
-// session are the explicit keys here: resume (safe: it only continues) and the
+// session are the explicit keys: resume (safe: it only continues) and the
 // confirmed cancel.
 type sessionPane struct {
-	sel    int // index into Model.sessions
-	round  int // round under the cursor
-	review int // review under the cursor, within that round
+	// cursor is the review under the cursor, counting through every round's
+	// reviews in order.
+	cursor int
 	// confirm is the ID of the session an 'x' has been pressed for once. A second
 	// 'x' on the same session cancels it; anything else withdraws it.
 	confirm string
@@ -96,134 +102,171 @@ func anySessionLive(sessions []sessionInfo) bool {
 	return false
 }
 
-func (m Model) selectedSession() *sessionInfo {
-	if m.sessionView == nil || m.sessionView.sel < 0 || m.sessionView.sel >= len(m.sessions) {
-		return nil
+// visibleSessions is how many of sessions, which collectSessions has put live
+// first, the left pane lists.
+func visibleSessions(sessions []sessionInfo) int {
+	live := 0
+	for _, s := range sessions {
+		if !s.s.State.Finished() {
+			live++
+		}
 	}
-	return &m.sessions[m.sessionView.sel]
+	return min(len(sessions), max(live, maxSessionRows))
 }
 
-// openSessions shows the session view, with the cursor on the newest session's
-// latest round.
-func (m Model) openSessions() Model {
-	p := &sessionPane{}
-	if len(m.sessions) > 0 {
-		p.round = max(len(m.sessions[0].s.Rounds)-1, 0)
+// sessionIndex is the index of the selected session among the listed ones, or
+// -1 when a sidecar is selected.
+func (m Model) sessionIndex() int {
+	if m.sessionSel == "" {
+		return -1
 	}
-	m.sessionView = p
+	return listedSessionIndex(m.sessions, m.sessionSel)
+}
+
+// listedSessionIndex is the index of the session id among those the left pane
+// lists, or -1.
+func listedSessionIndex(sessions []sessionInfo, id string) int {
+	for i := range visibleSessions(sessions) {
+		if sessions[i].s.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// selectedSession is the session selected in the left pane, nil when a sidecar
+// is selected.
+func (m Model) selectedSession() *sessionInfo {
+	i := m.sessionIndex()
+	if i < 0 {
+		return nil
+	}
+	return &m.sessions[i]
+}
+
+// selectSession selects the i-th listed session, with the cursor on its latest
+// round.
+func (m Model) selectSession(i int) Model {
+	s := m.sessions[i].s
+	m.sessionSel = s.ID
+	m.sessPane = sessionPane{cursor: latestRoundCursor(s)}
 	return m
 }
 
-// updateSessionKey handles keys while the session view is open.
-func (m Model) updateSessionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	p := *m.sessionView
-	wasConfirm := p.confirm
-	p.confirm, p.note = "", ""
-	sel := m.selectedSession()
-
-	switch msg.Code {
-	case 'q':
-		// Quit, not "close": this is the dashboard's own quit, and it only ever
-		// detaches. The sessions are the daemon's.
-		return m, tea.Quit
-	case 'c':
-		if msg.Mod == tea.ModCtrl {
-			return m, tea.Quit
-		}
-		m.sessionView = &p
-		return m.resumeSelected(&p, sel)
-	case tea.KeyEscape, 'r':
-		m.sessionView = nil
-		return m, nil
-	case tea.KeyDown, 'j', 's':
-		p.sel = min(p.sel+1, max(len(m.sessions)-1, 0))
-		p.round, p.review = lastRound(m.sessions, p.sel), 0
-	case tea.KeyUp, 'k', 'w':
-		p.sel = max(p.sel-1, 0)
-		p.round, p.review = lastRound(m.sessions, p.sel), 0
-	case tea.KeyTab:
-		if sel != nil && len(sel.s.Rounds) > 0 {
-			p.round, p.review = (p.round+1)%len(sel.s.Rounds), 0
-		}
-	case tea.KeyRight, 'l':
-		if sel != nil && p.round < len(sel.s.Rounds) {
-			p.review = min(p.review+1, max(len(sel.s.Rounds[p.round].Reviews)-1, 0))
-		}
-	case tea.KeyLeft, 'h':
-		p.review = max(p.review-1, 0)
-	case tea.KeyEnter:
-		m.sessionView = &p
-		return m.openReviewOutput()
-	case 'f':
-		m.sessionView = &p
-		return m.openFixOutput()
-	case 'x':
-		m.sessionView = &p
-		return m.requestSessionCancel(&p, sel, wasConfirm)
+// latestRoundCursor is the cursor on the first review of a session's latest
+// round.
+func latestRoundCursor(s watchd.Session) int {
+	n := 0
+	for i := 0; i < len(s.Rounds)-1; i++ {
+		n += len(s.Rounds[i].Reviews)
 	}
-	m.sessionView = &p
-	return m, nil
+	return n
 }
 
-func lastRound(sessions []sessionInfo, i int) int {
-	if i < 0 || i >= len(sessions) {
-		return 0
+func reviewCount(s watchd.Session) int {
+	n := 0
+	for _, r := range s.Rounds {
+		n += len(r.Reviews)
 	}
-	return max(len(sessions[i].s.Rounds)-1, 0)
+	return n
 }
 
-// resumeSelected continues a paused session. It does nothing for any other.
-func (m Model) resumeSelected(p *sessionPane, sel *sessionInfo) (tea.Model, tea.Cmd) {
-	if sel == nil || sel.s.State != watchd.SessionPaused {
+// cursorAt maps the review cursor to a round and a review within it. A session
+// with no reviews yet puts it on the latest round, with no review (-1).
+func cursorAt(s watchd.Session, cursor int) (round, review int) {
+	latest := max(len(s.Rounds)-1, 0)
+	n := reviewCount(s)
+	if n == 0 {
+		return latest, -1
+	}
+	cursor = min(max(cursor, 0), n-1)
+	for i, r := range s.Rounds {
+		if cursor < len(r.Reviews) {
+			return i, cursor
+		}
+		cursor -= len(r.Reviews)
+	}
+	return latest, -1
+}
+
+// updateSessionKey handles the keys that act on the selected session. handled
+// is false for a key it leaves to the dashboard.
+func (m Model) updateSessionKey(msg tea.KeyPressMsg, sel *sessionInfo, wasConfirm string) (next Model, cmd tea.Cmd, handled bool) {
+	right := m.focusedPane == paneRight
+	switch {
+	case msg.Code == 'c' && msg.Mod != tea.ModCtrl:
+		next, cmd = m.resumeSelected(sel)
+		return next, cmd, true
+	case msg.Code == 'x':
+		next, cmd = m.requestSessionCancel(sel, wasConfirm)
+		return next, cmd, true
+	case msg.Code == 'f':
+		next, cmd = m.openFixOutput(sel)
+		return next, cmd, true
+	case msg.Code == tea.KeyEnter && right:
+		next, cmd = m.openReviewOutput(sel)
+		return next, cmd, true
+	case msg.Code == tea.KeySpace && right:
+		// Space toggles a sidecar's invocations, which are not on screen.
+		return m, nil, true
+	case (msg.Code == tea.KeyDown || msg.Code == 's') && right:
+		m.sessPane.cursor = min(m.sessPane.cursor+1, max(reviewCount(sel.s)-1, 0))
+		return m, nil, true
+	case (msg.Code == tea.KeyUp || msg.Code == 'w') && right:
+		m.sessPane.cursor = max(min(m.sessPane.cursor, reviewCount(sel.s)-1)-1, 0)
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
+func (m Model) resumeSelected(sel *sessionInfo) (Model, tea.Cmd) {
+	if sel.s.State != watchd.SessionPaused {
 		return m, nil
 	}
-	p.note = "resuming…"
+	m.sessPane.note = "resuming…"
 	return m, resumeSessionCmd(sel.s.ID)
 }
 
 // requestSessionCancel implements the two-press cancel. The first press asks,
 // the second on the same session sends the request. A deliberate second key is
 // the only way the dashboard stops a session.
-func (m Model) requestSessionCancel(p *sessionPane, sel *sessionInfo, wasConfirm string) (tea.Model, tea.Cmd) {
+func (m Model) requestSessionCancel(sel *sessionInfo, wasConfirm string) (Model, tea.Cmd) {
 	switch {
-	case sel == nil:
-		return m, nil
 	case sel.s.State.Finished():
-		p.note = "that session has already ended"
+		m.sessPane.note = "that session has already ended"
 		return m, nil
 	case wasConfirm != sel.s.ID:
-		p.confirm = sel.s.ID
+		m.sessPane.confirm = sel.s.ID
 		return m, nil
 	}
-	p.note = "cancelling…"
+	m.sessPane.note = "cancelling…"
 	return m, cancelSessionCmd(sel.s.ID)
 }
 
 // openReviewOutput opens the scrollback pane for the review under the cursor,
 // through the same /output the sidecar activity pane uses.
-func (m Model) openReviewOutput() (tea.Model, tea.Cmd) {
-	sel := m.selectedSession()
-	p := m.sessionView
-	if sel == nil || p.round >= len(sel.s.Rounds) || p.review >= len(sel.s.Rounds[p.round].Reviews) {
+func (m Model) openReviewOutput(sel *sessionInfo) (Model, tea.Cmd) {
+	ri, vi := cursorAt(sel.s, m.sessPane.cursor)
+	if vi < 0 {
 		return m, nil
 	}
-	rv := sel.s.Rounds[p.round].Reviews[p.review]
+	round := sel.s.Rounds[ri]
+	rv := round.Reviews[vi]
 	if rv.CommandID == "" {
-		p.note = "no output yet for " + rv.Name
+		m.sessPane.note = "no output yet for " + rv.Name
 		return m, nil
 	}
-	return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", sel.s.Rounds[p.round].Number, rv.Name), rv.State == watchd.PromptRunning)
+	return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", round.Number, rv.Name), rv.State == watchd.PromptRunning)
 }
 
-// openFixOutput opens the log of the round's fixing agent, found among the
-// project's buffered commands by name.
-func (m Model) openFixOutput() (tea.Model, tea.Cmd) {
-	sel := m.selectedSession()
-	p := m.sessionView
-	if sel == nil || p.round >= len(sel.s.Rounds) || sel.projectIdx >= len(m.commands) {
+// openFixOutput opens the log of the fixing agent for the round under the
+// cursor, found among the project's buffered commands by name.
+func (m Model) openFixOutput(sel *sessionInfo) (Model, tea.Cmd) {
+	ri, _ := cursorAt(sel.s, m.sessPane.cursor)
+	if ri >= len(sel.s.Rounds) || sel.projectIdx >= len(m.commands) {
 		return m, nil
 	}
-	name := fmt.Sprintf("round %d fix", sel.s.Rounds[p.round].Number)
+	name := fmt.Sprintf("round %d fix", sel.s.Rounds[ri].Number)
 	var found *watchd.CommandState
 	for i := range m.commands[sel.projectIdx] {
 		c := &m.commands[sel.projectIdx][i]
@@ -232,30 +275,51 @@ func (m Model) openFixOutput() (tea.Model, tea.Cmd) {
 		}
 	}
 	if found == nil {
-		p.note = "no fix output for this round"
+		m.sessPane.note = "no fix output for this round"
 		return m, nil
 	}
 	return m.openOutput(found.CommandID, name, found.Running)
 }
 
 // openOutput opens the output pane for a buffered command.
-func (m Model) openOutput(commandID, name string, running bool) (tea.Model, tea.Cmd) {
+func (m Model) openOutput(commandID, name string, running bool) (Model, tea.Cmd) {
 	m.output = &outputPane{commandID: commandID, name: name, pinned: true, running: running}
 	m.outputSeq++
 	return m, tea.Batch(fetchOutput(commandID, 0), outputTick(m.outputSeq))
 }
 
-// withSessionAction folds a resume or cancel result into the view's note.
+// withSessionAction folds a resume or cancel result into the footer's note.
 func (m Model) withSessionAction(msg sessionActionMsg) Model {
-	if m.sessionView == nil {
-		return m
-	}
 	if msg.err != nil {
-		m.sessionView.note = msg.err.Error()
+		m.sessPane.note = msg.err.Error()
 		return m
 	}
-	m.sessionView.note = msg.note
+	m.sessPane.note = msg.note
 	return m
+}
+
+// sessionFooterLine is the footer's extra line for a pending cancel or the
+// result of the last action, "" when there is neither.
+func (m Model) sessionFooterLine(st watchStyles) string {
+	switch {
+	case m.sessPane.confirm != "":
+		return st.warning("press x again to cancel this session — q only detaches")
+	case m.sessPane.note != "":
+		return st.muted(m.sessPane.note)
+	}
+	return ""
+}
+
+// sessionKeys are the footer hints for acting on a session in its state.
+func sessionKeys(s watchd.Session) []footerKey {
+	var keys []footerKey
+	if s.State == watchd.SessionPaused {
+		keys = append(keys, footerKey{"c", "resume"})
+	}
+	if !s.State.Finished() {
+		keys = append(keys, footerKey{"x", "cancel"})
+	}
+	return keys
 }
 
 // ---- rendering --------------------------------------------------------------
@@ -269,26 +333,14 @@ var stageLabels = map[watchd.StageID]string{
 	watchd.StagePR:         "Open pull request",
 }
 
-// sessionTag is the header's note of a session in flight, so one started
-// elsewhere is visible without opening the view.
-func (m Model) sessionTag(st watchStyles) string {
-	for _, s := range m.sessions {
-		switch s.s.State {
-		case watchd.SessionPaused:
-			return st.warning(ui.IconWarn+" session paused") + "  "
-		case watchd.SessionRunning:
-			return st.running(spinFrames[m.spinIdx%len(spinFrames)]+" session running") + "  "
-		case watchd.SessionDone, watchd.SessionFailed, watchd.SessionCancelled:
-			// Ended sessions are not worth the header.
-		}
-	}
-	return ""
+func (m Model) spinFrame() string {
+	return spinFrames[m.spinIdx%len(spinFrames)]
 }
 
 func (m Model) sessionStateIcon(st watchStyles, s watchd.SessionState) string {
 	switch s {
 	case watchd.SessionRunning:
-		return st.running(spinFrames[m.spinIdx%len(spinFrames)])
+		return st.running(m.spinFrame())
 	case watchd.SessionPaused:
 		return st.warning(ui.IconWarn)
 	case watchd.SessionDone:
@@ -304,7 +356,7 @@ func (m Model) sessionStateIcon(st watchStyles, s watchd.SessionState) string {
 func (m Model) stageIcon(st watchStyles, s watchd.StageState) string {
 	switch s {
 	case watchd.StageRunning:
-		return st.running(spinFrames[m.spinIdx%len(spinFrames)])
+		return st.running(m.spinFrame())
 	case watchd.StageDone:
 		return st.success(ui.IconOK)
 	case watchd.StageFailed:
@@ -317,25 +369,30 @@ func (m Model) stageIcon(st watchStyles, s watchd.StageState) string {
 	return st.vdim("·")
 }
 
-func stageText(st watchStyles, s watchd.Stage) string {
+// stageText is a stage's state, with a failure's note cut to width.
+func stageText(st watchStyles, s watchd.Stage, width int) string {
 	switch s.State {
 	case watchd.StageNotBuilt:
 		return st.vdim("not built yet")
 	case watchd.StageFailed:
-		return st.err(truncate(strings.Join(strings.Fields(s.Note), " "), 90))
+		return st.err(truncate(oneLine(s.Note), width))
 	case watchd.StagePaused:
 		return st.warning("paused")
 	case watchd.StageRunning:
 		return st.muted("running")
 	case watchd.StageDone:
 		if s.Note != "" {
-			return st.muted("done · " + s.Note)
+			return st.muted(truncate("done · "+s.Note, width))
 		}
 		return st.muted("done")
 	case watchd.StagePending, watchd.StageSkipped:
 		return st.muted(string(s.State))
 	}
 	return ""
+}
+
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func sessionElapsed(s watchd.Session) time.Duration {
@@ -389,11 +446,78 @@ func roundStateText(st watchStyles, r watchd.Round) string {
 	return string(r.State)
 }
 
+// sessionRowStatus is the second line of a session's row in the left pane: what
+// it is doing now, or how it ended and when.
+func (m Model) sessionRowStatus(st watchStyles, s watchd.Session) string {
+	icon := m.sessionStateIcon(st, s.State)
+	switch s.State {
+	case watchd.SessionRunning:
+		what := "starting"
+		if n := len(s.Rounds); n > 0 {
+			r := s.Rounds[n-1]
+			what = fmt.Sprintf("round %d %s", r.Number, r.State)
+		}
+		// The elapsed time is the first thing to go: the round is what says how
+		// far along the session is.
+		elapsed := " · " + ui.FormatDuration(sessionElapsed(s))
+		if 4+utf8.RuneCountInString(what+elapsed) > leftPaneWidth {
+			elapsed = ""
+		}
+		return icon + " " + st.running(what) + st.muted(elapsed)
+	case watchd.SessionPaused:
+		return icon + " " + st.warning("paused") + st.muted(" · needs you")
+	case watchd.SessionDone, watchd.SessionFailed, watchd.SessionCancelled:
+		text := string(s.State)
+		if s.EndedAt != nil {
+			text += " · " + ago(*s.EndedAt)
+		}
+		return icon + " " + st.muted(text)
+	}
+	return icon + " " + st.muted(string(s.State))
+}
+
+// renderSessionSection is the review sessions section at the top of the left
+// pane, nothing when the daemon has no sessions.
+func (m Model) renderSessionSection(st watchStyles) []string {
+	if len(m.sessions) == 0 {
+		return nil
+	}
+	selIdx := m.sessionIndex()
+	title := st.vdim("review sessions")
+	if m.focusedPane == paneLeft && selIdx >= 0 {
+		title = st.emphasis("review sessions")
+	}
+	lines := []string{title, ""}
+	n := visibleSessions(m.sessions)
+	for i := range n {
+		info := m.sessions[i]
+		name := info.label
+		if info.s.Branch != "" {
+			name += " · " + info.s.Branch
+		}
+		name = truncate(name, leftPaneWidth-3)
+		switch {
+		case i == selIdx && m.focusedPane == paneLeft:
+			lines = append(lines, st.success("▶ ")+st.emphasis(name))
+		case i == selIdx:
+			lines = append(lines, st.vdim("▶ ")+st.muted(name))
+		default:
+			lines = append(lines, "  "+name)
+		}
+		lines = append(lines, "  "+m.sessionRowStatus(st, info.s))
+	}
+	if older := len(m.sessions) - n; older > 0 {
+		lines = append(lines, "  "+st.vdim(fmt.Sprintf("+%d older (chunk session list)", older)))
+	}
+	return append(lines, "")
+}
+
 // renderRound draws one round: its header, its reviews with the shared row
-// renderer, and what its fixes changed.
-func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, reviewSel int) []string {
+// renderer, and what its fixes changed. reviewSel is the review under the
+// cursor, -1 for none.
+func (m Model) renderRound(st watchStyles, r watchd.Round, reviewSel, width int) []string {
 	rst := reviewprogress.NewStyles(m.hasDarkBG)
-	head := fmt.Sprintf("    Round %d  %s", r.Number, roundStateText(st, r))
+	head := fmt.Sprintf("   Round %d  %s", r.Number, roundStateText(st, r))
 	if r.Findings > 0 || r.State == watchd.RoundDone {
 		head += st.dim(fmt.Sprintf("  ·  %d finding%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
 	}
@@ -402,29 +526,32 @@ func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, review
 	rows := reviewRows(r)
 	nameWidth := reviewprogress.NameWidth(rows)
 	for i, row := range rows {
-		line := "    " + reviewprogress.RenderRow(rst, row, nameWidth, m.spinIdx)
-		if selected && i == reviewSel {
-			line = "  ›" + line[3:]
+		marker := "     "
+		if i == reviewSel {
+			marker = "   › "
+			if m.focusedPane == paneRight {
+				marker = "   " + st.success("›") + " "
+			}
 		}
-		lines = append(lines, line)
+		lines = append(lines, marker+reviewprogress.RenderRow(rst, row, nameWidth, m.spinIdx))
 	}
 
 	if f := r.Fix; f != nil {
-		lines = append(lines, "        "+m.fixLine(st, f))
+		lines = append(lines, "       "+m.fixLine(st, f))
 		const showFiles = 5
 		for i, file := range f.Files {
 			if i == showFiles {
-				lines = append(lines, "          "+st.vdim(fmt.Sprintf("… and %d more", len(f.Files)-showFiles)))
+				lines = append(lines, "         "+st.vdim(fmt.Sprintf("… and %d more", len(f.Files)-showFiles)))
 				break
 			}
-			lines = append(lines, "          "+st.muted(file.Path)+"  "+st.success(fmt.Sprintf("+%d", file.Insertions))+" "+st.err(fmt.Sprintf("−%d", file.Deletions)))
+			lines = append(lines, "         "+st.muted(truncate(file.Path, width-20))+"  "+st.success(fmt.Sprintf("+%d", file.Insertions))+" "+st.err(fmt.Sprintf("−%d", file.Deletions)))
 		}
 		if f.Error != "" {
-			lines = append(lines, "          "+st.err(truncate(strings.Join(strings.Fields(f.Error), " "), 100)))
+			lines = append(lines, "         "+st.err(truncate(oneLine(f.Error), width-9)))
 		}
 	}
 	if r.Note != "" && r.State != watchd.RoundSuperseded {
-		lines = append(lines, "        "+st.vdim(r.Note))
+		lines = append(lines, "       "+st.vdim(truncate(oneLine(r.Note), width-7)))
 	}
 	return lines
 }
@@ -432,7 +559,7 @@ func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, review
 func (m Model) fixLine(st watchStyles, f *watchd.RoundFix) string {
 	switch f.State {
 	case watchd.FixRunning:
-		return st.running(spinFrames[m.spinIdx%len(spinFrames)]) + " " + st.muted("fixing the findings worth changing")
+		return st.running(m.spinFrame()) + " " + st.muted("fixing the findings worth changing")
 	case watchd.FixApplied:
 		return st.success(ui.IconOK) + " " + st.muted(fmt.Sprintf("fixes applied to your files: %d file%s, +%d −%d", len(f.Files), plural(len(f.Files)), f.Insertions, f.Deletions))
 	case watchd.FixEmpty:
@@ -450,39 +577,46 @@ func plural(n int) string {
 	return "s"
 }
 
-// renderSessionLines draws the selected session: header, restore point, pause
-// banner, and the timeline of stages with the review loop's rounds inside.
-func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRound, reviewSel int) (lines []string, selStart, selEnd int) {
+// renderSessionLines draws a session for the right pane: its state, restore
+// point and pause banner, then the timeline of stages with the review loop's
+// rounds inside. selStart and selEnd bound the round under the cursor.
+func (m Model) renderSessionLines(st watchStyles, info sessionInfo, width int) (lines []string, selStart, selEnd int) {
 	s := info.s
-	lines = append(lines, fmt.Sprintf(" ▶ %s  %s  %s  %s",
-		m.sessionStateIcon(st, s.State), st.emphasis(sessionTitle(info)), st.muted(string(s.State)), st.dim(ui.FormatDuration(sessionElapsed(s)))))
+	lines = append(lines, fmt.Sprintf(" %s %s  %s",
+		m.sessionStateIcon(st, s.State), st.muted(string(s.State)), st.dim(ui.FormatDuration(sessionElapsed(s)))))
 	if rp := s.Restore; rp != nil {
-		note := fmt.Sprintf("restore point saved · %d file%s changed · undo with: chunk session restore %s", len(rp.Paths), plural(len(rp.Paths)), s.ID[:min(8, len(s.ID))])
+		// The command first, so a narrow pane cuts the count rather than the ID.
+		note := fmt.Sprintf("undo: chunk session restore %s · %d file%s changed", s.ID[:min(8, len(s.ID))], len(rp.Paths), plural(len(rp.Paths)))
 		if rp.Restored {
 			note = "restored: everything the session changed has been put back"
 		}
-		lines = append(lines, "   "+st.vdim(note))
+		lines = append(lines, " "+st.vdim(truncate(note, width-1)))
 	}
 	if s.State == watchd.SessionPaused {
 		lines = append(lines, "",
-			"   "+st.warning(ui.IconWarn+" Paused: "+truncate(s.PauseReason, 110)),
-			"   "+st.muted("Your files changed while the session was working, so it stopped instead of overwriting them."),
-			"   "+st.vdim("c")+" "+st.dim("continue with your files as they are now")+"  "+st.vdim("·")+"  "+st.vdim("x x")+" "+st.dim("cancel the session"))
+			" "+st.warning(truncate(ui.IconWarn+" Paused: "+s.PauseReason, width-1)),
+			" "+st.muted(truncate("It stopped rather than overwrite files you changed.", width-1)),
+			" "+st.vdim("c")+" "+st.dim("continue with your files as they are now")+"  "+st.vdim("·")+"  "+st.vdim("x x")+" "+st.dim("cancel"))
 	}
 	if s.Error != "" {
-		lines = append(lines, "   "+st.err(truncate(strings.Join(strings.Fields(s.Error), " "), 110)))
+		lines = append(lines, " "+st.err(truncate(oneLine(s.Error), width-1)))
 	}
 	lines = append(lines, "")
 
+	selRound, reviewSel := cursorAt(s, m.sessPane.cursor)
 	for _, stage := range s.Stages {
-		lines = append(lines, fmt.Sprintf("   %s %-18s %s", m.stageIcon(st, stage.State), stageLabels[stage.ID], stageText(st, stage)))
+		lines = append(lines, fmt.Sprintf(" %s %-18s %s", m.stageIcon(st, stage.State), stageLabels[stage.ID], stageText(st, stage, width-22)))
 		if stage.ID != watchd.StageReviewLoop {
 			continue
 		}
 		for i, r := range s.Rounds {
 			start := len(lines)
-			lines = append(lines, m.renderRound(st, r, i == selectedRound, reviewSel)...)
-			if i == selectedRound {
+			sel := -1
+			if i == selRound {
+				sel = reviewSel
+			}
+			lines = append(lines, m.renderRound(st, r, sel, width)...)
+			if i == selRound {
 				selStart, selEnd = start, len(lines)
 			}
 		}
@@ -490,81 +624,23 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
 	return lines, selStart, selEnd
 }
 
-// renderSessionBody is the whole session screen body, windowed so the selected
-// round stays on screen.
-func (m Model) renderSessionBody(st watchStyles, height int) []string {
-	if len(m.sessions) == 0 {
-		lines := []string{"", "  " + st.muted("No sessions yet."), "  " + st.dim("Start one with: chunk session start")}
-		if m.reviewAuthErr != "" {
-			lines = append(lines, "", "  "+st.warning(ui.IconWarn+" "+m.reviewAuthErr))
-		}
-		return lines
+// renderSessionPane is the right pane for the selected session, windowed so the
+// round under the cursor stays on screen.
+func (m Model) renderSessionPane(st watchStyles, info sessionInfo, maxLines int) []string {
+	title := st.vdim("session")
+	if m.focusedPane == paneRight {
+		title = st.emphasis("session")
 	}
-	info := m.sessions[min(max(m.sessionView.sel, 0), len(m.sessions)-1)]
-	lines, selStart, selEnd := m.renderSessionLines(st, info, m.sessionView.round, m.sessionView.review)
-	if len(m.sessions) > 1 {
-		lines = append(lines, "", "  "+st.vdim(fmt.Sprintf("session %d of %d  ↑/↓ switch", m.sessionView.sel+1, len(m.sessions))))
-	}
-	if len(lines) > height {
+	title += "  " + st.muted(sessionTitle(info))
+
+	height := max(maxLines-2, 1)
+	body, selStart, selEnd := m.renderSessionLines(st, info, m.rightPaneWidth())
+	if len(body) > height {
 		first := 0
 		if selEnd > height {
 			first = min(selStart, selEnd-height)
 		}
-		lines = lines[first:min(first+height, len(lines))]
+		body = body[first:min(first+height, len(body))]
 	}
-	return lines
-}
-
-func (m Model) renderSessionFooter(st watchStyles) string {
-	keys := []struct{ key, action string }{
-		{"↑/↓", "switch"},
-		{"Tab", "round"},
-		{"←/→", "review"},
-		{"Enter", "output"},
-		{"f", "fix output"},
-		{"x", "cancel"},
-		{"Esc", "back"},
-		{"q", "detach"},
-	}
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, st.vdim(k.key)+" "+st.dim(k.action))
-	}
-	sep := "  " + st.vdim("·") + "  "
-	bar := strings.Join(parts, sep)
-	for len(parts) > 1 && lipgloss.Width(bar) > m.width-2 {
-		parts = parts[:len(parts)-1]
-		bar = strings.Join(parts, sep)
-	}
-	footer := st.vdim(strings.Repeat("─", m.width)) + "\n" + "  " + clip(bar, m.width-2) + "\n"
-	if m.sessionView != nil {
-		switch {
-		case m.sessionView.confirm != "":
-			footer += "  " + st.warning("press x again to cancel this session — q only detaches") + "\n"
-		case m.sessionView.note != "":
-			footer += "  " + st.muted(m.sessionView.note) + "\n"
-		}
-	}
-	if m.daemonErr != nil {
-		footer += "  " + st.err("daemon unavailable: "+m.daemonErr.Error()) + "\n"
-	}
-	return footer
-}
-
-// renderSessionView is the whole session screen: header, separator, body, footer.
-func (m Model) renderSessionView(st watchStyles) string {
-	height := m.contentHeight()
-	if m.sessionView != nil && (m.sessionView.confirm != "" || m.sessionView.note != "") {
-		height-- // the footer gains a line for the confirmation or note
-	}
-	height = max(height, 1)
-	lines := m.renderSessionBody(st, height)
-	var b strings.Builder
-	for i := 0; i < height; i++ {
-		if i < len(lines) {
-			b.WriteString(clip(lines[i], m.width))
-		}
-		b.WriteString("\n")
-	}
-	return m.renderHeader(st) + m.renderSeparator(st) + b.String() + m.renderSessionFooter(st)
+	return append([]string{title, ""}, body...)
 }

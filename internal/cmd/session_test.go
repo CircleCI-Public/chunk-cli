@@ -194,3 +194,46 @@ func TestSessionRestoreAndResumeExplainWhyTheyCannotRun(t *testing.T) {
 	_, err = runSessionCmd(t, "resume", started["id"])
 	assert.ErrorContains(t, err, "not paused")
 }
+
+// Leaving the dashboard reports the session the way following it would: a
+// finished one gets its summary, a running one the detach hint.
+func TestLeavingTheDashboardReportsWhereTheSessionStands(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	cfg := fakeSessionConfig("fine")
+	release := make(chan struct{})
+	finish := cfg.Stream
+	cfg.Stream = func(ctx context.Context, e *sidecar.PoolEntry, id string, on circleci.OutputFn) (int, error) {
+		select {
+		case <-release:
+			return finish(ctx, e, id, on)
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+	startSessionDaemon(t, cfg)
+	root, err := sessionProjectRoot(t.Context(), sessionProject(t))
+	assert.NilError(t, err)
+	id, err := watchd.StartSession(watchd.SessionRequest{ProjectRoot: root})
+	assert.NilError(t, err)
+
+	streams, out, errOut := testStreams()
+	assert.NilError(t, reportLeftSession(streams, id))
+	assert.Assert(t, strings.Contains(errOut.String(), "Detached. Session "+id+" keeps running"), errOut.String())
+	assert.Equal(t, out.String(), "")
+
+	close(release)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		d, err := watchd.FetchSession(id)
+		assert.NilError(t, err)
+		if d.State.Finished() {
+			break
+		}
+		assert.Assert(t, time.Now().Before(deadline), "session did not finish")
+		time.Sleep(20 * time.Millisecond)
+	}
+	streams, out, _ = testStreams()
+	assert.NilError(t, reportLeftSession(streams, id))
+	assert.Assert(t, strings.Contains(out.String(), "round 1:"), out.String())
+}
