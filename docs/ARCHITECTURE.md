@@ -624,6 +624,36 @@ GET  /validate/collect?root=<path>                 → {tasks}
   `ChangesBetween` then errors and the assessment falls back to `HEAD`, which
   reads larger and so errs towards blocking.
 
+## Sidecar Sync Strategy (`internal/sidecar/`)
+
+**Everything syncs with rsync.** `RsyncSync` / `RsyncSyncEphemeral` back
+`chunk sidecar sync`, variants and `chunk factory`; `rsyncPoolSidecar` backs the
+sidecar pool (seed, fan-out, stale replacement, dead-sidecar replacement), and so
+pooled `chunk validate` and `chunk review`. All of them funnel into `rsyncTo`.
+
+The git-bundle strategy and the checkout/patch strategy are gone. #539 removed
+them, #564 (pool primitives) brought bundle sync back by accident because the
+pool branch predated #539, and the pool was moved to rsync afterwards. Do not add
+a second sync strategy without changing this section.
+
+Consequences worth knowing:
+
+- rsync is stateless, so the pool no longer records a `last_synced_ref`; there is
+  no incremental-bundle bookkeeping. Old pool state files that still carry the key
+  load fine.
+- The synced `.git` directory carries branch and remote-tracking refs, so the
+  sidecar mirrors them without the ref-fixup scripts bundle sync needed.
+- Each pool member opens its own SSH proxy and walks the tree, where bundle sync
+  built once and sent N times. Concurrency is capped by `syncFanOutConcurrency`,
+  currently 8, so a pool that size or smaller syncs every member at once.
+  Measured on this repo against warm sidecars: fan-out to 4 cost 1.01x a single
+  sync (10.2s against 10.1s) and to 8 cost 1.13x (10.3s against 9.1s). Wall time
+  is dominated by the per-sidecar round trip, not by repeating the walk, so the
+  N-times cost bundle sync avoided does not show up until a pool exceeds
+  `syncFanOutConcurrency`.
+- Pool tests replace `poolSync`, since rsync cannot run against the fake SSH
+  server.
+
 ## Data Flow: merge conflict advisories
 
 The `watchd` daemon answers "does this branch still merge cleanly?" out of band,

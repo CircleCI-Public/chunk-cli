@@ -104,7 +104,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 }
 
 // keyGenMu serializes the check-then-generate below within this process. Sidecar
-// work fans out concurrently (bundle sync per sidecar, validate per variant) and
+// work fans out concurrently (rsync per sidecar, validate per variant) and
 // every goroutine calls EnsureKeyPair. Without the lock they all see a missing
 // key, each writes its own ed25519 material to the same path, and the sidecars
 // that registered an overwritten public key reject the private key that

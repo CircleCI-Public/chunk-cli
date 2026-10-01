@@ -99,7 +99,7 @@ func TestTofuHostKeyCallback(t *testing.T) {
 	assert.Assert(t, len(data) > 0)
 }
 
-// TestEnsureKeyPairConcurrent covers the fan-out paths (bundle sync per
+// TestEnsureKeyPairConcurrent covers the fan-out paths (rsync per
 // sidecar, validate per variant) reaching a machine with no key yet. Every
 // goroutine must end up with the same keypair: if two generate, each registers
 // a public key whose private half is then overwritten, and those sidecars

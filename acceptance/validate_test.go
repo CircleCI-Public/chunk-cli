@@ -440,7 +440,7 @@ func TestValidateRunRemoteUsesSSH(t *testing.T) {
 	// Pool setup probes the requested sidecar for staleness, then bundle sync
 	// opens the real SSH session. Both must target the explicit ID.
 	addKeyReqs := filterByPath(reqs, "/api/v3/sidecar/instances/sidecar-123/ssh/add-key")
-	assert.Equal(t, len(addKeyReqs), 2, "expected a stale probe and BundleSync add-key request; got: %v", reqs)
+	assert.Equal(t, len(addKeyReqs), 2, "expected a stale probe and rsync pool add-key request; got: %v", reqs)
 	createReqs := filterByPath(reqs, "/api/v3/sidecar/instances")
 	assert.Equal(t, len(createReqs), 0, "explicit target must not create another sidecar; got: %v", reqs)
 
@@ -576,6 +576,20 @@ func TestValidateHookAutoCreatesSidecarFromSidecarImage(t *testing.T) {
 	assert.Equal(t, len(addKeyReqs), 1, "expected 1 add-key request for the pool's second sidecar; got: %v", reqs)
 }
 
+// useLocalSidecar makes the fake sidecar run commands on this machine, so the
+// rsync a pooled run does is real, with the sidecar's home redirected to a temp
+// dir instead of /home/user.
+func useLocalSidecar(t *testing.T, env *testenv.TestEnv, sshSrv *fakes.SSHServer) {
+	t.Helper()
+	for _, bin := range []string{"rsync", "ssh"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not installed", bin)
+		}
+	}
+	sshSrv.RunLocally()
+	env.Extra["CHUNK_SIDECAR_HOME"] = t.TempDir()
+}
+
 func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 	env.Extra["CIRCLECI_ORG_ID"] = "org-aaa"
@@ -584,7 +598,7 @@ func TestValidateRunsExplicitLocalCommandAlongsideRemote(t *testing.T) {
 	assert.NilError(t, os.MkdirAll(sshDir, 0o700))
 	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(sshDir, "chunk_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
-	sshSrv.SetResult("", 0)
+	useLocalSidecar(t, env, sshSrv)
 
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = sshSrv.Addr()
@@ -713,7 +727,7 @@ func TestValidateHookMode_SetupErrorFlushedToStderr(t *testing.T) {
 
 	assert.Assert(t, result.ExitCode != 0, "expected failure; stderr: %s", result.Stderr)
 	// Sync status messages must reach stderr — proves setup output is not silently dropped.
-	assert.Assert(t, strings.Contains(result.Stderr, "Bundle ready"),
+	assert.Assert(t, strings.Contains(result.Stderr, "Syncing workspace"),
 		"expected sync attempt in stderr; got: %s", result.Stderr)
 }
 

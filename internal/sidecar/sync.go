@@ -1,14 +1,12 @@
 package sidecar
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
@@ -17,10 +15,10 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
 
-// bundleSyncFanOutConcurrency caps concurrent sidecar uploads during pool sync.
-// A full bundle can be tens of MB, so unbounded fan-out can exhaust local
-// memory or saturate the provider when hundreds of sidecars are prepared at once.
-const bundleSyncFanOutConcurrency = 8
+// syncFanOutConcurrency caps concurrent sidecar syncs during pool sync, so a
+// large pool does not open an SSH proxy and walk the tree for every sidecar at
+// once.
+const syncFanOutConcurrency = 8
 
 // sidecarHome returns the base home directory on the sidecar. It reads
 // CHUNK_SIDECAR_HOME so the default "/home/user" can be overridden when the
@@ -148,307 +146,6 @@ func syncTo(ctx context.Context, client *circleci.Client,
 	return nil
 }
 
-// BundleSync synchronises local commits and working-tree changes to a sidecar
-// using a git bundle, without requiring the branch to be pushed.
-func BundleSync(ctx context.Context,
-	client *circleci.Client, sidecarID, workdir, cwd string, retryOn404 bool, status iostream.StatusFunc) error {
-	prepared, err := prepareBundleSync(ctx, workdir, cwd, "", 1, status)
-	if err != nil {
-		return err
-	}
-	if err := syncPreparedSidecar(ctx, client, sidecarID, retryOn404, prepared); err != nil {
-		return err
-	}
-	if err := persistWorkspace(ctx, prepared.repoPath); err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("Could not save workspace: %v", err))
-	}
-	status(iostream.LevelDone, "Synced")
-	return nil
-}
-
-// BundleSyncFanOut synchronises a local working tree to multiple sidecars in
-// parallel using a full or incremental bundle.
-func BundleSyncFanOut(ctx context.Context, client *circleci.Client, sidecarIDs []string, workdir, cwd string, retryOn404 bool, status iostream.StatusFunc) error {
-	_, err := bundleSyncFanOutSince(ctx, client, sidecarIDs, workdir, cwd, "", retryOn404, status)
-	return err
-}
-
-type preparedBundleSync struct {
-	repo     string
-	repoPath string
-	headRef  string
-	resetRef string
-	bundle   []byte
-	patch    string
-	refs     syncRefs
-}
-
-// syncRefs names the local refs a sidecar mirrors, so git on the sidecar
-// answers "which branch is this, and what does it merge into" the same way it
-// does locally. The bundle carries only commits; without these the sidecar
-// keeps whatever branch and remote-tracking refs its image was built with.
-type syncRefs struct {
-	branch     string // local branch; empty when HEAD is detached
-	baseRemote string // remote of the default branch, e.g. "origin"
-	baseBranch string // default branch, e.g. "main"
-	// baseSHA is where HEAD forked from the default branch. It stands in for
-	// the remote-tracking ref because, as an ancestor of HEAD, it is already
-	// on the sidecar; the local remote tip may not be.
-	baseSHA string
-}
-
-// bundleSyncFanOutSince synchronises a local working tree to multiple sidecars
-// in parallel. It returns the local HEAD ref that all successful targets were
-// synced to.
-func bundleSyncFanOutSince(ctx context.Context, client *circleci.Client, sidecarIDs []string, workdir, cwd, baseRef string, retryOn404 bool, status iostream.StatusFunc) (string, error) {
-	prepared, err := prepareBundleSync(ctx, workdir, cwd, baseRef, len(sidecarIDs), status)
-	if err != nil {
-		return "", err
-	}
-
-	parallelism := len(sidecarIDs)
-	if parallelism > bundleSyncFanOutConcurrency {
-		parallelism = bundleSyncFanOutConcurrency
-	}
-
-	errs := make([]error, len(sidecarIDs))
-	sem := make(chan struct{}, parallelism)
-	var wg sync.WaitGroup
-	for i, id := range sidecarIDs {
-		wg.Add(1)
-		go func(i int, id string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			if err := syncPreparedSidecar(ctx, client, id, retryOn404, prepared); err != nil {
-				errs[i] = fmt.Errorf("sidecar %s: %w", id, err)
-			}
-		}(i, id)
-	}
-	wg.Wait()
-
-	if err := errors.Join(errs...); err != nil {
-		return "", err
-	}
-	status(iostream.LevelDone, fmt.Sprintf("Synced %d sidecars", len(sidecarIDs)))
-	return prepared.headRef, nil
-}
-
-func prepareBundleSync(ctx context.Context, workdir, cwd, baseRef string, sidecarCount int, status iostream.StatusFunc) (*preparedBundleSync, error) {
-	_, repo, repoErr := gitremote.DetectOrgAndRepoCtx(ctx, cwd)
-	if repoErr != nil && workdir == "" {
-		return nil, &NoOriginRemoteError{Err: repoErr}
-	}
-
-	repoPath := workdir
-	if repoPath == "" {
-		repoPath = DefaultWorkspace(repo)
-	}
-
-	headRef, err := gitutil.HeadRefCtx(ctx, cwd)
-	if err != nil {
-		return nil, fmt.Errorf("fan-out sync: %w", err)
-	}
-
-	resetRef := gitHeadRef
-	var bundle []byte
-	if baseRef == headRef {
-		status(iostream.LevelInfo, "No new commits since last sync.")
-	} else {
-		bundle, err = createBundle(ctx, baseRef, cwd)
-		if err != nil {
-			return nil, fmt.Errorf("fan-out sync: %w", err)
-		}
-		if baseRef == "" {
-			status(iostream.LevelInfo, fmt.Sprintf("Bundle ready (%d bytes), syncing to %d sidecars...", len(bundle), sidecarCount))
-		} else {
-			status(iostream.LevelInfo, fmt.Sprintf("Incremental bundle ready (%d bytes), syncing to %d sidecars...", len(bundle), sidecarCount))
-		}
-		resetRef = "FETCH_HEAD"
-	}
-
-	patch, err := generatePatch(ctx, headRef, cwd)
-	if err != nil {
-		return nil, fmt.Errorf("fan-out sync: %w", err)
-	}
-
-	return &preparedBundleSync{
-		repo:     repo,
-		repoPath: repoPath,
-		headRef:  headRef,
-		resetRef: resetRef,
-		bundle:   bundle,
-		patch:    patch,
-		refs:     localSyncRefs(ctx, cwd),
-	}, nil
-}
-
-// localSyncRefs reads the refs a sidecar should mirror. Every part is
-// optional: a detached HEAD has no branch and a repo with no remote HEAD has no
-// base, and the sync still goes ahead without them.
-func localSyncRefs(ctx context.Context, cwd string) syncRefs {
-	var refs syncRefs
-	if branch, err := gitutil.CurrentBranchInCtx(ctx, cwd); err == nil {
-		refs.branch = branch
-	}
-	remote, base, err := gitutil.DefaultRemoteBranchIn(cwd)
-	if err != nil {
-		return refs
-	}
-	out, err := (gitexec.Runner{Dir: cwd}).Output(ctx, "merge-base", gitHeadRef, "refs/remotes/"+remote+"/"+base)
-	if err != nil {
-		return refs
-	}
-	if sha := strings.TrimSpace(string(out)); sha != "" {
-		refs.baseRemote, refs.baseBranch, refs.baseSHA = remote, base, sha
-	}
-	return refs
-}
-
-func syncPreparedSidecar(ctx context.Context, client *circleci.Client, sidecarID string, retryOn404 bool, prepared *preparedBundleSync) error {
-	sess, err := OpenSession(ctx, client, sidecarID, retryOn404)
-	if err != nil {
-		return fmt.Errorf("open session: %w", err)
-	}
-	return applyBundleToSidecar(ctx, sess, prepared)
-}
-
-func applyBundleToSidecar(ctx context.Context, sess *Session, prepared *preparedBundleSync) error {
-	if _, err := ensureRemoteRepo(ctx, sess, prepared.repoPath); err != nil {
-		return err
-	}
-	if len(prepared.bundle) > 0 {
-		if err := sendPreparedBundle(ctx, sess, prepared.repo, prepared.repoPath, prepared.bundle); err != nil {
-			return err
-		}
-	}
-	return resetCleanApply(ctx, sess, prepared.repoPath, prepared.resetRef, prepared.patch, prepared.refs)
-}
-
-// ensureRemoteRepo ensures repoPath's parent exists and repoPath holds a git
-// repo. It returns true when the repo was freshly initialised.
-func ensureRemoteRepo(ctx context.Context, sess *Session, repoPath string) (bool, error) {
-	parentDir := filepath.Dir(repoPath)
-	if result, err := ExecOverSSH(ctx, sess, "mkdir -p "+ShellEscape(parentDir), nil, nil); err != nil {
-		return false, fmt.Errorf("mkdir: %w", err)
-	} else if result.ExitCode != 0 {
-		return false, fmt.Errorf("mkdir -p %s: %s", parentDir, result.Stderr)
-	}
-
-	testResult, err := ExecOverSSH(ctx, sess, "test -d "+ShellEscape(repoPath+"/.git"), nil, nil)
-	if err != nil {
-		return false, fmt.Errorf("check repo: %w", err)
-	}
-	if testResult.ExitCode == 0 {
-		return false, nil
-	}
-	if result, err := ExecOverSSH(ctx, sess, "git init "+ShellEscape(repoPath), nil, nil); err != nil {
-		return false, fmt.Errorf("git init: %w", err)
-	} else if result.ExitCode != 0 {
-		return false, fmt.Errorf("git init: %s", result.Stderr)
-	}
-	return true, nil
-}
-
-func sendPreparedBundle(ctx context.Context, sess *Session, repo, repoPath string, bundle []byte) error {
-	bundleName := repo
-	if bundleName == "" {
-		bundleName = "chunk"
-	}
-	bundlePath := fmt.Sprintf("/tmp/chunk-sync-%s.bundle", bundleName)
-	if result, err := ExecOverSSH(ctx, sess, "tee "+ShellEscape(bundlePath), bytes.NewReader(bundle), nil); err != nil {
-		return fmt.Errorf("write bundle: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("write bundle: %s", result.Stderr)
-	}
-
-	fetchCmd := fmt.Sprintf("git -C %s fetch %s HEAD", ShellEscape(repoPath), ShellEscape(bundlePath))
-	if result, err := ExecOverSSH(ctx, sess, fetchCmd, nil, nil); err != nil {
-		return fmt.Errorf("fetch: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("fetch: %s", result.Stderr)
-	}
-	return nil
-}
-
-func resetCleanApply(ctx context.Context, sess *Session, repoPath, resetRef, patch string, refs syncRefs) error {
-	if result, err := execScript(ctx, sess, checkoutScript(repoPath, resetRef, refs.branch)); err != nil {
-		return fmt.Errorf("reset: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("reset: %s", result.Stderr)
-	}
-	// Best-effort: the base refs only label history for tools that read git on
-	// the sidecar, and nothing chunk runs there depends on them.
-	if script := baseRefsScript(repoPath, refs); script != "" {
-		_, _ = execScript(ctx, sess, script)
-	}
-
-	cleanCmd := fmt.Sprintf("git -C %s clean -fd", ShellEscape(repoPath))
-	if result, err := ExecOverSSH(ctx, sess, cleanCmd, nil, nil); err != nil {
-		return fmt.Errorf("clean: %w", err)
-	} else if result.ExitCode != 0 {
-		return fmt.Errorf("clean: %s", result.Stderr)
-	}
-
-	if patch != "" {
-		applyCmd := fmt.Sprintf("git -C %s apply --whitespace=nowarn", ShellEscape(repoPath))
-		if result, err := ExecOverSSH(ctx, sess, applyCmd, strings.NewReader(patch), nil); err != nil {
-			return fmt.Errorf("apply patch: %w", err)
-		} else if result.ExitCode != 0 {
-			return fmt.Errorf("apply patch: %s", result.Stderr)
-		}
-	}
-	return nil
-}
-
-// execScript runs a shell script on the sidecar. The sidecar's SSH server
-// splits a command into arguments and runs it without a shell, so operators
-// like || and && only work when a shell reads them; piping the script to sh
-// also avoids nesting one level of quoting inside another.
-func execScript(ctx context.Context, sess *Session, script string) (*ExecResult, error) {
-	return ExecOverSSH(ctx, sess, "sh", strings.NewReader(script), nil)
-}
-
-// checkoutScript moves the sidecar to resetRef on a branch named like the local
-// one, discarding working-tree changes as `git reset --hard` would. A reset
-// alone would move whatever branch the sidecar image had checked out, so the
-// sidecar would report a branch the developer is not on.
-//
-// A detached local HEAD detaches the sidecar too. So does a branch name that
-// clashes with one an earlier sync left behind (foo vs foo/bar): a wrong name
-// must not fail the sync.
-func checkoutScript(repoPath, resetRef, branch string) string {
-	git := "git -C " + ShellEscape(repoPath)
-	detach := fmt.Sprintf("%s checkout -q -f --detach %s", git, ShellEscape(resetRef))
-	if branch == "" {
-		return detach
-	}
-	return fmt.Sprintf("%s checkout -q -f -B %s %s || %s", git, ShellEscape(branch), ShellEscape(resetRef), detach)
-}
-
-// baseRefsScript points the sidecar's default-branch refs at the merge base, so
-// `git diff origin/main...HEAD` and `git log main..HEAD` show the same commits
-// they do locally rather than everything since the sidecar image was built.
-// It returns "" when there is no base to point at.
-func baseRefsScript(repoPath string, refs syncRefs) string {
-	if refs.baseSHA == "" {
-		return ""
-	}
-	git := "git -C " + ShellEscape(repoPath)
-	remoteRef := "refs/remotes/" + refs.baseRemote + "/" + refs.baseBranch
-	cmds := []string{
-		fmt.Sprintf("%s update-ref %s %s", git, ShellEscape(remoteRef), ShellEscape(refs.baseSHA)),
-		fmt.Sprintf("%s symbolic-ref %s %s", git, ShellEscape("refs/remotes/"+refs.baseRemote+"/HEAD"), ShellEscape(remoteRef)),
-	}
-	// The checked-out branch was just set by checkoutScript; moving it here would
-	// undo that when the developer is on the default branch itself.
-	if refs.branch != refs.baseBranch {
-		cmds = append(cmds, fmt.Sprintf("%s update-ref %s %s", git, ShellEscape("refs/heads/"+refs.baseBranch), ShellEscape(refs.baseSHA)))
-	}
-	return strings.Join(cmds, " && ")
-}
-
 var errApplyFailed = errors.New("apply failed")
 
 type RemoteBaseError struct {
@@ -571,20 +268,6 @@ func syncWorkspace(ctx context.Context, status iostream.StatusFunc, org, repo, r
 		return fmt.Errorf("%w (exit code: %d): %s", errApplyFailed, applyResult.ExitCode, detail)
 	}
 	return nil
-}
-
-func createBundle(ctx context.Context, base, cwd string) ([]byte, error) {
-	var args []string
-	if base == "" {
-		args = []string{"bundle", "create", "-", gitHeadRef}
-	} else {
-		args = []string{"bundle", "create", "-", base + "..HEAD"}
-	}
-	out, err := (gitexec.Runner{Dir: cwd}).Output(ctx, args...)
-	if err != nil {
-		return nil, fmt.Errorf("create bundle: %w", err)
-	}
-	return out, nil
 }
 
 func generatePatch(ctx context.Context, base, cwd string) (string, error) {

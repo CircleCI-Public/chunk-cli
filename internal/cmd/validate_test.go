@@ -215,12 +215,26 @@ func TestValidationRepoPath(t *testing.T) {
 // member chunk validate ever created was remembered, so every run needing
 // more than one sidecar recreated the rest from scratch and orphaned the
 // previous run's extras.
+// useLocalSidecar makes the fake sidecar run commands on this machine, so the
+// rsync a pooled run does is real, with the sidecar's home redirected to a temp
+// dir instead of /home/user.
+func useLocalSidecar(t *testing.T, sshSrv *fakes.SSHServer) {
+	t.Helper()
+	for _, bin := range []string{"rsync", "ssh"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not installed", bin)
+		}
+	}
+	sshSrv.RunLocally()
+	t.Setenv("CHUNK_SIDECAR_HOME", t.TempDir())
+}
+
 func TestSaveActivePoolStatePersistsEveryMember(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv(config.EnvHome, homeDir)
 	pubKey := fakes.GenerateSSHKeypairAt(t, filepath.Join(homeDir, ".ssh", "chunk_ai"))
 	sshSrv := fakes.NewSSHServer(t, pubKey)
-	sshSrv.SetResult("", 0)
+	useLocalSidecar(t, sshSrv)
 
 	cci := fakes.NewFakeCircleCI()
 	cci.AddKeyURL = sshSrv.Addr()

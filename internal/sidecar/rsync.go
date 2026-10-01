@@ -37,7 +37,7 @@ func RsyncSync(ctx context.Context,
 	client *circleci.Client, sidecarID, workdir, cwd string,
 	status iostream.StatusFunc) error {
 
-	return rsyncTo(ctx, client, sidecarID, workdir, cwd, true, status)
+	return rsyncTo(ctx, client, sidecarID, workdir, cwd, true, false, status)
 }
 
 // RsyncSyncEphemeral syncs like RsyncSync but neither reads nor writes the
@@ -49,14 +49,25 @@ func RsyncSyncEphemeral(ctx context.Context,
 	if workdir == "" {
 		return fmt.Errorf("rsync: workdir is required for an ephemeral sync")
 	}
-	return rsyncTo(ctx, client, sidecarID, workdir, cwd, false, status)
+	return rsyncTo(ctx, client, sidecarID, workdir, cwd, false, false, status)
+}
+
+// rsyncPoolSidecar syncs the local tree at cwd to one pool member's repoPath.
+// retryOn404 tolerates a sidecar that was only just created and is not yet
+// reachable. Pool members are driven concurrently, so nothing is persisted to
+// the shared active-sidecar file.
+func rsyncPoolSidecar(ctx context.Context, client *circleci.Client,
+	sidecarID string, retryOn404 bool, repoPath, cwd string,
+	status iostream.StatusFunc) error {
+
+	return rsyncTo(ctx, client, sidecarID, repoPath, cwd, false, retryOn404, status)
 }
 
 func rsyncTo(ctx context.Context, client *circleci.Client,
-	sidecarID, workdir, cwd string, persist bool,
+	sidecarID, workdir, cwd string, persist, retryOn404 bool,
 	status iostream.StatusFunc) error {
 
-	sess, err := OpenSession(ctx, client, sidecarID, false)
+	sess, err := OpenSession(ctx, client, sidecarID, retryOn404)
 	if err != nil {
 		return fmt.Errorf("rsync: open session: %w", err)
 	}

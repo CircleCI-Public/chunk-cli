@@ -23,19 +23,22 @@ type PoolEntry struct {
 	Client   *circleci.Client
 }
 
+// poolSync syncs the local tree to one pool member. It is a variable so pool
+// tests can stand in for rsync, which cannot run against the fake SSH server.
+var poolSync = rsyncPoolSidecar
+
 // Pool manages sidecars up to a fixed capacity as a work queue for concurrent tasks.
 type Pool struct {
-	free          chan *PoolEntry
-	updates       chan struct{}
-	ids           []string
-	entries       []*PoolEntry
-	client        *circleci.Client
-	workDir       string
-	orgID         string
-	image         string
-	name          string
-	repoPath      string
-	lastSyncedRef string
+	free     chan *PoolEntry
+	updates  chan struct{}
+	ids      []string
+	entries  []*PoolEntry
+	client   *circleci.Client
+	workDir  string
+	orgID    string
+	image    string
+	name     string
+	repoPath string
 
 	mu             sync.Mutex
 	stateMu        sync.Mutex
@@ -50,11 +53,10 @@ type Pool struct {
 }
 
 type poolState struct {
-	SidecarIDs    []string `json:"sidecar_ids"`
-	RepoPath      string   `json:"repo_path"`
-	OrgID         string   `json:"org_id,omitempty"`
-	Image         string   `json:"image,omitempty"`
-	LastSyncedRef string   `json:"last_synced_ref,omitempty"`
+	SidecarIDs []string `json:"sidecar_ids"`
+	RepoPath   string   `json:"repo_path"`
+	OrgID      string   `json:"org_id,omitempty"`
+	Image      string   `json:"image,omitempty"`
 }
 
 // PoolOptions describes the resources and persisted identity of a pool.
@@ -128,14 +130,8 @@ func NewPool(
 	}
 
 	existingIDs := append([]string(nil), opts.ExistingIDs...)
-	var lastSyncedRef string
-	if state != nil && len(state.SidecarIDs) > 0 {
-		if len(existingIDs) == 0 {
-			existingIDs = append(existingIDs, state.SidecarIDs...)
-		}
-		if state.RepoPath == repoPath && slices.Equal(existingIDs, state.SidecarIDs[:min(len(existingIDs), len(state.SidecarIDs))]) {
-			lastSyncedRef = state.LastSyncedRef
-		}
+	if state != nil && len(state.SidecarIDs) > 0 && len(existingIDs) == 0 {
+		existingIDs = append(existingIDs, state.SidecarIDs...)
 	}
 	if len(existingIDs) > opts.Size {
 		// Surplus sidecars from the pool's own state would drop out of state
@@ -154,7 +150,7 @@ func NewPool(
 	for _, id := range opts.FreshIDs {
 		freshIDs[id] = true
 	}
-	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, existingIDs, lastSyncedRef, freshIDs, status)
+	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, existingIDs, freshIDs, status)
 }
 
 func assemblePool(
@@ -163,7 +159,6 @@ func assemblePool(
 	n int,
 	name, orgID, image, repoPath, workDir string,
 	existingIDs []string,
-	lastSyncedRef string,
 	freshIDs map[string]bool,
 	status iostream.StatusFunc,
 ) (*Pool, error) {
@@ -207,7 +202,6 @@ func assemblePool(
 
 	goodNew := make([]string, 0, n-len(aliveExisting))
 	newCount := n - len(aliveExisting)
-	existingSyncedRef := lastSyncedRef
 	var cloneSnapshotID, cloneSeedID string
 	if newCount > 0 {
 		seedIdx := len(aliveExisting)
@@ -217,12 +211,10 @@ func assemblePool(
 		}
 		status(iostream.LevelInfo, fmt.Sprintf("created sidecar %d (%s)", seedIdx, seed.ID))
 
-		headRef, err := bundleSyncFanOutSince(ctx, client, []string{seed.ID}, repoPath, workDir, "", true, status)
-		if err != nil {
+		if err := poolSync(ctx, client, seed.ID, true, repoPath, workDir, status); err != nil {
 			_ = client.DeleteSidecar(cleanCtx, seed.ID)
 			return nil, fmt.Errorf("pool seed sync: %w", err)
 		}
-		lastSyncedRef = headRef
 
 		if newCount == 1 {
 			goodNew = append(goodNew, seed.ID)
@@ -238,18 +230,8 @@ func assemblePool(
 		}
 	}
 
-	var prepared *preparedBundleSync
 	if len(aliveExisting) > 0 {
 		status(iostream.LevelInfo, fmt.Sprintf("syncing to %d sidecars...", len(aliveExisting)))
-		var err error
-		prepared, err = prepareBundleSync(ctx, repoPath, workDir, existingSyncedRef, len(aliveExisting), status)
-		if err != nil {
-			deleteSidecars(client, goodNew)
-			if cloneSeedID != "" {
-				_ = client.DeleteSidecar(cleanCtx, cloneSeedID)
-			}
-			return nil, fmt.Errorf("pool sync: %w", err)
-		}
 	}
 	if cloneSnapshotID == "" && len(goodNew) > 0 && len(staleIDs) > 0 {
 		if err := replaceActiveSidecars(context.WithoutCancel(ctx), map[string]string{staleIDs[0]: goodNew[0]}); err != nil {
@@ -287,7 +269,6 @@ func assemblePool(
 		image:          image,
 		name:           name,
 		repoPath:       repoPath,
-		lastSyncedRef:  lastSyncedRef,
 		pendingSyncs:   len(aliveExisting),
 		pendingCreates: pendingCreates,
 	}
@@ -302,8 +283,8 @@ func assemblePool(
 	if cloneSnapshotID != "" {
 		pool.startCloneCreation(ctx, cloneSnapshotID, cloneSeedID, newCount, staleIDs, status)
 	}
-	if prepared != nil {
-		pool.startBackgroundSync(ctx, aliveExisting, freshIDs, prepared, status)
+	if len(aliveExisting) > 0 {
+		pool.startBackgroundSync(ctx, aliveExisting, freshIDs, status)
 	}
 
 	return pool, nil
@@ -329,7 +310,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 		return err
 	}
 
-	if err := BundleSyncFanOut(ctx, p.client, []string{sc.ID}, dead.RepoPath, p.workDir, true, status); err != nil {
+	if err := poolSync(ctx, p.client, sc.ID, true, dead.RepoPath, p.workDir, status); err != nil {
 		_ = p.client.DeleteSidecar(cleanupCtx, sc.ID)
 		err = fmt.Errorf("replace: sync sidecar: %w", err)
 		p.retire(dead, err)
@@ -490,11 +471,10 @@ func (p *Pool) persistState() error {
 
 	p.mu.Lock()
 	state := &poolState{
-		SidecarIDs:    slices.Clone(p.ids),
-		RepoPath:      p.repoPath,
-		OrgID:         p.orgID,
-		Image:         p.image,
-		LastSyncedRef: p.lastSyncedRef,
+		SidecarIDs: slices.Clone(p.ids),
+		RepoPath:   p.repoPath,
+		OrgID:      p.orgID,
+		Image:      p.image,
 	}
 	p.mu.Unlock()
 
@@ -511,9 +491,6 @@ func (p *Pool) persistState() error {
 		}
 		if state.Image == "" {
 			state.Image = stored.Image
-		}
-		if state.LastSyncedRef == "" {
-			state.LastSyncedRef = stored.LastSyncedRef
 		}
 	}
 	return savePoolState(p.workDir, p.name, state)
@@ -659,7 +636,7 @@ func (p *Pool) waitForBackground(ctx context.Context) bool {
 func deleteSidecarsConcurrently(ctx context.Context, client *circleci.Client, ids []string) []string {
 	var mu sync.Mutex
 	var failed []string
-	sem := make(chan struct{}, bundleSyncFanOutConcurrency)
+	sem := make(chan struct{}, syncFanOutConcurrency)
 	var wg sync.WaitGroup
 	for _, id := range ids {
 		wg.Add(1)
@@ -679,7 +656,7 @@ func deleteSidecarsConcurrently(ctx context.Context, client *circleci.Client, id
 	return failed
 }
 
-func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, freshIDs map[string]bool, prepared *preparedBundleSync, status iostream.StatusFunc) {
+func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, freshIDs map[string]bool, status iostream.StatusFunc) {
 	done := make(chan struct{})
 	p.mu.Lock()
 	p.syncDone = done
@@ -689,8 +666,8 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 	p.mu.Unlock()
 
 	parallelism := len(sidecarIDs)
-	if parallelism > bundleSyncFanOutConcurrency {
-		parallelism = bundleSyncFanOutConcurrency
+	if parallelism > syncFanOutConcurrency {
+		parallelism = syncFanOutConcurrency
 	}
 
 	sem := make(chan struct{}, parallelism)
@@ -702,10 +679,10 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			err := syncPreparedSidecar(ctx, p.client, id, freshIDs[id], prepared)
+			err := poolSync(ctx, p.client, id, freshIDs[id], entry.RepoPath, p.workDir, status)
 			if isStaleSyncError(err) {
 				stale := entry
-				entry, err = p.replaceStaleEntry(ctx, stale, prepared, status)
+				entry, err = p.replaceStaleEntry(ctx, stale, status)
 				if err == nil {
 					p.mu.Lock()
 					index := slices.IndexFunc(p.entries, func(e *PoolEntry) bool { return e.ID == stale.ID })
@@ -729,9 +706,6 @@ func (p *Pool) startBackgroundSync(ctx context.Context, sidecarIDs []string, fre
 		wg.Wait()
 		p.mu.Lock()
 		doneWithoutError := p.pendingSyncs == 0 && p.syncErr == nil && !p.closed
-		if doneWithoutError {
-			p.lastSyncedRef = prepared.headRef
-		}
 		p.mu.Unlock()
 		if doneWithoutError {
 			if err := p.persistState(); err != nil {
@@ -747,7 +721,7 @@ func isStaleSyncError(err error) bool {
 	return err != nil && (circleci.SidecarGone(err) || circleci.SidecarOutOfDate(err))
 }
 
-func (p *Pool) replaceStaleEntry(ctx context.Context, stale *PoolEntry, prepared *preparedBundleSync, status iostream.StatusFunc) (*PoolEntry, error) {
+func (p *Pool) replaceStaleEntry(ctx context.Context, stale *PoolEntry, status iostream.StatusFunc) (*PoolEntry, error) {
 	status(iostream.LevelInfo, fmt.Sprintf("sidecar %s became stale during sync, creating replacement...", stale.ID))
 	_ = p.client.DeleteSidecar(context.Background(), stale.ID)
 
@@ -756,7 +730,7 @@ func (p *Pool) replaceStaleEntry(ctx context.Context, stale *PoolEntry, prepared
 		return stale, fmt.Errorf("replace stale sidecar: create: %w", err)
 	}
 	replacement := &PoolEntry{ID: sc.ID, RepoPath: stale.RepoPath, Client: p.client}
-	if err := syncPreparedSidecar(ctx, p.client, replacement.ID, true, prepared); err != nil {
+	if err := poolSync(ctx, p.client, replacement.ID, true, stale.RepoPath, p.workDir, status); err != nil {
 		_ = p.client.DeleteSidecar(context.Background(), replacement.ID)
 		return stale, fmt.Errorf("replace stale sidecar: sync: %w", err)
 	}
