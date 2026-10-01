@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
+	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -126,8 +127,11 @@ func EnsureKeyPair(path string) (generated bool, err error) {
 	defer keyGenMu.Unlock()
 
 	exists, err := keyExists(path)
-	if err != nil || exists {
+	if err != nil {
 		return false, err
+	}
+	if exists {
+		return false, migrateLegacyKey(path)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return false, fmt.Errorf("create .ssh directory: %w", err)
@@ -157,6 +161,38 @@ func EnsureKeyPair(path string) (generated bool, err error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// migrateLegacyKey rewrites a PKCS8 private key, which earlier versions of
+// chunk generated, in OpenSSH format. The system ssh that rsync runs cannot
+// load a PKCS8 ed25519 key on macOS. The key material is unchanged, so the
+// .pub file and the registration on any sidecar stay valid. Any other key is
+// left alone. Concurrent callers each write an equivalent file atomically.
+func migrateLegacyKey(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read SSH key: %w", err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "PRIVATE KEY" {
+		return nil
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil // not ours to convert; the caller's own use will report it
+	}
+	priv, ok := key.(ed25519.PrivateKey)
+	if !ok {
+		return nil
+	}
+	openssh, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		return fmt.Errorf("marshal private key: %w", err)
+	}
+	if err := writeFileAtomic(path, pem.EncodeToMemory(openssh), 0o600); err != nil {
+		return fmt.Errorf("convert SSH key to OpenSSH format: %w", err)
+	}
+	return nil
 }
 
 // keyExists reports whether the private key at path is present.

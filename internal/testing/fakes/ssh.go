@@ -98,11 +98,11 @@ func GenerateSSHKeypairAt(t *testing.T, path string) ssh.PublicKey {
 	if err != nil {
 		t.Fatal(err)
 	}
-	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	privBlock, err := ssh.MarshalPrivateKey(priv, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+	privPEM := pem.EncodeToMemory(privBlock)
 	if err := os.WriteFile(path, privPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
