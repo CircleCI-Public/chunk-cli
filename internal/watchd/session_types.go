@@ -273,6 +273,19 @@ type SessionRequest struct {
 	MaxRounds int `json:"max_rounds,omitempty"`
 }
 
+// RestoreRequest asks to undo a session's changes.
+type RestoreRequest struct {
+	// Force restores even files that were edited after the session changed them,
+	// discarding those edits.
+	Force bool `json:"force,omitempty"`
+}
+
+// RestoreResult lists the files a restore put back (or removed, if the session
+// had created them).
+type RestoreResult struct {
+	Paths []string `json:"paths"`
+}
+
 // SessionStartResponse answers an accepted POST /session.
 type SessionStartResponse struct {
 	ID string `json:"id"`

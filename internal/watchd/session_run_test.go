@@ -35,6 +35,11 @@ type fakeBackend struct {
 	// block makes every command wait until its context is cancelled.
 	block bool
 	pools []ReviewPoolSpec
+	// repoPath is the sandbox's checkout path; empty means a fixed fake one.
+	repoPath string
+	// onPool runs whenever a round opens its pool: the stand-in for syncing the
+	// user's files into the sandboxes.
+	onPool func(spec ReviewPoolSpec)
 }
 
 func (f *fakeBackend) config() ReviewConfig {
@@ -44,9 +49,16 @@ func (f *fakeBackend) config() ReviewConfig {
 			f.mu.Lock()
 			f.pools = append(f.pools, spec)
 			f.mu.Unlock()
+			if f.onPool != nil {
+				f.onPool(spec)
+			}
+			repo := "/work/repo"
+			if f.repoPath != "" {
+				repo = f.repoPath
+			}
 			free := make(chan *sidecar.PoolEntry, spec.Size)
 			for i := range spec.Size {
-				free <- &sidecar.PoolEntry{ID: fmt.Sprintf("sc-%d", i+1), RepoPath: "/work/repo"}
+				free <- &sidecar.PoolEntry{ID: fmt.Sprintf("sc-%d", i+1), RepoPath: repo}
 			}
 			return &ReviewPool{
 				Acquire: func(ctx context.Context) (*sidecar.PoolEntry, error) {

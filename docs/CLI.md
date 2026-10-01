@@ -165,6 +165,9 @@ chunk
 │   │   --json                      # Output as JSON
 │   ├── attach <id>                 # Follow a session until it ends or pauses
 │   ├── cancel <id>                 # Stop a session
+│   ├── resume <id>                 # Continue a paused session with your files as they are now
+│   ├── restore <id>                # Undo everything the session changed in your working tree
+│   │   --force                     # Also overwrite files you edited after the session changed them
 │   └── list                        # List the daemon's sessions
 │
 ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
@@ -310,7 +313,17 @@ chunk
   `CHUNK_WATCHD_REMOTE_ADDR` is set, since a session works on this machine's
   files. The project needs a git remote named `origin` (the sandboxes clone from
   it); `start` fails up front without one. A project has one active
-  session at a time. Sessions are kept in memory: a daemon restart loses the record. In-process `chunk review` is unchanged.
+  session at a time. A session runs up to three
+  rounds of {review, sandbox agent fixes what is high or medium severity, the
+  fixes are applied **directly to your working tree**} and stops early when a
+  round finds nothing worth changing. Before the first fix it saves a restore
+  point, so `chunk session restore <id>` puts every file the session changed back
+  (it leaves your other files alone and refuses to discard edits you made after
+  the session left a file, unless `--force`). If your files change while a round
+  runs, the session **pauses** instead of overwriting them; `resume` takes your
+  files as they are and goes again, `cancel` ends it. It never touches the
+  index, commits, or pushes. Sessions are kept in memory:
+  a daemon restart loses the record. In-process `chunk review` is unchanged.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

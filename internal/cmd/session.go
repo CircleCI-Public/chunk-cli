@@ -41,6 +41,8 @@ what it does, and only 'cancel' stops it.`,
 		newSessionStartCmd(),
 		newSessionAttachCmd(),
 		newSessionCancelCmd(),
+		newSessionResumeCmd(),
+		newSessionRestoreCmd(),
 		newSessionListCmd(),
 	)
 	return cmd
@@ -134,6 +136,56 @@ func newSessionCancelCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newSessionResumeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "resume <session-id>",
+		Short:        "Continue a paused session, taking your files as they are now",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireLocalDaemon(); err != nil {
+				return err
+			}
+			if err := watchd.ResumeSession(args[0]); err != nil {
+				return sessionError(err)
+			}
+			iostream.FromCmd(cmd).ErrPrintf("Resumed session %s; it reviews your files as they are now.\n", args[0])
+			return nil
+		},
+	}
+}
+
+func newSessionRestoreCmd() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "restore <session-id>",
+		Short: "Undo everything a session changed in your working tree",
+		Long: `Puts back every file the session's fixes changed, as it was before the first
+fix, and touches nothing else. Files you edited after the session left them are
+not overwritten unless you pass --force. If the daemon has lost the session
+(it restarted), the restore point is still in git: see docs/ARCHITECTURE.md.`,
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := requireLocalDaemon(); err != nil {
+				return err
+			}
+			res, err := watchd.RestoreSession(args[0], force)
+			if err != nil {
+				return sessionError(err)
+			}
+			streams := iostream.FromCmd(cmd)
+			for _, p := range res.Paths {
+				streams.Printf("restored %s\n", p)
+			}
+			streams.ErrPrintf("Restored %d file(s).\n", len(res.Paths))
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "Also overwrite files you edited after the session changed them")
+	return cmd
 }
 
 func newSessionListCmd() *cobra.Command {
@@ -292,6 +344,7 @@ func finishSession(streams iostream.Streams, detail watchd.SessionDetail, jsonOu
 	switch detail.State {
 	case watchd.SessionPaused:
 		streams.Printf("Paused: %s\n", detail.PauseReason)
+		streams.Printf("Continue with 'chunk session resume %s' (reviews your files as they are now), or 'chunk session cancel %s'.\n", detail.ID, detail.ID)
 	case watchd.SessionCancelled:
 		return newUserError("The session was cancelled.").withoutDetail()
 	case watchd.SessionFailed:
@@ -300,9 +353,19 @@ func finishSession(streams iostream.Streams, detail watchd.SessionDetail, jsonOu
 		// Summarised below.
 	}
 	for _, r := range detail.Rounds {
-		streams.Printf("round %d: %d finding(s), %d worth changing%s\n", r.Number, r.Findings, r.Worth, roundNote(r))
+		streams.Printf("round %d: %d finding(s), %d worth changing%s%s\n", r.Number, r.Findings, r.Worth, fixSummary(r), roundNote(r))
+	}
+	if rp := detail.Restore; rp != nil && !rp.Restored {
+		streams.Printf("Undo everything this session changed with: chunk session restore %s\n", detail.ID)
 	}
 	return nil
+}
+
+func fixSummary(r watchd.Round) string {
+	if r.Fix == nil || r.Fix.State != watchd.FixApplied {
+		return ""
+	}
+	return fmt.Sprintf(", fixed %d file(s) (+%d -%d)", len(r.Fix.Files), r.Fix.Insertions, r.Fix.Deletions)
 }
 
 func roundNote(r watchd.Round) string {

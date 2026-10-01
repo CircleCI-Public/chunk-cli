@@ -24,11 +24,9 @@ func TestSessionCountsDistinctFindingsAndThoseWorthChanging(t *testing.T) {
 		review.Finding{File: "a.go", Line: 3, Severity: "low", Body: "naming"},
 		review.Finding{File: "a.go", Line: 4, Severity: "info", Body: "note"},
 	)
-	d, root := newSessionDaemon(t, &fakeBackend{respond: func(string) (string, int) { return out, 0 }})
-
-	sess, err := d.startSession(SessionRequest{ProjectRoot: root})
-	assert.NilError(t, err)
-	detail := waitForSession(t, d, sess.ID)
+	// The agent that is asked to fix them changes nothing, which ends the loop.
+	r := newLoopRig(t, func(string) string { return out }, func(string) {})
+	detail := r.start(SessionRequest{})
 
 	// Both prompts report the same four findings; the round counts them once.
 	round := detail.Rounds[0]

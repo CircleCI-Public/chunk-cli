@@ -400,6 +400,9 @@ POST /session              {project_root, prompts_dir?, parallelism?, model?, ti
 GET  /session[?root=<path>] → {sessions: [Session...]}, newest first
 GET  /session/{id}         → SessionDetail: the session plus each round's review text
 POST /session/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
+POST /session/{id}/resume  → 202; only for a paused session (409 otherwise)
+POST /session/{id}/restore {force?} → {paths}; only for an ended session that changed
+                             files (409 otherwise, or if files were edited since)
 GET  /snapshot             → each project carries `sessions` (state only), and the
                              top level a `review_auth_error`
 ```
@@ -435,34 +438,50 @@ changed (`fix.files[]`: `path`, `insertions`, `deletions`; the totals are
   those, the ones **worth changing**: severity high or medium. In-process
   `chunk review` does not ask for findings, so its prompts and output are
   unchanged.
-- **Applying a fix safely** (`session_tree.go`, `session_fix.go`). These are the
-  building blocks the review-and-fix loop is made of; the loop that drives them
-  is a separate change. Nothing in a session calls them yet.
-  - *Fixes are a diff against what the reviewers saw.* In the sandbox,
-    `baselineScript` records the tree before an agent runs and `diffScript` diffs
-    it against the tree after (and then reverses the diff, leaving the sandbox as
-    it found it). The user's own uncommitted work, which was synced into the
-    sandbox, is in both trees and so never in the patch.
-  - `checkPatchPaths` refuses a patch that touches `.git/`, `.github/workflows/`,
-    `.github/actions/`, `.circleci/` or anything outside the repository. A patch
-    is also `git apply --check`ed first (`applyPatchToTree`), so one that does not
-    fit changes nothing at all.
-  - *Restore point* (`saveRestorePoint`). The user's working tree is snapshotted
-    (`gitutil.SnapshotTree`: a git tree object built with a throwaway index) into
-    a commit held by the ref `refs/chunk/restore/<session-id>`. It covers every
-    tracked file as it is on disk (staged and unstaged edits alike) and every
-    untracked file that is not ignored. It does **not** cover ignored files, and
-    it does not record the index: patches are applied to files only, never
-    `--index`. `restoreSession` puts back exactly the files the fixes changed
-    (`git restore --source=<ref> --worktree`; files the session created are
-    removed), and refuses, listing them, if any of those files were edited after
-    the session left them unless forced. The ref outlives the daemon;
-    `git for-each-ref refs/chunk/restore` lists them. Refs are not removed
-    automatically.
-  - *Changed underneath.* `treeNow` snapshots the working tree the same way, and
-    `changedBetween` lists what differs between two snapshots. Ignored files and
-    timestamps do not count as changes; any content change to a tracked or
-    untracked file does.
+- **The loop.** `runLoop` runs up to `MaxRounds` (3) rounds. A round is: all
+  review prompts in parallel on pooled sandboxes; if any distinct finding is
+  worth changing (severity high or medium) one sandbox agent, with edit tools,
+  fixes exactly those; the fix is brought back as a patch and applied straight to
+  the user's working tree. The loop stops early when a round has nothing worth
+  changing, or when the agent changes nothing. Each round opens its pool through
+  the same named, persisted pool, so later rounds reuse the warm sandboxes and
+  the pool re-syncs only what changed.
+- **Fixes are a diff against what the reviewers saw.** In the sandbox,
+  `baselineScript` records the tree before the agent runs and `diffScript` diffs
+  it against the tree after (and then reverses the diff, leaving the sandbox as
+  it found it). The user's own uncommitted work, which was synced into the
+  sandbox, is in both trees and so never in the patch. Those two scripts run
+  without the credential. `checkPatchPaths` refuses a patch that touches `.git/`,
+  `.github/workflows/`, `.github/actions/`, `.circleci/` or anything outside the
+  repository.
+- **Restore point** (`saveRestorePoint`). Before the first byte is written, the
+  daemon snapshots the user's working tree (`gitutil.SnapshotTree`: a git tree
+  object built with a throwaway index) into a commit held by the ref
+  `refs/chunk/restore/<session-id>`. It covers every tracked file as it is on disk
+  (staged and unstaged edits alike) and every untracked file that is not ignored.
+  It does **not** cover ignored files, and it does not record the index: a
+  session writes files only (`git apply`, never `--index`), so staging is left as
+  the user had it. If the restore point cannot be saved nothing is written.
+  `chunk session restore <id>` puts back exactly the files the fixes changed
+  (`git restore --source=<ref> --worktree`; files the session created are
+  removed), and refuses, listing them, if any of those files were edited after the
+  session left them unless `--force`. The ref outlives the daemon, so after a
+  restart the session record is gone but the undo is still
+  `git restore --source=refs/chunk/restore/<session-id> --worktree -- <paths>`
+  (`git for-each-ref refs/chunk/restore` lists them). Refs are not removed
+  automatically.
+- **Changed underneath.** The loop remembers the tree it last saw (`expected`): at
+  the start, then as it left it after each round's fixes. Before it starts a round
+  and again immediately before it applies a patch, it snapshots the working tree
+  and compares. A difference means the user edited while the sandboxes worked, so
+  the patch is for files that no longer exist: the round is marked superseded,
+  nothing is written, and the session **pauses** (`state: paused`,
+  `pause_reason`, `paused_paths`, stage `review_loop: paused`). `chunk session
+  resume <id>` (or the dashboard) adopts the files as they are now and runs the
+  round again; `cancel` ends the session. Ignored files and timestamps do not
+  count as changes; any content change to a tracked or untracked file does.
+  A patch is also `git apply --check`ed first, so one that does not fit changes
+  nothing at all.
 - **One active session per project.** Two would fight over the same files.
 - **Prompts come from the project** (`.chunk/reviews`): `prompts_dir` must be
   relative and may not leave the project.

@@ -19,11 +19,37 @@ const maxRequestBytes = 64 * 1024
 //	GET  /session[?root=<path>] list sessions (newest first), optionally one project's
 //	GET  /session/{id}         one session with its review text
 //	POST /session/{id}/cancel  stop a session
+//	POST /session/{id}/resume  continue a paused session with the files as they are now
+//	POST /session/{id}/restore undo everything the session changed in the working tree
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /session", d.handleSessionStart)
 	mux.HandleFunc("GET /session", d.handleSessionList)
 	mux.HandleFunc("GET /session/{id}", d.handleSessionGet)
 	mux.HandleFunc("POST /session/{id}/cancel", d.handleSessionCancel)
+	mux.HandleFunc("POST /session/{id}/resume", d.handleSessionResume)
+	mux.HandleFunc("POST /session/{id}/restore", d.handleSessionRestore)
+}
+
+func (d *daemon) handleSessionResume(w http.ResponseWriter, r *http.Request) {
+	if err := d.resumeSession(r.PathValue("id")); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (d *daemon) handleSessionRestore(w http.ResponseWriter, r *http.Request) {
+	var req RestoreRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	res, err := d.restoreFiles(r.Context(), r.PathValue("id"), req.Force)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
