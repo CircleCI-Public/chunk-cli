@@ -335,7 +335,7 @@ func TestRunPassProgressFn(t *testing.T) {
 
 func TestClaudeScript(t *testing.T) {
 	t.Parallel()
-	script := claudeScript("/home/user/my repo", "hi", "claude-sonnet-5")
+	script := claudeScriptWithTools("/home/user/my repo", "hi", "claude-sonnet-5", allowedTools, false)
 	assert.Assert(t, strings.Contains(script, "cd '/home/user/my repo'"), script)
 	assert.Assert(t, strings.Contains(script, "'claude' '-p' '--output-format' 'text'"), script)
 	assert.Assert(t, strings.Contains(script, "'--model' 'claude-sonnet-5'"), script)
@@ -378,6 +378,24 @@ func TestRunPassStructuredFindings(t *testing.T) {
 	assert.Equal(t, len(results[0].Parsed.Findings), 1)
 	assert.Equal(t, results[0].Parsed.Findings[0].File, "a.go")
 	assert.Assert(t, strings.Contains(results[1].Error, "read claude's result"), results[1].Error)
+}
+
+func TestRunPassStructuredResultOverTheCapFailsWithAClearError(t *testing.T) {
+	t.Parallel()
+	pool := newSafePool("sb-1")
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn, _ func(string)) (int, error) {
+		out(circleci.StreamStdout, []byte(`{"type":"result","result":"`))
+		out(circleci.StreamStdout, []byte(strings.Repeat("x", maxStructuredOutputBytes)))
+		return 0, nil
+	}
+
+	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "big", Body: "x"}}, Options{StructuredFindings: true})
+
+	assert.NilError(t, err)
+	assert.Equal(t, len(results), 1)
+	assert.Assert(t, strings.Contains(results[0].Error, "is over"), results[0].Error)
+	assert.Assert(t, !strings.Contains(results[0].Error, "read claude's result"), results[0].Error)
 }
 
 func TestRunPassForwardsACustomBaseURL(t *testing.T) {

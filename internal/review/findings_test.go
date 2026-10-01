@@ -2,6 +2,9 @@ package review
 
 import (
 	"encoding/json"
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,6 +110,44 @@ func TestFindingsSchemaIsValidJSON(t *testing.T) {
 	var schema map[string]any
 	assert.NilError(t, json.Unmarshal([]byte(FindingsSchema), &schema))
 	assert.Equal(t, schema["type"], "object")
+}
+
+// The schema and the structs ParseFindings decodes into are written apart. A
+// field renamed in one but not the other would not fail any decode: claude would
+// answer to the schema and the parser would quietly read zero values. This keeps
+// them naming the same fields.
+func TestFindingsSchemaNamesTheFieldsParseFindingsReads(t *testing.T) {
+	type node struct {
+		Properties map[string]node `json:"properties"`
+		Items      *node           `json:"items"`
+		Required   []string        `json:"required"`
+	}
+	var schema node
+	assert.NilError(t, json.Unmarshal([]byte(FindingsSchema), &schema))
+
+	jsonNames := func(typ reflect.Type) []string {
+		var names []string
+		for f := range typ.Fields() {
+			names = append(names, strings.Split(f.Tag.Get("json"), ",")[0])
+		}
+		slices.Sort(names)
+		return names
+	}
+	keys := func(props map[string]node) []string {
+		return slices.Sorted(maps.Keys(props))
+	}
+
+	structured, ok := reflect.TypeFor[claudeResult]().FieldByName("StructuredOutput")
+	assert.Assert(t, ok)
+	assert.DeepEqual(t, keys(schema.Properties), jsonNames(structured.Type.Elem()))
+
+	item := schema.Properties["findings"].Items
+	assert.Assert(t, item != nil)
+	assert.DeepEqual(t, keys(item.Properties), jsonNames(reflect.TypeFor[rawFinding]()))
+	for _, name := range item.Required {
+		_, ok := item.Properties[name]
+		assert.Assert(t, ok, "required %q is not a property", name)
+	}
 }
 
 func TestWorthChangingIsHighAndMediumOnly(t *testing.T) {

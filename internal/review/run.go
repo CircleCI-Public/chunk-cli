@@ -265,22 +265,27 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
 	var stdout, stderr strings.Builder
-	limit := maxOutputBytes
+	// Only stdout carries the JSON result, so only it gets the larger cap; stderr
+	// is read for a short tail and stays small.
+	stdoutLimit := maxOutputBytes
 	if opts.StructuredFindings {
-		limit = maxStructuredOutputBytes
+		stdoutLimit = maxStructuredOutputBytes
 	}
+	stdoutCut := false
 	tools := opts.AllowedTools
 	if len(tools) == 0 {
 		tools = allowedTools
 	}
 	onOutput := func(stream string, data []byte) {
-		buf := &stdout
+		buf, limit := &stdout, stdoutLimit
 		if stream == circleci.StreamStderr {
-			buf = &stderr
+			buf, limit = &stderr, maxOutputBytes
 		}
-		if buf.Len() < limit {
-			buf.Write(data[:min(len(data), limit-buf.Len())])
+		room := max(limit-buf.Len(), 0)
+		if len(data) > room && buf == &stdout {
+			stdoutCut = true
 		}
+		buf.Write(data[:min(len(data), room)])
 	}
 	var onSubmitted func(string)
 	if opts.OnSubmitted != nil {
@@ -302,6 +307,11 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		return r.fail(exitError(code, stderr.String()))
 	}
 	if opts.StructuredFindings {
+		// A result cut at the cap cannot decode; say why instead of reporting
+		// malformed JSON.
+		if stdoutCut {
+			return r.fail(fmt.Errorf("claude's result is over %d bytes", stdoutLimit))
+		}
 		parsed, err := ParseFindings(r.Output)
 		if err != nil {
 			return r.fail(err)
@@ -333,16 +343,11 @@ func exitError(code int, stderr string) error {
 	return fmt.Errorf("claude exited %d: %s", code, stderr)
 }
 
-// claudeScript builds the shell script that runs one review. The prompt is
-// piped in base64-encoded, so no quoting in it can reach the shell. Claude
-// Code's native installer puts claude in ~/.local/bin, which a non-login sh
-// does not have on PATH.
-func claudeScript(repoPath, prompt, model string) string {
-	return claudeScriptWithTools(repoPath, prompt, model, allowedTools, false)
-}
-
-// claudeScriptWithTools is claudeScript with an explicit tool allowlist, and,
-// when structured is set, claude's JSON result constrained by FindingsSchema.
+// claudeScriptWithTools builds the shell script that runs one review, with an
+// explicit tool allowlist and, when structured is set, claude's JSON result
+// constrained by FindingsSchema. The prompt is piped in base64-encoded, so no
+// quoting in it can reach the shell. Claude Code's native installer puts claude
+// in ~/.local/bin, which a non-login sh does not have on PATH.
 func claudeScriptWithTools(repoPath, prompt, model string, tools []string, structured bool) string {
 	format := "text"
 	if structured {

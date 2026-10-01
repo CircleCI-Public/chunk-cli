@@ -25,6 +25,18 @@ import (
 
 // fakeSessionConfig is a daemon setup that boots no sandboxes and calls no API:
 // every command answers with output.
+// reviewResult is claude's JSON result for a review that says prose and has
+// no findings. A reviewer that prints anything else has failed.
+func reviewResult(prose string) string {
+	structured := map[string]any{"review": prose, "findings": []any{}}
+	text, _ := json.Marshal(structured)
+	raw, _ := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "is_error": false,
+		"result": string(text), "structured_output": structured,
+	})
+	return string(raw)
+}
+
 func fakeSessionConfig(output string) watchd.ReviewConfig {
 	var next atomic.Int32
 	return watchd.ReviewConfig{
@@ -45,7 +57,7 @@ func fakeSessionConfig(output string) watchd.ReviewConfig {
 			return fmt.Sprintf("cmd-%d", next.Add(1)), nil
 		},
 		Stream: func(_ context.Context, _ *sidecar.PoolEntry, _ string, on circleci.OutputFn) (int, error) {
-			on(circleci.StreamStdout, []byte(output))
+			on(circleci.StreamStdout, []byte(reviewResult(output)))
 			return 0, nil
 		},
 	}
