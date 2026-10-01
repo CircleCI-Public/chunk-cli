@@ -4,7 +4,32 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
+
+// maxSocketPath returns the size of the kernel's Unix socket path buffer: 104
+// bytes on macOS and the BSDs, 108 on Linux. The path and its terminating NUL
+// must fit, so a path of that many bytes or more cannot be bound.
+func maxSocketPath() int {
+	switch runtime.GOOS {
+	case "darwin", "freebsd", "netbsd", "openbsd", "dragonfly":
+		return 104
+	}
+	return 108
+}
+
+// checkSocketPath fails with an actionable message when path is too long to bind
+// as a Unix socket. Without this the daemon dies with "bind: invalid argument"
+// in its own log and the CLI can only report that the daemon did not start.
+func checkSocketPath(path string) error {
+	limit := maxSocketPath()
+	if len(path) < limit {
+		return nil
+	}
+	return fmt.Errorf("the watch daemon's socket path is too long (%d bytes, the limit is %d): %s\n"+
+		"set CHUNK_WATCHD_DIR to a shorter directory, for example CHUNK_WATCHD_DIR=/tmp/chunk-watchd",
+		len(path), limit-1, path)
+}
 
 func watchdDir() (string, error) {
 	if override := os.Getenv("CHUNK_WATCHD_DIR"); override != "" {
@@ -41,7 +66,11 @@ func SocketPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(d, "watchd.sock"), nil
+	sock := filepath.Join(d, "watchd.sock")
+	if err := checkSocketPath(sock); err != nil {
+		return "", err
+	}
+	return sock, nil
 }
 
 // LogPath returns the path to the daemon log file.

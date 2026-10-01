@@ -11,6 +11,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -659,4 +660,22 @@ func TestConflictReportIsKnownWithNoAnswerBeforeTheFirstCheck(t *testing.T) {
 	// And nothing is said or claimed on the back of it.
 	assert.Check(t, cmp.Equal(ConflictNotice(report), ""))
 	assert.Check(t, cmp.Contains(ConflictStatus(report), "No conflict check has completed"))
+}
+
+func TestSocketPathTooLongIsReportedUpFront(t *testing.T) {
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", maxSocketPath()))
+	t.Setenv("CHUNK_WATCHD_DIR", long)
+
+	_, err := SocketPath()
+	assert.ErrorContains(t, err, "too long")
+	assert.ErrorContains(t, err, "CHUNK_WATCHD_DIR")
+	assert.ErrorContains(t, err, long)
+
+	// The launch path fails the same way, before any daemon is spawned.
+	err = EnsureRunning([]string{"unused"})
+	assert.ErrorContains(t, err, "CHUNK_WATCHD_DIR")
+
+	t.Setenv("CHUNK_WATCHD_DIR", socketDir(t))
+	_, err = SocketPath()
+	assert.NilError(t, err)
 }
