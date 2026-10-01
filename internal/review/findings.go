@@ -97,10 +97,21 @@ func parseReport(stdout string) (report, error) {
 	}
 	if env.IsError {
 		msg := strings.TrimSpace(env.Result)
-		if msg == "" {
-			return report{}, fmt.Errorf("claude reported %s", env.Subtype)
+		// A rejected credential can arrive as a result with exit code 0, so
+		// it is checked here as well as on the exit code.
+		if credentialRejectedRe.MatchString(msg) {
+			return report{}, ErrCredentialRejected
 		}
-		return report{}, fmt.Errorf("claude reported %s: %s", env.Subtype, msg)
+		// Claude gives API errors the subtype "success", which reads wrongly
+		// after "reported".
+		what := env.Subtype
+		if what == "" || what == "success" {
+			what = "an error"
+		}
+		if msg == "" {
+			return report{}, fmt.Errorf("claude reported %s", what)
+		}
+		return report{}, fmt.Errorf("claude reported %s: %s", what, msg)
 	}
 	if len(env.StructuredOutput) == 0 || string(env.StructuredOutput) == "null" {
 		return report{}, errNoStructuredOutput
@@ -112,5 +123,28 @@ func parseReport(stdout string) (report, error) {
 	if r.Findings == nil {
 		r.Findings = []Finding{}
 	}
+	for i, f := range r.Findings {
+		if err := f.validate(); err != nil {
+			return report{}, fmt.Errorf("finding %d: %w", i+1, err)
+		}
+	}
 	return r, nil
+}
+
+// validate checks the constraints findingsSchema asks claude to meet, so a
+// value outside them is reported as a failed review rather than ranked or
+// printed as if it were sound.
+func (f Finding) validate() error {
+	switch f.Severity {
+	case SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow:
+	default:
+		return fmt.Errorf("unknown severity %q", f.Severity)
+	}
+	if f.Confidence < 0 || f.Confidence > 100 {
+		return fmt.Errorf("confidence %d is outside 0-100", f.Confidence)
+	}
+	if f.Line < 0 {
+		return fmt.Errorf("line %d is negative", f.Line)
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -306,7 +307,9 @@ func printReviews(streams iostream.Streams, results []review.Result) {
 		streams.Printf("## %s\n\n", r.Prompt)
 		if r.Error != "" {
 			streams.Printf("_Review failed on %s: %s_\n\n", r.SidecarID, r.Error)
-			if r.Output != "" {
+			// A JSON result is already summarised by the error and stays in
+			// --json output; only text that is not JSON adds anything.
+			if r.Output != "" && !json.Valid([]byte(r.Output)) {
 				streams.Println(r.Output)
 			}
 			continue

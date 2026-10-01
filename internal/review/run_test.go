@@ -463,6 +463,46 @@ func TestRunPassClaudeReportedErrorWithoutMessage(t *testing.T) {
 	assert.Equal(t, r.Error, "claude reported error_during_execution")
 }
 
+// Claude can report a rejected credential in a result that exits 0. It must
+// still stop the pass, and "success" is not a reason worth printing.
+func TestRunPassCredentialRejectedWithExitZero(t *testing.T) {
+	t.Parallel()
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn) (int, error) {
+		out(circleci.StreamStdout, []byte(`{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate. API Error: 401 invalid x-api-key"}`))
+		return 0, nil
+	}
+	pool := newSafePool("sb-1", "sb-2")
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}, {Name: "c", Body: "z"}}, Options{})
+	assert.Assert(t, errors.Is(err, ErrCredentialRejected), "got %v", err)
+}
+
+func TestRunPassClaudeReportedErrorWithSuccessSubtype(t *testing.T) {
+	t.Parallel()
+	r := runOneWith(t, `{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 Overloaded"}`, 0)
+	assert.Equal(t, r.Error, "claude reported an error: API Error: 529 Overloaded")
+}
+
+func TestRunPassRejectsFindingsOutsideTheSchema(t *testing.T) {
+	t.Parallel()
+	good := Finding{File: "a.go", Line: 1, Severity: SeverityHigh, Confidence: 80, Claim: "c", FailureScenario: "f"}
+	for name, mutate := range map[string]func(*Finding){
+		"severity":        func(f *Finding) { f.Severity = "urgent" },
+		"high confidence": func(f *Finding) { f.Confidence = 150 },
+		"low confidence":  func(f *Finding) { f.Confidence = -1 },
+		"line":            func(f *Finding) { f.Line = -3 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			bad := good
+			mutate(&bad)
+			r := runOneWith(t, claudeResult(t, "s", good, bad), 0)
+			assert.Assert(t, strings.HasPrefix(r.Error, "finding 2: "), r.Error)
+			assert.Assert(t, r.Findings == nil)
+		})
+	}
+}
+
 func TestRunPassOutputTooLarge(t *testing.T) {
 	t.Parallel()
 	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn) (int, error) {

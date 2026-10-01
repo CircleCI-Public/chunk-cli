@@ -77,6 +77,16 @@ func TestCredentialRejectedFromConfigFileNamesTheFile(t *testing.T) {
 	assert.Equal(t, ue.exitCode, ExitAuthError)
 }
 
+// A failed review's raw output is claude's JSON result, which the error
+// already summarises and --json still carries.
+func TestPrintReviewsSkipsRawJSONOutputOnFailure(t *testing.T) {
+	var out bytes.Buffer
+	printReviews(iostream.Streams{Out: &out, Err: &bytes.Buffer{}}, []review.Result{
+		{Prompt: "broken", SidecarID: "sb-2", Error: "claude exited 1: overloaded", Output: `{"type":"result","is_error":true}`},
+	})
+	assert.Equal(t, out.String(), "## broken\n\n_Review failed on sb-2: claude exited 1: overloaded_\n\n")
+}
+
 func TestPrintReviews(t *testing.T) {
 	var out bytes.Buffer
 	printReviews(iostream.Streams{Out: &out, Err: &bytes.Buffer{}}, []review.Result{
