@@ -654,7 +654,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if gitRoot := gitutil.TopLevelCtx(ctx, attributionDir); gitRoot != "" {
 		attributionDir = gitRoot
 	}
-	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, attributionDir, hook)
+	pooled := executionPlan.PoolSize > 1
+	statusFn, recorder := wrapEventLogStatusFn(statusFn, runRecorderSidecarID(pooled, opts.sidecarID), activeSidecar, attributionDir, hook)
 	setupComplete := false
 	var setupErr error
 	defer func() {
@@ -675,7 +676,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if err := saveInlineValidateCommand(workDir, name, opts.inlineCmd, opts.save, streams); err != nil {
 		execErr = err
 	} else {
-		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, newPoolRecorders(recorder), statusFn, streams)
+		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, newPoolRecorders(recorder, pooled), statusFn, streams)
 	}
 	// Saved after the plan runs, not right after the pool is built: a pool
 	// grown beyond one sidecar finishes cloning in the background while
@@ -952,8 +953,13 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 // A command's ID is kept per sidecar too. The run's own recorder never sees a
 // pooled command's closing event, so an ID set there would stamp nothing, or
 // land on whichever local command finished next.
+//
+// A run on one sidecar is not split: its commands report through the run's own
+// recorder, so they and the run-wide summary close as one run. Closing each
+// command there too would show one run as one per command plus the summary.
 type poolRecorders struct {
-	run *eventlog.Recorder
+	run    *eventlog.Recorder
+	pooled bool
 
 	mu   sync.Mutex
 	byID map[string]*eventlog.Recorder
@@ -961,11 +967,11 @@ type poolRecorders struct {
 
 // newPoolRecorders returns nil when there is no log to record in, which status
 // and commandIDSetter tolerate.
-func newPoolRecorders(run *eventlog.Recorder) *poolRecorders {
+func newPoolRecorders(run *eventlog.Recorder, pooled bool) *poolRecorders {
 	if run == nil {
 		return nil
 	}
-	return &poolRecorders{run: run, byID: map[string]*eventlog.Recorder{}}
+	return &poolRecorders{run: run, pooled: pooled, byID: map[string]*eventlog.Recorder{}}
 }
 
 // recorder returns the recorder for one sidecar, creating it on first use.
@@ -980,9 +986,10 @@ func (p *poolRecorders) recorder(sidecarID string) *eventlog.Recorder {
 	return rec
 }
 
-// status returns the reporter for one sidecar, or nil when nothing is recorded.
+// status returns the reporter for one sidecar, or nil when nothing is recorded
+// or the run is not pooled, leaving the run's own reporter in place.
 func (p *poolRecorders) status(sidecarID string) iostream.StatusFunc {
-	if p == nil {
+	if p == nil || !p.pooled {
 		return nil
 	}
 	return p.recorder(sidecarID).PerCommand()
@@ -994,7 +1001,22 @@ func (p *poolRecorders) commandIDSetter(sidecarID string) func(string) {
 	if p == nil {
 		return nil
 	}
+	if !p.pooled {
+		return p.run.SetCommandID
+	}
 	return p.recorder(sidecarID).SetCommandID
+}
+
+// runRecorderSidecarID is the sidecar a run's own events are filed under. A
+// pooled run's, the run-wide summary among them, go under none: each pool
+// member records the commands it ran, and the summary tallies the whole pool.
+// Under the representative's ID that tally would close a run on its row and
+// mark it failed for another member's failure.
+func runRecorderSidecarID(pooled bool, sidecarID string) string {
+	if pooled {
+		return ""
+	}
+	return sidecarID
 }
 
 // failBeforeRun closes the event-log entry when setup fails before commands run.

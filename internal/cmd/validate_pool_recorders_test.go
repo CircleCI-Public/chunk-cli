@@ -30,7 +30,7 @@ func TestPoolRecordersFileEachCommandUnderItsSidecar(t *testing.T) {
 	assert.NilError(t, err)
 
 	run := eventlog.Record(dataDir, nil, eventlog.OpValidate, "sb-1", "", "main")
-	recorders := newPoolRecorders(run)
+	recorders := newPoolRecorders(run, true)
 
 	// Two commands, one per sidecar, as RunDistributed would report them.
 	one := recorders.status("sb-1")
@@ -63,7 +63,7 @@ func TestPoolRecordersReuseOneRecorderPerSidecar(t *testing.T) {
 	dataDir, err := config.ProjectDataDir(t.TempDir())
 	assert.NilError(t, err)
 
-	recorders := newPoolRecorders(eventlog.Record(dataDir, nil, eventlog.OpValidate, "sb-1", "", "main"))
+	recorders := newPoolRecorders(eventlog.Record(dataDir, nil, eventlog.OpValidate, "sb-1", "", "main"), true)
 	first := recorders.status("sb-1")
 	assert.Equal(t, len(recorders.byID), 1)
 	recorders.status("sb-1")
@@ -81,7 +81,7 @@ func TestPoolRecordersStampCommandIDOnTheSidecarThatRanIt(t *testing.T) {
 	assert.NilError(t, err)
 
 	run := eventlog.Record(dataDir, nil, eventlog.OpValidate, "sb-1", "", "main")
-	recorders := newPoolRecorders(run)
+	recorders := newPoolRecorders(run, true)
 
 	// Two commands in flight at once, each with its own ID.
 	recorders.commandIDSetter("sb-1")("cmd-1")
@@ -108,7 +108,7 @@ func TestPoolRecordersRecordConcurrentWorkers(t *testing.T) {
 	dataDir, err := config.ProjectDataDir(root)
 	assert.NilError(t, err)
 
-	recorders := newPoolRecorders(eventlog.Record(dataDir, nil, eventlog.OpValidate, "sb-0", "", "main"))
+	recorders := newPoolRecorders(eventlog.Record(dataDir, nil, eventlog.OpValidate, "sb-0", "", "main"), true)
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Add(1)
@@ -129,8 +129,65 @@ func TestPoolRecordersRecordConcurrentWorkers(t *testing.T) {
 // A run with no readable data directory records nothing, and must not be the
 // reason a validation fails.
 func TestNilPoolRecordersYieldNoStatus(t *testing.T) {
-	recorders := newPoolRecorders(nil)
+	recorders := newPoolRecorders(nil, true)
 	assert.Assert(t, recorders == nil)
 	assert.Assert(t, recorders.status("sb-1") == nil)
 	assert.Assert(t, recorders.commandIDSetter("sb-1") == nil)
+}
+
+// A run on one sidecar closes once, on the run-wide summary. Closing each
+// command too would show it as one run per command plus the summary.
+func TestUnpooledRecordersLeaveOneRunToClose(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := t.TempDir()
+	dataDir, err := config.ProjectDataDir(root)
+	assert.NilError(t, err)
+
+	run := eventlog.Record(dataDir, nil, eventlog.OpValidate, "sb-1", "", "main")
+	recorders := newPoolRecorders(run, false)
+	assert.Assert(t, recorders.status("sb-1") == nil, "an unpooled run reports through the run's own recorder")
+
+	// Two commands as RunDistributed would report them, falling back to the
+	// run's reporter, then the summary.
+	recorders.commandIDSetter("sb-1")("cmd-1")
+	run.Status(iostream.LevelDone, "lint  3.1s")
+	run.Status(iostream.LevelDone, "test  18.4s")
+	run.Final(iostream.LevelDone, "2/2 passed  21.5s", 2, 2)
+
+	events := poolEvents(t, root)
+	assert.Equal(t, len(events), 3)
+	var closes int
+	for _, e := range events {
+		assert.Equal(t, e.SidecarID, "sb-1")
+		if _, _, ok := e.Outcome(); ok {
+			closes++
+		}
+	}
+	assert.Equal(t, closes, 1)
+	assert.Equal(t, events[0].CommandID, "cmd-1", "the ID belongs on the command's own event")
+	assert.Equal(t, events[1].CommandID, "")
+}
+
+// A pooled run's summary tallies the whole pool, so it must not close a run on
+// any one member's row.
+func TestPooledRunSummaryIsFiledUnderNoSidecar(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := t.TempDir()
+	dataDir, err := config.ProjectDataDir(root)
+	assert.NilError(t, err)
+
+	run := eventlog.Record(dataDir, nil, eventlog.OpValidate, runRecorderSidecarID(true, "sb-1"), "", "main")
+	recorders := newPoolRecorders(run, true)
+	recorders.status("sb-1")(iostream.LevelDone, "test  18.4s")
+	recorders.status("sb-2")(iostream.LevelError, "lint  3.1s")
+	run.Final(iostream.LevelError, "1/2 passed  18.5s", 1, 2)
+
+	byID := map[string][]eventlog.Event{}
+	for _, e := range poolEvents(t, root) {
+		byID[e.SidecarID] = append(byID[e.SidecarID], e)
+	}
+	assert.Equal(t, len(byID["sb-1"]), 1, "the pool's summary landed on the representative's row")
+	assert.Equal(t, byID["sb-1"][0].Level, "done")
+	assert.Equal(t, len(byID[""]), 1)
+	assert.Equal(t, runRecorderSidecarID(false, "sb-1"), "sb-1")
 }
