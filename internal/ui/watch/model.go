@@ -236,6 +236,9 @@ type Model struct {
 	// finds something running after a quiet spell can start one without doubling
 	// up on a chain that never stopped.
 	spinning bool
+	// polled is true once a poll has delivered a snapshot, so the first one can
+	// auto-select a live session without later polls re-stealing the selection.
+	polled bool
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -406,7 +409,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchOutput(m.output.commandID, m.output.offset), outputTick(msg.seq))
 
 	case dataMsg:
-		firstPoll := m.selectedID == noSelection
+		firstPoll := !m.polled
 		m.daemonErr = nil
 		m.projects = msg.projects
 		m.sidecars = msg.sidecars
@@ -439,6 +442,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
 		m.hasSpinner = anyRunning(m.sidecars) || anySessionLive(m.sessions)
 		m = m.adjustLeftScroll()
+		m.polled = true
 		next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
 		if m.hasSpinner && !m.spinning {
 			m.spinning = true

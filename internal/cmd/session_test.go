@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -236,4 +237,35 @@ func TestLeavingTheDashboardReportsWhereTheSessionStands(t *testing.T) {
 	streams, out, _ = testStreams()
 	assert.NilError(t, reportLeftSession(streams, id))
 	assert.Assert(t, strings.Contains(out.String(), "round 1:"), out.String())
+}
+
+// An unknown session ID is refused before the dashboard clears the screen,
+// which would otherwise leave a dashboard that never selects anything.
+func TestWatchSessionRejectsAnUnknownIDBeforeOpeningTheDashboard(t *testing.T) {
+	isolateConfig(t)
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	startSessionDaemon(t, fakeSessionConfig("fine"))
+	project := sessionProject(t)
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	streams, _, _ := testStreams()
+	err := watchSession(cmd, streams, "no-such-session", project)
+	assert.ErrorContains(t, err, "no such session")
+}
+
+// With the daemon gone there is no telling whether the session carries on, so
+// leaving the dashboard says the session could not be read, not that it runs.
+func TestLeavingTheDashboardWithTheDaemonGoneDoesNotClaimTheSessionRuns(t *testing.T) {
+	dir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+
+	streams, out, errOut := testStreams()
+	assert.NilError(t, reportLeftSession(streams, "sess-1"))
+	assert.Assert(t, strings.Contains(errOut.String(), "Could not read the session"), errOut.String())
+	assert.Assert(t, strings.Contains(errOut.String(), "chunk session attach sess-1"), errOut.String())
+	assert.Assert(t, !strings.Contains(errOut.String(), "keeps running"), errOut.String())
+	assert.Equal(t, out.String(), "")
 }

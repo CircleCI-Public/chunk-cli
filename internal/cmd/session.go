@@ -380,7 +380,14 @@ func watchSession(cmd *cobra.Command, streams iostream.Streams, id, dir string) 
 // it carries on without the reader.
 func reportLeftSession(streams iostream.Streams, id string) error {
 	detail, err := watchd.FetchSession(id)
-	if err != nil || (!detail.State.Finished() && detail.State != watchd.SessionPaused) {
+	if err != nil {
+		// Say that the session could not be read rather than claiming it carries
+		// on: when the daemon is gone, the reattach hint cannot work.
+		warnUserError(streams, "Could not read the session: ", sessionError(err))
+		streams.ErrPrintf("Detached. Reattach with: chunk session attach %s\n", id)
+		return nil
+	}
+	if !detail.State.Finished() && detail.State != watchd.SessionPaused {
 		printDetached(streams, id)
 		return nil
 	}

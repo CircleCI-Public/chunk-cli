@@ -250,6 +250,20 @@ func TestSessionFooterOffersOnlyTheActionsTheStateAllows(t *testing.T) {
 
 	running := poll(sessModel(), []sessionInfo{liveSession("r", watchd.SessionRunning, time.Now())})
 	assert.Assert(t, !strings.Contains(hints(running), "resume") && strings.Contains(hints(running), "x cancel"), hints(running))
+
+	// Why a session cannot be started rides the footer, but only alongside
+	// sessions: the command that starts them is still hidden, and the warning
+	// would nag everyone else.
+	const authWarn = "no Anthropic API key"
+	footer := func(sessions []sessionInfo) string {
+		next, _ := sessModel().Update(dataMsg{sessions: sessions, reviewAuthErr: authWarn})
+		withErr := next.(Model)
+		return withErr.renderFooter(withErr.styles())
+	}
+	shown := footer([]sessionInfo{liveSession("r", watchd.SessionRunning, time.Now())})
+	assert.Assert(t, strings.Contains(shown, authWarn), shown)
+	hidden := footer(nil)
+	assert.Assert(t, !strings.Contains(hidden, authWarn), hidden)
 }
 
 // A dashboard opened for a session selects that one, even when another is live
