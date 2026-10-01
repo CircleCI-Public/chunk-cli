@@ -93,7 +93,7 @@ func indent(s, prefix string) string {
 // fixOnSandbox has Claude fix the findings in a sandbox and returns the patch it
 // left behind, relative to the files as they were synced. The sandbox is put
 // back as it was.
-func (d *daemon) fixOnSandbox(ctx context.Context, entry *sessionEntry, ridx int, root string, pool roundPool, findings []review.Finding) (string, error) {
+func (d *daemon) fixOnSandbox(ctx context.Context, entry *sessionEntry, ridx int, root string, pool roundPool, findings []review.Finding, req SessionRequest) (string, error) {
 	pe, err := pool.Acquire(ctx)
 	if err != nil {
 		return "", fmt.Errorf("acquire sandbox: %w", err)
@@ -119,7 +119,13 @@ func (d *daemon) fixOnSandbox(ctx context.Context, entry *sessionEntry, ridx int
 		func(context.Context) (*sidecar.PoolEntry, error) { return pe, nil },
 		func(*sidecar.PoolEntry) {},
 		loud, []review.Prompt{{Name: "fix", Body: fixPrompt(findings)}},
-		review.Options{Credential: d.rcfg.Credential, BaseURL: d.rcfg.BaseURL, AllowedTools: review.EditTools})
+		review.Options{
+			Credential:   d.rcfg.Credential,
+			BaseURL:      d.rcfg.BaseURL,
+			Model:        req.Model,
+			Timeout:      time.Duration(req.TimeoutSeconds) * time.Second,
+			AllowedTools: review.EditTools,
+		})
 	if err != nil {
 		return "", err
 	}

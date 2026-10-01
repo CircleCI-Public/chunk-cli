@@ -108,7 +108,7 @@ func (d *daemon) runRound(ctx context.Context, entry *sessionEntry, root string,
 	}
 
 	entry.startFix(ridx, worth)
-	patch, err := d.fixOnSandbox(ctx, entry, ridx, root, pool, worth)
+	patch, err := d.fixOnSandbox(ctx, entry, ridx, root, pool, worth, req)
 	if err != nil {
 		entry.failFix(ridx, err)
 		return 0, "", fmt.Errorf("fix: %w", err)
