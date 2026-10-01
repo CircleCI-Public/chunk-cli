@@ -647,7 +647,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	// Use the git root rather than workDir so the event log lands in the same
 	// data directory as sidecar state, which keys on the git top-level. A
 	// project whose .chunk sits below the git root would otherwise split its
-	// state across two data directories.
+	// state across two data directories. The plan gets the same root, so
+	// registered commands are filed under the project the daemon tracks.
 	attributionDir := opts.attributionRoot(workDir)
 	if gitRoot := gitutil.TopLevelCtx(ctx, attributionDir); gitRoot != "" {
 		attributionDir = gitRoot
@@ -673,7 +674,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if err := saveInlineValidateCommand(workDir, name, opts.inlineCmd, opts.save, streams); err != nil {
 		execErr = err
 	} else {
-		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, opts.attributionRoot(workDir), envVars, recorderCommandIDSetter(recorder), statusFn, streams)
+		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, recorderCommandIDSetter(recorder), statusFn, streams)
 	}
 	// Saved after the plan runs, not right after the pool is built: a pool
 	// grown beyond one sidecar finishes cloning in the background while
@@ -1353,9 +1354,10 @@ func runValidationPlan(
 	plan validate.Plan,
 	rc config.ResolvedConfig,
 	localWorkDir string,
-	// projectRoot is the repository a submitted command is registered under,
-	// which is localWorkDir for every run but a snapshot — see
-	// validateOpts.attributionRoot.
+	// projectRoot is the repository a submitted command is registered under. It
+	// is the git top-level, because the daemon buckets commands by canonicalised
+	// project root and discovers projects from the git-rooted breadcrumb: a
+	// registration under anything else is output the dashboard cannot reach.
 	projectRoot string,
 	envVars map[string]string,
 	setCommandID func(string),
