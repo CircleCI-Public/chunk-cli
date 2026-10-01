@@ -87,6 +87,9 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		headRefs: headRefs,
 		commands: allCommandsByProject,
 		authErr:  snap.AuthError,
+
+		sessions:      collectSessions(snap.Projects),
+		reviewAuthErr: snap.ReviewAuthError,
 	}
 }
 

@@ -324,6 +324,17 @@ chunk
   files as they are and goes again, `cancel` ends it. It never touches the
   index, commits, or pushes. Sessions are kept in memory:
   a daemon restart loses the record. In-process `chunk review` is unchanged.
+- **`watch` shows the daemon's sessions live.** The header notes a session running
+  or paused, and `r` opens the session view: a timeline of the whole flow — the
+  review loop with each round (its reviews, drawn by the same renderer as
+  `chunk review`, the findings and how many are worth changing, and what the
+  round's fixes changed in your files: file list and line counts), then Rebase,
+  CI, Approval and Open pull request, shown as "not built yet". A paused session
+  shows why (which files changed under it) and `c` continues it. `Enter` opens a
+  review's live log, `f` the round's fix log, `Tab` picks the round, `↑/↓` the
+  session. **`q` only detaches**: the session belongs to the daemon and carries
+  on. The one key that stops it is `x`, and it needs a second `x` on the same
+  session to confirm.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a

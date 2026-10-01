@@ -31,10 +31,10 @@ func TestNewModelInitialState(t *testing.T) {
 	m := New(basePrompts(), 2, func() {})
 
 	assert.Equal(t, len(m.rows), 2)
-	assert.Equal(t, m.rows[0].name, "api-design")
-	assert.Equal(t, m.rows[0].state, review.StateQueued)
-	assert.Equal(t, m.rows[1].name, "error-handling")
-	assert.Equal(t, m.rows[1].state, review.StateQueued)
+	assert.Equal(t, m.rows[0].Name, "api-design")
+	assert.Equal(t, m.rows[0].State, review.StateQueued)
+	assert.Equal(t, m.rows[1].Name, "error-handling")
+	assert.Equal(t, m.rows[1].State, review.StateQueued)
 }
 
 func TestProgressMsgUpdatesRow(t *testing.T) {
@@ -45,10 +45,10 @@ func TestProgressMsgUpdatesRow(t *testing.T) {
 		ProgressMsg(review.ProgressEvent{Prompt: "error-handling", SidecarID: "sb-def456", State: review.StateFailed, Error: "claude exited 1"}),
 	)
 
-	assert.Equal(t, m.rows[0].state, review.StateDone)
-	assert.Equal(t, m.rows[0].duration, 3*time.Second)
-	assert.Equal(t, m.rows[1].state, review.StateFailed)
-	assert.Equal(t, m.rows[1].errMsg, "claude exited 1")
+	assert.Equal(t, m.rows[0].State, review.StateDone)
+	assert.Equal(t, m.rows[0].Duration, 3*time.Second)
+	assert.Equal(t, m.rows[1].State, review.StateFailed)
+	assert.Equal(t, m.rows[1].Err, "claude exited 1")
 }
 
 func TestDoneMsgQuits(t *testing.T) {
@@ -64,8 +64,8 @@ func TestDoneMsgWithErrorSettlesUnfinishedRows(t *testing.T) {
 	)
 
 	for _, r := range m.rows {
-		assert.Equal(t, r.state, review.StateFailed, "row %s", r.name)
-		assert.Equal(t, r.errMsg, review.ErrClaudeMissing.Error())
+		assert.Equal(t, r.State, review.StateFailed, "row %s", r.Name)
+		assert.Equal(t, r.Err, review.ErrClaudeMissing.Error())
 	}
 	assert.Assert(t, !strings.Contains(m.render(), "running"))
 }

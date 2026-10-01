@@ -149,6 +149,10 @@ type dataMsg struct {
 	headRefs []string
 	commands [][]watchd.CommandState
 	authErr  string
+	// sessions are the daemon's pre-PR sessions, and reviewAuthErr its reason for
+	// being unable to start one.
+	sessions      []sessionInfo
+	reviewAuthErr string
 }
 
 // Model is the BubbleTea model for the watch dashboard.
@@ -217,6 +221,16 @@ type Model struct {
 	// conn is the daemon this dashboard talks to, shown in the header next to
 	// whether the last poll reached it.
 	conn watchd.Connection
+
+	// sessions are the daemon's pre-PR sessions across projects, and sessionView
+	// the open session view, nil when the dashboard is showing sidecars.
+	sessions      []sessionInfo
+	sessionView   *sessionPane
+	reviewAuthErr string
+	// spinning is true while a spinner tick chain is in flight, so a poll that
+	// finds something running after a quiet spell can start one without doubling
+	// up on a chain that never stopped.
+	spinning bool
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -242,6 +256,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		ownSession:    session.IDFromEnv(),
 		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
 		conn:          watchd.CurrentConnection(),
+		spinning:      true, // Init starts the first chain
 	}
 }
 
@@ -271,6 +286,8 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.Code {
 	case 'q', tea.KeyEscape:
 		return m, tea.Quit
+	case 'r':
+		return m.openSessions(), nil
 	case tea.KeyRight, 'l':
 		m.focusedPane = paneRight
 	case tea.KeyLeft, 'h':
@@ -337,6 +354,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.output != nil {
 			return m.updateOutputKey(msg)
 		}
+		if m.sessionView != nil {
+			return m.updateSessionKey(msg)
+		}
 		return m.updateDashboardKey(msg)
 
 	case tea.MouseClickMsg:
@@ -387,14 +407,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.headRefs = msg.headRefs
 		m.commands = msg.commands
 		m.authErr = msg.authErr
+		m.sessions = msg.sessions
+		m.reviewAuthErr = msg.reviewAuthErr
+		if m.sessionView != nil {
+			m.sessionView.sel = min(m.sessionView.sel, max(len(m.sessions)-1, 0))
+		}
 		// Sidecars are re-sorted by recency each poll, so track the selection
 		// by id. An unknown id (first poll, or the sidecar aged out) falls back
 		// to index 0, the most recently active sidecar.
 		m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
 		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-		m.hasSpinner = anyRunning(m.sidecars)
+		m.hasSpinner = anyRunning(m.sidecars) || anySessionLive(m.sessions)
 		m = m.adjustLeftScroll()
-		return m, tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+		next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+		if m.hasSpinner && !m.spinning {
+			m.spinning = true
+			return m, tea.Batch(next, doSpin())
+		}
+		return m, next
+
+	case sessionActionMsg:
+		return m.withSessionAction(msg), nil
 
 	case updateCheckMsg:
 		m.updateAvailable = msg.latest
@@ -409,6 +442,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.hasSpinner {
 			return m, doSpin()
 		}
+		m.spinning = false
 		return m, nil
 	}
 	return m, nil
@@ -433,6 +467,9 @@ func (m Model) render() string {
 	st := m.styles()
 	if m.output != nil {
 		return m.renderHeader(st) + m.renderSeparator(st) + m.renderOutputPane(st)
+	}
+	if m.sessionView != nil {
+		return m.renderSessionView(st)
 	}
 	return m.renderHeader(st) +
 		m.renderSeparator(st) +
@@ -460,7 +497,7 @@ func (m Model) renderHeader(st watchStyles) string {
 
 	clock := time.Now().Format("15:04:05")
 	title := st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
-	right := m.connectionTag(st) + "  " + st.vdim(clock)
+	right := m.sessionTag(st) + m.connectionTag(st) + "  " + st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -1134,6 +1171,7 @@ func (m Model) renderFooter(st watchStyles) string {
 		keys = []struct{ key, action string }{
 			{"↑/↓ w/s", "select"},
 			{"→", "runs"},
+			{"r", "sessions"},
 			{"q", "quit"},
 		}
 	} else {
@@ -1142,6 +1180,7 @@ func (m Model) renderFooter(st watchStyles) string {
 			{"Enter", "output"},
 			{"Space", "toggle"},
 			{"←", "sidecars"},
+			{"r", "sessions"},
 			{"q", "quit"},
 		}
 	}
