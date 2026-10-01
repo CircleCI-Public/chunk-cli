@@ -91,6 +91,10 @@ type Options struct {
 	// JSONSchema, when set, has claude return JSON matching it instead of
 	// prose. Result.Output is then claude's JSON result envelope.
 	JSONSchema string
+	// AllowEdits lifts the read-only tool limit, for a prompt that is meant
+	// to change the tree rather than review it. Sidecars are ephemeral
+	// copies of the repository, so permission checks are skipped.
+	AllowEdits bool
 	Timeout    time.Duration // per review; DefaultTimeout when zero
 	StatusFn   iostream.StatusFunc
 	ProgressFn func(ProgressEvent) // optional; called on each prompt state change
@@ -227,7 +231,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
 	var stdout, stderr strings.Builder
-	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts.Model, opts.JSONSchema), ClaudeEnv(opts), func(stream string, data []byte) {
+	code, err := exec(ctx, entry, claudeScript(entry.RepoPath, p.Body, opts), claudeEnv(opts), func(stream string, data []byte) {
 		buf := &stdout
 		if stream == circleci.StreamStderr {
 			buf = &stderr
@@ -245,7 +249,7 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		return r.fail(fmt.Errorf("exec: %w", err))
 	case code == exitClaudeMissing:
 		return r.fail(ErrClaudeMissing)
-	case code != 0 && CredentialRejected(r.Output, stderr.String()):
+	case code != 0 && credentialRejected(r.Output, stderr.String()):
 		return r.fail(ErrCredentialRejected)
 	case code != 0:
 		detail := stderr.String()
@@ -258,10 +262,10 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	return r
 }
 
-// CredentialRejected reports whether claude failed to authenticate. Both
+// credentialRejected reports whether claude failed to authenticate. Both
 // streams are checked: the 401 lands on stdout, while stderr can carry
 // unrelated warnings.
-func CredentialRejected(stdout, stderr string) bool {
+func credentialRejected(stdout, stderr string) bool {
 	return credentialRejectedRe.MatchString(stdout) || credentialRejectedRe.MatchString(stderr)
 }
 
@@ -283,14 +287,18 @@ func exitError(code int, stderr string) error {
 // piped in base64-encoded, so no quoting in it can reach the shell. Claude
 // Code's native installer puts claude in ~/.local/bin, which a non-login sh
 // does not have on PATH.
-func claudeScript(repoPath, prompt, model, jsonSchema string) string {
+func claudeScript(repoPath, prompt string, opts Options) string {
 	args := []string{"claude", "-p", "--output-format", "text"}
-	if jsonSchema != "" {
-		args = []string{"claude", "-p", "--output-format", "json", "--json-schema", jsonSchema}
+	if opts.JSONSchema != "" {
+		args = []string{"claude", "-p", "--output-format", "json", "--json-schema", opts.JSONSchema}
 	}
-	args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
-	if model != "" {
-		args = append(args, "--model", model)
+	if opts.AllowEdits {
+		args = append(args, "--dangerously-skip-permissions")
+	} else {
+		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
+	}
+	if opts.Model != "" {
+		args = append(args, "--model", opts.Model)
 	}
 	encoded := base64.StdEncoding.EncodeToString([]byte(prompt))
 	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
@@ -302,9 +310,9 @@ cd %s && echo %s | base64 -d | %s`,
 // defaultBaseURL is where claude sends requests when no base URL is set.
 const defaultBaseURL = "https://api.anthropic.com"
 
-// ClaudeEnv is the environment each claude run gets: only the credential, and
+// claudeEnv is the environment each claude run gets: only the credential, and
 // the base URL when it points somewhere other than Anthropic.
-func ClaudeEnv(opts Options) map[string]string {
+func claudeEnv(opts Options) map[string]string {
 	env := map[string]string{opts.Credential.EnvVar: opts.Credential.Value}
 	if opts.BaseURL != "" && strings.TrimRight(opts.BaseURL, "/") != defaultBaseURL {
 		env["ANTHROPIC_BASE_URL"] = opts.BaseURL

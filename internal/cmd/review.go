@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/keyring"
@@ -62,61 +63,16 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 				dir = args[0]
 			}
 
-			prompts, err := review.LoadPrompts(dir)
-			switch {
-			case errors.Is(err, review.ErrNoPrompts):
-				return &userError{
-					msg:        fmt.Sprintf("No prompts found in %s.", dir),
-					suggestion: "Add one .md or .txt file per review.",
-					err:        err,
-				}
-			case errors.Is(err, os.ErrNotExist) && len(args) == 0:
-				return &userError{
-					msg:        fmt.Sprintf("No %s directory in this project.", review.DefaultDir),
-					suggestion: fmt.Sprintf("Create %s with one .md or .txt file per review, or pass a directory.", review.DefaultDir),
-					hideDetail: true,
-					err:        err,
-				}
-			case err != nil:
-				return &userError{msg: fmt.Sprintf("Could not read prompts from %s.", dir), err: err}
-			}
-
-			cfg, err := config.LoadProjectConfig(workDir)
-			if err != nil {
-				return &userError{
-					msg:        msgValidateNotConfigured,
-					suggestion: suggestionRunInit,
-					err:        err,
-				}
-			}
-
-			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
-			// Checked before any sidecar boots: without a credential every
-			// review fails, and the pool would bill for nothing.
-			cred, credSource, credErr := reviewCredential(rc)
-			if credErr != nil {
-				if err := setupClaudeCredential(ctx, cmd, streams, rc, jsonOut, credErr); err != nil {
-					return err
-				}
-				rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
-				if cred, credSource, credErr = reviewCredential(rc); credErr != nil {
-					return credErr
-				}
-			}
-			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
+			prompts, err := loadReviewPrompts(dir, len(args) == 1)
 			if err != nil {
 				return err
 			}
-			if orgID == "" {
-				orgID = cfg.OrgID
-			}
-			resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, rc.CircleCITokenSource, streams))
+
+			target, err := resolveClaudePool(ctx, cmd, streams, workDir, orgID, image, jsonOut)
 			if err != nil {
 				return err
 			}
-			if image == "" {
-				image = resolveImage("", cfg)
-			}
+			rc, cred, credSource, client := target.rc, target.cred, target.credSource, target.client
 
 			size := review.PoolSize(parallelism, len(prompts))
 			statusFn := newStatusFunc(streams)
@@ -125,8 +81,8 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 			pool, err := sidecar.NewPool(ctx, client, sidecar.PoolOptions{
 				Size:    size,
 				Name:    review.PoolName,
-				OrgID:   resolvedOrgID,
-				Image:   image,
+				OrgID:   target.orgID,
+				Image:   target.image,
 				WorkDir: workDir,
 			}, statusFn)
 			if err != nil {
@@ -172,16 +128,8 @@ runs; pass --destroy-pool to delete it when the run ends.`,
 			} else {
 				results, passErr = runReviewTUI(ctx, pool, prompts, size, opts)
 			}
-			if errors.Is(passErr, review.ErrClaudeMissing) {
-				return &userError{
-					msg:        "Claude Code is not installed on the review sidecars.",
-					suggestion: "Install it in the sidecar image (see 'chunk sidecar env build') and pass --image, or set validation.sidecarImage.",
-					hideDetail: true,
-					err:        passErr,
-				}
-			}
-			if errors.Is(passErr, review.ErrCredentialRejected) {
-				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, passErr)
+			if err := claudeRunError(passErr, cred, credSource, rc.AnthropicBaseURL); err != nil {
+				return err
 			}
 			if jsonOut {
 				if jsonErr := iostream.PrintJSON(streams.Out, newReviewReport(results)); jsonErr != nil {
@@ -306,6 +254,94 @@ func countFailedReviews(results []review.Result) int {
 		}
 	}
 	return n
+}
+
+// loadReviewPrompts reads the review prompts in dir. explicit is whether the
+// directory was named on the command line: only the default may be missing.
+func loadReviewPrompts(dir string, explicit bool) ([]review.Prompt, error) {
+	prompts, err := review.LoadPrompts(dir)
+	switch {
+	case errors.Is(err, review.ErrNoPrompts):
+		return nil, &userError{
+			msg:        fmt.Sprintf("No prompts found in %s.", dir),
+			suggestion: "Add one .md or .txt file per review.",
+			err:        err,
+		}
+	case errors.Is(err, os.ErrNotExist) && !explicit:
+		return nil, &userError{
+			msg:        fmt.Sprintf("No %s directory in this project.", review.DefaultDir),
+			suggestion: fmt.Sprintf("Create %s with one .md or .txt file per review, or pass a directory.", review.DefaultDir),
+			hideDetail: true,
+			err:        err,
+		}
+	case err != nil:
+		return nil, &userError{msg: fmt.Sprintf("Could not read prompts from %s.", dir), err: err}
+	}
+	return prompts, nil
+}
+
+// claudePool is what a command that runs claude on a sidecar pool resolves
+// before booting one.
+type claudePool struct {
+	rc         config.ResolvedConfig
+	cred       review.Credential
+	credSource string
+	client     *circleci.Client
+	orgID      string
+	image      string
+}
+
+// resolveClaudePool loads the project config and resolves the Claude
+// credential, CircleCI client, org and sidecar image, with orgID and image
+// overriding the config when set. The credential is checked first: without one
+// every claude run fails, and the pool would bill for nothing.
+func resolveClaudePool(ctx context.Context, cmd *cobra.Command, streams iostream.Streams, workDir, orgID, image string, jsonOut bool) (claudePool, error) {
+	cfg, err := config.LoadProjectConfig(workDir)
+	if err != nil {
+		return claudePool{}, &userError{msg: msgValidateNotConfigured, suggestion: "Run 'chunk init' first.", err: err}
+	}
+	p := claudePool{orgID: orgID, image: image}
+	p.rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
+	var credErr error
+	if p.cred, p.credSource, credErr = reviewCredential(p.rc); credErr != nil {
+		if err := setupClaudeCredential(ctx, cmd, streams, p.rc, jsonOut, credErr); err != nil {
+			return claudePool{}, err
+		}
+		p.rc, _ = config.Resolve("", "", insecureStorageFlag(cmd))
+		if p.cred, p.credSource, credErr = reviewCredential(p.rc); credErr != nil {
+			return claudePool{}, credErr
+		}
+	}
+	if p.client, err = ensureCircleCIClient(ctx, cmd, p.rc, streams, ui.PromptHidden); err != nil {
+		return claudePool{}, err
+	}
+	if p.orgID == "" {
+		p.orgID = cfg.OrgID
+	}
+	if p.orgID, err = resolveOrgID(p.orgID, workDir, orgPicker(ctx, p.client, p.rc.CircleCITokenSource, streams)); err != nil {
+		return claudePool{}, err
+	}
+	if p.image == "" {
+		p.image = resolveImage("", cfg)
+	}
+	return p, nil
+}
+
+// claudeRunError maps a failure that stops every claude run on a pool to the
+// error to show, or returns nil for any other error.
+func claudeRunError(err error, cred review.Credential, source, baseURL string) error {
+	switch {
+	case errors.Is(err, review.ErrClaudeMissing):
+		return &userError{
+			msg:        "Claude Code is not installed on the sidecars.",
+			suggestion: "Install it in the sidecar image (see 'chunk sidecar env build') and pass --image, or set validation.sidecarImage.",
+			hideDetail: true,
+			err:        err,
+		}
+	case errors.Is(err, review.ErrCredentialRejected):
+		return credentialRejected(cred, source, baseURL, err)
+	}
+	return nil
 }
 
 // reviewCredential picks the credential reviews authenticate with, preferring

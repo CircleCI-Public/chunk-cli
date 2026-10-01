@@ -47,7 +47,7 @@ empty only when approving.`, body, base, base, base, intent)
 }
 
 // claudeResult is the part of claude's --output-format json envelope a review
-// reads.
+// reads. --json-schema puts the answer in structured_output.
 type claudeResult struct {
 	IsError          bool            `json:"is_error"`
 	Result           string          `json:"result"`
@@ -68,14 +68,8 @@ func ParseReview(output string) (Verdict, string, error) {
 	if env.IsError {
 		return "", "", fmt.Errorf("claude reported an error: %s", env.Result)
 	}
-	// Structured output is where --json-schema puts the answer; the result
-	// text is a fallback for claude versions that return it there instead.
-	raw := env.StructuredOutput
-	if len(raw) == 0 || string(raw) == "null" {
-		raw = json.RawMessage(strings.TrimSpace(env.Result))
-	}
 	var ans reviewAnswer
-	if err := json.Unmarshal(raw, &ans); err != nil {
+	if err := json.Unmarshal(env.StructuredOutput, &ans); err != nil {
 		return "", "", fmt.Errorf("parse review answer: %w", err)
 	}
 	switch ans.Verdict {

@@ -32,14 +32,14 @@ func TestFactoryMissingIntent(t *testing.T) {
 		"no sidecar should boot without an intent")
 }
 
-// A --reviews path that holds no prompts is a typo, not a run without reviews.
+// A --reviews path that does not exist is a typo, so it is named as one.
 func TestFactoryExplicitReviewsDirMissing(t *testing.T) {
 	env, cci, workDir := setupFactoryProject(t, nil)
 
 	result := binary.RunCLI(t, []string{"factory", "--reviews", ".chunk/review"}, env, workDir)
 
 	assert.Assert(t, result.ExitCode != 0, "expected non-zero exit code")
-	assert.Assert(t, strings.Contains(result.Stderr, "Could not read review prompts"), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "Could not read prompts"), "stderr: %s", result.Stderr)
 	assert.Equal(t, len(filterVariantRequests(cci.Recorder.AllRequests(), "POST", "/api/v3/sidecar/instances")), 0)
 }
 

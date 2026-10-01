@@ -1,6 +1,6 @@
-// Package factory drives an intent to done: a worker agent implements it, then
-// validation and review agents check the result, and their feedback goes back
-// to the worker until the checks pass or the attempts run out.
+// Package factory drives an intent to done: a worker agent implements it,
+// review agents judge the result, and their feedback goes back to the worker
+// until the reviews pass or the attempts run out.
 package factory
 
 import (
@@ -15,39 +15,25 @@ import (
 // DefaultMaxAttempts is how many work rounds a run gets when none is given.
 const DefaultMaxAttempts = 3
 
-// maxValidateFeedbackBytes caps how much validation output is fed back to the
-// worker. Failures are reported at the end of a run's output, so the tail is
-// what is kept.
-const maxValidateFeedbackBytes = 32 * 1024
+// ErrNotConverged is returned when every attempt ran and the last still had
+// failing reviews.
+var ErrNotConverged = errors.New("reviews still failing after the last attempt")
 
-// ErrNotConverged is returned when every attempt ran and the last still failed
-// its checks.
-var ErrNotConverged = errors.New("checks still failing after the last attempt")
-
-// ReviewResult is one reviewer's answer for one attempt. Err is set when the
-// review could not produce a verdict at all.
+// ReviewResult is one reviewer's answer for one attempt.
 type ReviewResult struct {
 	Name     string
 	Verdict  Verdict
 	Feedback string
-	Err      string
 }
 
-// Check is everything the checkers said about one attempt.
-type Check struct {
-	ValidatePassed bool
-	ValidateOutput string
-	Reviews        []ReviewResult
-}
-
-// Attempt records one round of work and its check.
+// Attempt records one round of work and the reviews of it.
 type Attempt struct {
-	N      int
-	Check  Check
-	Passed bool
+	N       int
+	Reviews []ReviewResult
+	Passed  bool
 }
 
-// Options configures a run. Work and Check do the remote work, so the loop
+// Options configures a run. Work and Review do the remote work, so the loop
 // itself holds no sidecar logic.
 type Options struct {
 	Intent      string
@@ -58,13 +44,13 @@ type Options struct {
 	// Work runs the worker agent on prompt and returns once its changes are in
 	// the local tree.
 	Work func(ctx context.Context, attempt int, prompt string) error
-	// Check validates and reviews the local tree.
-	Check  func(ctx context.Context, attempt int) (Check, error)
+	// Review reviews the local tree.
+	Review func(ctx context.Context, attempt int) ([]ReviewResult, error)
 	Status iostream.StatusFunc
 }
 
-// Run loops work and check until an attempt passes or MaxAttempts is reached.
-// It returns every attempt made, and ErrNotConverged when none passed.
+// Run loops work and review until an attempt passes or MaxAttempts is
+// reached. It returns every attempt made, and ErrNotConverged when none passed.
 func Run(ctx context.Context, opts Options) ([]Attempt, error) {
 	if opts.MaxAttempts <= 0 {
 		opts.MaxAttempts = DefaultMaxAttempts
@@ -85,74 +71,48 @@ func Run(ctx context.Context, opts Options) ([]Attempt, error) {
 			return attempts, fmt.Errorf("attempt %d: work: %w", n, err)
 		}
 
-		status(iostream.LevelStep, fmt.Sprintf("Attempt %d of %d: checking...", n, opts.MaxAttempts))
-		check, err := opts.Check(ctx, n)
+		status(iostream.LevelStep, fmt.Sprintf("Attempt %d of %d: reviewing...", n, opts.MaxAttempts))
+		reviews, err := opts.Review(ctx, n)
 		if err != nil {
-			return attempts, fmt.Errorf("attempt %d: check: %w", n, err)
+			return attempts, fmt.Errorf("attempt %d: review: %w", n, err)
 		}
-		// A check cut short by cancellation says nothing about the work.
-		if err := ctx.Err(); err != nil {
-			return attempts, err
-		}
-		a := Attempt{N: n, Check: check, Passed: Passed(check, opts.FailOn)}
+		a := Attempt{N: n, Reviews: reviews, Passed: Passed(reviews, opts.FailOn)}
 		attempts = append(attempts, a)
 		if a.Passed {
 			status(iostream.LevelDone, fmt.Sprintf("Attempt %d passed", n))
 			return attempts, nil
 		}
 		status(iostream.LevelWarn, fmt.Sprintf("Attempt %d did not pass", n))
-		feedback = Feedback(check, opts.FailOn)
+		feedback = Feedback(reviews, opts.FailOn)
 	}
 	return attempts, ErrNotConverged
 }
 
-// Passed reports whether an attempt's check is good enough to stop the loop:
-// validation passed and no review failed to run or returned a verdict at or
-// above failOn. A review that never produced a verdict fails the attempt, so a
-// broken reviewer cannot wave the work through.
-func Passed(check Check, failOn Verdict) bool {
-	if !check.ValidatePassed {
-		return false
-	}
-	for _, r := range check.Reviews {
-		if r.Err != "" || fails(r.Verdict, failOn) {
+// Passed reports whether no review returned a verdict that fails the attempt.
+func Passed(reviews []ReviewResult, failOn Verdict) bool {
+	for _, r := range reviews {
+		if fails(r.Verdict, failOn) {
 			return false
 		}
 	}
 	return true
 }
 
-// fails reports whether a verdict is at least as severe as failOn.
+// fails reports whether a verdict fails an attempt: only blocked does under
+// VerdictBlocked, anything but approved does under VerdictWarn.
 func fails(v, failOn Verdict) bool {
-	return severity(v) >= severity(failOn)
-}
-
-func severity(v Verdict) int {
-	switch v {
-	case VerdictBlocked:
-		return 2
-	case VerdictWarn:
-		return 1
-	case VerdictApproved:
-		return 0
+	if failOn == VerdictWarn {
+		return v != VerdictApproved
 	}
-	return 0
+	return v == VerdictBlocked
 }
 
-// Feedback turns a failed check into what the worker is told to address:
-// validation output when it failed, and every review whose verdict fails. A
-// review that could not run is left out: it is nothing the worker can fix.
-func Feedback(check Check, failOn Verdict) string {
+// Feedback is what the worker is told to address: every review whose verdict
+// fails the attempt.
+func Feedback(reviews []ReviewResult, failOn Verdict) string {
 	var b strings.Builder
-	if !check.ValidatePassed {
-		out := check.ValidateOutput
-		if len(out) > maxValidateFeedbackBytes {
-			out = "…" + out[len(out)-maxValidateFeedbackBytes:]
-		}
-		fmt.Fprintf(&b, "## Validation failed\n\n```\n%s\n```\n\n", strings.TrimSpace(out))
-	}
-	for _, r := range check.Reviews {
-		if r.Err == "" && fails(r.Verdict, failOn) {
+	for _, r := range reviews {
+		if fails(r.Verdict, failOn) {
 			fmt.Fprintf(&b, "## Review: %s (%s)\n\n%s\n\n", r.Name, r.Verdict, r.Feedback)
 		}
 	}
@@ -170,8 +130,8 @@ func WorkPrompt(intent, feedback string) string {
 
 ## Feedback on your previous attempt
 
-Your changes so far are already in this repository. Validation and review
-found the issues below. Address every one of them, then stop.
+Your changes so far are already in this repository. Reviewers found the
+issues below. Address every one of them, then stop.
 
 %s`, intent, feedback)
 }

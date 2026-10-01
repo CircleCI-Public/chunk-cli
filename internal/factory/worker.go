@@ -2,12 +2,12 @@ package factory
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,28 +15,8 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
-// ExitClaudeMissing is the worker script's exit code for claude not being on
-// PATH, matching the review scripts'.
-const ExitClaudeMissing = 97
-
 // WorktreesDir is where run worktrees are created, relative to the repo root.
 const WorktreesDir = ".chunk/worktrees"
-
-// WorkScript runs the worker agent on a sidecar. Unlike a reviewer, the worker
-// edits the tree, so it runs with permission checks off: the sidecar is an
-// ephemeral machine holding nothing but a copy of the repository. The prompt is
-// piped base64-encoded so no quoting in it reaches the shell.
-func WorkScript(repoPath, prompt, model string) string {
-	args := []string{"claude", "-p", "--output-format", "text", "--dangerously-skip-permissions"}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(prompt))
-	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
-command -v claude >/dev/null 2>&1 || exit %d
-cd %s && echo %s | base64 -d | %s`,
-		ExitClaudeMissing, sidecar.ShellEscape(repoPath), encoded, sidecar.ShellJoin(args))
-}
 
 // DiffScript prints everything the worker changed since base, committed or
 // not, as a binary patch. Staging first brings new files into the diff; the
@@ -58,16 +38,15 @@ type Worktree struct {
 // CreateWorktree adds a worktree for a run at HEAD of repoRoot, under
 // WorktreesDir, on a new branch named for the run.
 func CreateWorktree(ctx context.Context, repoRoot string, now time.Time) (Worktree, error) {
-	git := gitexec.Runner{Dir: repoRoot}
-	out, err := git.Output(ctx, "rev-parse", "HEAD")
+	base, err := HeadCommit(ctx, repoRoot)
 	if err != nil {
-		return Worktree{}, fmt.Errorf("resolve HEAD: %w", err)
+		return Worktree{}, err
 	}
 	stamp := now.UTC().Format("20060102-150405")
 	wt := Worktree{
 		Dir:    filepath.Join(repoRoot, WorktreesDir, stamp),
 		Branch: "chunk/factory-" + stamp,
-		Base:   strings.TrimSpace(string(out)),
+		Base:   base,
 	}
 
 	// Ignore the worktrees from inside their own directory, so no repository
@@ -80,7 +59,7 @@ func CreateWorktree(ctx context.Context, repoRoot string, now time.Time) (Worktr
 		return Worktree{}, fmt.Errorf("write %s/.gitignore: %w", WorktreesDir, err)
 	}
 
-	if out, err := git.CombinedOutput(ctx, "worktree", "add", "-b", wt.Branch, wt.Dir, wt.Base); err != nil {
+	if out, err := (gitexec.Runner{Dir: repoRoot}).CombinedOutput(ctx, "worktree", "add", "-b", wt.Branch, wt.Dir, wt.Base); err != nil {
 		return Worktree{}, fmt.Errorf("git worktree add: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	if err := excludePoolState(ctx, wt.Dir); err != nil {
@@ -90,43 +69,32 @@ func CreateWorktree(ctx context.Context, repoRoot string, now time.Time) (Worktr
 }
 
 // poolStateExclude matches the pool state files sidecar pools write into the
-// worktree, which must stay out of every attempt's commit.
+// worktree, which must stay out of every sync and every attempt's commit.
 const poolStateExclude = ".chunk/*-pool.json"
 
 // excludePoolState adds poolStateExclude to the repository's info/exclude,
 // which every worktree shares, unless it is already there.
 func excludePoolState(ctx context.Context, dir string) error {
-	out, err := (gitexec.Runner{Dir: dir}).Output(ctx, "rev-parse", "--git-common-dir")
+	out, err := (gitexec.Runner{Dir: dir}).Output(ctx, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
 	if err != nil {
-		return fmt.Errorf("find git dir: %w", err)
+		return fmt.Errorf("find info/exclude: %w", err)
 	}
-	commonDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(dir, commonDir)
-	}
-	path := filepath.Join(commonDir, "info", "exclude")
+	path := strings.TrimSpace(string(out))
 	existing, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	for line := range strings.SplitSeq(string(existing), "\n") {
-		if strings.TrimSpace(line) == poolStateExclude {
-			return nil
-		}
+	if slices.Contains(strings.Split(string(existing), "\n"), poolStateExclude) {
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+	content := strings.TrimRight(string(existing), "\n")
+	if content != "" {
+		content += "\n"
 	}
-	defer func() { _ = f.Close() }()
-	prefix := ""
-	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
-		prefix = "\n"
-	}
-	if _, err := fmt.Fprintf(f, "%s%s\n", prefix, poolStateExclude); err != nil {
+	if err := os.WriteFile(path, []byte(content+poolStateExclude+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil

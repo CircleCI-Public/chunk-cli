@@ -59,10 +59,10 @@ chunk
 │   ├── install                     # Install all skills
 │   └── list                        # List skills and install status
 │
-├── factory [intent-file]           # Implement an intent with Claude, looping on validate and review feedback
+├── factory [intent-file]           # Implement an intent with Claude, looping on review feedback
 │   --max-attempts <n>              # Maximum work rounds (default: 3)
 │   --fail-on <blocked|warn>        # Least severe review verdict that fails an attempt (default: blocked)
-│   --parallelism <n>               # Maximum sidecars for validation and review (default: 5)
+│   --parallelism <n>               # Maximum review sidecars (default: 5; 0: one per prompt)
 │   --reviews <dir>                 # Review prompts directory (default: .chunk/reviews)
 │   --model <model>                 # Claude model for the worker and reviews
 │   --timeout <duration>            # Max time for each work round (default: 30m)
@@ -191,28 +191,22 @@ chunk
 - **`factory` loop.** `chunk factory` reads an intent file (default `INTENT.md`)
   and creates a git worktree under `.chunk/worktrees/<timestamp>` on a new
   branch `chunk/factory-<timestamp>`, so the developer's working tree is never
-  touched. Each attempt syncs the worktree to a single worker sidecar, runs
-  `claude -p` there with the intent (plus the previous attempt's feedback), pulls
-  the worker's changes back as a binary diff and commits them as
-  `factory: attempt N`. Local `role: autofix` commands then run in the
-  worktree and their output is committed as `factory: autofix`, before the
-  worktree is synced to a check pool where the remaining validate commands and
-  every prompt in `.chunk/reviews` run in parallel. Reviewers answer through
-  `claude --json-schema` with a verdict (`blocked`, `warn` or `approved`) and
-  feedback. An attempt passes when validation passes and no review returns a
-  verdict at or above `--fail-on`; otherwise the failing output and feedback go
-  to the next attempt. Each review's feedback is logged as it arrives.
-  Failures the worker cannot fix stop the run instead of spending an attempt:
-  a sidecar that could not run a validate command, a review that could not run
-  or returned no verdict, a rejected Claude credential, and a first attempt
-  that changes nothing. A missing default `.chunk/reviews` means validation
-  alone checks the work; a `--reviews` directory with no prompts is an error. The worker runs with
-  permission checks off, since the sidecar is an ephemeral copy of the
-  repository; reviewers keep read-only tools. Pool state lives in the worktree,
-  so the run's sidecars are deleted when it ends unless `--keep-sidecars` is
-  passed. Config and review prompts are read from the developer's tree, so
-  uncommitted edits to them apply.
-
+  touched. Each attempt syncs the worktree to a worker sidecar and runs the
+  intent (plus the previous attempt's feedback) through the same `claude -p`
+  runner as `chunk review`, with permission checks off since the sidecar is an
+  ephemeral copy of the repository. The worker's changes are pulled back as a
+  binary diff and committed as `factory: attempt N`; nothing else runs on or
+  writes to the developer's machine. The worktree is then synced to a review
+  pool where every prompt in `.chunk/reviews` runs in parallel, answering
+  through `claude --json-schema` with a verdict (`blocked`, `warn` or
+  `approved`) and feedback. An attempt passes when no verdict fails it under
+  `--fail-on`; otherwise the failing reviews' feedback goes to the next
+  attempt. Each review's feedback is logged as it arrives. A review that cannot
+  run or returns no verdict, a rejected Claude credential, and a first attempt
+  that changes nothing stop the run rather than spending an attempt. Pool state
+  lives in the worktree, so the run's sidecars are deleted when it ends unless
+  `--keep-sidecars` is passed. Config and review prompts are read from the
+  developer's tree, so uncommitted edits to them apply.
 - `auth login` and `auth signup` both use OAuth and store the resulting token in the system keychain (or `~/.config/chunk/config.json` with `--insecure-storage`). They differ only in which page the browser opens: login for existing accounts, signup for new ones. Use `--no-browser` to print the URL instead of opening it automatically.
 - `auth signup` fails with a user-friendly error if a CircleCI token is already stored; run `chunk auth remove circleci` first to clear it. Existing accounts should use `chunk auth login`.
 - After a successful `auth signup`, chunk checks whether the new account belongs to any organization. If it belongs to none, chunk prompts for a name and creates a standalone org, so the first sidecar command does not fail on having none. Without a terminal it prints a warning pointing at `chunk org create <name>` instead; the signup itself still succeeds.

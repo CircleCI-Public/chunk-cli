@@ -58,7 +58,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			if err != nil {
 				return &userError{
 					msg:        msgValidateNotConfigured,
-					suggestion: suggestionRunInit,
+					suggestion: "Run 'chunk init' first.",
 					err:        err,
 				}
 			}

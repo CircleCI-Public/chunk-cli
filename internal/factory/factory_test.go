@@ -21,13 +21,6 @@ func TestParseReviewReadsStructuredOutput(t *testing.T) {
 	assert.Equal(t, fb, "rename x")
 }
 
-func TestParseReviewFallsBackToResultText(t *testing.T) {
-	t.Parallel()
-	v, _, err := ParseReview(`{"is_error":false,"result":"{\"verdict\":\"approved\",\"feedback\":\"\"}"}`)
-	assert.NilError(t, err)
-	assert.Equal(t, v, VerdictApproved)
-}
-
 func TestParseReviewRejectsBadAnswers(t *testing.T) {
 	t.Parallel()
 	for name, out := range map[string]string{
@@ -43,44 +36,34 @@ func TestParseReviewRejectsBadAnswers(t *testing.T) {
 
 func TestPassed(t *testing.T) {
 	t.Parallel()
-	ok := Check{ValidatePassed: true, Reviews: []ReviewResult{{Name: "a", Verdict: VerdictApproved}}}
-	warned := Check{ValidatePassed: true, Reviews: []ReviewResult{{Name: "a", Verdict: VerdictWarn}}}
-	blocked := Check{ValidatePassed: true, Reviews: []ReviewResult{{Name: "a", Verdict: VerdictBlocked}}}
-	broken := Check{ValidatePassed: true, Reviews: []ReviewResult{{Name: "a", Err: "timed out"}}}
-	failing := Check{ValidatePassed: false, Reviews: []ReviewResult{{Name: "a", Verdict: VerdictApproved}}}
-
-	assert.Assert(t, Passed(ok, VerdictBlocked))
-	assert.Assert(t, Passed(warned, VerdictBlocked))
-	assert.Assert(t, !Passed(warned, VerdictWarn))
-	assert.Assert(t, !Passed(blocked, VerdictBlocked))
-	assert.Assert(t, !Passed(broken, VerdictBlocked))
-	assert.Assert(t, !Passed(failing, VerdictBlocked))
+	review := func(v Verdict) []ReviewResult {
+		return []ReviewResult{{Name: "a", Verdict: VerdictApproved}, {Name: "b", Verdict: v}}
+	}
+	assert.Assert(t, Passed(review(VerdictApproved), VerdictBlocked))
+	assert.Assert(t, Passed(review(VerdictWarn), VerdictBlocked))
+	assert.Assert(t, !Passed(review(VerdictWarn), VerdictWarn))
+	assert.Assert(t, !Passed(review(VerdictBlocked), VerdictBlocked))
+	assert.Assert(t, !Passed(review(VerdictBlocked), VerdictWarn))
 }
 
-func TestFeedbackIncludesOnlyFailures(t *testing.T) {
+func TestFeedbackIncludesOnlyFailingReviews(t *testing.T) {
 	t.Parallel()
-	fb := Feedback(Check{
-		ValidatePassed: false,
-		ValidateOutput: "FAIL test_hello",
-		Reviews: []ReviewResult{
-			{Name: "security", Verdict: VerdictApproved, Feedback: "fine"},
-			{Name: "style", Verdict: VerdictWarn, Feedback: "rename x"},
-			{Name: "tests", Verdict: VerdictBlocked, Feedback: "no tests"},
-		},
+	fb := Feedback([]ReviewResult{
+		{Name: "security", Verdict: VerdictApproved, Feedback: "fine"},
+		{Name: "style", Verdict: VerdictWarn, Feedback: "rename x"},
+		{Name: "tests", Verdict: VerdictBlocked, Feedback: "no tests"},
 	}, VerdictBlocked)
-	assert.Assert(t, strings.Contains(fb, "FAIL test_hello"), fb)
-	assert.Assert(t, strings.Contains(fb, "tests (blocked)"), fb)
-	assert.Assert(t, !strings.Contains(Feedback(Check{ValidatePassed: true, Reviews: []ReviewResult{{Name: "x", Err: "timed out"}}}, VerdictBlocked), "timed out"))
+	assert.Assert(t, strings.Contains(fb, "## Review: tests (blocked)\n\nno tests"), fb)
 	assert.Assert(t, !strings.Contains(fb, "rename x"), fb)
 	assert.Assert(t, !strings.Contains(fb, "fine"), fb)
 }
 
-func TestRunFeedsFailuresBackUntilPass(t *testing.T) {
+func TestRunFeedsReviewsBackUntilPass(t *testing.T) {
 	t.Parallel()
 	var prompts []string
-	checks := []Check{
-		{ValidatePassed: false, ValidateOutput: "boom"},
-		{ValidatePassed: true, Reviews: []ReviewResult{{Name: "r", Verdict: VerdictApproved}}},
+	rounds := [][]ReviewResult{
+		{{Name: "r", Verdict: VerdictBlocked, Feedback: "add tests"}},
+		{{Name: "r", Verdict: VerdictApproved}},
 	}
 	attempts, err := Run(context.Background(), Options{
 		Intent:      "build it",
@@ -89,14 +72,14 @@ func TestRunFeedsFailuresBackUntilPass(t *testing.T) {
 			prompts = append(prompts, prompt)
 			return nil
 		},
-		Check: func(_ context.Context, n int) (Check, error) { return checks[n-1], nil },
+		Review: func(_ context.Context, n int) ([]ReviewResult, error) { return rounds[n-1], nil },
 	})
 	assert.NilError(t, err)
 	assert.Equal(t, len(attempts), 2)
 	assert.Assert(t, attempts[1].Passed)
 	assert.Equal(t, prompts[0], "build it")
 	assert.Assert(t, strings.HasPrefix(prompts[1], "build it"), prompts[1])
-	assert.Assert(t, strings.Contains(prompts[1], "boom"), prompts[1])
+	assert.Assert(t, strings.Contains(prompts[1], "add tests"), prompts[1])
 }
 
 func TestRunStopsAtMaxAttempts(t *testing.T) {
@@ -106,8 +89,8 @@ func TestRunStopsAtMaxAttempts(t *testing.T) {
 		Intent:      "x",
 		MaxAttempts: 2,
 		Work:        func(context.Context, int, string) error { works++; return nil },
-		Check: func(context.Context, int) (Check, error) {
-			return Check{ValidatePassed: true, Reviews: []ReviewResult{{Name: "r", Verdict: VerdictBlocked, Feedback: "no"}}}, nil
+		Review: func(context.Context, int) ([]ReviewResult, error) {
+			return []ReviewResult{{Name: "r", Verdict: VerdictBlocked, Feedback: "no"}}, nil
 		},
 	})
 	assert.Assert(t, errors.Is(err, ErrNotConverged))
@@ -121,25 +104,12 @@ func TestRunStopsOnWorkError(t *testing.T) {
 	_, err := Run(context.Background(), Options{
 		Intent: "x",
 		Work:   func(context.Context, int, string) error { return boom },
-		Check:  func(context.Context, int) (Check, error) { t.Fatal("check after failed work"); return Check{}, nil },
-	})
-	assert.Assert(t, errors.Is(err, boom))
-}
-
-func TestRunStopsWhenCanceledDuringCheck(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
-	attempts, err := Run(ctx, Options{
-		Intent:      "x",
-		MaxAttempts: 3,
-		Work:        func(context.Context, int, string) error { return nil },
-		Check: func(context.Context, int) (Check, error) {
-			cancel()
-			return Check{ValidatePassed: false}, nil
+		Review: func(context.Context, int) ([]ReviewResult, error) {
+			t.Fatal("review after failed work")
+			return nil, nil
 		},
 	})
-	assert.Assert(t, errors.Is(err, context.Canceled), "err: %v", err)
-	assert.Equal(t, len(attempts), 0)
+	assert.Assert(t, errors.Is(err, boom))
 }
 
 func git(t *testing.T, dir string, args ...string) string {
@@ -218,10 +188,8 @@ func TestCreateWorktreeApplyAndCommit(t *testing.T) {
 	assert.Equal(t, git(t, repo, "status", "--porcelain"), "")
 }
 
-func TestWorkScriptQuotesPrompt(t *testing.T) {
+func TestDiffScriptQuotesBase(t *testing.T) {
 	t.Parallel()
-	script := WorkScript("/home/user/app", `it's "quoted" $(rm -rf /)`, "")
-	assert.Assert(t, !strings.Contains(script, "rm -rf"), script)
-	assert.Assert(t, strings.Contains(script, "'--dangerously-skip-permissions'"), script)
-	assert.Assert(t, strings.Contains(DiffScript("/r", "abc"), "diff --cached --binary 'abc'"))
+	assert.Equal(t, DiffScript("/home/user/my app", "abc"),
+		"git -C '/home/user/my app' add -A && git -C '/home/user/my app' diff --cached --binary 'abc'")
 }
