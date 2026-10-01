@@ -2,18 +2,25 @@ package watchd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
+
+// maxRequestBytes bounds a session request body. A request names a project and
+// a few options; anything larger is not one.
+const maxRequestBytes = 64 * 1024
 
 // registerSessionRoutes adds the session API to mux. It sits behind the
 // transport's normal auth: the Unix socket is user-local, and the TCP listener
 // demands the bearer token.
 //
+//	POST /session              start a session
 //	GET  /session[?root=<path>] list sessions (newest first), optionally one project's
 //	GET  /session/{id}         one session with its review text
 //	POST /session/{id}/cancel  stop a session
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
+	mux.HandleFunc("POST /session", d.handleSessionStart)
 	mux.HandleFunc("GET /session", d.handleSessionList)
 	mux.HandleFunc("GET /session/{id}", d.handleSessionGet)
 	mux.HandleFunc("POST /session/{id}/cancel", d.handleSessionCancel)
@@ -23,6 +30,34 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeAPIError answers a refusal with the status it carries.
+func writeAPIError(w http.ResponseWriter, err error) {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		http.Error(w, ae.msg, ae.status)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func (d *daemon) handleSessionStart(w http.ResponseWriter, r *http.Request) {
+	var req SessionRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ProjectRoot == "" {
+		http.Error(w, "project_root required", http.StatusBadRequest)
+		return
+	}
+	sess, err := d.startSession(req)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, SessionStartResponse{ID: sess.ID})
 }
 
 func (d *daemon) handleSessionList(w http.ResponseWriter, r *http.Request) {
