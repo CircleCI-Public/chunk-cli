@@ -430,3 +430,48 @@ func TestRecorderPerCommandClosesEachRun(t *testing.T) {
 		t.Errorf("failure tallied %d/%d, want 0/1", passed, total)
 	}
 }
+
+func TestRecorderPerCommandStampsCommandID(t *testing.T) {
+	dir := t.TempDir()
+	run := Record(dir, nil, OpValidate, "sb-run", "", "main")
+	sibling := run.For("sb-1", "")
+	status := sibling.PerCommand()
+
+	// The ID belongs to the recorder whose command it names, not to its siblings.
+	run.SetCommandID("cmd-run")
+	sibling.SetCommandID("cmd-1")
+	status(iostream.LevelStep, "$ go test ./...")
+	status(iostream.LevelDone, "test  18.4s")
+	status(iostream.LevelError, "lint  3.1s") // a second command, no ID set yet
+	run.Status(iostream.LevelDone, "synced")
+
+	events := recentOrFail(t, dir, 4)
+
+	if events[1].CommandID != "cmd-1" {
+		t.Errorf("pass carried command ID %q, want cmd-1", events[1].CommandID)
+	}
+	if _, _, ok := events[1].Outcome(); !ok {
+		t.Error("the stamped pass should still close its run")
+	}
+	if events[2].CommandID != "" {
+		t.Errorf("second command carried %q, want the ID consumed once", events[2].CommandID)
+	}
+	if events[3].CommandID != "cmd-run" {
+		t.Errorf("run recorder event carried %q, want its own cmd-run", events[3].CommandID)
+	}
+}
+
+func TestRecorderPerCommandForwardsEveryLevel(t *testing.T) {
+	dir := t.TempDir()
+	var reported []iostream.Level
+	status := Record(dir, func(l iostream.Level, _ string) { reported = append(reported, l) }, OpValidate, "sb-1", "", "main").PerCommand()
+
+	for _, l := range []iostream.Level{iostream.LevelStep, iostream.LevelInfo, iostream.LevelWarn, iostream.LevelDone, iostream.LevelError} {
+		status(l, "msg")
+	}
+
+	if len(reported) != 5 {
+		t.Errorf("reported %d of 5 levels", len(reported))
+	}
+	recentOrFail(t, dir, 5)
+}

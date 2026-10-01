@@ -40,7 +40,7 @@ type DistributedRunOptions[T any] struct {
 	WorkerName  func(T) string
 	// WorkerStatus is the reporter for one worker's own events, so a command is
 	// attributed to the worker that ran it rather than to the run as a whole.
-	// Status is used when nil.
+	// Status is used when it is nil, and for a worker it returns nil for.
 	WorkerStatus func(T) iostream.StatusFunc
 	Run          func(context.Context, T, config.Command, iostream.StatusFunc, iostream.Streams) DistributedJobResult
 	Status       iostream.StatusFunc
@@ -115,7 +115,9 @@ func RunDistributed[T any](ctx context.Context, commands []config.Command, opts 
 			}
 			workerStatus := status
 			if opts.WorkerStatus != nil {
-				workerStatus = serialized(opts.WorkerStatus(worker))
+				if fn := opts.WorkerStatus(worker); fn != nil {
+					workerStatus = serialized(fn)
+				}
 			}
 			for {
 				select {

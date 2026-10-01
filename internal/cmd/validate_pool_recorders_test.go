@@ -71,6 +71,35 @@ func TestPoolRecordersReuseOneRecorderPerSidecar(t *testing.T) {
 	assert.Assert(t, first != nil)
 }
 
+// A pooled command's closing event is written by its sidecar's own recorder, so
+// that is where its ID has to be set. Set on the run's recorder it stamps
+// nothing, and waits there for the next local command to finish.
+func TestPoolRecordersStampCommandIDOnTheSidecarThatRanIt(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := t.TempDir()
+	dataDir, err := config.ProjectDataDir(root)
+	assert.NilError(t, err)
+
+	run := eventlog.Record(dataDir, nil, eventlog.OpValidate, "sb-1", "", "main")
+	recorders := newPoolRecorders(run)
+
+	// Two commands in flight at once, each with its own ID.
+	recorders.commandIDSetter("sb-1")("cmd-1")
+	recorders.commandIDSetter("sb-2")("cmd-2")
+	recorders.status("sb-2")(iostream.LevelDone, "lint  3.1s")
+	recorders.status("sb-1")(iostream.LevelError, "test  18.4s")
+	// A local command finishing afterwards, through the run's own recorder.
+	run.Status(iostream.LevelDone, "fmt  0.1s")
+
+	byID := map[string][]eventlog.Event{}
+	for _, e := range poolEvents(t, root) {
+		byID[e.SidecarID] = append(byID[e.SidecarID], e)
+	}
+	assert.Equal(t, byID["sb-2"][0].CommandID, "cmd-2")
+	assert.Equal(t, byID["sb-1"][0].CommandID, "cmd-1")
+	assert.Equal(t, byID["sb-1"][1].CommandID, "", "a local command inherited a pooled command's ID")
+}
+
 // Workers report concurrently, so the registry and the shared log both have to
 // tolerate it.
 func TestPoolRecordersRecordConcurrentWorkers(t *testing.T) {
@@ -103,4 +132,5 @@ func TestNilPoolRecordersYieldNoStatus(t *testing.T) {
 	recorders := newPoolRecorders(nil)
 	assert.Assert(t, recorders == nil)
 	assert.Assert(t, recorders.status("sb-1") == nil)
+	assert.Assert(t, recorders.commandIDSetter("sb-1") == nil)
 }

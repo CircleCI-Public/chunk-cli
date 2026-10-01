@@ -176,7 +176,7 @@ func TestRunValidationPlanLocalOnlyDoesNotRequirePool(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil, nil,
+		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -195,7 +195,7 @@ func TestRunValidationPlanRemoteRequiresPool(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, t.TempDir(), t.TempDir(), nil, nil, nil,
+		context.Background(), nil, plan, config.ResolvedConfig{}, t.TempDir(), t.TempDir(), nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 
@@ -1637,7 +1637,7 @@ func TestRunValidationPlanRunsAutofixFirst(t *testing.T) {
 	}
 
 	result, err := runValidationPlan(
-		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil, nil,
+		context.Background(), nil, plan, config.ResolvedConfig{}, workDir, workDir, nil, nil,
 		func(iostream.Level, string) {}, iostream.Streams{Out: io.Discard, Err: io.Discard},
 	)
 

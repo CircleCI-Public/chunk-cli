@@ -163,8 +163,8 @@ func TestRunDistributedReportsEachCommandToItsWorker(t *testing.T) {
 				byWorker[worker] = append(byWorker[worker], message)
 			}
 		},
-		Run: func(_ context.Context, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
-			status(iostream.LevelDone, command.Name+" done")
+		Run: func(_ context.Context, worker int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+			status(iostream.LevelDone, fmt.Sprintf("%s done on sidecar-%d", command.Name, worker))
 			return DistributedJobResult{Passed: 1}
 		},
 		Status: func(_ iostream.Level, message string) {
@@ -187,7 +187,7 @@ func TestRunDistributedReportsEachCommandToItsWorker(t *testing.T) {
 	for worker, messages := range byWorker {
 		for _, m := range messages {
 			reported++
-			assert.Assert(t, strings.Contains(m, fmt.Sprintf("sidecar-%d", worker)) || strings.HasSuffix(m, " done"),
+			assert.Assert(t, strings.Contains(m, fmt.Sprintf("sidecar-%d", worker)),
 				"worker %d got %q", worker, m)
 		}
 	}
@@ -200,9 +200,10 @@ func TestRunDistributedReportsWhileJobsRun(t *testing.T) {
 	// its whole duration.
 	release := make(chan struct{})
 	reported := make(chan string, 2)
+	finished := make(chan DistributedRunResult, 1)
 
 	go func() {
-		result := RunDistributed(context.Background(), []config.Command{{Name: "slow"}, {Name: "quick"}}, DistributedRunOptions[int]{
+		finished <- RunDistributed(context.Background(), []config.Command{{Name: "slow"}, {Name: "quick"}}, DistributedRunOptions[int]{
 			Parallelism: 2,
 			Acquire:     func(context.Context) (int, error) { return 1, nil },
 			Release:     func(int) {},
@@ -221,13 +222,13 @@ func TestRunDistributedReportsWhileJobsRun(t *testing.T) {
 				return DistributedJobResult{Passed: 1}
 			},
 		})
-		assert.NilError(t, result.Err)
 	}()
 
 	// The quick command must report before the slow one is allowed to finish.
 	assert.Equal(t, <-reported, "quick")
 	close(release)
 	assert.Equal(t, <-reported, "slow")
+	assert.NilError(t, (<-finished).Err)
 }
 
 func TestRunDistributedFallsBackToRunStatus(t *testing.T) {
@@ -236,6 +237,27 @@ func TestRunDistributedFallsBackToRunStatus(t *testing.T) {
 		Parallelism: 1,
 		Acquire:     func(context.Context) (int, error) { return 1, nil },
 		Release:     func(int) {},
+		Run: func(_ context.Context, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
+			status(iostream.LevelDone, command.Name)
+			return DistributedJobResult{Passed: 1}
+		},
+		Status: func(_ iostream.Level, message string) { got = append(got, message) },
+	})
+
+	assert.NilError(t, result.Err)
+	assert.DeepEqual(t, got, []string{"running on worker: test", "test"})
+}
+
+// A WorkerStatus that has nothing to record for a worker, as the pool's does
+// when the project has no event log, must not leave that worker's commands
+// unreported.
+func TestRunDistributedFallsBackWhenWorkerStatusIsNil(t *testing.T) {
+	var got []string
+	result := RunDistributed(context.Background(), []config.Command{{Name: "test"}}, DistributedRunOptions[int]{
+		Parallelism:  1,
+		Acquire:      func(context.Context) (int, error) { return 1, nil },
+		Release:      func(int) {},
+		WorkerStatus: func(int) iostream.StatusFunc { return nil },
 		Run: func(_ context.Context, _ int, command config.Command, status iostream.StatusFunc, _ iostream.Streams) DistributedJobResult {
 			status(iostream.LevelDone, command.Name)
 			return DistributedJobResult{Passed: 1}

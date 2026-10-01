@@ -195,10 +195,13 @@ func Record(dataDir string, fn iostream.StatusFunc, op Op, sidecarID, sidecarNam
 }
 
 // For returns a recorder sharing this one's log, branch, op and reporter,
-// tagged with a different sidecar. A pooled run needs one per member: readers match an
-// event to a sidecar row on SidecarID alone, so a run recorded under a single
-// representative ID puts every command on one row and leaves the rest of the
-// pool blank.
+// tagged with a different sidecar. A pooled run needs one per member: readers
+// match an event to a sidecar row on SidecarID alone, so a run recorded under a
+// single representative ID puts every command on one row and leaves the rest of
+// the pool blank.
+//
+// The sibling keeps its own pending command ID, so SetCommandID has to be called
+// on the recorder whose events the ID belongs to.
 func (r *Recorder) For(sidecarID, sidecarName string) *Recorder {
 	return &Recorder{
 		log:   r.log,
@@ -216,14 +219,17 @@ func (r *Recorder) For(sidecarID, sidecarName string) *Recorder {
 // tallying it 1/1 or 0/1. A pool member runs one command at a time, so its
 // events are a sequence of single-command runs rather than one long one, and
 // each has to close for a reader to collapse it.
+//
+// The closing event is the one command's own, so unlike a run-wide Final it
+// carries the command ID set by SetCommandID.
 func (r *Recorder) PerCommand() iostream.StatusFunc {
 	return func(level iostream.Level, msg string) {
 		switch level {
 		case iostream.LevelDone:
-			r.Final(level, msg, 1, 1)
+			r.write(level, msg, true, 1, 1, true)
 		case iostream.LevelError:
-			r.Final(level, msg, 0, 1)
-		case iostream.LevelStep, iostream.LevelInfo, iostream.LevelWarn:
+			r.write(level, msg, true, 0, 1, true)
+		default:
 			r.Status(level, msg)
 		}
 	}
@@ -252,6 +258,14 @@ func (r *Recorder) Final(level iostream.Level, msg string, passed, total int) {
 }
 
 func (r *Recorder) record(level iostream.Level, msg string, final bool, passed, total int) {
+	// Attach the pending command ID to the per-command pass/fail event. Final
+	// events are run-wide summaries that belong to no single command.
+	r.write(level, msg, final, passed, total, !final && (level == iostream.LevelDone || level == iostream.LevelError))
+}
+
+// write reports and records one event. stampID attaches the pending command ID
+// to it and consumes that ID.
+func (r *Recorder) write(level iostream.Level, msg string, final bool, passed, total int, stampID bool) {
 	if r.inner != nil {
 		r.inner(level, msg)
 	}
@@ -263,9 +277,7 @@ func (r *Recorder) record(level iostream.Level, msg string, final bool, passed, 
 	e.Level = levelStr(level)
 	e.Msg = msg
 	e.Final, e.Passed, e.Total = final, passed, total
-	// Attach the pending command ID to the per-command pass/fail event. Final
-	// events are run-wide summaries that belong to no single command.
-	if !final && (level == iostream.LevelDone || level == iostream.LevelError) {
+	if stampID {
 		r.mu.Lock()
 		e.CommandID = r.pendingCommandID
 		r.pendingCommandID = ""

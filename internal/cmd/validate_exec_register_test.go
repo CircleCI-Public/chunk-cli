@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -89,6 +90,38 @@ func TestPooledValidateClearsCommandIDWhenSubmissionFails(t *testing.T) {
 	ue, ok := errors.AsType[*userError](result.Err)
 	assert.Assert(t, ok)
 	assert.Equal(t, ue.ErrorCode(), "sidecar.unreachable")
+}
+
+// RunRemoteStreamedResult is what reports a command's failure, and a command
+// that could not be started never reaches it. The pool's per-command reporter
+// closes a sidecar's run on a pass or failure, so a silent failure here would
+// leave that sidecar showing as running.
+func TestPooledValidateReportsFailureBeforeTheCommandRuns(t *testing.T) {
+	cci := fakes.NewFakeCircleCI()
+	cci.ExecStatusCode = http.StatusInternalServerError
+	srv := httptest.NewServer(cci)
+	t.Cleanup(srv.Close)
+
+	client, err := circleci.NewClient(circleci.Config{Token: "test-token", BaseURL: srv.URL})
+	assert.NilError(t, err)
+	var levels []iostream.Level
+	var messages []string
+	result := runPooledValidateCommand(
+		context.Background(),
+		&sidecar.PoolEntry{ID: "sb-1", RepoPath: "/workspace/repo", Client: client},
+		config.Command{Name: "test", Run: "true"},
+		"", t.TempDir(), t.TempDir(), nil, nil,
+		func(level iostream.Level, msg string) {
+			levels = append(levels, level)
+			messages = append(messages, msg)
+		},
+		iostream.Streams{Out: io.Discard, Err: io.Discard},
+	)
+
+	assert.Assert(t, result.Err != nil)
+	assert.DeepEqual(t, levels, []iostream.Level{iostream.LevelError})
+	assert.Assert(t, strings.Contains(messages[0], "test"), "got %q", messages[0])
+	assert.Assert(t, strings.Contains(messages[0], "sb-1"), "got %q", messages[0])
 }
 
 func TestPooledValidateReportsMissingWorkspace(t *testing.T) {
