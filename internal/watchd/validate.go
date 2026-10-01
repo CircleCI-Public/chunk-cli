@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
@@ -421,16 +424,45 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 // is set. The sidecar the daemon creates is handed to the subprocess by ID, so
 // the subprocess never gets to pick an image itself: without this, a daemon run
 // boots the bare default image and none of the snapshot's toolchain is there.
-func (req ValidateRequest) sidecarImage() string {
+//
+// A project with no config file has no snapshot. A config that exists but
+// cannot be loaded is an error: booting the bare image instead would fail later
+// with a missing toolchain and nothing to explain why.
+func (req ValidateRequest) sidecarImage() (string, error) {
 	dir := req.WorkDir
 	if dir == "" {
 		dir = req.ProjectRoot
 	}
-	cfg, err := config.LoadProjectConfig(dir)
-	if err != nil || !cfg.HasSidecarImage() {
-		return ""
+	// With no directory the load would read the daemon's own working
+	// directory, which is some other project's config.
+	if dir == "" {
+		return "", nil
 	}
-	return cfg.Validation.SidecarImage
+	cfg, err := config.LoadProjectConfig(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load project config: %w", err)
+	}
+	if !cfg.HasSidecarImage() {
+		return "", nil
+	}
+	return cfg.Validation.SidecarImage, nil
+}
+
+// provisionFailure is the message for a sidecar that could not be created. A
+// 400 or 404 with a configured snapshot usually means the snapshot is gone or
+// belongs to another org, which the API's own message does not say.
+func provisionFailure(err error, orgID, image string) string {
+	msg := err.Error()
+	var se *circleci.StatusError
+	if image == "" || !errors.As(err, &se) || (se.StatusCode != http.StatusBadRequest && se.StatusCode != http.StatusNotFound) {
+		return msg
+	}
+	return fmt.Sprintf("%s\nsnapshot %s (validation.sidecarImage) may not exist in org %s; "+
+		"'chunk sidecar snapshot list' shows the ones that do, and "+
+		"'chunk config set validation.sidecarImage <id>' records one", msg, image, orgID)
 }
 
 // runValidateNow runs req to completion while the caller waits.
@@ -443,9 +475,13 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *
 	args := req.runArgs()
 	if d.prov != nil && req.OrgID != "" {
 		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
-		id, err := d.prov.create(ctx, req.OrgID, name, req.sidecarImage())
+		image, err := req.sidecarImage()
 		if err != nil {
 			return ValidateResponse{ExitCode: 1, Stderr: err.Error()}
+		}
+		id, err := d.prov.create(ctx, req.OrgID, name, image)
+		if err != nil {
+			return ValidateResponse{ExitCode: 1, Stderr: provisionFailure(err, req.OrgID, image)}
 		}
 		defer func() { _ = d.prov.delete(context.Background(), id) }()
 		args = append(append([]string(nil), args...), "--sidecar-id", id)
