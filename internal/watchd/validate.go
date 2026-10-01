@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
@@ -416,6 +417,22 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	writeValidateJSON(w, resp)
 }
 
+// sidecarImage returns the project's configured snapshot image, or "" when none
+// is set. The sidecar the daemon creates is handed to the subprocess by ID, so
+// the subprocess never gets to pick an image itself: without this, a daemon run
+// boots the bare default image and none of the snapshot's toolchain is there.
+func (req ValidateRequest) sidecarImage() string {
+	dir := req.WorkDir
+	if dir == "" {
+		dir = req.ProjectRoot
+	}
+	cfg, err := config.LoadProjectConfig(dir)
+	if err != nil || !cfg.HasSidecarImage() {
+		return ""
+	}
+	return cfg.Validation.SidecarImage
+}
+
 // runValidateNow runs req to completion while the caller waits.
 func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *RiskSummary) ValidateResponse {
 	before := d.snapshotState(req.ProjectRoot)
@@ -426,7 +443,7 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *
 	args := req.runArgs()
 	if d.prov != nil && req.OrgID != "" {
 		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
-		id, err := d.prov.create(ctx, req.OrgID, name, "")
+		id, err := d.prov.create(ctx, req.OrgID, name, req.sidecarImage())
 		if err != nil {
 			return ValidateResponse{ExitCode: 1, Stderr: err.Error()}
 		}
