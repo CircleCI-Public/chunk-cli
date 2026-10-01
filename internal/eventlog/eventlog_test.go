@@ -352,3 +352,126 @@ func TestOutcomeLegacyIgnoresOtherOps(t *testing.T) {
 		t.Error("a sync event should not close a validate run")
 	}
 }
+
+func recentOrFail(t *testing.T, dir string, want int) []Event {
+	t.Helper()
+	log, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := log.Recent(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != want {
+		t.Fatalf("got %d events, want %d", len(events), want)
+	}
+	return events
+}
+
+func TestRecorderForSharesLogAndInheritsRun(t *testing.T) {
+	dir := t.TempDir()
+	run := Record(dir, nil, OpHook, "sb-run", "primary", "feature")
+
+	run.For("sb-1", "").Status(iostream.LevelStep, "$ go test ./...")
+	run.For("sb-2", "").Final(iostream.LevelDone, "lint  1.0s", 1, 1)
+	run.Final(iostream.LevelDone, "2/2 passed", 2, 2)
+
+	// One log, or a sibling would trim the file out from under the others.
+	events := recentOrFail(t, dir, 3)
+
+	if events[0].SidecarID != "sb-1" {
+		t.Errorf("got sidecar %q, want sb-1", events[0].SidecarID)
+	}
+	if events[0].Op != OpHook {
+		t.Errorf("got op %q, want the run's own op", events[0].Op)
+	}
+	if events[0].Branch != "feature" {
+		t.Errorf("got branch %q, want feature", events[0].Branch)
+	}
+	if events[0].SidecarName != "" {
+		t.Errorf("got name %q, want the run's name left behind", events[0].SidecarName)
+	}
+	if events[1].SidecarID != "sb-2" {
+		t.Errorf("got sidecar %q, want sb-2", events[1].SidecarID)
+	}
+	if events[2].SidecarID != "sb-run" || events[2].SidecarName != "primary" {
+		t.Errorf("got %q/%q, want sb-run/primary", events[2].SidecarID, events[2].SidecarName)
+	}
+}
+
+func TestRecorderPerCommandClosesEachRun(t *testing.T) {
+	dir := t.TempDir()
+	status := Record(dir, nil, OpValidate, "sb-1", "", "main").PerCommand()
+
+	status(iostream.LevelInfo, "running on sidecar sb-1: test")
+	status(iostream.LevelStep, "$ go test ./...")
+	status(iostream.LevelDone, "test  18.4s")
+	status(iostream.LevelStep, "$ golangci-lint run")
+	status(iostream.LevelError, "lint  3.1s")
+
+	events := recentOrFail(t, dir, 5)
+
+	// Only a pass or a failure closes a run, so one sidecar's stream reads as a
+	// sequence of single-command runs rather than one that never ends.
+	var closed []int
+	for i, e := range events {
+		if _, _, ok := e.Outcome(); ok {
+			closed = append(closed, i)
+		}
+	}
+	if len(closed) != 2 || closed[0] != 2 || closed[1] != 4 {
+		t.Fatalf("runs closed at %v, want the pass and the failure", closed)
+	}
+	if passed, total, _ := events[2].Outcome(); passed != 1 || total != 1 {
+		t.Errorf("pass tallied %d/%d, want 1/1", passed, total)
+	}
+	if passed, total, _ := events[4].Outcome(); passed != 0 || total != 1 {
+		t.Errorf("failure tallied %d/%d, want 0/1", passed, total)
+	}
+}
+
+func TestRecorderPerCommandStampsCommandID(t *testing.T) {
+	dir := t.TempDir()
+	run := Record(dir, nil, OpValidate, "sb-run", "", "main")
+	sibling := run.For("sb-1", "")
+	status := sibling.PerCommand()
+
+	// The ID belongs to the recorder whose command it names, not to its siblings.
+	run.SetCommandID("cmd-run")
+	sibling.SetCommandID("cmd-1")
+	status(iostream.LevelStep, "$ go test ./...")
+	status(iostream.LevelDone, "test  18.4s")
+	status(iostream.LevelError, "lint  3.1s") // a second command, no ID set yet
+	run.Status(iostream.LevelDone, "synced")
+
+	events := recentOrFail(t, dir, 4)
+
+	if events[1].CommandID != "cmd-1" {
+		t.Errorf("pass carried command ID %q, want cmd-1", events[1].CommandID)
+	}
+	if _, _, ok := events[1].Outcome(); !ok {
+		t.Error("the stamped pass should still close its run")
+	}
+	if events[2].CommandID != "" {
+		t.Errorf("second command carried %q, want the ID consumed once", events[2].CommandID)
+	}
+	if events[3].CommandID != "cmd-run" {
+		t.Errorf("run recorder event carried %q, want its own cmd-run", events[3].CommandID)
+	}
+}
+
+func TestRecorderPerCommandForwardsEveryLevel(t *testing.T) {
+	dir := t.TempDir()
+	var reported []iostream.Level
+	status := Record(dir, func(l iostream.Level, _ string) { reported = append(reported, l) }, OpValidate, "sb-1", "", "main").PerCommand()
+
+	for _, l := range []iostream.Level{iostream.LevelStep, iostream.LevelInfo, iostream.LevelWarn, iostream.LevelDone, iostream.LevelError} {
+		status(l, "msg")
+	}
+
+	if len(reported) != 5 {
+		t.Errorf("reported %d of 5 levels", len(reported))
+	}
+	recentOrFail(t, dir, 5)
+}

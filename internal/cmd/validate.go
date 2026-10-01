@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -653,7 +654,8 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if gitRoot := gitutil.TopLevelCtx(ctx, attributionDir); gitRoot != "" {
 		attributionDir = gitRoot
 	}
-	statusFn, recorder := wrapEventLogStatusFn(statusFn, opts.sidecarID, activeSidecar, attributionDir, hook)
+	pooled := executionPlan.PoolSize > 1
+	statusFn, recorder := wrapEventLogStatusFn(statusFn, runRecorderSidecarID(pooled, opts.sidecarID), activeSidecar, attributionDir, hook)
 	setupComplete := false
 	var setupErr error
 	defer func() {
@@ -674,7 +676,7 @@ func runValidateCmdE(cmd *cobra.Command, args []string, opts *validateOpts) erro
 	if err := saveInlineValidateCommand(workDir, name, opts.inlineCmd, opts.save, streams); err != nil {
 		execErr = err
 	} else {
-		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, recorderCommandIDSetter(recorder), statusFn, streams)
+		result, execErr = runValidationPlan(ctx, validatePool, executionPlan, rc, workDir, attributionDir, envVars, newPoolRecorders(recorder, pooled), statusFn, streams)
 	}
 	// Saved after the plan runs, not right after the pool is built: a pool
 	// grown beyond one sidecar finishes cloning in the background while
@@ -739,13 +741,6 @@ func validateParallelism(parallel int, explicitSidecarID string) int {
 		return parallel
 	}
 	return defaultValidateParallelism
-}
-
-func recorderCommandIDSetter(recorder *eventlog.Recorder) func(string) {
-	if recorder == nil {
-		return nil
-	}
-	return recorder.SetCommandID
 }
 
 func prepareValidationTarget(
@@ -947,6 +942,81 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 	_ = sidecar.RegisterProjectRoot(dataDir, workDir)
 	recorder := eventlog.Record(dataDir, statusFn, op, sidecarID, scName, sidecar.CurrentBranch(workDir))
 	return recorder.Status, recorder
+}
+
+// poolRecorders hands out one event-log recorder per pool sidecar. They share
+// the run's log, so its mutex serialises the concurrent workers' appends, and
+// each closes its own commands: the dashboard matches an event to a sidecar row
+// on SidecarID alone, so a pooled run recorded under one representative ID puts
+// every command on one row and leaves the rest of the pool blank.
+//
+// A command's ID is kept per sidecar too. The run's own recorder never sees a
+// pooled command's closing event, so an ID set there would stamp nothing, or
+// land on whichever local command finished next.
+//
+// A run on one sidecar is not split: its commands report through the run's own
+// recorder, so they and the run-wide summary close as one run. Closing each
+// command there too would show one run as one per command plus the summary.
+type poolRecorders struct {
+	run    *eventlog.Recorder
+	pooled bool
+
+	mu   sync.Mutex
+	byID map[string]*eventlog.Recorder
+}
+
+// newPoolRecorders returns nil when there is no log to record in, which status
+// and commandIDSetter tolerate.
+func newPoolRecorders(run *eventlog.Recorder, pooled bool) *poolRecorders {
+	if run == nil {
+		return nil
+	}
+	return &poolRecorders{run: run, pooled: pooled, byID: map[string]*eventlog.Recorder{}}
+}
+
+// recorder returns the recorder for one sidecar, creating it on first use.
+func (p *poolRecorders) recorder(sidecarID string) *eventlog.Recorder {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	rec, ok := p.byID[sidecarID]
+	if !ok {
+		rec = p.run.For(sidecarID, "")
+		p.byID[sidecarID] = rec
+	}
+	return rec
+}
+
+// status returns the reporter for one sidecar, or nil when nothing is recorded
+// or the run is not pooled, leaving the run's own reporter in place.
+func (p *poolRecorders) status(sidecarID string) iostream.StatusFunc {
+	if p == nil || !p.pooled {
+		return nil
+	}
+	return p.recorder(sidecarID).PerCommand()
+}
+
+// commandIDSetter returns what stamps a submitted command's ID onto the closing
+// event of the sidecar that runs it, or nil when nothing is recorded.
+func (p *poolRecorders) commandIDSetter(sidecarID string) func(string) {
+	if p == nil {
+		return nil
+	}
+	if !p.pooled {
+		return p.run.SetCommandID
+	}
+	return p.recorder(sidecarID).SetCommandID
+}
+
+// runRecorderSidecarID is the sidecar a run's own events are filed under. A
+// pooled run's, the run-wide summary among them, go under none: each pool
+// member records the commands it ran, and the summary tallies the whole pool.
+// Under the representative's ID that tally would close a run on its row and
+// mark it failed for another member's failure.
+func runRecorderSidecarID(pooled bool, sidecarID string) string {
+	if pooled {
+		return ""
+	}
+	return sidecarID
 }
 
 // failBeforeRun closes the event-log entry when setup fails before commands run.
@@ -1360,7 +1430,7 @@ func runValidationPlan(
 	// registration under anything else is output the dashboard cannot reach.
 	projectRoot string,
 	envVars map[string]string,
-	setCommandID func(string),
+	recorders *poolRecorders,
 	statusFn iostream.StatusFunc,
 	streams iostream.Streams,
 ) (validate.Result, error) {
@@ -1389,8 +1459,11 @@ func runValidationPlan(
 			WorkerName: func(entry *sidecar.PoolEntry) string {
 				return "sidecar " + entry.ID
 			},
+			WorkerStatus: func(entry *sidecar.PoolEntry) iostream.StatusFunc {
+				return recorders.status(entry.ID)
+			},
 			Run: func(ctx context.Context, entry *sidecar.PoolEntry, command config.Command, status iostream.StatusFunc, commandStreams iostream.Streams) validate.DistributedJobResult {
-				return runPooledValidateCommand(ctx, entry, command, rc.CircleCIToken, localWorkDir, projectRoot, envVars, setCommandID, status, commandStreams)
+				return runPooledValidateCommand(ctx, entry, command, rc.CircleCIToken, localWorkDir, projectRoot, envVars, recorders.commandIDSetter(entry.ID), status, commandStreams)
 			},
 			Status:  statusFn,
 			Streams: streams,
@@ -1455,9 +1528,15 @@ func runPooledValidateCommand(
 	if err != nil {
 		var workspaceErr *sidecar.WorkspaceNotFoundError
 		if errors.As(err, &workspaceErr) {
-			return validate.DistributedJobResult{Err: missingWorkspace(entry.ID, entry.RepoPath, command.Name, err)}
+			err = missingWorkspace(entry.ID, entry.RepoPath, command.Name, err)
+		} else {
+			err = unreachableSidecar(entry.ID, command.Name, err)
 		}
-		return validate.DistributedJobResult{Err: unreachableSidecar(entry.ID, command.Name, err)}
+		// The command never reached RunRemoteStreamedResult, which is what reports
+		// a failure. Without a line here nothing closes the run RunDistributed
+		// opened on this sidecar, so a reader shows it running until it goes quiet.
+		statusFn(iostream.LevelError, fmt.Sprintf("%s  failed on sidecar %s: %v", command.Name, entry.ID, err))
+		return validate.DistributedJobResult{Err: err}
 	}
 	commandCfg := &config.ProjectConfig{Commands: []config.Command{command}}
 	result, err := validate.RunRemoteStreamedResult(ctx, execFn, commandCfg, "", dest, localWorkDir, statusFn, streams)
