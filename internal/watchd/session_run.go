@@ -425,15 +425,11 @@ func (e *sessionEntry) finishReviews(ridx int, results []review.Result) {
 			Error:      r.Error,
 			DurationMS: r.Duration.Milliseconds(),
 		}
-		if r.Parsed.Found {
-			res.Output = truncateOutput(r.Parsed.Prose)
-			res.FindingsParsed = true
-			res.FindingsDropped = r.Parsed.Dropped
-			for i, f := range r.Parsed.Findings {
-				f.Prompt = r.Prompt
-				f.ID = fmt.Sprintf("%s-%d", r.Prompt, i+1)
-				res.Findings = append(res.Findings, f)
-			}
+		res.FindingsDropped = r.Parsed.Dropped
+		for i, f := range r.Parsed.Findings {
+			f.Prompt = r.Prompt
+			f.ID = fmt.Sprintf("%s-%d", r.Prompt, i+1)
+			res.Findings = append(res.Findings, f)
 		}
 		if i := e.reviewIndexLocked(ridx, r.Prompt); i >= 0 {
 			e.s.Rounds[ridx].Reviews[i].Findings = len(res.Findings)

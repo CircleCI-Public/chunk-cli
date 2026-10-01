@@ -2,6 +2,7 @@ package watchd
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -9,12 +10,29 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
-// findingsOutput renders a review output carrying the given findings.
+// findingsOutput renders claude's JSON result for a review carrying the given
+// findings.
 func findingsOutput(t *testing.T, findings ...review.Finding) string {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"findings": findings})
+	return reviewOutput(t, "Prose review.", findings...)
+}
+
+// reviewOutput renders claude's JSON result for a review with the given prose
+// and findings.
+func reviewOutput(t *testing.T, prose string, findings ...review.Finding) string {
+	t.Helper()
+	if findings == nil {
+		findings = []review.Finding{}
+	}
+	structured := map[string]any{"review": prose, "findings": findings}
+	text, err := json.Marshal(structured)
 	assert.NilError(t, err)
-	return "Prose review.\n```json\n" + string(raw) + "\n```\n"
+	raw, err := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "is_error": false,
+		"result": string(text), "structured_output": structured,
+	})
+	assert.NilError(t, err)
+	return string(raw)
 }
 
 func TestSessionCountsDistinctFindingsAndThoseWorthChanging(t *testing.T) {
@@ -36,28 +54,20 @@ func TestSessionCountsDistinctFindingsAndThoseWorthChanging(t *testing.T) {
 		assert.Equal(t, p.Findings, 4)
 	}
 	res := detail.Details[0].Results[0]
-	assert.Assert(t, res.FindingsParsed)
-	assert.Equal(t, res.Output, "Prose review.", "the JSON block is not repeated in the prose")
+	assert.Equal(t, res.Output, "Prose review.", "the output is the prose, not claude's JSON")
 	assert.Equal(t, res.Findings[0].ID, res.Prompt+"-1")
 }
 
-// Structured output is best effort: a review that ignores the instructions, or
-// whose JSON is broken, is still a review.
-func TestSessionFallsBackToProseWhenFindingsAreMissingOrMalformed(t *testing.T) {
-	for name, out := range map[string]string{
-		"no block":  "Just prose, nothing structured.",
-		"malformed": "Prose.\n```json\n{\"findings\":[{\"file\":\n```",
-	} {
-		t.Run(name, func(t *testing.T) {
-			d, root := newSessionDaemon(t, &fakeBackend{respond: func(string) (string, int) { return out, 0 }})
-			sess, err := d.startSession(SessionRequest{ProjectRoot: root})
-			assert.NilError(t, err)
-			detail := waitForSession(t, d, sess.ID)
+// A review whose answer has no structured output is a failed review, not a
+// prose-only one: nothing it said can be acted on.
+func TestSessionFailsAReviewWithoutStructuredOutput(t *testing.T) {
+	d, root := newSessionDaemon(t, &fakeBackend{respond: func(string) (string, int) { return "Just prose, nothing structured.", 0 }})
+	sess, err := d.startSession(SessionRequest{ProjectRoot: root})
+	assert.NilError(t, err)
+	detail := waitForSession(t, d, sess.ID)
 
-			assert.Equal(t, detail.State, SessionDone)
-			assert.Equal(t, detail.Rounds[0].Findings, 0)
-			assert.Assert(t, !detail.Details[0].Results[0].FindingsParsed)
-			assert.Equal(t, detail.Details[0].Results[0].Output, out)
-		})
-	}
+	assert.Equal(t, detail.Rounds[0].Findings, 0)
+	res := detail.Details[0].Results[0]
+	assert.Assert(t, strings.Contains(res.Error, "read claude's result"), res.Error)
+	assert.Equal(t, len(res.Findings), 0)
 }

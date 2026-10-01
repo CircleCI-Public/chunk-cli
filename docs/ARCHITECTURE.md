@@ -426,18 +426,17 @@ changed (`fix.files[]`: `path`, `insertions`, `deletions`; the totals are
   any snapshot or session detail. A missing one is reported as
   `Snapshot.ReviewAuthError` and refuses `POST /session` with 503.
 - **Structured findings.** Sessions set `review.Options.StructuredFindings`,
-  which appends `review.FindingsInstructions` to every prompt: end the answer
-  with one fenced `json` block, `{"findings":[{file,line,severity,body,patch?}]}`.
-  `review.ParseFindings` reads it defensively and never fails: no block, broken
-  JSON, or a block about something else all yield prose only
-  (`findings_parsed` false), and the last decodable block wins, even when a
-  suggested patch contains a code fence. Entries with no file or body, or a path
-  that is absolute or climbs out of the repo, are dropped and counted; at most 50
-  are kept; severity is normalised to high/medium/low/info and unknown words
-  become info. A round counts *distinct* findings (`DedupeFindings`) and, of
-  those, the ones **worth changing**: severity high or medium. In-process
-  `chunk review` does not ask for findings, so its prompts and output are
-  unchanged.
+  which runs each review with `--output-format json --json-schema
+  review.FindingsSchema`: `{review, findings:[{file,line,severity,body,patch?}]}`,
+  severity one of high/medium/low/info. Claude Code validates the answer against
+  the schema itself; `review.ParseFindings` reads `structured_output` from the
+  result, and a result without one (an error, or retries exhausted) fails that
+  review. The prose is the `review` field. The content is still untrusted:
+  entries with no file or body, or a path that is absolute or climbs out of the
+  repo, are dropped and counted; at most 50 are kept. A round counts *distinct*
+  findings (`DedupeFindings`) and, of those, the ones **worth changing**:
+  severity high or medium. In-process `chunk review` does not ask for findings,
+  so its prompts and output are unchanged.
 - **The loop.** `runLoop` runs up to `MaxRounds` (3) rounds. A round is: all
   review prompts in parallel on pooled sandboxes; if any distinct finding is
   worth changing (severity high or medium) one sandbox agent, with edit tools,

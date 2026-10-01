@@ -24,6 +24,12 @@ const DefaultTimeout = 15 * time.Minute
 // so hitting this means something went wrong, not that the review was thorough.
 const maxOutputBytes = 256 * 1024
 
+// maxStructuredOutputBytes caps claude's JSON result when structured findings
+// are wanted. It is larger than maxOutputBytes because the result carries the
+// answer twice, as text and as structured_output, and up to MaxFindings patches;
+// a truncated result would not decode at all.
+const maxStructuredOutputBytes = 8 << 20
+
 // exitClaudeMissing is the review script's exit code for claude not being on
 // PATH. Not the shell's own 127, which claude also exits with when something it
 // shelled out to is missing: that is one broken review, not a dead pass.
@@ -100,9 +106,10 @@ type Options struct {
 	Timeout    time.Duration // per review; DefaultTimeout when zero
 	StatusFn   iostream.StatusFunc
 	ProgressFn func(ProgressEvent) // optional; called on each prompt state change
-	// StructuredFindings asks each review to end with a JSON block of findings
-	// (see FindingsInstructions) and parses it into Result.Parsed. Off, prompts
-	// run exactly as written and Result.Parsed stays empty.
+	// StructuredFindings runs each review with FindingsSchema as its
+	// --json-schema, parses the findings into Result.Parsed and puts the prose
+	// in Result.Output. A review whose answer has no structured output fails.
+	// Off, Result.Parsed stays empty.
 	StructuredFindings bool
 	// AllowedTools overrides the read-only tool set. Empty means read-only, which
 	// is what every review uses.
@@ -122,9 +129,8 @@ type Result struct {
 	Output    string
 	Error     string
 	Duration  time.Duration
-	// Parsed holds the structured findings read from Output when
-	// Options.StructuredFindings is set. Output itself is left as Claude wrote
-	// it, so nothing is lost when parsing finds nothing.
+	// Parsed holds the structured findings when Options.StructuredFindings is
+	// set.
 	Parsed Parsed
 }
 
@@ -259,9 +265,9 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	// Stdout is the review. Stderr is kept only to explain a failure, so
 	// claude's progress noise never lands in the review text.
 	var stdout, stderr strings.Builder
-	body := p.Body
+	limit := maxOutputBytes
 	if opts.StructuredFindings {
-		body += FindingsInstructions
+		limit = maxStructuredOutputBytes
 	}
 	tools := opts.AllowedTools
 	if len(tools) == 0 {
@@ -272,15 +278,15 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		if stream == circleci.StreamStderr {
 			buf = &stderr
 		}
-		if buf.Len() < maxOutputBytes {
-			buf.Write(data[:min(len(data), maxOutputBytes-buf.Len())])
+		if buf.Len() < limit {
+			buf.Write(data[:min(len(data), limit-buf.Len())])
 		}
 	}
 	var onSubmitted func(string)
 	if opts.OnSubmitted != nil {
 		onSubmitted = func(commandID string) { opts.OnSubmitted(entry, p.Name, commandID) }
 	}
-	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, body, opts.Model, tools), claudeEnv(opts), onOutput, onSubmitted)
+	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, p.Body, opts.Model, tools, opts.StructuredFindings), claudeEnv(opts), onOutput, onSubmitted)
 	r.Output = strings.TrimSpace(stdout.String())
 	r.Duration = time.Since(start)
 	switch {
@@ -296,7 +302,12 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 		return r.fail(exitError(code, stderr.String()))
 	}
 	if opts.StructuredFindings {
-		r.Parsed = ParseFindings(r.Output)
+		parsed, err := ParseFindings(r.Output)
+		if err != nil {
+			return r.fail(err)
+		}
+		r.Parsed = parsed
+		r.Output = parsed.Prose
 	}
 	return r
 }
@@ -327,12 +338,20 @@ func exitError(code int, stderr string) error {
 // Code's native installer puts claude in ~/.local/bin, which a non-login sh
 // does not have on PATH.
 func claudeScript(repoPath, prompt, model string) string {
-	return claudeScriptWithTools(repoPath, prompt, model, allowedTools)
+	return claudeScriptWithTools(repoPath, prompt, model, allowedTools, false)
 }
 
-// claudeScriptWithTools is claudeScript with an explicit tool allowlist.
-func claudeScriptWithTools(repoPath, prompt, model string, tools []string) string {
-	args := []string{"claude", "-p", "--output-format", "text", "--allowedTools", strings.Join(tools, ",")}
+// claudeScriptWithTools is claudeScript with an explicit tool allowlist, and,
+// when structured is set, claude's JSON result constrained by FindingsSchema.
+func claudeScriptWithTools(repoPath, prompt, model string, tools []string, structured bool) string {
+	format := "text"
+	if structured {
+		format = "json"
+	}
+	args := []string{"claude", "-p", "--output-format", format, "--allowedTools", strings.Join(tools, ",")}
+	if structured {
+		args = append(args, "--json-schema", FindingsSchema)
+	}
 	if model != "" {
 		args = append(args, "--model", model)
 	}

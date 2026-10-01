@@ -344,6 +344,42 @@ func TestClaudeScript(t *testing.T) {
 	assert.Equal(t, promptOf(t, script), "hi")
 }
 
+func TestClaudeScriptStructuredAsksForTheFindingsSchema(t *testing.T) {
+	t.Parallel()
+	script := claudeScriptWithTools("/home/user/repo", "hi", "", allowedTools, true)
+	assert.Assert(t, strings.Contains(script, "'claude' '-p' '--output-format' 'json'"), script)
+	assert.Assert(t, strings.Contains(script, "'--json-schema' "+sidecar.ShellEscape(FindingsSchema)), script)
+	assert.Equal(t, promptOf(t, script), "hi", "the prompt is sent as written")
+}
+
+func TestRunPassStructuredFindings(t *testing.T) {
+	t.Parallel()
+	pool := newSafePool("sb-1")
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, _ map[string]string, out circleci.OutputFn, _ func(string)) (int, error) {
+		if promptOf(t, script) == "prose" {
+			out(circleci.StreamStdout, []byte("Just prose."))
+			return 0, nil
+		}
+		out(circleci.StreamStdout, []byte(claudeJSON(t, map[string]any{
+			"review":   "One issue.",
+			"findings": []map[string]any{{"file": "a.go", "line": 1, "severity": "high", "body": "nil deref"}},
+		})))
+		return 0, nil
+	}
+
+	results, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec,
+		[]Prompt{{Name: "ok", Body: "structured"}, {Name: "bad", Body: "prose"}},
+		Options{StructuredFindings: true})
+
+	assert.NilError(t, err)
+	assert.Equal(t, len(results), 2)
+	assert.Equal(t, results[0].Error, "")
+	assert.Equal(t, results[0].Output, "One issue.", "the prose replaces the JSON result")
+	assert.Equal(t, len(results[0].Parsed.Findings), 1)
+	assert.Equal(t, results[0].Parsed.Findings[0].File, "a.go")
+	assert.Assert(t, strings.Contains(results[1].Error, "read claude's result"), results[1].Error)
+}
+
 func TestRunPassForwardsACustomBaseURL(t *testing.T) {
 	t.Parallel()
 	var gotEnv map[string]string

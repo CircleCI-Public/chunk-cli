@@ -99,7 +99,7 @@ func reportsBug(t *testing.T) func(string) string {
 		data, err := os.ReadFile(filepath.Join(sandbox, "app.go"))
 		assert.NilError(t, err)
 		if !strings.Contains(string(data), "BUG") {
-			return "Looks good."
+			return findingsOutput(t)
 		}
 		return findingsOutput(t, review.Finding{File: "app.go", Line: 1, Severity: "high", Body: "BUG must go"})
 	}

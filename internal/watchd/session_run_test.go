@@ -94,6 +94,9 @@ func (f *fakeBackend) config() ReviewConfig {
 			script := f.scripts[id]
 			f.mu.Unlock()
 			out, code := "ok", 0
+			if strings.Contains(script, "--json-schema") {
+				out = noFindings
+			}
 			if f.respond != nil {
 				out, code = f.respond(script)
 			}
@@ -102,6 +105,10 @@ func (f *fakeBackend) config() ReviewConfig {
 		},
 	}
 }
+
+// noFindings is claude's JSON result for a review that found nothing.
+const noFindings = `{"type":"result","subtype":"success","is_error":false,"result":"ok",` +
+	`"structured_output":{"review":"ok","findings":[]}}`
 
 // newSessionDaemon builds a daemon that tracks one real git repo holding two
 // review prompts. It returns the daemon and the project's canonical root.
@@ -195,7 +202,7 @@ func TestSessionRecordsTheRoundAndEveryStageOfTheFlow(t *testing.T) {
 }
 
 func TestSessionSnapshotHasStateButNeitherTextNorCredential(t *testing.T) {
-	d, root := newSessionDaemon(t, &fakeBackend{respond: func(string) (string, int) { return "LONG-REVIEW-PROSE", 0 }})
+	d, root := newSessionDaemon(t, &fakeBackend{respond: func(string) (string, int) { return reviewOutput(t, "LONG-REVIEW-PROSE"), 0 }})
 	sess, err := d.startSession(SessionRequest{ProjectRoot: root})
 	assert.NilError(t, err)
 	waitForSession(t, d, sess.ID)
