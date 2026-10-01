@@ -227,11 +227,15 @@ func (r *Recorder) PerCommand() iostream.StatusFunc {
 		switch level {
 		case iostream.LevelDone:
 			r.write(level, msg, true, 1, 1, true)
+			return
 		case iostream.LevelError:
 			r.write(level, msg, true, 0, 1, true)
-		default:
-			r.Status(level, msg)
+			return
+		case iostream.LevelStep, iostream.LevelInfo, iostream.LevelWarn:
 		}
+		// Every other level, including any added later, leaves the run open
+		// rather than being dropped.
+		r.Status(level, msg)
 	}
 }
 
