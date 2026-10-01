@@ -106,6 +106,14 @@ func applyPatchToTree(ctx context.Context, root, patchPath string) ([]FileChange
 		return nil, fmt.Errorf("measure the fixes: %w", err)
 	}
 	files := parseNumstat(string(stat))
+	// The deny list is enforced here as well as on the diff header, because -z
+	// gives the real paths: git quotes a name with a space in the header, and a
+	// quoted name is not something header parsing can be trusted to read.
+	for _, f := range files {
+		if err := deniedPath(f.Path); err != nil {
+			return nil, err
+		}
+	}
 	if out, err := git.CombinedOutput(ctx, "apply", patchPath); err != nil {
 		return nil, fmt.Errorf("apply the fixes: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -244,15 +252,23 @@ func checkPatchPaths(patch string) error {
 			if !ok {
 				continue
 			}
-			clean := path.Clean(p)
-			if clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
-				return fmt.Errorf("the fixes touch %q, outside the repository", p)
+			if err := deniedPath(p); err != nil {
+				return err
 			}
-			for _, denied := range deniedPatchPrefixes {
-				if strings.HasPrefix(clean+"/", denied) || strings.HasPrefix(clean, denied) {
-					return fmt.Errorf("the fixes touch %q, which a review fix may not edit", clean)
-				}
-			}
+		}
+	}
+	return nil
+}
+
+// deniedPath refuses one path a fix must not change.
+func deniedPath(p string) error {
+	clean := path.Clean(filepath.ToSlash(p))
+	if clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+		return fmt.Errorf("the fixes touch %q, outside the repository", p)
+	}
+	for _, denied := range deniedPatchPrefixes {
+		if strings.HasPrefix(clean+"/", denied) || strings.HasPrefix(clean, denied) {
+			return fmt.Errorf("the fixes touch %q, which a review fix may not edit", clean)
 		}
 	}
 	return nil

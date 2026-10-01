@@ -345,3 +345,18 @@ func TestAppliedFixesCarryLineCountsPerFileInJSON(t *testing.T) {
 		assert.Assert(t, f["insertions"] != nil && f["deletions"] != nil, "file %v lacks line counts", f["path"])
 	}
 }
+
+// git C-quotes a non-ASCII path in the diff header, which puts the whole name
+// behind a quote and out of reach of header parsing. The apply path checks the
+// names git reports for the patch itself, where they are never quoted.
+func TestApplyRefusesADeniedPathTheDiffHeaderQuotes(t *testing.T) {
+	const denied = ".circleci/t\u00e9st.yml"
+	root := userRepo(t)
+	patch := patchFor(t, root, func(d string) { put(t, d, denied, "jobs: {}\n") })
+	assert.Assert(t, strings.Contains(patch, `"a/`), patch)
+	assert.NilError(t, checkPatchPaths(patch), "a quoted header is what the header check cannot read")
+
+	_, err := applyPatchToTree(t.Context(), root, writePatch(t, patch))
+	assert.ErrorContains(t, err, "may not edit")
+	assert.Assert(t, !exists(root, denied), "nothing is written when a path is refused")
+}
