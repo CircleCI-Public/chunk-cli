@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -55,17 +55,29 @@ func Provision(ctx context.Context, client *circleci.Client, orgID, image, repoP
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
-		Teardown(client, entries)
+		if tdErr := Teardown(client, entries); tdErr != nil {
+			status(iostream.LevelWarn, fmt.Sprintf("could not delete sidecars: %v", tdErr))
+		}
 		return nil, nil, err
 	}
 	return entries[0], entries[1:], nil
 }
 
-// Teardown deletes sidecars, ignoring nil entries and failures: it runs on the
-// way out, when there is nothing left to do about a sidecar that will not go.
-func Teardown(client *circleci.Client, entries []*sidecar.PoolEntry) {
-	ctx := context.Background()
-	var wg sync.WaitGroup
+// teardownTimeout bounds Teardown: it runs on the way out, when a stuck delete
+// should not keep the command from exiting.
+const teardownTimeout = time.Minute
+
+// Teardown deletes sidecars, ignoring nil entries and ones already gone. It
+// returns the deletes that failed, so the caller can name the sidecars left
+// running.
+func Teardown(client *circleci.Client, entries []*sidecar.PoolEntry) error {
+	ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
+	defer cancel()
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []error
+	)
 	for _, e := range entries {
 		if e == nil {
 			continue
@@ -73,10 +85,15 @@ func Teardown(client *circleci.Client, entries []*sidecar.PoolEntry) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			_ = client.DeleteSidecar(ctx, id)
+			if err := client.DeleteSidecar(ctx, id); err != nil && !circleci.SidecarGone(err) {
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("delete sidecar %s: %w", id, err))
+				mu.Unlock()
+			}
 		}(e.ID)
 	}
 	wg.Wait()
+	return errors.Join(errs...)
 }
 
 // Sidecars runs the loop's steps on real sidecars: the implementer writes code
@@ -164,25 +181,39 @@ func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
 	return append(checks, validation...), nil
 }
 
-// WritePatch writes the implementer's work, relative to the baseline, to path
-// as a patch the developer can git apply to the tree they started from.
-func (s *Sidecars) WritePatch(ctx context.Context, path string) error {
-	if err := s.Relay.Pull(ctx, s.Implementer.Entry.ID, s.Implementer.Entry.RepoPath); err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, "git", "-C", s.Relay.Dir(), "diff", "HEAD", "--binary")
-	patch, err := cmd.Output()
+// WritePatch collects the implementer's work and writes it, relative to the
+// baseline, to path as a patch the developer can git apply to the tree they
+// started from. It collects first because it also runs after a turn that
+// failed, whose new files are not yet marked intent-to-add. Nothing is written
+// when the change is empty.
+//
+// The diff runs on the implementer's sidecar, not on a local copy: the
+// implementer controls its .git/config and .gitattributes, whose filters and
+// diff drivers git would otherwise run on the developer's machine.
+func (s *Sidecars) WritePatch(ctx context.Context, path string) (Change, error) {
+	change, err := s.ws.collect(ctx)
 	if err != nil {
-		return fmt.Errorf("diff implementer's work: %w", err)
+		return Change{}, err
+	}
+	if change.Empty() {
+		return change, nil
+	}
+	patch, err := s.ws.run(ctx, "cd "+sidecar.ShellEscape(s.Implementer.Entry.RepoPath)+" && "+patchDiff)
+	if err != nil {
+		return Change{}, fmt.Errorf("diff implementer's work: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create patch directory: %w", err)
+		return Change{}, fmt.Errorf("create patch directory: %w", err)
 	}
-	if err := os.WriteFile(path, patch, 0o644); err != nil {
-		return fmt.Errorf("write patch: %w", err)
+	if err := os.WriteFile(path, []byte(patch), 0o644); err != nil {
+		return Change{}, fmt.Errorf("write patch: %w", err)
 	}
-	return nil
+	return change, nil
 }
+
+// patchDiff produces a patch git apply accepts whatever the sidecar's git
+// config says, such as diff.noprefix or color.diff=always.
+const patchDiff = "git diff HEAD --binary --no-ext-diff --no-textconv --no-color --no-relative --src-prefix=a/ --dst-prefix=b/"
 
 // stopStrayReviews kills claude processes left on reviewers by an earlier
 // round: a review that timed out stops being streamed but keeps running on its

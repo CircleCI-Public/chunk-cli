@@ -53,6 +53,12 @@ applied with git apply to the tree the run started from.`,
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
 			status := newStatusFunc(streams)
+			if attempts < 1 {
+				return newUserError("--attempts must be at least 1.").
+					withCode("command.invalid_args").
+					withExitCode(ExitBadArgs).
+					withoutDetail()
+			}
 
 			workDir, err := os.Getwd()
 			if err != nil {
@@ -114,7 +120,10 @@ applied with git apply to the tree the run started from.`,
 					status(iostream.LevelInfo, "kept sidecars: "+strings.Join(ids, " "))
 					return
 				}
-				factory.Teardown(client, all)
+				if err := factory.Teardown(client, all); err != nil {
+					status(iostream.LevelWarn, fmt.Sprintf("could not delete sidecars: %v", err))
+					status(iostream.LevelInfo, "Delete them with 'chunk sidecar delete', or wait for them to expire.")
+				}
 			}()
 
 			relay, err := factory.NewRelay(client, status)
@@ -151,13 +160,11 @@ applied with git apply to the tree the run started from.`,
 
 			loop := factory.Loop{Attempts: attempts, OnEvent: func(e factory.Event) { printEvent(status, attempts, e) }}
 			outcome, loopErr := loop.Run(ctx, steps, args[0])
-			if errors.Is(loopErr, review.ErrCredentialRejected) {
-				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, loopErr)
-			}
 			// Whatever the implementer got to is kept, even when the loop
 			// failed partway, so the work is not lost with the sidecars.
-			if !outcome.Change.Empty() {
-				saveFactoryPatch(ctx, steps, workDir, outcome.Change, status, streams)
+			saveFactoryPatch(ctx, steps, workDir, status, streams)
+			if errors.Is(loopErr, review.ErrCredentialRejected) {
+				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, loopErr)
 			}
 			if loopErr != nil {
 				return factoryLoopError(loopErr)
@@ -183,11 +190,18 @@ applied with git apply to the tree the run started from.`,
 // prompts and, unless noValidate, the validation commands. Having neither is an
 // error, since the loop would then pass whatever the implementer wrote.
 func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noValidate bool) ([]review.Prompt, []config.Command, error) {
-	if reviewsDir == "" {
+	explicit := reviewsDir != ""
+	if !explicit {
 		reviewsDir = filepath.Join(workDir, review.DefaultDir)
 	}
 	prompts, err := review.LoadPrompts(reviewsDir)
-	if err != nil && !errors.Is(err, review.ErrNoPrompts) && !errors.Is(err, os.ErrNotExist) {
+	switch {
+	case err == nil:
+	case !explicit && (errors.Is(err, review.ErrNoPrompts) || errors.Is(err, os.ErrNotExist)):
+		// The default directory is optional: validation commands alone may do.
+	case errors.Is(err, review.ErrNoPrompts):
+		return nil, nil, &userError{msg: fmt.Sprintf("No review prompts found in %s.", reviewsDir), suggestion: "Add one .md or .txt file per review.", err: err}
+	default:
 		return nil, nil, &userError{msg: fmt.Sprintf("Could not read review prompts from %s.", reviewsDir), err: err}
 	}
 	var commands []config.Command
@@ -204,15 +218,19 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 	return prompts, commands, nil
 }
 
-// saveFactoryPatch writes the implementer's work to a patch under
+// saveFactoryPatch writes the implementer's work, if any, to a patch under
 // .chunk/factory. It runs on the way out, after a failure too, so it gets its
 // own deadline rather than the run's possibly canceled context.
-func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir string, change factory.Change, status iostream.StatusFunc, streams iostream.Streams) {
+func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir string, status iostream.StatusFunc, streams iostream.Streams) {
 	path := filepath.Join(workDir, ".chunk", "factory", time.Now().UTC().Format("20060102-150405")+".patch")
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
-	if err := steps.WritePatch(ctx, path); err != nil {
+	change, err := steps.WritePatch(ctx, path)
+	if err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("could not save the implementer's work: %v", err))
+		return
+	}
+	if change.Empty() {
 		return
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Saved %s to %s", change.Stat, path))
