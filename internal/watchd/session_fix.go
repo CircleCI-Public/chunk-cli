@@ -23,14 +23,14 @@ const maxPatchBytes = 1 << 20
 var treeSHARe = regexp.MustCompile(`^[0-9a-f]{40,64}$`)
 
 // treeScript snapshots the sandbox's working tree into a tree object and prints
-// its name, using a throwaway index (seeded from the real one for speed) so
-// nothing in the sandbox is staged. It is the sandbox's counterpart of treeNow.
-const treeScriptBody = `IDX=$(mktemp) || exit 1
-cp "$(git rev-parse --git-path index)" "$IDX" 2>/dev/null
-GIT_INDEX_FILE="$IDX" git add -A >/dev/null 2>&1 || { rm -f "$IDX"; exit 1; }
-GIT_INDEX_FILE="$IDX" git write-tree
+// its name, using a throwaway index so nothing in the sandbox is staged. The
+// index is not seeded from the sandbox's own, for the reason given on
+// gitutil.SnapshotTree. It is the sandbox's counterpart of treeNow.
+const treeScriptBody = `D=$(mktemp -d) || exit 1
+GIT_INDEX_FILE="$D/index" git add -A >/dev/null 2>&1 || { rm -rf "$D"; exit 1; }
+GIT_INDEX_FILE="$D/index" git write-tree
 rc=$?
-rm -f "$IDX"
+rm -rf "$D"
 exit $rc`
 
 // baselineScript prints the tree of the sandbox as the reviewers saw it, which is

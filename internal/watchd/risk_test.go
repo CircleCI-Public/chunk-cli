@@ -410,8 +410,8 @@ func TestAFreshRepoIsMeasuredWithoutGit(t *testing.T) {
 	assert.Assert(t, strings.Contains(resp.Reason, "10 lines"), "reason was %q", resp.Reason)
 }
 
-// And it is still measured incrementally: the state that passed is remembered
-// as a hashed walk rather than a git tree, and the next change is read from it.
+// And it is still measured incrementally: the state that passed is remembered,
+// and the next change is read from it rather than from the whole tree.
 func TestAFreshRepoIsMeasuredIncrementally(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
@@ -425,7 +425,8 @@ func TestAFreshRepoIsMeasuredIncrementally(t *testing.T) {
 	})))
 	assert.Assert(t, first.TaskID != "", "held: %s", first.Reason)
 	waitFor(t, func() bool { return len(d.tasks.inFlight(root)) == 0 }, "run never finished")
-	assert.Assert(t, d.risk.baseline(root).index != nil, "no hashed baseline was kept")
+	base := d.risk.baseline(root)
+	assert.Assert(t, base.tree != "" || base.index != nil, "no baseline was kept")
 
 	// 400 more lines in a second file. Against the whole tree that is 800 and
 	// would block; against the state that just passed it is 400.
