@@ -1,23 +1,42 @@
 package review
 
 import (
+	"encoding/json"
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 )
 
-const goodBlock = "```json\n" + `{"findings":[
-  {"file":"internal/a.go","line":12,"severity":"high","body":"nil deref","patch":"--- a/internal/a.go\n+++ b/internal/a.go\n@@ -1 +1 @@\n-x\n+y\n"},
-  {"file":"./b.go","line":"7","severity":"Warning","body":"unchecked error"}
-]}` + "\n```"
+// claudeJSON renders claude's --output-format json result around a structured
+// answer, the way claude does: the answer twice, as text and as an object.
+func claudeJSON(t *testing.T, structured any) string {
+	t.Helper()
+	text, err := json.Marshal(structured)
+	assert.NilError(t, err)
+	raw, err := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "is_error": false,
+		"result": string(text), "structured_output": structured,
+	})
+	assert.NilError(t, err)
+	return string(raw)
+}
 
-func TestParseFindingsReadsTheJSONBlockAndKeepsTheProse(t *testing.T) {
-	out := "The change looks mostly fine.\n\nTwo issues below.\n\n" + goodBlock + "\n"
+func TestParseFindingsReadsTheStructuredOutput(t *testing.T) {
+	out := claudeJSON(t, map[string]any{
+		"review": "  The change looks mostly fine.\n\nTwo issues below.\n",
+		"findings": []map[string]any{
+			{"file": "internal/a.go", "line": 12, "severity": "high", "body": "nil deref", "patch": "--- a/internal/a.go\n+++ b/internal/a.go\n@@ -1 +1 @@\n-x\n+y\n"},
+			{"file": "./b.go", "line": 7, "severity": "medium", "body": "unchecked error"},
+		},
+	})
 
-	got := ParseFindings(out)
+	got, err := ParseFindings(out)
 
-	assert.Assert(t, got.Found)
+	assert.NilError(t, err)
 	assert.Equal(t, got.Dropped, 0)
 	assert.Equal(t, len(got.Findings), 2)
 	assert.Equal(t, got.Findings[0].File, "internal/a.go")
@@ -25,63 +44,61 @@ func TestParseFindingsReadsTheJSONBlockAndKeepsTheProse(t *testing.T) {
 	assert.Equal(t, got.Findings[0].Severity, SeverityHigh)
 	assert.Assert(t, strings.Contains(got.Findings[0].Patch, "+y"))
 	assert.Equal(t, got.Findings[1].File, "b.go", "leading ./ is dropped")
-	assert.Equal(t, got.Findings[1].Line, 7, "a numeric string is accepted as a line")
-	assert.Equal(t, got.Findings[1].Severity, SeverityMedium, "warning maps to medium")
+	assert.Equal(t, got.Findings[1].Severity, SeverityMedium)
 	assert.Equal(t, got.Prose, "The change looks mostly fine.\n\nTwo issues below.")
-	assert.Assert(t, !strings.Contains(got.Prose, "findings"))
 }
 
-func TestParseFindingsWithNoBlockIsProseOnlyNotAnError(t *testing.T) {
-	out := "Looks good to me. No JSON here."
+// A patch that contains a code fence is just a string in the structured
+// output; nothing has to find where a block ends.
+func TestParseFindingsKeepsAPatchContainingAFence(t *testing.T) {
+	patch := "+```go\n+x := 1\n+```\n"
+	out := claudeJSON(t, map[string]any{
+		"review":   "Prose.",
+		"findings": []map[string]any{{"file": "README.md", "line": 3, "severity": "low", "body": "add a fence", "patch": patch}},
+	})
 
-	got := ParseFindings(out)
+	got, err := ParseFindings(out)
 
-	assert.Assert(t, !got.Found)
-	assert.Equal(t, len(got.Findings), 0)
-	assert.Equal(t, got.Prose, out)
+	assert.NilError(t, err)
+	assert.Equal(t, len(got.Findings), 1)
+	assert.Equal(t, got.Findings[0].Patch, patch)
 }
 
-func TestParseFindingsToleratesMalformedJSON(t *testing.T) {
-	for name, out := range map[string]string{
-		"truncated":   "review\n```json\n{\"findings\":[{\"file\":\"a.go\",\n```",
-		"not json":    "review\n```json\nthis is not json\n```",
-		"unclosed":    "review\n```json\n{\"findings\":[]}",
-		"wrong shape": "review\n```json\n{\"name\":\"a config example\"}\n```",
-		"scalar":      "review\n```json\n42\n```",
+func TestParseFindingsFailsWithoutStructuredOutput(t *testing.T) {
+	for name, tc := range map[string]struct{ out, want string }{
+		"not json": {out: "Just prose.", want: "read claude's result"},
+		"error result": {
+			out:  `{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"result":"gave up"}`,
+			want: "claude gave no structured findings (error_max_structured_output_retries): gave up",
+		},
+		"no structured output": {
+			out:  `{"type":"result","subtype":"success","is_error":false,"result":"prose only"}`,
+			want: "claude gave no structured findings (success): prose only",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := ParseFindings(out)
-			assert.Assert(t, !got.Found)
-			assert.Equal(t, got.Prose, out, "prose must be untouched when nothing parsed")
+			_, err := ParseFindings(tc.out)
+			assert.ErrorContains(t, err, tc.want)
 		})
 	}
 }
 
-func TestParseFindingsTakesTheLastDecodableBlock(t *testing.T) {
-	out := "first try\n```json\n{\"findings\":[{\"file\":\"old.go\",\"body\":\"old\"}]}\n```\n" +
-		"revised\n```json\n{\"findings\":[{\"file\":\"new.go\",\"body\":\"new\"}]}\n```\n" +
-		"and a quoted example\n```json\n{\"unrelated\":true}\n```"
-
-	got := ParseFindings(out)
-
-	assert.Assert(t, got.Found)
-	assert.Equal(t, len(got.Findings), 1)
-	assert.Equal(t, got.Findings[0].File, "new.go")
-}
-
 func TestParseFindingsDropsUnusableEntriesAndCountsThem(t *testing.T) {
-	out := "```json\n" + `{"findings":[
-	  {"file":"","body":"no file"},
-	  {"file":"a.go","body":"   "},
-	  {"file":"/etc/passwd","body":"absolute"},
-	  {"file":"../outside.go","body":"climbs out"},
-	  {"file":"a/../../b.go","body":"climbs out later"},
-	  {"file":"ok.go","body":"fine","severity":"catastrophic","line":-3}
-	]}` + "\n```"
+	out := claudeJSON(t, map[string]any{
+		"review": "",
+		"findings": []map[string]any{
+			{"file": "", "body": "no file"},
+			{"file": "a.go", "body": "   "},
+			{"file": "/etc/passwd", "body": "absolute"},
+			{"file": "../outside.go", "body": "climbs out"},
+			{"file": "a/../../b.go", "body": "climbs out later"},
+			{"file": "ok.go", "body": "fine", "severity": "catastrophic", "line": -3},
+		},
+	})
 
-	got := ParseFindings(out)
+	got, err := ParseFindings(out)
 
-	assert.Assert(t, got.Found)
+	assert.NilError(t, err)
 	assert.Equal(t, got.Dropped, 5)
 	assert.Equal(t, len(got.Findings), 1)
 	assert.Equal(t, got.Findings[0].File, "ok.go")
@@ -89,20 +106,48 @@ func TestParseFindingsDropsUnusableEntriesAndCountsThem(t *testing.T) {
 	assert.Equal(t, got.Findings[0].Line, 0, "a negative line is no line")
 }
 
-// A suggested patch that itself contains a code fence looks, to a fence scanner,
-// like the end of the block. The findings must survive it.
-func TestParseFindingsSurvivesAFenceInsideAJSONString(t *testing.T) {
-	out := "Prose.\n```json\n" +
-		`{"findings":[{"file":"README.md","line":3,"severity":"low","body":"add a fence","patch":"+` + "```" + `go\n+x := 1\n+` + "```" + `\n"}]}` +
-		"\n```\nTrailing words.\n"
+func TestFindingsSchemaIsValidJSON(t *testing.T) {
+	var schema map[string]any
+	assert.NilError(t, json.Unmarshal([]byte(FindingsSchema), &schema))
+	assert.Equal(t, schema["type"], "object")
+}
 
-	got := ParseFindings(out)
+// The schema and the structs ParseFindings decodes into are written apart. A
+// field renamed in one but not the other would not fail any decode: claude would
+// answer to the schema and the parser would quietly read zero values. This keeps
+// them naming the same fields.
+func TestFindingsSchemaNamesTheFieldsParseFindingsReads(t *testing.T) {
+	type node struct {
+		Properties map[string]node `json:"properties"`
+		Items      *node           `json:"items"`
+		Required   []string        `json:"required"`
+	}
+	var schema node
+	assert.NilError(t, json.Unmarshal([]byte(FindingsSchema), &schema))
 
-	assert.Assert(t, got.Found, "prose: %q", got.Prose)
-	assert.Equal(t, len(got.Findings), 1)
-	assert.Equal(t, got.Findings[0].File, "README.md")
-	assert.Assert(t, strings.Contains(got.Findings[0].Patch, "x := 1"))
-	assert.Equal(t, got.Prose, "Prose.\n\nTrailing words.")
+	jsonNames := func(typ reflect.Type) []string {
+		var names []string
+		for f := range typ.Fields() {
+			names = append(names, strings.Split(f.Tag.Get("json"), ",")[0])
+		}
+		slices.Sort(names)
+		return names
+	}
+	keys := func(props map[string]node) []string {
+		return slices.Sorted(maps.Keys(props))
+	}
+
+	structured, ok := reflect.TypeFor[claudeResult]().FieldByName("StructuredOutput")
+	assert.Assert(t, ok)
+	assert.DeepEqual(t, keys(schema.Properties), jsonNames(structured.Type.Elem()))
+
+	item := schema.Properties["findings"].Items
+	assert.Assert(t, item != nil)
+	assert.DeepEqual(t, keys(item.Properties), jsonNames(reflect.TypeFor[rawFinding]()))
+	for _, name := range item.Required {
+		_, ok := item.Properties[name]
+		assert.Assert(t, ok, "required %q is not a property", name)
+	}
 }
 
 func TestWorthChangingIsHighAndMediumOnly(t *testing.T) {

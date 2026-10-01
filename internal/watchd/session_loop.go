@@ -82,6 +82,17 @@ func (d *daemon) runLoop(ctx context.Context, entry *sessionEntry, prompts []rev
 	return nil
 }
 
+// failedReviews counts the reviews that ended in an error.
+func failedReviews(results []review.Result) int {
+	n := 0
+	for _, r := range results {
+		if r.Error != "" {
+			n++
+		}
+	}
+	return n
+}
+
 // runRound runs one round. The returned reason is why the loop is over, when the
 // outcome is roundStopped.
 func (d *daemon) runRound(ctx context.Context, entry *sessionEntry, root string, prompts []review.Prompt, req SessionRequest, st *loopState) (outcome, string, error) {
@@ -101,10 +112,23 @@ func (d *daemon) runRound(ctx context.Context, entry *sessionEntry, root string,
 		return 0, "", err
 	}
 
+	// A review that failed found nothing, which is not the same as finding
+	// nothing wrong. If none of them ran, there is no round to call clean.
+	failed := failedReviews(results)
+	if len(results) > 0 && failed == len(results) {
+		err := fmt.Errorf("every review failed: %s", results[0].Error)
+		entry.endRound(ridx, RoundFailed, err.Error())
+		return 0, "", err
+	}
+
 	worth := entry.worthFindings(ridx)
 	if len(worth) == 0 {
-		entry.endRound(ridx, RoundDone, "no findings worth changing")
-		return roundStopped, "no findings worth changing", nil
+		reason := "no findings worth changing"
+		if failed > 0 {
+			reason = fmt.Sprintf("%s (%d of %d reviews failed)", reason, failed, len(results))
+		}
+		entry.endRound(ridx, RoundDone, reason)
+		return roundStopped, reason, nil
 	}
 
 	entry.startFix(ridx, worth)

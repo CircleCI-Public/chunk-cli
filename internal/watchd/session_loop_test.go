@@ -99,7 +99,7 @@ func reportsBug(t *testing.T) func(string) string {
 		data, err := os.ReadFile(filepath.Join(sandbox, "app.go"))
 		assert.NilError(t, err)
 		if !strings.Contains(string(data), "BUG") {
-			return "Looks good."
+			return findingsOutput(t)
 		}
 		return findingsOutput(t, review.Finding{File: "app.go", Line: 1, Severity: "high", Body: "BUG must go"})
 	}
@@ -113,6 +113,20 @@ func fixesBug(t *testing.T) func(string) {
 func userState(t *testing.T, r *loopRig) (index, head string) {
 	t.Helper()
 	return git(t, r.root, "ls-files", "--stage"), git(t, r.root, "rev-parse", "HEAD")
+}
+
+// A round in which no review produced a result has not found the code clean.
+func TestLoopFailsWhenEveryReviewFails(t *testing.T) {
+	r := newLoopRig(t, nil, nil)
+	r.review = func(string) string { return "this is not a claude result" }
+
+	detail := r.start(SessionRequest{})
+
+	assert.Equal(t, detail.State, SessionFailed)
+	assert.Assert(t, strings.Contains(detail.Error, "every review failed"), detail.Error)
+	assert.Equal(t, len(detail.Rounds), 1)
+	assert.Equal(t, detail.Rounds[0].State, RoundFailed)
+	assert.Equal(t, r.fixCount(), 0, "nothing was reviewed, so nothing is fixed")
 }
 
 func TestLoopFixesTheUsersFilesThenStopsWhenNothingIsLeft(t *testing.T) {
