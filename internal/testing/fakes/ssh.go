@@ -8,11 +8,14 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,6 +38,9 @@ type SSHServer struct {
 	authorizedKey ssh.PublicKey
 	commands      []string
 	envVars       map[string]string
+	// runLocally, when set, executes each command on this machine instead of
+	// returning a canned result.
+	runLocally bool
 }
 
 // GenerateSSHKeypair generates an ed25519 keypair, writes the private and public
@@ -202,6 +208,16 @@ func (s *SSHServer) SetResultFn(fn func(command string) (stdout string, exitCode
 	s.resultFn = fn
 }
 
+// RunLocally makes the server execute each command with sh on this machine,
+// wiring the session's stdin, stdout and stderr to it, instead of returning a
+// canned result. Paths on the "sidecar" are then local paths, which lets a test
+// drive a real rsync through the same tunnel chunk uses for a sidecar.
+func (s *SSHServer) RunLocally() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runLocally = true
+}
+
 // Commands returns a copy of all exec command strings received so far.
 func (s *SSHServer) Commands() []string {
 	s.mu.Lock()
@@ -300,10 +316,19 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		stdout := s.stdout
 		exitCode := s.exitCode
 		resultFn := s.resultFn
+		runLocally := s.runLocally
 		s.mu.Unlock()
 
 		if req.WantReply {
 			_ = req.Reply(true, nil)
+		}
+		if runLocally {
+			exitCode = runCommand(ch, cmd)
+			exitPayload := make([]byte, 4)
+			binary.BigEndian.PutUint32(exitPayload, uint32(exitCode)) //nolint:gosec // exit codes are 0-255
+			_, _ = ch.SendRequest("exit-status", false, exitPayload)
+			_ = ch.Close()
+			return
 		}
 		// Called after the lock is released so a resultFn that blocks — standing in
 		// for a command that never returns — does not stall the whole server.
@@ -324,6 +349,36 @@ func (s *SSHServer) handleSession(ch ssh.Channel, requests <-chan *ssh.Request) 
 		_ = ch.Close()
 		return // one exec per session
 	}
+}
+
+// runCommand runs command with sh, streaming the channel to and from it, and
+// returns its exit code. Stdin is copied by hand rather than assigned to the
+// command: exec would then wait for the client to close its end, which rsync
+// does only after the server side has exited.
+func runCommand(ch ssh.Channel, command string) int {
+	cmd := exec.Command("sh", "-c", command) //nolint:gosec // a test fake; running the command is its purpose
+	cmd.Stdout = ch
+	cmd.Stderr = ch.Stderr()
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return 1
+	}
+	if err := cmd.Start(); err != nil {
+		_, _ = fmt.Fprintln(ch.Stderr(), err)
+		return 127
+	}
+	go func() {
+		_, _ = io.Copy(stdin, ch)
+		_ = stdin.Close()
+	}()
+	if err := cmd.Wait(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode()
+		}
+		return 1
+	}
+	return 0
 }
 
 func generateHostKey(t *testing.T) ssh.Signer {

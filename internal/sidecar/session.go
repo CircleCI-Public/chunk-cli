@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
-	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -49,11 +48,13 @@ func GenerateKeyPair(path string) error {
 		return fmt.Errorf("generate key: %w", err)
 	}
 
-	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	// OpenSSH's own format, not PKCS8: rsync runs the system ssh with this key,
+	// and macOS's LibreSSL-built ssh cannot load a PKCS8 ed25519 key.
+	privBlock, err := ssh.MarshalPrivateKey(priv, "")
 	if err != nil {
 		return fmt.Errorf("marshal private key: %w", err)
 	}
-	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+	privPEM := pem.EncodeToMemory(privBlock)
 
 	sshPub, err := ssh.NewPublicKey(pub)
 	if err != nil {

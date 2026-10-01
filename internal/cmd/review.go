@@ -97,7 +97,7 @@ A prompts directory named "results" must be passed as ./results, since
 			if err != nil {
 				return &userError{
 					msg:        msgValidateNotConfigured,
-					suggestion: "Run 'chunk init' first.",
+					suggestion: suggestionRunInit,
 					err:        err,
 				}
 			}

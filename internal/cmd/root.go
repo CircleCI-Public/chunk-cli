@@ -114,6 +114,7 @@ Configuration:
 	rootCmd.AddCommand(newValidateCmd())
 	rootCmd.AddCommand(newMutateCmd())
 	rootCmd.AddCommand(newReviewCmd())
+	rootCmd.AddCommand(newFactoryCmd())
 	rootCmd.AddCommand(newSessionCmd())
 	rootCmd.AddCommand(newHookCmd())
 	rootCmd.AddCommand(newConflictsCmd())

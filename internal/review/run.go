@@ -33,7 +33,11 @@ const maxStructuredOutputBytes = 8 << 20
 // exitClaudeMissing is the review script's exit code for claude not being on
 // PATH. Not the shell's own 127, which claude also exits with when something it
 // shelled out to is missing: that is one broken review, not a dead pass.
-const exitClaudeMissing = 97
+const exitClaudeMissing = ExitClaudeMissing
+
+// ExitClaudeMissing is the exit code a script running claude on a sidecar uses
+// for claude not being on PATH, so every caller reports it the same way.
+const ExitClaudeMissing = 97
 
 // ErrClaudeMissing is returned when a sidecar has no claude binary.
 var ErrClaudeMissing = errors.New("claude is not installed on the sidecar")
@@ -322,6 +326,12 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	return r
 }
 
+// CredentialRejected reports whether claude's output shows it failed to
+// authenticate, for other callers that run claude on a sidecar.
+func CredentialRejected(stdout, stderr string) bool {
+	return credentialRejected(stdout, stderr)
+}
+
 // credentialRejected reports whether claude failed to authenticate. Both
 // streams are checked: the 401 lands on stdout, while stderr can carry
 // unrelated warnings.
@@ -373,9 +383,15 @@ const defaultBaseURL = "https://api.anthropic.com"
 // claudeEnv is the environment each review runs with: only the credential, and
 // the base URL when it points somewhere other than Anthropic.
 func claudeEnv(opts Options) map[string]string {
-	env := map[string]string{opts.Credential.EnvVar: opts.Credential.Value}
-	if opts.BaseURL != "" && strings.TrimRight(opts.BaseURL, "/") != defaultBaseURL {
-		env["ANTHROPIC_BASE_URL"] = opts.BaseURL
+	return Env(opts.Credential, opts.BaseURL)
+}
+
+// Env is the environment claude runs with on a sidecar: only the credential,
+// and the base URL when it points somewhere other than Anthropic.
+func Env(cred Credential, baseURL string) map[string]string {
+	env := map[string]string{cred.EnvVar: cred.Value}
+	if baseURL != "" && strings.TrimRight(baseURL, "/") != defaultBaseURL {
+		env["ANTHROPIC_BASE_URL"] = baseURL
 	}
 	return env
 }
