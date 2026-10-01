@@ -385,6 +385,47 @@ Design constraints worth preserving:
   Resolution is deferred to first use because it can read the OS keychain, and the
   daemon starts on every `chunk watch` whether or not anything needs a token.
 
+### Pre-PR sessions
+
+A session is the daemon's record of one pre-PR run for a project: the work is
+reviewed by agents in sandboxes, the findings worth changing are fixed, and the
+loop goes round again. The daemon is the **local** one (Unix socket); sessions
+work on files on this machine. This section covers the record and the API that
+serves it; running a session is added on top of it.
+
+```
+GET  /session[?root=<path>] → {sessions: [Session...]}, newest first
+GET  /session/{id}         → SessionDetail: the session plus each round's review text
+POST /session/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
+GET  /snapshot             → each project carries `sessions` (state only), and the
+                             top level a `review_auth_error`
+```
+
+**The record.** `Session` holds `stages` (always the full flow, in order:
+`review_loop`, `rebase`, `ci`, `approval`, `pr`), `rounds`, and a `restore` point.
+Stage states are `not_built | pending | running | paused | done | failed |
+skipped`; only `review_loop` is implemented, the rest are `not_built` and shown
+as "not built yet". Building a later stage means filling in its `Stage` — the
+record does not change shape. A `Round` carries its reviews (the same
+`ReviewPrompt` rows `chunk review` draws), finding counts, what its fixes
+changed (`fix`: files and line counts), and a note on why the loop ended.
+
+- **State in snapshots, text on demand.** Snapshots hold state only; review text
+  is in `GET /session/{id}`, as command output is in `/output`. Every Claude
+  command is registered with the output store, so its live log is readable.
+- **Credentials.** `cmd/watchdaemon.go` resolves the Claude credential once at
+  start (`daemonReviewConfig`) and passes it in with `watchd.WithReview`. It is
+  put only in the environment of a Claude command; it is not logged and not in
+  any snapshot or session detail. A missing one is reported as
+  `Snapshot.ReviewAuthError`.
+- **One active session per project.** Two would fight over the same files.
+- **Detach is not cancel.** A viewer disconnecting changes nothing; the session
+  belongs to the daemon.
+- **In memory only.** Like async validate tasks, a daemon restart loses the
+  session record (the last 10 per project are kept while it runs). What a
+  session changed in the user's files is not lost with it: the restore point is a
+  git ref.
+
 ### Resource sampling
 
 There is no metrics endpoint, so usage is sampled inside the sidecar. The naive

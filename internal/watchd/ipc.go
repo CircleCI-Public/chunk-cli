@@ -101,6 +101,7 @@ func newServer(d *daemon) *http.Server {
 	mux.HandleFunc("/validate/collect", d.handleCollect)
 	mux.HandleFunc("/sidecar", d.handleSidecar)
 	mux.HandleFunc("/sidecar/", d.handleSidecarByID)
+	registerSessionRoutes(mux, d)
 	return &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,

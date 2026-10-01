@@ -44,16 +44,34 @@ func newWatchDaemonCmd() *cobra.Command {
 			// Resolve the GitHub client for PR monitoring. Failure is not fatal:
 			// PR monitoring is advisory and the daemon runs fine without it.
 			var ghClient *github.Client
-			if fullRC, rcErr := config.Resolve("", "", false); rcErr == nil && fullRC.GitHubToken != "" {
+			fullRC, rcErr := config.Resolve("", "", false)
+			if rcErr == nil && fullRC.GitHubToken != "" {
 				ghClient, _ = github.New(github.Config{
 					Token:   fullRC.GitHubToken,
 					BaseURL: fullRC.GitHubAPIURL,
 				})
 			}
 
-			return watchd.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner(), ghClient)
+			return watchd.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner(), ghClient,
+				watchd.WithReview(daemonReviewConfig(fullRC, rcErr)))
 		},
 	}
+}
+
+// daemonReviewConfig resolves the Claude credential sessions run with, once, at
+// daemon start. The daemon has no terminal, so a missing credential is reported
+// through the snapshot rather than prompted for, and the credential itself goes
+// no further than the environment of a Claude command: it is never logged and
+// never part of any response.
+func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) watchd.ReviewConfig {
+	if rcErr != nil {
+		return watchd.ReviewConfig{AuthError: "could not read configuration — sessions unavailable: " + rcErr.Error()}
+	}
+	cred, _, credErr := reviewCredential(rc)
+	if credErr != nil {
+		return watchd.ReviewConfig{AuthError: "no Claude credential — sessions unavailable (run: chunk auth set anthropic-oauth, then restart the daemon)"}
+	}
+	return watchd.ReviewConfig{Credential: cred, BaseURL: rc.AnthropicBaseURL}
 }
 
 // authMessage renders a credential-resolution failure for the dashboard. An

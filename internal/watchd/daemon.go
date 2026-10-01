@@ -87,6 +87,9 @@ type daemon struct {
 	// live drops sidecars the API no longer lists, so the dashboard shows only
 	// the ones that exist.
 	live *livenessChecker
+	// sessions holds pre-PR sessions, and rcfg what the daemon needs to run one.
+	sessions *sessionStore
+	rcfg     ReviewConfig
 }
 
 // RunDaemon is the watch daemon entry point, called by the hidden _daemon subcommand.
@@ -96,7 +99,7 @@ type daemon struct {
 // (the daemon still records commands without a client, and /validate returns an
 // error without a runner). ghClient may be nil; PR monitoring is skipped when
 // no GitHub credentials are available.
-func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
+func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client, opts ...Option) error {
 	var tcpLn net.Listener
 	if addr := TCPListenAddr(); addr != "" {
 		if TCPToken() == "" {
@@ -108,13 +111,17 @@ func RunDaemon(ctx context.Context, client *circleci.Client, authMessage string,
 		}
 		tcpLn = ln
 	}
-	return runDaemon(ctx, tcpLn, client, authMessage, runner, ghClient)
+	return runDaemon(ctx, tcpLn, client, authMessage, runner, ghClient, opts...)
 }
 
 // runDaemon is the inner daemon loop. It accepts a pre-opened tcpLn (nil when
 // TCP is disabled) so tests can avoid the TOCTOU race of closing and re-opening
 // a listener to discover a free port.
-func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client) error {
+func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client, authMessage string, runner ValidateRunner, ghClient *github.Client, opts ...Option) error {
+	var dopts daemonOptions
+	for _, opt := range opts {
+		opt(&dopts)
+	}
 	if _, err := EnsureDir(); err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
@@ -166,6 +173,8 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		prov:      prov,
 		claims:    newClaimStore(),
 		live:      newLivenessChecker(listFor(client)),
+		sessions:  newSessionStore(ctx),
+		rcfg:      dopts.review,
 	}
 	// A background run is the one run with nobody to report a failure to, so what
 	// it concluded is remembered here and blocks the run after it.
@@ -176,6 +185,7 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	defer d.out.stopAll()
 	defer d.res.stopAll()
 	defer d.tasks.stopAll()
+	defer d.sessions.stopAll()
 	if prov != nil {
 		defer prov.stopAll(context.Background())
 	}
@@ -416,12 +426,12 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 	if len(roots) == 0 {
 		projects := make([]ProjectSnapshot, 0, len(d.projects))
 		for _, ps := range d.projects {
-			projects = append(projects, ps.snap)
+			projects = append(projects, d.withSessions(ps.root, ps.snap))
 		}
 		// Map iteration is random; sort by root so project rows stay stable
 		// between polls when watchAll mode requests all projects.
 		sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-		return Snapshot{Projects: projects, AuthError: d.authError}
+		return Snapshot{Projects: projects, AuthError: d.authError, ReviewAuthError: d.reviewAuthError()}
 	}
 
 	ordered := make([]ProjectSnapshot, 0, len(roots))
@@ -432,11 +442,25 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 				continue
 			}
 			seen[ps.root] = true
-			ordered = append(ordered, ps.snap)
+			ordered = append(ordered, d.withSessions(ps.root, ps.snap))
 			break
 		}
 	}
-	return Snapshot{Projects: ordered, AuthError: d.authError}
+	return Snapshot{Projects: ordered, AuthError: d.authError, ReviewAuthError: d.reviewAuthError()}
+}
+
+// withSessions attaches the project's sessions to a snapshot. It is done when a
+// snapshot is read rather than when the poll builds it, so a session's progress
+// is as fresh as the request instead of as fresh as the last five-second poll.
+//
+// root is passed in because a project adopted a moment ago has no snapshot yet,
+// and so no Root of its own to look sessions up by.
+func (d *daemon) withSessions(root string, p ProjectSnapshot) ProjectSnapshot {
+	if p.Root == "" {
+		p.Root = root
+	}
+	p.Sessions = d.sessions.forProject(root)
+	return p
 }
 
 // fillMissingOrg gives sidecars whose state recorded no org the project's org.
