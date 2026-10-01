@@ -640,20 +640,26 @@ func writeRemoteProjectConfig(t *testing.T, workDir string) {
 // environment's XDG data directory for the given project root.
 func writeSidecarState(t *testing.T, e *testenv.TestEnv, projectRoot, sessionID, sidecarID string) {
 	t.Helper()
-	// Resolve symlinks so the hash matches what os.Getwd() returns in the subprocess.
-	// On macOS, t.TempDir() returns /var/folders/... but os.Getwd() resolves to /private/var/...
-	realRoot, err := filepath.EvalSymlinks(projectRoot)
-	assert.NilError(t, err)
-	// Compute the data dir directly from e.HomeDir so we don't touch the parent process env.
-	// This mirrors config.ProjectDataDir: <XDG_DATA_HOME>/chunk/<sha256(root)>
-	sum := sha256.Sum256([]byte(filepath.Clean(realRoot)))
-	dir := filepath.Join(e.HomeDir, ".local", "share", "chunk", fmt.Sprintf("%x", sum))
+	dir := projectDataDir(t, e, projectRoot)
 	assert.NilError(t, os.MkdirAll(dir, 0o755))
 	// Detect the branch so the file name matches what the subprocess will look for.
 	branch := gitCurrentBranch(t, projectRoot)
 	filename := sidecar.StateFileName(sessionID, branch)
 	data := []byte(`{"sidecar_id":"` + sidecarID + `"}`)
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, filename), data, 0o644))
+}
+
+// projectDataDir mirrors config.ProjectDataDir, <XDG_DATA_HOME>/chunk/<sha256(root)>,
+// derived from e.HomeDir so the parent process environment is left alone.
+func projectDataDir(t *testing.T, e *testenv.TestEnv, projectRoot string) string {
+	t.Helper()
+	// Resolve symlinks so the hash matches what os.Getwd() returns in the
+	// subprocess: on macOS t.TempDir() gives /var/folders/... which resolves to
+	// /private/var/...
+	realRoot, err := filepath.EvalSymlinks(projectRoot)
+	assert.NilError(t, err)
+	sum := sha256.Sum256([]byte(filepath.Clean(realRoot)))
+	return filepath.Join(e.HomeDir, ".local", "share", "chunk", fmt.Sprintf("%x", sum))
 }
 
 // TestValidateHookMode_SuccessResponse verifies that a successful hook run

@@ -63,7 +63,7 @@ func TestRunPass(t *testing.T) {
 	t.Parallel()
 	pool := newSafePool("sb-1")
 	var gotEnv map[string]string
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, env map[string]string, out circleci.OutputFn) (int, error) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, env map[string]string, out circleci.OutputFn, _ func(string)) (int, error) {
 		gotEnv = env
 		if promptOf(t, script) == "fail please" {
 			out(circleci.StreamStdout, []byte("partial"))
@@ -94,9 +94,48 @@ func TestRunPass(t *testing.T) {
 	assert.Equal(t, results[1].Error, "claude exited 1: rate limited")
 }
 
+func TestRunPassReportsSubmittedCommand(t *testing.T) {
+	t.Parallel()
+	pool := newSafePool("sb-1")
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn, sub func(string)) (int, error) {
+		sub("cmd-9")
+		return 0, nil
+	}
+
+	type submission struct {
+		sidecarID, prompt, commandID string
+	}
+	var got []submission
+	var mu sync.Mutex
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{{Name: "a", Body: "x"}}, Options{
+		OnSubmitted: func(entry *sidecar.PoolEntry, prompt, commandID string) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, submission{entry.ID, prompt, commandID})
+		},
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, len(got), 1)
+	assert.Equal(t, got[0], submission{"sb-1", "a", "cmd-9"})
+}
+
+func TestRunPassWithoutOnSubmittedPassesNilHook(t *testing.T) {
+	t.Parallel()
+	pool := newSafePool("sb-1")
+	var gotHook bool
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn, sub func(string)) (int, error) {
+		gotHook = sub != nil
+		return 0, nil
+	}
+
+	_, err := RunPass(context.Background(), pool.Acquire, pool.Release, exec, []Prompt{{Name: "a", Body: "x"}}, Options{})
+	assert.NilError(t, err)
+	assert.Assert(t, !gotHook, "an Execer must be able to skip submission reporting when nobody asked for it")
+}
+
 func TestRunPassClaudeMissingStopsPass(t *testing.T) {
 	t.Parallel()
-	exec := func(context.Context, *sidecar.PoolEntry, string, map[string]string, circleci.OutputFn) (int, error) {
+	exec := func(context.Context, *sidecar.PoolEntry, string, map[string]string, circleci.OutputFn, func(string)) (int, error) {
 		return exitClaudeMissing, nil
 	}
 
@@ -108,7 +147,7 @@ func TestRunPassClaudeMissingStopsPass(t *testing.T) {
 
 func TestRunPassShellNotFoundIsOneFailedReview(t *testing.T) {
 	t.Parallel()
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, _ map[string]string, _ circleci.OutputFn) (int, error) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, _ map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
 		if promptOf(t, script) == "x" {
 			return 127, nil
 		}
@@ -127,7 +166,7 @@ func TestRunPassShellNotFoundIsOneFailedReview(t *testing.T) {
 func TestRunPassSendsOnlyTheGivenCredential(t *testing.T) {
 	t.Parallel()
 	var gotEnv map[string]string
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn) (int, error) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
 		gotEnv = env
 		return 0, nil
 	}
@@ -146,7 +185,7 @@ func TestRunPassSendsOnlyTheGivenCredential(t *testing.T) {
 func TestRunPassCredentialRejectedStopsPass(t *testing.T) {
 	t.Parallel()
 	// The 401 lands on stdout, while stderr carries an unrelated warning.
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn) (int, error) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn, _ func(string)) (int, error) {
 		out(circleci.StreamStderr, []byte("workspace has not been trusted\n"))
 		out(circleci.StreamStdout, []byte("Failed to authenticate. API Error: 401 OAuth access token is invalid.\n"))
 		return 1, nil
@@ -162,7 +201,7 @@ func TestRunPassCredentialRejectedStopsPass(t *testing.T) {
 // pass must not be cut short by it.
 func TestRunPassSuccessfulReviewQuotingA401(t *testing.T) {
 	t.Parallel()
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn) (int, error) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn, _ func(string)) (int, error) {
 		out(circleci.StreamStdout, []byte("the handler failed to authenticate and returns 401\n"))
 		return 0, nil
 	}
@@ -180,7 +219,7 @@ func TestRunPassClaudeMissingNoSpuriousFailures(t *testing.T) {
 	// context is canceled. The context-canceled results must be attributed to
 	// ErrClaudeMissing, not shown as generic "exec: context canceled" failures.
 	var first atomic.Bool
-	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn) (int, error) {
+	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
 		if first.CompareAndSwap(false, true) {
 			return exitClaudeMissing, nil
 		}
@@ -211,7 +250,7 @@ func TestRunPassClaudeMissingNoSpuriousFailures(t *testing.T) {
 
 func TestRunPassTimeout(t *testing.T) {
 	t.Parallel()
-	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn) (int, error) {
+	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
 		<-ctx.Done()
 		return 0, ctx.Err()
 	}
@@ -226,15 +265,15 @@ func TestRunPassTimeout(t *testing.T) {
 func TestRunPassAcquireFailureKeepsStartedResults(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
-	exec := func(context.Context, *sidecar.PoolEntry, string, map[string]string, circleci.OutputFn) (int, error) {
+	exec := func(context.Context, *sidecar.PoolEntry, string, map[string]string, circleci.OutputFn, func(string)) (int, error) {
 		return 0, nil
 	}
 	// One sidecar; the first review cancels the context, so the second
 	// prompt can never acquire one.
 	pool := newSafePool("sb-1")
-	blocking := func(ctx context.Context, e *sidecar.PoolEntry, s string, env map[string]string, out circleci.OutputFn) (int, error) {
+	blocking := func(ctx context.Context, e *sidecar.PoolEntry, s string, env map[string]string, out circleci.OutputFn, sub func(string)) (int, error) {
 		cancel()
-		return exec(ctx, e, s, env, out)
+		return exec(ctx, e, s, env, out, sub)
 	}
 
 	results, err := RunPass(ctx, pool.Acquire, pool.Release, blocking, []Prompt{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}}, Options{})
@@ -246,7 +285,7 @@ func TestRunPassAcquireFailureKeepsStartedResults(t *testing.T) {
 func TestRunPassProgressFn(t *testing.T) {
 	t.Parallel()
 	pool := newSafePool("sb-1", "sb-2")
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, _ map[string]string, out circleci.OutputFn) (int, error) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, script string, _ map[string]string, out circleci.OutputFn, _ func(string)) (int, error) {
 		out(circleci.StreamStdout, []byte("ok"))
 		if promptOf(t, script) == "fail" {
 			return 1, nil
@@ -308,7 +347,7 @@ func TestClaudeScript(t *testing.T) {
 func TestRunPassForwardsACustomBaseURL(t *testing.T) {
 	t.Parallel()
 	var gotEnv map[string]string
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn) (int, error) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
 		gotEnv = env
 		return 0, nil
 	}
@@ -324,7 +363,7 @@ func TestRunPassForwardsACustomBaseURL(t *testing.T) {
 func TestRunPassOmitsTheDefaultBaseURL(t *testing.T) {
 	t.Parallel()
 	var gotEnv map[string]string
-	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn) (int, error) {
+	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, env map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
 		gotEnv = env
 		return 0, nil
 	}

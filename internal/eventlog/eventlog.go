@@ -26,6 +26,7 @@ const (
 	OpExec     Op = "exec"
 	OpSetup    Op = "setup"
 	OpHook     Op = "hook"
+	OpReview   Op = "review"
 )
 
 // Event is a single status event written to the log.
