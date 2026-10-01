@@ -82,6 +82,49 @@ func pingDaemon() (bool, string) {
 	return doPing(client)
 }
 
+// ErrUnauthorized reports that a remote daemon rejected the bearer token. It is
+// its own sentinel because the fix (set CHUNK_WATCHD_TCP_TOKEN to the daemon's
+// value) has nothing in common with the fix for an unreachable daemon.
+var ErrUnauthorized = errors.New("the remote watch daemon rejected the token (check CHUNK_WATCHD_TCP_TOKEN)")
+
+// Connection describes which daemon this process talks to.
+type Connection struct {
+	// Remote is the TCP address of a remote daemon, empty for the local socket.
+	Remote string
+}
+
+// CurrentConnection reports the daemon this process is configured to use.
+func CurrentConnection() Connection {
+	return Connection{Remote: TCPRemoteAddr()}
+}
+
+// Label is the short human-readable form: "local", or "remote host:port".
+func (c Connection) Label() string {
+	if c.Remote == "" {
+		return "local"
+	}
+	return "remote " + c.Remote
+}
+
+// requestError wraps a failed request with where it was going. The bare
+// transport error names the placeholder host "watchd", which tells a reader
+// nothing about which daemon did not answer.
+func requestError(err error) error {
+	if addr := TCPRemoteAddr(); addr != "" {
+		return fmt.Errorf("remote watch daemon at %s unreachable: %w", addr, err)
+	}
+	return fmt.Errorf("connect to watch daemon: %w", err)
+}
+
+// statusError turns a non-200 response into an error, mapping 401 onto
+// ErrUnauthorized.
+func statusError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusUnauthorized {
+		return ErrUnauthorized
+	}
+	return fmt.Errorf("watch daemon returned %s", resp.Status)
+}
+
 // FetchSnapshot connects to the running watch daemon and returns the current
 // snapshot for the given project roots. If roots is empty all known projects
 // are returned.
@@ -96,11 +139,11 @@ func FetchSnapshot(roots []string) (Snapshot, error) {
 	}
 	resp, err := client.Post("http://watchd/snapshot", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("connect to watch daemon: %w", err)
+		return Snapshot{}, requestError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return Snapshot{}, fmt.Errorf("watch daemon returned %s", resp.Status)
+		return Snapshot{}, statusError(resp)
 	}
 	var snap Snapshot
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
@@ -237,11 +280,11 @@ func FetchOutput(commandID string, offset int64) (OutputChunk, error) {
 		neturl.QueryEscape(commandID), offset)
 	resp, err := client.Get(reqURL)
 	if err != nil {
-		return OutputChunk{}, fmt.Errorf("connect to watch daemon: %w", err)
+		return OutputChunk{}, requestError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return OutputChunk{}, fmt.Errorf("watch daemon returned %s", resp.Status)
+		return OutputChunk{}, statusError(resp)
 	}
 	var chunk OutputChunk
 	if err := json.NewDecoder(resp.Body).Decode(&chunk); err != nil {

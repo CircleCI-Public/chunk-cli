@@ -213,6 +213,10 @@ type Model struct {
 	// authErr explains why command output is unavailable, when it is. An empty
 	// logs pane with no explanation sends people hunting the wrong fault.
 	authErr string
+
+	// conn is the daemon this dashboard talks to, shown in the header next to
+	// whether the last poll reached it.
+	conn watchd.Connection
 }
 
 // noSelection is the initial selectedID sentinel. It can never match a real
@@ -237,7 +241,16 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		watchAll:      watchAll,
 		ownSession:    session.IDFromEnv(),
 		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
+		conn:          watchd.CurrentConnection(),
 	}
+}
+
+// WithConnection returns a copy of m that reports conn as the daemon it talks
+// to. New reads it from the environment; this is for callers and tests that
+// already know.
+func (m Model) WithConnection(conn watchd.Connection) Model {
+	m.conn = conn
+	return m
 }
 
 // WithDaemonArgs returns a copy of m that can relaunch the watch daemon when a
@@ -447,12 +460,24 @@ func (m Model) renderHeader(st watchStyles) string {
 
 	clock := time.Now().Format("15:04:05")
 	title := st.emphasis("chunk watch") + "  " + st.muted(count) + contextTag
-	right := st.vdim(clock)
+	right := m.connectionTag(st) + "  " + st.vdim(clock)
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
 	return title + strings.Repeat(" ", gap) + right + "\n"
+}
+
+// connectionTag says which daemon the dashboard is showing and whether it is
+// answering. An unreachable daemon is named in the header as well as the footer
+// because the rows below it are the last thing that daemon said, and a header
+// that stayed green would let stale rows pass for live ones.
+func (m Model) connectionTag(st watchStyles) string {
+	label := m.conn.Label()
+	if m.daemonErr != nil {
+		return st.err(ui.IconFail + " " + label + " unreachable")
+	}
+	return st.success(ui.IconOK) + " " + st.muted(label)
 }
 
 func (m Model) renderSeparator(st watchStyles) string {
