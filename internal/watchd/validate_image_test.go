@@ -244,6 +244,31 @@ func TestRunValidateNowPrefersWorkDirOverProjectRoot(t *testing.T) {
 	assert.Check(t, cmp.DeepEqual(rec.created(), []string{"snap-sub"}))
 }
 
+// The image the client resolved wins over the project config: it carries a
+// per-command override the daemon cannot see, and a remote daemon may have no
+// checkout to read a config from at all.
+func TestRunValidateNowPrefersTheRequestedImage(t *testing.T) {
+	rec := &imageRecorder{next: fakes.NewFakeCircleCI()}
+	srv := httptest.NewServer(rec)
+	defer srv.Close()
+
+	root := t.TempDir()
+	writeProjectConfig(t, root, `{"validation":{"sidecarImage":"snap-project"}}`)
+
+	d := newTestDaemon()
+	d.prov = newProvisioner(newTestClient(t, srv.URL))
+	d.runner = func(context.Context, string, string, []string, []string, io.Writer, io.Writer) int { return 0 }
+
+	d.runValidateNow(context.Background(), ValidateRequest{
+		Args:         []string{"validate", "test", "--remote"},
+		OrgID:        "org-1",
+		ProjectRoot:  root,
+		SidecarImage: "snap-test",
+	}, nil)
+
+	assert.Check(t, cmp.DeepEqual(rec.created(), []string{"snap-test"}))
+}
+
 // A snapshot the API does not know is named in the error, so the user is not
 // left with a bare "not found".
 func TestRunValidateNowExplainsARejectedSnapshot(t *testing.T) {

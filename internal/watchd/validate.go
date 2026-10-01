@@ -83,6 +83,16 @@ type ValidateRequest struct {
 	// A daemon that predates this field ignores it and falls back to ProjectRoot,
 	// which is the caller's cwd and therefore also correct in the common case.
 	WorkDir string `json:"work_dir,omitempty"`
+	// SidecarImage is the image the caller resolved for this run from its own
+	// config, per-command override included. The daemon boots the sidecar it
+	// provisions from it, since the subprocess is handed that sidecar by ID and
+	// never picks an image itself. A remote daemon may not have the checkout to
+	// read the config from, so the client resolving it is what makes the image
+	// right there.
+	//
+	// Empty means the caller configured none, or predates this field; the daemon
+	// then reads validation.sidecarImage from the project's config itself.
+	SidecarImage string `json:"sidecar_image,omitempty"`
 }
 
 // runArgs is the command line the run is given: the caller's args, plus
@@ -420,8 +430,9 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	writeValidateJSON(w, resp)
 }
 
-// sidecarImage returns the project's configured snapshot image, or "" when none
-// is set. The sidecar the daemon creates is handed to the subprocess by ID, so
+// sidecarImage returns the image to boot the run's sidecar from: the one the
+// caller sent, or else the project's configured snapshot, or "" when there is
+// neither. The sidecar the daemon creates is handed to the subprocess by ID, so
 // the subprocess never gets to pick an image itself: without this, a daemon run
 // boots the bare default image and none of the snapshot's toolchain is there.
 //
@@ -429,6 +440,9 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 // cannot be loaded is an error: booting the bare image instead would fail later
 // with a missing toolchain and nothing to explain why.
 func (req ValidateRequest) sidecarImage() (string, error) {
+	if req.SidecarImage != "" {
+		return req.SidecarImage, nil
+	}
 	dir := req.WorkDir
 	if dir == "" {
 		dir = req.ProjectRoot
