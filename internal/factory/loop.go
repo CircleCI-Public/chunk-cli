@@ -29,7 +29,8 @@ const (
 	// ResultStuck means the implementer changed nothing in response to
 	// feedback, so another round would review the same code again.
 	ResultStuck Result = "stuck"
-	// ResultNoChange means the implementer's first turn changed nothing.
+	// ResultNoChange means the implementer's work is empty: it changed
+	// nothing, or reverted everything it had changed.
 	ResultNoChange Result = "no_change"
 )
 
@@ -107,7 +108,7 @@ func (l Loop) Run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 			}
 			emit(Event{Kind: EventCollected, Round: round, Change: change})
 			switch {
-			case round == 1 && change.Empty():
+			case change.Empty():
 				out.Result, out.Change = ResultNoChange, change
 				return out, nil
 			case round > 1 && change.Fingerprint == out.Change.Fingerprint:

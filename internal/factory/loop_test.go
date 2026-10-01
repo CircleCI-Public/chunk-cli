@@ -95,6 +95,16 @@ func TestLoopReportsNoChangeOnFirstRound(t *testing.T) {
 	assert.Equal(t, steps.checked, 0)
 }
 
+// TestLoopReportsNoChangeWhenWorkIsReverted guards against passing a later
+// round that reverted everything: its checks would run on the bare baseline.
+func TestLoopReportsNoChangeWhenWorkIsReverted(t *testing.T) {
+	steps := &fakeSteps{changes: []Change{change(1), {Fingerprint: "empty"}}, checks: [][]Check{{fail}}}
+	out, err := Loop{Attempts: 3}.Run(context.Background(), steps, "p")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultNoChange)
+	assert.Equal(t, steps.checked, 1)
+}
+
 // TestLoopRechecksWithoutImplementingAfterOnlyErrors guards against prompting
 // the implementer with nothing to fix: it would change nothing, and the loop
 // would then call it stuck instead of retrying the checks that could not run.
