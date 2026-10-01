@@ -35,6 +35,7 @@ type Pool struct {
 	entries  []*PoolEntry
 	client   *circleci.Client
 	workDir  string
+	stateDir string
 	orgID    string
 	image    string
 	name     string
@@ -61,22 +62,28 @@ type poolState struct {
 
 // PoolOptions describes the resources and persisted identity of a pool.
 type PoolOptions struct {
-	Size        int
-	Name        string
-	OrgID       string
-	Image       string
-	WorkDir     string
+	Size  int
+	Name  string
+	OrgID string
+	Image string
+	// WorkDir is the tree synced to every member.
+	WorkDir string
+	// StateDir is where the pool's state is kept, under .chunk; WorkDir when
+	// empty. It differs when the synced tree is not the project the pool
+	// belongs to, such as a worktree, whose .chunk would be synced and
+	// committed with the work.
+	StateDir    string
 	RepoPath    string
 	ExistingIDs []string
 	FreshIDs    []string
 }
 
-func poolStatePath(workDir, name string) string {
-	return filepath.Join(workDir, ".chunk", name+"-pool.json")
+func poolStatePath(stateDir, name string) string {
+	return filepath.Join(stateDir, ".chunk", name+"-pool.json")
 }
 
-func loadPoolState(workDir, name string) (*poolState, error) {
-	data, err := os.ReadFile(poolStatePath(workDir, name))
+func loadPoolState(stateDir, name string) (*poolState, error) {
+	data, err := os.ReadFile(poolStatePath(stateDir, name))
 	if err != nil {
 		return nil, err
 	}
@@ -84,12 +91,12 @@ func loadPoolState(workDir, name string) (*poolState, error) {
 	return &state, json.Unmarshal(data, &state)
 }
 
-func savePoolState(workDir, name string, state *poolState) error {
+func savePoolState(stateDir, name string, state *poolState) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshal pool state: %w", err)
 	}
-	path := poolStatePath(workDir, name)
+	path := poolStatePath(stateDir, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create pool state directory: %w", err)
 	}
@@ -99,8 +106,8 @@ func savePoolState(workDir, name string, state *poolState) error {
 	return nil
 }
 
-func clearPoolState(workDir, name string) {
-	_ = os.Remove(poolStatePath(workDir, name))
+func clearPoolState(stateDir, name string) {
+	_ = os.Remove(poolStatePath(stateDir, name))
 }
 
 func NewPool(
@@ -112,7 +119,11 @@ func NewPool(
 	if opts.Size < 1 {
 		return nil, errors.New("pool size must be positive")
 	}
-	state, _ := loadPoolState(opts.WorkDir, opts.Name)
+	stateDir := opts.StateDir
+	if stateDir == "" {
+		stateDir = opts.WorkDir
+	}
+	state, _ := loadPoolState(stateDir, opts.Name)
 	repoPath := opts.RepoPath
 	if repoPath == "" && state != nil {
 		repoPath = state.RepoPath
@@ -150,14 +161,14 @@ func NewPool(
 	for _, id := range opts.FreshIDs {
 		freshIDs[id] = true
 	}
-	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, existingIDs, freshIDs, status)
+	return assemblePool(ctx, client, opts.Size, opts.Name, opts.OrgID, image, repoPath, opts.WorkDir, stateDir, existingIDs, freshIDs, status)
 }
 
 func assemblePool(
 	ctx context.Context,
 	client *circleci.Client,
 	n int,
-	name, orgID, image, repoPath, workDir string,
+	name, orgID, image, repoPath, workDir, stateDir string,
 	existingIDs []string,
 	freshIDs map[string]bool,
 	status iostream.StatusFunc,
@@ -265,6 +276,7 @@ func assemblePool(
 		entries:        entries,
 		client:         client,
 		workDir:        workDir,
+		stateDir:       stateDir,
 		orgID:          orgID,
 		image:          image,
 		name:           name,
@@ -344,7 +356,7 @@ func (p *Pool) Replace(ctx context.Context, dead *PoolEntry, status iostream.Sta
 	p.notifyUpdate()
 
 	if err := p.persistState(); err != nil {
-		clearPoolState(p.workDir, p.name)
+		clearPoolState(p.stateDir, p.name)
 		status(iostream.LevelWarn, fmt.Sprintf("could not save pool state: %v", err))
 	}
 	status(iostream.LevelInfo, fmt.Sprintf("replacement sidecar: %s", replacement.ID))
@@ -478,7 +490,7 @@ func (p *Pool) persistState() error {
 	}
 	p.mu.Unlock()
 
-	stored, err := loadPoolState(p.workDir, p.name)
+	stored, err := loadPoolState(p.stateDir, p.name)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -493,7 +505,7 @@ func (p *Pool) persistState() error {
 			state.Image = stored.Image
 		}
 	}
-	return savePoolState(p.workDir, p.name, state)
+	return savePoolState(p.stateDir, p.name, state)
 }
 
 func (p *Pool) Acquire(ctx context.Context) (*PoolEntry, error) {
@@ -576,7 +588,7 @@ func (p *Pool) Destroy(ctx context.Context) error {
 	failed := deleteSidecarsConcurrently(ctx, p.client, ids)
 	p.notifyUpdate()
 	if len(failed) == 0 {
-		clearPoolState(p.workDir, p.name)
+		clearPoolState(p.stateDir, p.name)
 		return nil
 	}
 

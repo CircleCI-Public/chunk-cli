@@ -146,9 +146,11 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 }
 
 // RsyncPull copies a sidecar's workspace at repoPath into localDir, the reverse
-// of RsyncSyncEphemeral: localDir ends up mirroring the workspace, .git
-// included, minus files git ignores there. The workspace must be a git repo. Anything in localDir that
-// is not in the workspace is deleted, so localDir must be a directory chunk owns.
+// of RsyncSyncEphemeral: localDir ends up mirroring the workspace's files,
+// minus files git ignores there. The workspace must be a git repo. Its .git is
+// not copied and localDir's own is left alone, so a sidecar's git config and
+// hooks never reach this machine. Anything else in localDir that is not in the
+// workspace is deleted, so localDir must be a directory chunk owns.
 func RsyncPull(ctx context.Context,
 	client *circleci.Client, sidecarID, repoPath, localDir string,
 	status iostream.StatusFunc) error {
@@ -175,7 +177,9 @@ func RsyncPull(ctx context.Context,
 	}
 	defer func() { _ = os.Remove(excludeFile) }()
 
-	flags := []string{"--archive", "--delete", "--exclude-from=" + excludeFile}
+	// An excluded path is also protected from --delete, which is what keeps
+	// localDir's own .git.
+	flags := []string{"--archive", "--delete", "--exclude=/.git", "--exclude-from=" + excludeFile}
 	src := strings.TrimRight(repoPath, "/") + "/"
 	dst := strings.TrimRight(localDir, "/") + "/"
 	if err := runRsync(ctx, sess, flags, remotePath(src), dst); err != nil {

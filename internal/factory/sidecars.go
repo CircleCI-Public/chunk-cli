@@ -2,9 +2,8 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -21,10 +20,10 @@ const reviewScope = `The change under review is the uncommitted work in this rep
 `
 
 // PoolName names a run's sidecar pool. Each run has a pool of its own, rather
-// than one per project reused as `chunk review` does: the baseline commit
-// moves the implementer's HEAD, and the reviewers get the implementer's .git,
-// so a later sync would start from a commit the developer never had. Two runs
-// in one project must not share sidecars either.
+// than one per project reused as `chunk review` does: every member is synced
+// from the run's worktree and gets a baseline commit on top of it, which a
+// later run's sync does not expect. Two runs in one project must not share
+// sidecars either.
 func PoolName(runID string) string {
 	return "factory-" + runID
 }
@@ -69,11 +68,22 @@ type Sidecars struct {
 	ws workspace
 }
 
-// Prepare commits the developer's tree, which the pool synced to every member,
-// as the baseline the implementer's work is measured against.
+// Prepare commits the tree the pool synced to every member, the worktree's, as
+// the baseline the implementer's work is measured against. Reviewers get one
+// too: they are sent the implementer's files but never its .git, so `git diff
+// HEAD` on a reviewer needs a commit of the same tree to diff against.
 func (s *Sidecars) Prepare(ctx context.Context) error {
 	s.ws = workspace{exec: s.Exec, entry: s.Implementer.Entry}
-	return s.ws.commitBaseline(ctx)
+	if err := s.ws.commitBaseline(ctx); err != nil {
+		return err
+	}
+	return s.onReviewers(func(e *sidecar.PoolEntry) error {
+		rw := workspace{exec: s.Exec, entry: e}
+		if err := rw.commitBaseline(ctx); err != nil {
+			return fmt.Errorf("%s: %w", e.ID, err)
+		}
+		return nil
+	})
 }
 
 // Implement runs one implementer turn.
@@ -93,9 +103,18 @@ func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
 		return nil, err
 	}
 	if len(s.Prompts) > 0 {
-		s.stopStrayReviews(ctx)
+		// A review that timed out stops being streamed but keeps running on
+		// its sidecar, and would read the tree as it is replaced. Best-effort:
+		// a sidecar that cannot be reached fails the push that follows anyway.
+		// The bracket keeps the pattern from matching the shell running pkill.
+		_ = s.onReviewers(s.script(ctx, "pkill -f '[c]laude -p' || true"))
 		if err := s.Relay.Push(ctx, s.Reviewers); err != nil {
 			return nil, err
+		}
+		// New files are marked intent-to-add so `git diff HEAD` shows them; the
+		// reset first drops marks for files a later round deleted.
+		if err := s.onReviewers(s.script(ctx, "git reset -q && git add -A -N")); err != nil {
+			return nil, fmt.Errorf("prepare reviewers: %w", err)
 		}
 	}
 
@@ -129,55 +148,36 @@ func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
 	return append(checks, validation...), nil
 }
 
-// WritePatch collects the implementer's work and writes it, relative to the
-// baseline, to path as a patch the developer can git apply to the tree they
-// started from. It collects first because it also runs after a turn that
-// failed, whose new files are not yet marked intent-to-add. Nothing is written
-// when the change is empty.
-//
-// The diff runs on the implementer's sidecar, not on a local copy: the
-// implementer controls its .git/config and .gitattributes, whose filters and
-// diff drivers git would otherwise run on the developer's machine.
-func (s *Sidecars) WritePatch(ctx context.Context, path string) (Change, error) {
-	change, err := s.ws.collect(ctx)
-	if err != nil {
-		return Change{}, err
-	}
-	if change.Empty() {
-		return change, nil
-	}
-	patch, err := s.ws.run(ctx, "cd "+sidecar.ShellEscape(s.Implementer.Entry.RepoPath)+" && "+patchDiff)
-	if err != nil {
-		return Change{}, fmt.Errorf("diff implementer's work: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return Change{}, fmt.Errorf("create patch directory: %w", err)
-	}
-	if err := os.WriteFile(path, []byte(patch), 0o644); err != nil {
-		return Change{}, fmt.Errorf("write patch: %w", err)
-	}
-	return change, nil
+// Pull brings the implementer's work so far into the worktree. Check does it
+// every round; this is for the way out, after a turn that failed or a round
+// that stopped short of checking.
+func (s *Sidecars) Pull(ctx context.Context) error {
+	return s.Relay.Pull(ctx, s.Implementer.Entry.ID, s.Implementer.Entry.RepoPath)
 }
 
-// patchDiff produces a patch git apply accepts whatever the sidecar's git
-// config says, such as diff.noprefix or color.diff=always.
-const patchDiff = "git diff HEAD --binary --no-ext-diff --no-textconv --no-color --no-relative --src-prefix=a/ --dst-prefix=b/"
-
-// stopStrayReviews kills claude processes left on reviewers by an earlier
-// round: a review that timed out stops being streamed but keeps running on its
-// sidecar, and would read the tree as it is replaced. Best-effort: a sidecar
-// that cannot be reached fails the push that follows anyway. The bracket keeps
-// the pattern from matching the shell that runs pkill.
-func (s *Sidecars) stopStrayReviews(ctx context.Context) {
+// onReviewers runs fn on every reviewer at once and reports all that failed.
+func (s *Sidecars) onReviewers(fn func(*sidecar.PoolEntry) error) error {
+	errs := make([]error, len(s.Reviewers))
 	var wg sync.WaitGroup
-	for _, e := range s.Reviewers {
+	for i, e := range s.Reviewers {
 		wg.Add(1)
-		go func(e *sidecar.PoolEntry) {
+		go func(i int, e *sidecar.PoolEntry) {
 			defer wg.Done()
-			_, _ = review.RunScript(ctx, s.Exec, e, "pkill -f '[c]laude -p' || true", maxScriptOutput)
-		}(e)
+			errs[i] = fn(e)
+		}(i, e)
 	}
 	wg.Wait()
+	return errors.Join(errs...)
+}
+
+// script runs a command in a reviewer's workspace.
+func (s *Sidecars) script(ctx context.Context, cmd string) func(*sidecar.PoolEntry) error {
+	return func(e *sidecar.PoolEntry) error {
+		if _, err := review.RunScript(ctx, s.Exec, e, "cd "+sidecar.ShellEscape(e.RepoPath)+" && "+cmd, maxScriptOutput); err != nil {
+			return fmt.Errorf("%s: %w", e.ID, err)
+		}
+		return nil
+	}
 }
 
 func (s *Sidecars) scopedPrompts() []review.Prompt {

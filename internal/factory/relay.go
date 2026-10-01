@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
@@ -14,55 +13,42 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
-// relayConcurrency caps concurrent pushes from the staging copy. Each push
+// relayConcurrency caps concurrent pushes from the worktree. Each push
 // runs its own rsync and SSH tunnel.
 const relayConcurrency = 8
 
-// Relay carries a workspace from one sidecar to others through a staging copy
-// on this machine. Sidecars cannot reach each other, so the implementer's tree
-// is pulled here with rsync and pushed from here to each reviewer the same way
-// the developer's own tree is synced.
+// Relay carries the implementer's workspace to the reviewers through the run's
+// worktree on this machine. Sidecars cannot reach each other, so the
+// implementer's files are pulled into the worktree with rsync and pushed from
+// there to each reviewer the same way the developer's own tree is synced.
 //
-// The staging copy is a temporary directory the relay creates and owns: a
-// pull mirrors the sidecar into it with --delete, so it must never be a
-// directory anyone else keeps files in.
+// A pull mirrors the implementer's files into the worktree with --delete, so
+// the directory must be one chunk owns. It leaves .git alone: the worktree
+// keeps its own, and the implementer's git config and hooks never reach this
+// machine, where git will run on the files.
 type Relay struct {
-	client  *circleci.Client
-	staging string
-	status  iostream.StatusFunc
+	client *circleci.Client
+	dir    string
+	status iostream.StatusFunc
 }
 
-// NewRelay creates a relay with a fresh staging directory. Close removes it.
-func NewRelay(client *circleci.Client, status iostream.StatusFunc) (*Relay, error) {
-	staging, err := os.MkdirTemp("", "chunk-factory-")
-	if err != nil {
-		return nil, fmt.Errorf("create staging directory: %w", err)
-	}
+// NewRelay relays through dir, the run's worktree.
+func NewRelay(client *circleci.Client, dir string, status iostream.StatusFunc) *Relay {
 	if status == nil {
 		status = func(iostream.Level, string) {}
 	}
-	return &Relay{client: client, staging: staging, status: status}, nil
+	return &Relay{client: client, dir: dir, status: status}
 }
 
-// Dir is the staging copy: the workspace as of the last Pull.
-func (r *Relay) Dir() string {
-	return r.staging
-}
-
-// Close removes the staging copy.
-func (r *Relay) Close() error {
-	return os.RemoveAll(r.staging)
-}
-
-// Pull mirrors the workspace at repoPath on sidecarID into the staging copy.
+// Pull mirrors the workspace at repoPath on sidecarID into the worktree.
 func (r *Relay) Pull(ctx context.Context, sidecarID, repoPath string) error {
-	if err := sidecar.RsyncPull(ctx, r.client, sidecarID, repoPath, r.staging, r.status); err != nil {
+	if err := sidecar.RsyncPull(ctx, r.client, sidecarID, repoPath, r.dir, r.status); err != nil {
 		return fmt.Errorf("pull from %s: %w", sidecarID, err)
 	}
 	return nil
 }
 
-// Push mirrors the staging copy to each entry's workspace, in parallel. It
+// Push mirrors the worktree to each entry's workspace, in parallel. It
 // attempts every entry and reports all that failed.
 func (r *Relay) Push(ctx context.Context, entries []*sidecar.PoolEntry) error {
 	errs := make([]error, len(entries))
@@ -80,7 +66,7 @@ func (r *Relay) Push(ctx context.Context, entries []*sidecar.PoolEntry) error {
 			status := func(level iostream.Level, msg string) {
 				r.status(level, fmt.Sprintf("%s: %s", id, msg))
 			}
-			if err := sidecar.RsyncSyncEphemeral(ctx, r.client, id, repoPath, r.staging, status); err != nil {
+			if err := sidecar.RsyncSyncEphemeral(ctx, r.client, id, repoPath, r.dir, status); err != nil {
 				errs[i] = fmt.Errorf("push to %s: %w", id, err)
 			}
 		}(i, e.ID, e.RepoPath)
