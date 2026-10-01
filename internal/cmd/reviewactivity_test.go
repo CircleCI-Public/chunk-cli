@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
 // reviewEvents returns everything the activity wrote for one project root.
@@ -57,7 +60,7 @@ func TestReviewActivityAttributesEachPromptToItsSidecar(t *testing.T) {
 	events := reviewEvents(t, root)
 	// A queued prompt has no sidecar yet, so recording it would file activity
 	// the dashboard can never show against a row.
-	assert.Equal(t, len(events), 4)
+	assert.Equal(t, len(events), 5)
 
 	passed := eventsFor(events, "sb-1")
 	assert.Equal(t, len(passed), 2)
@@ -71,10 +74,15 @@ func TestReviewActivityAttributesEachPromptToItsSidecar(t *testing.T) {
 	assert.Equal(t, total, 1)
 
 	failed := eventsFor(events, "sb-2")
-	assert.Equal(t, len(failed), 2)
+	assert.Equal(t, len(failed), 3)
+	// The dashboard shows the closing event only as the tally in a header, so
+	// the reason has to be on an ordinary event ahead of it.
 	assert.Equal(t, failed[1].Msg, "errors failed: boom")
 	assert.Equal(t, failed[1].Level, "error")
-	p, total, ok = failed[1].Outcome()
+	assert.Assert(t, !failed[1].Final, "the reason must not close the run on its own")
+	assert.Equal(t, failed[2].Msg, "errors failed after 3.0s")
+	assert.Equal(t, failed[2].Level, "error")
+	p, total, ok = failed[2].Outcome()
 	assert.Assert(t, ok)
 	assert.Equal(t, p, 0)
 	assert.Equal(t, total, 1)
@@ -92,14 +100,15 @@ func TestReviewActivityFinishClosesAbandonedRuns(t *testing.T) {
 	activity.finish(errors.New("claude is not installed"))
 
 	events := eventsFor(reviewEvents(t, root), "sb-1")
-	assert.Equal(t, len(events), 2)
+	assert.Equal(t, len(events), 3)
 	assert.Equal(t, events[1].Msg, "naming stopped: claude is not installed")
-	_, _, ok := events[1].Outcome()
+	assert.Assert(t, !events[1].Final)
+	_, _, ok := events[2].Outcome()
 	assert.Assert(t, ok, "an abandoned run must still close or the sidecar reads as busy")
 
 	// A second finish has nothing left to close.
 	activity.finish(errors.New("again"))
-	assert.Equal(t, len(eventsFor(reviewEvents(t, root), "sb-1")), 2)
+	assert.Equal(t, len(eventsFor(reviewEvents(t, root), "sb-1")), 3)
 }
 
 func TestReviewActivityFinishIgnoresSuccess(t *testing.T) {
@@ -130,16 +139,40 @@ func TestReviewActivityRegistersCommandForOutputReplay(t *testing.T) {
 		assert.Equal(t, reg.Name, "naming")
 		// The daemon buckets commands by project root; a root the events do not
 		// share leaves the output pane unreachable from the run.
-		assert.Equal(t, reg.ProjectRoot, activity.projectRoot)
+		assert.Equal(t, config.CanonicalProjectRoot(reg.ProjectRoot), config.CanonicalProjectRoot(root))
 		assert.Assert(t, !reg.SubmittedAt.IsZero())
 	case <-time.After(5 * time.Second):
 		t.Fatal("review command was not registered")
 	}
 }
 
+// Sidecar state and the daemon's project breadcrumb key on the git root, so a
+// pass started below it has to file its events there, not under the subdirectory.
+func TestReviewActivityFilesUnderTheGitRoot(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	repo := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
+	sub := filepath.Join(repo, "pkg", "deep")
+	assert.NilError(t, os.MkdirAll(sub, 0o755))
+
+	activity := newReviewActivity(context.Background(), sub)
+	assert.Assert(t, activity != nil)
+	assert.Equal(t, config.CanonicalProjectRoot(activity.projectRoot), config.CanonicalProjectRoot(repo))
+
+	activity.progress(review.ProgressEvent{Prompt: "naming", SidecarID: "sb-1", State: review.StateRunning})
+
+	assert.Equal(t, len(eventsFor(reviewEvents(t, repo), "sb-1")), 1)
+	dataDir, err := config.ProjectDataDir(repo)
+	assert.NilError(t, err)
+	_, err = os.Stat(sidecar.ProjectRootPath(dataDir))
+	assert.NilError(t, err, "the daemon finds a project through its breadcrumb")
+}
+
 // Reviews run concurrently, so every recorder shares one log and its mutex.
 func TestReviewActivityRecordsConcurrentReviews(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	// submitted registers with the watch daemon; without this the registrations
+	// would reach whichever one the developer running the tests has open.
+	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
 	root := t.TempDir()
 
 	activity := newReviewActivity(context.Background(), root)

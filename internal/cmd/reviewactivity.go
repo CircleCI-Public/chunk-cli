@@ -74,15 +74,25 @@ func (a *reviewActivity) progress(e review.ProgressEvent) {
 	case review.StateQueued:
 		// Nothing to file: a queued prompt has no sidecar to file it against.
 	case review.StateRunning:
-		a.track(e.SidecarID, e.Prompt)
+		a.open(e.SidecarID, e.Prompt)
 		rec.Status(iostream.LevelStep, "$ claude -p "+e.Prompt)
 	case review.StateDone:
-		a.track(e.SidecarID, "")
+		a.settle(e.SidecarID)
 		rec.Final(iostream.LevelDone, fmt.Sprintf("%s reviewed in %s", e.Prompt, ui.FormatDuration(e.Duration)), 1, 1)
 	case review.StateFailed:
-		a.track(e.SidecarID, "")
-		rec.Final(iostream.LevelError, fmt.Sprintf("%s failed: %s", e.Prompt, e.Error), 0, 1)
+		a.settle(e.SidecarID)
+		closeFailed(rec,
+			fmt.Sprintf("%s failed: %s", e.Prompt, e.Error),
+			fmt.Sprintf("%s failed after %s", e.Prompt, ui.FormatDuration(e.Duration)))
 	}
+}
+
+// closeFailed files why a run went wrong and then closes it. The reason rides
+// on an ordinary error event because the dashboard shows a closing event only
+// as the tally in its header, so a reason written there is never displayed.
+func closeFailed(rec *eventlog.Recorder, reason, closing string) {
+	rec.Status(iostream.LevelError, reason)
+	rec.Final(iostream.LevelError, closing, 0, 1)
 }
 
 // submitted registers the remote command so its output can be replayed from
@@ -109,15 +119,14 @@ func (a *reviewActivity) finish(err error) {
 		return
 	}
 	a.mu.Lock()
-	open := make(map[string]string, len(a.inFlight))
-	for id, prompt := range a.inFlight {
-		open[id] = prompt
-	}
-	clear(a.inFlight)
+	stranded := a.inFlight
+	a.inFlight = map[string]string{}
 	a.mu.Unlock()
 
-	for id, prompt := range open {
-		a.recorder(id).Final(iostream.LevelError, fmt.Sprintf("%s stopped: %s", prompt, err), 0, 1)
+	for id, prompt := range stranded {
+		closeFailed(a.recorder(id),
+			fmt.Sprintf("%s stopped: %s", prompt, err),
+			prompt+" stopped")
 	}
 }
 
@@ -136,12 +145,17 @@ func (a *reviewActivity) recorder(sidecarID string) *eventlog.Recorder {
 	return rec
 }
 
-func (a *reviewActivity) track(sidecarID, prompt string) {
+// open notes the prompt a sidecar has started, so finish can close it if the
+// pass ends without an outcome.
+func (a *reviewActivity) open(sidecarID, prompt string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if prompt == "" {
-		delete(a.inFlight, sidecarID)
-		return
-	}
 	a.inFlight[sidecarID] = prompt
+}
+
+// settle notes that a sidecar's prompt reported its own outcome.
+func (a *reviewActivity) settle(sidecarID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.inFlight, sidecarID)
 }

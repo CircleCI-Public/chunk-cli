@@ -122,7 +122,7 @@ type sidecarInfo struct {
 	verified     bool
 	lastActivity time.Time
 	lastOp       eventlog.Op
-	lastResult   string // how the last validate run ended: levelDone, levelError, or "" for none
+	lastResult   string // how the last validate or review run ended: levelDone, levelError, or "" for none
 	// resources is the latest resource sample, nil when the daemon has none.
 	resources *watchd.Resources
 }
@@ -568,8 +568,8 @@ func (m Model) renderBody(st watchStyles) string {
 }
 
 // rowStatus is the one-line state a sidecar row reports: what it is doing now,
-// or, when idle, how its last validate run ended. Split out of renderSidecarPane so
-// neither grows past the complexity limit.
+// or, when idle, how its last validate or review run ended. Split out of
+// renderSidecarPane so neither grows past the complexity limit.
 func (m Model) rowStatus(st watchStyles, sc sidecarInfo) string {
 	switch {
 	case sc.running:
@@ -1062,9 +1062,15 @@ func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selecte
 		}
 	}
 
-	label2 := "validate" + "  " + outcomeStr + "  " + tsStr + durStr + outMark
+	// A review run is its own kind of invocation; everything else here, hook
+	// runs included, is a validate.
+	name := "validate"
+	if n := len(g.events); n > 0 && g.events[n-1].Op == eventlog.OpReview {
+		name = string(eventlog.OpReview)
+	}
+	label2 := name + "  " + outcomeStr + "  " + tsStr + durStr + outMark
 	if selected {
-		label2 = st.emphasis("validate") + "  " + outcomeStr + "  " + tsStr + durStr + outMark
+		label2 = st.emphasis(name) + "  " + outcomeStr + "  " + tsStr + durStr + outMark
 	}
 	return arrow + label2
 }
