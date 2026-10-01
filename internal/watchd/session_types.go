@@ -256,6 +256,10 @@ type SessionDetail struct {
 	Details []RoundDetail `json:"details,omitempty"`
 }
 
+// DefaultParallelism is how many sandboxes a session reviews with at once
+// unless asked otherwise. Zero in a request means one per prompt.
+const DefaultParallelism = 5
+
 // SessionRequest starts a session.
 type SessionRequest struct {
 	// ProjectRoot is a project the daemon tracks. Required.

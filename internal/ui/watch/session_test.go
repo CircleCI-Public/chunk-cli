@@ -312,9 +312,11 @@ func TestSessionCursorWalksReviewsAcrossRounds(t *testing.T) {
 	assert.Equal(t, rv, -1)
 }
 
-// Against a real daemon: the dashboard sees a session started elsewhere, quitting
-// the dashboard leaves it running, and only the confirmed cancel key stops it.
-func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *testing.T) {
+// startSessionDaemon runs a real daemon whose reviews never finish on their own,
+// over one registered project with a review prompt, and returns the project's
+// root. withOrigin gives the project the origin remote sessions clone from.
+func startSessionDaemon(t *testing.T, withOrigin bool) string {
+	t.Helper()
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	sockDir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
@@ -330,6 +332,9 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 		assert.NilError(t, runErr, string(out))
 	}
 	run("init", "-b", "main")
+	if withOrigin {
+		run("remote", "add", "origin", "https://github.com/acme/widgets.git")
+	}
 	prompts := filepath.Join(project, ".chunk", "reviews")
 	assert.NilError(t, os.MkdirAll(prompts, 0o755))
 	assert.NilError(t, os.WriteFile(filepath.Join(prompts, "bugs.md"), []byte("find bugs"), 0o644))
@@ -375,6 +380,13 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 		}
 	})
 	waitForCond(t, "daemon", watchd.IsDaemonRunning)
+	return root
+}
+
+// Against a real daemon: the dashboard sees a session started elsewhere, quitting
+// the dashboard leaves it running, and only the confirmed cancel key stops it.
+func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *testing.T) {
+	root := startSessionDaemon(t, false)
 
 	id, err := watchd.StartSession(watchd.SessionRequest{ProjectRoot: root})
 	assert.NilError(t, err)
@@ -422,4 +434,89 @@ func waitForCond(t *testing.T, what string, ok func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// n starts a session for the selected row's project, and only on a second
+// press: the first names the working tree the session's fixes would change.
+func TestStartKeyNeedsConfirmationAndTargetsTheSelectedProject(t *testing.T) {
+	m := sessModel()
+	m.projects = []ProjectEntry{{ProjectRoot: "/work/a"}, {ProjectRoot: "/work/b"}}
+	m = poll(m, nil, sidecarInfo{id: "sc-a", projectIdx: 0}, sidecarInfo{id: "sc-b", projectIdx: 1})
+	m.projects = []ProjectEntry{{ProjectRoot: "/work/a"}, {ProjectRoot: "/work/b"}}
+
+	m, _ = press(m, tea.KeyDown)
+	m, cmd := press(m, 'n')
+	assert.Assert(t, cmd == nil)
+	assert.Equal(t, m.sessPane.startConfirm, "/work/b")
+	assert.Assert(t, strings.Contains(m.render(), "press n again to start a review session in /work/b"), m.render())
+
+	// Another key withdraws it.
+	m, _ = press(m, tea.KeyUp)
+	assert.Equal(t, m.sessPane.startConfirm, "")
+	m, cmd = press(m, 'n', 'n')
+	assert.Assert(t, cmd != nil, "the second n starts the session")
+	assert.Equal(t, m.sessPane.note, "starting a session…")
+
+	// Against a remote daemon there is nothing to start: the files are not there.
+	remote := m.WithConnection(watchd.Connection{Remote: "host:1"})
+	remote, cmd = press(remote, 'n', 'n')
+	assert.Assert(t, cmd == nil)
+	assert.Assert(t, strings.Contains(remote.sessPane.note, "local daemon"), remote.sessPane.note)
+
+	// With several projects and nothing selected, there is no telling which.
+	none := sessModel()
+	none.projects = []ProjectEntry{{ProjectRoot: "/work/a"}, {ProjectRoot: "/work/b"}}
+	none, cmd = press(none, 'n')
+	assert.Assert(t, cmd == nil)
+	assert.Assert(t, strings.Contains(none.sessPane.note, "select a sidecar or session"), none.sessPane.note)
+}
+
+func TestStartKeyRefusesAProjectWithoutAnOriginRemote(t *testing.T) {
+	project := t.TempDir()
+	out, err := exec.Command("git", "-C", project, "init", "-b", "main").CombinedOutput()
+	assert.NilError(t, err, string(out))
+
+	msg, ok := startSessionCmd(project)().(sessionStartedMsg)
+	assert.Assert(t, ok)
+	assert.ErrorContains(t, msg.err, "no git remote named origin")
+
+	m := sessModel().withSessionStarted(msg)
+	assert.Assert(t, strings.HasPrefix(m.sessPane.note, "could not start a session: "), m.sessPane.note)
+	assert.Equal(t, m.focusSession, "")
+}
+
+// Against a real daemon: n n starts a session, and the dashboard selects it on
+// the next poll.
+func TestStartKeyStartsASessionAndSelectsIt(t *testing.T) {
+	root := startSessionDaemon(t, true)
+
+	m := sessModel()
+	m.loadFn = loadFromDaemon
+	m.projects = []ProjectEntry{{ProjectRoot: root}}
+	m, cmd := press(m, 'n', 'n')
+	assert.Assert(t, cmd != nil)
+	started, ok := cmd().(sessionStartedMsg)
+	assert.Assert(t, ok)
+	assert.NilError(t, started.err)
+	next, _ := m.Update(started)
+	m = next.(Model)
+
+	var msg tea.Msg
+	waitForCond(t, "session in snapshot", func() bool {
+		msg = m.loadData()
+		dm, ok := msg.(dataMsg)
+		return ok && len(dm.sessions) == 1
+	})
+	next, _ = m.Update(msg)
+	m = next.(Model)
+	assert.Equal(t, m.sessionSel, started.id)
+
+	// A second start for the same project is refused by the daemon, and says so.
+	m, cmd = press(m, 'n', 'n')
+	refused, _ := cmd().(sessionStartedMsg)
+	assert.Assert(t, refused.err != nil)
+	m = m.withSessionStarted(refused)
+	assert.Assert(t, strings.HasPrefix(m.sessPane.note, "could not start a session: "), m.sessPane.note)
+
+	assert.NilError(t, watchd.CancelSession(started.id))
 }

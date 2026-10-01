@@ -100,7 +100,7 @@ func newSessionStartCmd() *cobra.Command {
 	cmd.Flags().StringVar(&projectDir, "project", "", "Project to review (default: the git repository containing the current directory)")
 	cmd.Flags().StringVar(&promptsDir, "prompts", "", "Directory of review prompts, relative to the project (default: .chunk/reviews)")
 	cmd.Flags().IntVar(&rounds, "rounds", 0, fmt.Sprintf("Review-and-fix rounds to run at most (default and maximum: %d)", watchd.MaxRounds))
-	cmd.Flags().IntVar(&parallelism, "parallelism", 5, "Maximum sandboxes reviewing at once (0: one per prompt)")
+	cmd.Flags().IntVar(&parallelism, "parallelism", watchd.DefaultParallelism, "Maximum sandboxes reviewing at once (0: one per prompt)")
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Max time for each Claude run (default: 15m)")
 	cmd.Flags().BoolVar(&detach, "detach", false, "Print the session ID and return without following it")

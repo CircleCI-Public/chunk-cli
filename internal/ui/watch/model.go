@@ -301,8 +301,8 @@ func (m Model) Init() tea.Cmd {
 func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Any key withdraws a pending cancel and clears the last action's note, so
 	// only an x pressed straight after another x cancels.
-	wasConfirm := m.sessPane.confirm
-	m.sessPane.confirm, m.sessPane.note = "", ""
+	wasConfirm, wasStart := m.sessPane.confirm, m.sessPane.startConfirm
+	m.sessPane.confirm, m.sessPane.startConfirm, m.sessPane.note = "", "", ""
 	if sel := m.selectedSession(); sel != nil {
 		if next, cmd, handled := m.updateSessionKey(msg, sel, wasConfirm); handled {
 			return next, cmd
@@ -312,6 +312,8 @@ func (m Model) updateDashboardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.Code {
 	case 'q', tea.KeyEscape:
 		return m, tea.Quit
+	case 'n':
+		return m.requestSessionStart(wasStart)
 	case tea.KeyRight, 'l':
 		m.focusedPane = paneRight
 	case tea.KeyLeft, 'h':
@@ -409,49 +411,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchOutput(m.output.commandID, m.output.offset), outputTick(msg.seq))
 
 	case dataMsg:
-		firstPoll := !m.polled
-		m.daemonErr = nil
-		m.projects = msg.projects
-		m.sidecars = msg.sidecars
-		m.events = msg.events
-		m.offsets = msg.offsets
-		m.branches = msg.branches
-		m.headRefs = msg.headRefs
-		m.commands = msg.commands
-		m.authErr = msg.authErr
-		m.sessions = msg.sessions
-		m.reviewAuthErr = msg.reviewAuthErr
-		switch {
-		case m.focusSession != "":
-			if i := listedSessionIndex(m.sessions, m.focusSession); i >= 0 {
-				m = m.selectSession(i)
-				m.focusSession = ""
-			}
-		case firstPoll && len(m.sessions) > 0 && !m.sessions[0].s.State.Finished():
-			// A session in flight is what the dashboard was most likely opened
-			// to follow.
-			m = m.selectSession(0)
-		case m.sessionSel != "" && m.sessionIndex() < 0:
-			// The session is gone (the daemon restarted) or no longer listed.
-			m.sessionSel, m.sessPane = "", sessionPane{}
-		}
-		// Sidecars are re-sorted by recency each poll, so track the selection
-		// by id. An unknown id (first poll, or the sidecar aged out) falls back
-		// to index 0, the most recently active sidecar.
-		m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
-		m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
-		m.hasSpinner = anyRunning(m.sidecars) || anySessionLive(m.sessions)
-		m = m.adjustLeftScroll()
-		m.polled = true
-		next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
-		if m.hasSpinner && !m.spinning {
-			m.spinning = true
-			return m, tea.Batch(next, doSpin())
-		}
-		return m, next
+		return m.withData(msg)
 
 	case sessionActionMsg:
 		return m.withSessionAction(msg), nil
+
+	case sessionStartedMsg:
+		return m.withSessionStarted(msg), nil
 
 	case updateCheckMsg:
 		m.updateAvailable = msg.latest
@@ -470,6 +436,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// withData folds a poll's snapshot into the model and schedules the next poll.
+// Split out of Update so neither grows past the complexity limit.
+func (m Model) withData(msg dataMsg) (tea.Model, tea.Cmd) {
+	firstPoll := !m.polled
+	m.daemonErr = nil
+	m.projects = msg.projects
+	m.sidecars = msg.sidecars
+	m.events = msg.events
+	m.offsets = msg.offsets
+	m.branches = msg.branches
+	m.headRefs = msg.headRefs
+	m.commands = msg.commands
+	m.authErr = msg.authErr
+	m.sessions = msg.sessions
+	m.reviewAuthErr = msg.reviewAuthErr
+	switch {
+	case m.focusSession != "":
+		if i := listedSessionIndex(m.sessions, m.focusSession); i >= 0 {
+			m = m.selectSession(i)
+			m.focusSession = ""
+		}
+	case firstPoll && len(m.sessions) > 0 && !m.sessions[0].s.State.Finished():
+		// A session in flight is what the dashboard was most likely opened
+		// to follow.
+		m = m.selectSession(0)
+	case m.sessionSel != "" && m.sessionIndex() < 0:
+		// The session is gone (the daemon restarted) or no longer listed.
+		m.sessionSel, m.sessPane = "", sessionPane{}
+	}
+	// Sidecars are re-sorted by recency each poll, so track the selection
+	// by id. An unknown id (first poll, or the sidecar aged out) falls back
+	// to index 0, the most recently active sidecar.
+	m.selectedIdx = indexOfSidecar(m.sidecars, m.selectedID)
+	m.selectedID = selectedSidecarID(m.sidecars, m.selectedIdx)
+	m.hasSpinner = anyRunning(m.sidecars) || anySessionLive(m.sessions)
+	m = m.adjustLeftScroll()
+	m.polled = true
+	next := tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+	if m.hasSpinner && !m.spinning {
+		m.spinning = true
+		return m, tea.Batch(next, doSpin())
+	}
+	return m, next
 }
 
 func (m Model) View() tea.View {
@@ -553,8 +564,8 @@ func (m Model) contentHeight() int {
 	if m.daemonErr != nil {
 		h--
 	}
-	// So does a pending cancel's confirmation or an action's note.
-	if m.sessPane.confirm != "" || m.sessPane.note != "" {
+	// So does a pending confirmation or an action's note.
+	if m.hasSessionFooterLine() {
 		h--
 	}
 	if h < 1 {
@@ -1236,6 +1247,12 @@ func (m Model) footerKeys() []footerKey {
 	}
 	if sel != nil {
 		keys = append(keys, sessionKeys(sel.s)...)
+	}
+	// Offered only alongside sessions: the command that starts them is still
+	// hidden, so the hint would advertise it to everyone else. The key works
+	// regardless.
+	if len(m.sessions) > 0 && m.conn.Remote == "" {
+		keys = append(keys, footerKey{"n", "new session"})
 	}
 	return append(keys, footerKey{"q", "quit"})
 }

@@ -1,7 +1,9 @@
 package watch
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/reviewprogress"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
@@ -41,6 +44,9 @@ type sessionPane struct {
 	// confirm is the ID of the session an 'x' has been pressed for once. A second
 	// 'x' on the same session cancels it; anything else withdraws it.
 	confirm string
+	// startConfirm is the project root an 'n' has been pressed for once. A
+	// second 'n' starts a session there; anything else withdraws it.
+	startConfirm string
 	// note is a one-line result of the last action, shown until the next key.
 	note string
 }
@@ -67,6 +73,89 @@ func cancelSessionCmd(id string) tea.Cmd {
 		}
 		return sessionActionMsg{note: "cancel requested"}
 	}
+}
+
+// sessionStartedMsg reports the outcome of starting a session with n.
+type sessionStartedMsg struct {
+	id  string
+	err error
+}
+
+// startSessionCmd starts a session for the project at root, with the same
+// defaults as `chunk session start`.
+func startSessionCmd(root string) tea.Cmd {
+	return func() tea.Msg {
+		// The sandboxes clone from origin. Without it the daemon accepts the
+		// session and it fails deep in pool setup with a git exit code, so check
+		// here, as `chunk session start` does.
+		if _, err := gitremote.URL(context.Background(), root, "origin"); err != nil {
+			return sessionStartedMsg{err: fmt.Errorf("%s has no git remote named origin (add one with: git remote add origin <url>)", displayPath(root))}
+		}
+		id, err := watchd.StartSession(watchd.SessionRequest{ProjectRoot: root, Parallelism: watchd.DefaultParallelism})
+		return sessionStartedMsg{id: id, err: err}
+	}
+}
+
+// displayPath shortens a path under the home directory to ~/...
+func displayPath(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if rel, err := filepath.Rel(home, p); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.Join("~", rel)
+	}
+	return p
+}
+
+// startTarget is the project n starts a session for: the one the selected row
+// belongs to, or the only project when nothing is selected.
+func (m Model) startTarget() (root string, ok bool) {
+	idx := -1
+	switch sel, sc := m.selectedSession(), m.selectedSidecar(); {
+	case sel != nil:
+		idx = sel.projectIdx
+	case sc != nil:
+		idx = sc.projectIdx
+	case len(m.projects) == 1:
+		idx = 0
+	}
+	if idx < 0 || idx >= len(m.projects) || m.projects[idx].ProjectRoot == "" {
+		return "", false
+	}
+	return m.projects[idx].ProjectRoot, true
+}
+
+// requestSessionStart implements the two-press start. A session applies fixes
+// to the working tree it reviews, so like cancel it takes a deliberate second
+// key, and the first names the working tree it would change.
+func (m Model) requestSessionStart(wasStart string) (Model, tea.Cmd) {
+	if m.conn.Remote != "" {
+		m.sessPane.note = "sessions run on the local daemon: start one on the machine with the files"
+		return m, nil
+	}
+	root, ok := m.startTarget()
+	switch {
+	case !ok:
+		m.sessPane.note = "select a sidecar or session in the project to review"
+		return m, nil
+	case wasStart != root:
+		m.sessPane.startConfirm = root
+		return m, nil
+	}
+	m.sessPane.note = "starting a session…"
+	return m, startSessionCmd(root)
+}
+
+// withSessionStarted selects a started session as soon as a poll lists it.
+func (m Model) withSessionStarted(msg sessionStartedMsg) Model {
+	if msg.err != nil {
+		m.sessPane.note = "could not start a session: " + msg.err.Error()
+		return m
+	}
+	m.focusSession = msg.id
+	m.sessPane.note = "session started; it appears here with the next update"
+	return m
 }
 
 // collectSessions flattens every project's sessions, live ones first and the rest
@@ -302,12 +391,19 @@ func (m Model) withSessionAction(msg sessionActionMsg) Model {
 // result of the last action, "" when there is neither.
 func (m Model) sessionFooterLine(st watchStyles) string {
 	switch {
+	case m.sessPane.startConfirm != "":
+		return st.warning("press n again to start a review session in " + displayPath(m.sessPane.startConfirm) + " — its fixes change your files there")
 	case m.sessPane.confirm != "":
 		return st.warning("press x again to cancel this session — q only detaches")
 	case m.sessPane.note != "":
 		return st.muted(m.sessPane.note)
 	}
 	return ""
+}
+
+// hasSessionFooterLine reports whether the footer carries sessionFooterLine.
+func (m Model) hasSessionFooterLine() bool {
+	return m.sessPane.startConfirm != "" || m.sessPane.confirm != "" || m.sessPane.note != ""
 }
 
 // sessionKeys are the footer hints for acting on a session in its state.
