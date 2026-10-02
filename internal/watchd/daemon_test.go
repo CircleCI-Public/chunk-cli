@@ -157,9 +157,11 @@ func TestBuildID_survivesTheBinaryBeingRebuiltUnderIt(t *testing.T) {
 
 	before := BuildID()
 	assert.NilError(t, os.Chtimes(exe, time.Now(), fi.ModTime().Add(time.Hour)))
-
 	assert.Equal(t, before, BuildID())
-	assert.Assert(t, before != currentBuildID(), "a fresh read sees the rebuilt file, which is what BuildID must not do")
+
+	// And the frozen stat really is the live file's, so the assertion above is
+	// about caching rather than about a stat that never worked.
+	assert.Assert(t, statExecutable().mod != executableAtStartup.mod)
 }
 
 // A daemon that predates the identity answers /ping with an empty body, so the
