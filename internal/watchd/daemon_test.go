@@ -144,6 +144,26 @@ func TestBuildID_fallsBackToTheVersionWithoutAnExecutable(t *testing.T) {
 	assert.Equal(t, buildID("v1.2.3", "", 0, time.Time{}), "v1.2.3")
 }
 
+func TestBuildID_survivesTheBinaryBeingRebuiltUnderIt(t *testing.T) {
+	// The daemon runs for days across rebuilds of the binary that launched it.
+	// Re-reading the executable per call would have it answer /ping with the
+	// identity of whatever replaced it, match a client built from that same
+	// file, and never be recognised as stale.
+	exe, err := os.Executable()
+	assert.NilError(t, err)
+	fi, err := os.Stat(exe)
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.Chtimes(exe, time.Now(), fi.ModTime()) })
+
+	before := BuildID()
+	assert.NilError(t, os.Chtimes(exe, time.Now(), fi.ModTime().Add(time.Hour)))
+	assert.Equal(t, before, BuildID())
+
+	// And the frozen stat really is the live file's, so the assertion above is
+	// about caching rather than about a stat that never worked.
+	assert.Assert(t, statExecutable().mod != executableAtStartup.mod)
+}
+
 // A daemon that predates the identity answers /ping with an empty body, so the
 // client must read that as a mismatch and replace it rather than trust it.
 func TestPing_emptyBuildIsAMismatch(t *testing.T) {
