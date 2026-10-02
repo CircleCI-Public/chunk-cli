@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -71,6 +72,11 @@ func (d *daemon) startFactory(req FactoryRequest) (Session, error) {
 			image = cfgImage
 		}
 	}
+	// The daemon's working directory is not the caller's, so a relative path
+	// would put the log somewhere the caller did not mean.
+	if req.Log != "" && req.Log != factory.LogDefault && !filepath.IsAbs(req.Log) {
+		return Session{}, apiErr(http.StatusBadRequest, "log must be an absolute path, got %q", req.Log)
+	}
 	attempts := req.Attempts
 	if attempts <= 0 {
 		attempts = DefaultAttempts
@@ -102,6 +108,8 @@ func (d *daemon) startFactory(req FactoryRequest) (Session, error) {
 		Model:            req.Model,
 		ImplementTimeout: time.Duration(req.ImplementTimeoutSeconds) * time.Second,
 		ReviewTimeout:    time.Duration(req.ReviewTimeoutSeconds) * time.Second,
+		Log:              req.Log,
+		Verbose:          req.Verbose,
 	}
 	go d.executeFactory(ctx, entry, opts)
 	return entry.snapshot(), nil
@@ -308,6 +316,7 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	f := e.s.Factory
 	f.Committed = rep.Committed
 	f.KeptSidecars = rep.KeptSidecars
+	f.Log = rep.Log
 	if rep.Started {
 		f.Result = string(rep.Outcome.Result)
 		f.Rounds = rep.Outcome.Rounds

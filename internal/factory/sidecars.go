@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -64,8 +65,16 @@ type Sidecars struct {
 	// OnCheck is called as each validation command finishes. Reviews report
 	// their progress through Review.ProgressFn.
 	OnCheck func(Check)
+	// OnReviewerTree, when set, is called each round for every reviewer, in
+	// Reviewers order, with whether the change it is about to review is the
+	// implementer's. It is a canary for the relay; a mismatch does not stop the
+	// round.
+	OnReviewerTree func(ReviewerTree)
 
 	ws workspace
+	// fingerprint is the implementer's change as last collected, which is
+	// what each round's reviews are of.
+	fingerprint string
 }
 
 // Prepare commits the tree the pool synced to every member, the worktree's, as
@@ -93,12 +102,16 @@ func (s *Sidecars) Implement(ctx context.Context, prompt string) (Turn, error) {
 
 // Collect describes the implementer's work so far.
 func (s *Sidecars) Collect(ctx context.Context) (Change, error) {
-	return s.ws.collect(ctx)
+	c, err := s.ws.collect(ctx)
+	if err == nil {
+		s.fingerprint = c.Fingerprint
+	}
+	return c, err
 }
 
 // Check relays the implementer's tree to the reviewers, then runs the reviews
 // there and validation on the implementer at the same time.
-func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
+func (s *Sidecars) Check(ctx context.Context, round int) ([]Check, error) {
 	if err := s.Relay.Pull(ctx, s.Implementer.Entry.ID, s.Implementer.Entry.RepoPath); err != nil {
 		return nil, err
 	}
@@ -115,6 +128,9 @@ func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
 		// reset first drops marks for files a later round deleted.
 		if err := s.onReviewers(s.script(ctx, "git reset -q && git add -A -N")); err != nil {
 			return nil, fmt.Errorf("prepare reviewers: %w", err)
+		}
+		if s.OnReviewerTree != nil {
+			s.reviewerTrees(ctx, round)
 		}
 	}
 
@@ -177,6 +193,42 @@ func (s *Sidecars) script(ctx context.Context, cmd string) func(*sidecar.PoolEnt
 			return fmt.Errorf("%s: %w", e.ID, err)
 		}
 		return nil
+	}
+}
+
+// ReviewerTree compares the change one reviewer is about to review with the
+// implementer's, by fingerprint.
+type ReviewerTree struct {
+	Round     int
+	SidecarID string
+	// Fingerprint is the reviewer's change; Want is the implementer's.
+	Fingerprint string
+	Want        string
+	// Err is why the reviewer's fingerprint could not be read.
+	Err error
+}
+
+// Matches reports whether the reviewer has the implementer's change.
+func (t ReviewerTree) Matches() bool {
+	return t.Err == nil && t.Fingerprint != "" && t.Fingerprint == t.Want
+}
+
+// reviewerTrees fingerprints every reviewer's change at once and reports them
+// in order.
+func (s *Sidecars) reviewerTrees(ctx context.Context, round int) {
+	trees := make([]ReviewerTree, len(s.Reviewers))
+	var wg sync.WaitGroup
+	for i, e := range s.Reviewers {
+		wg.Add(1)
+		go func(i int, e *sidecar.PoolEntry) {
+			defer wg.Done()
+			out, err := review.RunScript(ctx, s.Exec, e, "cd "+sidecar.ShellEscape(e.RepoPath)+" && "+fingerprintCmd, maxScriptOutput)
+			trees[i] = ReviewerTree{Round: round, SidecarID: e.ID, Fingerprint: strings.TrimSpace(out), Want: s.fingerprint, Err: err}
+		}(i, e)
+	}
+	wg.Wait()
+	for _, t := range trees {
+		s.OnReviewerTree(t)
 	}
 }
 

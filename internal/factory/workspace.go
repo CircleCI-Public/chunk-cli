@@ -52,6 +52,12 @@ func (w *workspace) commitBaseline(ctx context.Context) error {
 	return nil
 }
 
+// fingerprintCmd prints a hash of the change in the current directory: its
+// diff against HEAD, binary files included. Two workspaces with the same files
+// on the same baseline tree print the same hash, whatever their baseline
+// commits, since the diff names blobs by content.
+const fingerprintCmd = "git diff HEAD --binary | sha256sum | cut -d' ' -f1"
+
 // collect gathers the implementer's work as uncommitted changes against the
 // baseline and describes it. Commits the implementer made despite being told
 // not to are folded back into the working tree, and new files are marked
@@ -63,9 +69,9 @@ func (w *workspace) collect(ctx context.Context) (Change, error) {
 	script := fmt.Sprintf(`cd %s || exit 1
 if [ "$(git rev-parse HEAD)" != %s ]; then git reset -q --soft %s || exit 1; fi
 git add -A -N || exit 1
-git diff HEAD --binary | sha256sum | cut -d' ' -f1
+%s
 git diff HEAD --shortstat`,
-		sidecar.ShellEscape(w.entry.RepoPath), sidecar.ShellEscape(w.baseline), sidecar.ShellEscape(w.baseline))
+		sidecar.ShellEscape(w.entry.RepoPath), sidecar.ShellEscape(w.baseline), sidecar.ShellEscape(w.baseline), fingerprintCmd)
 	out, err := w.run(ctx, script)
 	if err != nil {
 		return Change{}, fmt.Errorf("collect changes: %w", err)

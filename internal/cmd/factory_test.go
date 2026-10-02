@@ -64,3 +64,31 @@ func TestFactoryOutcomeIsTheLastCheckedRound(t *testing.T) {
 	assert.Equal(t, o.Checks[0].Name, "bugs")
 	assert.Equal(t, len(o.Checks[0].Findings), 1)
 }
+
+func TestFactoryLogPath(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		path    string
+		verbose bool
+		want    string
+	}{
+		{name: "no log", want: ""},
+		{name: "default", path: factory.LogDefault, want: factory.LogDefault},
+		{name: "verbose implies the default", verbose: true, want: factory.LogDefault},
+		{name: "absolute kept", path: "/tmp/run.log", want: "/tmp/run.log"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := factoryLogPath(tc.path, tc.verbose)
+			assert.NilError(t, err)
+			assert.Equal(t, got, tc.want)
+		})
+	}
+
+	// The daemon does not share this process's working directory, so a
+	// relative path is resolved here.
+	got, err := factoryLogPath("run.log", false)
+	assert.NilError(t, err)
+	wd, err := os.Getwd()
+	assert.NilError(t, err)
+	assert.Equal(t, got, filepath.Join(wd, "run.log"))
+}

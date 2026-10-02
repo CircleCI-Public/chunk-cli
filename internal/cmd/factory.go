@@ -20,8 +20,8 @@ import (
 
 func newFactoryCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, jsonOut bool
-	var orgID, image, model, reviewsDir string
+	var keepSidecars, noValidate, jsonOut, verbose bool
+	var orgID, image, model, reviewsDir, logPath string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
@@ -40,7 +40,15 @@ The run works in a git worktree of its own, on the branch
 chunk/factory/<run id>, starting from your files as they are, uncommitted
 changes included. Your checkout is never touched. The implementer's work is
 synced into the worktree each round and committed there when the run ends;
-the worktree is kept so you can look at it or carry on in it.`,
+the worktree is kept so you can look at it or carry on in it.
+
+With --log, the run keeps a plain-text log, by default
+~/.chunk/factory/run-<run id>.log, with its full context whatever the display
+leaves out: every prompt the implementer is sent and what it did and said,
+each review's findings in full, and each validation command's output when it
+failed. --verbose adds the review prompts, the output of commands that passed,
+and a check each round that every reviewer has the implementer's change; it
+implies --log.`,
 		// Hidden until the workshop build settles.
 		Hidden:       true,
 		SilenceUsage: true,
@@ -83,6 +91,10 @@ the worktree is kept so you can look at it or carry on in it.`,
 			if err != nil {
 				return err
 			}
+			logArg, err := factoryLogPath(logPath, verbose)
+			if err != nil {
+				return err
+			}
 
 			if err := watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd}); err != nil {
 				return &userError{msg: "Could not start the watch daemon.", err: err}
@@ -100,11 +112,20 @@ the worktree is kept so you can look at it or carry on in it.`,
 				KeepSidecars:            keepSidecars,
 				OrgID:                   orgID,
 				Image:                   image,
+				Log:                     logArg,
+				Verbose:                 verbose,
 			})
 			if err != nil {
 				return sessionError(err)
 			}
 			streams.ErrPrintf("Factory run %s started on the watch daemon. Ctrl-C stops it.\n", id)
+			switch logArg {
+			case "":
+			case factory.LogDefault:
+				streams.ErrPrintf("Logging to %s\n", filepath.Join("~", ".chunk", "factory", "run-<run id>.log"))
+			default:
+				streams.ErrPrintf("Logging to %s\n", logArg)
+			}
 			return followSession(ctx, streams, id, jsonOut, true)
 		},
 	}
@@ -120,6 +141,9 @@ the worktree is kept so you can look at it or carry on in it.`,
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().StringVar(&logPath, "log", "", "keep a log of the run's full context in this file (alone: ~/.chunk/factory/run-<run id>.log)")
+	cmd.Flags().Lookup("log").NoOptDefVal = factory.LogDefault
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks (implies --log)")
 	return cmd
 }
 
@@ -202,6 +226,23 @@ func factoryReviewsDir(root, dir string) (string, error) {
 	return rel, nil
 }
 
+// factoryLogPath is --log as the daemon is told it: absolute, since the daemon
+// does not share this process's working directory, or factory.LogDefault, or
+// "" for no log. --verbose implies a log.
+func factoryLogPath(path string, verbose bool) (string, error) {
+	switch {
+	case path == "" && verbose:
+		return factory.LogDefault, nil
+	case path == "" || path == factory.LogDefault:
+		return path, nil
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
+	}
+	return abs, nil
+}
+
 // finishFactory prints where a factory run ended up and maps anything short of
 // every check passing to an error.
 func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.SessionDetail, jsonOut bool) error {
@@ -240,6 +281,9 @@ func printFactoryLeftovers(ctx context.Context, f *watchd.FactoryRun, status ios
 	}
 	if len(f.KeptSidecars) > 0 {
 		status(iostream.LevelInfo, "kept sidecars: "+strings.Join(f.KeptSidecars, " "))
+	}
+	if f.Log != "" {
+		status(iostream.LevelInfo, "Log: "+f.Log)
 	}
 }
 

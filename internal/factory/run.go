@@ -52,6 +52,15 @@ type RunOptions struct {
 	// Exec runs commands on the sidecars; review.ClientExec when nil.
 	Exec review.Execer
 
+	// Log is where to keep a plain-text log of the run, with its full context
+	// whatever a display of it filters out: a path, LogDefault for
+	// DefaultLogPath, or "" for none.
+	Log string
+	// Verbose adds the review prompts, the output of commands that passed,
+	// and a check each round that every reviewer has the implementer's change
+	// to the log. It implies a log.
+	Verbose bool
+
 	// Status reports progress, warnings included. It must be set.
 	Status iostream.StatusFunc
 	// The rest report what the run is doing, and may be nil. OnStart is
@@ -76,6 +85,8 @@ type Report struct {
 	Outcome   Outcome
 	// KeptSidecars are the sidecars left running with KeepSidecars.
 	KeptSidecars []string
+	// Log is the path of the run's log, if it kept one.
+	Log string
 }
 
 // ReviewerCount is how many reviewer sidecars a run with prompts needs when
@@ -97,8 +108,23 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 // with the report so far. The work is committed either way once the implementer has
 // started, so it is not lost with the sidecars.
 func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
-	status := opts.Status
 	rep.RunID = time.Now().UTC().Format("20060102-150405")
+	if opts.Verbose && opts.Log == "" {
+		opts.Log = LogDefault
+	}
+	lg, err := openLog(opts.Log, rep.RunID, opts.Verbose)
+	if err != nil {
+		return rep, fmt.Errorf("open the run's log: %w", err)
+	}
+	if lg != nil {
+		rep.Log = lg.path
+	}
+	// Deferred first, so it runs last: the other defers report as they clean
+	// up, and that goes in the log too.
+	defer func() { lg.close(rep, err) }()
+	opts = lg.wrap(opts)
+	status := opts.Status
+	lg.start(rep.RunID, opts)
 
 	dataDir, err := config.ProjectDataDir(opts.Root)
 	if err != nil {
@@ -168,6 +194,9 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		},
 		Commands: opts.Commands,
 		OnCheck:  opts.OnCheck,
+	}
+	if opts.Verbose {
+		steps.OnReviewerTree = func(t ReviewerTree) { lg.reviewerTree(status, t) }
 	}
 	if err := steps.Prepare(ctx); err != nil {
 		return rep, fmt.Errorf("set up the implementer's workspace: %w", err)
