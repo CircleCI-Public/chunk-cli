@@ -133,7 +133,13 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 	if err := writePID(pidPath, os.Getpid()); err != nil {
 		return fmt.Errorf("write pid: %w", err)
 	}
-	defer func() { _ = os.Remove(pidPath) }()
+	// Winding down can take minutes, and a replacement daemon may have started
+	// meanwhile; its pid file and socket are not this one's to remove.
+	defer func() {
+		if p, err := readPID(pidPath); err == nil && p == os.Getpid() {
+			_ = os.Remove(pidPath)
+		}
+	}()
 
 	sockPath, err := SocketPath()
 	if err != nil {
@@ -146,7 +152,12 @@ func runDaemon(ctx context.Context, tcpLn net.Listener, client *circleci.Client,
 		return fmt.Errorf("listen on %s: %w", sockPath, err)
 	}
 	defer func() { _ = ln.Close() }()
-	defer func() { _ = os.Remove(sockPath) }()
+	sockInfo, _ := os.Stat(sockPath)
+	defer func() {
+		if cur, err := os.Stat(sockPath); err == nil && sockInfo != nil && os.SameFile(sockInfo, cur) {
+			_ = os.Remove(sockPath)
+		}
+	}()
 
 	// The signal-aware context is built first because the output store derives
 	// every streamer from it: a streamer must not be able to outlive the daemon
