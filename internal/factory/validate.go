@@ -2,7 +2,9 @@ package factory
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -30,6 +32,34 @@ func ValidationCommands(cmds []config.Command) []config.Command {
 		out = append(out, c)
 	}
 	return out
+}
+
+// ErrNothingToCheck means a run has neither review prompts nor validation
+// commands, so its loop would pass whatever the implementer wrote.
+var ErrNothingToCheck = errors.New("nothing to check the implementer's work with")
+
+// LoadChecks loads what the implementer's work is checked with: the review
+// prompts in dir and, unless noValidate, cfg's validation commands. With
+// optional, a missing or empty dir means no reviews rather than an error, so
+// validation commands alone may do.
+func LoadChecks(dir string, optional bool, cfg *config.ProjectConfig, noValidate bool) ([]review.Prompt, []config.Command, error) {
+	prompts, err := review.LoadPrompts(dir)
+	switch {
+	case err == nil:
+	case optional && (errors.Is(err, review.ErrNoPrompts) || errors.Is(err, os.ErrNotExist)):
+	case errors.Is(err, review.ErrNoPrompts):
+		return nil, nil, fmt.Errorf("no review prompts in %s: %w", dir, err)
+	default:
+		return nil, nil, fmt.Errorf("read review prompts from %s: %w", dir, err)
+	}
+	var commands []config.Command
+	if !noValidate {
+		commands = ValidationCommands(cfg.Commands)
+	}
+	if len(prompts) == 0 && len(commands) == 0 {
+		return nil, nil, ErrNothingToCheck
+	}
+	return prompts, commands, nil
 }
 
 // runValidation runs each command in turn in the implementer's workspace, where
