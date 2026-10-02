@@ -302,6 +302,16 @@ func sessionError(err error) error {
 	return fmt.Errorf("talk to the watch daemon: %w", err)
 }
 
+// printLostFactoryWork says where a factory run was working when its session
+// can no longer be followed. The daemon still commits the work as it stops.
+func printLostFactoryWork(streams iostream.Streams, f *watchd.FactoryRun) {
+	if f == nil {
+		return
+	}
+	streams.ErrPrintf("The factory run was working in %s on %s; the daemon commits what it did there as it stops.\n  %s\n",
+		f.Worktree, f.Branch, keepWorkHint(factory.Worktree{Path: f.Worktree, Branch: f.Branch, Baseline: f.Baseline, Head: f.Head}))
+}
+
 // followSession polls a session, reporting what changes, until it ends or
 // pauses. Ctrl-C detaches and the session carries on, or with cancelOnInterrupt
 // cancels it and follows it until it has wound down.
@@ -310,20 +320,28 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 	failures := 0
 	ticker := time.NewTicker(sessionPollInterval)
 	defer ticker.Stop()
+	// lastFactory is where a factory run's work was last seen, so it can still
+	// be pointed to if the daemon goes away: its record goes with it.
+	var lastFactory *watchd.FactoryRun
 	for {
 		detail, err := watchd.FetchSession(id)
 		var refused *watchd.SessionRefused
 		switch {
 		case errors.As(err, &refused):
+			printLostFactoryWork(streams, lastFactory)
 			return sessionError(err)
 		case err != nil:
 			if failures++; failures >= maxSessionPollFailures {
+				printLostFactoryWork(streams, lastFactory)
 				return newUserError("Lost contact with the watch daemon.").
 					withSuggestion(fmt.Sprintf("The session may still be running. Reattach with: chunk session attach %s", id)).
 					wrap(err)
 			}
 		default:
 			failures = 0
+			if detail.IsFactory() && detail.Factory != nil && detail.Factory.Worktree != "" {
+				lastFactory = detail.Factory
+			}
 			rep.report(detail.Session)
 			if detail.State.Finished() || detail.State == watchd.SessionPaused {
 				if detail.IsFactory() {
