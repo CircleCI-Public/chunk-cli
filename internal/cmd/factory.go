@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -204,16 +205,16 @@ func factoryReviewsDir(root, dir string) (string, error) {
 // finishFactory prints where a factory run ended up and maps anything short of
 // every check passing to an error.
 func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.SessionDetail, jsonOut bool) error {
-	if jsonOut {
-		return iostream.PrintJSON(streams.Out, detail)
-	}
 	status := newStatusFunc(streams)
 	f := detail.Factory
-	if f.Committed {
-		printFactoryWork(ctx, factory.Worktree{Path: f.Worktree, Branch: f.Branch, Baseline: f.Baseline, Head: f.Head}, status, streams)
-	}
-	if len(f.KeptSidecars) > 0 {
-		status(iostream.LevelInfo, "kept sidecars: "+strings.Join(f.KeptSidecars, " "))
+	if jsonOut {
+		if err := iostream.PrintJSON(streams.Out, detail); err != nil {
+			return err
+		}
+		// The JSON is the report; the exit code still says whether it passed.
+		status = func(iostream.Level, string) {}
+	} else {
+		printFactoryLeftovers(ctx, f, status, streams)
 	}
 	switch detail.State {
 	case watchd.SessionCancelled:
@@ -225,12 +226,33 @@ func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.
 	return reportOutcome(status, factoryOutcome(detail))
 }
 
+// printFactoryLeftovers says what a run left behind: its committed work, or
+// where its uncommitted work still is, and any sidecars kept running.
+func printFactoryLeftovers(ctx context.Context, f *watchd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
+	switch {
+	case f.Committed:
+		printFactoryWork(ctx, factory.Worktree{Path: f.Worktree, Branch: f.Branch, Baseline: f.Baseline, Head: f.Head}, status, streams)
+	case f.Worktree != "":
+		// A worktree removed after an early failure held no work.
+		if _, err := os.Stat(f.Worktree); err == nil {
+			status(iostream.LevelWarn, "The work was not committed. It is in the worktree "+f.Worktree)
+		}
+	}
+	if len(f.KeptSidecars) > 0 {
+		status(iostream.LevelInfo, "kept sidecars: "+strings.Join(f.KeptSidecars, " "))
+	}
+}
+
 // factoryOutcome rebuilds a run's outcome from its record: why it stopped,
-// and how its last round's reviews came out.
+// and how the last round it checked came out. A run that stopped because the
+// implementer changed nothing new ends on a round that was never checked.
 func factoryOutcome(detail watchd.SessionDetail) factory.Outcome {
-	o := factory.Outcome{Result: factory.Result(detail.Factory.Result), Rounds: len(detail.Rounds)}
-	if n := len(detail.Details); n > 0 {
-		for _, res := range detail.Details[n-1].Results {
+	o := factory.Outcome{Result: factory.Result(detail.Factory.Result), Rounds: detail.Factory.Rounds}
+	for _, rd := range detail.Details {
+		if rd.Number != o.Rounds {
+			continue
+		}
+		for _, res := range rd.Results {
 			o.Checks = append(o.Checks, factory.Check{
 				Name: res.Prompt, Kind: factory.KindReview, Status: factory.Status(res.Status),
 				SidecarID: res.SidecarID, Error: res.Error, Findings: res.Findings,

@@ -10,6 +10,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // TestFactoryChecksOnlyToleratesMissingDefaultReviews guards against a
@@ -41,4 +42,25 @@ func TestKeepWorkHint(t *testing.T) {
 	// in their checkout, so only the run's own changes are applied.
 	dirty := factory.Worktree{Branch: "chunk/factory/run-1", Baseline: "def", Head: "abc"}
 	assert.Equal(t, keepWorkHint(dirty), "Apply it with: git diff --binary def chunk/factory/run-1 | git apply")
+}
+
+// A stuck run's record ends on a round that was never checked; its outcome is
+// the last round that was.
+func TestFactoryOutcomeIsTheLastCheckedRound(t *testing.T) {
+	bug := review.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
+	detail := watchd.SessionDetail{
+		Session: watchd.Session{
+			Factory: &watchd.FactoryRun{Result: string(factory.ResultStuck), Rounds: 1},
+			Rounds:  []watchd.Round{{Number: 1}, {Number: 2}},
+		},
+		Details: []watchd.RoundDetail{
+			{Number: 1, Results: []watchd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []review.Finding{bug}}}},
+			{Number: 2},
+		},
+	}
+	o := factoryOutcome(detail)
+	assert.Equal(t, o.Rounds, 1)
+	assert.Equal(t, len(o.Checks), 1)
+	assert.Equal(t, o.Checks[0].Name, "bugs")
+	assert.Equal(t, len(o.Checks[0].Findings), 1)
 }

@@ -101,7 +101,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.DeepEqual(t, *detail.Factory, FactoryRun{
 		Prompt: "add a --verbose flag", RunID: "run-1",
 		Worktree: "/data/factory/run-1", Branch: "chunk/factory/run-1", Baseline: "base", Head: "head",
-		Result: "passed", Committed: true,
+		Result: "passed", Rounds: 1, Committed: true,
 	})
 
 	assert.Equal(t, len(detail.Rounds), 1)
@@ -145,6 +145,37 @@ func TestFactorySessionWhoseChecksStillFailIsDoneWithItsStageFailed(t *testing.T
 	assert.Equal(t, detail.Factory.Result, "exhausted")
 	assert.Equal(t, detail.Stages[0].State, StageFailed)
 	assert.Equal(t, detail.Stages[0].Note, "checks still failed after 1 round(s)")
+}
+
+// A run that stops because the implementer changed nothing new ends on a
+// round it never checked: that round is done, not failed, and the run's
+// rounds are the ones checked.
+func TestFactorySessionThatGetsStuckClosesItsUncheckedRound(t *testing.T) {
+	run := scriptedRun(factory.ResultStuck)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		rep, err := run(ctx, opts)
+		if err != nil {
+			return rep, err
+		}
+		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 2, Prompt: opts.Prompt})
+		opts.OnEvent(factory.Event{Kind: factory.EventImplemented, Round: 2, Turn: factory.Turn{Summary: "nothing new"}})
+		opts.OnEvent(factory.Event{Kind: factory.EventCollected, Round: 2, Change: factory.Change{Stat: "1 file changed", Fingerprint: "f"}})
+		return rep, nil
+	})
+
+	sess, err := d.startFactory(FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+
+	assert.Equal(t, detail.State, SessionDone)
+	assert.Equal(t, detail.Stages[0].State, StageFailed)
+	assert.Equal(t, detail.Factory.Rounds, 1)
+	assert.Equal(t, len(detail.Rounds), 2)
+	assert.Equal(t, detail.Rounds[0].State, RoundDone)
+	last := detail.Rounds[1]
+	assert.Equal(t, last.State, RoundDone)
+	assert.Equal(t, last.Note, "not checked: the implementer stopped changing the code after round 1, with checks still failing")
+	assert.Equal(t, len(last.Reviews), 0)
 }
 
 func TestFactorySessionThatCannotStartSaysWhichStepFailed(t *testing.T) {

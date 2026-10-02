@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -115,6 +116,22 @@ func TestFactoryWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
 	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("[high] flag.go:1 unused")), stderr)
+}
+
+// --json prints the run's record, and the exit code still says whether its
+// checks passed.
+func TestFactoryJSONWhoseChecksStillFailExitsWithAnError(t *testing.T) {
+	factoryProject(t)
+	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultExhausted))
+
+	stdout, stderr, err := runFactoryCmd(t, "--json", "--attempts", "1", "add a --verbose flag")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
+	var detail watchd.SessionDetail
+	assert.NilError(t, json.Unmarshal([]byte(stdout), &detail), stdout)
+	assert.Equal(t, detail.Factory.Result, "exhausted")
+	assert.Assert(t, !bytes.Contains([]byte(stderr), []byte("[high] flag.go:1 unused")), stderr)
 }
 
 // Ctrl-C stops the run rather than leaving it running, and the work done so

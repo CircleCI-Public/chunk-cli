@@ -521,6 +521,9 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 	default:
 		entry.s.State = SessionDone
 		stage.State, stage.Note = StageDone, entry.loopNote
+		if entry.loopFailed {
+			stage.State = StageFailed
+		}
 	}
 
 	// Anything still in flight when the session ended did not finish; say so

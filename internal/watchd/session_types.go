@@ -165,8 +165,10 @@ type FactoryRun struct {
 	Branch   string `json:"branch,omitempty"`
 	Baseline string `json:"baseline,omitempty"`
 	Head     string `json:"head,omitempty"`
-	// Result is why the loop stopped, as factory.Result, once it has.
+	// Result is why the loop stopped, as factory.Result, once it has, and
+	// Rounds how many rounds were checked, as factory.Outcome.Rounds.
 	Result string `json:"result,omitempty"`
+	Rounds int    `json:"rounds,omitempty"`
 	// Committed reports whether the work was committed on Branch.
 	Committed bool `json:"committed,omitempty"`
 	// KeptSidecars are the sidecars left running at the user's request.

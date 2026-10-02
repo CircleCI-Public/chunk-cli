@@ -131,7 +131,6 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	rep, err := run(ctx, opts)
 	rec.finish(rep, err)
 	d.settleSession(entry, err)
-	rec.settleStage(rep, err)
 }
 
 // factoryResultNote says how a factory loop ended, for its stage.
@@ -311,34 +310,27 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	f.KeptSidecars = rep.KeptSidecars
 	if rep.Started {
 		f.Result = string(rep.Outcome.Result)
+		f.Rounds = rep.Outcome.Rounds
 	}
 	if err == nil {
 		e.loopNote = factoryResultNote(rep.Outcome)
+		e.loopFailed = rep.Outcome.Result != factory.ResultPassed
 	}
+	now := time.Now()
 	for i := range e.s.Rounds {
-		if impl := e.s.Rounds[i].Implement; impl != nil && impl.State == FixRunning {
+		round := &e.s.Rounds[i]
+		if impl := round.Implement; impl != nil && impl.State == FixRunning {
 			impl.State = FixFailed
 			if err != nil {
 				impl.Error = friendlyReviewError(err)
 			}
 		}
-	}
-}
-
-// settleStage marks the loop's stage failed when the loop ran to its end
-// without the checks passing: the session itself is done, but its work did not
-// pass.
-func (r *factoryRecorder) settleStage(rep factory.Report, err error) {
-	if err != nil || rep.Outcome.Result == factory.ResultPassed {
-		return
-	}
-	e := r.entry
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.s.State != SessionDone {
-		return
-	}
-	if st := e.stageLocked(StageFactoryLoop); st != nil {
-		st.State = StageFailed
+		// A round the loop stopped in after the implementer's turn, finding
+		// nothing new to check, ended there: its reviews never ran.
+		if err == nil && round.State == RoundImplementing {
+			round.State, round.EndedAt = RoundDone, &now
+			round.Note = "not checked: " + e.loopNote
+			round.Reviews = nil
+		}
 	}
 }
