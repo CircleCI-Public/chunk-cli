@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -90,4 +91,50 @@ func TestCommitWorkCommitsAfterACancelAndAFailedPull(t *testing.T) {
 	assert.Equal(t, len(warnings), 1, "%v", warnings)
 	assert.Assert(t, strings.HasPrefix(warnings[0], "could not bring back the implementer's last changes"), warnings[0])
 	assert.Equal(t, gitOutput(t, root, "show", "--format=", "--name-only", wt.Branch), "flag.go")
+}
+
+// A run with a log records itself there, its failure included, and keeps it
+// open until its cleanup has reported too.
+func TestRunKeepsItsLog(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	root := newProject(t)
+	cci := fakes.NewFakeCircleCI()
+	cci.CreateStatusCode = http.StatusInternalServerError
+	api := httptest.NewServer(cci)
+	t.Cleanup(api.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
+	assert.NilError(t, err)
+
+	path := filepath.Join(t.TempDir(), "run.log")
+	var shown []string
+	rep, err := Run(context.Background(), RunOptions{
+		Root:     root,
+		Prompt:   "add a --verbose flag",
+		Attempts: 1,
+		Client:   client,
+		OrgID:    "org-1",
+		Log:      path,
+		Status:   func(_ iostream.Level, msg string) { shown = append(shown, msg) },
+	})
+	assert.ErrorContains(t, err, "create the run's sidecars: ")
+	assert.Equal(t, rep.Log, path)
+
+	b, err := os.ReadFile(path)
+	assert.NilError(t, err)
+	got := string(b)
+	for _, want := range []string{
+		"info  run " + rep.RunID + "\n",
+		"info  prompt:\n    add a --verbose flag\n",
+		"step  Preparing an implementer sidecar and 0 reviewer sidecar(s)...\n",
+		"end   stopped: create the run's sidecars: ",
+	} {
+		assert.Assert(t, strings.Contains(got, want), "missing %q in:\n%s", want, got)
+	}
+	// Every status line the caller saw is in the log.
+	for _, msg := range shown {
+		assert.Assert(t, strings.Contains(got, msg), "status %q is not in the log:\n%s", msg, got)
+	}
+	// The end is the last thing written.
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	assert.Assert(t, strings.Contains(lines[len(lines)-1], " end "), got)
 }

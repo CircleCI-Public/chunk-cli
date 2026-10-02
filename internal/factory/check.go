@@ -47,6 +47,12 @@ type Check struct {
 	Error string
 	// Findings are a review's findings, kept as data for display.
 	Findings []review.Finding
+	// Prose is a review's prose alongside its findings, kept for display.
+	Prose string
+	// ExitCode and Output are a validation command's exit code and the tail of
+	// its output, kept for the run's log.
+	ExitCode int
+	Output   string
 }
 
 // outputTail bounds how much of a failed command's output is fed back. The end
@@ -59,7 +65,7 @@ const outputTail = 4000
 // round to polish style remarks. Lower findings are kept for display. A review
 // that could not run errored.
 func FromReview(r review.Result) Check {
-	c := Check{Name: r.Prompt, Kind: KindReview, SidecarID: r.SidecarID, Duration: r.Duration, Findings: r.Parsed.Findings}
+	c := Check{Name: r.Prompt, Kind: KindReview, SidecarID: r.SidecarID, Duration: r.Duration, Findings: r.Parsed.Findings, Prose: r.Parsed.Prose}
 	if r.Error != "" {
 		c.Status, c.Error = StatusErrored, r.Error
 		return c
@@ -82,7 +88,8 @@ func FromReview(r review.Result) Check {
 // FromCommand converts one validation command's run into a check. runErr is a
 // failure to run the command at all, as opposed to it exiting non-zero.
 func FromCommand(name, sidecarID string, exitCode int, output string, d time.Duration, runErr error) Check {
-	c := Check{Name: name, Kind: KindValidate, SidecarID: sidecarID, Duration: d}
+	c := Check{Name: name, Kind: KindValidate, SidecarID: sidecarID, Duration: d,
+		ExitCode: exitCode, Output: review.Tail(strings.TrimSpace(output), outputTail)}
 	switch {
 	case runErr != nil:
 		c.Status, c.Error = StatusErrored, runErr.Error()
@@ -90,7 +97,7 @@ func FromCommand(name, sidecarID string, exitCode int, output string, d time.Dur
 		c.Status = StatusPassed
 	default:
 		c.Status = StatusFailed
-		c.Feedback = fmt.Sprintf("Exited %d.\n```\n%s\n```", exitCode, review.Tail(strings.TrimSpace(output), outputTail))
+		c.Feedback = fmt.Sprintf("Exited %d.\n```\n%s\n```", exitCode, c.Output)
 	}
 	return c
 }

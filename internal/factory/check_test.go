@@ -51,6 +51,9 @@ func TestFromCommand(t *testing.T) {
 	// The tail is kept, where a test runner reports what failed.
 	assert.Assert(t, strings.Contains(failed.Feedback, "FAIL pkg"))
 	assert.Assert(t, strings.HasPrefix(failed.Feedback, "Exited 2."))
+	// The exit code and output are kept for the run's summary too.
+	assert.Equal(t, failed.ExitCode, 2)
+	assert.Assert(t, strings.HasSuffix(failed.Output, "FAIL pkg"))
 
 	errored := FromCommand("test", "sc", 0, "", 0, errors.New("exec: connection reset"))
 	assert.Equal(t, errored.Status, StatusErrored)

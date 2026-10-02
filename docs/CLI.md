@@ -334,7 +334,15 @@ chunk
   set. `--reviews` must name a directory inside the project. When the run ends
   it prints the work committed on `chunk/factory/<run id>`, how to keep it, and
   how the last round's reviews came out, and exits non-zero unless every check
-  passed.
+  passed. `--log[=path]` has the run keep a plain-text log, by default
+  `~/.chunk/factory/run-<start time>.log`, with the full context the display leaves
+  out — each prompt the implementer is sent, what it did and said, every
+  review's findings and prose, and failed commands' output — for a person or an
+  agent to judge the run and its prompts by. The daemon writes it, so a
+  relative path is resolved against the caller's directory first. `--verbose`
+  adds the review prompts, passing commands' output, and a check each round
+  that every reviewer has the implementer's change, also shows the log in the
+  terminal as the run writes it, and implies `--log`.
 - **`watch` shows the daemon's sessions live.** The header notes a session running
   or paused, and `r` opens the session view: a timeline of the whole flow — the
   review loop with each round (its reviews, drawn by the same renderer as

@@ -240,6 +240,27 @@ func TestFactorySessionsAndReviewSessionsTakeTurns(t *testing.T) {
 	assert.Assert(t, busy != "", "two factory runs ran at once")
 }
 
+// TestFactorySessionKeepsItsLog guards --log and --verbose on the daemon: the
+// run is asked for them, and the record says where the log is.
+func TestFactorySessionKeepsItsLog(t *testing.T) {
+	var got factory.RunOptions
+	run := scriptedRun(factory.ResultPassed)
+	d, root := newFactoryDaemon(t, func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+		got = opts
+		rep, err := run(ctx, opts)
+		rep.Log = "/logs/run-1.log"
+		return rep, err
+	})
+
+	sess, err := d.startFactory(FactoryRequest{ProjectRoot: root, Prompt: "add a flag", Log: "/logs/run-1.log", Verbose: true})
+	assert.NilError(t, err)
+	detail := waitForSessionEnd(t, d, sess.ID)
+
+	assert.Equal(t, got.Log, "/logs/run-1.log")
+	assert.Assert(t, got.Verbose)
+	assert.Equal(t, detail.Factory.Log, "/logs/run-1.log")
+}
+
 func TestStartFactoryRefusesABadRequest(t *testing.T) {
 	d, root := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
 
@@ -252,6 +273,7 @@ func TestStartFactoryRefusesABadRequest(t *testing.T) {
 		"unknown project": {FactoryRequest{ProjectRoot: "/nowhere", Prompt: "x"}, http.StatusNotFound, "not tracking"},
 		"escaping dir":    {FactoryRequest{ProjectRoot: root, Prompt: "x", ReviewsDir: "../elsewhere"}, http.StatusBadRequest, "inside the project"},
 		"missing dir":     {FactoryRequest{ProjectRoot: root, Prompt: "x", ReviewsDir: "nope"}, http.StatusBadRequest, "nope"},
+		"relative log":    {FactoryRequest{ProjectRoot: root, Prompt: "x", Log: "run.log"}, http.StatusBadRequest, "absolute path"},
 		"reviews alone": {
 			FactoryRequest{ProjectRoot: root, Prompt: "x", ReviewsDir: ".chunk/reviews", NoValidate: true},
 			0, "",

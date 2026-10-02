@@ -173,6 +173,8 @@ type FactoryRun struct {
 	Committed bool `json:"committed,omitempty"`
 	// KeptSidecars are the sidecars left running at the user's request.
 	KeptSidecars []string `json:"kept_sidecars,omitempty"`
+	// Log is the path of the run's log, once the run has ended, if it kept one.
+	Log string `json:"log,omitempty"`
 }
 
 // ReviewPrompt is one review's progress inside a round. It carries state only:
@@ -378,6 +380,11 @@ type FactoryRequest struct {
 	// OrgID and Image override the project's configured ones.
 	OrgID string `json:"org_id,omitempty"`
 	Image string `json:"image,omitempty"`
+	// Log is where the run keeps a plain-text log of its full context: an
+	// absolute path, factory.LogDefault, or empty for none. Verbose adds more
+	// to it and implies it; see factory.RunOptions.
+	Log     string `json:"log,omitempty"`
+	Verbose bool   `json:"verbose,omitempty"`
 }
 
 // RestoreRequest asks to undo a session's changes.
