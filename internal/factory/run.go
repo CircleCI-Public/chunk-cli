@@ -224,7 +224,7 @@ func closePool(ctx context.Context, pool *sidecar.Pool, keep bool, status iostre
 		}
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, poolCloseTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), poolCloseTimeout)
 	defer cancel()
 	pool.Close(ctx)
 	ids := pool.IDs()

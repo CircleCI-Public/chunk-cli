@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -13,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 )
 
@@ -54,4 +56,38 @@ func TestReviewerCount(t *testing.T) {
 	assert.Equal(t, ReviewerCount(2, prompts), 2)
 	assert.Equal(t, ReviewerCount(5, prompts), 3, "never more than one per prompt")
 	assert.Equal(t, ReviewerCount(2, nil), 0, "none without prompts")
+}
+
+// The work is committed when the run was cancelled and the last pull fails:
+// what earlier rounds brought back is still kept on the run's branch.
+func TestCommitWorkCommitsAfterACancelAndAFailedPull(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	root := newProject(t)
+	ctx := context.Background()
+	wt, err := CreateWorktree(ctx, root, t.TempDir()+"/wt", "run-1")
+	assert.NilError(t, err)
+	writeFile(t, wt.Path, "flag.go", "package main\n")
+
+	api := httptest.NewServer(fakes.NewFakeCircleCI())
+	t.Cleanup(api.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
+	assert.NilError(t, err)
+	steps := &Sidecars{
+		Implementer: &Implementer{Entry: &sidecar.PoolEntry{ID: "no-such-sidecar", RepoPath: "/workspace"}},
+		Relay:       NewRelay(client, wt.Path, nil),
+	}
+	var warnings []string
+	status := func(level iostream.Level, msg string) {
+		if level == iostream.LevelWarn {
+			warnings = append(warnings, msg)
+		}
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	assert.Assert(t, commitWork(cancelled, steps, wt, "chunk factory: add a flag", status))
+
+	assert.Equal(t, len(warnings), 1, "%v", warnings)
+	assert.Assert(t, strings.HasPrefix(warnings[0], "could not bring back the implementer's last changes"), warnings[0])
+	assert.Equal(t, gitOutput(t, root, "show", "--format=", "--name-only", wt.Branch), "flag.go")
 }
