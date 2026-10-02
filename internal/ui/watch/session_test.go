@@ -249,3 +249,40 @@ func waitForCond(t *testing.T, what string, ok func() bool) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+func TestSessionViewShowsAFactoryRun(t *testing.T) {
+	info := liveSession("fac-1", watchd.SessionRunning, time.Now())
+	info.s.Kind = watchd.KindFactory
+	info.s.Stages[0].ID = watchd.StageFactoryLoop
+	info.s.Factory = &watchd.FactoryRun{Prompt: "add a --verbose flag", Branch: "chunk/factory/1", Worktree: "/tmp/wt"}
+	info.s.Rounds = []watchd.Round{{
+		Number: 1, State: watchd.RoundChecking,
+		Implement: &watchd.RoundImplement{State: watchd.FixApplied, DurationMS: 4000, Stat: "2 files changed", Summary: "added the flag"},
+		Checks:    []watchd.RoundCheck{{Name: "lint", Status: "failed", Error: "exit 1"}, {Name: "test", Status: "passed"}},
+		Reviews:   []watchd.ReviewPrompt{{Name: "bugs", State: watchd.PromptRunning}},
+	}}
+
+	m, _ := press(sessModel(info), 'r')
+	var out strings.Builder
+	for _, l := range m.renderSessionBody(m.styles(), 40) {
+		out.WriteString(l + "\n")
+	}
+	got := out.String()
+	for _, want := range []string{"Factory loop", "add a --verbose flag", "chunk/factory/1", "implementer finished", "2 files changed", "lint", "test", "bugs", "reviewing and validating"} {
+		assert.Assert(t, strings.Contains(got, want), "missing %q in:\n%s", want, got)
+	}
+}
+
+func TestWithSessionOpensTheSessionViewOnceItIsListed(t *testing.T) {
+	m := sessModel().WithSession("fac-2")
+	assert.Assert(t, m.focusRequestedSession().sessionView == nil, "not listed yet")
+
+	m.sessions = []sessionInfo{liveSession("other", watchd.SessionRunning, time.Now()), liveSession("fac-2", watchd.SessionRunning, time.Now().Add(-time.Minute))}
+	m = m.focusRequestedSession()
+	assert.Assert(t, m.sessionView != nil)
+	assert.Equal(t, m.sessionView.sel, 1)
+
+	// The user can leave the view without it reopening.
+	m.sessionView = nil
+	assert.Assert(t, m.focusRequestedSession().sessionView == nil)
+}
