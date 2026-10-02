@@ -37,6 +37,7 @@ func readLog(t *testing.T, path string) string {
 // full context, not the display's summary of it.
 func TestLogRecordsWhatTheDisplayLeavesOut(t *testing.T) {
 	lg, path := newTestLog(t, false)
+	lg.attempts = 3
 	var shown []string
 	opts := lg.wrap(RunOptions{Status: func(_ iostream.Level, msg string) { shown = append(shown, msg) }})
 
@@ -96,6 +97,25 @@ func TestLogRecordsWhatTheDisplayLeavesOut(t *testing.T) {
 	assert.Equal(t, info.Mode().Perm(), os.FileMode(0o600))
 }
 
+// TestLogDoesNotSayTheLastRoundsFindingsWereSent guards the log's account of
+// what the implementer was told: no round follows the last, so its findings,
+// worth changing or not, were not sent.
+func TestLogDoesNotSayTheLastRoundsFindingsWereSent(t *testing.T) {
+	lg, path := newTestLog(t, false)
+	lg.start("20261002-150405", RunOptions{Prompt: "p", Attempts: 2})
+	checks := []Check{{Name: "bugs", Kind: KindReview, Status: StatusFailed, SidecarID: "rev-1", Findings: []review.Finding{
+		{File: "a.go", Line: 3, Severity: "high", Body: "nil deref"},
+	}}}
+	lg.event(Event{Kind: EventChecked, Round: 1, Checks: checks})
+	lg.event(Event{Kind: EventChecked, Round: 2, Checks: checks})
+	lg.close(Report{}, nil)
+
+	got := strings.Split(readLog(t, path), "[high] a.go:3")
+	assert.Equal(t, len(got), 3, readLog(t, path))
+	assert.Assert(t, strings.HasPrefix(got[1], " (sent to the implementer):"), got[1])
+	assert.Assert(t, strings.HasPrefix(got[2], ":"), got[2])
+}
+
 func TestLogVerboseAddsPromptsAndPassingOutput(t *testing.T) {
 	opts := RunOptions{
 		Prompt:   "add a flag",
@@ -122,9 +142,14 @@ func TestLogVerboseAddsPromptsAndPassingOutput(t *testing.T) {
 		} {
 			assert.Assert(t, strings.Contains(got, want), "verbose=%t: missing %q in:\n%s", verbose, want, got)
 		}
-		prompt := strings.Contains(got, "info  review prompt adversarial:\n    Find real problems.\n    \n    Prove them.\n")
+		// The prompts are logged as they are sent: a review's with the scope
+		// that tells it what to review, and the implementer's system prompt.
+		prompt := strings.Contains(got, "info  review prompt adversarial:\n    The change under review is the uncommitted work") &&
+			strings.Contains(got, "\n    Find real problems.\n    \n    Prove them.\n")
+		system := strings.Contains(got, "info  implementer system prompt:\n    You are working in a disposable copy")
 		output := strings.Contains(got, "info    output:\n    ok pkg\n")
 		assert.Equal(t, prompt, verbose, got)
+		assert.Equal(t, system, verbose, got)
 		assert.Equal(t, output, verbose, got)
 	}
 }

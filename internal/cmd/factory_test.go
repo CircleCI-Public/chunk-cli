@@ -105,11 +105,31 @@ func TestFactoryLogPath(t *testing.T) {
 func TestTailLogCopiesTheWholeLogByTheTimeItStops(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.log")
 	var out bytes.Buffer
-	stop := tailLog(path, &out)
+	stop := tailLog(path, 0, &out)
 	// The log does not exist when the tail starts; the run creates it.
 	assert.NilError(t, os.WriteFile(path, []byte("start\nend\n"), 0o600))
 	stop()
 	assert.Equal(t, out.String(), "start\nend\n")
+}
+
+// TestTailLogSkipsWhatTheLogHeldBeforeTheRun guards --log=<existing file>: the
+// run appends to it, and the earlier runs' lines are not shown again.
+func TestTailLogSkipsWhatTheLogHeldBeforeTheRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.log")
+	assert.NilError(t, os.WriteFile(path, []byte("earlier run\n"), 0o600))
+	from := logSize(path)
+	assert.Equal(t, from, int64(len("earlier run\n")))
+	assert.Equal(t, logSize(filepath.Join(t.TempDir(), "none.log")), int64(0))
+
+	var out bytes.Buffer
+	stop := tailLog(path, from, &out)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	assert.NilError(t, err)
+	_, err = f.WriteString("this run\n")
+	assert.NilError(t, err)
+	assert.NilError(t, f.Close())
+	stop()
+	assert.Equal(t, out.String(), "this run\n")
 }
 
 // TestLogTailCopiesWholeLines guards --verbose's terminal output: each line of
@@ -117,14 +137,13 @@ func TestTailLogCopiesTheWholeLogByTheTimeItStops(t *testing.T) {
 func TestLogTailCopiesWholeLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.log")
 	var out bytes.Buffer
-	tail := &logTail{w: &out}
+	tail := &logTail{w: &out, path: path}
 
-	tail.follow(path) // not created yet
-	tail.follow("")
+	tail.follow() // not created yet
 	assert.Equal(t, out.String(), "")
 
 	assert.NilError(t, os.WriteFile(path, []byte("one\ntw"), 0o600))
-	tail.follow(path)
+	tail.follow()
 	assert.Equal(t, out.String(), "one\n")
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
@@ -132,7 +151,20 @@ func TestLogTailCopiesWholeLines(t *testing.T) {
 	_, err = f.WriteString("o\nthree\n")
 	assert.NilError(t, err)
 	assert.NilError(t, f.Close())
-	tail.follow(path)
-	tail.follow(path)
+	tail.follow()
+	tail.follow()
 	assert.Equal(t, out.String(), "one\ntwo\nthree\n")
+}
+
+// TestLogTailKeepsSidecarOutputOffTheTerminal guards --verbose: the log holds
+// command output and agents' text from the sidecars, and its escape sequences
+// are not passed on to the terminal.
+func TestLogTailKeepsSidecarOutputOffTheTerminal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.log")
+	assert.NilError(t, os.WriteFile(path, []byte("ok\tpkg \x1b]0;title\x07\x1b[31mFAIL\x1b[0m\r\n\u00e9\n"), 0o600))
+	var out bytes.Buffer
+	(&logTail{w: &out, path: path}).follow()
+	// The escape bytes and the carriage return are gone; text, tabs, newlines
+	// and non-ASCII letters stay.
+	assert.Equal(t, out.String(), "ok\tpkg ]0;title[31mFAIL[0m\n\u00e9\n")
 }

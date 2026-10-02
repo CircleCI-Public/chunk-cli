@@ -189,11 +189,16 @@ func (s *Sidecars) onReviewers(fn func(*sidecar.PoolEntry) error) error {
 // script runs a command in a reviewer's workspace.
 func (s *Sidecars) script(ctx context.Context, cmd string) func(*sidecar.PoolEntry) error {
 	return func(e *sidecar.PoolEntry) error {
-		if _, err := review.RunScript(ctx, s.Exec, e, "cd "+sidecar.ShellEscape(e.RepoPath)+" && "+cmd, maxScriptOutput); err != nil {
+		if _, err := review.RunScript(ctx, s.Exec, e, inRepo(e, cmd), maxScriptOutput); err != nil {
 			return fmt.Errorf("%s: %w", e.ID, err)
 		}
 		return nil
 	}
+}
+
+// inRepo is the script that runs cmd in e's workspace.
+func inRepo(e *sidecar.PoolEntry, cmd string) string {
+	return "cd " + sidecar.ShellEscape(e.RepoPath) + " && " + cmd
 }
 
 // ReviewerTree compares the change one reviewer is about to review with the
@@ -222,7 +227,7 @@ func (s *Sidecars) reviewerTrees(ctx context.Context, round int) {
 		wg.Add(1)
 		go func(i int, e *sidecar.PoolEntry) {
 			defer wg.Done()
-			out, err := review.RunScript(ctx, s.Exec, e, "cd "+sidecar.ShellEscape(e.RepoPath)+" && "+fingerprintCmd, maxScriptOutput)
+			out, err := review.RunScript(ctx, s.Exec, e, inRepo(e, fingerprintCmd), maxScriptOutput)
 			trees[i] = ReviewerTree{Round: round, SidecarID: e.ID, Fingerprint: strings.TrimSpace(out), Want: s.fingerprint, Err: err}
 		}(i, e)
 	}
@@ -233,8 +238,14 @@ func (s *Sidecars) reviewerTrees(ctx context.Context, round int) {
 }
 
 func (s *Sidecars) scopedPrompts() []review.Prompt {
-	out := make([]review.Prompt, len(s.Prompts))
-	for i, p := range s.Prompts {
+	return scopePrompts(s.Prompts)
+}
+
+// scopePrompts is prompts as each reviewer is sent them, told what the change
+// under review is.
+func scopePrompts(prompts []review.Prompt) []review.Prompt {
+	out := make([]review.Prompt, len(prompts))
+	for i, p := range prompts {
 		out[i] = review.Prompt{Name: p.Name, Body: reviewScope + p.Body}
 	}
 	return out

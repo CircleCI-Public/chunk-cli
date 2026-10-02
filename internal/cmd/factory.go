@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -97,6 +98,9 @@ also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return err
 			}
+			// The run appends to a log that is already there, so the tail
+			// starts after whatever the file holds before the run is started.
+			logFrom := logSize(logArg)
 
 			if err := watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd}); err != nil {
 				return &userError{msg: "Could not start the watch daemon.", err: err}
@@ -127,7 +131,7 @@ also shows the log here as the run writes it; it implies --log.`,
 			// With --verbose the log is shown here too, as the run writes it,
 			// alongside the run's progress.
 			if verbose && !jsonOut {
-				defer tailLog(logArg, streams.Err)()
+				defer tailLog(logArg, logFrom, streams.Err)()
 			}
 			return followSession(ctx, streams, id, jsonOut, true)
 		},
@@ -232,20 +236,23 @@ func factoryReviewsDir(root, dir string) (string, error) {
 // tailPollInterval is how often tailLog looks for more of the log.
 const tailPollInterval = 500 * time.Millisecond
 
-// tailLog copies the log at path to w as the run writes it, until the returned
-// stop is called, which copies whatever is left and returns once it has.
-func tailLog(path string, w io.Writer) (stop func()) {
-	t := &logTail{w: w}
+// tailLog copies the log at path to w as the run writes it, from offset from,
+// until the returned stop is called, which copies whatever is left and returns
+// once it has. A log that already holds earlier runs, since the run appends to
+// it, is followed from where it ended when the caller measured it, so they are
+// not shown again.
+func tailLog(path string, from int64, w io.Writer) (stop func()) {
+	t := &logTail{w: w, path: path, off: from}
 	done, finished := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(finished)
 		ticker := time.NewTicker(tailPollInterval)
 		defer ticker.Stop()
 		for {
-			t.follow(path)
+			t.follow()
 			select {
 			case <-done:
-				t.follow(path)
+				t.follow()
 				return
 			case <-ticker.C:
 			}
@@ -257,24 +264,27 @@ func tailLog(path string, w io.Writer) (stop func()) {
 	}
 }
 
-// logTail copies a log to w as it grows, a whole line at a time.
+// logSize is how much the file at path holds, or 0 when there is no such file.
+func logSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// logTail copies the log at path to w as it grows, a whole line at a time.
 type logTail struct {
 	w    io.Writer
 	path string
 	off  int64
 }
 
-// follow copies whatever has been added to the log at path since the last
-// call. A log not created yet, or unreadable for now, is tried again next
-// time: the run writes it, and a hiccup reading it must not stop the follow.
-func (t *logTail) follow(path string) {
-	if path == "" {
-		return
-	}
-	if path != t.path {
-		t.path, t.off = path, 0
-	}
-	f, err := os.Open(path)
+// follow copies whatever has been added to the log since the last call. A log
+// not created yet, or unreadable for now, is tried again next time: the run
+// writes it, and a hiccup reading it must not stop the follow.
+func (t *logTail) follow() {
+	f, err := os.Open(t.path)
 	if err != nil {
 		return
 	}
@@ -291,8 +301,20 @@ func (t *logTail) follow(path string) {
 	if end == 0 {
 		return
 	}
-	_, _ = t.w.Write(b[:end])
+	_, _ = t.w.Write(plainText(b[:end]))
 	t.off += int64(end)
+}
+
+// plainText drops the terminal control characters in b, other than newlines
+// and tabs. The log holds what ran on the sidecars: command output and
+// agents' text, which must not reach the terminal as commands of its own.
+func plainText(b []byte) []byte {
+	return bytes.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, b)
 }
 
 // factoryLogPath is --log as the daemon is told it, or "" for no log. It is

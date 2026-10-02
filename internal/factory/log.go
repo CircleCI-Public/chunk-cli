@@ -38,6 +38,9 @@ type runLog struct {
 	path    string
 	verbose bool
 	now     func() time.Time
+	// attempts is the most rounds the run checks, set by start: the last
+	// round's findings are not fed back, since no round follows it.
+	attempts int
 }
 
 // openLog creates the log at path, LogDefault for DefaultLogPath, or returns
@@ -97,6 +100,7 @@ func (l *runLog) start(runID string, opts RunOptions) {
 	if l == nil {
 		return
 	}
+	l.attempts = opts.Attempts
 	l.line("info", "run "+runID)
 	l.block("prompt", opts.Prompt)
 	l.line("info", fmt.Sprintf("attempts %d, %d reviewer sidecar(s)", opts.Attempts, opts.Reviewers))
@@ -113,7 +117,11 @@ func (l *runLog) start(runID string, opts RunOptions) {
 	if !l.verbose {
 		return
 	}
-	for _, p := range opts.Prompts {
+	// The prompts as they are sent: the implementer's system prompt comes with
+	// every turn, and each review's prompt is told what the change under
+	// review is.
+	l.block("implementer system prompt", implementerSystemPrompt)
+	for _, p := range scopePrompts(opts.Prompts) {
 		l.block("review prompt "+p.Name, p.Body)
 	}
 }
@@ -174,8 +182,10 @@ func (l *runLog) review(round int, c Check) {
 	}
 	l.line(statusLevel(c.Status), fmt.Sprintf("%s with %d finding(s)", head, len(c.Findings)))
 	for _, f := range c.Findings {
+		// Only a finding worth changing is fed back, and only when a round
+		// follows this one.
 		sent := ""
-		if f.WorthChanging() {
+		if f.WorthChanging() && round < l.attempts {
 			sent = " (sent to the implementer)"
 		}
 		l.block(fmt.Sprintf("  [%s] %s%s", f.Severity, f.Location(), sent), f.Body)
