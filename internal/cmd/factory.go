@@ -349,6 +349,7 @@ func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.
 	} else {
 		printFactoryLeftovers(ctx, f, status, streams)
 	}
+	printFactoryTotals(detail, status)
 	switch detail.State {
 	case watchd.SessionCancelled:
 		return newUserError("The factory run was cancelled.").withoutDetail()
@@ -356,11 +357,30 @@ func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
 	case watchd.SessionRunning, watchd.SessionPaused, watchd.SessionDone:
 	}
-	return reportOutcome(status, factoryOutcome(detail))
+	return reportOutcome(status, factory.Outcome{Result: factory.Result(f.Result), Rounds: f.Rounds})
+}
+
+// printFactoryTotals says how long the run took and what the implementer's
+// turns cost. What the reviews cost is not reported to chunk.
+func printFactoryTotals(detail watchd.SessionDetail, status iostream.StatusFunc) {
+	ended := time.Now()
+	if detail.EndedAt != nil {
+		ended = *detail.EndedAt
+	}
+	var cost float64
+	turns := 0
+	for _, r := range detail.Rounds {
+		if impl := r.Implement; impl != nil && impl.State != watchd.FixRunning {
+			cost += impl.CostUSD
+			turns++
+		}
+	}
+	status(iostream.LevelInfo, fmt.Sprintf("The run took %s; %d implementer turn(s) cost $%.2f.", ended.Sub(detail.StartedAt).Round(time.Second), turns, cost))
 }
 
 // printFactoryLeftovers says what a run left behind: its committed work, or
-// where its uncommitted work still is, and any sidecars kept running.
+// where its uncommitted work still is. Sidecars kept running were said in the
+// run's progress.
 func printFactoryLeftovers(ctx context.Context, f *watchd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
 	switch {
 	case f.Committed:
@@ -371,52 +391,11 @@ func printFactoryLeftovers(ctx context.Context, f *watchd.FactoryRun, status ios
 			status(iostream.LevelWarn, "The work was not committed. It is in the worktree "+f.Worktree)
 		}
 	}
-	if len(f.KeptSidecars) > 0 {
-		status(iostream.LevelInfo, "kept sidecars: "+strings.Join(f.KeptSidecars, " "))
-	}
-	if f.Log != "" {
-		status(iostream.LevelInfo, "Log: "+f.Log)
-	}
 }
 
-// factoryOutcome rebuilds a run's outcome from its record: why it stopped,
-// and how the last round it checked came out. A run that stopped because the
-// implementer changed nothing new ends on a round that was never checked.
-func factoryOutcome(detail watchd.SessionDetail) factory.Outcome {
-	o := factory.Outcome{Result: factory.Result(detail.Factory.Result), Rounds: detail.Factory.Rounds}
-	for _, rd := range detail.Details {
-		if rd.Number != o.Rounds {
-			continue
-		}
-		for _, res := range rd.Results {
-			o.Checks = append(o.Checks, factory.Check{
-				Name: res.Prompt, Kind: factory.KindReview, Status: factory.Status(res.Status),
-				SidecarID: res.SidecarID, Error: res.Error, Findings: res.Findings,
-			})
-		}
-	}
-	return o
-}
-
-// reportOutcome prints how the last round's checks came out and returns an
-// error unless they all passed.
+// reportOutcome says why the loop stopped and returns an error unless every
+// check passed. How each round's checks came out was said as it was checked.
 func reportOutcome(status iostream.StatusFunc, o factory.Outcome) error {
-	for _, c := range o.Checks {
-		if c.Kind != factory.KindReview {
-			continue
-		}
-		switch c.Status {
-		case factory.StatusPassed:
-			status(iostream.LevelDone, fmt.Sprintf("review %s: no findings", c.Name))
-		case factory.StatusFailed:
-			status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", c.Name, len(c.Findings)))
-			for _, f := range c.Findings {
-				status(iostream.LevelInfo, fmt.Sprintf("  [%s] %s %s", f.Severity, f.Location(), oneLineSummary(f.Body)))
-			}
-		case factory.StatusErrored:
-			status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", c.Name, c.Error))
-		}
-	}
 	switch o.Result {
 	case factory.ResultPassed:
 		status(iostream.LevelDone, fmt.Sprintf("All checks passed after %d round(s).", o.Rounds))

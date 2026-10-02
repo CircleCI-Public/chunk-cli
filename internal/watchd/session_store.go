@@ -71,6 +71,7 @@ func cloneSession(s Session) Session {
 	if s.Factory != nil {
 		f := *s.Factory
 		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
+		f.Progress = s.Factory.Progress.clone()
 		out.Factory = &f
 	}
 	if s.Restore != nil {

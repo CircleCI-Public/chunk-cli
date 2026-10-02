@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -342,7 +344,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 			if detail.IsFactory() && detail.Factory != nil && detail.Factory.Worktree != "" {
 				lastFactory = detail.Factory
 			}
-			rep.report(detail.Session)
+			rep.report(detail)
 			if detail.State.Finished() || detail.State == watchd.SessionPaused {
 				if detail.IsFactory() {
 					return finishFactory(ctx, streams, detail, jsonOut)
@@ -416,7 +418,11 @@ type sessionReporter struct {
 	// implementer turn and how many of its validation commands.
 	implement map[int]watchd.RoundImplement
 	checks    map[int]int
-	state     watchd.SessionState
+	// progress counts the lines of the factory run's progress already said.
+	progress int
+	// checked marks the factory rounds whose review findings have been said.
+	checked map[int]bool
+	state   watchd.SessionState
 }
 
 func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
@@ -426,14 +432,34 @@ func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
 		reviews:   map[string]watchd.PromptRunState{},
 		implement: map[int]watchd.RoundImplement{},
 		checks:    map[int]int{},
+		checked:   map[int]bool{},
 	}
 }
 
-func (r *sessionReporter) report(s watchd.Session) {
+func (r *sessionReporter) report(d watchd.SessionDetail) {
+	s := d.Session
+	// A factory run's progress comes first: most of it is the setup before
+	// any round, which a snapshot caught up on all at once would otherwise
+	// show after the rounds.
+	if f := s.Factory; f != nil {
+		for _, l := range f.Progress.Since(r.progress) {
+			r.status(l.Level.Level(), l.Text)
+		}
+		r.progress = f.Progress.Total
+	}
 	for i, round := range s.Rounds {
 		if r.rounds[i] != round.State {
 			r.rounds[i] = round.State
-			r.status(iostream.LevelStep, fmt.Sprintf("round %d: %s", round.Number, round.State))
+			// A review session's notes are in its closing summary; a factory
+			// run's say how each round went, which nothing else does.
+			number, note := strconv.Itoa(round.Number), ""
+			if s.IsFactory() {
+				note = roundNote(round)
+				if s.Factory != nil && s.Factory.Attempts > 0 {
+					number += "/" + strconv.Itoa(s.Factory.Attempts)
+				}
+			}
+			r.status(iostream.LevelStep, fmt.Sprintf("round %s: %s%s", number, round.State, note))
 		}
 		if impl := round.Implement; impl != nil {
 			r.reportImplement(i, *impl)
@@ -452,12 +478,18 @@ func (r *sessionReporter) report(s watchd.Session) {
 			case watchd.PromptRunning:
 				r.status(iostream.LevelInfo, fmt.Sprintf("reviewing %s on %s", p.Name, p.SidecarID))
 			case watchd.PromptDone:
-				r.status(iostream.LevelDone, fmt.Sprintf("%s reviewed", p.Name))
+				r.status(iostream.LevelDone, fmt.Sprintf("%s reviewed in %s", p.Name, msDuration(p.DurationMS)))
 			case watchd.PromptFailed:
 				r.status(iostream.LevelWarn, fmt.Sprintf("%s: %s", p.Name, p.Error))
 			case watchd.PromptQueued:
 				// Nothing to say yet.
 			}
+		}
+		// A factory round's findings are recorded as it is checked, which is
+		// when it is done.
+		if s.IsFactory() && round.State == watchd.RoundDone && !r.checked[i] {
+			r.checked[i] = true
+			r.reportFindings(roundResults(d, round.Number))
 		}
 	}
 	if r.state != s.State && s.State == watchd.SessionPaused {
@@ -491,6 +523,39 @@ func (r *sessionReporter) reportImplement(i int, impl watchd.RoundImplement) {
 	}
 }
 
+// roundResults is the review results of the round numbered n.
+func roundResults(d watchd.SessionDetail, n int) []watchd.ReviewResult {
+	for _, rd := range d.Details {
+		if rd.Number == n {
+			return rd.Results
+		}
+	}
+	return nil
+}
+
+// reportFindings says what each of a factory round's reviews found: what the
+// implementer is asked to fix next, or what is left when the run ends.
+func (r *sessionReporter) reportFindings(results []watchd.ReviewResult) {
+	for _, res := range results {
+		switch factory.Status(res.Status) {
+		case factory.StatusPassed:
+			r.status(iostream.LevelDone, fmt.Sprintf("review %s: no findings worth changing", res.Prompt))
+		case factory.StatusFailed:
+			r.status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", res.Prompt, len(res.Findings)))
+		case factory.StatusErrored:
+			r.status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", res.Prompt, res.Error))
+			continue
+		}
+		for _, f := range res.Findings {
+			r.status(iostream.LevelInfo, fmt.Sprintf("  [%s] %s %s", f.Severity, f.Location(), oneLineSummary(f.Body)))
+		}
+	}
+}
+
+// failedOutputLines is how much of a failed validation command's output is
+// shown: enough for a test runner's or compiler's summary.
+const failedOutputLines = 20
+
 // reportCheck says how a factory round's validation command came out.
 func (r *sessionReporter) reportCheck(c watchd.RoundCheck) {
 	switch factory.Status(c.Status) {
@@ -498,6 +563,13 @@ func (r *sessionReporter) reportCheck(c watchd.RoundCheck) {
 		r.status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, msDuration(c.DurationMS)))
 	case factory.StatusFailed:
 		r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, msDuration(c.DurationMS)))
+		if c.Output == "" {
+			return
+		}
+		lines := strings.Split(c.Output, "\n")
+		for _, l := range lines[max(len(lines)-failedOutputLines, 0):] {
+			r.status(iostream.LevelInfo, "    "+l)
+		}
 	case factory.StatusErrored:
 		r.status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
 	}
