@@ -111,6 +111,27 @@ func TestSnapshotTreeKeepsAnUninitializedSubmodule(t *testing.T) {
 	assert.Equal(t, snapshot(t, dir), gitRun(t, dir, "rev-parse", "HEAD^{tree}"))
 }
 
+// A path outside a sparse checkout is absent from the working tree. The
+// snapshot must keep its committed entry, for the same reason as the
+// submodule above.
+func TestSnapshotTreeKeepsASparseExcludedPath(t *testing.T) {
+	t.Parallel()
+
+	dir := setupRepo(t)
+	for _, d := range []string{"keep", "excluded"} {
+		assert.NilError(t, os.MkdirAll(filepath.Join(dir, d), 0o755))
+	}
+	commitFile(t, dir, "keep/a.txt", "one\n")
+	commitFile(t, dir, "excluded/b.txt", "two\n")
+
+	gitRun(t, dir, "sparse-checkout", "init", "--cone")
+	gitRun(t, dir, "sparse-checkout", "set", "keep")
+	_, err := os.Stat(filepath.Join(dir, "excluded", "b.txt"))
+	assert.Assert(t, os.IsNotExist(err), "sparse checkout left the path in place")
+
+	assert.Equal(t, snapshot(t, dir), gitRun(t, dir, "rev-parse", "HEAD^{tree}"))
+}
+
 func TestSnapshotTreeWorksBeforeTheFirstCommit(t *testing.T) {
 	t.Parallel()
 
