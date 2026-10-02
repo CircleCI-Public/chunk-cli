@@ -69,11 +69,7 @@ func FromReview(r review.Result) Check {
 		if !f.WorthChanging() {
 			continue
 		}
-		loc := f.File
-		if f.Line > 0 {
-			loc = fmt.Sprintf("%s:%d", f.File, f.Line)
-		}
-		fmt.Fprintf(&b, "- [%s] %s: %s\n", f.Severity, loc, f.Body)
+		fmt.Fprintf(&b, "- [%s] %s: %s\n", f.Severity, f.Location(), f.Body)
 	}
 	if b.Len() == 0 {
 		c.Status = StatusPassed
@@ -94,16 +90,9 @@ func FromCommand(name, sidecarID string, exitCode int, output string, d time.Dur
 		c.Status = StatusPassed
 	default:
 		c.Status = StatusFailed
-		c.Feedback = fmt.Sprintf("Exited %d.\n```\n%s\n```", exitCode, tailText(strings.TrimSpace(output), outputTail))
+		c.Feedback = fmt.Sprintf("Exited %d.\n```\n%s\n```", exitCode, review.Tail(strings.TrimSpace(output), outputTail))
 	}
 	return c
-}
-
-func tailText(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return "…" + s[len(s)-n:]
 }
 
 // Feedback renders the failed checks of a round as the implementer's next

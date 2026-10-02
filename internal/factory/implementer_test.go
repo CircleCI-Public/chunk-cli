@@ -135,7 +135,7 @@ func TestImplementerFailures(t *testing.T) {
 		{
 			name: "error result",
 			body: `echo '{"type":"result","is_error":true,"result":"API overloaded"}'; exit 1`,
-			want: "implementer exited 1: API overloaded",
+			want: "implementer: claude exited 1: API overloaded",
 		},
 		{
 			name: "credential rejected",
@@ -150,7 +150,7 @@ func TestImplementerFailures(t *testing.T) {
 		{
 			name: "stderr only",
 			body: `echo boom >&2; exit 2`,
-			want: "implementer exited 2: boom",
+			want: "implementer: claude exited 2: boom",
 		},
 	}
 	for _, tc := range cases {

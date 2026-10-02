@@ -92,8 +92,9 @@ applied with git apply to the tree the run started from.`,
 			if image == "" {
 				image = resolveImage("", cfg)
 			}
-			_, repo, err := gitremote.DetectOrgAndRepoCtx(ctx, workDir)
-			if err != nil {
+			// The pool would find this out too, but only after sidecars started
+			// booting.
+			if _, _, err := gitremote.DetectOrgAndRepoCtx(ctx, workDir); err != nil {
 				return &userError{msg: "Could not tell which repository this is from its origin remote.", err: err}
 			}
 
@@ -102,29 +103,28 @@ applied with git apply to the tree the run started from.`,
 			} else if reviewers <= 0 || reviewers > len(prompts) {
 				reviewers = len(prompts)
 			}
-			status(iostream.LevelStep, fmt.Sprintf("Creating an implementer sidecar and %d reviewer sidecar(s)...", reviewers))
-			impl, revs, err := factory.Provision(ctx, client, resolvedOrgID, image, sidecar.DefaultWorkspace(repo), reviewers, status)
+			runID := time.Now().UTC().Format("20060102-150405")
+			status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", reviewers))
+			pool, err := newPool(ctx, client, sidecar.PoolOptions{
+				Size:    factory.PoolSize(reviewers),
+				Name:    factory.PoolName(runID),
+				OrgID:   resolvedOrgID,
+				Image:   image,
+				WorkDir: workDir,
+			}, "factory's sidecars", rc.CircleCITokenSource, status)
 			if err != nil {
-				if authErr := notAuthorized("create sidecars", rc.CircleCITokenSource, err); authErr != nil {
-					return authErr
-				}
-				return &userError{msg: "Could not create the factory's sidecars.", err: err}
+				return err
 			}
-			all := append([]*sidecar.PoolEntry{impl}, revs...)
-			defer func() {
-				if keepSidecars {
-					ids := make([]string, len(all))
-					for i, e := range all {
-						ids[i] = e.ID
-					}
-					status(iostream.LevelInfo, "kept sidecars: "+strings.Join(ids, " "))
-					return
-				}
-				if err := factory.Teardown(client, all); err != nil {
-					status(iostream.LevelWarn, fmt.Sprintf("could not delete sidecars: %v", err))
-					status(iostream.LevelInfo, "Delete them with 'chunk sidecar delete', or wait for them to expire.")
-				}
-			}()
+			defer closeFactoryPool(ctx, pool, keepSidecars, status)
+			if err := waitPoolReady(ctx, pool, "factory's sidecars"); err != nil {
+				return err
+			}
+			// The implementer holds its member for the whole run; reviews are
+			// handed the rest.
+			impl, err := pool.Acquire(ctx)
+			if err != nil {
+				return &userError{msg: "Could not check out the implementer's sidecar.", err: err}
+			}
 
 			relay, err := factory.NewRelay(client, status)
 			if err != nil {
@@ -133,14 +133,15 @@ applied with git apply to the tree the run started from.`,
 			defer func() { _ = relay.Close() }()
 
 			steps := &factory.Sidecars{
-				Client: client,
-				Exec:   review.ClientExec,
+				Exec: review.ClientExec,
 				Implementer: &factory.Implementer{
 					Exec: review.ClientExec, Entry: impl, Credential: cred, BaseURL: rc.AnthropicBaseURL,
 					Model: model, Timeout: implementTimeout,
 					OnActivity: func(a factory.Activity) { printActivity(status, a) },
 				},
-				Reviewers: revs,
+				Acquire:   pool.Acquire,
+				Release:   pool.Release,
+				Reviewers: factory.Members(impl, pool.IDs()),
 				Relay:     relay,
 				Prompts:   prompts,
 				Review: review.Options{
@@ -149,12 +150,9 @@ applied with git apply to the tree the run started from.`,
 					ProgressFn:         func(e review.ProgressEvent) { printReviewProgress(status, e) },
 				},
 				Commands: commands,
-				Status:   status,
 				OnCheck:  func(c factory.Check) { printCheck(status, c) },
 			}
-
-			status(iostream.LevelStep, "Syncing your working tree to the implementer...")
-			if err := steps.Prepare(ctx, workDir); err != nil {
+			if err := steps.Prepare(ctx); err != nil {
 				return &userError{msg: "Could not set up the implementer's workspace.", err: err}
 			}
 
@@ -162,7 +160,7 @@ applied with git apply to the tree the run started from.`,
 			outcome, loopErr := loop.Run(ctx, steps, args[0])
 			// Whatever the implementer got to is kept, even when the loop
 			// failed partway, so the work is not lost with the sidecars.
-			saveFactoryPatch(ctx, steps, workDir, status, streams)
+			saveFactoryPatch(ctx, steps, workDir, runID, status, streams)
 			if errors.Is(loopErr, review.ErrCredentialRejected) {
 				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, loopErr)
 			}
@@ -221,8 +219,8 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 // saveFactoryPatch writes the implementer's work, if any, to a patch under
 // .chunk/factory. It runs on the way out, after a failure too, so it gets its
 // own deadline rather than the run's possibly canceled context.
-func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir string, status iostream.StatusFunc, streams iostream.Streams) {
-	path := filepath.Join(workDir, ".chunk", "factory", time.Now().UTC().Format("20060102-150405")+".patch")
+func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir, runID string, status iostream.StatusFunc, streams iostream.Streams) {
+	path := filepath.Join(workDir, ".chunk", "factory", runID+".patch")
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
 	change, err := steps.WritePatch(ctx, path)
@@ -237,14 +235,20 @@ func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir stri
 	streams.ErrPrintf("  Apply it with: git apply %s\n", path)
 }
 
+// closeFactoryPool deletes the run's sidecars, or with keep leaves them
+// running. A kept pool stays in its state file, which is how the dashboard and
+// 'chunk sidecar' still find its sidecars; no later run reuses it, since the
+// name is the run's own.
+func closeFactoryPool(ctx context.Context, pool *sidecar.Pool, keep bool, status iostream.StatusFunc) {
+	closePool(ctx, pool, !keep, status)
+	if keep {
+		status(iostream.LevelInfo, "kept sidecars: "+strings.Join(pool.IDs(), " "))
+	}
+}
+
 func factoryLoopError(err error) error {
 	if errors.Is(err, review.ErrClaudeMissing) {
-		return &userError{
-			msg:        "Claude Code is not installed on the factory's sidecars.",
-			suggestion: "Install it in the sidecar image (see 'chunk sidecar env build') and pass --image, or set validation.sidecarImage.",
-			hideDetail: true,
-			err:        err,
-		}
+		return agentNotInstalled("the factory's sidecars", err)
 	}
 	return &userError{msg: "The factory stopped early.", err: err}
 }
@@ -324,7 +328,7 @@ func reportOutcome(status iostream.StatusFunc, o factory.Outcome) error {
 		case factory.StatusFailed:
 			status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", c.Name, len(c.Findings)))
 			for _, f := range c.Findings {
-				status(iostream.LevelInfo, fmt.Sprintf("  [%s] %s:%d %s", f.Severity, f.File, f.Line, oneLineSummary(f.Body)))
+				status(iostream.LevelInfo, fmt.Sprintf("  [%s] %s %s", f.Severity, f.Location(), oneLineSummary(f.Body)))
 			}
 		case factory.StatusErrored:
 			status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", c.Name, c.Error))
