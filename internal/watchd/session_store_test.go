@@ -23,7 +23,7 @@ func TestSessionStoreAllowsOneActiveSessionPerProject(t *testing.T) {
 
 	first, _, busy := store.add(Session{ProjectRoot: "/p"})
 	assert.Equal(t, busy, "")
-	assert.Equal(t, len(first.snapshot().Stages), len(newStages()))
+	assert.Equal(t, len(first.snapshot().Stages), len(newStages(StageReviewLoop)))
 
 	_, _, busy = store.add(Session{ProjectRoot: "/p"})
 	assert.Assert(t, busy != "", "a second session on the same project must be refused")

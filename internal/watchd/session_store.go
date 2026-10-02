@@ -33,10 +33,12 @@ type sessionEntry struct {
 	// before the session starts waiting is not lost.
 	resume chan struct{}
 	// leftTree is the user's working tree as the session last left it, after the
-	// most recent fix; loopNote is why the review loop ended. Both are
-	// internal: the record shows their consequences.
-	leftTree string
-	loopNote string
+	// most recent fix; loopNote is why the review loop ended, and loopFailed
+	// that it ran to its end without its work passing. All are internal: the
+	// record shows their consequences.
+	leftTree   string
+	loopNote   string
+	loopFailed bool
 	// sidecarReview maps a sandbox to the review currently running on it, so a
 	// command submitted there can be attributed to its review.
 	sidecarReview map[string]string
@@ -54,12 +56,22 @@ func cloneSession(s Session) Session {
 			ended := *r.EndedAt
 			out.Rounds[i].EndedAt = &ended
 		}
+		out.Rounds[i].Checks = slices.Clone(r.Checks)
+		if r.Implement != nil {
+			impl := *r.Implement
+			out.Rounds[i].Implement = &impl
+		}
 		if r.Fix != nil {
 			fix := *r.Fix
 			fix.Files = slices.Clone(r.Fix.Files)
 			fix.FindingIDs = slices.Clone(r.Fix.FindingIDs)
 			out.Rounds[i].Fix = &fix
 		}
+	}
+	if s.Factory != nil {
+		f := *s.Factory
+		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
+		out.Factory = &f
 	}
 	if s.Restore != nil {
 		rp := *s.Restore
@@ -144,7 +156,7 @@ func (s *sessionStore) add(sess Session) (*sessionEntry, context.Context, string
 	}
 	sess.ID = uuid.NewString()
 	sess.State = SessionRunning
-	sess.Stages = newStages()
+	sess.Stages = newStages(sess.loopStage())
 	sess.StartedAt = time.Now()
 	ctx, cancel := context.WithCancel(s.parent)
 	entry := &sessionEntry{

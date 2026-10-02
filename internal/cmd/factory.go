@@ -13,17 +13,14 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
-	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func newFactoryCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate bool
+	var keepSidecars, noValidate, jsonOut bool
 	var orgID, image, model, reviewsDir string
 	var implementTimeout, reviewTimeout time.Duration
 
@@ -34,6 +31,10 @@ func newFactoryCmd() *cobra.Command {
 review its work with each prompt in the reviews directory, each on its own
 sidecar, and run the project's validation commands, feeding failures back to
 the implementer until every check passes or attempts run out.
+
+The run happens on the local watch daemon, as a session: watch it in
+'chunk watch'. Ctrl-C stops the run, and what the implementer did so far is
+still committed.
 
 The run works in a git worktree of its own, on the branch
 chunk/factory/<run id>, starting from your files as they are, uncommitted
@@ -56,133 +57,55 @@ the worktree is kept so you can look at it or carry on in it.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
-			status := newStatusFunc(streams)
 			if attempts < 1 {
 				return newUserError("--attempts must be at least 1.").
 					withCode("command.invalid_args").
 					withExitCode(ExitBadArgs).
 					withoutDetail()
 			}
-
-			workDir, err := os.Getwd()
+			if err := requireLocalDaemon(); err != nil {
+				return err
+			}
+			root, err := sessionProjectRoot(ctx, "")
 			if err != nil {
 				return err
 			}
-			cfg, err := config.LoadProjectConfig(workDir)
+			cfg, err := config.LoadProjectConfig(root)
 			if err != nil {
 				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err}
 			}
-			prompts, commands, err := factoryChecks(workDir, reviewsDir, cfg, noValidate)
+			// The daemon loads these itself; loading them here first explains a
+			// mistake before anything starts.
+			if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
+				return err
+			}
+			relReviews, err := factoryReviewsDir(root, reviewsDir)
 			if err != nil {
 				return err
 			}
 
-			rc, _ := config.Resolve("", "", insecureStorageFlag(cmd))
-			cred, credSource, credErr := reviewCredential(rc)
-			if credErr != nil {
-				return credErr
+			if err := watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd}); err != nil {
+				return &userError{msg: "Could not start the watch daemon.", err: err}
 			}
-			client, err := ensureCircleCIClient(ctx, cmd, rc, streams, ui.PromptHidden)
+			id, err := watchd.StartFactory(watchd.FactoryRequest{
+				ProjectRoot:             root,
+				Prompt:                  args[0],
+				ReviewsDir:              relReviews,
+				NoValidate:              noValidate,
+				Attempts:                attempts,
+				Reviewers:               reviewers,
+				Model:                   model,
+				ImplementTimeoutSeconds: int(implementTimeout / time.Second),
+				ReviewTimeoutSeconds:    int(reviewTimeout / time.Second),
+				KeepSidecars:            keepSidecars,
+				OrgID:                   orgID,
+				Image:                   image,
+			})
 			if err != nil {
-				return err
+				return sessionError(err)
 			}
-			if orgID == "" {
-				orgID = cfg.OrgID
-			}
-			resolvedOrgID, err := resolveOrgID(orgID, workDir, orgPicker(ctx, client, rc.CircleCITokenSource, streams))
-			if err != nil {
-				return err
-			}
-			if image == "" {
-				image = resolveImage("", cfg)
-			}
-			// The pool would find this out too, but only after sidecars started
-			// booting.
-			if _, _, err := gitremote.DetectOrgAndRepoCtx(ctx, workDir); err != nil {
-				return &userError{msg: "Could not tell which repository this is from its origin remote.", err: err}
-			}
-
-			if len(prompts) == 0 {
-				reviewers = 0
-			} else if reviewers <= 0 || reviewers > len(prompts) {
-				reviewers = len(prompts)
-			}
-			runID := time.Now().UTC().Format("20060102-150405")
-			root, wt, err := createFactoryWorktree(ctx, workDir, runID)
-			if err != nil {
-				return err
-			}
-			// Until the implementer starts, the worktree holds nothing the
-			// developer does not already have.
-			started := false
-			defer func() {
-				if !started {
-					removeFactoryWorktree(ctx, root, wt, status)
-				}
-			}()
-
-			status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", reviewers))
-			pool, err := newPool(ctx, client, sidecar.PoolOptions{
-				Size:  factory.PoolSize(reviewers),
-				Name:  factory.PoolName(runID),
-				OrgID: resolvedOrgID,
-				Image: image,
-				// The sidecars start from the worktree, and its state stays in
-				// the project, where the dashboard finds it.
-				WorkDir:  wt.Path,
-				StateDir: root,
-			}, "factory's sidecars", rc.CircleCITokenSource, status)
-			if err != nil {
-				return err
-			}
-			defer closeFactoryPool(ctx, pool, keepSidecars, status)
-			if err := waitPoolReady(ctx, pool, "factory's sidecars"); err != nil {
-				return err
-			}
-			// The implementer holds its member for the whole run; reviews are
-			// handed the rest.
-			impl, err := pool.Acquire(ctx)
-			if err != nil {
-				return &userError{msg: "Could not check out the implementer's sidecar.", err: err}
-			}
-
-			steps := &factory.Sidecars{
-				Exec: review.ClientExec,
-				Implementer: &factory.Implementer{
-					Exec: review.ClientExec, Entry: impl, Credential: cred, BaseURL: rc.AnthropicBaseURL,
-					Model: model, Timeout: implementTimeout,
-					OnActivity: func(a factory.Activity) { printActivity(status, a) },
-				},
-				Acquire:   pool.Acquire,
-				Release:   pool.Release,
-				Reviewers: factory.Members(impl, pool.IDs()),
-				Relay:     factory.NewRelay(client, wt.Path, status),
-				Prompts:   prompts,
-				Review: review.Options{
-					Credential: cred, BaseURL: rc.AnthropicBaseURL, Model: model, Timeout: reviewTimeout,
-					StructuredFindings: true,
-					ProgressFn:         func(e review.ProgressEvent) { printReviewProgress(status, e) },
-				},
-				Commands: commands,
-				OnCheck:  func(c factory.Check) { printCheck(status, c) },
-			}
-			if err := steps.Prepare(ctx); err != nil {
-				return &userError{msg: "Could not set up the implementer's workspace.", err: err}
-			}
-
-			started = true
-			loop := factory.Loop{Attempts: attempts, OnEvent: func(e factory.Event) { printEvent(status, attempts, e) }}
-			outcome, loopErr := loop.Run(ctx, steps, args[0])
-			// Whatever the implementer got to is kept, even when the loop
-			// failed partway, so the work is not lost with the sidecars.
-			commitFactoryWork(ctx, steps, wt, factory.CommitMessage(args[0], runID, outcome), status, streams)
-			if errors.Is(loopErr, review.ErrCredentialRejected) {
-				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, loopErr)
-			}
-			if loopErr != nil {
-				return factoryLoopError(loopErr)
-			}
-			return reportOutcome(status, outcome)
+			streams.ErrPrintf("Factory run %s started on the watch daemon. Ctrl-C stops it.\n", id)
+			return followSession(ctx, streams, id, jsonOut, true)
 		},
 	}
 
@@ -196,6 +119,7 @@ the worktree is kept so you can look at it or carry on in it.`,
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
@@ -207,79 +131,27 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 	if !explicit {
 		reviewsDir = filepath.Join(workDir, review.DefaultDir)
 	}
-	prompts, err := review.LoadPrompts(reviewsDir)
+	prompts, commands, err := factory.LoadChecks(reviewsDir, !explicit, cfg, noValidate)
 	switch {
 	case err == nil:
-	case !explicit && (errors.Is(err, review.ErrNoPrompts) || errors.Is(err, os.ErrNotExist)):
-		// The default directory is optional: validation commands alone may do.
-	case errors.Is(err, review.ErrNoPrompts):
-		return nil, nil, &userError{msg: fmt.Sprintf("No review prompts found in %s.", reviewsDir), suggestion: "Add one .md or .txt file per review.", err: err}
-	default:
-		return nil, nil, &userError{msg: fmt.Sprintf("Could not read review prompts from %s.", reviewsDir), err: err}
-	}
-	var commands []config.Command
-	if !noValidate {
-		commands = factory.ValidationCommands(cfg.Commands)
-	}
-	if len(prompts) == 0 && len(commands) == 0 {
+		return prompts, commands, nil
+	case errors.Is(err, factory.ErrNothingToCheck):
 		return nil, nil, &userError{
 			msg:        "Nothing to check the implementer's work with.",
 			suggestion: fmt.Sprintf("Add review prompts to %s, or validation commands with 'chunk init'.", review.DefaultDir),
 			hideDetail: true,
 		}
+	case errors.Is(err, review.ErrNoPrompts):
+		return nil, nil, &userError{msg: fmt.Sprintf("No review prompts found in %s.", reviewsDir), suggestion: "Add one .md or .txt file per review.", err: err}
 	}
-	return prompts, commands, nil
+	return nil, nil, &userError{msg: fmt.Sprintf("Could not read review prompts from %s.", reviewsDir), err: err}
 }
 
-// createFactoryWorktree makes the run's worktree in the project's chunk data
-// directory, outside the repository, so nothing that syncs or scans the
-// developer's checkout finds it. It returns the repository root with it.
-func createFactoryWorktree(ctx context.Context, workDir, runID string) (string, factory.Worktree, error) {
-	root := gitutil.TopLevelCtx(ctx, workDir)
-	if root == "" {
-		return "", factory.Worktree{}, &userError{msg: "chunk factory must be run inside a git repository.", hideDetail: true}
-	}
-	dataDir, err := config.ProjectDataDir(root)
-	if err != nil {
-		return "", factory.Worktree{}, &userError{msg: "Could not find chunk's data directory for this project.", err: err}
-	}
-	wt, err := factory.CreateWorktree(ctx, root, filepath.Join(dataDir, "factory", runID), runID)
-	if err != nil {
-		return "", factory.Worktree{}, &userError{msg: "Could not create the run's worktree.", err: err}
-	}
-	return root, wt, nil
-}
-
-// removeFactoryWorktree removes the worktree of a run that ended before the
-// implementer started. It has its own deadline, since it runs on the way out.
-func removeFactoryWorktree(ctx context.Context, root string, wt factory.Worktree, status iostream.StatusFunc) {
+// printFactoryWork summarizes the work committed on the run's branch and says
+// how to keep it.
+func printFactoryWork(ctx context.Context, wt factory.Worktree, status iostream.StatusFunc, streams iostream.Streams) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
-	if err := wt.Remove(ctx, root); err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("could not remove the run's worktree %s: %v", wt.Path, err))
-	}
-}
-
-// commitFactoryWork brings the implementer's last work into the worktree and
-// commits it on the run's branch. It runs on the way out, after a failure too,
-// so it gets its own deadlines rather than the run's possibly canceled context:
-// one for the pull, and a fresh one for the commit, so a pull that hangs cannot
-// use up the commit's time. What an earlier round pulled is committed even if
-// the last pull fails.
-func commitFactoryWork(ctx context.Context, steps *factory.Sidecars, wt factory.Worktree, message string, status iostream.StatusFunc, streams iostream.Streams) {
-	base := context.WithoutCancel(ctx)
-	pullCtx, cancelPull := context.WithTimeout(base, 2*time.Minute)
-	err := steps.Pull(pullCtx)
-	cancelPull()
-	if err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("could not bring back the implementer's last changes: %v", err))
-	}
-	ctx, cancel := context.WithTimeout(base, cleanupTimeout)
-	defer cancel()
-	if _, err := wt.Commit(ctx, message); err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("could not commit the work in %s: %v", wt.Path, err))
-		return
-	}
 	stat, err := wt.Stat(ctx)
 	if err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("could not summarize the work on %s: %v", wt.Branch, err))
@@ -306,84 +178,88 @@ func keepWorkHint(wt factory.Worktree) string {
 	return fmt.Sprintf("Apply it with: git diff --binary %s %s | git apply", wt.Baseline, wt.Branch)
 }
 
-// closeFactoryPool deletes the run's sidecars, or with keep leaves them
-// running. A kept pool stays in its state file, which is how the dashboard and
-// 'chunk sidecar' still find its sidecars; no later run reuses it, since the
-// name is the run's own.
-func closeFactoryPool(ctx context.Context, pool *sidecar.Pool, keep bool, status iostream.StatusFunc) {
-	closePool(ctx, pool, !keep, status)
-	if keep {
-		status(iostream.LevelInfo, "kept sidecars: "+strings.Join(pool.IDs(), " "))
+// factoryReviewsDir is the --reviews directory relative to the project root,
+// which is how the daemon is told it, or "" for the default.
+func factoryReviewsDir(root, dir string) (string, error) {
+	if dir == "" {
+		return "", nil
 	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", dir, err)
+	}
+	// The root has its symlinks resolved, so the directory must too.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", newUserError("--reviews must be a directory inside the project.").
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return rel, nil
 }
 
-func factoryLoopError(err error) error {
-	if errors.Is(err, review.ErrClaudeMissing) {
-		return agentNotInstalled("the factory's sidecars", err)
-	}
-	return &userError{msg: "The factory stopped early.", err: err}
-}
-
-func printEvent(status iostream.StatusFunc, attempts int, e factory.Event) {
-	switch e.Kind {
-	case factory.EventImplementing:
-		if e.Round == 1 {
-			status(iostream.LevelStep, "Implementing...")
-			return
+// finishFactory prints where a factory run ended up and maps anything short of
+// every check passing to an error.
+func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.SessionDetail, jsonOut bool) error {
+	status := newStatusFunc(streams)
+	f := detail.Factory
+	if jsonOut {
+		if err := iostream.PrintJSON(streams.Out, detail); err != nil {
+			return err
 		}
-		status(iostream.LevelStep, fmt.Sprintf("Round %d/%d: fixing failed checks...", e.Round, attempts))
-	case factory.EventImplemented:
-		status(iostream.LevelDone, fmt.Sprintf("implementer finished in %s ($%.2f)", e.Turn.Duration.Round(time.Second), e.Turn.CostUSD))
-		if e.Turn.Summary != "" {
-			status(iostream.LevelInfo, oneLineSummary(e.Turn.Summary))
+		// The JSON is the report; the exit code still says whether it passed.
+		status = func(iostream.Level, string) {}
+	} else {
+		printFactoryLeftovers(ctx, f, status, streams)
+	}
+	switch detail.State {
+	case watchd.SessionCancelled:
+		return newUserError("The factory run was cancelled.").withoutDetail()
+	case watchd.SessionFailed:
+		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
+	case watchd.SessionRunning, watchd.SessionPaused, watchd.SessionDone:
+	}
+	return reportOutcome(status, factoryOutcome(detail))
+}
+
+// printFactoryLeftovers says what a run left behind: its committed work, or
+// where its uncommitted work still is, and any sidecars kept running.
+func printFactoryLeftovers(ctx context.Context, f *watchd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
+	switch {
+	case f.Committed:
+		printFactoryWork(ctx, factory.Worktree{Path: f.Worktree, Branch: f.Branch, Baseline: f.Baseline, Head: f.Head}, status, streams)
+	case f.Worktree != "":
+		// A worktree removed after an early failure held no work.
+		if _, err := os.Stat(f.Worktree); err == nil {
+			status(iostream.LevelWarn, "The work was not committed. It is in the worktree "+f.Worktree)
 		}
-	case factory.EventCollected:
-		if e.Change.Empty() {
-			status(iostream.LevelWarn, "no changes")
-			return
-		}
-		status(iostream.LevelInfo, e.Change.Stat)
-	case factory.EventChecking:
-		status(iostream.LevelStep, fmt.Sprintf("Round %d/%d: reviewing and validating...", e.Round, attempts))
-	case factory.EventChecked:
-		passed := 0
-		for _, c := range e.Checks {
-			if c.Status == factory.StatusPassed {
-				passed++
-			}
-		}
-		status(iostream.LevelInfo, fmt.Sprintf("%d of %d checks passed", passed, len(e.Checks)))
+	}
+	if len(f.KeptSidecars) > 0 {
+		status(iostream.LevelInfo, "kept sidecars: "+strings.Join(f.KeptSidecars, " "))
 	}
 }
 
-func printActivity(status iostream.StatusFunc, a factory.Activity) {
-	if a.Tool == "" {
-		return
+// factoryOutcome rebuilds a run's outcome from its record: why it stopped,
+// and how the last round it checked came out. A run that stopped because the
+// implementer changed nothing new ends on a round that was never checked.
+func factoryOutcome(detail watchd.SessionDetail) factory.Outcome {
+	o := factory.Outcome{Result: factory.Result(detail.Factory.Result), Rounds: detail.Factory.Rounds}
+	for _, rd := range detail.Details {
+		if rd.Number != o.Rounds {
+			continue
+		}
+		for _, res := range rd.Results {
+			o.Checks = append(o.Checks, factory.Check{
+				Name: res.Prompt, Kind: factory.KindReview, Status: factory.Status(res.Status),
+				SidecarID: res.SidecarID, Error: res.Error, Findings: res.Findings,
+			})
+		}
 	}
-	status(iostream.LevelInfo, fmt.Sprintf("  %s %s", a.Tool, oneLineSummary(a.Detail)))
-}
-
-func printReviewProgress(status iostream.StatusFunc, e review.ProgressEvent) {
-	switch e.State {
-	case review.StateQueued:
-	case review.StateRunning:
-		status(iostream.LevelInfo, fmt.Sprintf("  review %s started on %s", e.Prompt, e.SidecarID))
-	case review.StateFailed:
-		status(iostream.LevelWarn, fmt.Sprintf("  review %s could not run: %s", e.Prompt, e.Error))
-	case review.StateDone:
-		status(iostream.LevelInfo, fmt.Sprintf("  review %s finished in %s", e.Prompt, e.Duration.Round(time.Second)))
-	}
-}
-
-func printCheck(status iostream.StatusFunc, c factory.Check) {
-	switch c.Status {
-	case factory.StatusPassed:
-		status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, c.Duration.Round(time.Second)))
-	case factory.StatusFailed:
-		status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, c.Duration.Round(time.Second)))
-	case factory.StatusErrored:
-		status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
-	}
+	return o
 }
 
 // reportOutcome prints how the last round's checks came out and returns an

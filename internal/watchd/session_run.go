@@ -12,6 +12,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -63,6 +64,8 @@ type ReviewConfig struct {
 	NewPool func(ctx context.Context, spec ReviewPoolSpec) (*ReviewPool, error)
 	Submit  SubmitFunc
 	Stream  StreamFunc
+	// RunFactory runs a factory session; factory.Run when nil.
+	RunFactory func(ctx context.Context, opts factory.RunOptions) (factory.Report, error)
 }
 
 // Option customizes RunDaemon.
@@ -186,6 +189,7 @@ func (d *daemon) startSession(req SessionRequest) (Session, error) {
 	}
 
 	entry, ctx, busy := d.sessions.add(Session{
+		Kind:        KindReview,
 		ProjectRoot: ps.root,
 		Branch:      currentBranch(ps.root),
 		HeadSHA:     headRef(ps.root),
@@ -258,20 +262,13 @@ func (d *daemon) runReviews(ctx context.Context, entry *sessionEntry, ridx int, 
 // defaultReviewPool builds a real pool the way `chunk review` does: named so its
 // state persists in the project and a later round reuses the warm sandboxes.
 func (d *daemon) defaultReviewPool(ctx context.Context, spec ReviewPoolSpec) (*ReviewPool, error) {
-	cfg, err := config.LoadProjectConfig(spec.Root)
+	cfg, err := loadProjectConfig(spec.Root)
 	if err != nil {
-		return nil, fmt.Errorf("load project config (run 'chunk init' in the project): %w", err)
+		return nil, err
 	}
-	orgID := cfg.OrgID
-	if orgID == "" {
-		orgID, _ = config.ResolveOrgID(spec.Root)
-	}
-	if orgID == "" {
-		return nil, errors.New("no CircleCI org ID configured for this project")
-	}
-	image := ""
-	if cfg.Validation != nil {
-		image = cfg.Validation.SidecarImage
+	orgID, image, err := poolTarget(spec.Root, cfg)
+	if err != nil {
+		return nil, err
 	}
 	status := func(_ iostream.Level, msg string) {
 		log.Printf("watchd: session pool (%s): %s", spec.Root, msg)
@@ -292,6 +289,32 @@ func (d *daemon) defaultReviewPool(ctx context.Context, spec ReviewPoolSpec) (*R
 		WaitReady: pool.WaitSynced,
 		Close:     pool.Close,
 	}, nil
+}
+
+// loadProjectConfig reads the configuration of a project the daemon runs work
+// for.
+func loadProjectConfig(root string) (*config.ProjectConfig, error) {
+	cfg, err := config.LoadProjectConfig(root)
+	if err != nil {
+		return nil, fmt.Errorf("load project config (run 'chunk init' in the project): %w", err)
+	}
+	return cfg, nil
+}
+
+// poolTarget is the org a project's sidecars are created in and the image they
+// start from, as `chunk review` resolves them.
+func poolTarget(root string, cfg *config.ProjectConfig) (orgID, image string, err error) {
+	orgID = cfg.OrgID
+	if orgID == "" {
+		orgID, _ = config.ResolveOrgID(root)
+	}
+	if orgID == "" {
+		return "", "", errors.New("no CircleCI org ID configured for this project")
+	}
+	if cfg.Validation != nil {
+		image = cfg.Validation.SidecarImage
+	}
+	return orgID, image, nil
 }
 
 // execerFor runs each Claude command through the exec API in two phases, submit
@@ -486,7 +509,7 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 
 	now := time.Now()
 	entry.s.EndedAt = &now
-	stage := entry.stageLocked(StageReviewLoop)
+	stage := entry.stageLocked(entry.s.loopStage())
 	switch {
 	case entry.cancelled:
 		entry.s.State = SessionCancelled
@@ -498,6 +521,9 @@ func (d *daemon) settleSession(entry *sessionEntry, runErr error) {
 	default:
 		entry.s.State = SessionDone
 		stage.State, stage.Note = StageDone, entry.loopNote
+		if entry.loopFailed {
+			stage.State = StageFailed
+		}
 	}
 
 	// Anything still in flight when the session ended did not finish; say so

@@ -324,6 +324,17 @@ chunk
   files as they are and goes again, `cancel` ends it. It never touches the
   index, commits, or pushes. Sessions are kept in memory:
   a daemon restart loses the record. In-process `chunk review` is unchanged.
+- **`factory` runs on the local daemon too.** `chunk factory "<prompt>"` checks
+  the project's review prompts and validation commands, registers the project,
+  starts the daemon if needed, and starts a factory session; it follows the run
+  until it ends. Ctrl-C stops the run and waits for it to commit the work done
+  so far. It uses the daemon's
+  credentials and the project's configured org and image unless `--org-id` or
+  `--image` say otherwise, and it is refused when `CHUNK_WATCHD_REMOTE_ADDR` is
+  set. `--reviews` must name a directory inside the project. When the run ends
+  it prints the work committed on `chunk/factory/<run id>`, how to keep it, and
+  how the last round's reviews came out, and exits non-zero unless every check
+  passed.
 - **`watch` shows the daemon's sessions live.** The header notes a session running
   or paused, and `r` opens the session view: a timeline of the whole flow — the
   review loop with each round (its reviews, drawn by the same renderer as

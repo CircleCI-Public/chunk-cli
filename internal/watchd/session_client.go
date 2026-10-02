@@ -84,6 +84,16 @@ func StartSession(req SessionRequest) (string, error) {
 	return resp.ID, nil
 }
 
+// StartFactory asks the daemon to start a factory session and returns its ID
+// without waiting for it. It is followed and cancelled like any other session.
+func StartFactory(req FactoryRequest) (string, error) {
+	var resp SessionStartResponse
+	if err := sessionCall(http.MethodPost, "/factory", req, &resp); err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
 // FetchSession returns one session with the text of its reviews.
 func FetchSession(id string) (SessionDetail, error) {
 	var detail SessionDetail

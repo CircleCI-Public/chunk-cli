@@ -37,10 +37,13 @@ type StageID string
 // so building one is filling in its Stage and not changing the record's shape.
 const (
 	StageReviewLoop StageID = "review_loop"
-	StageRebase     StageID = "rebase"
-	StageCI         StageID = "ci"
-	StageApproval   StageID = "approval"
-	StagePR         StageID = "pr"
+	// StageFactoryLoop is a factory run's loop, which takes the review loop's
+	// place: implement, then review and validate until the checks pass.
+	StageFactoryLoop StageID = "factory_loop"
+	StageRebase      StageID = "rebase"
+	StageCI          StageID = "ci"
+	StageApproval    StageID = "approval"
+	StagePR          StageID = "pr"
 )
 
 // StageState is where one stage stands.
@@ -67,16 +70,33 @@ type Stage struct {
 	Note string `json:"note,omitempty"`
 }
 
+// SessionKind is what a session runs.
+type SessionKind string
+
+// Session kinds.
+const (
+	// KindReview reviews the user's files and applies the fixes to them. A
+	// session with no kind is one of these.
+	KindReview SessionKind = "review"
+	// KindFactory is a factory run: an implementer works in a worktree of its
+	// own, and reviews and validation check the work until it passes.
+	KindFactory SessionKind = "factory"
+)
+
 // RoundState is where one review-and-fix round stands.
 type RoundState string
 
 // Round states.
 const (
 	RoundReviewing RoundState = "reviewing"
-	RoundFixing    RoundState = "fixing"
-	RoundApplying  RoundState = "applying"
-	RoundDone      RoundState = "done"
-	RoundFailed    RoundState = "failed"
+	// RoundImplementing and RoundChecking are a factory round's halves: the
+	// implementer's turn, then the reviews and validation commands.
+	RoundImplementing RoundState = "implementing"
+	RoundChecking     RoundState = "checking"
+	RoundFixing       RoundState = "fixing"
+	RoundApplying     RoundState = "applying"
+	RoundDone         RoundState = "done"
+	RoundFailed       RoundState = "failed"
 	// RoundSuperseded marks a round abandoned because the files changed under it;
 	// the round is run again against the new files.
 	RoundSuperseded RoundState = "superseded"
@@ -110,6 +130,49 @@ type RoundFix struct {
 	// FindingIDs are the findings the agent was asked to fix.
 	FindingIDs []string `json:"finding_ids,omitempty"`
 	Error      string   `json:"error,omitempty"`
+}
+
+// RoundImplement is a factory round's implementer turn.
+type RoundImplement struct {
+	State      FixState `json:"state"`
+	DurationMS int64    `json:"duration_ms,omitempty"`
+	CostUSD    float64  `json:"cost_usd,omitempty"`
+	// Summary is the implementer's own account of the turn.
+	Summary string `json:"summary,omitempty"`
+	// Stat summarizes the work so far against the run's baseline.
+	Stat  string `json:"stat,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// RoundCheck is one validation command a factory round ran.
+type RoundCheck struct {
+	Name string `json:"name"`
+	// Status is "passed", "failed" or "errored", as factory.Status.
+	Status     string `json:"status"`
+	SidecarID  string `json:"sidecar_id,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// FactoryRun is what a factory session works on and where its work is.
+type FactoryRun struct {
+	Prompt string `json:"prompt"`
+	RunID  string `json:"run_id,omitempty"`
+	// Worktree is where the work is, on Branch. Baseline is the commit the
+	// branch starts from and Head the user's HEAD when the run started; they
+	// differ when the user's uncommitted work was committed as the baseline.
+	Worktree string `json:"worktree,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Baseline string `json:"baseline,omitempty"`
+	Head     string `json:"head,omitempty"`
+	// Result is why the loop stopped, as factory.Result, once it has, and
+	// Rounds how many rounds were checked, as factory.Outcome.Rounds.
+	Result string `json:"result,omitempty"`
+	Rounds int    `json:"rounds,omitempty"`
+	// Committed reports whether the work was committed on Branch.
+	Committed bool `json:"committed,omitempty"`
+	// KeptSidecars are the sidecars left running at the user's request.
+	KeptSidecars []string `json:"kept_sidecars,omitempty"`
 }
 
 // ReviewPrompt is one review's progress inside a round. It carries state only:
@@ -169,6 +232,10 @@ type Round struct {
 	Findings int       `json:"findings"`
 	Worth    int       `json:"worth"`
 	Fix      *RoundFix `json:"fix,omitempty"`
+	// Implement and Checks are a factory round's implementer turn and
+	// validation commands. Its reviews are in Reviews.
+	Implement *RoundImplement `json:"implement,omitempty"`
+	Checks    []RoundCheck    `json:"checks,omitempty"`
 	// Note says why the round ended the way it did, such as why the loop stopped.
 	Note      string     `json:"note,omitempty"`
 	StartedAt time.Time  `json:"started_at"`
@@ -190,10 +257,12 @@ type RestorePoint struct {
 // Session is the record of one pre-PR session: the review loop, and the stages
 // that will follow it. It holds state only; text is in SessionDetail.
 type Session struct {
-	ID          string `json:"id"`
-	ProjectRoot string `json:"project_root"`
-	Branch      string `json:"branch,omitempty"`
-	HeadSHA     string `json:"head_sha,omitempty"`
+	ID string `json:"id"`
+	// Kind is what the session runs; empty means KindReview.
+	Kind        SessionKind `json:"kind,omitempty"`
+	ProjectRoot string      `json:"project_root"`
+	Branch      string      `json:"branch,omitempty"`
+	HeadSHA     string      `json:"head_sha,omitempty"`
 
 	State SessionState `json:"state"`
 	// PauseReason says why a paused session is waiting, and PausedPaths which
@@ -207,16 +276,29 @@ type Session struct {
 	Rounds []Round `json:"rounds"`
 	// Restore is nil until the first fix is about to change the user's files.
 	Restore *RestorePoint `json:"restore,omitempty"`
+	// Factory is set on a factory session.
+	Factory *FactoryRun `json:"factory,omitempty"`
 
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// newStages returns the full flow for a session that is starting: the review
-// loop running and every later stage not built.
-func newStages() []Stage {
+// IsFactory reports whether the session is a factory run.
+func (s Session) IsFactory() bool { return s.Kind == KindFactory }
+
+// loopStage is the stage the session's loop is.
+func (s Session) loopStage() StageID {
+	if s.IsFactory() {
+		return StageFactoryLoop
+	}
+	return StageReviewLoop
+}
+
+// newStages returns the full flow for a session that is starting: its loop
+// running and every later stage not built.
+func newStages(loop StageID) []Stage {
 	return []Stage{
-		{ID: StageReviewLoop, State: StageRunning},
+		{ID: loop, State: StageRunning},
 		{ID: StageRebase, State: StageNotBuilt},
 		{ID: StageCI, State: StageNotBuilt},
 		{ID: StageApproval, State: StageNotBuilt},
@@ -238,6 +320,9 @@ type ReviewResult struct {
 	Findings []review.Finding `json:"findings,omitempty"`
 	// FindingsDropped counts findings that were unusable or over the cap.
 	FindingsDropped int `json:"findings_dropped,omitempty"`
+	// Status is how a factory review came out as a check: "passed", "failed"
+	// or "errored", as factory.Status.
+	Status string `json:"status,omitempty"`
 }
 
 // RoundDetail is the text of one round.
@@ -267,6 +352,32 @@ type SessionRequest struct {
 	// MaxRounds lowers the number of rounds; zero or more than MaxRounds means
 	// MaxRounds.
 	MaxRounds int `json:"max_rounds,omitempty"`
+}
+
+// FactoryRequest starts a factory session.
+type FactoryRequest struct {
+	// ProjectRoot is a project the daemon tracks. Required.
+	ProjectRoot string `json:"project_root"`
+	// Prompt is what the implementer is asked to do. Required.
+	Prompt string `json:"prompt"`
+	// ReviewsDir is a directory of review prompts relative to the project
+	// root; empty means .chunk/reviews, which may be missing when validation
+	// commands are enough.
+	ReviewsDir string `json:"reviews_dir,omitempty"`
+	NoValidate bool   `json:"no_validate,omitempty"`
+	// Attempts is the most rounds to check; zero means DefaultAttempts.
+	Attempts int `json:"attempts,omitempty"`
+	// Reviewers is how many reviewer sidecars to run; zero means one per
+	// review prompt.
+	Reviewers int    `json:"reviewers,omitempty"`
+	Model     string `json:"model,omitempty"`
+	// Zero timeouts mean the factory's defaults.
+	ImplementTimeoutSeconds int  `json:"implement_timeout_seconds,omitempty"`
+	ReviewTimeoutSeconds    int  `json:"review_timeout_seconds,omitempty"`
+	KeepSidecars            bool `json:"keep_sidecars,omitempty"`
+	// OrgID and Image override the project's configured ones.
+	OrgID string `json:"org_id,omitempty"`
+	Image string `json:"image,omitempty"`
 }
 
 // RestoreRequest asks to undo a session's changes.
