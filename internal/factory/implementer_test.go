@@ -143,6 +143,16 @@ func TestImplementerFailures(t *testing.T) {
 			is:   review.ErrCredentialRejected,
 		},
 		{
+			name: "credential rejected on stderr",
+			body: `echo '{"type":"result","is_error":true,"result":"Something went wrong"}'; echo 'Failed to authenticate. API Error: 401' >&2; exit 1`,
+			is:   review.ErrCredentialRejected,
+		},
+		{
+			name: "error result without text",
+			body: `echo '{"type":"result","is_error":true,"result":""}'; echo boom >&2`,
+			want: "implementer: boom",
+		},
+		{
 			name: "no result",
 			body: `echo '{"type":"system","session_id":"s"}'`,
 			want: "without a result",

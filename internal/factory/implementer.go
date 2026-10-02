@@ -106,11 +106,14 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	if strings.TrimSpace(explain) == "" {
 		explain = stderr.String()
 	}
-	switch err := review.ClaudeRunError(ctx, timeout, code, err, s.result.Result, explain); {
+	// explain stands in for stderr, so stderr goes in with the result for the
+	// credential check: a 401 there must not hide behind a result that says
+	// something else.
+	switch err := review.ClaudeRunError(ctx, timeout, code, err, s.result.Result+"\n"+stderr.String(), explain); {
 	case err != nil:
 		return turn, fmt.Errorf("implementer: %w", err)
 	case s.result.IsError:
-		return turn, fmt.Errorf("implementer: %s", review.Tail(strings.TrimSpace(s.result.Result), 2000))
+		return turn, fmt.Errorf("implementer: %s", review.Tail(strings.TrimSpace(explain), 2000))
 	case !s.sawResult:
 		return turn, errors.New("implementer ended without a result")
 	}
