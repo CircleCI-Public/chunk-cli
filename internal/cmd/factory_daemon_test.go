@@ -14,6 +14,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
@@ -29,7 +30,9 @@ func fakeFactoryConfig(t *testing.T, result factory.Result) watchd.ReviewConfig 
 			return factory.Report{}, fmt.Errorf("create the run's worktree: %w", err)
 		}
 		opts.OnStart("run-1", wt)
+		opts.Status(iostream.LevelStep, "Preparing an implementer sidecar and 1 reviewer sidecar(s)...")
 		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
+		opts.OnActivity(factory.Activity{Tool: "Edit", Detail: "flag.go"})
 		if err := os.WriteFile(filepath.Join(wt.Path, "flag.go"), []byte("package main\n"), 0o644); err != nil {
 			return factory.Report{}, err
 		}
@@ -89,15 +92,20 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 
 	for _, want := range []string{
 		"started on the watch daemon",
-		// The run ends before the first poll, so only where it ended shows.
-		"round 1: done",
+		// The run ends before the first poll, so only where it ended shows,
+		// out of the default attempts.
+		"round 1/3: done — 1 of 1 checks passed",
+		"Preparing an implementer sidecar and 1 reviewer sidecar(s)...",
+		"  Edit flag.go",
 		"implementer finished",
 		"added the flag",
 		"test passed",
 		"Committed 1 file changed, 1 insertion(+) to chunk/factory/run-1",
 		// The project's uncommitted config is the run's baseline.
 		"Apply it with: git diff --binary",
-		"review bugs: no findings",
+		"review bugs: no findings worth changing",
+		"The run took ",
+		"1 implementer turn(s) cost $",
 		"All checks passed after 1 round(s).",
 	} {
 		assert.Assert(t, bytes.Contains([]byte(stderr), []byte(want)), "missing %q in:\n%s", want, stderr)
@@ -131,7 +139,8 @@ func TestFactoryJSONWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	var detail watchd.SessionDetail
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &detail), stdout)
 	assert.Equal(t, detail.Factory.Result, "exhausted")
-	assert.Assert(t, !bytes.Contains([]byte(stderr), []byte("[high] flag.go:1 unused")), stderr)
+	// Progress still goes to stderr, but the closing report is the JSON.
+	assert.Assert(t, !bytes.Contains([]byte(stderr), []byte("The run took")), stderr)
 }
 
 // Ctrl-C stops the run rather than leaving it running, and the work done so
@@ -146,7 +155,9 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 			return factory.Report{}, fmt.Errorf("create the run's worktree: %w", err)
 		}
 		opts.OnStart("run-1", wt)
+		opts.Status(iostream.LevelStep, "Preparing an implementer sidecar and 1 reviewer sidecar(s)...")
 		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
+		opts.OnActivity(factory.Activity{Tool: "Edit", Detail: "flag.go"})
 		if err := os.WriteFile(filepath.Join(wt.Path, "flag.go"), []byte("package main\n"), 0o644); err != nil {
 			return factory.Report{}, err
 		}

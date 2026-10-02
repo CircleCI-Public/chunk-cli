@@ -50,7 +50,7 @@ type Check struct {
 	// Prose is a review's prose alongside its findings, kept for display.
 	Prose string
 	// ExitCode and Output are a validation command's exit code and the tail of
-	// its output, kept for the run's log.
+	// its output, kept for display and the run's log.
 	ExitCode int
 	Output   string
 }

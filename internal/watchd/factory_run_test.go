@@ -14,6 +14,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -37,8 +38,12 @@ func scriptedRun(result factory.Result) func(context.Context, factory.RunOptions
 	return func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		wt := factory.Worktree{Path: "/data/factory/run-1", Branch: "chunk/factory/run-1", Baseline: "base", Head: "head"}
 		opts.OnStart("run-1", wt)
+		opts.Status(iostream.LevelStep, "Preparing an implementer sidecar and 2 reviewer sidecar(s)...")
 
 		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
+		// Text the implementer writes is not tool use.
+		opts.OnActivity(factory.Activity{Detail: "Let me look."})
+		opts.OnActivity(factory.Activity{Tool: "Bash", Detail: "go test\n  ./..."})
 		opts.OnEvent(factory.Event{Kind: factory.EventImplemented, Round: 1, Turn: factory.Turn{Summary: "added it", Duration: time.Minute, CostUSD: 0.5}})
 		opts.OnEvent(factory.Event{Kind: factory.EventCollected, Round: 1, Change: factory.Change{Stat: "1 file changed", Fingerprint: "f"}})
 		opts.OnEvent(factory.Event{Kind: factory.EventChecking, Round: 1})
@@ -55,6 +60,7 @@ func scriptedRun(result factory.Result) func(context.Context, factory.RunOptions
 		opts.OnReviewProgress(review.ProgressEvent{Prompt: "bugs", SidecarID: "sc-2", State: review.StateDone, Duration: time.Second})
 		opts.OnReviewProgress(review.ProgressEvent{Prompt: "style", SidecarID: "sc-3", State: review.StateDone, Duration: time.Second})
 		opts.OnCheck(factory.Check{Name: "test", Kind: factory.KindValidate, Status: factory.StatusPassed, SidecarID: "sc-1", Duration: 2 * time.Second})
+		opts.OnCheck(factory.Check{Name: "lint", Kind: factory.KindValidate, Status: factory.StatusFailed, SidecarID: "sc-1", Output: "main.go:3: unused"})
 
 		bug := review.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
 		checks := []factory.Check{
@@ -99,9 +105,10 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.Equal(t, detail.Stages[0].Note, "all checks passed after 1 round(s)")
 	assert.Equal(t, detail.Branch, "chunk/factory/run-1")
 	assert.DeepEqual(t, *detail.Factory, FactoryRun{
-		Prompt: "add a --verbose flag", RunID: "run-1",
+		Prompt: "add a --verbose flag", Attempts: DefaultAttempts, RunID: "run-1",
 		Worktree: "/data/factory/run-1", Branch: "chunk/factory/run-1", Baseline: "base", Head: "head",
 		Result: "passed", Rounds: 1, Committed: true,
+		Progress: Feed{Lines: []FeedLine{{Level: FeedStep, Text: "Preparing an implementer sidecar and 2 reviewer sidecar(s)..."}}, Total: 1},
 	})
 
 	assert.Equal(t, len(detail.Rounds), 1)
@@ -110,8 +117,12 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.Equal(t, round.Note, "2 of 3 checks passed")
 	assert.DeepEqual(t, *round.Implement, RoundImplement{
 		State: FixApplied, DurationMS: 60000, CostUSD: 0.5, Summary: "added it", Stat: "1 file changed",
+		Activity: Feed{Lines: []FeedLine{{Level: FeedInfo, Text: "Bash go test ./..."}}, Total: 1},
 	})
-	assert.DeepEqual(t, round.Checks, []RoundCheck{{Name: "test", Status: "passed", SidecarID: "sc-1", DurationMS: 2000}})
+	assert.DeepEqual(t, round.Checks, []RoundCheck{
+		{Name: "test", Status: "passed", SidecarID: "sc-1", DurationMS: 2000},
+		{Name: "lint", Status: "failed", SidecarID: "sc-1", Output: "main.go:3: unused"},
+	})
 	assert.Equal(t, round.Findings, 1)
 	assert.Equal(t, round.Worth, 1)
 	byName := map[string]ReviewPrompt{}
@@ -299,4 +310,23 @@ func TestStartFactoryRefusesABadRequest(t *testing.T) {
 	var ae *apiError
 	assert.Assert(t, errors.As(err, &ae), "got %v", err)
 	assert.ErrorContains(t, ae, "nothing to check")
+}
+
+func TestFeedKeepsTheLatestLinesAndCountsThemAll(t *testing.T) {
+	var f Feed
+	for i := range maxFeedLines + 5 {
+		f.add(iostream.LevelInfo, fmt.Sprint(i))
+	}
+	assert.Equal(t, f.Total, maxFeedLines+5)
+	assert.Equal(t, len(f.Lines), maxFeedLines)
+	assert.Equal(t, f.Lines[0].Text, "5")
+
+	// A follower that has seen all but two gets those two.
+	got := f.Since(f.Total - 2)
+	assert.Equal(t, len(got), 2)
+	assert.Equal(t, got[1].Text, fmt.Sprint(maxFeedLines+4))
+	// One that fell behind gets what is still kept, and one that is ahead
+	// of the feed nothing.
+	assert.Equal(t, len(f.Since(0)), maxFeedLines)
+	assert.Equal(t, len(f.Since(f.Total+1)), 0)
 }

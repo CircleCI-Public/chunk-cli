@@ -18,6 +18,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
@@ -205,4 +206,57 @@ func TestSessionRestoreAndResumeExplainWhyTheyCannotRun(t *testing.T) {
 	// And a session that is not paused cannot be resumed.
 	_, err = runSessionCmd(t, "resume", started["id"])
 	assert.ErrorContains(t, err, "not paused")
+}
+
+// reportedLines follows a session through snapshots and returns what was
+// said, one string per line.
+func reportedLines(snapshots ...watchd.SessionDetail) []string {
+	var lines []string
+	rep := newSessionReporter(func(_ iostream.Level, msg string) { lines = append(lines, msg) })
+	for _, d := range snapshots {
+		rep.report(d)
+	}
+	return lines
+}
+
+func TestSessionReporterSaysHowEachFactoryRoundWent(t *testing.T) {
+	bug := review.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
+	output := strings.Repeat("ok\n", 30) + "--- FAIL: TestFlag"
+	checking := watchd.SessionDetail{Session: watchd.Session{
+		Kind:    watchd.KindFactory,
+		Factory: &watchd.FactoryRun{Attempts: 3},
+		Rounds: []watchd.Round{{
+			Number:  1,
+			State:   watchd.RoundChecking,
+			Reviews: []watchd.ReviewPrompt{{Name: "bugs", State: watchd.PromptDone, DurationMS: 12000}},
+			Checks:  []watchd.RoundCheck{{Name: "test", Status: "failed", DurationMS: 3000, Output: output}},
+		}},
+	}}
+	done := checking
+	done.Rounds = []watchd.Round{checking.Rounds[0]}
+	done.Rounds[0].State, done.Rounds[0].Note = watchd.RoundDone, "0 of 2 checks passed"
+	done.Details = []watchd.RoundDetail{{Number: 1, Results: []watchd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []review.Finding{bug}}}}}
+
+	// The round is seen done twice; its findings are said once.
+	lines := reportedLines(checking, done, done)
+
+	want := []string{"round 1/3: checking", "  test failed in 3s"}
+	for range failedOutputLines - 1 {
+		want = append(want, "    ok")
+	}
+	want = append(want,
+		"    --- FAIL: TestFlag",
+		"bugs reviewed in 12s",
+		"round 1/3: done — 0 of 2 checks passed",
+		"review bugs: 1 finding(s)",
+		"  [high] main.go:3 nil deref",
+	)
+	assert.DeepEqual(t, lines, want)
+}
+
+func TestSessionReporterLeavesAReviewSessionsNotesToItsSummary(t *testing.T) {
+	d := watchd.SessionDetail{Session: watchd.Session{
+		Rounds: []watchd.Round{{Number: 1, State: watchd.RoundDone, Note: "no findings worth changing"}},
+	}}
+	assert.DeepEqual(t, reportedLines(d), []string{"round 1: done"})
 }

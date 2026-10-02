@@ -1,8 +1,10 @@
 package watchd
 
 import (
+	"slices"
 	"time"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
@@ -142,6 +144,90 @@ type RoundImplement struct {
 	// Stat summarizes the work so far against the run's baseline.
 	Stat  string `json:"stat,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Activity is the tools the implementer used in the turn, latest last.
+	Activity Feed `json:"activity,omitzero"`
+}
+
+// Feed is the latest lines of a stream that can run long, such as a run's
+// progress, and how many lines there have been, so a follower can tell which
+// it has not seen. Only the last maxFeedLines are kept.
+type Feed struct {
+	Lines []FeedLine `json:"lines,omitempty"`
+	Total int        `json:"total,omitempty"`
+}
+
+// FeedLine is one line of a Feed.
+type FeedLine struct {
+	Level FeedLevel `json:"level"`
+	Text  string    `json:"text"`
+}
+
+// FeedLevel is how a feed line reads, as iostream.Level, spelled out so it
+// reads in JSON.
+type FeedLevel string
+
+// Feed levels.
+const (
+	FeedStep  FeedLevel = "step"
+	FeedInfo  FeedLevel = "info"
+	FeedWarn  FeedLevel = "warn"
+	FeedDone  FeedLevel = "done"
+	FeedError FeedLevel = "error"
+)
+
+// maxFeedLines is how many lines a Feed keeps.
+const maxFeedLines = 100
+
+// feedLevel spells out an iostream level.
+func feedLevel(l iostream.Level) FeedLevel {
+	switch l {
+	case iostream.LevelStep:
+		return FeedStep
+	case iostream.LevelWarn:
+		return FeedWarn
+	case iostream.LevelDone:
+		return FeedDone
+	case iostream.LevelError:
+		return FeedError
+	case iostream.LevelInfo:
+	}
+	return FeedInfo
+}
+
+// Level is the line's iostream level. An unknown value reads as info: it
+// comes from a daemon that may be newer than this client.
+func (l FeedLevel) Level() iostream.Level {
+	switch l {
+	case FeedStep:
+		return iostream.LevelStep
+	case FeedWarn:
+		return iostream.LevelWarn
+	case FeedDone:
+		return iostream.LevelDone
+	case FeedError:
+		return iostream.LevelError
+	case FeedInfo:
+	}
+	return iostream.LevelInfo
+}
+
+func (f *Feed) add(level iostream.Level, text string) {
+	f.Lines = append(f.Lines, FeedLine{Level: feedLevel(level), Text: text})
+	if over := len(f.Lines) - maxFeedLines; over > 0 {
+		f.Lines = slices.Delete(f.Lines, 0, over)
+	}
+	f.Total++
+}
+
+// Since returns the lines added after the first seen, as many as are still
+// kept.
+func (f Feed) Since(seen int) []FeedLine {
+	n := min(max(f.Total-seen, 0), len(f.Lines))
+	return f.Lines[len(f.Lines)-n:]
+}
+
+func (f Feed) clone() Feed {
+	return Feed{Lines: slices.Clone(f.Lines), Total: f.Total}
 }
 
 // RoundCheck is one validation command a factory round ran.
@@ -152,12 +238,16 @@ type RoundCheck struct {
 	SidecarID  string `json:"sidecar_id,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Output is the end of a failed command's output.
+	Output string `json:"output,omitempty"`
 }
 
 // FactoryRun is what a factory session works on and where its work is.
 type FactoryRun struct {
 	Prompt string `json:"prompt"`
-	RunID  string `json:"run_id,omitempty"`
+	// Attempts is the most rounds the run checks.
+	Attempts int    `json:"attempts,omitempty"`
+	RunID    string `json:"run_id,omitempty"`
 	// Worktree is where the work is, on Branch. Baseline is the commit the
 	// branch starts from and Head the user's HEAD when the run started; they
 	// differ when the user's uncommitted work was committed as the baseline.
@@ -175,6 +265,9 @@ type FactoryRun struct {
 	KeptSidecars []string `json:"kept_sidecars,omitempty"`
 	// Log is the path of the run's log, once the run has ended, if it kept one.
 	Log string `json:"log,omitempty"`
+	// Progress is what the run said as it went: its sidecars being made
+	// ready and synced, and anything that went wrong cleaning up.
+	Progress Feed `json:"progress,omitzero"`
 }
 
 // ReviewPrompt is one review's progress inside a round. It carries state only:

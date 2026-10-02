@@ -331,10 +331,12 @@ chunk
   so far. It uses the daemon's
   credentials and the project's configured org and image unless `--org-id` or
   `--image` say otherwise, and it is refused when `CHUNK_WATCHD_REMOTE_ADDR` is
-  set. `--reviews` must name a directory inside the project. When the run ends
-  it prints the work committed on `chunk/factory/<run id>`, how to keep it, and
-  how the last round's reviews came out, and exits non-zero unless every check
-  passed. `--log[=path]` has the run keep a plain-text log, by default
+  set. `--reviews` must name a directory inside the project. As it follows the run
+  it prints the sidecars being prepared, the implementer's tool use, and each
+  round's findings, with the end of any failed validation command's output.
+  When the run ends it prints the work committed on `chunk/factory/<run id>`,
+  how to keep it, how long the run took and what the implementer cost, and
+  exits non-zero unless every check passed. `--log[=path]` has the run keep a plain-text log, by default
   `~/.chunk/factory/run-<start time>.log`, with the full context the display leaves
   out — each prompt the implementer is sent, what it did and said, every
   review's findings and prose, and failed commands' output — for a person or an

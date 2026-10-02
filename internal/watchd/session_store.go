@@ -59,6 +59,7 @@ func cloneSession(s Session) Session {
 		out.Rounds[i].Checks = slices.Clone(r.Checks)
 		if r.Implement != nil {
 			impl := *r.Implement
+			impl.Activity = r.Implement.Activity.clone()
 			out.Rounds[i].Implement = &impl
 		}
 		if r.Fix != nil {
@@ -71,6 +72,7 @@ func cloneSession(s Session) Session {
 	if s.Factory != nil {
 		f := *s.Factory
 		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
+		f.Progress = s.Factory.Progress.clone()
 		out.Factory = &f
 	}
 	if s.Restore != nil {
