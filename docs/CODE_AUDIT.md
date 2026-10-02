@@ -8,6 +8,9 @@ conventions in [AGENTS.md](../AGENTS.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 **Re-audited at:** `0f3882a` (main, 2026-09-22). Every `file:line` below was re-derived
 against that commit. Line numbers drift — treat them as a starting point, not a contract.
 
+**Findings re-checked at:** `c0246dc` (main, 2026-10-02). Every open finding above section 3
+was confirmed to still hold; line numbers were not re-derived.
+
 Findings marked **[fixed]** were resolved between the two audits; where a specific commit
 is known it is cited. Everything else is still open.
 
@@ -239,8 +242,10 @@ remotely", "scaffold test-suites.yml" and "set up smarter testing".
 - `internal/sidecar/active.go` — re-walks for `.git`, falls back to cwd
 - `internal/cmd/hook.go:31` — `resolveHookRoot`, shells out, falls back to cwd
 
-`internal/config/paths.go` documents the hazard in a comment: two of these must hash to the
-same string, and nothing enforces it.
+The hashing half of this has since been closed: `internal/config/paths.go` now exports
+`CanonicalProjectRoot`, whose comment states that anything keying state by project root must
+go through it, and records the duplicate-rows bug that followed from two spellings of the same
+repo hashing apart. What remains is the five ways of *finding* the root in the first place.
 
 **Fix:** one function in `gitutil` with the cwd fallback; the other callers use it.
 
