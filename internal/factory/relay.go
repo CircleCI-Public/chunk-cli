@@ -23,9 +23,9 @@ const relayConcurrency = 8
 // there to each reviewer the same way the developer's own tree is synced.
 //
 // A pull mirrors the implementer's files into the worktree with --delete, so
-// the directory must be one chunk owns. It leaves .git alone: the worktree
-// keeps its own, and the implementer's git config and hooks never reach this
-// machine, where git will run on the files.
+// the directory must be one chunk owns. It leaves every .git alone, nested
+// ones included: the worktree keeps its own, and the implementer's git config
+// and hooks never reach this machine, where git will run on the files.
 type Relay struct {
 	client *circleci.Client
 	dir    string

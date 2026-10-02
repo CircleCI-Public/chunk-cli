@@ -49,6 +49,15 @@ func newRelay(t *testing.T, dir string) *Relay {
 	return NewRelay(client, dir, func(iostream.Level, string) {})
 }
 
+// localRepo returns an empty git repo to pull into, standing in for the run's
+// worktree.
+func localRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitOutput(t, dir, "init", "-q")
+	return dir
+}
+
 func writeFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -106,6 +115,8 @@ func TestRelayCarriesWorkspaceToEveryReviewer(t *testing.T) {
 	writeFile(t, impl, "pkg/new.go", "package pkg\n")
 	writeFile(t, impl, "build/app", "binary")
 	gitOutput(t, impl, "config", "core.hooksPath", "/tmp/evil")
+	// A nested repo's git config would run here too, so its .git stays put.
+	gitOutput(t, impl, "init", "-q", "pkg")
 
 	assert.NilError(t, r.Pull(ctx, "impl", impl))
 
@@ -118,6 +129,8 @@ func TestRelayCarriesWorkspaceToEveryReviewer(t *testing.T) {
 	cmd := exec.Command("git", "config", "core.hooksPath")
 	cmd.Dir = wt.Path
 	assert.Assert(t, cmd.Run() != nil, "the implementer's git config reached this machine")
+	_, err = os.Lstat(filepath.Join(wt.Path, "pkg", ".git"))
+	assert.Assert(t, os.IsNotExist(err), "a nested repo's .git reached this machine")
 
 	assert.NilError(t, r.Push(ctx, reviewers))
 	s := &Sidecars{Exec: localExec(t.TempDir()), Reviewers: reviewers}
@@ -134,7 +147,7 @@ func TestRelayCarriesWorkspaceToEveryReviewer(t *testing.T) {
 }
 
 func TestRelayPullMirrorsDeletions(t *testing.T) {
-	r := newRelay(t, t.TempDir())
+	r := newRelay(t, localRepo(t))
 	ctx := context.Background()
 
 	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
@@ -152,8 +165,27 @@ func TestRelayPullMirrorsDeletions(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err))
 }
 
+// TestRelayPullKeepsTrackedIgnoredFiles covers a file tracked despite matching
+// .gitignore: a sync never sends it, so its absence on the sidecar must not
+// delete it from the worktree.
+func TestRelayPullKeepsTrackedIgnoredFiles(t *testing.T) {
+	dir := localRepo(t)
+	writeFile(t, dir, ".gitignore", "*.env\n")
+	writeFile(t, dir, "dev.env", "local")
+	gitOutput(t, dir, "add", "-f", ".gitignore", "dev.env")
+	r := newRelay(t, dir)
+
+	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	writeFile(t, impl, ".gitignore", "*.env\n")
+	writeFile(t, impl, "main.go", "package main\n")
+	assert.NilError(t, r.Pull(context.Background(), "impl", impl))
+
+	assert.Equal(t, readFile(t, dir, "dev.env"), "local")
+	assert.Equal(t, readFile(t, dir, "main.go"), "package main\n")
+}
+
 func TestRelayPushReportsEveryFailedReviewer(t *testing.T) {
-	r := newRelay(t, t.TempDir())
+	r := newRelay(t, localRepo(t))
 	ctx := context.Background()
 
 	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
@@ -180,7 +212,7 @@ func TestRelayPushReportsEveryFailedReviewer(t *testing.T) {
 // TestRelayPullHonoursGitIgnoreRules covers ignore rules rsync's own .gitignore
 // merge gets wrong or never reads, which is why the pull asks git instead.
 func TestRelayPullHonoursGitIgnoreRules(t *testing.T) {
-	r := newRelay(t, t.TempDir())
+	r := newRelay(t, localRepo(t))
 	ctx := context.Background()
 
 	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
