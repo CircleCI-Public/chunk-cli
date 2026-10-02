@@ -25,12 +25,15 @@ import (
 // in a temp directory (GIT_INDEX_FILE), so no staging is touched, and HEAD and
 // the working tree are never written.
 //
-// That index is never seeded from the repository's own. Copying it would bring
+// That index is never a copy of the repository's own. Copying it would bring
 // its stat cache along, and git trusts that cache for any file whose size and
 // mtime still match — so a snapshot could report content the file no longer has,
 // two snapshots of one unchanged tree could disagree, and an edit that keeps a
-// file's size inside one mtime tick could go unseen. Hashing from cold is also
-// no slower in practice, since seeding costs a copy of the whole index.
+// file's size inside one mtime tick could go unseen. It is seeded from HEAD's
+// tree instead, which carries no stat data, so every file is still hashed from
+// cold. The seed keeps what the working tree does not hold — an uninitialized
+// submodule, a path outside a sparse checkout — at its committed entry rather
+// than dropping it, which would make a clean tree differ from HEAD.
 //
 // It does write blob and tree objects into .git/objects. They are unreferenced,
 // so git's own gc collects them in its own time — which is also why a snapshot
@@ -46,6 +49,12 @@ func SnapshotTree(dir string) (string, error) {
 	defer func() { _ = os.RemoveAll(tmp) }()
 
 	env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(tmp, "index"))
+	// A repository with no commit yet has nothing to seed from.
+	if _, err := gitOutEnv(dir, nil, "rev-parse", "--verify", "-q", "HEAD^{tree}"); err == nil {
+		if _, err := gitOutEnv(dir, env, "read-tree", "HEAD"); err != nil {
+			return "", fmt.Errorf("seed index from HEAD: %w", err)
+		}
+	}
 	if _, err := gitOutEnv(dir, env, "add", "-A"); err != nil {
 		return "", fmt.Errorf("stage working tree: %w", err)
 	}
