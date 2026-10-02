@@ -29,8 +29,8 @@
       "name": "format",
       "run": "task fmt",
       "role": "autofix",
-      "timeout": 30,
-      "local": true
+      "local": true,
+      "timeout": 30
     }
   ],
   "vcs": {
@@ -40,10 +40,13 @@
   "validation": {
     "sidecarImage": "4c46e935-5727-461b-9c73-d6806ecbdf36"
   },
-  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c",
   "environment": {
     "stack": "go",
     "setup": [
+      {
+        "name": "runtime",
+        "command": "curl -fsSL https://go.dev/dl/go1.26.2.linux-$(dpkg --print-architecture).tar.gz | sudo tar -C /usr/local -xzf -"
+      },
       {
         "name": "system",
         "command": "sudo apt-get update && sudo apt-get install -y git --no-install-recommends && sudo rm -rf /var/lib/apt/lists/*"
@@ -54,6 +57,7 @@
       }
     ],
     "image": "cimg/go",
-    "image_version": "1.26"
-  }
+    "image_version": "1.26.2"
+  },
+  "orgID": "f22b6566-597d-46d5-ba74-99ef5bb3d85c"
 }
