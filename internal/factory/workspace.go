@@ -78,9 +78,9 @@ git diff HEAD --shortstat`,
 	return c, nil
 }
 
-// maxScriptOutput caps what a workspace script may print. The largest is the
-// patch of the implementer's whole change; past this something has gone wrong.
-const maxScriptOutput = 32 << 20
+// maxScriptOutput caps what a workspace script may print: a commit, or git's
+// summary of the change. Past this something has gone wrong.
+const maxScriptOutput = 64 << 10
 
 // run executes script on the implementer's sidecar and returns its stdout.
 func (w *workspace) run(ctx context.Context, script string) (string, error) {

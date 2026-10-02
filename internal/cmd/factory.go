@@ -14,6 +14,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -34,8 +35,11 @@ review its work with each prompt in the reviews directory, each on its own
 sidecar, and run the project's validation commands, feeding failures back to
 the implementer until every check passes or attempts run out.
 
-The implementer's work is written as a patch under .chunk/factory, to be
-applied with git apply to the tree the run started from.`,
+The run works in a git worktree of its own, on the branch
+chunk/factory/<run id>, starting from your files as they are, uncommitted
+changes included. Your checkout is never touched. The implementer's work is
+synced into the worktree each round and committed there when the run ends;
+the worktree is kept so you can look at it or carry on in it.`,
 		// Hidden until the workshop build settles.
 		Hidden:       true,
 		SilenceUsage: true,
@@ -104,13 +108,29 @@ applied with git apply to the tree the run started from.`,
 				reviewers = len(prompts)
 			}
 			runID := time.Now().UTC().Format("20060102-150405")
+			root, wt, err := createFactoryWorktree(ctx, workDir, runID)
+			if err != nil {
+				return err
+			}
+			// Until the implementer starts, the worktree holds nothing the
+			// developer does not already have.
+			started := false
+			defer func() {
+				if !started {
+					removeFactoryWorktree(ctx, root, wt, status)
+				}
+			}()
+
 			status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", reviewers))
 			pool, err := newPool(ctx, client, sidecar.PoolOptions{
-				Size:    factory.PoolSize(reviewers),
-				Name:    factory.PoolName(runID),
-				OrgID:   resolvedOrgID,
-				Image:   image,
-				WorkDir: workDir,
+				Size:  factory.PoolSize(reviewers),
+				Name:  factory.PoolName(runID),
+				OrgID: resolvedOrgID,
+				Image: image,
+				// The sidecars start from the worktree, and its state stays in
+				// the project, where the dashboard finds it.
+				WorkDir:  wt.Path,
+				StateDir: root,
 			}, "factory's sidecars", rc.CircleCITokenSource, status)
 			if err != nil {
 				return err
@@ -126,12 +146,6 @@ applied with git apply to the tree the run started from.`,
 				return &userError{msg: "Could not check out the implementer's sidecar.", err: err}
 			}
 
-			relay, err := factory.NewRelay(client, status)
-			if err != nil {
-				return err
-			}
-			defer func() { _ = relay.Close() }()
-
 			steps := &factory.Sidecars{
 				Exec: review.ClientExec,
 				Implementer: &factory.Implementer{
@@ -142,7 +156,7 @@ applied with git apply to the tree the run started from.`,
 				Acquire:   pool.Acquire,
 				Release:   pool.Release,
 				Reviewers: factory.Members(impl, pool.IDs()),
-				Relay:     relay,
+				Relay:     factory.NewRelay(client, wt.Path, status),
 				Prompts:   prompts,
 				Review: review.Options{
 					Credential: cred, BaseURL: rc.AnthropicBaseURL, Model: model, Timeout: reviewTimeout,
@@ -156,11 +170,12 @@ applied with git apply to the tree the run started from.`,
 				return &userError{msg: "Could not set up the implementer's workspace.", err: err}
 			}
 
+			started = true
 			loop := factory.Loop{Attempts: attempts, OnEvent: func(e factory.Event) { printEvent(status, attempts, e) }}
 			outcome, loopErr := loop.Run(ctx, steps, args[0])
 			// Whatever the implementer got to is kept, even when the loop
 			// failed partway, so the work is not lost with the sidecars.
-			saveFactoryPatch(ctx, steps, workDir, runID, status, streams)
+			commitFactoryWork(ctx, steps, wt, factory.CommitMessage(args[0], runID, outcome), status, streams)
 			if errors.Is(loopErr, review.ErrCredentialRejected) {
 				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, loopErr)
 			}
@@ -216,23 +231,79 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 	return prompts, commands, nil
 }
 
-// saveFactoryPatch writes the implementer's work, if any, to a patch under
-// .chunk/factory. It runs on the way out, after a failure too, so it gets its
-// own deadline rather than the run's possibly canceled context.
-func saveFactoryPatch(ctx context.Context, steps *factory.Sidecars, workDir, runID string, status iostream.StatusFunc, streams iostream.Streams) {
-	path := filepath.Join(workDir, ".chunk", "factory", runID+".patch")
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	defer cancel()
-	change, err := steps.WritePatch(ctx, path)
+// createFactoryWorktree makes the run's worktree in the project's chunk data
+// directory, outside the repository, so nothing that syncs or scans the
+// developer's checkout finds it. It returns the repository root with it.
+func createFactoryWorktree(ctx context.Context, workDir, runID string) (string, factory.Worktree, error) {
+	root := gitutil.TopLevelCtx(ctx, workDir)
+	if root == "" {
+		return "", factory.Worktree{}, &userError{msg: "chunk factory must be run inside a git repository.", hideDetail: true}
+	}
+	dataDir, err := config.ProjectDataDir(root)
 	if err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("could not save the implementer's work: %v", err))
+		return "", factory.Worktree{}, &userError{msg: "Could not find chunk's data directory for this project.", err: err}
+	}
+	wt, err := factory.CreateWorktree(ctx, root, filepath.Join(dataDir, "factory", runID), runID)
+	if err != nil {
+		return "", factory.Worktree{}, &userError{msg: "Could not create the run's worktree.", err: err}
+	}
+	return root, wt, nil
+}
+
+// removeFactoryWorktree removes the worktree of a run that ended before the
+// implementer started. It has its own deadline, since it runs on the way out.
+func removeFactoryWorktree(ctx context.Context, root string, wt factory.Worktree, status iostream.StatusFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	if err := wt.Remove(ctx, root); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("could not remove the run's worktree %s: %v", wt.Path, err))
+	}
+}
+
+// commitFactoryWork brings the implementer's last work into the worktree and
+// commits it on the run's branch. It runs on the way out, after a failure too,
+// so it gets its own deadlines rather than the run's possibly canceled context:
+// one for the pull, and a fresh one for the commit, so a pull that hangs cannot
+// use up the commit's time. What an earlier round pulled is committed even if
+// the last pull fails.
+func commitFactoryWork(ctx context.Context, steps *factory.Sidecars, wt factory.Worktree, message string, status iostream.StatusFunc, streams iostream.Streams) {
+	base := context.WithoutCancel(ctx)
+	pullCtx, cancelPull := context.WithTimeout(base, 2*time.Minute)
+	err := steps.Pull(pullCtx)
+	cancelPull()
+	if err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("could not bring back the implementer's last changes: %v", err))
+	}
+	ctx, cancel := context.WithTimeout(base, cleanupTimeout)
+	defer cancel()
+	if _, err := wt.Commit(ctx, message); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("could not commit the work in %s: %v", wt.Path, err))
 		return
 	}
-	if change.Empty() {
+	stat, err := wt.Stat(ctx)
+	if err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("could not summarize the work on %s: %v", wt.Branch, err))
+		streams.ErrPrintf("  Worktree: %s\n", wt.Path)
 		return
 	}
-	status(iostream.LevelDone, fmt.Sprintf("Saved %s to %s", change.Stat, path))
-	streams.ErrPrintf("  Apply it with: git apply %s\n", path)
+	if stat == "" {
+		status(iostream.LevelInfo, "No changes to keep. The worktree is at "+wt.Path)
+		return
+	}
+	status(iostream.LevelDone, fmt.Sprintf("Committed %s to %s", stat, wt.Branch))
+	streams.ErrPrintf("  Worktree: %s\n  %s\n", wt.Path, keepWorkHint(wt))
+}
+
+// keepWorkHint says how to bring the run's work into the developer's checkout.
+// A merge only works when the branch starts at their HEAD: when it starts from
+// their uncommitted work committed as the baseline, a merge would collide with
+// that same work still uncommitted in their checkout, so they apply the run's
+// own changes on top of it instead.
+func keepWorkHint(wt factory.Worktree) string {
+	if wt.Baseline == wt.Head {
+		return "Merge it with: git merge " + wt.Branch
+	}
+	return fmt.Sprintf("Apply it with: git diff --binary %s %s | git apply", wt.Baseline, wt.Branch)
 }
 
 // closeFactoryPool deletes the run's sidecars, or with keep leaves them

@@ -19,10 +19,11 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 )
 
-// newRelay returns a relay whose sidecars are directories on this machine: the
-// fake sidecar runs every command locally, so rsync and ssh run for real through
-// the same WebSocket tunnel chunk uses, and a sidecar's workspace is a local path.
-func newRelay(t *testing.T) *Relay {
+// newRelay returns a relay through dir whose sidecars are directories on this
+// machine: the fake sidecar runs every command locally, so rsync and ssh run
+// for real through the same WebSocket tunnel chunk uses, and a sidecar's
+// workspace is a local path.
+func newRelay(t *testing.T, dir string) *Relay {
 	t.Helper()
 	for _, bin := range []string{"rsync", "ssh"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -45,10 +46,16 @@ func newRelay(t *testing.T) *Relay {
 	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
 	assert.NilError(t, err)
 
-	r, err := NewRelay(client, func(iostream.Level, string) {})
-	assert.NilError(t, err)
-	t.Cleanup(func() { assert.NilError(t, r.Close()) })
-	return r
+	return NewRelay(client, dir, func(iostream.Level, string) {})
+}
+
+// localRepo returns an empty git repo to pull into, standing in for the run's
+// worktree.
+func localRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitOutput(t, dir, "init", "-q")
+	return dir
 }
 
 func writeFile(t *testing.T, dir, name, content string) {
@@ -75,48 +82,72 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	return strings.TrimRight(string(out), "\n")
 }
 
+// TestRelayCarriesWorkspaceToEveryReviewer runs a round's relay the way a run
+// does: the implementer's files are pulled into the run's worktree, pushed from
+// there to every reviewer, and the reviewers' new files marked, so each
+// reviewer's `git diff HEAD` is the implementer's work.
 func TestRelayCarriesWorkspaceToEveryReviewer(t *testing.T) {
-	r := newRelay(t)
 	ctx := context.Background()
+	root := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	writeFile(t, root, ".gitignore", "build/\n")
+	writeFile(t, root, "main.go", "package main\n")
+	gitrepo.AddFile(t, root, ".")
+	gitOutput(t, root, "commit", "-m", "base")
+	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
+	assert.NilError(t, err)
+	r := newRelay(t, wt.Path)
 
-	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
-	writeFile(t, impl, ".gitignore", "build/\n")
-	writeFile(t, impl, "main.go", "package main\n")
-	gitrepo.AddFile(t, impl, ".")
-	gitOutput(t, impl, "commit", "-m", "base")
-	// What an implementer leaves behind: an edit, a new file, and build output
-	// that reviewers have no business seeing.
+	// Every pool member starts from the worktree's baseline, as the pool's
+	// sync leaves them.
+	member := func() string {
+		dir := filepath.Join(t.TempDir(), "my-repo")
+		gitOutput(t, root, "clone", "-q", "--branch", wt.Branch, root, dir)
+		return dir
+	}
+	impl := member()
+	reviewers := []*sidecar.PoolEntry{{ID: "rev-1", RepoPath: member()}, {ID: "rev-2", RepoPath: member()}}
+	// A reviewer from an earlier round still holds a file the implementer has
+	// since deleted.
+	writeFile(t, reviewers[0].RepoPath, "stale.go", "package main\n")
+	// What an implementer leaves behind: an edit, a new file, build output
+	// that has no business leaving its sidecar, and git config it set.
 	writeFile(t, impl, "main.go", "package main\n\nfunc main() {}\n")
 	writeFile(t, impl, "pkg/new.go", "package pkg\n")
 	writeFile(t, impl, "build/app", "binary")
-
-	reviewers := []*sidecar.PoolEntry{
-		{ID: "rev-1", RepoPath: filepath.Join(t.TempDir(), "my-repo")},
-		{ID: "rev-2", RepoPath: filepath.Join(t.TempDir(), "my-repo")},
-	}
-	// A reviewer reused from an earlier round still holds a file the
-	// implementer has since deleted.
-	writeFile(t, reviewers[0].RepoPath, "stale.go", "package main\n")
+	gitOutput(t, impl, "config", "core.hooksPath", "/tmp/evil")
+	// A nested repo's git config would run here too, so its .git stays put.
+	gitOutput(t, impl, "init", "-q", "pkg")
 
 	assert.NilError(t, r.Pull(ctx, "impl", impl))
+
+	// The work lands in the worktree, which keeps its own git.
+	assert.Equal(t, readFile(t, wt.Path, "main.go"), "package main\n\nfunc main() {}\n")
+	info, err := os.Lstat(filepath.Join(wt.Path, ".git"))
+	assert.NilError(t, err)
+	assert.Assert(t, !info.IsDir(), "the implementer's .git replaced the worktree's")
+	assert.Equal(t, gitOutput(t, wt.Path, "status", "--porcelain"), " M main.go\n?? pkg/")
+	cmd := exec.Command("git", "config", "core.hooksPath")
+	cmd.Dir = wt.Path
+	assert.Assert(t, cmd.Run() != nil, "the implementer's git config reached this machine")
+	_, err = os.Lstat(filepath.Join(wt.Path, "pkg", ".git"))
+	assert.Assert(t, os.IsNotExist(err), "a nested repo's .git reached this machine")
+
 	assert.NilError(t, r.Push(ctx, reviewers))
+	s := &Sidecars{Exec: localExec(t.TempDir()), Reviewers: reviewers}
+	assert.NilError(t, s.onReviewers(s.script(ctx, "git reset -q && git add -A -N")))
 
 	for _, rev := range reviewers {
-		assert.Equal(t, readFile(t, rev.RepoPath, "main.go"), "package main\n\nfunc main() {}\n")
-		assert.Equal(t, readFile(t, rev.RepoPath, "pkg/new.go"), "package pkg\n")
+		assert.Equal(t, gitOutput(t, rev.RepoPath, "diff", "HEAD", "--name-only"), "main.go\npkg/new.go", rev.ID)
+		assert.Equal(t, gitOutput(t, rev.RepoPath, "rev-parse", "HEAD"), wt.Baseline, "a reviewer's own history was replaced")
 		_, err := os.Stat(filepath.Join(rev.RepoPath, "build"))
 		assert.Assert(t, os.IsNotExist(err), "ignored build output reached %s", rev.ID)
 		_, err = os.Stat(filepath.Join(rev.RepoPath, "stale.go"))
 		assert.Assert(t, os.IsNotExist(err), "deleted file survived on %s", rev.ID)
-
-		// Reviewers read the change through git, so history must arrive too.
-		assert.Equal(t, gitOutput(t, rev.RepoPath, "rev-parse", "HEAD"), gitOutput(t, impl, "rev-parse", "HEAD"))
-		assert.Equal(t, gitOutput(t, rev.RepoPath, "status", "--porcelain"), " M main.go\n?? pkg/")
 	}
 }
 
 func TestRelayPullMirrorsDeletions(t *testing.T) {
-	r := newRelay(t)
+	r := newRelay(t, localRepo(t))
 	ctx := context.Background()
 
 	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
@@ -124,18 +155,37 @@ func TestRelayPullMirrorsDeletions(t *testing.T) {
 	writeFile(t, impl, "drop.go", "package main\n")
 	assert.NilError(t, r.Pull(ctx, "impl", impl))
 
-	// The next round deletes a file; the staging copy must not keep it, or it
+	// The next round deletes a file; the worktree must not keep it, or it
 	// would be pushed back to every reviewer.
 	assert.NilError(t, os.Remove(filepath.Join(impl, "drop.go")))
 	assert.NilError(t, r.Pull(ctx, "impl", impl))
 
-	assert.Equal(t, readFile(t, r.Dir(), "keep.go"), "package main\n")
-	_, err := os.Stat(filepath.Join(r.Dir(), "drop.go"))
+	assert.Equal(t, readFile(t, r.dir, "keep.go"), "package main\n")
+	_, err := os.Stat(filepath.Join(r.dir, "drop.go"))
 	assert.Assert(t, os.IsNotExist(err))
 }
 
+// TestRelayPullKeepsTrackedIgnoredFiles covers a file tracked despite matching
+// .gitignore: a sync never sends it, so its absence on the sidecar must not
+// delete it from the worktree.
+func TestRelayPullKeepsTrackedIgnoredFiles(t *testing.T) {
+	dir := localRepo(t)
+	writeFile(t, dir, ".gitignore", "*.env\n")
+	writeFile(t, dir, "dev.env", "local")
+	gitOutput(t, dir, "add", "-f", ".gitignore", "dev.env")
+	r := newRelay(t, dir)
+
+	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+	writeFile(t, impl, ".gitignore", "*.env\n")
+	writeFile(t, impl, "main.go", "package main\n")
+	assert.NilError(t, r.Pull(context.Background(), "impl", impl))
+
+	assert.Equal(t, readFile(t, dir, "dev.env"), "local")
+	assert.Equal(t, readFile(t, dir, "main.go"), "package main\n")
+}
+
 func TestRelayPushReportsEveryFailedReviewer(t *testing.T) {
-	r := newRelay(t)
+	r := newRelay(t, localRepo(t))
 	ctx := context.Background()
 
 	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
@@ -162,7 +212,7 @@ func TestRelayPushReportsEveryFailedReviewer(t *testing.T) {
 // TestRelayPullHonoursGitIgnoreRules covers ignore rules rsync's own .gitignore
 // merge gets wrong or never reads, which is why the pull asks git instead.
 func TestRelayPullHonoursGitIgnoreRules(t *testing.T) {
-	r := newRelay(t)
+	r := newRelay(t, localRepo(t))
 	ctx := context.Background()
 
 	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
@@ -183,16 +233,16 @@ func TestRelayPullHonoursGitIgnoreRules(t *testing.T) {
 	assert.NilError(t, r.Pull(ctx, "impl", impl))
 
 	for _, gone := range []string{"debug.log", "scratch", "build", "what[1].txt"} {
-		_, err := os.Stat(filepath.Join(r.Dir(), gone))
+		_, err := os.Stat(filepath.Join(r.dir, gone))
 		assert.Assert(t, os.IsNotExist(err), "ignored %s was pulled", gone)
 	}
-	assert.Equal(t, readFile(t, r.Dir(), "keep.log"), "wanted")
-	assert.Equal(t, readFile(t, r.Dir(), "cmd/build/main.go"), "package main\n")
-	assert.Equal(t, readFile(t, r.Dir(), "what1.txt"), "kept")
+	assert.Equal(t, readFile(t, r.dir, "keep.log"), "wanted")
+	assert.Equal(t, readFile(t, r.dir, "cmd/build/main.go"), "package main\n")
+	assert.Equal(t, readFile(t, r.dir, "what1.txt"), "kept")
 }
 
 func TestRelayPullRequiresGitWorkspace(t *testing.T) {
-	r := newRelay(t)
+	r := newRelay(t, t.TempDir())
 	err := r.Pull(context.Background(), "impl", t.TempDir())
 	assert.ErrorContains(t, err, "list ignored files")
 }

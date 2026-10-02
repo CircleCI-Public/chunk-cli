@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitexec"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 )
@@ -146,9 +147,14 @@ func rsyncTo(ctx context.Context, client *circleci.Client,
 }
 
 // RsyncPull copies a sidecar's workspace at repoPath into localDir, the reverse
-// of RsyncSyncEphemeral: localDir ends up mirroring the workspace, .git
-// included, minus files git ignores there. The workspace must be a git repo. Anything in localDir that
-// is not in the workspace is deleted, so localDir must be a directory chunk owns.
+// of RsyncSyncEphemeral: localDir ends up mirroring the workspace's files,
+// minus files git ignores there. The workspace must be a git repo, and so must
+// localDir. No .git, at any depth, is copied and localDir's own is left alone,
+// so a sidecar's git config and hooks never reach this machine. Files localDir
+// tracks but git ignores are left alone too: a sync never sends them, so the
+// workspace not having them is no reason to delete them. Anything else in
+// localDir that is not in the workspace is deleted, so localDir must be a
+// directory chunk owns.
 func RsyncPull(ctx context.Context,
 	client *circleci.Client, sidecarID, repoPath, localDir string,
 	status iostream.StatusFunc) error {
@@ -169,13 +175,20 @@ func RsyncPull(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	excludeFile, err := writeExcludeFile(excludes)
+	tracked, err := trackedIgnoredPaths(ctx, localDir)
+	if err != nil {
+		return err
+	}
+	excludeFile, err := writeExcludeFile(append(excludes, tracked...))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(excludeFile) }()
 
-	flags := []string{"--archive", "--delete", "--exclude-from=" + excludeFile}
+	// Excluding every .git, not just the root's, keeps a nested repo's config
+	// and hooks on the sidecar too. An excluded path is also protected from
+	// --delete, which is what keeps localDir's own .git.
+	flags := []string{"--archive", "--delete", "--exclude=.git", "--exclude-from=" + excludeFile}
 	src := strings.TrimRight(repoPath, "/") + "/"
 	dst := strings.TrimRight(localDir, "/") + "/"
 	if err := runRsync(ctx, sess, flags, remotePath(src), dst); err != nil {
@@ -203,6 +216,23 @@ func ignoredPaths(ctx context.Context, sess *Session, repoPath string) ([]string
 	// -z keeps git from quoting paths with unusual characters, which would
 	// then match nothing.
 	for _, p := range strings.Split(result.Stdout, "\x00") {
+		if p != "" {
+			paths = append(paths, "/"+escapeRsyncPattern(p))
+		}
+	}
+	return paths, nil
+}
+
+// trackedIgnoredPaths lists the files git tracks in localDir that its ignore
+// rules match, each anchored like ignoredPaths' paths. A sync's .gitignore
+// filter never sends them, so a pull must not delete them.
+func trackedIgnoredPaths(ctx context.Context, localDir string) ([]string, error) {
+	out, err := (gitexec.Runner{Dir: localDir}).Output(ctx, "ls-files", "-z", "--cached", "--ignored", "--exclude-standard")
+	if err != nil {
+		return nil, fmt.Errorf("rsync pull: list tracked ignored files: %w", err)
+	}
+	var paths []string
+	for _, p := range strings.Split(string(out), "\x00") {
 		if p != "" {
 			paths = append(paths, "/"+escapeRsyncPattern(p))
 		}
