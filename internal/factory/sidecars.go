@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -98,7 +99,7 @@ func (s *Sidecars) Collect(ctx context.Context) (Change, error) {
 
 // Check relays the implementer's tree to the reviewers, then runs the reviews
 // there and validation on the implementer at the same time.
-func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
+func (s *Sidecars) Check(ctx context.Context, _ int, history []Exchange) ([]Check, error) {
 	if err := s.Relay.Pull(ctx, s.Implementer.Entry.ID, s.Implementer.Entry.RepoPath); err != nil {
 		return nil, err
 	}
@@ -128,7 +129,7 @@ func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results, reviewErr = review.RunPass(ctx, s.Acquire, s.Release, s.Exec, s.scopedPrompts(), s.Review)
+			results, reviewErr = review.RunPass(ctx, s.Acquire, s.Release, s.Exec, reviewPrompts(s.Prompts, history), s.Review)
 		}()
 	}
 	wg.Add(1)
@@ -180,10 +181,45 @@ func (s *Sidecars) script(ctx context.Context, cmd string) func(*sidecar.PoolEnt
 	}
 }
 
-func (s *Sidecars) scopedPrompts() []review.Prompt {
-	out := make([]review.Prompt, len(s.Prompts))
-	for i, p := range s.Prompts {
-		out[i] = review.Prompt{Name: p.Name, Body: reviewScope + p.Body}
+// maxReply caps how much of the implementer's reply a review is shown. The end
+// is kept: the reply summarises the change first and answers findings after.
+const maxReply = 4000
+
+// reviewPrompts scopes each prompt to the change under review and, for a
+// review that failed an earlier round, adds what it raised and the
+// implementer's reply. Without that a review starts afresh every round and
+// raises again a finding the implementer declined with a reason.
+func reviewPrompts(prompts []review.Prompt, history []Exchange) []review.Prompt {
+	out := make([]review.Prompt, len(prompts))
+	for i, p := range prompts {
+		out[i] = review.Prompt{Name: p.Name, Body: reviewScope + p.Body + earlierRounds(p.Name, history)}
 	}
 	return out
+}
+
+// earlierRounds renders the exchanges in which the review named name failed,
+// or "" when it never did.
+func earlierRounds(name string, history []Exchange) string {
+	var b strings.Builder
+	for _, e := range history {
+		for _, c := range e.Checks {
+			if c.Kind != KindReview || c.Name != name {
+				continue
+			}
+			reply := strings.TrimSpace(e.Reply)
+			if reply == "" {
+				reply = "(no reply)"
+			}
+			fmt.Fprintf(&b, "\n### Round %d: you raised\n\n%s\n\n### The implementer replied\n\n%s\n",
+				e.Round, c.Feedback, review.Tail(reply, maxReply))
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n\n## Earlier rounds\n\n" +
+		"This change has been reviewed before. Below are the findings you raised and the implementer's " +
+		"reply to them. Do not raise a finding again if the code now addresses it, or if the implementer " +
+		"declined it with a reason that holds. Raise it again only if the reason does not hold, and say " +
+		"in the finding why not.\n" + b.String()
 }

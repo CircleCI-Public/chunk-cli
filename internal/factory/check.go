@@ -112,7 +112,8 @@ func Feedback(checks []Check) string {
 	}
 	return "Your changes were reviewed and validated, and these checks failed. " +
 		"Fix the problems they describe in the code. A review finding you judge to be wrong " +
-		"may be left alone; say why in your final message.\n" + b.String()
+		"may be left alone: in your final message, name it and say why. The reviewer that " +
+		"raised it is shown that message and will not raise it again if your reason holds.\n" + b.String()
 }
 
 // Passed reports whether every check passed. An errored check is not a pass:
