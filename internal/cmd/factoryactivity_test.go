@@ -95,6 +95,32 @@ func TestFactoryActivityClosesAFailedTurn(t *testing.T) {
 	assert.Equal(t, passed, 0)
 }
 
+// A sync is filed on the row of the sidecar it reaches, and leaves no run open:
+// it is shown as part of the run it prepares.
+func TestFactoryActivityFilesSyncsOnEachSidecar(t *testing.T) {
+	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+	root := t.TempDir()
+
+	activity := newFactoryActivity(context.Background(), root, "chunk/factory/run-1", "sb-impl")
+	activity.synced("sb-impl", false)(nil)
+	activity.synced("sb-rev", true)(errors.New("rsync exited 12"))
+
+	events := reviewEvents(t, root)
+	pull := eventsFor(events, "sb-impl")
+	assert.Equal(t, len(pull), 2)
+	assert.Equal(t, pull[0].Op, eventlog.OpSync)
+	assert.Equal(t, pull[0].Msg, "pulling the implementer's work into the worktree...")
+	assert.Equal(t, pull[1].Level, "done")
+	push := eventsFor(events, "sb-rev")
+	assert.Equal(t, len(push), 2)
+	assert.Equal(t, push[1].Msg, "sync failed: rsync exited 12")
+	assert.Equal(t, push[1].Level, "error")
+	for _, e := range events {
+		assert.Equal(t, e.Branch, "chunk/factory/run-1")
+		assert.Assert(t, !e.Final, "a sync must not close a run: %q", e.Msg)
+	}
+}
+
 func TestFactoryActivityThrottlesToolUse(t *testing.T) {
 	t.Setenv(config.EnvXDGDataHome, t.TempDir())
 	root := t.TempDir()
@@ -146,5 +172,6 @@ func TestFactoryActivityToleratesNoLog(t *testing.T) {
 	activity.checked(factory.Check{Status: factory.StatusPassed})
 	activity.reviewProgress(review.ProgressEvent{SidecarID: "sb-rev", State: review.StateRunning})
 	activity.reviewSubmitted(&sidecar.PoolEntry{ID: "sb-rev"}, "naming", "cmd-2")
+	activity.synced("sb-rev", true)(nil)
 	activity.finish(errors.New("stopped"))
 }

@@ -146,6 +146,30 @@ func (a *factoryActivity) checked(c factory.Check) {
 	}
 }
 
+// synced files a pull from the implementer into the worktree, or a push from
+// it to a reviewer, on that sidecar's row. It returns what files the sync
+// ending. Neither event closes a run, as with chunk sidecar sync: a sync is
+// shown as part of the run it prepares.
+func (a *factoryActivity) synced(sidecarID string, push bool) func(error) {
+	if a == nil {
+		return func(error) {}
+	}
+	rec := a.reviews.log.Recorder(nil, eventlog.OpSync, sidecarID, "", a.reviews.branch)
+	what := "pulling the implementer's work into the worktree"
+	if push {
+		what = "syncing the implementer's work"
+	}
+	rec.Status(iostream.LevelStep, what+"...")
+	start := time.Now()
+	return func(err error) {
+		if err != nil {
+			rec.Status(iostream.LevelError, fmt.Sprintf("sync failed: %s", err))
+			return
+		}
+		rec.Status(iostream.LevelDone, "synced in "+ui.FormatDuration(time.Since(start)))
+	}
+}
+
 // finish closes any review a run stopped by err left open.
 func (a *factoryActivity) finish(err error) {
 	if a == nil {

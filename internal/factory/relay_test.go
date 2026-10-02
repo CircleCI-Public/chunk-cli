@@ -2,11 +2,13 @@ package factory
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -187,6 +189,16 @@ func TestRelayPullKeepsTrackedIgnoredFiles(t *testing.T) {
 func TestRelayPushReportsEveryFailedReviewer(t *testing.T) {
 	r := newRelay(t, localRepo(t))
 	ctx := context.Background()
+	// Every sync that starts is reported ending, failed or not.
+	var mu sync.Mutex
+	synced := map[string]string{}
+	r.OnSync = func(id string, push bool) func(error) {
+		return func(err error) {
+			mu.Lock()
+			defer mu.Unlock()
+			synced[id] = fmt.Sprintf("push=%t failed=%t", push, err != nil)
+		}
+	}
 
 	impl := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
 	writeFile(t, impl, "main.go", "package main\n")
@@ -207,6 +219,12 @@ func TestRelayPushReportsEveryFailedReviewer(t *testing.T) {
 	assert.Assert(t, !strings.Contains(err.Error(), "rev-ok"))
 	// One reviewer failing must not stop the others being synced.
 	assert.Equal(t, readFile(t, good.RepoPath, "main.go"), "package main\n")
+	assert.DeepEqual(t, synced, map[string]string{
+		"impl":   "push=false failed=false",
+		"rev-1":  "push=true failed=true",
+		"rev-ok": "push=true failed=false",
+		"rev-2":  "push=true failed=true",
+	})
 }
 
 // TestRelayPullHonoursGitIgnoreRules covers ignore rules rsync's own .gitignore

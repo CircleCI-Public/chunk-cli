@@ -146,6 +146,8 @@ the worktree is kept so you can look at it or carry on in it.`,
 				return &userError{msg: "Could not check out the implementer's sidecar.", err: err}
 			}
 			activity := newFactoryActivity(ctx, root, wt.Branch, impl.ID)
+			relay := factory.NewRelay(client, wt.Path, status)
+			relay.OnSync = activity.synced
 
 			steps := &factory.Sidecars{
 				Exec: review.ClientExec,
@@ -160,7 +162,7 @@ the worktree is kept so you can look at it or carry on in it.`,
 				Acquire:   pool.Acquire,
 				Release:   pool.Release,
 				Reviewers: factory.Members(impl, pool.IDs()),
-				Relay:     factory.NewRelay(client, wt.Path, status),
+				Relay:     relay,
 				Prompts:   prompts,
 				Review: review.Options{
 					Credential: cred, BaseURL: rc.AnthropicBaseURL, Model: model, Timeout: reviewTimeout,

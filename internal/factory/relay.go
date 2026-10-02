@@ -27,6 +27,10 @@ const relayConcurrency = 8
 // ones included: the worktree keeps its own, and the implementer's git config
 // and hooks never reach this machine, where git will run on the files.
 type Relay struct {
+	// OnSync, if set, is called as each pull or push to a sidecar starts, and
+	// the function it returns as that one ends.
+	OnSync func(sidecarID string, push bool) func(error)
+
 	client *circleci.Client
 	dir    string
 	status iostream.StatusFunc
@@ -42,7 +46,10 @@ func NewRelay(client *circleci.Client, dir string, status iostream.StatusFunc) *
 
 // Pull mirrors the workspace at repoPath on sidecarID into the worktree.
 func (r *Relay) Pull(ctx context.Context, sidecarID, repoPath string) error {
-	if err := sidecar.RsyncPull(ctx, r.client, sidecarID, repoPath, r.dir, r.status); err != nil {
+	done := r.started(sidecarID, false)
+	err := sidecar.RsyncPull(ctx, r.client, sidecarID, repoPath, r.dir, r.status)
+	done(err)
+	if err != nil {
 		return fmt.Errorf("pull from %s: %w", sidecarID, err)
 	}
 	return nil
@@ -66,11 +73,23 @@ func (r *Relay) Push(ctx context.Context, entries []*sidecar.PoolEntry) error {
 			status := func(level iostream.Level, msg string) {
 				r.status(level, fmt.Sprintf("%s: %s", id, msg))
 			}
-			if err := sidecar.RsyncSyncEphemeral(ctx, r.client, id, repoPath, r.dir, status); err != nil {
+			done := r.started(id, true)
+			err := sidecar.RsyncSyncEphemeral(ctx, r.client, id, repoPath, r.dir, status)
+			done(err)
+			if err != nil {
 				errs[i] = fmt.Errorf("push to %s: %w", id, err)
 			}
 		}(i, e.ID, e.RepoPath)
 	}
 	wg.Wait()
 	return errors.Join(errs...)
+}
+
+// started reports a sync starting through OnSync, and returns what reports it
+// ending.
+func (r *Relay) started(sidecarID string, push bool) func(error) {
+	if r.OnSync == nil {
+		return func(error) {}
+	}
+	return r.OnSync(sidecarID, push)
 }
