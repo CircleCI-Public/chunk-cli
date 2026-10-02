@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,12 +45,12 @@ synced into the worktree each round and committed there when the run ends;
 the worktree is kept so you can look at it or carry on in it.
 
 With --log, the run keeps a plain-text log, by default
-~/.chunk/factory/run-<run id>.log, with its full context whatever the display
+~/.chunk/factory/run-<start time>.log, with its full context whatever the display
 leaves out: every prompt the implementer is sent and what it did and said,
 each review's findings in full, and each validation command's output when it
 failed. --verbose adds the review prompts, the output of commands that passed,
-and a check each round that every reviewer has the implementer's change; it
-implies --log.`,
+and a check each round that every reviewer has the implementer's change, and
+also shows the log here as the run writes it; it implies --log.`,
 		// Hidden until the workshop build settles.
 		Hidden:       true,
 		SilenceUsage: true,
@@ -91,7 +93,7 @@ implies --log.`,
 			if err != nil {
 				return err
 			}
-			logArg, err := factoryLogPath(logPath, verbose)
+			logArg, err := factoryLogPath(logPath, verbose, time.Now())
 			if err != nil {
 				return err
 			}
@@ -119,12 +121,13 @@ implies --log.`,
 				return sessionError(err)
 			}
 			streams.ErrPrintf("Factory run %s started on the watch daemon. Ctrl-C stops it.\n", id)
-			switch logArg {
-			case "":
-			case factory.LogDefault:
-				streams.ErrPrintf("Logging to %s\n", filepath.Join("~", ".chunk", "factory", "run-<run id>.log"))
-			default:
+			if logArg != "" {
 				streams.ErrPrintf("Logging to %s\n", logArg)
+			}
+			// With --verbose the log is shown here too, as the run writes it,
+			// alongside the run's progress.
+			if verbose && !jsonOut {
+				defer tailLog(logArg, streams.Err)()
 			}
 			return followSession(ctx, streams, id, jsonOut, true)
 		},
@@ -141,9 +144,9 @@ implies --log.`,
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
-	cmd.Flags().StringVar(&logPath, "log", "", "keep a log of the run's full context in this file (alone: ~/.chunk/factory/run-<run id>.log)")
+	cmd.Flags().StringVar(&logPath, "log", "", "keep a log of the run's full context in this file (alone: ~/.chunk/factory/run-<start time>.log)")
 	cmd.Flags().Lookup("log").NoOptDefVal = factory.LogDefault
-	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks (implies --log)")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
 	return cmd
 }
 
@@ -226,15 +229,82 @@ func factoryReviewsDir(root, dir string) (string, error) {
 	return rel, nil
 }
 
-// factoryLogPath is --log as the daemon is told it: absolute, since the daemon
-// does not share this process's working directory, or factory.LogDefault, or
-// "" for no log. --verbose implies a log.
-func factoryLogPath(path string, verbose bool) (string, error) {
+// tailPollInterval is how often tailLog looks for more of the log.
+const tailPollInterval = 500 * time.Millisecond
+
+// tailLog copies the log at path to w as the run writes it, until the returned
+// stop is called, which copies whatever is left and returns once it has.
+func tailLog(path string, w io.Writer) (stop func()) {
+	t := &logTail{w: w}
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(tailPollInterval)
+		defer ticker.Stop()
+		for {
+			t.follow(path)
+			select {
+			case <-done:
+				t.follow(path)
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+	}
+}
+
+// logTail copies a log to w as it grows, a whole line at a time.
+type logTail struct {
+	w    io.Writer
+	path string
+	off  int64
+}
+
+// follow copies whatever has been added to the log at path since the last
+// call. A log not created yet, or unreadable for now, is tried again next
+// time: the run writes it, and a hiccup reading it must not stop the follow.
+func (t *logTail) follow(path string) {
+	if path == "" {
+		return
+	}
+	if path != t.path {
+		t.path, t.off = path, 0
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(t.off, io.SeekStart); err != nil {
+		return
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return
+	}
+	// A line still being written is left for the next call.
+	end := bytes.LastIndexByte(b, '\n') + 1
+	if end == 0 {
+		return
+	}
+	_, _ = t.w.Write(b[:end])
+	t.off += int64(end)
+}
+
+// factoryLogPath is --log as the daemon is told it, or "" for no log. It is
+// absolute, since the daemon does not share this process's working directory,
+// and settled here, so this command knows where the log is to show it. A
+// default log is named for now, the run's start; --verbose implies one.
+func factoryLogPath(path string, verbose bool, now time.Time) (string, error) {
 	switch {
-	case path == "" && verbose:
-		return factory.LogDefault, nil
+	case path == "" && !verbose:
+		return "", nil
 	case path == "" || path == factory.LogDefault:
-		return path, nil
+		return factory.DefaultLogPath(now.UTC().Format("20060102-150405"))
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
