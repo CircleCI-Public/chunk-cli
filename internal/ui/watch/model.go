@@ -227,6 +227,9 @@ type Model struct {
 	sessions      []sessionInfo
 	sessionView   *sessionPane
 	reviewAuthErr string
+	// focusSession is a session to open the session view on as soon as the
+	// daemon reports it, for a caller that has just started one.
+	focusSession string
 	// spinning is true while a spinner tick chain is in flight, so a poll that
 	// finds something running after a quiet spell can start one without doubling
 	// up on a chain that never stopped.
@@ -273,6 +276,14 @@ func (m Model) WithConnection(conn watchd.Connection) Model {
 // one passed to watchd.EnsureRunning.
 func (m Model) WithDaemonArgs(subArgs []string) Model {
 	m.daemonArgs = subArgs
+	return m
+}
+
+// WithSession returns a copy of m that opens the session view on session id
+// once the daemon lists it, so a command that just started a session lands
+// on it instead of on the sidecar list.
+func (m Model) WithSession(id string) Model {
+	m.focusSession = id
 	return m
 }
 
@@ -412,6 +423,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionView != nil {
 			m.sessionView.sel = min(m.sessionView.sel, max(len(m.sessions)-1, 0))
 		}
+		m = m.focusRequestedSession()
 		// Sidecars are re-sorted by recency each poll, so track the selection
 		// by id. An unknown id (first poll, or the sidecar aged out) falls back
 		// to index 0, the most recently active sidecar.
@@ -1616,4 +1628,22 @@ func ago(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
+}
+
+// focusRequestedSession opens the session view on the session WithSession
+// asked for, once it is listed. It does so once: after that the user is free
+// to leave the view.
+func (m Model) focusRequestedSession() Model {
+	if m.focusSession == "" {
+		return m
+	}
+	for i, s := range m.sessions {
+		if s.s.ID != m.focusSession {
+			continue
+		}
+		m.focusSession = ""
+		m.sessionView = &sessionPane{sel: i, round: lastRound(m.sessions, i)}
+		break
+	}
+	return m
 }

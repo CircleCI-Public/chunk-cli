@@ -262,11 +262,12 @@ func (m Model) withSessionAction(msg sessionActionMsg) Model {
 
 // stageLabels name the stages of the flow for display.
 var stageLabels = map[watchd.StageID]string{
-	watchd.StageReviewLoop: "Review loop",
-	watchd.StageRebase:     "Rebase onto main",
-	watchd.StageCI:         "CI run",
-	watchd.StageApproval:   "Your approval",
-	watchd.StagePR:         "Open pull request",
+	watchd.StageReviewLoop:  "Review loop",
+	watchd.StageFactoryLoop: "Factory loop",
+	watchd.StageRebase:      "Rebase onto main",
+	watchd.StageCI:          "CI run",
+	watchd.StageApproval:    "Your approval",
+	watchd.StagePR:          "Open pull request",
 }
 
 // sessionTag is the header's note of a session in flight, so one started
@@ -413,6 +414,8 @@ func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, review
 		lines = append(lines, line)
 	}
 
+	lines = append(lines, m.renderFactoryRound(st, r)...)
+
 	if f := r.Fix; f != nil {
 		lines = append(lines, "        "+m.fixLine(st, f))
 		const showFiles = 5
@@ -429,6 +432,92 @@ func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, review
 	}
 	if r.Note != "" && r.State != watchd.RoundSuperseded {
 		lines = append(lines, "        "+st.vdim(r.Note))
+	}
+	return lines
+}
+
+// renderFactoryRound draws what only a factory round has: the implementer's
+// turn and the validation commands. A review session's rounds have neither.
+func (m Model) renderFactoryRound(st watchStyles, r watchd.Round) []string {
+	var lines []string
+	if impl := r.Implement; impl != nil {
+		lines = append(lines, "        "+m.implementLine(st, impl))
+		if impl.Stat != "" {
+			lines = append(lines, "          "+st.muted(impl.Stat))
+		}
+		if impl.Summary != "" {
+			lines = append(lines, "          "+st.vdim(truncate(strings.Join(strings.Fields(impl.Summary), " "), 100)))
+		}
+		if impl.Error != "" {
+			lines = append(lines, "          "+st.err(truncate(strings.Join(strings.Fields(impl.Error), " "), 100)))
+		}
+	}
+	for _, c := range r.Checks {
+		line := "        " + checkIcon(st, c.Status) + " " + st.muted(c.Name)
+		if c.DurationMS > 0 {
+			line += "  " + st.dim(ui.FormatDuration(time.Duration(c.DurationMS)*time.Millisecond))
+		}
+		if c.Error != "" {
+			line += "  " + st.err(truncate(strings.Join(strings.Fields(c.Error), " "), 80))
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func (m Model) implementLine(st watchStyles, impl *watchd.RoundImplement) string {
+	switch impl.State {
+	case watchd.FixRunning:
+		return st.running(spinFrames[m.spinIdx%len(spinFrames)]) + " " + st.muted("implementer working")
+	case watchd.FixApplied:
+		text := "implementer finished"
+		if impl.DurationMS > 0 {
+			text += " in " + ui.FormatDuration(time.Duration(impl.DurationMS)*time.Millisecond)
+		}
+		if impl.CostUSD > 0 {
+			text += fmt.Sprintf(" · $%.2f", impl.CostUSD)
+		}
+		return st.success(ui.IconOK) + " " + st.muted(text)
+	case watchd.FixEmpty:
+		return st.muted("the implementer made no changes")
+	case watchd.FixFailed:
+		return st.err(ui.IconFail + " implementer failed")
+	}
+	return ""
+}
+
+// checkIcon marks a validation command by its factory.Status spelling.
+func checkIcon(st watchStyles, status string) string {
+	switch status {
+	case "passed":
+		return st.success(ui.IconOK)
+	case "failed":
+		return st.err(ui.IconFail)
+	}
+	return st.warning(ui.IconWarn)
+}
+
+// renderFactoryHeader draws what a factory run is doing and where its work is.
+func renderFactoryHeader(st watchStyles, f *watchd.FactoryRun) []string {
+	lines := []string{"   " + st.muted("Prompt: ") + truncate(strings.Join(strings.Fields(f.Prompt), " "), 100)}
+	if f.Branch != "" {
+		lines = append(lines, "   "+st.vdim("Branch: "+f.Branch))
+	}
+	if f.Worktree != "" {
+		lines = append(lines, "   "+st.vdim("Worktree: "+f.Worktree))
+	}
+	if f.Result != "" {
+		note := "Result: " + f.Result
+		if f.Rounds > 0 {
+			note += fmt.Sprintf(" after %d round%s", f.Rounds, plural(f.Rounds))
+		}
+		if f.Committed {
+			note += " · work committed"
+		}
+		lines = append(lines, "   "+st.muted(note))
+	}
+	if len(f.KeptSidecars) > 0 {
+		lines = append(lines, "   "+st.vdim("Kept sidecars: "+strings.Join(f.KeptSidecars, " ")))
 	}
 	return lines
 }
@@ -473,6 +562,9 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
 			"   "+st.muted("Your files changed while the session was working, so it stopped instead of overwriting them."),
 			"   "+st.vdim("c")+" "+st.dim("continue with your files as they are now")+"  "+st.vdim("·")+"  "+st.vdim("x x")+" "+st.dim("cancel the session"))
 	}
+	if s.Factory != nil {
+		lines = append(lines, renderFactoryHeader(st, s.Factory)...)
+	}
 	if s.Error != "" {
 		lines = append(lines, "   "+st.err(truncate(strings.Join(strings.Fields(s.Error), " "), 110)))
 	}
@@ -480,7 +572,7 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
 
 	for _, stage := range s.Stages {
 		lines = append(lines, fmt.Sprintf("   %s %-18s %s", m.stageIcon(st, stage.State), stageLabels[stage.ID], stageText(st, stage)))
-		if stage.ID != watchd.StageReviewLoop {
+		if stage.ID != watchd.StageReviewLoop && stage.ID != watchd.StageFactoryLoop {
 			continue
 		}
 		for i, r := range s.Rounds {
