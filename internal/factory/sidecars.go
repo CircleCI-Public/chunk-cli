@@ -206,12 +206,8 @@ func earlierRounds(name string, history []Exchange) string {
 			if c.Kind != KindReview || c.Name != name {
 				continue
 			}
-			reply := strings.TrimSpace(e.Reply)
-			if reply == "" {
-				reply = "(no reply)"
-			}
 			fmt.Fprintf(&b, "\n### Round %d: you raised\n\n%s\n\n### The implementer replied\n\n%s\n",
-				e.Round, c.Feedback, review.Tail(reply, maxReply))
+				e.Round, c.Feedback, review.Tail(strings.TrimSpace(e.Reply), maxReply))
 		}
 	}
 	if b.Len() == 0 {
