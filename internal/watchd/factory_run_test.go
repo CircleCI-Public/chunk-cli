@@ -41,9 +41,6 @@ func scriptedRun(result factory.Result) func(context.Context, factory.RunOptions
 		opts.Status(iostream.LevelStep, "Preparing an implementer sidecar and 2 reviewer sidecar(s)...")
 
 		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
-		// Text the implementer writes is not tool use.
-		opts.OnActivity(factory.Activity{Detail: "Let me look."})
-		opts.OnActivity(factory.Activity{Tool: "Bash", Detail: "go test\n  ./..."})
 		opts.OnEvent(factory.Event{Kind: factory.EventImplemented, Round: 1, Turn: factory.Turn{Summary: "added it", Duration: time.Minute, CostUSD: 0.5}})
 		opts.OnEvent(factory.Event{Kind: factory.EventCollected, Round: 1, Change: factory.Change{Stat: "1 file changed", Fingerprint: "f"}})
 		opts.OnEvent(factory.Event{Kind: factory.EventChecking, Round: 1})
@@ -117,7 +114,6 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.Equal(t, round.Note, "2 of 3 checks passed")
 	assert.DeepEqual(t, *round.Implement, RoundImplement{
 		State: FixApplied, DurationMS: 60000, CostUSD: 0.5, Summary: "added it", Stat: "1 file changed",
-		Activity: Feed{Lines: []FeedLine{{Level: FeedInfo, Text: "Bash go test ./..."}}, Total: 1},
 	})
 	assert.DeepEqual(t, round.Checks, []RoundCheck{
 		{Name: "test", Status: "passed", SidecarID: "sc-1", DurationMS: 2000},

@@ -32,7 +32,6 @@ func fakeFactoryConfig(t *testing.T, result factory.Result) watchd.ReviewConfig 
 		opts.OnStart("run-1", wt)
 		opts.Status(iostream.LevelStep, "Preparing an implementer sidecar and 1 reviewer sidecar(s)...")
 		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
-		opts.OnActivity(factory.Activity{Tool: "Edit", Detail: "flag.go"})
 		if err := os.WriteFile(filepath.Join(wt.Path, "flag.go"), []byte("package main\n"), 0o644); err != nil {
 			return factory.Report{}, err
 		}
@@ -96,7 +95,6 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 		// out of the default attempts.
 		"round 1/3: done — 1 of 1 checks passed",
 		"Preparing an implementer sidecar and 1 reviewer sidecar(s)...",
-		"  Edit flag.go",
 		"implementer finished",
 		"added the flag",
 		"test passed",
@@ -157,7 +155,6 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 		opts.OnStart("run-1", wt)
 		opts.Status(iostream.LevelStep, "Preparing an implementer sidecar and 1 reviewer sidecar(s)...")
 		opts.OnEvent(factory.Event{Kind: factory.EventImplementing, Round: 1, Prompt: opts.Prompt})
-		opts.OnActivity(factory.Activity{Tool: "Edit", Detail: "flag.go"})
 		if err := os.WriteFile(filepath.Join(wt.Path, "flag.go"), []byte("package main\n"), 0o644); err != nil {
 			return factory.Report{}, err
 		}

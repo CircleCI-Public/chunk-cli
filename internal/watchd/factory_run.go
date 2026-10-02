@@ -130,7 +130,6 @@ func (d *daemon) executeFactory(ctx context.Context, entry *sessionEntry, opts f
 	opts.Exec = d.execerFor(root, rec.attribute)
 	opts.OnStart = rec.started
 	opts.OnEvent = rec.event
-	opts.OnActivity = rec.activity
 	opts.OnReviewProgress = rec.reviewProgress
 	opts.OnCheck = rec.checked
 
@@ -189,36 +188,6 @@ func (r *factoryRecorder) progress(level iostream.Level, msg string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.s.Factory.Progress.add(level, msg)
-}
-
-// activity records a tool the implementer used in the turn in progress. Text
-// it wrote in between is said in the turn's summary.
-func (r *factoryRecorder) activity(a factory.Activity) {
-	if a.Tool == "" {
-		return
-	}
-	e := r.entry
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if r.cur >= len(e.s.Rounds) {
-		return
-	}
-	if impl := e.s.Rounds[r.cur].Implement; impl != nil {
-		impl.Activity.add(iostream.LevelInfo, oneLine(a.Tool+" "+a.Detail, maxActivityText))
-	}
-}
-
-// maxActivityText caps one activity line: a tool's detail can be a whole
-// script.
-const maxActivityText = 160
-
-// oneLine folds s onto one line of at most n bytes.
-func oneLine(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > n {
-		return s[:n-3] + "..."
-	}
-	return s
 }
 
 // round returns the record's index for a factory round, beginning it if it

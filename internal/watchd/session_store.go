@@ -59,7 +59,6 @@ func cloneSession(s Session) Session {
 		out.Rounds[i].Checks = slices.Clone(r.Checks)
 		if r.Implement != nil {
 			impl := *r.Implement
-			impl.Activity = r.Implement.Activity.clone()
 			out.Rounds[i].Implement = &impl
 		}
 		if r.Fix != nil {

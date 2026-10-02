@@ -144,8 +144,6 @@ type RoundImplement struct {
 	// Stat summarizes the work so far against the run's baseline.
 	Stat  string `json:"stat,omitempty"`
 	Error string `json:"error,omitempty"`
-	// Activity is the tools the implementer used in the turn, latest last.
-	Activity Feed `json:"activity,omitzero"`
 }
 
 // Feed is the latest lines of a stream that can run long, such as a run's

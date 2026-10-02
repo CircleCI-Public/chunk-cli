@@ -418,9 +418,7 @@ type sessionReporter struct {
 	// implementer turn and how many of its validation commands.
 	implement map[int]watchd.RoundImplement
 	checks    map[int]int
-	// activity and progress count the feed lines already said: each round's
-	// implementer tools, and the factory run's own progress.
-	activity map[int]int
+	// progress counts the lines of the factory run's progress already said.
 	progress int
 	// checked marks the factory rounds whose review findings have been said.
 	checked map[int]bool
@@ -434,7 +432,6 @@ func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
 		reviews:   map[string]watchd.PromptRunState{},
 		implement: map[int]watchd.RoundImplement{},
 		checks:    map[int]int{},
-		activity:  map[int]int{},
 		checked:   map[int]bool{},
 	}
 }
@@ -465,10 +462,6 @@ func (r *sessionReporter) report(d watchd.SessionDetail) {
 			r.status(iostream.LevelStep, fmt.Sprintf("round %s: %s%s", number, round.State, note))
 		}
 		if impl := round.Implement; impl != nil {
-			for _, l := range impl.Activity.Since(r.activity[i]) {
-				r.status(l.Level.Level(), "  "+l.Text)
-			}
-			r.activity[i] = impl.Activity.Total
 			r.reportImplement(i, *impl)
 		}
 		for _, c := range round.Checks[min(r.checks[i], len(round.Checks)):] {
