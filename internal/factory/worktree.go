@@ -23,6 +23,9 @@ type Worktree struct {
 	// Baseline is the commit the branch starts from: the developer's HEAD, or
 	// their uncommitted work committed on top of it.
 	Baseline string
+	// Head is the developer's HEAD when the run started. It differs from
+	// Baseline when their uncommitted work was committed as the baseline.
+	Head string
 }
 
 // commitEnv commits as chunk, so a run never stops to ask for an identity or
@@ -64,7 +67,7 @@ func CreateWorktree(ctx context.Context, root, path, runID string) (Worktree, er
 		start = strings.TrimSpace(string(out))
 	}
 
-	w := Worktree{Path: path, Branch: branchPrefix + runID, Baseline: start}
+	w := Worktree{Path: path, Branch: branchPrefix + runID, Baseline: start, Head: head}
 	if out, err := git.CombinedOutput(ctx, "worktree", "add", "--quiet", "-b", w.Branch, path, start); err != nil {
 		return Worktree{}, fmt.Errorf("create worktree: %w: %s", err, strings.TrimSpace(string(out)))
 	}

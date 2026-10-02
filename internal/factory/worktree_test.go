@@ -36,6 +36,8 @@ func TestCreateWorktreeStartsFromTheDevelopersFiles(t *testing.T) {
 
 	assert.Equal(t, wt.Branch, "chunk/factory/run-1")
 	assert.Equal(t, gitOutput(t, wt.Path, "rev-parse", "HEAD"), wt.Baseline)
+	assert.Equal(t, wt.Head, gitOutput(t, root, "rev-parse", "HEAD"))
+	assert.Assert(t, wt.Baseline != wt.Head, "uncommitted work was not committed as the baseline")
 	// Uncommitted work is in the baseline, untracked files included, so it is
 	// not part of the change under review.
 	assert.Equal(t, readFile(t, wt.Path, "main.go"), "package main\n\n// in progress\n")
@@ -56,6 +58,7 @@ func TestCreateWorktreeFromACleanTreeStartsAtHEAD(t *testing.T) {
 	wt, err := CreateWorktree(ctx, root, filepath.Join(t.TempDir(), "wt"), "run-1")
 	assert.NilError(t, err)
 	assert.Equal(t, wt.Baseline, gitOutput(t, root, "rev-parse", "HEAD"))
+	assert.Equal(t, wt.Head, wt.Baseline)
 }
 
 func TestWorktreeCommitKeepsTheWorktree(t *testing.T) {

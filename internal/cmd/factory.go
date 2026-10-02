@@ -262,25 +262,48 @@ func removeFactoryWorktree(ctx context.Context, root string, wt factory.Worktree
 
 // commitFactoryWork brings the implementer's last work into the worktree and
 // commits it on the run's branch. It runs on the way out, after a failure too,
-// so it gets its own deadline rather than the run's possibly canceled context.
-// What an earlier round pulled is committed even if the last pull fails.
+// so it gets its own deadlines rather than the run's possibly canceled context:
+// one for the pull, and a fresh one for the commit, so a pull that hangs cannot
+// use up the commit's time. What an earlier round pulled is committed even if
+// the last pull fails.
 func commitFactoryWork(ctx context.Context, steps *factory.Sidecars, wt factory.Worktree, message string, status iostream.StatusFunc, streams iostream.Streams) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	defer cancel()
-	if err := steps.Pull(ctx); err != nil {
+	base := context.WithoutCancel(ctx)
+	pullCtx, cancelPull := context.WithTimeout(base, 2*time.Minute)
+	err := steps.Pull(pullCtx)
+	cancelPull()
+	if err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("could not bring back the implementer's last changes: %v", err))
 	}
+	ctx, cancel := context.WithTimeout(base, cleanupTimeout)
+	defer cancel()
 	if _, err := wt.Commit(ctx, message); err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("could not commit the work in %s: %v", wt.Path, err))
 		return
 	}
 	stat, err := wt.Stat(ctx)
-	if err != nil || stat == "" {
+	if err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("could not summarize the work on %s: %v", wt.Branch, err))
+		streams.ErrPrintf("  Worktree: %s\n", wt.Path)
+		return
+	}
+	if stat == "" {
 		status(iostream.LevelInfo, "No changes to keep. The worktree is at "+wt.Path)
 		return
 	}
 	status(iostream.LevelDone, fmt.Sprintf("Committed %s to %s", stat, wt.Branch))
-	streams.ErrPrintf("  Worktree: %s\n  Merge it with: git merge %s\n", wt.Path, wt.Branch)
+	streams.ErrPrintf("  Worktree: %s\n  %s\n", wt.Path, keepWorkHint(wt))
+}
+
+// keepWorkHint says how to bring the run's work into the developer's checkout.
+// A merge only works when the branch starts at their HEAD: when it starts from
+// their uncommitted work committed as the baseline, a merge would collide with
+// that same work still uncommitted in their checkout, so they apply the run's
+// own changes on top of it instead.
+func keepWorkHint(wt factory.Worktree) string {
+	if wt.Baseline == wt.Head {
+		return "Merge it with: git merge " + wt.Branch
+	}
+	return fmt.Sprintf("Apply it with: git diff --binary %s %s | git apply", wt.Baseline, wt.Branch)
 }
 
 // closeFactoryPool deletes the run's sidecars, or with keep leaves them
