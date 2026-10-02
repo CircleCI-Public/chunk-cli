@@ -9,12 +9,15 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
@@ -105,6 +108,9 @@ the worktree is kept so you can look at it or carry on in it.`,
 				return sessionError(err)
 			}
 			streams.ErrPrintf("Factory run %s started on the watch daemon. Ctrl-C stops it.\n", id)
+			if !jsonOut && ui.RequireStdoutTTY() == nil {
+				return followFactoryTUI(ctx, streams, root, id)
+			}
 			return followSession(ctx, streams, id, jsonOut, true)
 		},
 	}
@@ -301,4 +307,32 @@ func oneLineSummary(s string) string {
 		return s[:157] + "..."
 	}
 	return s
+}
+
+// followFactoryTUI shows a factory run in the watch dashboard, opened on the
+// run's session. Quitting the dashboard only detaches (x twice cancels the
+// run), so what happens next depends on where the run is: a finished run is
+// reported as it is without the dashboard, and one still going is left to the
+// daemon.
+func followFactoryTUI(ctx context.Context, streams iostream.Streams, root, id string) error {
+	dataDir, err := config.ProjectDataDir(root)
+	if err != nil {
+		return fmt.Errorf("find chunk's data directory for the project: %w", err)
+	}
+	entries := []watch.ProjectEntry{{DataDir: dataDir, ProjectRoot: root}}
+	daemonArgs := []string{watchCmdName, watchDaemonSubcmd}
+	m := watch.New(entries, false).WithDaemonArgs(daemonArgs).WithSession(id)
+	if _, err := tea.NewProgram(m, tea.WithContext(ctx)).Run(); err != nil && ctx.Err() == nil {
+		return fmt.Errorf("factory dashboard: %w", err)
+	}
+
+	detail, err := watchd.FetchSession(id)
+	if err != nil {
+		return sessionError(err)
+	}
+	if detail.State.Finished() {
+		return finishFactory(ctx, streams, detail, false)
+	}
+	streams.ErrPrintf("Detached. Run %s keeps going on the watch daemon (chunk watch to see it, chunk session cancel %s to stop it).\n", id, id)
+	return nil
 }
