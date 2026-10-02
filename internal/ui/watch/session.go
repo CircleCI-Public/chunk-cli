@@ -377,6 +377,10 @@ func roundStateText(st watchStyles, r watchd.Round) string {
 		return st.running("reviewing")
 	case watchd.RoundFixing:
 		return st.running("fixing")
+	case watchd.RoundImplementing:
+		return st.running("implementing")
+	case watchd.RoundChecking:
+		return st.running("reviewing and validating")
 	case watchd.RoundApplying:
 		return st.running("applying fixes to your files")
 	case watchd.RoundDone:

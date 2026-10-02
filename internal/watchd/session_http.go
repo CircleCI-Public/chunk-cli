@@ -21,8 +21,10 @@ const maxRequestBytes = 64 * 1024
 //	POST /session/{id}/cancel  stop a session
 //	POST /session/{id}/resume  continue a paused session with the files as they are now
 //	POST /session/{id}/restore undo everything the session changed in the working tree
+//	POST /factory              start a factory session, followed and stopped like any other
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /session", d.handleSessionStart)
+	mux.HandleFunc("POST /factory", d.handleFactoryStart)
 	mux.HandleFunc("GET /session", d.handleSessionList)
 	mux.HandleFunc("GET /session/{id}", d.handleSessionGet)
 	mux.HandleFunc("POST /session/{id}/cancel", d.handleSessionCancel)
@@ -79,6 +81,24 @@ func (d *daemon) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := d.startSession(req)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, SessionStartResponse{ID: sess.ID})
+}
+
+func (d *daemon) handleFactoryStart(w http.ResponseWriter, r *http.Request) {
+	var req FactoryRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBytes)).Decode(&req); err != nil {
+		http.Error(w, "decode request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ProjectRoot == "" {
+		http.Error(w, "project_root required", http.StatusBadRequest)
+		return
+	}
+	sess, err := d.startFactory(req)
 	if err != nil {
 		writeAPIError(w, err)
 		return

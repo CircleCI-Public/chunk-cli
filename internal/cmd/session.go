@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -87,7 +88,7 @@ func newSessionStartCmd() *cobra.Command {
 				return printSessionID(streams, id, jsonOut)
 			}
 			streams.ErrPrintf("Session %s started on the watch daemon. Ctrl-C detaches; it keeps running.\n", id)
-			return followSession(cmd.Context(), streams, id, jsonOut)
+			return followSession(cmd.Context(), streams, id, jsonOut, false)
 		},
 	}
 	cmd.Flags().StringVar(&projectDir, "project", "", "Project to review (default: the git repository containing the current directory)")
@@ -112,7 +113,7 @@ func newSessionAttachCmd() *cobra.Command {
 			if err := requireLocalDaemon(); err != nil {
 				return err
 			}
-			return followSession(cmd.Context(), iostream.FromCmd(cmd), args[0], jsonOut)
+			return followSession(cmd.Context(), iostream.FromCmd(cmd), args[0], jsonOut, false)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
@@ -302,8 +303,9 @@ func sessionError(err error) error {
 }
 
 // followSession polls a session, reporting what changes, until it ends or
-// pauses. Ctrl-C detaches; the session carries on.
-func followSession(ctx context.Context, streams iostream.Streams, id string, jsonOut bool) error {
+// pauses. Ctrl-C detaches and the session carries on, or with cancelOnInterrupt
+// cancels it and follows it until it has wound down.
+func followSession(ctx context.Context, streams iostream.Streams, id string, jsonOut, cancelOnInterrupt bool) error {
 	rep := newSessionReporter(newStatusFunc(streams))
 	failures := 0
 	ticker := time.NewTicker(sessionPollInterval)
@@ -324,13 +326,25 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 			failures = 0
 			rep.report(detail.Session)
 			if detail.State.Finished() || detail.State == watchd.SessionPaused {
+				if detail.IsFactory() {
+					return finishFactory(ctx, streams, detail, jsonOut)
+				}
 				return finishSession(streams, detail, jsonOut)
 			}
 		}
 		select {
 		case <-ctx.Done():
-			streams.ErrPrintf("Detached. Session %s keeps running on the daemon (chunk session attach %s, or cancel %s).\n", id, id, id)
-			return nil
+			if !cancelOnInterrupt {
+				streams.ErrPrintf("Detached. Session %s keeps running on the daemon (chunk session attach %s, or cancel %s).\n", id, id, id)
+				return nil
+			}
+			if err := watchd.CancelSession(id); err != nil {
+				return sessionError(err)
+			}
+			streams.ErrPrintf("Stopping %s...\n", id)
+			// Only one interrupt: from here the session is followed until it
+			// ends, which is when its work has been put away.
+			ctx = context.WithoutCancel(ctx)
 		case <-ticker.C:
 		}
 	}
@@ -380,14 +394,20 @@ type sessionReporter struct {
 	status  iostream.StatusFunc
 	rounds  map[int]watchd.RoundState
 	reviews map[string]watchd.PromptRunState
-	state   watchd.SessionState
+	// implement and checks are what has been said of a factory round's
+	// implementer turn and how many of its validation commands.
+	implement map[int]watchd.RoundImplement
+	checks    map[int]int
+	state     watchd.SessionState
 }
 
 func newSessionReporter(status iostream.StatusFunc) *sessionReporter {
 	return &sessionReporter{
-		status:  status,
-		rounds:  map[int]watchd.RoundState{},
-		reviews: map[string]watchd.PromptRunState{},
+		status:    status,
+		rounds:    map[int]watchd.RoundState{},
+		reviews:   map[string]watchd.PromptRunState{},
+		implement: map[int]watchd.RoundImplement{},
+		checks:    map[int]int{},
 	}
 }
 
@@ -397,6 +417,13 @@ func (r *sessionReporter) report(s watchd.Session) {
 			r.rounds[i] = round.State
 			r.status(iostream.LevelStep, fmt.Sprintf("round %d: %s", round.Number, round.State))
 		}
+		if impl := round.Implement; impl != nil {
+			r.reportImplement(i, *impl)
+		}
+		for _, c := range round.Checks[min(r.checks[i], len(round.Checks)):] {
+			r.reportCheck(c)
+		}
+		r.checks[i] = len(round.Checks)
 		for _, p := range round.Reviews {
 			key := fmt.Sprintf("%d/%s", i, p.Name)
 			if r.reviews[key] == p.State {
@@ -419,4 +446,45 @@ func (r *sessionReporter) report(s watchd.Session) {
 		r.status(iostream.LevelWarn, "paused: "+s.PauseReason)
 	}
 	r.state = s.State
+}
+
+// reportImplement says how a factory round's implementer turn went, once it
+// has gone somewhere new.
+func (r *sessionReporter) reportImplement(i int, impl watchd.RoundImplement) {
+	prev := r.implement[i]
+	r.implement[i] = impl
+	if impl.State != prev.State {
+		switch impl.State {
+		case watchd.FixApplied:
+			r.status(iostream.LevelDone, fmt.Sprintf("implementer finished in %s ($%.2f)", msDuration(impl.DurationMS), impl.CostUSD))
+			if impl.Summary != "" {
+				r.status(iostream.LevelInfo, oneLineSummary(impl.Summary))
+			}
+		case watchd.FixEmpty:
+			r.status(iostream.LevelWarn, "no changes")
+		case watchd.FixFailed:
+			r.status(iostream.LevelWarn, "implementer failed: "+impl.Error)
+		case watchd.FixRunning:
+			// The round's own state line says so.
+		}
+	}
+	if impl.Stat != "" && impl.Stat != prev.Stat {
+		r.status(iostream.LevelInfo, impl.Stat)
+	}
+}
+
+// reportCheck says how a factory round's validation command came out.
+func (r *sessionReporter) reportCheck(c watchd.RoundCheck) {
+	switch factory.Status(c.Status) {
+	case factory.StatusPassed:
+		r.status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, msDuration(c.DurationMS)))
+	case factory.StatusFailed:
+		r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, msDuration(c.DurationMS)))
+	case factory.StatusErrored:
+		r.status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
+	}
+}
+
+func msDuration(ms int64) time.Duration {
+	return (time.Duration(ms) * time.Millisecond).Round(time.Second)
 }

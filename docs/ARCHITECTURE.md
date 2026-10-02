@@ -403,9 +403,27 @@ POST /session/{id}/cancel  → 202 (idempotent; the only thing that stops a sess
 POST /session/{id}/resume  → 202; only for a paused session (409 otherwise)
 POST /session/{id}/restore {force?} → {paths}; only for an ended session that changed
                              files (409 otherwise, or if files were edited since)
+POST /factory              {project_root, prompt, reviews_dir?, no_validate?, attempts?, reviewers?,
+                            model?, implement_timeout_seconds?, review_timeout_seconds?,
+                            keep_sidecars?, org_id?, image?}
+                           → 202 {id}   (404 unknown project, 400 bad request or nothing
+                                         to check, 503 no credential)
 GET  /snapshot             → each project carries `sessions` (state only), and the
                              top level a `review_auth_error`
 ```
+
+**Factory sessions.** `POST /factory` starts a session of kind `factory`. The
+daemon runs `factory.Run` in a goroutine in place of the review loop, and the
+session is followed, listed and cancelled like any other. Its first stage is
+`factory_loop`. Each factory round is a `Round` with an `implement` turn
+(state, duration, cost, the implementer's summary, the diff stat so far), its
+`reviews` and its validation `checks`, and the session's `factory` field names
+the run's worktree and branch and why the loop stopped (`result`: `passed`,
+`exhausted`, `stuck` or `no_change`). A run that ends with its checks still
+failing is a `done` session with a `failed` stage. A factory session counts
+toward the one-active-session-per-project rule like any other. Only the reviews' commands are registered with the
+output store. The implementer's raw stream-json and the validation commands are
+not yet.
 
 **The record.** `Session` holds `stages` (always the full flow, in order:
 `review_loop`, `rebase`, `ci`, `approval`, `pr`), `rounds`, and a `restore` point.

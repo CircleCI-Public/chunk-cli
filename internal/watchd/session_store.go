@@ -54,12 +54,22 @@ func cloneSession(s Session) Session {
 			ended := *r.EndedAt
 			out.Rounds[i].EndedAt = &ended
 		}
+		out.Rounds[i].Checks = slices.Clone(r.Checks)
+		if r.Implement != nil {
+			impl := *r.Implement
+			out.Rounds[i].Implement = &impl
+		}
 		if r.Fix != nil {
 			fix := *r.Fix
 			fix.Files = slices.Clone(r.Fix.Files)
 			fix.FindingIDs = slices.Clone(r.Fix.FindingIDs)
 			out.Rounds[i].Fix = &fix
 		}
+	}
+	if s.Factory != nil {
+		f := *s.Factory
+		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
+		out.Factory = &f
 	}
 	if s.Restore != nil {
 		rp := *s.Restore
@@ -144,7 +154,7 @@ func (s *sessionStore) add(sess Session) (*sessionEntry, context.Context, string
 	}
 	sess.ID = uuid.NewString()
 	sess.State = SessionRunning
-	sess.Stages = newStages()
+	sess.Stages = newStages(sess.loopStage())
 	sess.StartedAt = time.Now()
 	ctx, cancel := context.WithCancel(s.parent)
 	entry := &sessionEntry{
