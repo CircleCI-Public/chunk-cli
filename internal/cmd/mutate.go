@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -128,31 +127,17 @@ against the test suite in parallel.`,
 			statusFn := newStatusFunc(io)
 			statusFn(iostream.LevelStep, fmt.Sprintf("Creating pool of %d sidecar(s)...", poolSize))
 
-			pool, err := sidecar.NewPool(cmd.Context(), client, sidecar.PoolOptions{
+			pool, err := newPool(cmd.Context(), client, sidecar.PoolOptions{
 				Size:    poolSize,
 				Name:    "mutate",
 				OrgID:   orgID,
 				Image:   image,
 				WorkDir: workDir,
-			}, statusFn)
+			}, "mutation sidecar pool", rc.CircleCITokenSource, statusFn)
 			if err != nil {
-				return fmt.Errorf("pool: %w", err)
+				return err
 			}
-			defer func() {
-				if destroyPool {
-					cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(cmd.Context()), cleanupTimeout)
-					defer cancel()
-					if err := pool.Destroy(cleanupCtx); err != nil {
-						statusFn(iostream.LevelWarn, fmt.Sprintf("could not destroy pool: %v", err))
-					}
-					return
-				}
-				// Waiting lets pending creates land in pool state for reuse;
-				// an interrupt cancels them instead.
-				closeCtx, cancel := context.WithTimeout(cmd.Context(), poolCloseTimeout)
-				defer cancel()
-				pool.Close(closeCtx)
-			}()
+			defer closePool(cmd.Context(), pool, destroyPool, statusFn)
 
 			statusFn(iostream.LevelStep, fmt.Sprintf("Running %d mutations (test: %s)...", len(mutations), testCmd))
 

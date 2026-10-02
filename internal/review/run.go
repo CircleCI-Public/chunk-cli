@@ -295,17 +295,8 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	code, err := exec(ctx, entry, claudeScriptWithTools(entry.RepoPath, p.Body, opts.Model, tools, opts.StructuredFindings), Env(opts.Credential, opts.BaseURL), onOutput, onSubmitted)
 	r.Output = strings.TrimSpace(stdout.String())
 	r.Duration = time.Since(start)
-	switch {
-	case ctx.Err() == context.DeadlineExceeded:
-		return r.fail(fmt.Errorf("timed out after %s", opts.Timeout))
-	case err != nil:
-		return r.fail(fmt.Errorf("exec: %w", err))
-	case code == ExitClaudeMissing:
-		return r.fail(ErrClaudeMissing)
-	case code != 0 && CredentialRejected(r.Output, stderr.String()):
-		return r.fail(ErrCredentialRejected)
-	case code != 0:
-		return r.fail(exitError(code, stderr.String()))
+	if err := ClaudeRunError(ctx, opts.Timeout, code, err, r.Output, stderr.String()); err != nil {
+		return r.fail(err)
 	}
 	if opts.StructuredFindings {
 		// A result cut at the cap cannot decode; say why instead of reporting
@@ -323,6 +314,27 @@ func runOne(ctx context.Context, exec Execer, entry *sidecar.PoolEntry, p Prompt
 	return r
 }
 
+// ClaudeRunError explains how a claude run on a sidecar ended, or returns nil
+// when it exited 0. ctx is the run's own context, bounded by timeout; code and
+// execErr are what the Execer returned, and stdout and stderr what claude
+// wrote. Every caller running claude classifies its end here, so a missing
+// binary or a rejected credential reads the same whatever ran.
+func ClaudeRunError(ctx context.Context, timeout time.Duration, code int, execErr error, stdout, stderr string) error {
+	switch {
+	case ctx.Err() == context.DeadlineExceeded:
+		return fmt.Errorf("timed out after %s", timeout)
+	case execErr != nil:
+		return fmt.Errorf("exec: %w", execErr)
+	case code == ExitClaudeMissing:
+		return ErrClaudeMissing
+	case code != 0 && CredentialRejected(stdout, stderr):
+		return ErrCredentialRejected
+	case code != 0:
+		return exitError(code, stderr)
+	}
+	return nil
+}
+
 // CredentialRejected reports whether claude failed to authenticate. Both
 // streams are checked: the 401 lands on stdout, while stderr can carry
 // unrelated warnings.
@@ -330,7 +342,7 @@ func CredentialRejected(stdout, stderr string) bool {
 	return credentialRejectedRe.MatchString(stdout) || credentialRejectedRe.MatchString(stderr)
 }
 
-// stderrTail is how much of stderr a failed review reports.
+// stderrTail is how much of stderr a failed command reports.
 const stderrTail = 2000
 
 func exitError(code int, stderr string) error {
@@ -338,17 +350,21 @@ func exitError(code int, stderr string) error {
 	if stderr == "" {
 		return fmt.Errorf("claude exited %d", code)
 	}
-	if len(stderr) > stderrTail {
-		stderr = "…" + stderr[len(stderr)-stderrTail:]
+	return fmt.Errorf("claude exited %d: %s", code, Tail(stderr, stderrTail))
+}
+
+// Tail keeps the last n bytes of s, marking the cut. The end is kept because
+// that is where compilers, test runners and claude say what went wrong.
+func Tail(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	return fmt.Errorf("claude exited %d: %s", code, stderr)
+	return "…" + s[len(s)-n:]
 }
 
 // claudeScriptWithTools builds the shell script that runs one review, with an
 // explicit tool allowlist and, when structured is set, claude's JSON result
-// constrained by FindingsSchema. The prompt is piped in base64-encoded, so no
-// quoting in it can reach the shell. Claude Code's native installer puts claude
-// in ~/.local/bin, which a non-login sh does not have on PATH.
+// constrained by FindingsSchema.
 func claudeScriptWithTools(repoPath, prompt, model string, tools []string, structured bool) string {
 	format := "text"
 	if structured {
@@ -361,6 +377,15 @@ func claudeScriptWithTools(repoPath, prompt, model string, tools []string, struc
 	if model != "" {
 		args = append(args, "--model", model)
 	}
+	return ClaudeScript(repoPath, prompt, args)
+}
+
+// ClaudeScript builds the shell script that runs claude in repoPath on a
+// sidecar with prompt on stdin. args is the whole command line, starting with
+// "claude". The prompt is piped in base64-encoded, so no quoting in it can
+// reach the shell. Claude Code's native installer puts claude in ~/.local/bin,
+// which a non-login sh does not have on PATH.
+func ClaudeScript(repoPath, prompt string, args []string) string {
 	encoded := base64.StdEncoding.EncodeToString([]byte(prompt))
 	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
 command -v claude >/dev/null 2>&1 || exit %d

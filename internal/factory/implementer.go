@@ -3,7 +3,6 @@ package factory
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,29 +100,27 @@ func (im *Implementer) Run(ctx context.Context, prompt string) (Turn, error) {
 	}
 	turn := Turn{Summary: s.result.Result, Duration: time.Since(start), CostUSD: s.result.TotalCostUSD}
 
-	switch {
-	case ctx.Err() == context.DeadlineExceeded:
-		return turn, fmt.Errorf("implementer timed out after %s", timeout)
+	// claude puts why a turn failed in its result, so that explains a failed
+	// exit before stderr does.
+	explain := s.result.Result
+	if strings.TrimSpace(explain) == "" {
+		explain = stderr.String()
+	}
+	// explain stands in for stderr, so stderr goes in with the result for the
+	// credential check: a 401 there must not hide behind a result that says
+	// something else.
+	switch err := review.ClaudeRunError(ctx, timeout, code, err, s.result.Result+"\n"+stderr.String(), explain); {
 	case err != nil:
-		return turn, fmt.Errorf("implementer exec: %w", err)
-	case code == review.ExitClaudeMissing:
-		return turn, review.ErrClaudeMissing
-	case code != 0 && review.CredentialRejected(s.result.Result, stderr.String()):
-		return turn, review.ErrCredentialRejected
-	case code != 0 || s.result.IsError:
-		msg := strings.TrimSpace(s.result.Result)
-		if msg == "" {
-			msg = strings.TrimSpace(stderr.String())
-		}
-		return turn, fmt.Errorf("implementer exited %d: %s", code, tailText(msg, 2000))
+		return turn, fmt.Errorf("implementer: %w", err)
+	case s.result.IsError:
+		return turn, fmt.Errorf("implementer: %s", review.Tail(strings.TrimSpace(explain), 2000))
 	case !s.sawResult:
 		return turn, errors.New("implementer ended without a result")
 	}
 	return turn, nil
 }
 
-// script builds the shell script for one turn. The prompt is piped in
-// base64-encoded so no quoting in it reaches the shell.
+// script builds the shell script for one turn.
 func (im *Implementer) script(prompt string) string {
 	args := []string{
 		"claude", "-p", "--output-format", "stream-json", "--verbose",
@@ -139,11 +136,7 @@ func (im *Implementer) script(prompt string) string {
 	if im.Model != "" {
 		args = append(args, "--model", im.Model)
 	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(prompt))
-	return fmt.Sprintf(`export PATH="$HOME/.local/bin:$PATH"
-command -v claude >/dev/null 2>&1 || exit %d
-cd %s && echo %s | base64 -d | %s`,
-		review.ExitClaudeMissing, sidecar.ShellEscape(im.Entry.RepoPath), encoded, sidecar.ShellJoin(args))
+	return review.ClaudeScript(im.Entry.RepoPath, prompt, args)
 }
 
 // streamEvent is the part of one stream-json line the implementer reads.

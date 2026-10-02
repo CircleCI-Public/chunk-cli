@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -79,27 +78,11 @@ git diff HEAD --shortstat`,
 	return c, nil
 }
 
+// maxScriptOutput caps what a workspace script may print. The largest is the
+// patch of the implementer's whole change; past this something has gone wrong.
+const maxScriptOutput = 32 << 20
+
 // run executes script on the implementer's sidecar and returns its stdout.
 func (w *workspace) run(ctx context.Context, script string) (string, error) {
-	return runScript(ctx, w.exec, w.entry, script)
-}
-
-// runScript executes script on entry's sidecar, returning stdout, and an error
-// carrying stderr when it exits non-zero.
-func runScript(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, script string) (string, error) {
-	var stdout, stderr strings.Builder
-	code, err := exec(ctx, entry, script, nil, func(stream string, data []byte) {
-		if stream == circleci.StreamStderr {
-			stderr.Write(data)
-			return
-		}
-		stdout.Write(data)
-	}, nil)
-	if err != nil {
-		return "", err
-	}
-	if code != 0 {
-		return "", fmt.Errorf("exit %d: %s", code, tailText(strings.TrimSpace(stderr.String()), 2000))
-	}
-	return stdout.String(), nil
+	return review.RunScript(ctx, w.exec, w.entry, script, maxScriptOutput)
 }

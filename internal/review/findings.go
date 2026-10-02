@@ -209,6 +209,15 @@ func truncateRunes(s string, n int) string {
 	return string([]rune(s)[:n]) + "…"
 }
 
+// Location is where the finding is, as file:line, or the file alone when the
+// finding has no line.
+func (f Finding) Location() string {
+	if f.Line > 0 {
+		return fmt.Sprintf("%s:%d", f.File, f.Line)
+	}
+	return f.File
+}
+
 // WorthChanging reports whether a finding is serious enough to act on: severity
 // high or medium. Lower findings are kept on the record but never trigger a fix,
 // so a loop does not churn the code over style remarks.

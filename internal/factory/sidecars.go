@@ -2,16 +2,12 @@ package factory
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
@@ -24,91 +20,48 @@ const reviewScope = `The change under review is the uncommitted work in this rep
 
 `
 
-// Provision creates the implementer's sidecar and one per reviewer, in
-// parallel, and waits until each accepts connections. On error, any sidecar it
-// created is deleted.
-func Provision(ctx context.Context, client *circleci.Client, orgID, image, repoPath string, reviewers int, status iostream.StatusFunc) (impl *sidecar.PoolEntry, revs []*sidecar.PoolEntry, err error) {
-	names := make([]string, 0, 1+reviewers)
-	names = append(names, "factory-implementer")
-	for i := range reviewers {
-		names = append(names, fmt.Sprintf("factory-reviewer-%d", i+1))
-	}
-	entries := make([]*sidecar.PoolEntry, len(names))
-	errs := make([]error, len(names))
-	var wg sync.WaitGroup
-	for i, name := range names {
-		wg.Add(1)
-		go func(i int, name string) {
-			defer wg.Done()
-			sc, err := sidecar.Create(ctx, client, orgID, name, image)
-			if err != nil {
-				errs[i] = fmt.Errorf("create %s: %w", name, err)
-				return
-			}
-			entries[i] = &sidecar.PoolEntry{ID: sc.ID, RepoPath: repoPath, Client: client}
-			status(iostream.LevelInfo, fmt.Sprintf("created %s (%s)", name, sc.ID))
-			// A new sidecar can briefly 404 before it accepts a key.
-			if _, err := sidecar.OpenSession(ctx, client, sc.ID, true); err != nil {
-				errs[i] = fmt.Errorf("connect to %s: %w", name, err)
-			}
-		}(i, name)
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		if tdErr := Teardown(client, entries); tdErr != nil {
-			status(iostream.LevelWarn, fmt.Sprintf("could not delete sidecars: %v", tdErr))
-		}
-		return nil, nil, err
-	}
-	return entries[0], entries[1:], nil
+// PoolName names a run's sidecar pool. Each run has a pool of its own, rather
+// than one per project reused as `chunk review` does: the baseline commit
+// moves the implementer's HEAD, and the reviewers get the implementer's .git,
+// so a later sync would start from a commit the developer never had. Two runs
+// in one project must not share sidecars either.
+func PoolName(runID string) string {
+	return "factory-" + runID
 }
 
-// teardownTimeout bounds Teardown: it runs on the way out, when a stuck delete
-// should not keep the command from exiting.
-const teardownTimeout = time.Minute
-
-// Teardown deletes sidecars, ignoring nil entries and ones already gone. It
-// returns the deletes that failed, so the caller can name the sidecars left
-// running.
-func Teardown(client *circleci.Client, entries []*sidecar.PoolEntry) error {
-	ctx, cancel := context.WithTimeout(context.Background(), teardownTimeout)
-	defer cancel()
-	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		errs []error
-	)
-	for _, e := range entries {
-		if e == nil {
-			continue
-		}
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			if err := client.DeleteSidecar(ctx, id); err != nil && !circleci.SidecarGone(err) {
-				mu.Lock()
-				errs = append(errs, fmt.Errorf("delete sidecar %s: %w", id, err))
-				mu.Unlock()
-			}
-		}(e.ID)
-	}
-	wg.Wait()
-	return errors.Join(errs...)
+// PoolSize is how many sidecars a run needs: the implementer, which runs the
+// validation commands too, and one per reviewer.
+func PoolSize(reviewers int) int {
+	return 1 + reviewers
 }
 
-// Sidecars runs the loop's steps on real sidecars: the implementer writes code
-// on its own sidecar, which also runs validation, and each review runs on a
-// reviewer sidecar the implementer's tree is relayed to.
+// Members describes every sidecar in a pool other than the implementer, the
+// ones its tree is relayed to. ids are the pool's, once it is synced.
+func Members(impl *sidecar.PoolEntry, ids []string) []*sidecar.PoolEntry {
+	var out []*sidecar.PoolEntry
+	for _, id := range ids {
+		if id != impl.ID {
+			out = append(out, &sidecar.PoolEntry{ID: id, RepoPath: impl.RepoPath, Client: impl.Client})
+		}
+	}
+	return out
+}
+
+// Sidecars runs the loop's steps on a pool of sidecars: the implementer writes
+// code on the member it holds for the whole run, which also runs validation,
+// and each review runs on another member the implementer's tree is relayed to.
 type Sidecars struct {
-	Client      *circleci.Client
 	Exec        review.Execer
 	Implementer *Implementer
-	Reviewers   []*sidecar.PoolEntry
-	Relay       *Relay
-	Prompts     []review.Prompt
-	Review      review.Options
-	Commands    []config.Command
-	Status      iostream.StatusFunc
+	// Acquire and Release hand out reviewer sidecars: the pool's own, with the
+	// implementer's member already checked out.
+	Acquire   func(context.Context) (*sidecar.PoolEntry, error)
+	Release   func(*sidecar.PoolEntry)
+	Reviewers []*sidecar.PoolEntry
+	Relay     *Relay
+	Prompts   []review.Prompt
+	Review    review.Options
+	Commands  []config.Command
 	// OnCheck is called as each validation command finishes. Reviews report
 	// their progress through Review.ProgressFn.
 	OnCheck func(Check)
@@ -116,14 +69,10 @@ type Sidecars struct {
 	ws workspace
 }
 
-// Prepare syncs the developer's tree at workDir to the implementer and commits
-// it as the baseline the implementer's work is measured against.
-func (s *Sidecars) Prepare(ctx context.Context, workDir string) error {
-	impl := s.Implementer.Entry
-	if err := sidecar.RsyncSyncEphemeral(ctx, s.Client, impl.ID, impl.RepoPath, workDir, s.status()); err != nil {
-		return fmt.Errorf("sync to implementer: %w", err)
-	}
-	s.ws = workspace{exec: s.Exec, entry: impl}
+// Prepare commits the developer's tree, which the pool synced to every member,
+// as the baseline the implementer's work is measured against.
+func (s *Sidecars) Prepare(ctx context.Context) error {
+	s.ws = workspace{exec: s.Exec, entry: s.Implementer.Entry}
 	return s.ws.commitBaseline(ctx)
 }
 
@@ -160,8 +109,7 @@ func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			acquire, release := s.reviewerPool()
-			results, reviewErr = review.RunPass(ctx, acquire, release, s.Exec, s.scopedPrompts(), s.Review)
+			results, reviewErr = review.RunPass(ctx, s.Acquire, s.Release, s.Exec, s.scopedPrompts(), s.Review)
 		}()
 	}
 	wg.Add(1)
@@ -226,7 +174,7 @@ func (s *Sidecars) stopStrayReviews(ctx context.Context) {
 		wg.Add(1)
 		go func(e *sidecar.PoolEntry) {
 			defer wg.Done()
-			_, _ = runScript(ctx, s.Exec, e, "pkill -f '[c]laude -p' || true")
+			_, _ = review.RunScript(ctx, s.Exec, e, "pkill -f '[c]laude -p' || true", maxScriptOutput)
 		}(e)
 	}
 	wg.Wait()
@@ -238,29 +186,4 @@ func (s *Sidecars) scopedPrompts() []review.Prompt {
 		out[i] = review.Prompt{Name: p.Name, Body: reviewScope + p.Body}
 	}
 	return out
-}
-
-// reviewerPool hands out reviewer sidecars to a review pass, blocking while
-// all are in use.
-func (s *Sidecars) reviewerPool() (acquire func(context.Context) (*sidecar.PoolEntry, error), release func(*sidecar.PoolEntry)) {
-	free := make(chan *sidecar.PoolEntry, len(s.Reviewers))
-	for _, e := range s.Reviewers {
-		free <- e
-	}
-	acquire = func(ctx context.Context) (*sidecar.PoolEntry, error) {
-		select {
-		case e := <-free:
-			return e, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	return acquire, func(e *sidecar.PoolEntry) { free <- e }
-}
-
-func (s *Sidecars) status() iostream.StatusFunc {
-	if s.Status == nil {
-		return func(iostream.Level, string) {}
-	}
-	return s.Status
 }

@@ -627,9 +627,11 @@ GET  /validate/collect?root=<path>                 → {tasks}
 ## Sidecar Sync Strategy (`internal/sidecar/`)
 
 **Everything syncs with rsync.** `RsyncSync` / `RsyncSyncEphemeral` back
-`chunk sidecar sync`, variants and `chunk factory`; `rsyncPoolSidecar` backs the
-sidecar pool (seed, fan-out, stale replacement, dead-sidecar replacement), and so
-pooled `chunk validate` and `chunk review`. All of them funnel into `rsyncTo`.
+`chunk sidecar sync`, variants and the `chunk factory` relay from implementer to
+reviewers; `rsyncPoolSidecar` backs the sidecar pool (seed, fan-out, stale
+replacement, dead-sidecar replacement), and so pooled `chunk validate`,
+`chunk review` and the `chunk factory` initial sync. All of them funnel into
+`rsyncTo`.
 
 The git-bundle strategy and the checkout/patch strategy are gone. #539 removed
 them, #564 (pool primitives) brought bundle sync back by accident because the

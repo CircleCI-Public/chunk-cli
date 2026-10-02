@@ -24,7 +24,7 @@ const maxCommandOutput = 256 * 1024
 func ValidationCommands(cmds []config.Command) []config.Command {
 	var out []config.Command
 	for _, c := range cmds {
-		if c.Role == "autofix" || c.Local || strings.Contains(c.Run, "{{") {
+		if c.Role == config.RoleAutofix || c.RunsLocally() || strings.Contains(c.Run, "{{") {
 			continue
 		}
 		out = append(out, c)

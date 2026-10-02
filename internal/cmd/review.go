@@ -141,37 +141,20 @@ A prompts directory named "results" must be passed as ./results, since
 			statusFn := newStatusFunc(streams)
 			statusFn(iostream.LevelStep, fmt.Sprintf("Preparing pool of %d sidecar(s) for %d prompt(s)...", size, len(prompts)))
 
-			pool, err := sidecar.NewPool(ctx, client, sidecar.PoolOptions{
+			pool, err := newPool(ctx, client, sidecar.PoolOptions{
 				Size:    size,
 				Name:    review.PoolName,
 				OrgID:   resolvedOrgID,
 				Image:   image,
 				WorkDir: workDir,
-			}, statusFn)
+			}, "review sidecar pool", rc.CircleCITokenSource, statusFn)
 			if err != nil {
-				if authErr := notAuthorized("create sidecars", rc.CircleCITokenSource, err); authErr != nil {
-					return authErr
-				}
-				return &userError{msg: "Could not prepare the review sidecar pool.", err: err}
+				return err
 			}
-			defer func() {
-				if destroyPool {
-					cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-					defer cancel()
-					if err := pool.Destroy(cleanupCtx); err != nil {
-						statusFn(iostream.LevelWarn, fmt.Sprintf("could not destroy pool: %v", err))
-					}
-					return
-				}
-				closeCtx, cancel := context.WithTimeout(ctx, poolCloseTimeout)
-				defer cancel()
-				pool.Close(closeCtx)
-			}()
+			defer closePool(ctx, pool, destroyPool, statusFn)
 
-			// Waiting also keeps the pool's "Synced" line, reported from
-			// another goroutine, from landing among the reviews' progress.
-			if err := review.WaitReady(ctx, pool.WaitSynced); err != nil {
-				return &userError{msg: "The review sidecar pool did not become ready.", err: err}
+			if err := waitPoolReady(ctx, pool, "review sidecar pool"); err != nil {
+				return err
 			}
 
 			activity := newReviewActivity(ctx, workDir)
@@ -196,12 +179,7 @@ A prompts directory named "results" must be passed as ./results, since
 			}
 			activity.finish(passErr)
 			if errors.Is(passErr, review.ErrClaudeMissing) {
-				return &userError{
-					msg:        "Claude Code is not installed on the review sidecars.",
-					suggestion: "Install it in the sidecar image (see 'chunk sidecar env build') and pass --image, or set validation.sidecarImage.",
-					hideDetail: true,
-					err:        passErr,
-				}
+				return agentNotInstalled("the review sidecars", passErr)
 			}
 			if errors.Is(passErr, review.ErrCredentialRejected) {
 				return credentialRejected(cred, credSource, rc.AnthropicBaseURL, passErr)
@@ -240,9 +218,9 @@ A prompts directory named "results" must be passed as ./results, since
 	return cmd
 }
 
-// newReviewPool creates or reuses a pool for a review, turning a rejected
-// creation into the not-authorized error. what names the pool in messages.
-func newReviewPool(ctx context.Context, client *circleci.Client, opts sidecar.PoolOptions, what, tokenSource string, statusFn iostream.StatusFunc) (*sidecar.Pool, error) {
+// newPool creates or reuses a pool, turning a rejected creation into the
+// not-authorized error. what names the pool in messages.
+func newPool(ctx context.Context, client *circleci.Client, opts sidecar.PoolOptions, what, tokenSource string, statusFn iostream.StatusFunc) (*sidecar.Pool, error) {
 	pool, err := sidecar.NewPool(ctx, client, opts, statusFn)
 	if err != nil {
 		if authErr := notAuthorized("create sidecars", tokenSource, err); authErr != nil {
@@ -253,11 +231,43 @@ func newReviewPool(ctx context.Context, client *circleci.Client, opts sidecar.Po
 	return pool, nil
 }
 
-// waitPoolReady blocks until the pool's sidecars are synced. Waiting also keeps
-// the pool's "Synced" line, reported from another goroutine, from landing among
-// later output.
+// closePool ends a command's use of its pool: with destroy it deletes the
+// sidecars and clears the pool's state, and otherwise keeps them for reuse.
+// Keeping waits for pending creates to land in pool state; an interrupt
+// cancels them instead.
+func closePool(ctx context.Context, pool *sidecar.Pool, destroy bool, status iostream.StatusFunc) {
+	if destroy {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+		if err := pool.Destroy(cleanupCtx); err != nil {
+			status(iostream.LevelWarn, fmt.Sprintf("could not destroy pool: %v", err))
+		}
+		return
+	}
+	closeCtx, cancel := context.WithTimeout(ctx, poolCloseTimeout)
+	defer cancel()
+	pool.Close(closeCtx)
+}
+
+// agentNotInstalled explains a pass that stopped because the sidecars in where
+// have no coding agent to run.
+func agentNotInstalled(where string, err error) error {
+	return &userError{
+		msg:        fmt.Sprintf("Claude Code is not installed on %s.", where),
+		suggestion: "Install it in the sidecar image (see 'chunk sidecar env build') and pass --image, or set validation.sidecarImage.",
+		hideDetail: true,
+		err:        err,
+	}
+}
+
+// waitPoolReady blocks until the pool's sidecars are created and synced.
+// sidecar.NewPool returns as soon as its members exist, while reused members
+// may still be syncing in the background; waiting makes a failed sync surface
+// before any work starts, rather than as one task failing partway through.
+// It also keeps the pool's "Synced" line, reported from another goroutine,
+// from landing among later output.
 func waitPoolReady(ctx context.Context, pool *sidecar.Pool, what string) error {
-	if err := review.WaitReady(ctx, pool.WaitSynced); err != nil {
+	if err := pool.WaitSynced(ctx); err != nil {
 		return &userError{msg: fmt.Sprintf("The %s did not become ready.", what), err: err}
 	}
 	return nil

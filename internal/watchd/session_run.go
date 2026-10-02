@@ -228,9 +228,11 @@ func (d *daemon) openRoundPool(ctx context.Context, root string, prompts int, re
 		return roundPool{}, fmt.Errorf("prepare sandbox pool: %w", err)
 	}
 	rp := roundPool{pool}
-	if err := review.WaitReady(ctx, pool.WaitReady); err != nil {
+	// Waiting makes a failed sync surface before any review starts, rather than
+	// as one review failing partway through the round.
+	if err := pool.WaitReady(ctx); err != nil {
 		rp.close(ctx)
-		return roundPool{}, err
+		return roundPool{}, fmt.Errorf("wait for sidecar pool: %w", err)
 	}
 	return rp, nil
 }

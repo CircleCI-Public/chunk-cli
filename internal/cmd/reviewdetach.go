@@ -107,7 +107,7 @@ func runReviewDetached(ctx context.Context, req detachRequest) error {
 	}
 
 	statusFn(iostream.LevelStep, "Preparing the primary sidecar...")
-	pool, err := newReviewPool(ctx, req.client, sidecar.PoolOptions{
+	pool, err := newPool(ctx, req.client, sidecar.PoolOptions{
 		Size:    1,
 		Name:    review.PrimaryPoolName,
 		OrgID:   req.orgID,
