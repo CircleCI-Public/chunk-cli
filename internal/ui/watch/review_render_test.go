@@ -40,6 +40,8 @@ func TestInvocationHeaderNamesItsOp(t *testing.T) {
 	assert.Assert(t, strings.Contains(run(eventlog.OpValidate), "validate"))
 	assert.Assert(t, strings.Contains(run(eventlog.OpReview), "review"))
 	assert.Assert(t, !strings.Contains(run(eventlog.OpReview), "validate"))
+	assert.Assert(t, strings.Contains(run(eventlog.OpImplement), "implement"))
+	assert.Assert(t, !strings.Contains(run(eventlog.OpImplement), "validate"))
 }
 
 func TestLastRunResultCountsReviews(t *testing.T) {
@@ -48,8 +50,11 @@ func TestLastRunResultCountsReviews(t *testing.T) {
 		{Op: eventlog.OpReview, SidecarID: "sb-1", Level: "error", Final: true, Total: 1},
 		{Op: eventlog.OpSync, SidecarID: "sb-1", Level: "done", Msg: "synced"},
 		{Op: eventlog.OpReview, SidecarID: "sb-2", Level: "done", Final: true, Passed: 1, Total: 1},
+		{Op: eventlog.OpValidate, SidecarID: "sb-4", Level: "done", Final: true, Passed: 1, Total: 1},
+		{Op: eventlog.OpImplement, SidecarID: "sb-4", Level: "error", Final: true, Total: 1},
 	}
 	assert.Equal(t, lastRunResult(events, "sb-1"), levelError, "a failed review newer than a passed validate")
 	assert.Equal(t, lastRunResult(events, "sb-2"), levelDone)
 	assert.Equal(t, lastRunResult(events, "sb-3"), "")
+	assert.Equal(t, lastRunResult(events, "sb-4"), levelError, "a failed implementer turn newer than a passed validate")
 }

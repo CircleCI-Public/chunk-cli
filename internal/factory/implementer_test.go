@@ -22,7 +22,10 @@ import (
 // HOME pointed at home so a fake claude can be installed where the scripts
 // look for it.
 func localExec(home string) review.Execer {
-	return func(ctx context.Context, _ *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, _ func(string)) (int, error) {
+	return func(ctx context.Context, _ *sidecar.PoolEntry, script string, env map[string]string, onOutput circleci.OutputFn, onSubmitted func(string)) (int, error) {
+		if onSubmitted != nil {
+			onSubmitted("local-command")
+		}
 		cmd := exec.CommandContext(ctx, "sh", "-c", script)
 		cmd.Env = append(os.Environ(), "HOME="+home)
 		for k, v := range env {

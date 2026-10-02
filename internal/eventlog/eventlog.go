@@ -27,6 +27,8 @@ const (
 	OpSetup    Op = "setup"
 	OpHook     Op = "hook"
 	OpReview   Op = "review"
+	// OpImplement is a chunk factory implementer turn.
+	OpImplement Op = "implement"
 )
 
 // Event is a single status event written to the log.

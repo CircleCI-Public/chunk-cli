@@ -1062,11 +1062,13 @@ func renderInvocationHeader(st watchStyles, g invocationGroup, expanded, selecte
 		}
 	}
 
-	// A review run is its own kind of invocation; everything else here, hook
-	// runs included, is a validate.
+	// Review runs and implementer turns are their own kinds of invocation;
+	// everything else here, hook runs included, is a validate.
 	name := "validate"
-	if n := len(g.events); n > 0 && g.events[n-1].Op == eventlog.OpReview {
-		name = string(eventlog.OpReview)
+	if n := len(g.events); n > 0 {
+		if op := g.events[n-1].Op; op == eventlog.OpReview || op == eventlog.OpImplement {
+			name = string(op)
+		}
 	}
 	label2 := name + "  " + outcomeStr + "  " + tsStr + durStr + outMark
 	if selected {
@@ -1149,6 +1151,8 @@ func opTag(st watchStyles, op eventlog.Op) string {
 		return "hook    "
 	case eventlog.OpReview:
 		return "review  "
+	case eventlog.OpImplement:
+		return "impl    "
 	default:
 		return st.muted(fmt.Sprintf("%-8s", string(op)))
 	}

@@ -61,9 +61,11 @@ type Sidecars struct {
 	Prompts   []review.Prompt
 	Review    review.Options
 	Commands  []config.Command
-	// OnCheck is called as each validation command finishes. Reviews report
-	// their progress through Review.ProgressFn.
-	OnCheck func(Check)
+	// OnSubmitted is called as each validation command starts on the
+	// implementer, with its remote command ID, and OnCheck as each finishes.
+	// Reviews report their progress through Review.ProgressFn.
+	OnSubmitted func(c config.Command, commandID string)
+	OnCheck     func(Check)
 
 	ws workspace
 }
@@ -134,7 +136,7 @@ func (s *Sidecars) Check(ctx context.Context, _ int) ([]Check, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		validation = runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnCheck)
+		validation = runValidation(ctx, s.Exec, s.Implementer.Entry, s.Commands, s.OnSubmitted, s.OnCheck)
 	}()
 	wg.Wait()
 	if reviewErr != nil {

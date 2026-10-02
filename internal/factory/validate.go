@@ -35,10 +35,15 @@ func ValidationCommands(cmds []config.Command) []config.Command {
 // runValidation runs each command in turn in the implementer's workspace, where
 // the code under review already is, and returns one check per command. They
 // run one after another because they share one checkout and one machine.
-func runValidation(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, cmds []config.Command, onDone func(Check)) []Check {
+// onSubmitted, if set, is called with each command's remote ID as it starts.
+func runValidation(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, cmds []config.Command, onSubmitted func(config.Command, string), onDone func(Check)) []Check {
 	checks := make([]Check, 0, len(cmds))
 	for _, c := range cmds {
-		check := runCommand(ctx, exec, entry, c)
+		var submitted func(string)
+		if onSubmitted != nil {
+			submitted = func(commandID string) { onSubmitted(c, commandID) }
+		}
+		check := runCommand(ctx, exec, entry, c, submitted)
 		if onDone != nil {
 			onDone(check)
 		}
@@ -47,7 +52,7 @@ func runValidation(ctx context.Context, exec review.Execer, entry *sidecar.PoolE
 	return checks
 }
 
-func runCommand(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, c config.Command) Check {
+func runCommand(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntry, c config.Command, onSubmitted func(string)) Check {
 	timeout := defaultCommandTimeout
 	if c.Timeout > 0 {
 		timeout = time.Duration(c.Timeout) * time.Second
@@ -64,7 +69,7 @@ func runCommand(ctx context.Context, exec review.Execer, entry *sidecar.PoolEntr
 		if room := maxCommandOutput - out.Len(); room > 0 {
 			out.Write(data[:min(len(data), room)])
 		}
-	}, nil)
+	}, onSubmitted)
 	if ctx.Err() == context.DeadlineExceeded {
 		// A command that runs past its timeout is a failure the implementer may
 		// be able to fix, such as a test that hangs, so it is fed back.

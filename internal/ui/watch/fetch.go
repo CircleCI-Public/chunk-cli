@@ -105,9 +105,9 @@ func commandRunning(commands []watchd.CommandState, sidecarID string) bool {
 	return false
 }
 
-// lastRunResult is the level of the most recent validate or review run to
-// finish on sidecarID, levelDone or levelError, or "" when none has in the
-// retained events. The sidecar's last event will not do: a sync finishes
+// lastRunResult is the level of the most recent validate, review or
+// implementer run to finish on sidecarID, levelDone or levelError, or "" when
+// none has in the retained events. The sidecar's last event will not do: a sync finishes
 // "done" too, so a failed run followed by a sync would read as a pass.
 func lastRunResult(events []eventlog.Event, sidecarID string) string {
 	for i := len(events) - 1; i >= 0; i-- {
@@ -115,7 +115,7 @@ func lastRunResult(events []eventlog.Event, sidecarID string) string {
 		if e.SidecarID != sidecarID {
 			continue
 		}
-		if e.Op != eventlog.OpValidate && e.Op != eventlog.OpReview {
+		if e.Op != eventlog.OpValidate && e.Op != eventlog.OpReview && e.Op != eventlog.OpImplement {
 			continue
 		}
 		if _, _, ok := e.Outcome(); !ok {

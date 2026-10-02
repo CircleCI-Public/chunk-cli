@@ -145,13 +145,17 @@ the worktree is kept so you can look at it or carry on in it.`,
 			if err != nil {
 				return &userError{msg: "Could not check out the implementer's sidecar.", err: err}
 			}
+			activity := newFactoryActivity(ctx, root, wt.Branch, impl.ID)
 
 			steps := &factory.Sidecars{
 				Exec: review.ClientExec,
 				Implementer: &factory.Implementer{
 					Exec: review.ClientExec, Entry: impl, Credential: cred, BaseURL: rc.AnthropicBaseURL,
 					Model: model, Timeout: implementTimeout,
-					OnActivity: func(a factory.Activity) { printActivity(status, a) },
+					OnActivity: func(a factory.Activity) {
+						printActivity(status, a)
+						activity.toolUsed(a)
+					},
 				},
 				Acquire:   pool.Acquire,
 				Release:   pool.Release,
@@ -161,10 +165,18 @@ the worktree is kept so you can look at it or carry on in it.`,
 				Review: review.Options{
 					Credential: cred, BaseURL: rc.AnthropicBaseURL, Model: model, Timeout: reviewTimeout,
 					StructuredFindings: true,
-					ProgressFn:         func(e review.ProgressEvent) { printReviewProgress(status, e) },
+					ProgressFn: func(e review.ProgressEvent) {
+						printReviewProgress(status, e)
+						activity.reviewProgress(e)
+					},
+					OnSubmitted: activity.reviewSubmitted,
 				},
-				Commands: commands,
-				OnCheck:  func(c factory.Check) { printCheck(status, c) },
+				Commands:    commands,
+				OnSubmitted: activity.commandSubmitted,
+				OnCheck: func(c factory.Check) {
+					printCheck(status, c)
+					activity.checked(c)
+				},
 			}
 			if err := steps.Prepare(ctx); err != nil {
 				return &userError{msg: "Could not set up the implementer's workspace.", err: err}
@@ -172,7 +184,8 @@ the worktree is kept so you can look at it or carry on in it.`,
 
 			started = true
 			loop := factory.Loop{Attempts: attempts, OnEvent: func(e factory.Event) { printEvent(status, attempts, e) }}
-			outcome, loopErr := loop.Run(ctx, steps, args[0])
+			outcome, loopErr := loop.Run(ctx, recordedSteps{Steps: steps, activity: activity}, args[0])
+			activity.finish(loopErr)
 			// Whatever the implementer got to is kept, even when the loop
 			// failed partway, so the work is not lost with the sidecars.
 			commitFactoryWork(ctx, steps, wt, factory.CommitMessage(args[0], runID, outcome), status, streams)

@@ -36,6 +36,12 @@ type reviewActivity struct {
 // returns nil when the log is unavailable, which every method tolerates:
 // recording is best-effort and must never fail a review.
 func newReviewActivity(ctx context.Context, workDir string) *reviewActivity {
+	return newBranchActivity(ctx, workDir, "")
+}
+
+// newBranchActivity is newReviewActivity for work on a branch other than the
+// one checked out at workDir. An empty branch means the checked-out one.
+func newBranchActivity(ctx context.Context, workDir, branch string) *reviewActivity {
 	// The git root, not workDir, because sidecar state and the daemon's project
 	// breadcrumb key on it. A .chunk below the git root would otherwise split a
 	// project's state across two data directories.
@@ -54,10 +60,13 @@ func newReviewActivity(ctx context.Context, workDir string) *reviewActivity {
 	// Registers the project so the daemon finds it, which matters for a repo
 	// where review runs before validate ever has.
 	_ = sidecar.RegisterProjectRoot(dataDir, root)
+	if branch == "" {
+		branch = sidecar.CurrentBranch(root)
+	}
 	return &reviewActivity{
 		log:         log,
 		projectRoot: root,
-		branch:      sidecar.CurrentBranch(root),
+		branch:      branch,
 		recorders:   map[string]*eventlog.Recorder{},
 		inFlight:    map[string]string{},
 	}

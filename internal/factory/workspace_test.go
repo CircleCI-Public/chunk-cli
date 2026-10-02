@@ -87,14 +87,20 @@ func TestRunValidation(t *testing.T) {
 	entry := &sidecar.PoolEntry{ID: "impl", RepoPath: dir}
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "marker"), nil, 0o644))
 
-	var done []string
+	var submitted, done []string
 	checks := runValidation(context.Background(), localExec(t.TempDir()), entry, []config.Command{
 		// Commands run in the workspace.
 		{Name: "in-workspace", Run: "test -f marker"},
 		{Name: "failing", Run: "echo compiling; echo 'undefined: foo' >&2; exit 1"},
 		{Name: "hangs", Run: "sleep 10", Timeout: 1},
+	}, func(c config.Command, commandID string) {
+		assert.Assert(t, commandID != "")
+		submitted = append(submitted, c.Name)
 	}, func(c Check) { done = append(done, c.Name) })
 
+	// Each command reports its remote ID as it starts, so its output can be
+	// replayed from the dashboard.
+	assert.DeepEqual(t, submitted, []string{"in-workspace", "failing", "hangs"})
 	assert.DeepEqual(t, done, []string{"in-workspace", "failing", "hangs"})
 	assert.Equal(t, checks[0].Status, StatusPassed)
 	assert.Equal(t, checks[1].Status, StatusFailed)
