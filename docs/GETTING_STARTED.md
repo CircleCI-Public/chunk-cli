@@ -32,7 +32,7 @@ Sidecars are available to all CircleCI customers, including the free plans.
 
 ### Skills
 
-**Skills** are instructions for AI coding agents (Claude Code, Cursor, Codex). Running `chunk skill install` copies skill files into your agent's configuration directory, teaching it how to run the sidecar dev loop and commands like `/chunk-review`.
+**Skills** are instructions for AI coding agents (Claude Code, Cursor, Codex, opencode). Running `chunk skill install` copies skill files into your agent's configuration directory, teaching it how to run the sidecar dev loop and commands like `/chunk-review`.
 
 ### .chunk/ directory
 
