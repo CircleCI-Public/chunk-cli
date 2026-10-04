@@ -77,8 +77,8 @@ func newSkillInstallCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
-	cmd.Flags().BoolVar(&userScope, "user", false, "Install into user-level agent config directories (~/.claude/skills, ~/.agents/skills)")
-	cmd.Flags().BoolVar(&projectScope, "project", false, "Install into project-level agent config directories (.claude/skills, .agents/skills) [default]")
+	cmd.Flags().BoolVar(&userScope, "user", false, "Install into user-level agent config directories (~/.claude/skills, ~/.agents/skills, ~/.config/opencode/skills)")
+	cmd.Flags().BoolVar(&projectScope, "project", false, "Install into project-level agent config directories (.claude/skills, .agents/skills, .opencode/skills) [default]")
 
 	return cmd
 }
@@ -126,8 +126,8 @@ func newSkillListCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
-	cmd.Flags().BoolVar(&userScope, "user", false, "List user-level skill installation status (~/.claude/skills, ~/.agents/skills)")
-	cmd.Flags().BoolVar(&projectScope, "project", false, "List project-level skill installation status (.claude/skills, .agents/skills) [default]")
+	cmd.Flags().BoolVar(&userScope, "user", false, "List user-level skill installation status (~/.claude/skills, ~/.agents/skills, ~/.config/opencode/skills)")
+	cmd.Flags().BoolVar(&projectScope, "project", false, "List project-level skill installation status (.claude/skills, .agents/skills, .opencode/skills) [default]")
 
 	return cmd
 }
