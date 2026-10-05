@@ -1,0 +1,1 @@
+Audit the implementation against every explicit requirement in the requested change. Exercise or trace each requirement and report every demonstrated high- or medium-severity defect in this pass; do not defer related concerns to another round. Do not invent requirements or broaden the requested scope. Return no finding when the literal requested behavior is complete.

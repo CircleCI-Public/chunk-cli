@@ -462,8 +462,9 @@ type FactoryRequest struct {
 	Attempts int `json:"attempts,omitempty"`
 	// Reviewers is how many reviewer sidecars to run; zero means one per
 	// review prompt.
-	Reviewers int    `json:"reviewers,omitempty"`
-	Model     string `json:"model,omitempty"`
+	Reviewers               int    `json:"reviewers,omitempty"`
+	Model                   string `json:"model,omitempty"`
+	ImplementerInstructions string `json:"implementer_instructions,omitempty"`
 	// Zero timeouts mean the factory's defaults.
 	ImplementTimeoutSeconds int  `json:"implement_timeout_seconds,omitempty"`
 	ReviewTimeoutSeconds    int  `json:"review_timeout_seconds,omitempty"`

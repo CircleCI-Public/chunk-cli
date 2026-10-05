@@ -26,6 +26,7 @@ tasks:
     cmds:
       - go tool golangci-lint run {{.ARGS}}
       - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py
+      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py
 
   fmt:
     desc: Format the code
@@ -69,6 +70,17 @@ tasks:
         task env-harness -- --repo flask --timeout 1200
     cmds:
       - uv run --project harness harness/environment.py {{.CLI_ARGS}}
+
+  factory-harness:
+    desc: |
+      Run an adaptive factory experiment against this repository's pinned baseline.
+      Args are passed through to harness/factory.py.
+      Examples:
+        task factory-harness
+        task factory-harness -- --passes 3
+        task factory-harness -- --passes 1 --profile targeted --no-advisor
+    cmds:
+      - uv run --project harness harness/factory.py {{.CLI_ARGS}}
 
   release:
     desc: Tag, build, and publish a release (tag → goreleaser → NUR)

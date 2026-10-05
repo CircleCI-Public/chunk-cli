@@ -1,0 +1,1 @@
+Review the requested user-facing behavior for applicable accessibility requirements and regressions, including accessible naming, visible labels when requested, keyboard use, focus, and live status announcements. Do not demand unrelated design changes or behavior outside the requested change. Report all demonstrated high- or medium-severity findings in this pass; otherwise pass.

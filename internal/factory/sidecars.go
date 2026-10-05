@@ -12,13 +12,23 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 )
 
-// reviewScope tells each reviewer what the change under review is. The prompt
-// files are written for a developer's branch; in the loop the change is the
-// implementer's uncommitted work on top of a baseline commit.
-const reviewScope = `The change under review is the uncommitted work in this repository: run ` +
+// reviewScope tells each reviewer how the run's request and its reusable review
+// prompt relate. The original request remains the specification in every round;
+// later implementer prompts contain only feedback from the preceding checks.
+const reviewScope = `Review the implementation against the original requested change below. Treat the requested change as the specification and the review instructions as the lens for evaluating it. Do not implement changes yourself.
+
+## Requested change
+
+%s
+
+## Change under review
+
+The change under review is the uncommitted work in this repository: run ` +
 	"`git diff HEAD`" + ` to see it, including new files. Committed history is the baseline and is not under review.
 
-`
+## Review instructions
+
+%s`
 
 // PoolName names a run's sidecar pool. Each run has a pool of its own, rather
 // than one per project reused as `chunk review` does: every member is synced
@@ -59,9 +69,13 @@ type Sidecars struct {
 	Release   func(*sidecar.PoolEntry)
 	Reviewers []*sidecar.PoolEntry
 	Relay     *Relay
-	Prompts   []review.Prompt
-	Review    review.Options
-	Commands  []config.Command
+	// Request is the original change the implementer was asked to make. It is
+	// included in every review, including rounds where the implementer is sent
+	// only feedback from the preceding checks.
+	Request  string
+	Prompts  []review.Prompt
+	Review   review.Options
+	Commands []config.Command
 	// OnCheck is called as each validation command finishes. Reviews report
 	// their progress through Review.ProgressFn.
 	OnCheck func(Check)
@@ -238,15 +252,15 @@ func (s *Sidecars) reviewerTrees(ctx context.Context, round int) {
 }
 
 func (s *Sidecars) scopedPrompts() []review.Prompt {
-	return scopePrompts(s.Prompts)
+	return scopePrompts(s.Request, s.Prompts)
 }
 
-// scopePrompts is prompts as each reviewer is sent them, told what the change
-// under review is.
-func scopePrompts(prompts []review.Prompt) []review.Prompt {
+// scopePrompts is prompts as each reviewer is sent them, with the stable
+// request being checked and the location of the change under review.
+func scopePrompts(request string, prompts []review.Prompt) []review.Prompt {
 	out := make([]review.Prompt, len(prompts))
 	for i, p := range prompts {
-		out[i] = review.Prompt{Name: p.Name, Body: reviewScope + p.Body}
+		out[i] = review.Prompt{Name: p.Name, Body: fmt.Sprintf(reviewScope, request, p.Body)}
 	}
 	return out
 }

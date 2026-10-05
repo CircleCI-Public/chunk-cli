@@ -1,0 +1,43 @@
+{
+  "passes": 5,
+  "attempts": 3,
+  "initial_profile": "control",
+  "targeted_profile": "targeted",
+  "targeted_by_pass": 3,
+  "profiles": {
+    "control": {
+      "reviews": [".chunk/reviews/adversarial.md", ".chunk/reviews/correctness.md", ".chunk/reviews/testing.md"],
+      "implementer_instructions": "Use your judgment about which validation commands to run before finishing.",
+      "reviewers": 0
+    },
+    "lean": {
+      "reviews": [".chunk/reviews/adversarial.md", ".chunk/reviews/testing.md"],
+      "implementer_instructions": "Factory runs all repository-wide validation after this turn. Format changed files and run only the smallest focused test that exercises the changed behavior. Do not run repository-wide tests, lint, or vet.",
+      "reviewers": 0
+    },
+    "targeted": {
+      "reviews": [
+        "harness/factory-reviews/requirements.md",
+        "harness/factory-reviews/runtime.md",
+        "harness/factory-reviews/cli-wiring.md",
+        "harness/factory-reviews/testing.md",
+        "harness/factory-reviews/safety.md"
+      ],
+      "implementer_instructions": "Factory runs all repository-wide validation after this turn. Format changed files and run one focused test for the user-facing behavior, then stop. Do not run package-wide or repository-wide tests, lint, or vet.",
+      "reviewers": 0
+    },
+    "consolidated": {
+      "reviews": ["harness/factory-reviews/consolidated.md"],
+      "implementer_instructions": "Factory runs all repository-wide validation after this turn. Format changed files and run one focused test for the user-facing behavior, then stop.",
+      "reviewers": 1
+    }
+  },
+  "good_looks_like": {
+    "requirements": "The requested behavior is complete and no unrelated behavior changes.",
+    "validation": "Every configured validation command passes.",
+    "implementation": "No independently confirmed high or medium defect remains; tests exercise the user-facing boundary.",
+    "convergence": "The factory result passes within the configured attempt budget; exhausted or stuck runs cannot win.",
+    "reviews": "High precision and coverage for actionable high or medium defects, with little duplication or scope drift.",
+    "efficiency": "Prefer lower wall time and reviewer-seconds only after quality is comparable."
+  }
+}

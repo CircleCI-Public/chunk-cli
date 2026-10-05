@@ -331,9 +331,12 @@ chunk
   so far. It uses the daemon's
   credentials and the project's configured org and image unless `--org-id` or
   `--image` say otherwise, and it is refused when `CHUNK_WATCHD_REMOTE_ADDR` is
-  set. `--reviews` must name a directory inside the project. As it follows the run
-  it prints the sidecars being prepared and each round's findings, with the end
-  of any failed validation command's output.
+  set. `--reviews` must name a directory inside the project. Every reviewer is
+  given the original factory prompt as the requested-change specification, so
+  the files in that directory can be reusable review lenses rather than copies
+  of a particular request. As it follows the run it prints the sidecars being
+  prepared and each round's findings, with the end of any failed validation
+  command's output.
   When the run ends it prints the work committed on `chunk/factory/<run id>`,
   how to keep it, how long the run took and what the implementer cost, and
   exits non-zero unless every check passed. `--log[=path]` has the run keep a plain-text log, by default
@@ -345,6 +348,8 @@ chunk
   adds the review prompts, passing commands' output, and a check each round
   that every reviewer has the implementer's change, also shows the log in the
   terminal as the run writes it, and implies `--log`.
+  `--implementer-instructions` appends run-specific guidance to the implementer's
+  fixed safety prompt, which is useful for controlled harness experiments.
 - **`watch` shows the daemon's sessions live.** The header notes a session running
   or paused, and `r` opens the session view: a timeline of the whole flow — the
   review loop with each round (its reviews, drawn by the same renderer as
