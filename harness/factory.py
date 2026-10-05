@@ -18,7 +18,7 @@ from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage
 REPO_ROOT = Path(__file__).parent.parent
 BINARY = REPO_ROOT / "dist" / "chunk"
 DEFAULT_PROMPT = REPO_ROOT / "harness/factory-prompts/session-list-failed.md"
-BASELINE_FILE = REPO_ROOT / "harness/factory-baseline.json"
+DEFAULT_BASELINE = REPO_ROOT / "harness/factory-baseline.json"
 DEFAULT_CONFIG = REPO_ROOT / "harness/factory-experiment.json"
 RESULTS_ROOT = REPO_ROOT / "harness/results"
 MAX_ADVISOR_INPUT = 45_000
@@ -35,27 +35,40 @@ def build_binary(binary: Path) -> None:
         raise RuntimeError(f"go build failed:\n{result.stdout}{result.stderr}")
 
 
-def load_baseline() -> dict:
-    baseline = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+def load_baseline(path: Path, target_repo: Path) -> dict:
+    baseline = json.loads(path.read_text(encoding="utf-8"))
     revision = baseline.get("revision", "")
     if not revision:
-        raise RuntimeError(f"baseline has no revision: {BASELINE_FILE}")
-    subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"], cwd=REPO_ROOT,
+        raise RuntimeError(f"baseline has no revision: {path}")
+    subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"], cwd=target_repo,
                    capture_output=True, check=True)
     return baseline
 
 
 @contextlib.contextmanager
-def baseline_checkout(revision: str) -> Iterator[Path]:
+def baseline_checkout(target_repo: Path, revision: str) -> Iterator[Path]:
     with tempfile.TemporaryDirectory(prefix="chunk-factory-eval-") as temp_dir:
         checkout = Path(temp_dir) / "repo"
         subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(checkout), revision],
-                       cwd=REPO_ROOT, check=True)
+                       cwd=target_repo, check=True)
         try:
             yield checkout
         finally:
-            subprocess.run(["git", "worktree", "remove", "--force", str(checkout)], cwd=REPO_ROOT,
+            subprocess.run(["git", "worktree", "remove", "--force", str(checkout)], cwd=target_repo,
                            capture_output=True, check=False)
+
+
+def install_setup_files(project: Path, setup_files: list[dict]) -> list[str]:
+    installed = []
+    for item in setup_files:
+        source = REPO_ROOT / item["source"]
+        destination = project / item["destination"]
+        if not source.is_file():
+            raise RuntimeError(f"setup file not found: {source}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        installed.append(item["destination"])
+    return installed
 
 
 def install_reviews(project: Path, pass_dir: Path, review_paths: list[str]) -> list[str]:
@@ -106,14 +119,14 @@ def read_result(pass_dir: Path) -> dict:
         return {"error": True, "message": "factory did not produce a session result"}
 
 
-def capture_diff(result: dict, pass_dir: Path) -> str:
+def capture_diff(result: dict, pass_dir: Path, target_repo: Path) -> str:
     factory = result.get("factory") or {}
     baseline, branch = factory.get("baseline"), factory.get("branch")
     diff = ""
     if baseline and branch:
         diff = subprocess.run(
             ["git", "diff", baseline, branch, "--", ".", ":(exclude).chunk/factory-eval-reviews"],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+            cwd=target_repo, capture_output=True, text=True, check=False,
         ).stdout
     (pass_dir / "diff.patch").write_text(diff, encoding="utf-8")
     return diff
@@ -297,6 +310,7 @@ def resolve_profile(config: dict, name: str) -> dict:
 
 
 def prepare_experiment(args, config_path: Path, prompt_path: Path, baseline: dict,
+                       target_repo: Path,
                        config: dict, passes: int) -> tuple[Path, list[dict]]:
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
     experiment_dir = (args.results_dir or RESULTS_ROOT / stamp).resolve()
@@ -313,6 +327,7 @@ def prepare_experiment(args, config_path: Path, prompt_path: Path, baseline: dic
     write_json(experiment_dir / "metadata.json", {
         "started_utc": datetime.datetime.now(datetime.UTC).isoformat(),
         "baseline": baseline,
+        "target_repo": str(target_repo),
         "harness_revision": subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True,
         ).stdout.strip(),
@@ -336,7 +351,8 @@ def starting_profile(args, config: dict, experiment_dir: Path, history: list[dic
     return args.profile or config["initial_profile"]
 
 
-def run_or_resume_pass(binary: Path, prompt: str, baseline: dict, pass_dir: Path,
+def run_or_resume_pass(binary: Path, prompt: str, baseline: dict, target_repo: Path,
+                       config: dict, pass_dir: Path,
                        number: int, passes: int, profile_name: str, profile: dict) -> int:
     if (pass_dir / "result.json").exists():
         print(f"\nResuming pass {number}/{passes}: {profile_name}")
@@ -344,7 +360,10 @@ def run_or_resume_pass(binary: Path, prompt: str, baseline: dict, pass_dir: Path
     pass_dir.mkdir()
     pass_config = {"pass": number, "profile": profile_name, **profile}
     print(f"\nPass {number}/{passes}: {profile_name}")
-    with baseline_checkout(baseline["revision"]) as project:
+    with baseline_checkout(target_repo, baseline["revision"]) as project:
+        pass_config["installed_setup_files"] = install_setup_files(
+            project, config.get("setup_files", []),
+        )
         pass_config["installed_reviews"] = install_reviews(project, pass_dir, profile["reviews"])
         write_json(pass_dir / "config.json", pass_config)
         return run_factory(binary, prompt, pass_dir, project, profile)
@@ -354,6 +373,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--prompt-file", type=Path, default=DEFAULT_PROMPT)
+    parser.add_argument("--baseline-file", type=Path, default=DEFAULT_BASELINE)
+    parser.add_argument("--target-repo", type=Path, default=REPO_ROOT)
     parser.add_argument("--passes", type=int, help="override the configured pass count")
     parser.add_argument("--profile", help="initial profile override")
     parser.add_argument("--results-dir", type=Path)
@@ -366,16 +387,19 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    config_path, prompt_path = args.config.resolve(), args.prompt_file.resolve()
+    config_path, prompt_path, baseline_path, target_repo = (
+        args.config.resolve(), args.prompt_file.resolve(),
+        args.baseline_file.resolve(), args.target_repo.resolve(),
+    )
     config = json.loads(config_path.read_text(encoding="utf-8"))
     passes = args.passes or config["passes"]
     if passes < 1:
         parser.error("--passes must be at least 1")
     prompt = prompt_path.read_text(encoding="utf-8").strip()
-    baseline, binary = load_baseline(), args.binary.resolve()
+    baseline, binary = load_baseline(baseline_path, target_repo), args.binary.resolve()
     try:
         experiment_dir, history = prepare_experiment(
-            args, config_path, prompt_path, baseline, config, passes,
+            args, config_path, prompt_path, baseline, target_repo, config, passes,
         )
     except ValueError as error:
         parser.error(str(error))
@@ -395,10 +419,11 @@ def main() -> int:
         profile = resolve_profile(config, profile_name)
         pass_dir = experiment_dir / f"pass-{number:02d}"
         status = run_or_resume_pass(
-            binary, prompt, baseline, pass_dir, number, passes, profile_name, profile,
+            binary, prompt, baseline, target_repo, config, pass_dir,
+            number, passes, profile_name, profile,
         )
         result = read_result(pass_dir)
-        diff, summary = capture_diff(result, pass_dir), summarize(result)
+        diff, summary = capture_diff(result, pass_dir, target_repo), summarize(result)
         grade = fallback_grade(summary) if args.no_advisor else grade_pass(prompt, config, summary, diff)
         grade["score"] = score(grade, summary)
         write_json(pass_dir / "grade.json", grade)
