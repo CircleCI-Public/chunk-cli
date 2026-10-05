@@ -153,6 +153,21 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
+├── factory <prompt>                # Implement a prompt on a sidecar, then review and validate it until it passes
+│   --attempts <n>                  # Most rounds of review and validation (default: 3)
+│   --reviewers <n>                 # Reviewer sidecars (0: one per review prompt)
+│   --reviews <dir>                 # Directory of review prompts (default: .chunk/reviews)
+│   --no-validate                   # Skip the project's validation commands
+│   --keep-sidecars                 # Leave the sidecars running when the run ends
+│   --org-id <id>                   # Organization ID
+│   --image <id>                    # Snapshot image ID (default: validation.sidecarImage)
+│   --model <name>                  # Claude model (default: Claude Code's default)
+│   --implement-timeout <duration>  # Max time for each implementer turn
+│   --review-timeout <duration>     # Max time for each review
+│   --log[=path]                    # Keep a log of the run's full context (default: ~/.chunk/factory/run-<start time>.log)
+│   --verbose                       # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
+│   --json                          # Output as JSON
+│
 ├── session                         # (hidden) Pre-PR review session on the local watch daemon
 │   ├── start                       # Start a session for the current project
 │   │   --project <path>            # Project to review (default: the enclosing git repository)

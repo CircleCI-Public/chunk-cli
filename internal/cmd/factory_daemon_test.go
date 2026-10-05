@@ -189,3 +189,34 @@ func TestFactoryRefusesReviewsOutsideTheProject(t *testing.T) {
 	_, _, err := runFactoryCmd(t, "--reviews", outside, "add a --verbose flag")
 	assert.ErrorContains(t, err, "--reviews must be a directory inside the project.")
 }
+
+// The prompt is the whole argument, so no prompt, a blank one and a second
+// one are all caught before anything starts.
+func TestFactoryRequiresAPrompt(t *testing.T) {
+	// The arguments are refused before anything starts, but the project keeps
+	// a guard that moves below this one from reading the developer's own
+	// config or starting a daemon against this repository.
+	factoryProject(t)
+	for _, args := range [][]string{
+		{},
+		{"   "},
+		{"add a --verbose flag", "and tests"},
+	} {
+		_, _, err := runFactoryCmd(t, args...)
+		var ue *userError
+		assert.Assert(t, errors.As(err, &ue), "args %q: got %v", args, err)
+		assert.Equal(t, ue.UserMessage(), "Pass the prompt as one argument.", "args %q", args)
+		assert.Equal(t, ue.UserExitCode(), ExitBadArgs, "args %q", args)
+	}
+}
+
+// A run of no rounds would check nothing, so --attempts is refused here
+// rather than on the daemon.
+func TestFactoryRejectsAttemptsBelowOne(t *testing.T) {
+	factoryProject(t)
+	_, _, err := runFactoryCmd(t, "--attempts", "0", "add a --verbose flag")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), "--attempts must be at least 1.")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+}

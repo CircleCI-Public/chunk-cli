@@ -52,8 +52,6 @@ each review's findings in full, and each validation command's output when it
 failed. --verbose adds the review prompts, the output of commands that passed,
 and a check each round that every reviewer has the implementer's change, and
 also shows the log here as the run writes it; it implies --log.`,
-		// Hidden until the workshop build settles.
-		Hidden:       true,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
