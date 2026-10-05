@@ -22,6 +22,24 @@ const fakeReviewer = `mkdir -p "$HOME/seen"
 git diff HEAD --binary > "$HOME/seen/$$"
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"review":"ok","findings":[]}}'`
 
+func TestScopePromptsIncludesOriginalRequestAndReusableInstructions(t *testing.T) {
+	prompts := []review.Prompt{{Name: "testing", Body: "Check tests for every requested behavior."}}
+	got := scopePrompts("Add shareable search.\nPreserve the URL hash.", prompts)
+
+	assert.Equal(t, len(got), 1)
+	assert.Equal(t, got[0].Name, "testing")
+	for _, want := range []string{
+		"## Requested change\n\nAdd shareable search.\nPreserve the URL hash.",
+		"## Change under review\n\nThe change under review is the uncommitted work",
+		"## Review instructions\n\nCheck tests for every requested behavior.",
+	} {
+		assert.Assert(t, strings.Contains(got[0].Body, want), "missing %q in:\n%s", want, got[0].Body)
+	}
+	// Composing the runtime context must not rewrite the reusable prompt loaded
+	// from the repository.
+	assert.Equal(t, prompts[0].Body, "Check tests for every requested behavior.")
+}
+
 // TestCheckReviewsTheImplementersLatestWork runs several rounds of Check
 // against an implementer whose work changes every round: edits, new files, a
 // new file deleted again, a tracked file deleted and restored, an edit
@@ -175,6 +193,7 @@ func newSidecarsFixture(t *testing.T, wrap func(review.Execer) review.Execer) (*
 		Release:   func(e *sidecar.PoolEntry) { pool <- e },
 		Reviewers: reviewers,
 		Relay:     newRelay(t, wt.Path),
+		Request:   "make the requested change",
 		Prompts:   []review.Prompt{{Name: "bugs", Body: "find bugs"}, {Name: "style", Body: "check style"}},
 		Review: review.Options{
 			Credential:         review.Credential{EnvVar: "ANTHROPIC_API_KEY", Value: "k"},

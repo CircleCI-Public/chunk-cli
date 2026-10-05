@@ -187,6 +187,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Release:   pool.Release,
 		Reviewers: Members(impl, pool.IDs()),
 		Relay:     NewRelay(opts.Client, wt.Path, status),
+		Request:   opts.Prompt,
 		Prompts:   opts.Prompts,
 		Review: review.Options{
 			Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,

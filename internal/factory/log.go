@@ -118,10 +118,10 @@ func (l *runLog) start(runID string, opts RunOptions) {
 		return
 	}
 	// The prompts as they are sent: the implementer's system prompt comes with
-	// every turn, and each review's prompt is told what the change under
-	// review is.
+	// every turn, and each review gets the original request and the location of
+	// the change under review.
 	l.block("implementer system prompt", implementerSystemPrompt(opts.ImplementerInstructions))
-	for _, p := range scopePrompts(opts.Prompts) {
+	for _, p := range scopePrompts(opts.Prompt, opts.Prompts) {
 		l.block("review prompt "+p.Name, p.Body)
 	}
 }

@@ -142,9 +142,12 @@ func TestLogVerboseAddsPromptsAndPassingOutput(t *testing.T) {
 		} {
 			assert.Assert(t, strings.Contains(got, want), "verbose=%t: missing %q in:\n%s", verbose, want, got)
 		}
-		// The prompts are logged as they are sent: a review's with the scope
-		// that tells it what to review, and the implementer's system prompt.
-		prompt := strings.Contains(got, "info  review prompt adversarial:\n    The change under review is the uncommitted work") &&
+		// The prompts are logged as they are sent: a review's with the original
+		// request and scope, and the implementer's system prompt.
+		prompt := strings.Contains(got, "info  review prompt adversarial:\n    Review the implementation against the original requested change") &&
+			strings.Contains(got, "\n    ## Requested change\n    \n    add a flag\n") &&
+			strings.Contains(got, "\n    ## Change under review\n    \n    The change under review is the uncommitted work") &&
+			strings.Contains(got, "\n    ## Review instructions\n") &&
 			strings.Contains(got, "\n    Find real problems.\n    \n    Prove them.\n")
 		system := strings.Contains(got, "info  implementer system prompt:\n    You are working in a disposable copy")
 		output := strings.Contains(got, "info    output:\n    ok pkg\n")
