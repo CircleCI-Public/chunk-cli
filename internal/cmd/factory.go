@@ -29,7 +29,7 @@ func newFactoryCmd() *cobra.Command {
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "factory <prompt | ->",
+		Use:   "factory [prompt|-]",
 		Short: "Implement a prompt on a sidecar, then review and validate it until it passes",
 		Long: `Send a prompt to an implementer agent running on a sidecar, then loop:
 review its work with each prompt in the reviews directory, each on its own
@@ -46,8 +46,8 @@ changes included. Your checkout is never touched. The implementer's work is
 synced into the worktree each round and committed there when the run ends;
 the worktree is kept so you can look at it or carry on in it.
 
-To pass the prompt from a file, give - as the prompt and send the file on
-stdin: chunk factory - < prompt.md.
+With no prompt argument, the prompt is read from redirected stdin. A - prompt
+selects stdin explicitly: chunk factory < prompt.md or chunk factory - < prompt.md.
 
 With --log, the run keeps a plain-text log, by default
 ~/.chunk/factory/run-<start time>.log, with its full context whatever the display
@@ -60,19 +60,19 @@ also shows the log here as the run writes it; it implies --log.`,
 		Hidden:       true,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
-			if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
+			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
 				return nil
 			}
-			return newUserError("Pass the prompt as one argument.").
+			return newUserError("Pass the prompt as one argument or on stdin.").
 				withCode("command.invalid_args").
-				withSuggestion(`Quote it: chunk factory "add a --verbose flag", or send a file on stdin: chunk factory - < prompt.md`).
+				withSuggestion(`Quote it: chunk factory "add a --verbose flag", or send a file on stdin: chunk factory < prompt.md`).
 				withExitCode(ExitBadArgs).
 				withoutDetail()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
-			prompt, err := factoryPrompt(cmd.InOrStdin(), args[0])
+			prompt, err := factoryPrompt(cmd.InOrStdin(), args)
 			if err != nil {
 				return err
 			}
@@ -162,19 +162,18 @@ also shows the log here as the run writes it; it implies --log.`,
 	return cmd
 }
 
-// factoryPrompt is the prompt the implementer is sent: the argument, or stdin
-// when the argument is -. Stdin that is a terminal is refused rather than
-// waited on, since a missing redirect is the likelier mistake.
-func factoryPrompt(in io.Reader, arg string) (string, error) {
-	if arg != "-" {
-		return arg, nil
+// factoryPrompt is the prompt the implementer is sent: the sole argument when
+// it is not -, and stdin otherwise. With no argument, terminal stdin is refused
+// rather than waited on, since a missing redirect is the likelier mistake. An
+// explicit - may read a terminal because the caller asked for stdin.
+func factoryPrompt(in io.Reader, args []string) (string, error) {
+	if len(args) == 1 && args[0] != "-" {
+		return args[0], nil
 	}
-	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		return "", newUserError("Pass the prompt as an argument or on stdin.").
-			withCode("command.invalid_args").
-			withSuggestion(`chunk factory "add a --verbose flag", or chunk factory - < prompt.md`).
-			withExitCode(ExitBadArgs).
-			withoutDetail()
+	if len(args) == 0 {
+		if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+			return "", missingFactoryPromptError()
+		}
 	}
 	b, err := io.ReadAll(in)
 	if err != nil {
@@ -188,6 +187,14 @@ func factoryPrompt(in io.Reader, arg string) (string, error) {
 			withoutDetail()
 	}
 	return prompt, nil
+}
+
+func missingFactoryPromptError() error {
+	return newUserError("Pass the prompt as an argument or on stdin.").
+		withCode("command.invalid_args").
+		withSuggestion(`chunk factory "add a --verbose flag", or chunk factory < prompt.md`).
+		withExitCode(ExitBadArgs).
+		withoutDetail()
 }
 
 // factoryChecks loads what the implementer's work is checked with: the review
