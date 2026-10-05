@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,42 @@ func TestFactoryChecksOnlyToleratesMissingDefaultReviews(t *testing.T) {
 	assert.NilError(t, os.Mkdir(empty, 0o755))
 	_, _, err = factoryChecks(workDir, empty, cfg, false)
 	assert.ErrorIs(t, err, review.ErrNoPrompts)
+}
+
+func TestFactoryPrompt(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		stdin   string
+		want    string
+		wantErr string
+	}{
+		{name: "argument", args: []string{"add a flag"}, stdin: "ignored", want: "add a flag"},
+		{name: "no argument reads stdin", stdin: "# Task\n\nadd a flag\n", want: "# Task\n\nadd a flag\n"},
+		{name: "dash reads stdin", args: []string{"-"}, stdin: "# Task\n\nadd a flag\n", want: "# Task\n\nadd a flag\n"},
+		{name: "empty implicit stdin", stdin: " \n", wantErr: "empty"},
+		{name: "empty explicit stdin", args: []string{"-"}, stdin: " \n", wantErr: "empty"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := factoryPrompt(strings.NewReader(tc.stdin), tc.args)
+			if tc.wantErr != "" {
+				assert.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			assert.NilError(t, err)
+			assert.Equal(t, got, tc.want)
+		})
+	}
+}
+
+func TestFactoryArgs(t *testing.T) {
+	cmd := newFactoryCmd()
+	assert.NilError(t, cmd.Args(cmd, nil))
+	assert.NilError(t, cmd.Args(cmd, []string{"add a flag"}))
+	assert.NilError(t, cmd.Args(cmd, []string{"-"}))
+	assert.ErrorContains(t, cmd.Args(cmd, []string{""}), "one argument or on stdin")
+	assert.ErrorContains(t, cmd.Args(cmd, []string{"one", "two"}), "one argument or on stdin")
 }
 
 func TestKeepWorkHint(t *testing.T) {

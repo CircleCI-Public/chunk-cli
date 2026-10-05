@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
@@ -28,7 +29,7 @@ func newFactoryCmd() *cobra.Command {
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
-		Use:   "factory <prompt>",
+		Use:   "factory [prompt|-]",
 		Short: "Implement a prompt on a sidecar, then review and validate it until it passes",
 		Long: `Send a prompt to an implementer agent running on a sidecar, then loop:
 review its work with each prompt in the reviews directory, each on its own
@@ -45,6 +46,9 @@ changes included. Your checkout is never touched. The implementer's work is
 synced into the worktree each round and committed there when the run ends;
 the worktree is kept so you can look at it or carry on in it.
 
+With no prompt argument, the prompt is read from redirected stdin. A - prompt
+selects stdin explicitly: chunk factory < prompt.md or chunk factory - < prompt.md.
+
 With --log, the run keeps a plain-text log, by default
 ~/.chunk/factory/run-<start time>.log, with its full context whatever the display
 leaves out: every prompt the implementer is sent and what it did and said,
@@ -54,18 +58,22 @@ and a check each round that every reviewer has the implementer's change, and
 also shows the log here as the run writes it; it implies --log.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
-			if len(args) == 1 && strings.TrimSpace(args[0]) != "" {
+			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
 				return nil
 			}
-			return newUserError("Pass the prompt as one argument.").
+			return newUserError("Pass the prompt as one argument or on stdin.").
 				withCode("command.invalid_args").
-				withSuggestion(`Quote it: chunk factory "add a --verbose flag"`).
+				withSuggestion(`Quote it: chunk factory "add a --verbose flag", or send a file on stdin: chunk factory < prompt.md`).
 				withExitCode(ExitBadArgs).
 				withoutDetail()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
+			prompt, err := factoryPrompt(cmd.InOrStdin(), args)
+			if err != nil {
+				return err
+			}
 			if attempts < 1 {
 				return newUserError("--attempts must be at least 1.").
 					withCode("command.invalid_args").
@@ -105,7 +113,7 @@ also shows the log here as the run writes it; it implies --log.`,
 			}
 			id, err := watchd.StartFactory(watchd.FactoryRequest{
 				ProjectRoot:             root,
-				Prompt:                  args[0],
+				Prompt:                  prompt,
 				ReviewsDir:              relReviews,
 				NoValidate:              noValidate,
 				Attempts:                attempts,
@@ -152,6 +160,41 @@ also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().Lookup("log").NoOptDefVal = factory.LogDefault
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
 	return cmd
+}
+
+// factoryPrompt is the prompt the implementer is sent: the sole argument when
+// it is not -, and stdin otherwise. With no argument, terminal stdin is refused
+// rather than waited on, since a missing redirect is the likelier mistake. An
+// explicit - may read a terminal because the caller asked for stdin.
+func factoryPrompt(in io.Reader, args []string) (string, error) {
+	if len(args) == 1 && args[0] != "-" {
+		return args[0], nil
+	}
+	if len(args) == 0 {
+		if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+			return "", missingFactoryPromptError()
+		}
+	}
+	b, err := io.ReadAll(in)
+	if err != nil {
+		return "", &userError{msg: "Could not read the prompt from stdin.", err: err}
+	}
+	prompt := string(b)
+	if strings.TrimSpace(prompt) == "" {
+		return "", newUserError("The prompt on stdin is empty.").
+			withCode("command.invalid_args").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return prompt, nil
+}
+
+func missingFactoryPromptError() error {
+	return newUserError("Pass the prompt as an argument or on stdin.").
+		withCode("command.invalid_args").
+		withSuggestion(`chunk factory "add a --verbose flag", or chunk factory < prompt.md`).
+		withExitCode(ExitBadArgs).
+		withoutDetail()
 }
 
 // factoryChecks loads what the implementer's work is checked with: the review
