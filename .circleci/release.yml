@@ -26,6 +26,14 @@ jobs:
             sudo apt install snapd --yes
             sudo snap install snapcraft --classic
       - run:
+          # goreleaser shells out to choco to pack the chocolatey package;
+          # there's no native Linux build, so wrap the Docker image instead.
+          name: Install choco
+          command: |
+            sudo cp tools/choco.sh /usr/local/bin/choco
+            sudo chmod +x /usr/local/bin/choco
+            choco help
+      - run:
           name: Install goreleaser
           command: go install github.com/goreleaser/goreleaser/v2@latest
       - run:
