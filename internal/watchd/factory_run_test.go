@@ -82,7 +82,10 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 		return run(ctx, opts)
 	})
 
-	sess, err := d.startFactory(FactoryRequest{ProjectRoot: root, Prompt: "  add a --verbose flag  ", Reviewers: 1})
+	sess, err := d.startFactory(FactoryRequest{
+		ProjectRoot: root, Prompt: "  add a --verbose flag  ", Reviewers: 1,
+		ImplementerInstructions: "keep the change small",
+	})
 	assert.NilError(t, err)
 	assert.Equal(t, sess.Kind, KindFactory)
 	detail := waitForSessionEnd(t, d, sess.ID)
@@ -95,6 +98,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.Equal(t, len(got.Prompts), 2)
 	assert.Equal(t, len(got.Commands), 1)
 	assert.Equal(t, got.Credential.Value, testSecret)
+	assert.Equal(t, got.ImplementerInstructions, "keep the change small")
 
 	assert.Equal(t, detail.State, SessionDone)
 	assert.Equal(t, detail.Stages[0].ID, StageFactoryLoop)

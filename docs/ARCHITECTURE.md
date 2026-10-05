@@ -354,10 +354,11 @@ command finishes, so anything holding the only copy of the output loses it.
 Design constraints worth preserving:
 
 - **The daemon has no working directory worth trusting.** The socket is
-  user-global, so one daemon serves every repo on the machine, and it was
-  launched with whatever cwd the developer happened to be in — one arbitrary repo
-  out of all of them (`launchDaemon` sets no `Dir`). Anything the daemon runs on
-  a caller's behalf must therefore be told which project it is for:
+  user-global, so one daemon serves every repo on the machine. `launchDaemon`
+  runs it in the watchd state directory (`EnsureDir`) rather than the checkout
+  that launched it, so a removed worktree cannot break later commands at
+  `getcwd` — but that cwd is no project's root. Anything the daemon runs on a
+  caller's behalf must therefore be told which project it is for:
   `ValidateRequest.ProjectRoot` carries it, and `makeValidateRunner` turns it
   into `--project` so the run cannot fall through to `os.Getwd()`. A run that
   resolves the project itself validates the daemon's repo and reports the answer
@@ -404,8 +405,8 @@ POST /session/{id}/resume  → 202; only for a paused session (409 otherwise)
 POST /session/{id}/restore {force?} → {paths}; only for an ended session that changed
                              files (409 otherwise, or if files were edited since)
 POST /factory              {project_root, prompt, reviews_dir?, no_validate?, attempts?, reviewers?,
-                            model?, implement_timeout_seconds?, review_timeout_seconds?,
-                            keep_sidecars?, org_id?, image?}
+                            model?, implementer_instructions?, implement_timeout_seconds?,
+                            review_timeout_seconds?, keep_sidecars?, org_id?, image?}
                            → 202 {id}   (404 unknown project, 400 bad request or nothing
                                          to check, 503 no credential)
 GET  /snapshot             → each project carries `sessions` (state only), and the

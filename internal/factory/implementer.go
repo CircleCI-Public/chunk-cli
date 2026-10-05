@@ -20,13 +20,15 @@ import (
 // may run the tests several times, so it gets longer than a review.
 const DefaultImplementTimeout = 30 * time.Minute
 
-// implementerSystemPrompt keeps the implementer's work where the loop collects
-// it. Reviewers are shown the uncommitted changes against the baseline commit,
-// so a commit, reset or branch switch would hide the work from them.
+// baseImplementerSystemPrompt keeps the implementer's work where the loop
+// collects it. Reviewers are shown the uncommitted changes against the baseline
+// commit, so a commit, reset or branch switch would hide the work from them.
 const baseImplementerSystemPrompt = `You are working in a disposable copy of the repository on a remote machine.
 Make the requested change by editing files. Leave your changes uncommitted: do not run git commit, git stash, git reset, git checkout, git switch or git rebase. Your changes are collected from the working tree and reviewed.
 When you finish, reply with a short summary of what you changed.`
 
+// implementerSystemPrompt returns the base system prompt, followed by the
+// run's own instructions when there are any.
 func implementerSystemPrompt(instructions string) string {
 	if strings.TrimSpace(instructions) == "" {
 		return baseImplementerSystemPrompt
