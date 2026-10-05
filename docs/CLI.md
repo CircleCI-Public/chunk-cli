@@ -345,6 +345,8 @@ chunk
   adds the review prompts, passing commands' output, and a check each round
   that every reviewer has the implementer's change, also shows the log in the
   terminal as the run writes it, and implies `--log`.
+  `--implementer-instructions` appends run-specific guidance to the implementer's
+  fixed safety prompt, which is useful for controlled harness experiments.
 - **`watch` shows the daemon's sessions live.** The header notes a session running
   or paused, and `r` opens the session view: a timeline of the whole flow — the
   review loop with each round (its reviews, drawn by the same renderer as

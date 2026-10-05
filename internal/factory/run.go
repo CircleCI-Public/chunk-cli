@@ -43,11 +43,12 @@ type RunOptions struct {
 	// KeepSidecars leaves the sidecars running when the run ends.
 	KeepSidecars bool
 
-	Credential       review.Credential
-	BaseURL          string
-	Model            string
-	ImplementTimeout time.Duration
-	ReviewTimeout    time.Duration
+	Credential              review.Credential
+	BaseURL                 string
+	Model                   string
+	ImplementerInstructions string
+	ImplementTimeout        time.Duration
+	ReviewTimeout           time.Duration
 
 	// Exec runs commands on the sidecars; review.ClientExec when nil.
 	Exec review.Execer
@@ -179,7 +180,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Exec: exec,
 		Implementer: &Implementer{
 			Exec: exec, Entry: impl, Credential: opts.Credential, BaseURL: opts.BaseURL,
-			Model: opts.Model, Timeout: opts.ImplementTimeout,
+			Model: opts.Model, Timeout: opts.ImplementTimeout, Instructions: opts.ImplementerInstructions,
 			OnActivity: opts.OnActivity,
 		},
 		Acquire:   pool.Acquire,

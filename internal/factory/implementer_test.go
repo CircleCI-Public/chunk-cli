@@ -105,6 +105,18 @@ func TestImplementerRunsAndReportsActivity(t *testing.T) {
 	assert.Equal(t, string(stdin), "add a --verbose flag")
 }
 
+func TestImplementerAddsRunSpecificInstructions(t *testing.T) {
+	im, home, _ := newImplementer(t, streamOK)
+	im.Instructions = "Run only the focused test."
+
+	_, err := im.Run(context.Background(), "add a flag")
+	assert.NilError(t, err)
+	args, err := os.ReadFile(filepath.Join(home, "args"))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(args), "Run-specific instructions:"), string(args))
+	assert.Assert(t, strings.Contains(string(args), im.Instructions), string(args))
+}
+
 // TestImplementerResumesItsSession guards the feedback rounds: each must
 // continue the first turn's conversation, not start a fresh one without the
 // context of the work it is fixing.

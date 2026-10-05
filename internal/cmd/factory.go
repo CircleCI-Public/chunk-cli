@@ -24,7 +24,7 @@ import (
 func newFactoryCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, jsonOut, verbose bool
-	var orgID, image, model, reviewsDir, logPath string
+	var orgID, image, model, reviewsDir, logPath, implementerInstructions string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
@@ -113,6 +113,7 @@ also shows the log here as the run writes it; it implies --log.`,
 				Attempts:                attempts,
 				Reviewers:               reviewers,
 				Model:                   model,
+				ImplementerInstructions: implementerInstructions,
 				ImplementTimeoutSeconds: int(implementTimeout / time.Second),
 				ReviewTimeoutSeconds:    int(reviewTimeout / time.Second),
 				KeepSidecars:            keepSidecars,
@@ -145,6 +146,7 @@ also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().StringVar(&orgID, "org-id", "", "Organization ID")
 	cmd.Flags().StringVar(&image, "image", "", "Snapshot image ID (default: validation.sidecarImage from config)")
 	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
+	cmd.Flags().StringVar(&implementerInstructions, "implementer-instructions", "", "extra instructions for the implementer")
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
