@@ -578,7 +578,8 @@ func EnsureLaunched(subArgs []string) error {
 }
 
 func launchDaemon(subArgs []string) error {
-	if _, err := EnsureDir(); err != nil {
+	daemonDir, err := EnsureDir()
+	if err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
 	}
 	logPath, err := LogPath()
@@ -600,6 +601,10 @@ func launchDaemon(subArgs []string) error {
 	child.Stdout = logFile
 	child.Stderr = logFile
 	child.Stdin = nil
+	// The daemon outlives the command and often the checkout that launched it.
+	// Give it a stable cwd so a removed worktree cannot make later rsync and
+	// shell commands fail at getcwd before they reach their explicit workdir.
+	child.Dir = daemonDir
 	detachProcess(child)
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("start watch daemon: %w", err)
