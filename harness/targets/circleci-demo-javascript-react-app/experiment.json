@@ -2,12 +2,6 @@
   "passes": 1,
   "attempts": 3,
   "initial_profile": "candidate",
-  "setup_files": [
-    {
-      "source": "harness/targets/circleci-demo-javascript-react-app/project-config.json",
-      "destination": ".chunk/config.json"
-    }
-  ],
   "profiles": {
     "candidate": {
       "reviews": [
