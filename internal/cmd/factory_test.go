@@ -71,6 +71,38 @@ func TestFactoryArgs(t *testing.T) {
 	assert.ErrorContains(t, cmd.Args(cmd, []string{"one", "two"}), "one argument or on stdin")
 }
 
+// TestFactoryLogMisuse guards --log FILE, which pflag reads as a bare --log and
+// a prompt of FILE, against silently sending the file name as the prompt.
+func TestFactoryLogMisuse(t *testing.T) {
+	tests := []struct {
+		name    string
+		logPath string
+		args    []string
+		misuse  bool
+	}{
+		{name: "file after a bare --log", logPath: factory.LogDefault, args: []string{"/tmp/run.log"}, misuse: true},
+		{name: "relative file with an extension", logPath: factory.LogDefault, args: []string{"run.log"}, misuse: true},
+		{name: "file then a prompt", logPath: factory.LogDefault, args: []string{"out/run", "add a flag"}, misuse: true},
+		{name: "prompt with a bare --log", logPath: factory.LogDefault, args: []string{"add a flag"}},
+		{name: "one-word prompt with a bare --log", logPath: factory.LogDefault, args: []string{"refactor"}},
+		{name: "prompt naming a file", logPath: factory.LogDefault, args: []string{"tidy up main.go"}},
+		{name: "stdin with a bare --log", logPath: factory.LogDefault, args: []string{"-"}},
+		{name: "no prompt argument", logPath: factory.LogDefault},
+		{name: "file given with =", logPath: "/tmp/run.log", args: []string{"README.md"}},
+		{name: "no --log", args: []string{"README.md"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := factoryLogMisuse(tc.logPath, tc.args)
+			if !tc.misuse {
+				assert.NilError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, "--log takes its file after an =")
+		})
+	}
+}
+
 func TestKeepWorkHint(t *testing.T) {
 	// A branch that starts at the developer's HEAD merges.
 	clean := factory.Worktree{Branch: "chunk/factory/run-1", Baseline: "abc", Head: "abc"}
