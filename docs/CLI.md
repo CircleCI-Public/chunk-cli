@@ -342,7 +342,8 @@ chunk
   a daemon restart loses the record. In-process `chunk review` is unchanged.
 - **`factory` runs on the local daemon too.** `chunk factory "<prompt>"` (or
   `chunk factory < prompt.md`; `chunk factory - < prompt.md` is the explicit
-  form) checks
+  form; a prompt argument with a non-empty file on stdin is refused, so a
+  stray word such as `--log run.log < prompt.md` cannot drop the file) checks
   the project's review prompts and validation commands, registers the project,
   starts the daemon if needed, and starts a factory session; it follows the run
   until it ends. Ctrl-C stops the run and waits for it to commit the work done

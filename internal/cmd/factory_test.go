@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,7 @@ func TestFactoryPrompt(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := factoryPrompt(strings.NewReader(tc.stdin), tc.args)
+			got, err := factoryPrompt(strings.NewReader(tc.stdin), tc.args, false)
 			if tc.wantErr != "" {
 				assert.ErrorContains(t, err, tc.wantErr)
 				return
@@ -60,6 +61,42 @@ func TestFactoryPrompt(t *testing.T) {
 			assert.Equal(t, got, tc.want)
 		})
 	}
+}
+
+// A prompt argument with a file redirected to stdin would silently drop the
+// file's prompt, as in --log run.log < prompt.md, so it is refused. Empty files
+// and non-files are what scripts inherit as stdin, so they are not.
+func TestFactoryPromptRefusesAnArgumentAndARedirectedFile(t *testing.T) {
+	dir := t.TempDir()
+	promptFile := filepath.Join(dir, "prompt.md")
+	assert.NilError(t, os.WriteFile(promptFile, []byte("# Task\n\nadd a flag\n"), 0o644))
+	emptyFile := filepath.Join(dir, "empty")
+	assert.NilError(t, os.WriteFile(emptyFile, nil, 0o644))
+	open := func(path string) *os.File {
+		f, err := os.Open(path)
+		assert.NilError(t, err)
+		t.Cleanup(func() { _ = f.Close() })
+		return f
+	}
+
+	_, err := factoryPrompt(open(promptFile), []string{"/tmp/run.log"}, true)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), `Got the prompt "/tmp/run.log" as an argument and another prompt on stdin.`)
+	assert.Equal(t, ue.Suggestion(), "--log takes no file. To log to /tmp/run.log, write --log-file /tmp/run.log.")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+
+	_, err = factoryPrompt(open(promptFile), []string{"add a flag"}, false)
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.Suggestion(), "Pass the prompt as the argument or on stdin, not both.")
+
+	got, err := factoryPrompt(open(promptFile), []string{"-"}, false)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "# Task\n\nadd a flag\n")
+
+	got, err = factoryPrompt(open(emptyFile), []string{"add a flag"}, true)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "add a flag")
 }
 
 func TestFactoryArgs(t *testing.T) {

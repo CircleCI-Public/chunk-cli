@@ -48,6 +48,7 @@ the worktree is kept so you can look at it or carry on in it.
 
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory < prompt.md or chunk factory - < prompt.md.
+A prompt argument with a file on stdin is refused rather than drop the file.
 
 With --log, the run keeps a plain-text log in
 ~/.chunk/factory/run-<start time>.log, with its full context whatever the
@@ -71,7 +72,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
-			prompt, err := factoryPrompt(cmd.InOrStdin(), args)
+			prompt, err := factoryPrompt(cmd.InOrStdin(), args, logOn && logFile == "")
 			if err != nil {
 				return err
 			}
@@ -167,8 +168,17 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 // it is not -, and stdin otherwise. With no argument, terminal stdin is refused
 // rather than waited on, since a missing redirect is the likelier mistake. An
 // explicit - may read a terminal because the caller asked for stdin.
-func factoryPrompt(in io.Reader, args []string) (string, error) {
+//
+// An argument with a file redirected to stdin is refused too: the argument
+// would win and the file's prompt be silently dropped. It is usually a word
+// meant for a flag, as in --log run.log < prompt.md; bareLog says --log was
+// given without --log-file, to point at that. Only a non-empty regular file
+// counts, since a pipe or /dev/null is what scripts often inherit as stdin.
+func factoryPrompt(in io.Reader, args []string, bareLog bool) (string, error) {
 	if len(args) == 1 && args[0] != "-" {
+		if redirectedFile(in) {
+			return "", promptTwiceError(args[0], bareLog)
+		}
 		return args[0], nil
 	}
 	if len(args) == 0 {
@@ -188,6 +198,29 @@ func factoryPrompt(in io.Reader, args []string) (string, error) {
 			withoutDetail()
 	}
 	return prompt, nil
+}
+
+// redirectedFile reports whether in is a regular file with something in it,
+// as stdin is under < prompt.md.
+func redirectedFile(in io.Reader) bool {
+	f, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
+}
+
+func promptTwiceError(arg string, bareLog bool) error {
+	suggestion := `Pass the prompt as the argument or on stdin, not both.`
+	if bareLog {
+		suggestion = fmt.Sprintf("--log takes no file. To log to %s, write --log-file %s.", arg, arg)
+	}
+	return newUserError(fmt.Sprintf("Got the prompt %q as an argument and another prompt on stdin.", arg)).
+		withCode("command.invalid_args").
+		withSuggestion(suggestion).
+		withExitCode(ExitBadArgs).
+		withoutDetail()
 }
 
 func missingFactoryPromptError() error {
