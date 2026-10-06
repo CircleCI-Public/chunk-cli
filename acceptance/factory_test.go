@@ -22,7 +22,7 @@ func TestFactoryIsListedAndDocumented(t *testing.T) {
 
 	help := binary.RunCLI(t, []string{"factory", "--help"}, env, env.HomeDir)
 	assert.Equal(t, help.ExitCode, 0, "stderr: %s", help.Stderr)
-	for _, want := range []string{"chunk factory <prompt>", "--attempts", "--reviews", "--no-validate"} {
+	for _, want := range []string{"chunk factory [prompt|-]", "--attempts", "--reviews", "--no-validate"} {
 		assert.Assert(t, strings.Contains(help.Stdout, want), "missing %q in stdout: %s", want, help.Stdout)
 	}
 }
@@ -30,10 +30,11 @@ func TestFactoryIsListedAndDocumented(t *testing.T) {
 func TestFactoryWithoutAPromptExitsBadArgs(t *testing.T) {
 	env := testenv.NewTestEnv(t)
 
-	result := binary.RunCLI(t, []string{"factory"}, env, env.HomeDir)
+	// With no argument the prompt is read from stdin, which is empty here.
+	result := binary.RunCLIWithStdin(t, []string{"factory"}, env, env.HomeDir, []byte{})
 
 	assert.Equal(t, result.ExitCode, 2, "stderr: %s", result.Stderr)
-	assert.Assert(t, strings.Contains(result.Stderr, "Pass the prompt as one argument."), "stderr: %s", result.Stderr)
+	assert.Assert(t, strings.Contains(result.Stderr, "The prompt on stdin is empty."), "stderr: %s", result.Stderr)
 }
 
 // Everything below returns before the watch daemon is started, so these are
