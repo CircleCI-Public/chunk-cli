@@ -71,38 +71,6 @@ func TestFactoryArgs(t *testing.T) {
 	assert.ErrorContains(t, cmd.Args(cmd, []string{"one", "two"}), "one argument or on stdin")
 }
 
-// TestFactoryLogMisuse guards --log FILE, which pflag reads as a bare --log and
-// a prompt of FILE, against silently sending the file name as the prompt.
-func TestFactoryLogMisuse(t *testing.T) {
-	tests := []struct {
-		name    string
-		logPath string
-		args    []string
-		misuse  bool
-	}{
-		{name: "file after a bare --log", logPath: factory.LogDefault, args: []string{"/tmp/run.log"}, misuse: true},
-		{name: "relative file with an extension", logPath: factory.LogDefault, args: []string{"run.log"}, misuse: true},
-		{name: "file then a prompt", logPath: factory.LogDefault, args: []string{"out/run", "add a flag"}, misuse: true},
-		{name: "prompt with a bare --log", logPath: factory.LogDefault, args: []string{"add a flag"}},
-		{name: "one-word prompt with a bare --log", logPath: factory.LogDefault, args: []string{"refactor"}},
-		{name: "prompt naming a file", logPath: factory.LogDefault, args: []string{"tidy up main.go"}},
-		{name: "stdin with a bare --log", logPath: factory.LogDefault, args: []string{"-"}},
-		{name: "no prompt argument", logPath: factory.LogDefault},
-		{name: "file given with =", logPath: "/tmp/run.log", args: []string{"README.md"}},
-		{name: "no --log", args: []string{"README.md"}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := factoryLogMisuse(tc.logPath, tc.args)
-			if !tc.misuse {
-				assert.NilError(t, err)
-				return
-			}
-			assert.ErrorContains(t, err, "--log takes its file after an =")
-		})
-	}
-}
-
 func TestKeepWorkHint(t *testing.T) {
 	// A branch that starts at the developer's HEAD merges.
 	clean := factory.Worktree{Branch: "chunk/factory/run-1", Baseline: "abc", Head: "abc"}
@@ -120,19 +88,19 @@ func TestFactoryLogPath(t *testing.T) {
 	now := time.Date(2026, 10, 2, 15, 4, 5, 0, time.UTC)
 	byTime := filepath.Join(home, ".chunk", "factory", "run-20261002-150405.log")
 	for _, tc := range []struct {
-		name    string
-		path    string
-		verbose bool
-		want    string
+		name string
+		path string
+		on   bool
+		want string
 	}{
 		{name: "no log", want: ""},
 		// The default is named here, so this command can show the log.
-		{name: "default", path: factory.LogDefault, want: byTime},
-		{name: "verbose implies the default", verbose: true, want: byTime},
-		{name: "absolute kept", path: "/tmp/run.log", want: "/tmp/run.log"},
+		{name: "default", on: true, want: byTime},
+		{name: "file without the switch", path: "/tmp/run.log", want: "/tmp/run.log"},
+		{name: "file with the switch", path: "/tmp/run.log", on: true, want: "/tmp/run.log"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := factoryLogPath(tc.path, tc.verbose, now)
+			got, err := factoryLogPath(tc.path, tc.on, now)
 			assert.NilError(t, err)
 			assert.Equal(t, got, tc.want)
 		})
@@ -147,6 +115,20 @@ func TestFactoryLogPath(t *testing.T) {
 	assert.Equal(t, got, filepath.Join(wd, "run.log"))
 }
 
+// TestFactoryLogFileTakesTheNextWord guards --log-file FILE, which an optional
+// value would have read as a log at the default path and a prompt of FILE.
+func TestFactoryLogFileTakesTheNextWord(t *testing.T) {
+	for _, args := range [][]string{
+		{"--log-file", "run.log", "add a flag"},
+		{"--log-file=run.log", "add a flag"},
+	} {
+		cmd := newFactoryCmd()
+		assert.NilError(t, cmd.ParseFlags(args), "args %q", args)
+		assert.Equal(t, cmd.Flags().Lookup("log-file").Value.String(), "run.log", "args %q", args)
+		assert.DeepEqual(t, cmd.Flags().Args(), []string{"add a flag"})
+	}
+}
+
 // TestTailLogCopiesTheWholeLogByTheTimeItStops guards --verbose's last lines:
 // what the run wrote just before it ended is shown, not lost with the tail.
 func TestTailLogCopiesTheWholeLogByTheTimeItStops(t *testing.T) {
@@ -159,7 +141,7 @@ func TestTailLogCopiesTheWholeLogByTheTimeItStops(t *testing.T) {
 	assert.Equal(t, out.String(), "start\nend\n")
 }
 
-// TestTailLogSkipsWhatTheLogHeldBeforeTheRun guards --log=<existing file>: the
+// TestTailLogSkipsWhatTheLogHeldBeforeTheRun guards --log-file <existing file>: the
 // run appends to it, and the earlier runs' lines are not shown again.
 func TestTailLogSkipsWhatTheLogHeldBeforeTheRun(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.log")

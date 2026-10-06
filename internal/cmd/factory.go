@@ -24,8 +24,8 @@ import (
 
 func newFactoryCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, jsonOut, verbose bool
-	var orgID, image, model, reviewsDir, logPath, implementerInstructions string
+	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
@@ -49,19 +49,16 @@ the worktree is kept so you can look at it or carry on in it.
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory < prompt.md or chunk factory - < prompt.md.
 
-With --log, the run keeps a plain-text log, by default
-~/.chunk/factory/run-<start time>.log or in the file given as --log=FILE (the =
-is needed), with its full context whatever the display
-leaves out: every prompt the implementer is sent and what it did and said,
-each review's findings in full, and each validation command's output when it
-failed. --verbose adds the review prompts, the output of commands that passed,
-and a check each round that every reviewer has the implementer's change, and
-also shows the log here as the run writes it; it implies --log.`,
+With --log, the run keeps a plain-text log in
+~/.chunk/factory/run-<start time>.log, or in the file --log-file names, with its
+full context whatever the display leaves out: every prompt the implementer is
+sent and what it did and said, each review's findings in full, and each
+validation command's output when it failed. --verbose adds the review prompts,
+the output of commands that passed, and a check each round that every reviewer
+has the implementer's change, and also shows the log here as the run writes
+it; it implies --log.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
-			if err := factoryLogMisuse(logPath, args); err != nil {
-				return err
-			}
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
 				return nil
 			}
@@ -104,7 +101,7 @@ also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return err
 			}
-			logArg, err := factoryLogPath(logPath, verbose, time.Now())
+			logArg, err := factoryLogPath(logFile, logOn || verbose, time.Now())
 			if err != nil {
 				return err
 			}
@@ -160,8 +157,8 @@ also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
-	cmd.Flags().StringVar(&logPath, "log", "", "keep a log of the run's full context in the file given as --log=FILE (alone: ~/.chunk/factory/run-<start time>.log)")
-	cmd.Flags().Lookup("log").NoOptDefVal = factory.LogDefault
+	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log")
+	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
 	return cmd
 }
@@ -191,31 +188,6 @@ func factoryPrompt(in io.Reader, args []string) (string, error) {
 			withoutDetail()
 	}
 	return prompt, nil
-}
-
-// factoryLogMisuse catches --log given its file after a space. --log's value is
-// optional, so only --log=FILE names the file: in --log FILE the flag takes its
-// default and FILE becomes the prompt, silently replacing a prompt on stdin. A
-// prompt is rarely a single word that looks like a path, so one that does,
-// after a bare --log, is taken to be this mistake.
-func factoryLogMisuse(logPath string, args []string) error {
-	if logPath != factory.LogDefault || len(args) == 0 || !looksLikePath(args[0]) {
-		return nil
-	}
-	return newUserError(fmt.Sprintf("--log takes its file after an =, so %s would be the prompt.", args[0])).
-		withCode("command.invalid_args").
-		withSuggestion(fmt.Sprintf("Write --log=%s.", args[0])).
-		withExitCode(ExitBadArgs).
-		withoutDetail()
-}
-
-// looksLikePath reports whether s is a single word with a directory or an
-// extension, as a file name is and a prompt seldom is.
-func looksLikePath(s string) bool {
-	if s == "" || strings.ContainsFunc(s, unicode.IsSpace) {
-		return false
-	}
-	return strings.ContainsRune(s, filepath.Separator) || strings.ContainsRune(s, '/') || filepath.Ext(s) != ""
 }
 
 func missingFactoryPromptError() error {
@@ -389,15 +361,16 @@ func plainText(b []byte) []byte {
 	}, b)
 }
 
-// factoryLogPath is --log as the daemon is told it, or "" for no log. It is
-// absolute, since the daemon does not share this process's working directory,
-// and settled here, so this command knows where the log is to show it. A
-// default log is named for now, the run's start; --verbose implies one.
-func factoryLogPath(path string, verbose bool, now time.Time) (string, error) {
+// factoryLogPath is the log as the daemon is told it, or "" for no log: path
+// when --log-file names one, else the default when on, as --log and --verbose
+// turn it. It is absolute, since the daemon does not share this process's
+// working directory, and settled here, so this command knows where the log is
+// to show it. A default log is named for now, the run's start.
+func factoryLogPath(path string, on bool, now time.Time) (string, error) {
 	switch {
-	case path == "" && !verbose:
+	case path == "" && !on:
 		return "", nil
-	case path == "" || path == factory.LogDefault:
+	case path == "":
 		return factory.DefaultLogPath(now.UTC().Format("20060102-150405"))
 	}
 	abs, err := filepath.Abs(path)

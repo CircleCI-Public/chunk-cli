@@ -92,7 +92,7 @@ def run_factory(binary: Path, prompt: str, pass_dir: Path, project: Path, profil
     # Popen is intentionally kept alive while stderr is streamed to two destinations.
     # pylint: disable=consider-using-with
     command = [str(binary), "factory", "--attempts", str(profile["attempts"]), "--json", "--verbose",
-               f"--log={pass_dir / 'factory.log'}", "--reviews", ".chunk/factory-eval-reviews",
+               "--log-file", str(pass_dir / 'factory.log'), "--reviews", ".chunk/factory-eval-reviews",
                "--implementer-instructions", profile.get("implementer_instructions", "")]
     for key, flag in (("reviewers", "--reviewers"), ("model", "--model"),
                       ("implement_timeout", "--implement-timeout"), ("review_timeout", "--review-timeout")):

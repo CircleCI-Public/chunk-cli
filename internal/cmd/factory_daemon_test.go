@@ -208,8 +208,6 @@ func TestFactoryRequiresAPrompt(t *testing.T) {
 		{args: []string{}, want: "The prompt on stdin is empty."},
 		{args: []string{"   "}, want: "Pass the prompt as one argument or on stdin."},
 		{args: []string{"add a --verbose flag", "and tests"}, want: "Pass the prompt as one argument or on stdin."},
-		{args: []string{"--log", "run.log"}, want: "--log takes its file after an =, so run.log would be the prompt."},
-		{args: []string{"--log", "run.log", "add a --verbose flag"}, want: "--log takes its file after an =, so run.log would be the prompt."},
 	} {
 		_, _, err := runFactoryCmd(t, tc.args...)
 		var ue *userError

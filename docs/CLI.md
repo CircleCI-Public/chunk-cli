@@ -164,7 +164,8 @@ chunk
 │   --model <name>                  # Claude model (default: Claude Code's default)
 │   --implement-timeout <duration>  # Max time for each implementer turn
 │   --review-timeout <duration>     # Max time for each review
-│   --log[=path]                    # Keep a log of the run's full context (default: ~/.chunk/factory/run-<start time>.log)
+│   --log                           # Keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log
+│   --log-file <path>               # Keep the log in this file instead (implies --log)
 │   --verbose                       # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │   --json                          # Output as JSON
 │
@@ -356,8 +357,8 @@ chunk
   command's output.
   When the run ends it prints the work committed on `chunk/factory/<run id>`,
   how to keep it, how long the run took and what the implementer cost, and
-  exits non-zero unless every check passed. `--log[=path]` has the run keep a plain-text log, by default
-  `~/.chunk/factory/run-<start time>.log`, with the full context the display leaves
+  exits non-zero unless every check passed. `--log` has the run keep a plain-text log in
+  `~/.chunk/factory/run-<start time>.log`, or `--log-file <path>` in a file of your choosing, with the full context the display leaves
   out — each prompt the implementer is sent, what it did and said, every
   review's findings and prose, and failed commands' output — for a person or an
   agent to judge the run and its prompts by. The daemon writes it, so a
