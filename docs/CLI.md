@@ -153,7 +153,7 @@ chunk
 │           --org-id <id>           # Organization ID
 │           --json                  # Output as JSON
 │
-├── factory <prompt>                # Implement a prompt on a sidecar, then review and validate it until it passes
+├── factory [prompt|-]              # Implement a prompt on a sidecar, then review and validate it until it passes
 │   --attempts <n>                  # Most rounds of review and validation (default: 3)
 │   --reviewers <n>                 # Reviewer sidecars (0: one per review prompt)
 │   --reviews <dir>                 # Directory of review prompts (default: .chunk/reviews)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -76,6 +77,9 @@ func runFactoryCmdCtx(ctx context.Context, args ...string) (string, string, erro
 	var out, errOut bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
+	// With no prompt argument the prompt is read from stdin, so give it an
+	// empty one rather than whatever the test binary was started with.
+	cmd.SetIn(strings.NewReader(""))
 	cmd.SetArgs(args)
 	cmd.SetContext(ctx)
 	err := cmd.Execute()
@@ -190,23 +194,26 @@ func TestFactoryRefusesReviewsOutsideTheProject(t *testing.T) {
 	assert.ErrorContains(t, err, "--reviews must be a directory inside the project.")
 }
 
-// The prompt is the whole argument, so no prompt, a blank one and a second
-// one are all caught before anything starts.
+// The prompt is the whole argument or stdin, so no prompt, a blank one and a
+// second one are all caught before anything starts.
 func TestFactoryRequiresAPrompt(t *testing.T) {
 	// The arguments are refused before anything starts, but the project keeps
 	// a guard that moves below this one from reading the developer's own
 	// config or starting a daemon against this repository.
 	factoryProject(t)
-	for _, args := range [][]string{
-		{},
-		{"   "},
-		{"add a --verbose flag", "and tests"},
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{}, want: "The prompt on stdin is empty."},
+		{args: []string{"   "}, want: "Pass the prompt as one argument or on stdin."},
+		{args: []string{"add a --verbose flag", "and tests"}, want: "Pass the prompt as one argument or on stdin."},
 	} {
-		_, _, err := runFactoryCmd(t, args...)
+		_, _, err := runFactoryCmd(t, tc.args...)
 		var ue *userError
-		assert.Assert(t, errors.As(err, &ue), "args %q: got %v", args, err)
-		assert.Equal(t, ue.UserMessage(), "Pass the prompt as one argument.", "args %q", args)
-		assert.Equal(t, ue.UserExitCode(), ExitBadArgs, "args %q", args)
+		assert.Assert(t, errors.As(err, &ue), "args %q: got %v", tc.args, err)
+		assert.Equal(t, ue.UserMessage(), tc.want, "args %q", tc.args)
+		assert.Equal(t, ue.UserExitCode(), ExitBadArgs, "args %q", tc.args)
 	}
 }
 
