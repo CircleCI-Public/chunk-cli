@@ -261,6 +261,29 @@ func TestFactoryRequiresAPrompt(t *testing.T) {
 	}
 }
 
+// --log=FILE named the log's file before --log-file did, and an empty
+// --log-file would silently log nothing, so both are refused with a pointer
+// to what to write instead.
+func TestFactoryRefusesLogFlagMisuse(t *testing.T) {
+	factoryProject(t)
+	for _, tc := range []struct {
+		args           []string
+		wantMsg, wantS string
+	}{
+		{args: []string{"--log=run.log", "add a flag"}, wantMsg: "--log takes no file.", wantS: "Write --log-file run.log."},
+		{args: []string{"--log=", "add a flag"}, wantMsg: "--log takes no file.", wantS: "Write --log-file FILE."},
+		{args: []string{"--log-file", "", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
+		{args: []string{"--log-file=", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
+	} {
+		_, _, err := runFactoryCmd(t, tc.args...)
+		var ue *userError
+		assert.Assert(t, errors.As(err, &ue), "args %q: got %v", tc.args, err)
+		assert.Equal(t, ue.UserMessage(), tc.wantMsg, "args %q", tc.args)
+		assert.Equal(t, ue.Suggestion(), tc.wantS, "args %q", tc.args)
+		assert.Equal(t, ue.UserExitCode(), ExitBadArgs, "args %q", tc.args)
+	}
+}
+
 // A run of no rounds would check nothing, so --attempts is refused here
 // rather than on the daemon.
 func TestFactoryRejectsAttemptsBelowOne(t *testing.T) {

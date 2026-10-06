@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -75,6 +76,13 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			prompt, err := factoryPrompt(cmd.InOrStdin(), args, logOn && logFile == "")
 			if err != nil {
 				return err
+			}
+			if cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "" {
+				return newUserError("--log-file needs a file.").
+					withCode("command.invalid_flags").
+					withSuggestion("Write --log-file FILE, or --log to log to ~/.chunk/factory.").
+					withExitCode(ExitBadArgs).
+					withoutDetail()
 			}
 			if attempts < 1 {
 				return newUserError("--attempts must be at least 1.").
@@ -161,7 +169,30 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
+	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd
+}
+
+// factoryFlagError points --log=FILE, which named the log's file before
+// --log-file did, at --log-file instead of pflag's error about parsing a
+// bool. Other flag errors go to the parent's handler.
+func factoryFlagError(cmd *cobra.Command, err error) error {
+	var invalid *pflag.InvalidValueError
+	if errors.As(err, &invalid) && invalid.GetFlag().Name == "log" {
+		file := invalid.GetValue()
+		if file == "" {
+			file = "FILE"
+		}
+		return newUserError("--log takes no file.").
+			withCode("command.invalid_flags").
+			withSuggestion(fmt.Sprintf("Write --log-file %s.", file)).
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	if cmd.HasParent() {
+		return cmd.Parent().FlagErrorFunc()(cmd, err)
+	}
+	return err
 }
 
 // factoryPrompt is the prompt the implementer is sent: the sole argument when
