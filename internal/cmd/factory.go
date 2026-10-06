@@ -50,13 +50,13 @@ With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory < prompt.md or chunk factory - < prompt.md.
 
 With --log, the run keeps a plain-text log in
-~/.chunk/factory/run-<start time>.log, or in the file --log-file names, with its
-full context whatever the display leaves out: every prompt the implementer is
-sent and what it did and said, each review's findings in full, and each
-validation command's output when it failed. --verbose adds the review prompts,
-the output of commands that passed, and a check each round that every reviewer
-has the implementer's change, and also shows the log here as the run writes
-it; it implies --log.`,
+~/.chunk/factory/run-<start time>.log, with its full context whatever the
+display leaves out: every prompt the implementer is sent and what it did and
+said, each review's findings in full, and each validation command's output
+when it failed. --log-file FILE keeps the log in FILE instead, and on its own
+turns the log on. --verbose adds the review prompts, the output of commands
+that passed, and a check each round that every reviewer has the implementer's
+change, and also shows the log here as the run writes it; it implies --log.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {

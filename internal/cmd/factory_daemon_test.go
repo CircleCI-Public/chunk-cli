@@ -117,6 +117,50 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err))
 }
 
+// TestFactoryLogFlagsReachTheDaemon guards how --log, --log-file and --verbose
+// become the log the daemon is told to keep: any of them turns it on, and
+// --log-file says where it goes.
+func TestFactoryLogFlagsReachTheDaemon(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "run.log")
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		wantLog     string // "default" is the run-<time>.log in the home directory
+		wantVerbose bool
+	}{
+		{name: "no log"},
+		{name: "--log", args: []string{"--log"}, wantLog: "default"},
+		{name: "--verbose implies the log", args: []string{"--verbose"}, wantLog: "default", wantVerbose: true},
+		{name: "--log-file implies the log", args: []string{"--log-file", logFile}, wantLog: logFile},
+		{name: "--log-file names where --log goes", args: []string{"--log", "--log-file", logFile}, wantLog: logFile},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			factoryProject(t)
+			started := make(chan factory.RunOptions, 1)
+			cfg := fakeFactoryConfig(t, factory.ResultPassed)
+			run := cfg.RunFactory
+			cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+				started <- opts
+				return run(ctx, opts)
+			}
+			startSessionDaemon(t, cfg)
+
+			_, stderr, err := runFactoryCmd(t, append(tc.args, "add a flag")...)
+			assert.NilError(t, err, stderr)
+			got := <-started
+			assert.Equal(t, got.Verbose, tc.wantVerbose)
+			if tc.wantLog != "default" {
+				assert.Equal(t, got.Log, tc.wantLog)
+				return
+			}
+			home, err := os.UserHomeDir()
+			assert.NilError(t, err)
+			assert.Equal(t, filepath.Dir(got.Log), filepath.Join(home, ".chunk", "factory"))
+			assert.Assert(t, strings.HasPrefix(filepath.Base(got.Log), "run-") && strings.HasSuffix(got.Log, ".log"), got.Log)
+		})
+	}
+}
+
 func TestFactoryWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	factoryProject(t)
 	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultExhausted))
