@@ -1,4 +1,7 @@
-package reviewprogress
+// Package promptrows renders the prompts of a review pass as rows: one line per
+// prompt with its state, sidecar and timing. chunk review draws its own pass
+// with it, and the watch dashboard draws a factory round's reviews.
+package promptrows
 
 import (
 	"fmt"
@@ -7,7 +10,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -16,15 +18,26 @@ const (
 	sidecarPfxLen = 8
 )
 
+// State is where a prompt is in its run.
+type State int
+
+// Prompt states, in the order a prompt moves through them.
+const (
+	Queued  State = iota // waiting for a sidecar
+	Running              // executing on a sidecar
+	Done                 // completed successfully
+	Failed               // completed with error
+)
+
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// Row is one prompt of a review pass as the row renderers show it. It is the
-// same whether the pass runs in this process or on the watch daemon, which is
-// what lets `chunk review` and `chunk watch` draw a review identically.
+// Row is one prompt of a review pass as the row renderers show it. Each view
+// fills it in from its own source, which is what lets `chunk review` and
+// `chunk watch` draw a review identically.
 type Row struct {
 	Name      string
 	SidecarID string
-	State     review.PromptState
+	State     State
 	Duration  time.Duration
 	Err       string
 }
@@ -73,10 +86,10 @@ func RenderRow(st Styles, r Row, nameWidth, spinIdx int) string {
 	var icon, nameStr, detail string
 
 	switch r.State {
-	case review.StateQueued:
+	case Queued:
 		icon = st.VDim.Render("·")
 		nameStr = st.VDim.Render(paddedName)
-	case review.StateRunning:
+	case Running:
 		icon = st.Running.Render(spinFrames[spinIdx%len(spinFrames)])
 		nameStr = paddedName
 		pfx := r.SidecarID
@@ -84,11 +97,11 @@ func RenderRow(st Styles, r Row, nameWidth, spinIdx int) string {
 			pfx = pfx[:sidecarPfxLen]
 		}
 		detail = st.Running.Render("↪ " + pfx)
-	case review.StateDone:
+	case Done:
 		icon = st.Success.Render(ui.IconOK)
 		nameStr = st.Success.Render(paddedName)
 		detail = st.Dim.Render(ui.FormatDuration(r.Duration))
-	case review.StateFailed:
+	case Failed:
 		icon = st.Err.Render(ui.IconFail)
 		nameStr = st.Err.Render(paddedName)
 		// Errors can carry multi-line stderr; keep the row on one line
@@ -112,13 +125,13 @@ func RenderSummary(st Styles, rows []Row) string {
 	var running, done, queued, failed int
 	for _, r := range rows {
 		switch r.State {
-		case review.StateQueued:
+		case Queued:
 			queued++
-		case review.StateRunning:
+		case Running:
 			running++
-		case review.StateDone:
+		case Done:
 			done++
-		case review.StateFailed:
+		case Failed:
 			failed++
 		}
 	}
@@ -142,7 +155,7 @@ func RenderSummary(st Styles, rows []Row) string {
 // Active reports whether any row is still queued or running.
 func Active(rows []Row) bool {
 	for _, r := range rows {
-		if r.State == review.StateQueued || r.State == review.StateRunning {
+		if r.State == Queued || r.State == Running {
 			return true
 		}
 	}

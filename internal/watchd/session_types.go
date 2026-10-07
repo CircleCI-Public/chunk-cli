@@ -1,10 +1,10 @@
 package watchd
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
 // SessionState is where a whole session stands.
@@ -204,9 +204,9 @@ type ReviewPrompt struct {
 	Findings int `json:"findings,omitempty"`
 }
 
-// PromptRunState is where one review of a round stands. The values match
-// review.PromptState one for one, spelled out so they read in JSON and survive
-// the enum being reordered.
+// PromptRunState is where one review of a round stands. The values are
+// spelled out so they read in JSON and survive the daemon's own enum being
+// reordered.
 type PromptRunState string
 
 // Review states.
@@ -216,23 +216,6 @@ const (
 	PromptDone    PromptRunState = "done"
 	PromptFailed  PromptRunState = "failed"
 )
-
-// Progress maps the state onto the review package's own, which is what the row
-// renderers shared with `chunk review` are written against. An unknown value
-// reads as queued: it comes from a daemon that may be newer than this client.
-func (s PromptRunState) Progress() review.PromptState {
-	switch s {
-	case PromptRunning:
-		return review.StateRunning
-	case PromptDone:
-		return review.StateDone
-	case PromptFailed:
-		return review.StateFailed
-	case PromptQueued:
-		return review.StateQueued
-	}
-	return review.StateQueued
-}
 
 // Round is one pass of implementing the work and checking it.
 type Round struct {
@@ -289,10 +272,36 @@ type ReviewResult struct {
 	// Findings are the structured findings the review gave, each with an ID
 	// unique within the round. Empty when it gave none or failed; Error tells
 	// the two apart.
-	Findings []review.Finding `json:"findings,omitempty"`
+	Findings []Finding `json:"findings,omitempty"`
 	// Status is how a factory review came out as a check: "passed", "failed"
 	// or "errored", as factory.Status.
 	Status string `json:"status,omitempty"`
+}
+
+// Finding is one problem a review reported.
+type Finding struct {
+	// ID is unique within a round.
+	ID string `json:"id,omitempty"`
+	// Prompt names the review that reported it.
+	Prompt string `json:"prompt,omitempty"`
+	// File is a repository-relative path with forward slashes.
+	File string `json:"file"`
+	// Line is the 1-based line the finding is about; zero means the file as a
+	// whole or a line the reviewer did not give.
+	Line     int    `json:"line,omitempty"`
+	Severity string `json:"severity"`
+	Body     string `json:"body"`
+	// Patch is an optional unified diff that would fix the finding.
+	Patch string `json:"patch,omitempty"`
+}
+
+// Location is where the finding is, as file:line, or the file alone when the
+// finding has no line.
+func (f Finding) Location() string {
+	if f.Line > 0 {
+		return fmt.Sprintf("%s:%d", f.File, f.Line)
+	}
+	return f.File
 }
 
 // RoundDetail is the text of one round.

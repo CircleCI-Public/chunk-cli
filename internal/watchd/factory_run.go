@@ -277,17 +277,22 @@ func (r *factoryRecorder) recordReviewsLocked(ridx int, checks []factory.Check) 
 		for i, f := range c.Findings {
 			f.Prompt = c.Name
 			f.ID = fmt.Sprintf("%s-%d", c.Name, i+1)
-			res.Findings = append(res.Findings, f)
+			res.Findings = append(res.Findings, wireFinding(f))
+			all = append(all, f)
 		}
 		if i := e.reviewIndexLocked(ridx, c.Name); i >= 0 {
 			e.s.Rounds[ridx].Reviews[i].Findings = len(res.Findings)
 		}
-		all = append(all, res.Findings...)
 		rd.Results = append(rd.Results, res)
 	}
 	unique := review.DedupeFindings(all)
 	e.s.Rounds[ridx].Findings = len(unique)
 	e.s.Rounds[ridx].Worth = len(worthChanging(unique))
+}
+
+// wireFinding is a review's finding as the session API carries it.
+func wireFinding(f review.Finding) Finding {
+	return Finding{ID: f.ID, Prompt: f.Prompt, File: f.File, Line: f.Line, Severity: f.Severity, Body: f.Body, Patch: f.Patch}
 }
 
 func (r *factoryRecorder) reviewProgress(ev review.ProgressEvent) {

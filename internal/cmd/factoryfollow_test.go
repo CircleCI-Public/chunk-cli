@@ -118,7 +118,7 @@ func reportedLines(snapshots ...watchd.SessionDetail) []string {
 }
 
 func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
-	bug := review.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
+	bug := watchd.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
 	output := strings.Repeat("ok\n", 30) + "--- FAIL: TestFlag"
 	checking := watchd.SessionDetail{Session: watchd.Session{
 		Factory: &watchd.FactoryRun{Attempts: 3},
@@ -132,7 +132,7 @@ func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
 	done := checking
 	done.Rounds = []watchd.Round{checking.Rounds[0]}
 	done.Rounds[0].State, done.Rounds[0].Note = watchd.RoundDone, "0 of 2 checks passed"
-	done.Details = []watchd.RoundDetail{{Number: 1, Results: []watchd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []review.Finding{bug}}}}}
+	done.Details = []watchd.RoundDetail{{Number: 1, Results: []watchd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []watchd.Finding{bug}}}}}
 
 	// The round is seen done twice; its findings are said once.
 	lines := reportedLines(checking, done, done)

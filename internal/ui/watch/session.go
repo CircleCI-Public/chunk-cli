@@ -11,7 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/ui/reviewprogress"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/promptrows"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
@@ -292,18 +292,33 @@ func sessionTitle(info sessionInfo) string {
 }
 
 // reviewRows converts a round's reviews for the shared row renderer.
-func reviewRows(round watchd.Round) []reviewprogress.Row {
-	rows := make([]reviewprogress.Row, 0, len(round.Reviews))
+func reviewRows(round watchd.Round) []promptrows.Row {
+	rows := make([]promptrows.Row, 0, len(round.Reviews))
 	for _, p := range round.Reviews {
-		rows = append(rows, reviewprogress.Row{
+		rows = append(rows, promptrows.Row{
 			Name:      p.Name,
 			SidecarID: p.SidecarID,
-			State:     p.State.Progress(),
+			State:     rowState(p.State),
 			Duration:  time.Duration(p.DurationMS) * time.Millisecond,
 			Err:       p.Error,
 		})
 	}
 	return rows
+}
+
+// rowState is a review's state as the row renderer shows it. An unknown value
+// reads as queued: it comes from a daemon that may be newer than this client.
+func rowState(s watchd.PromptRunState) promptrows.State {
+	switch s {
+	case watchd.PromptRunning:
+		return promptrows.Running
+	case watchd.PromptDone:
+		return promptrows.Done
+	case watchd.PromptFailed:
+		return promptrows.Failed
+	case watchd.PromptQueued:
+	}
+	return promptrows.Queued
 }
 
 func roundStateText(st watchStyles, r watchd.Round) string {
@@ -325,7 +340,7 @@ func roundStateText(st watchStyles, r watchd.Round) string {
 // renderRound draws one round: its header and its reviews with the shared row
 // renderer.
 func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, reviewSel int) []string {
-	rst := reviewprogress.NewStyles(m.hasDarkBG)
+	rst := promptrows.NewStyles(m.hasDarkBG)
 	head := fmt.Sprintf("    Round %d  %s", r.Number, roundStateText(st, r))
 	if r.Findings > 0 || r.State == watchd.RoundDone {
 		head += st.dim(fmt.Sprintf("  ·  %d finding%s, %d worth changing", r.Findings, plural(r.Findings), r.Worth))
@@ -333,9 +348,9 @@ func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, review
 	lines := []string{head}
 
 	rows := reviewRows(r)
-	nameWidth := reviewprogress.NameWidth(rows)
+	nameWidth := promptrows.NameWidth(rows)
 	for i, row := range rows {
-		line := "    " + reviewprogress.RenderRow(rst, row, nameWidth, m.spinIdx)
+		line := "    " + promptrows.RenderRow(rst, row, nameWidth, m.spinIdx)
 		if selected && i == reviewSel {
 			line = "  ›" + line[3:]
 		}
