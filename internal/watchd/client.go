@@ -152,6 +152,40 @@ func FetchSnapshot(roots []string) (Snapshot, error) {
 	return snap, nil
 }
 
+// FetchSnapshotRelaunching is FetchSnapshot for a caller that keeps polling.
+// If the local daemon has gone away it starts one and asks again, once.
+//
+// Starting one at startup is not enough on its own: the daemon can exit while
+// a dashboard is open — it crashes, someone kills it, or a chunk from another
+// build replaces it (see BuildID) — and the dashboard would then hold whatever
+// it last saw, which reads as a quiet dashboard rather than a broken one.
+//
+// It relaunches with EnsureLaunched rather than EnsureRunning on purpose: a
+// failed poll should start a daemon if none is answering, not replace one that
+// is. A remote daemon is managed elsewhere, so it is never relaunched.
+func FetchSnapshotRelaunching(roots []string) (Snapshot, error) {
+	fetch := func() (Snapshot, error) { return FetchSnapshot(roots) }
+	if TCPRemoteAddr() != "" {
+		return fetch()
+	}
+	return fetchRelaunching(fetch, EnsureLaunched)
+}
+
+// fetchRelaunching fetches, relaunching and retrying once on failure. fetch and
+// relaunch are parameters so this can be tested without a daemon.
+func fetchRelaunching(fetch func() (Snapshot, error), relaunch func() error) (Snapshot, error) {
+	snap, err := fetch()
+	if err == nil {
+		return snap, nil
+	}
+	if relaunchErr := relaunch(); relaunchErr != nil {
+		// Report the fetch failure rather than the relaunch failure: the first is
+		// what the reader is looking at, and the second is usually a restatement.
+		return Snapshot{}, err
+	}
+	return fetch()
+}
+
 // registerTimeout bounds a command registration. It is deliberately short: this
 // call sits on the hook path, in front of a command the developer is waiting for,
 // and a logs pane is never worth delaying that.
@@ -507,10 +541,21 @@ func CollectValidateResults(projectRoot string) ([]TaskState, error) {
 	return result.Tasks, nil
 }
 
+// DaemonSubcommand is the hidden command the daemon runs as. Starting the
+// daemon is re-executing this binary with it, so the command that registers it
+// and the code that launches it share this one name.
+const DaemonSubcommand = "_daemon"
+
+// launchArgs is the command line the daemon is started with.
+func launchArgs() []string { return []string{DaemonSubcommand} }
+
+// launch starts the daemon process. A variable so tests can see whether
+// EnsureRunning and EnsureLaunched decided to start one, without starting one.
+var launch = launchDaemon
+
 // EnsureRunning checks whether the watch daemon is running and serving, and
-// launches it if not. subArgs are the CLI arguments used to invoke the daemon
-// (e.g. ["watch", "_daemon"]).
-func EnsureRunning(subArgs []string) error {
+// launches it if not.
+func EnsureRunning() error {
 	// Remote daemons are managed externally; local pid/socket operations are
 	// irrelevant and would start a stray local daemon.
 	if TCPRemoteAddr() != "" {
@@ -541,7 +586,7 @@ func EnsureRunning(subArgs []string) error {
 			}
 		}
 	}
-	return launchDaemon(subArgs)
+	return launch()
 }
 
 // EnsureLaunched starts the daemon when nothing is answering and otherwise
@@ -552,7 +597,7 @@ func EnsureRunning(subArgs []string) error {
 // while has no business restarting a daemon another one is using: the build
 // check is a startup decision, made once, where the cost of being wrong is one
 // restart rather than a restart per poll for as long as two dashboards are open.
-func EnsureLaunched(subArgs []string) error {
+func EnsureLaunched() error {
 	// Remote daemons are managed externally; starting a local one would be wrong.
 	if TCPRemoteAddr() != "" {
 		return nil
@@ -574,10 +619,10 @@ func EnsureLaunched(subArgs []string) error {
 			return nil
 		}
 	}
-	return launchDaemon(subArgs)
+	return launch()
 }
 
-func launchDaemon(subArgs []string) error {
+func launchDaemon() error {
 	daemonDir, err := EnsureDir()
 	if err != nil {
 		return fmt.Errorf("ensure watchd dir: %w", err)
@@ -597,7 +642,7 @@ func launchDaemon(subArgs []string) error {
 		return fmt.Errorf("get executable: %w", err)
 	}
 
-	child := exec.Command(executable, subArgs...)
+	child := exec.Command(executable, launchArgs()...)
 	child.Stdout = logFile
 	child.Stderr = logFile
 	child.Stdin = nil

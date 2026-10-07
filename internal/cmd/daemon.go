@@ -15,14 +15,15 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
-// newWatchDaemonCmd returns the hidden _daemon subcommand invoked by EnsureRunning
-// to start the background watch daemon. It is intentionally hidden from help output.
-func newWatchDaemonCmd() *cobra.Command {
+// newDaemonCmd returns the hidden command the watch daemon runs as. Its name is
+// watchd's, because watchd is what launches it.
+func newDaemonCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    watchDaemonSubcmd,
+		Use:    watchd.DaemonSubcommand,
 		Short:  "Run the watch daemon (internal use only)",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {

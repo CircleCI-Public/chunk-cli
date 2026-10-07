@@ -2,7 +2,9 @@ package watchd
 
 import (
 	"errors"
+	"io"
 	"net"
+	"net/http"
 	neturl "net/url"
 	"os"
 	"path/filepath"
@@ -98,14 +100,14 @@ func TestEnsureRunning_SkipsInRemoteMode(t *testing.T) {
 	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:9")
 	// If the remote guard is missing, EnsureRunning will call launchDaemon which
 	// will fail on the missing executable path — the test would not return nil.
-	err := EnsureRunning([]string{"watch", "_daemon"})
+	err := EnsureRunning()
 	assert.NilError(t, err)
 }
 
 func TestEnsureLaunched_SkipsInRemoteMode(t *testing.T) {
 	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
 	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:9")
-	err := EnsureLaunched([]string{"watch", "_daemon"})
+	err := EnsureLaunched()
 	assert.NilError(t, err)
 }
 
@@ -231,7 +233,7 @@ func TestSocketPathTooLongIsReportedUpFront(t *testing.T) {
 	assert.ErrorContains(t, err, long)
 
 	// The launch path fails the same way, before any daemon is spawned.
-	err = EnsureRunning([]string{"unused"})
+	err = EnsureRunning()
 	assert.ErrorContains(t, err, "CHUNK_WATCHD_DIR")
 
 	t.Setenv("CHUNK_WATCHD_DIR", socketDir(t))
@@ -250,4 +252,98 @@ func socketDir(t *testing.T) string {
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
+}
+
+// fakeDaemon stands in for a running daemon: a pid file naming this process and
+// a socket that answers /ping with build. It returns a count of launches the
+// client attempts while it is up.
+func fakeDaemon(t *testing.T, build string) *int {
+	t.Helper()
+	dir := socketDir(t)
+	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	pidPath, err := PIDPath()
+	assert.NilError(t, err)
+	assert.NilError(t, WritePID(pidPath, os.Getpid()))
+	sockPath, err := SocketPath()
+	assert.NilError(t, err)
+	ln, err := net.Listen("unix", sockPath)
+	assert.NilError(t, err)
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, build)
+		}),
+		ReadHeaderTimeout: time.Second,
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	launches := 0
+	prev := launch
+	launch = func() error { launches++; return nil }
+	t.Cleanup(func() { launch = prev })
+	return &launches
+}
+
+// EnsureLaunched must leave a reachable daemon alone whatever build it reports,
+// so a failed poll in one dashboard cannot restart the daemon another is using.
+func TestEnsureLaunched_leavesAReachableDaemonAlone(t *testing.T) {
+	launches := fakeDaemon(t, "some-other-build")
+	assert.NilError(t, EnsureLaunched())
+	assert.Equal(t, *launches, 0, "a reachable daemon was relaunched")
+}
+
+func TestFetchRelaunching_successNeverTouchesTheDaemon(t *testing.T) {
+	fetches, relaunches := 0, 0
+	_, err := fetchRelaunching(
+		func() (Snapshot, error) { fetches++; return Snapshot{}, nil },
+		func() error { relaunches++; return nil })
+	assert.NilError(t, err)
+	assert.Equal(t, fetches, 1)
+	assert.Equal(t, relaunches, 0)
+}
+
+func TestFetchRelaunching_relaunchesAndRetriesOnce(t *testing.T) {
+	fetches, relaunches := 0, 0
+	_, err := fetchRelaunching(
+		func() (Snapshot, error) {
+			fetches++
+			if fetches == 1 {
+				return Snapshot{}, errors.New("connect to watch daemon: no such file")
+			}
+			return Snapshot{}, nil
+		},
+		func() error { relaunches++; return nil })
+	assert.NilError(t, err)
+	assert.Equal(t, fetches, 2)
+	assert.Equal(t, relaunches, 1)
+}
+
+func TestFetchRelaunching_reportsTheFetchErrorWhenRelaunchFails(t *testing.T) {
+	_, err := fetchRelaunching(
+		func() (Snapshot, error) { return Snapshot{}, errors.New("connect to watch daemon: no such file") },
+		func() error { return errors.New("could not spawn") })
+	// The fetch failure is what the reader is looking at, not the relaunch one.
+	assert.Error(t, err, "connect to watch daemon: no such file")
+}
+
+func TestFetchRelaunching_reportsTheRetryErrorWhenBothFetchesFail(t *testing.T) {
+	errs := []error{errors.New("first"), errors.New("second")}
+	fetches := 0
+	_, err := fetchRelaunching(
+		func() (Snapshot, error) { e := errs[fetches]; fetches++; return Snapshot{}, e },
+		func() error { return nil })
+	assert.Error(t, err, "second")
+	assert.Equal(t, fetches, 2)
+}
+
+func TestFetchSnapshotRelaunching_neverRelaunchesARemoteDaemon(t *testing.T) {
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:1")
+	prev := launch
+	launches := 0
+	launch = func() error { launches++; return nil }
+	t.Cleanup(func() { launch = prev })
+
+	_, err := FetchSnapshotRelaunching(nil)
+	assert.Assert(t, err != nil)
+	assert.Equal(t, launches, 0)
 }

@@ -138,7 +138,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			// starts after whatever the file holds before the run is started.
 			logFrom := logSize(logArg)
 
-			if err := watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd}); err != nil {
+			if err := watchd.EnsureRunning(); err != nil {
 				return &userError{msg: "Could not start the watch daemon.", err: err}
 			}
 			id, err := watchd.StartFactory(watchd.FactoryRequest{

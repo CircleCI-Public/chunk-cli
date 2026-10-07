@@ -122,58 +122,6 @@ func TestPollReplaysResultsRecordedWhileTheDaemonWasDown(t *testing.T) {
 	assert.Equal(t, len(p.Sidecars), 0)
 }
 
-// EnsureLaunched must leave a reachable daemon alone whatever build it reports,
-// so a failed poll in one dashboard cannot restart the daemon another is using.
-func TestEnsureLaunched_leavesAReachableDaemonAlone(t *testing.T) {
-	// Not t.TempDir(): it embeds the test name, and a unix socket path is capped
-	// at 104 bytes on darwin, so a descriptive name here silently breaks listen.
-	dir, err := os.MkdirTemp("", "wd")
-	assert.NilError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_WATCHD_DIR", dir)
-	// The daemon polls every known project before it serves, and every project
-	// costs a git call. Pointed at the developer's real data directory that first
-	// poll can outlast the wait below, so keep it hermetic.
-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	errCh := make(chan error, 1)
-	go func() { errCh <- RunDaemon(ctx, nil, "", nil, nil) }()
-
-	sockPath, err := watchd.SocketPath()
-	assert.NilError(t, err)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if reachable, _ := ping(sockPath); reachable {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	reachable, _ := ping(sockPath)
-	assert.Assert(t, reachable, "daemon did not become reachable within 5s")
-
-	pidPath, err := watchd.PIDPath()
-	assert.NilError(t, err)
-	_, before, err := watchd.IsRunning(pidPath)
-	assert.NilError(t, err)
-
-	// Args that could not possibly start anything: if EnsureLaunched tried to
-	// relaunch, it would fail rather than silently succeed.
-	assert.NilError(t, watchd.EnsureLaunched([]string{"definitely", "not", "a", "command"}))
-
-	_, after, err := watchd.IsRunning(pidPath)
-	assert.NilError(t, err)
-	assert.Equal(t, before, after, "the running daemon was replaced")
-
-	cancel()
-	select {
-	case <-errCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("daemon did not shut down")
-	}
-}
-
 // A daemon resolves its CircleCI client once at startup, so a login has no
 // effect on one that is already running. Stopping it is what makes the next
 // launch pick the new credentials up.

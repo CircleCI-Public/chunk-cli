@@ -1,9 +1,20 @@
 package watch
 
 import (
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
+
+// loadFromDaemon is the default Model.loadFn.
+func loadFromDaemon(m Model) tea.Msg {
+	msg, err := fetchFromDaemon(m)
+	if err != nil {
+		return errMsg{err}
+	}
+	return msg
+}
 
 // fetchFromDaemon fetches a snapshot from the watch daemon and converts it to
 // a dataMsg for the model.
@@ -15,7 +26,11 @@ func fetchFromDaemon(m Model) (dataMsg, error) {
 			roots[i] = p.ProjectRoot
 		}
 	}
-	snap, err := watchd.FetchSnapshot(roots)
+	fetch := watchd.FetchSnapshot
+	if m.relaunch {
+		fetch = watchd.FetchSnapshotRelaunching
+	}
+	snap, err := fetch(roots)
 	if err != nil {
 		return dataMsg{}, err
 	}

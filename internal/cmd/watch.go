@@ -18,14 +18,9 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
-// watchCmdName is the name of the watch command. It is referenced by the
-// daemon re-exec argv and by the update-check skip list, so it lives here
-// next to the command it names.
+// watchCmdName is the name of the watch command, referenced by the update-check
+// and auto-launch skip lists.
 const watchCmdName = "watch"
-
-// watchDaemonSubcmd is the hidden subcommand name used to spawn the background
-// watch daemon process. Defined here so all cmd-package callers share one constant.
-const watchDaemonSubcmd = "_daemon"
 
 func newWatchCmd() *cobra.Command {
 	var (
@@ -47,8 +42,7 @@ func newWatchCmd() *cobra.Command {
 				return runRemoteWatch(cmd, focus, args)
 			}
 
-			daemonArgs := []string{watchCmdName, watchDaemonSubcmd}
-			if err := watchd.EnsureRunning(daemonArgs); err != nil {
+			if err := watchd.EnsureRunning(); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 
@@ -94,7 +88,7 @@ func newWatchCmd() *cobra.Command {
 				entries = append(entries, watch.ProjectEntry{ProjectRoot: abs})
 			}
 
-			m := watch.New(entries, !focus).WithDaemonArgs(daemonArgs)
+			m := watch.New(entries, !focus).WithRelaunch()
 			p := tea.NewProgram(m, tea.WithContext(cmd.Context()))
 			_, err = p.Run()
 			return err
@@ -105,7 +99,10 @@ func newWatchCmd() *cobra.Command {
 	// --all is now the default; keep the flag so existing invocations keep working.
 	cmd.Flags().BoolVar(&all, "all", false, "Watch all known projects (default)")
 	_ = cmd.Flags().MarkDeprecated("all", "watching all known projects is now the default; use --focus to watch only the current directory")
-	cmd.AddCommand(newWatchDaemonCmd())
+	// The daemon used to run as `chunk watch _daemon`. A dashboard opened before
+	// an upgrade still relaunches it that way, against the new binary, so the old
+	// spelling stays as a hidden alias.
+	cmd.AddCommand(newDaemonCmd())
 	return cmd
 }
 
