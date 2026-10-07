@@ -26,7 +26,7 @@ tasks:
     cmds:
       - go tool golangci-lint run {{.ARGS}}
       - uv run --project harness pylint --rcfile harness/pyproject.toml harness/environment.py
-      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py
+      - uv run --project harness pylint --rcfile harness/pyproject.toml harness/factory.py harness/factory_agents.py harness/factory_judge.py harness/factory_report.py harness/factory_tasks.py harness/review_eval.py
 
   fmt:
     desc: Format the code
@@ -73,14 +73,25 @@ tasks:
 
   factory-harness:
     desc: |
-      Run an adaptive factory experiment against this repository's pinned baseline.
-      Args are passed through to harness/factory.py.
+      Evaluate chunk factory on the pinned tasks in harness/tasks. Args are passed
+      through to harness/factory.py; see harness/README.md.
       Examples:
-        task factory-harness
-        task factory-harness -- --passes 3
-        task factory-harness -- --passes 1 --profile targeted --no-advisor
+        task factory-harness -- check-tasks                      # oracle/nop: are the tasks sound?
+        task factory-harness -- run -k 3                         # every default agent, 3 trials each
+        task factory-harness -- run --tasks react-search --agents factory-control,claude-code -k 1
+        task factory-harness -- report harness/results/<job>
     cmds:
       - uv run --project harness harness/factory.py {{.CLI_ARGS}}
+
+  review-harness:
+    desc: |
+      Evaluate factory's review prompts on seeded defects (harness/review-cases).
+      Args are passed through to harness/review_eval.py; see harness/README.md.
+      Examples:
+        task review-harness -- check
+        task review-harness -- run -k 3
+    cmds:
+      - uv run --project harness harness/review_eval.py {{.CLI_ARGS}}
 
   release:
     desc: Tag, build, and publish a release (tag → goreleaser → NUR)

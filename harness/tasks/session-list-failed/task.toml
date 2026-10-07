@@ -1,0 +1,43 @@
+description = "Add a --failed filter to `chunk session list` for both text and JSON output"
+tags = ["go", "cli", "small"]
+
+[repo]
+url = "https://github.com/CircleCI-Public/chunk-cli.git"
+ref = "main"
+revision = "4955156b5a433c615352e5d2030280408994ff10"
+recorded_utc = "2026-10-04T18:32:54Z"
+
+[good_looks_like]
+requirements = "The requested behavior is complete and no unrelated behavior changes."
+validation = "Every configured validation command passes."
+implementation = "No independently confirmed high or medium defect remains; tests exercise the user-facing boundary."
+convergence = "The factory result passes within the configured attempt budget; exhausted or stuck runs cannot win."
+reviews = "High precision and coverage for actionable high or medium defects, with little duplication or scope drift."
+efficiency = "Prefer lower wall time and reviewer-seconds only after quality is comparable."
+
+[[verifier.checks]]
+name = "hidden"
+kind = "hidden"
+command = "go test -race -count=1 ./internal/cmd -run '^TestHiddenEval'"
+timeout = 600
+
+# "document the flag in docs/CLI.md"
+[[verifier.checks]]
+name = "hidden-docs"
+kind = "hidden"
+command = "grep -q -- '--failed' docs/CLI.md"
+timeout = 30
+
+# Unit tests only. acceptance/ has wall-clock timeouts that fail when several
+# trials verify at once, which would score agents on machine load.
+[[verifier.checks]]
+name = "suite-test"
+kind = "suite"
+command = "go test -race -count=1 -skip '^TestHiddenEval' $(go list ./... | grep -v /acceptance)"
+timeout = 1200
+
+[[verifier.checks]]
+name = "suite-lint"
+kind = "suite"
+command = "go tool golangci-lint run --allow-parallel-runners ./..."
+timeout = 600

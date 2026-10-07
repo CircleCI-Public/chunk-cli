@@ -1,0 +1,60 @@
+description = "Remove the hidden `chunk session` CLI commands without breaking `chunk factory` or `chunk watch`, which reuse their code"
+tags = ["go", "cli", "removal"]
+implementer_context = ""
+
+[repo]
+url = "https://github.com/CircleCI-Public/chunk-cli.git"
+ref = "main"
+revision = "d48d143f02be1cba5992bcabfecb85cf0e5fe913"
+recorded_utc = "2026-10-06T19:48:57Z"
+
+[good_looks_like]
+requirements = "`chunk session` and every subcommand are gone; factory and watch keep their usage, flags, defaults and refusals; no printed hint or doc points at `chunk session`; internal/watchd is untouched and nothing new is added."
+validation = "Every configured validation command passes."
+implementation = "Code factory still uses (followSession, sessionReporter, sessionError, requireLocalDaemon, sessionProjectRoot, printLostFactoryWork) is kept, ideally moved somewhere factory-named; code only the removed commands used is deleted rather than left dead. Tests of retained code are kept, and coverage the deleted session tests gave to retained helpers moves to factory. No independently confirmed high or medium defect remains."
+convergence = "The factory result passes within the configured attempt budget; exhausted or stuck runs cannot win."
+reviews = "High precision and coverage for actionable high or medium defects (e.g. a dangling `chunk session` hint, dead code, lost test coverage of retained helpers, a watchd change), with little duplication or scope drift."
+efficiency = "Prefer lower wall time and reviewer-seconds only after quality is comparable."
+
+# Root no longer registers `session`; factory and watch keep their usage,
+# flags, defaults and up-front refusals.
+[[verifier.checks]]
+name = "hidden"
+kind = "hidden"
+command = "go test -race -count=1 ./internal/cmd -run '^TestHiddenEval'"
+timeout = 600
+
+# "no mention of `chunk session` in docs/, README.md, AGENTS.md or skills/, and
+# the command tree in docs/CLI.md no longer lists `session`"
+[[verifier.checks]]
+name = "hidden-docs"
+kind = "hidden"
+command = "out=$(grep -rnE 'chunk session' docs README.md AGENTS.md skills; grep -nE '^(│ +)?(├|└)── session( |$)' docs/CLI.md); if [ -n \"$out\" ]; then echo \"$out\"; exit 1; fi"
+timeout = 30
+
+# "nothing chunk prints ... may tell the user to run a `chunk session ...` command"
+[[verifier.checks]]
+name = "hidden-hints"
+kind = "hidden"
+command = "out=$(grep -rnE --include='*.go' 'chunk session (start|attach|cancel|resume|restore|list)' internal main.go | grep -v '_test\\.go:'); if [ -n \"$out\" ]; then echo \"$out\"; exit 1; fi"
+timeout = 30
+
+[[verifier.checks]]
+name = "suite-build"
+kind = "suite"
+command = "go build ./... && go vet ./..."
+timeout = 600
+
+# Unit tests only. acceptance/ has wall-clock timeouts that fail when several
+# trials verify at once, which would score agents on machine load.
+[[verifier.checks]]
+name = "suite-test"
+kind = "suite"
+command = "go test -race -count=1 -skip '^TestHiddenEval' $(go list ./... | grep -v /acceptance)"
+timeout = 1200
+
+[[verifier.checks]]
+name = "suite-lint"
+kind = "suite"
+command = "go tool golangci-lint run --allow-parallel-runners ./..."
+timeout = 600

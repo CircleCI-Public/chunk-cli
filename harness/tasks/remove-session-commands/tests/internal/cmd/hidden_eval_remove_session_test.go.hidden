@@ -1,0 +1,227 @@
+package cmd
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spf13/cobra"
+)
+
+// hiddenEvalIsolate points every config, data and daemon directory at a fresh
+// temporary home so nothing here reads or writes the developer's own state.
+func hiddenEvalIsolate(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("CHUNK_WATCHD_DIR", filepath.Join(home, "watchd"))
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "")
+	t.Setenv("CHUNK_WATCHD_TCP_TOKEN", "")
+	t.Setenv("CHUNK_SESSION_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CHUNK_NO_TELEMETRY", "1")
+	t.Setenv("CI", "1")
+}
+
+func hiddenEvalSubcommand(root *cobra.Command, name string) *cobra.Command {
+	for _, c := range root.Commands() {
+		if c.Name() == name {
+			return c
+		}
+		for _, a := range c.Aliases {
+			if a == name {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+func TestHiddenEvalSessionCommandIsRemoved(t *testing.T) {
+	hiddenEvalIsolate(t)
+	root := NewRootCmd("test")
+	if c := hiddenEvalSubcommand(root, "session"); c != nil {
+		// Fatal before executing anything: running the old command would talk
+		// to a daemon.
+		t.Fatalf("root command still registers %q (Use %q)", c.Name(), c.Use)
+	}
+
+	for _, args := range [][]string{{"session", "list"}, {"session"}} {
+		root := NewRootCmd("test")
+		root.SetArgs(args)
+		root.SetOut(&strings.Builder{})
+		root.SetErr(&strings.Builder{})
+		root.SetIn(strings.NewReader(""))
+		root.SetContext(t.Context())
+		_, err := root.ExecuteC()
+		if err == nil {
+			t.Fatalf("chunk %s: expected an unknown command error, got success", strings.Join(args, " "))
+		}
+		if !strings.Contains(err.Error(), `unknown command "session"`) {
+			t.Fatalf("chunk %s: expected an unknown command error, got %v", strings.Join(args, " "), err)
+		}
+	}
+}
+
+func hiddenEvalAssertFlags(t *testing.T, c *cobra.Command, want map[string]string) {
+	t.Helper()
+	for name, def := range want {
+		f := c.Flags().Lookup(name)
+		if f == nil {
+			t.Errorf("%s: flag --%s is missing", c.Name(), name)
+			continue
+		}
+		if f.DefValue != def {
+			t.Errorf("%s: flag --%s default is %q, want %q", c.Name(), name, f.DefValue, def)
+		}
+	}
+}
+
+func TestHiddenEvalFactoryIsStillRegisteredWithItsFlags(t *testing.T) {
+	hiddenEvalIsolate(t)
+	root := NewRootCmd("test")
+	fc := hiddenEvalSubcommand(root, "factory")
+	if fc == nil {
+		t.Fatal("factory is no longer a subcommand of the root command")
+	}
+	if fc.Use != "factory [prompt|-]" {
+		t.Errorf("factory Use is %q, want %q", fc.Use, "factory [prompt|-]")
+	}
+	if fc.Hidden {
+		t.Error("factory became hidden")
+	}
+	hiddenEvalAssertFlags(t, fc, map[string]string{
+		"attempts":                 "3",
+		"image":                    "",
+		"implement-timeout":        "30m0s",
+		"implementer-instructions": "",
+		"json":                     "false",
+		"keep-sidecars":            "false",
+		"log":                      "",
+		"model":                    "",
+		"no-validate":              "false",
+		"org-id":                   "",
+		"review-timeout":           "15m0s",
+		"reviewers":                "0",
+		"reviews":                  "",
+		"verbose":                  "false",
+	})
+	if f := fc.Flags().Lookup("log"); f != nil && f.NoOptDefVal != "default" {
+		t.Errorf("factory --log with no value means %q, want %q", f.NoOptDefVal, "default")
+	}
+}
+
+func TestHiddenEvalWatchIsStillRegisteredWithItsFlags(t *testing.T) {
+	hiddenEvalIsolate(t)
+	root := NewRootCmd("test")
+	wc := hiddenEvalSubcommand(root, "watch")
+	if wc == nil {
+		t.Fatal("watch is no longer a subcommand of the root command")
+	}
+	if wc.Use != "watch [dir...]" {
+		t.Errorf("watch Use is %q, want %q", wc.Use, "watch [dir...]")
+	}
+	hiddenEvalAssertFlags(t, wc, map[string]string{"focus": "false", "all": "false"})
+	// factory starts the daemon through watch's hidden daemon subcommand.
+	if hiddenEvalSubcommand(wc, "_daemon") == nil {
+		t.Error("watch no longer has its _daemon subcommand")
+	}
+}
+
+// hiddenEvalUserErr is how chunk's user-facing errors present themselves.
+type hiddenEvalUserErr interface {
+	UserMessage() string
+	Suggestion() string
+	UserExitCode() int
+}
+
+// hiddenEvalRunFactory runs the factory command's own RunE from a fresh root,
+// skipping the root's hooks (telemetry, update check, daemon auto-launch).
+// Every case here is refused before a daemon would be needed.
+func hiddenEvalRunFactory(t *testing.T, args ...string) error {
+	t.Helper()
+	fc := hiddenEvalSubcommand(NewRootCmd("test"), "factory")
+	if fc == nil {
+		t.Fatal("factory is no longer a subcommand of the root command")
+	}
+	fc.SetOut(&strings.Builder{})
+	fc.SetErr(&strings.Builder{})
+	fc.SetIn(strings.NewReader(""))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	fc.SetContext(ctx)
+	if fc.Args != nil {
+		if err := fc.Args(fc, args); err != nil {
+			return err
+		}
+	}
+	return fc.RunE(fc, args)
+}
+
+func hiddenEvalGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	c := exec.Command("git", args...)
+	c.Dir = dir
+	c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@t")
+	if out, err := c.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func TestHiddenEvalFactoryStillRefusesARemoteDaemon(t *testing.T) {
+	hiddenEvalIsolate(t)
+	t.Chdir(t.TempDir())
+	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:1")
+
+	err := hiddenEvalRunFactory(t, "add a --verbose flag")
+	var ue hiddenEvalUserErr
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected a user error, got %v", err)
+	}
+	if !strings.Contains(ue.UserMessage(), "CHUNK_WATCHD_REMOTE_ADDR") {
+		t.Errorf("message %q does not name CHUNK_WATCHD_REMOTE_ADDR", ue.UserMessage())
+	}
+	if ue.UserExitCode() != ExitBadArgs {
+		t.Errorf("exit code %d, want %d", ue.UserExitCode(), ExitBadArgs)
+	}
+}
+
+func TestHiddenEvalFactoryStillRefusesOutsideAGitRepository(t *testing.T) {
+	hiddenEvalIsolate(t)
+	t.Chdir(t.TempDir())
+
+	err := hiddenEvalRunFactory(t, "add a --verbose flag")
+	if err == nil || !strings.Contains(err.Error(), "not inside a git repository") {
+		t.Fatalf("expected a not-inside-a-git-repository error, got %v", err)
+	}
+}
+
+func TestHiddenEvalFactoryStillNeedsAnOriginRemote(t *testing.T) {
+	hiddenEvalIsolate(t)
+	dir := t.TempDir()
+	hiddenEvalGit(t, dir, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hiddenEvalGit(t, dir, "add", ".")
+	hiddenEvalGit(t, dir, "commit", "-m", "init")
+	t.Chdir(dir)
+
+	err := hiddenEvalRunFactory(t, "add a --verbose flag")
+	var ue hiddenEvalUserErr
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected a user error, got %v", err)
+	}
+	if !strings.Contains(ue.UserMessage(), "origin") || !strings.Contains(ue.Suggestion(), "git remote add origin") {
+		t.Errorf("got message %q, suggestion %q; want the missing origin remote explained", ue.UserMessage(), ue.Suggestion())
+	}
+	if ue.UserExitCode() != ExitBadArgs {
+		t.Errorf("exit code %d, want %d", ue.UserExitCode(), ExitBadArgs)
+	}
+}

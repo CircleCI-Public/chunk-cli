@@ -1,0 +1,692 @@
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 8e9f8305..5352b410 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -391,8 +391,9 @@ Design constraints worth preserving:
+ A session is the daemon's record of one pre-PR run for a project: the work is
+ reviewed by agents in sandboxes, the findings worth changing are fixed, and the
+ loop goes round again. The daemon is the **local** one (Unix socket); sessions
+-work on files on this machine. `chunk session` is the CLI for it and
+-`chunk watch` shows it live.
++work on files on this machine. `chunk factory` starts its sessions and
++`chunk watch` shows them live; a review session (`POST /session`) has no CLI
++command of its own.
+ 
+ ```
+ POST /session              {project_root, prompts_dir?, parallelism?, model?, timeout_seconds?, max_rounds?}
+@@ -480,10 +481,10 @@ changed (`fix.files[]`: `path`, `insertions`, `deletions`; the totals are
+   It does **not** cover ignored files, and it does not record the index: a
+   session writes files only (`git apply`, never `--index`), so staging is left as
+   the user had it. If the restore point cannot be saved nothing is written.
+-  `chunk session restore <id>` puts back exactly the files the fixes changed
++  `POST /session/{id}/restore` puts back exactly the files the fixes changed
+   (`git restore --source=<ref> --worktree`; files the session created are
+   removed), and refuses, listing them, if any of those files were edited after the
+-  session left them unless `--force`. The ref outlives the daemon, so after a
++  session left them unless `force` is set. The ref outlives the daemon, so after a
+   restart the session record is gone but the undo is still
+   `git restore --source=refs/chunk/restore/<session-id> --worktree -- <paths>`
+   (`git for-each-ref refs/chunk/restore` lists them). Refs are not removed
+@@ -494,8 +495,8 @@ changed (`fix.files[]`: `path`, `insertions`, `deletions`; the totals are
+   and compares. A difference means the user edited while the sandboxes worked, so
+   the patch is for files that no longer exist: the round is marked superseded,
+   nothing is written, and the session **pauses** (`state: paused`,
+-  `pause_reason`, `paused_paths`, stage `review_loop: paused`). `chunk session
+-  resume <id>` (or the dashboard) adopts the files as they are now and runs the
++  `pause_reason`, `paused_paths`, stage `review_loop: paused`). `POST
++  /session/{id}/resume` (the dashboard's `c`) adopts the files as they are now and runs the
+   round again; `cancel` ends the session. Ignored files and timestamps do not
+   count as changes; any content change to a tracked or untracked file does.
+   A patch is also `git apply --check`ed first, so one that does not fit changes
+diff --git a/docs/CLI.md b/docs/CLI.md
+index cc899eac..f78143b0 100644
+--- a/docs/CLI.md
++++ b/docs/CLI.md
+@@ -168,23 +168,6 @@ chunk
+ │   --verbose                       # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
+ │   --json                          # Output as JSON
+ │
+-├── session                         # (hidden) Pre-PR review session on the local watch daemon
+-│   ├── start                       # Start a session for the current project
+-│   │   --project <path>            # Project to review (default: the enclosing git repository)
+-│   │   --prompts <dir>             # Review prompts, relative to the project (default: .chunk/reviews)
+-│   │   --rounds <n>                # Rounds at most (default and maximum: 3)
+-│   │   --parallelism <n>           # Sandboxes reviewing at once (default: 5)
+-│   │   --model <name>              # Claude model
+-│   │   --timeout <duration>        # Max time for each Claude run (default: 15m)
+-│   │   --detach                    # Print the session ID and return
+-│   │   --json                      # Output as JSON
+-│   ├── attach <id>                 # Follow a session until it ends or pauses
+-│   ├── cancel <id>                 # Stop a session
+-│   ├── resume <id>                 # Continue a paused session with your files as they are now
+-│   ├── restore <id>                # Undo everything the session changed in your working tree
+-│   │   --force                     # Also overwrite files you edited after the session changed them
+-│   └── list                        # List the daemon's sessions
+-│
+ ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
+ │   --focus                         # Watch only the current directory instead of all known projects
+ │
+@@ -319,27 +302,7 @@ chunk
+   repos than the daemon's, so they are not used: the default is every project the
+   daemon tracks, and `watch <path>` / `--focus <path>` take paths **on the daemon's
+   host**, sent as typed. `--focus` with no path is an error in this mode.
+-- **`session` runs on the local daemon, in the background.** `chunk session start`
+-  registers the current git repository with the daemon, starts the daemon if it
+-  is not running, and starts a session; it follows the session until it ends
+-  (Ctrl-C detaches, `--detach` returns at once). The session belongs to the
+-  daemon: only `cancel` stops it. It uses the *daemon's* Claude and CircleCI
+-  credentials, resolved when it started, and it is refused when
+-  `CHUNK_WATCHD_REMOTE_ADDR` is set, since a session works on this machine's
+-  files. The project needs a git remote named `origin` (the sandboxes clone from
+-  it); `start` fails up front without one. A project has one active
+-  session at a time. A session runs up to three
+-  rounds of {review, sandbox agent fixes what is high or medium severity, the
+-  fixes are applied **directly to your working tree**} and stops early when a
+-  round finds nothing worth changing. Before the first fix it saves a restore
+-  point, so `chunk session restore <id>` puts every file the session changed back
+-  (it leaves your other files alone and refuses to discard edits you made after
+-  the session left a file, unless `--force`). If your files change while a round
+-  runs, the session **pauses** instead of overwriting them; `resume` takes your
+-  files as they are and goes again, `cancel` ends it. It never touches the
+-  index, commits, or pushes. Sessions are kept in memory:
+-  a daemon restart loses the record. In-process `chunk review` is unchanged.
+-- **`factory` runs on the local daemon too.** `chunk factory "<prompt>"` (or
++- **`factory` runs on the local daemon.** `chunk factory "<prompt>"` (or
+   `chunk factory < prompt.md`; `chunk factory - < prompt.md` is the explicit
+   form) checks
+   the project's review prompts and validation commands, registers the project,
+@@ -348,7 +311,11 @@ chunk
+   so far. It uses the daemon's
+   credentials and the project's configured org and image unless `--org-id` or
+   `--image` say otherwise, and it is refused when `CHUNK_WATCHD_REMOTE_ADDR` is
+-  set. `--reviews` must name a directory inside the project. Every reviewer is
++  set, since the run works on this machine's files. The project needs a git
++  remote named `origin` (the sidecars clone from it). A project has one active
++  session at a time, and a factory run is one. Sessions are kept in memory: a
++  daemon restart loses the record, though the run's worktree and branch stay.
++  `--reviews` must name a directory inside the project. Every reviewer is
+   given the original factory prompt as the requested-change specification, so
+   the files in that directory can be reusable review lenses rather than copies
+   of a particular request. As it follows the run it prints the sidecars being
+diff --git a/internal/cmd/factory.go b/internal/cmd/factory.go
+index 3baa5e80..b69a29b1 100644
+--- a/internal/cmd/factory.go
++++ b/internal/cmd/factory.go
+@@ -140,7 +140,7 @@ also shows the log here as the run writes it; it implies --log.`,
+ 			if verbose && !jsonOut {
+ 				defer tailLog(logArg, logFrom, streams.Err)()
+ 			}
+-			return followSession(ctx, streams, id, jsonOut, true)
++			return followSession(ctx, streams, id, jsonOut)
+ 		},
+ 	}
+ 
+diff --git a/internal/cmd/factory_daemon_test.go b/internal/cmd/factory_daemon_test.go
+index 2cf7ad32..49ee7fe9 100644
+--- a/internal/cmd/factory_daemon_test.go
++++ b/internal/cmd/factory_daemon_test.go
+@@ -7,6 +7,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"os"
++	"os/exec"
+ 	"path/filepath"
+ 	"strings"
+ 	"testing"
+@@ -227,3 +228,39 @@ func TestFactoryRejectsAttemptsBelowOne(t *testing.T) {
+ 	assert.Equal(t, ue.UserMessage(), "--attempts must be at least 1.")
+ 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+ }
++
++// A run works on this machine's files, so a remote daemon is refused.
++func TestFactoryRefusesARemoteDaemon(t *testing.T) {
++	factoryProject(t)
++	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:1")
++
++	_, _, err := runFactoryCmd(t, "add a --verbose flag")
++	var ue *userError
++	assert.Assert(t, errors.As(err, &ue), "got %v", err)
++	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
++}
++
++func TestFactoryOutsideAGitRepositoryIsRefused(t *testing.T) {
++	isolateConfig(t)
++	t.Setenv(config.EnvXDGDataHome, t.TempDir())
++	t.Chdir(t.TempDir())
++
++	_, _, err := runFactoryCmd(t, "add a --verbose flag")
++	assert.ErrorContains(t, err, "not inside a git repository")
++}
++
++func TestFactoryWithoutAnOriginRemoteFailsBeforeAnySandboxWork(t *testing.T) {
++	project := factoryProject(t)
++	// No daemon is running: the check must come before the daemon is needed.
++	c := exec.Command("git", "remote", "remove", "origin")
++	c.Dir = project
++	out, err := c.CombinedOutput()
++	assert.NilError(t, err, string(out))
++
++	_, _, err = runFactoryCmd(t, "add a --verbose flag")
++	var ue *userError
++	assert.Assert(t, errors.As(err, &ue), "got %v", err)
++	assert.Assert(t, strings.Contains(ue.UserMessage(), "origin"))
++	assert.Assert(t, strings.Contains(ue.Suggestion(), "git remote add origin"))
++	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
++}
+diff --git a/internal/cmd/session.go b/internal/cmd/factoryfollow.go
+similarity index 55%
+rename from internal/cmd/session.go
+rename to internal/cmd/factoryfollow.go
+index 2813f955..58dc1640 100644
+--- a/internal/cmd/session.go
++++ b/internal/cmd/factoryfollow.go
+@@ -10,8 +10,6 @@ import (
+ 	"strings"
+ 	"time"
+ 
+-	"github.com/spf13/cobra"
+-
+ 	"github.com/CircleCI-Public/chunk-cli/internal/config"
+ 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+ 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
+@@ -21,205 +19,15 @@ import (
+ 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+ )
+ 
+-// sessionPollInterval is how often an attached `chunk session` asks the daemon
+-// how the session is going.
++// sessionPollInterval is how often `chunk factory` asks the daemon how the run's
++// session is going.
+ const sessionPollInterval = time.Second
+ 
+-// maxSessionPollFailures is how many polls in a row may fail before an attached
+-// command gives up. The session is on the daemon and keeps going either way.
++// maxSessionPollFailures is how many polls in a row may fail before `chunk
++// factory` gives up following. The session is on the daemon and keeps going
++// either way.
+ const maxSessionPollFailures = 5
+ 
+-func newSessionCmd() *cobra.Command {
+-	cmd := &cobra.Command{
+-		Use:   "session",
+-		Short: "Run and follow a pre-PR review session on the local watch daemon",
+-		Long: `A session reviews the work in the current project and applies the fixes,
+-in the background, on the local watch daemon. See 'chunk watch' to follow it
+-live. The session belongs to the daemon: attaching and detaching never changes
+-what it does, and only 'cancel' stops it.`,
+-		// Hidden until the rest of the flow (rebase, CI, approval, PR) exists.
+-		Hidden: true,
+-	}
+-	cmd.AddCommand(
+-		newSessionStartCmd(),
+-		newSessionAttachCmd(),
+-		newSessionCancelCmd(),
+-		newSessionResumeCmd(),
+-		newSessionRestoreCmd(),
+-		newSessionListCmd(),
+-	)
+-	return cmd
+-}
+-
+-func newSessionStartCmd() *cobra.Command {
+-	var (
+-		projectDir, promptsDir, model string
+-		parallelism, rounds           int
+-		timeout                       time.Duration
+-		detach, jsonOut               bool
+-	)
+-	cmd := &cobra.Command{
+-		Use:          "start",
+-		Short:        "Start a session for the current project",
+-		SilenceUsage: true,
+-		Args:         cobra.NoArgs,
+-		RunE: func(cmd *cobra.Command, _ []string) error {
+-			if err := requireLocalDaemon(); err != nil {
+-				return err
+-			}
+-			root, err := sessionProjectRoot(cmd.Context(), projectDir)
+-			if err != nil {
+-				return err
+-			}
+-			if err := watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd}); err != nil {
+-				return &userError{msg: "Could not start the watch daemon.", err: err}
+-			}
+-			id, err := watchd.StartSession(watchd.SessionRequest{
+-				ProjectRoot:    root,
+-				PromptsDir:     promptsDir,
+-				Parallelism:    parallelism,
+-				Model:          model,
+-				TimeoutSeconds: int(timeout / time.Second),
+-				MaxRounds:      rounds,
+-			})
+-			if err != nil {
+-				return sessionError(err)
+-			}
+-			streams := iostream.FromCmd(cmd)
+-			if detach {
+-				return printSessionID(streams, id, jsonOut)
+-			}
+-			streams.ErrPrintf("Session %s started on the watch daemon. Ctrl-C detaches; it keeps running.\n", id)
+-			return followSession(cmd.Context(), streams, id, jsonOut, false)
+-		},
+-	}
+-	cmd.Flags().StringVar(&projectDir, "project", "", "Project to review (default: the git repository containing the current directory)")
+-	cmd.Flags().StringVar(&promptsDir, "prompts", "", "Directory of review prompts, relative to the project (default: .chunk/reviews)")
+-	cmd.Flags().IntVar(&rounds, "rounds", 0, fmt.Sprintf("Review-and-fix rounds to run at most (default and maximum: %d)", watchd.MaxRounds))
+-	cmd.Flags().IntVar(&parallelism, "parallelism", 5, "Maximum sandboxes reviewing at once (0: one per prompt)")
+-	cmd.Flags().StringVar(&model, "model", "", "Claude model (default: Claude Code's default)")
+-	cmd.Flags().DurationVar(&timeout, "timeout", 0, "Max time for each Claude run (default: 15m)")
+-	cmd.Flags().BoolVar(&detach, "detach", false, "Print the session ID and return without following it")
+-	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+-	return cmd
+-}
+-
+-func newSessionAttachCmd() *cobra.Command {
+-	var jsonOut bool
+-	cmd := &cobra.Command{
+-		Use:          "attach <session-id>",
+-		Short:        "Follow a session until it ends or pauses",
+-		SilenceUsage: true,
+-		Args:         cobra.ExactArgs(1),
+-		RunE: func(cmd *cobra.Command, args []string) error {
+-			if err := requireLocalDaemon(); err != nil {
+-				return err
+-			}
+-			return followSession(cmd.Context(), iostream.FromCmd(cmd), args[0], jsonOut, false)
+-		},
+-	}
+-	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+-	return cmd
+-}
+-
+-func newSessionCancelCmd() *cobra.Command {
+-	return &cobra.Command{
+-		Use:          "cancel <session-id>",
+-		Short:        "Stop a session (changes it already made stay; use restore to undo them)",
+-		SilenceUsage: true,
+-		Args:         cobra.ExactArgs(1),
+-		RunE: func(cmd *cobra.Command, args []string) error {
+-			if err := requireLocalDaemon(); err != nil {
+-				return err
+-			}
+-			if err := watchd.CancelSession(args[0]); err != nil {
+-				return sessionError(err)
+-			}
+-			iostream.FromCmd(cmd).ErrPrintf("Asked the daemon to cancel session %s.\n", args[0])
+-			return nil
+-		},
+-	}
+-}
+-
+-func newSessionResumeCmd() *cobra.Command {
+-	return &cobra.Command{
+-		Use:          "resume <session-id>",
+-		Short:        "Continue a paused session, taking your files as they are now",
+-		SilenceUsage: true,
+-		Args:         cobra.ExactArgs(1),
+-		RunE: func(cmd *cobra.Command, args []string) error {
+-			if err := requireLocalDaemon(); err != nil {
+-				return err
+-			}
+-			if err := watchd.ResumeSession(args[0]); err != nil {
+-				return sessionError(err)
+-			}
+-			iostream.FromCmd(cmd).ErrPrintf("Resumed session %s; it reviews your files as they are now.\n", args[0])
+-			return nil
+-		},
+-	}
+-}
+-
+-func newSessionRestoreCmd() *cobra.Command {
+-	var force bool
+-	cmd := &cobra.Command{
+-		Use:   "restore <session-id>",
+-		Short: "Undo everything a session changed in your working tree",
+-		Long: `Puts back every file the session's fixes changed, as it was before the first
+-fix, and touches nothing else. Files you edited after the session left them are
+-not overwritten unless you pass --force. If the daemon has lost the session
+-(it restarted), the restore point is still in git: see docs/ARCHITECTURE.md.`,
+-		SilenceUsage: true,
+-		Args:         cobra.ExactArgs(1),
+-		RunE: func(cmd *cobra.Command, args []string) error {
+-			if err := requireLocalDaemon(); err != nil {
+-				return err
+-			}
+-			res, err := watchd.RestoreSession(args[0], force)
+-			if err != nil {
+-				return sessionError(err)
+-			}
+-			streams := iostream.FromCmd(cmd)
+-			for _, p := range res.Paths {
+-				streams.Printf("restored %s\n", p)
+-			}
+-			streams.ErrPrintf("Restored %d file(s).\n", len(res.Paths))
+-			return nil
+-		},
+-	}
+-	cmd.Flags().BoolVar(&force, "force", false, "Also overwrite files you edited after the session changed them")
+-	return cmd
+-}
+-
+-func newSessionListCmd() *cobra.Command {
+-	var jsonOut bool
+-	cmd := &cobra.Command{
+-		Use:          "list",
+-		Short:        "List the daemon's sessions",
+-		SilenceUsage: true,
+-		Args:         cobra.NoArgs,
+-		RunE: func(cmd *cobra.Command, _ []string) error {
+-			if err := requireLocalDaemon(); err != nil {
+-				return err
+-			}
+-			sessions, err := watchd.ListSessions("")
+-			if err != nil {
+-				return sessionError(err)
+-			}
+-			streams := iostream.FromCmd(cmd)
+-			if jsonOut {
+-				return iostream.PrintJSON(streams.Out, sessions)
+-			}
+-			for _, s := range sessions {
+-				streams.Printf("%s  %-9s  %s  %d round(s)\n", s.ID, s.State, s.ProjectRoot, len(s.Rounds))
+-			}
+-			return nil
+-		},
+-	}
+-	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+-	return cmd
+-}
+-
+ // requireLocalDaemon refuses to run when the environment points at a remote
+ // daemon. A session works on files on this machine, so it belongs to the local
+ // daemon; a remote daemon would be reviewing a different checkout.
+@@ -274,15 +82,6 @@ func sessionProjectRoot(ctx context.Context, projectDir string) (string, error)
+ 	return root, nil
+ }
+ 
+-func printSessionID(streams iostream.Streams, id string, jsonOut bool) error {
+-	if jsonOut {
+-		return iostream.PrintJSON(streams.Out, map[string]string{"id": id})
+-	}
+-	streams.Println(id)
+-	streams.ErrPrintf("Follow it with: chunk session attach %s   Stop it with: chunk session cancel %s\n", id, id)
+-	return nil
+-}
+-
+ // sessionError renders a failure talking to the session API.
+ func sessionError(err error) error {
+ 	var refused *watchd.SessionRefused
+@@ -295,7 +94,7 @@ func sessionError(err error) error {
+ 		e := newUserError(refused.Message).withoutDetail()
+ 		switch refused.Status {
+ 		case http.StatusConflict:
+-			e = e.withSuggestion("Follow the active one with 'chunk session attach <id>'.")
++			e = e.withSuggestion("Follow the active one in 'chunk watch'.")
+ 		case http.StatusNotFound:
+ 			e = e.withSuggestion("The daemon tracks projects it has seen; check the path or the session ID.")
+ 		}
+@@ -314,10 +113,9 @@ func printLostFactoryWork(streams iostream.Streams, f *watchd.FactoryRun) {
+ 		f.Worktree, f.Branch, keepWorkHint(factory.Worktree{Path: f.Worktree, Branch: f.Branch, Baseline: f.Baseline, Head: f.Head}))
+ }
+ 
+-// followSession polls a session, reporting what changes, until it ends or
+-// pauses. Ctrl-C detaches and the session carries on, or with cancelOnInterrupt
+-// cancels it and follows it until it has wound down.
+-func followSession(ctx context.Context, streams iostream.Streams, id string, jsonOut, cancelOnInterrupt bool) error {
++// followSession polls a factory run's session, reporting what changes, until it
++// ends. Ctrl-C cancels it and follows it until it has wound down.
++func followSession(ctx context.Context, streams iostream.Streams, id string, jsonOut bool) error {
+ 	rep := newSessionReporter(newStatusFunc(streams))
+ 	failures := 0
+ 	ticker := time.NewTicker(sessionPollInterval)
+@@ -336,7 +134,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
+ 			if failures++; failures >= maxSessionPollFailures {
+ 				printLostFactoryWork(streams, lastFactory)
+ 				return newUserError("Lost contact with the watch daemon.").
+-					withSuggestion(fmt.Sprintf("The session may still be running. Reattach with: chunk session attach %s", id)).
++					withSuggestion(fmt.Sprintf("Run %s may still be going on the daemon. Follow it in 'chunk watch'.", id)).
+ 					wrap(err)
+ 			}
+ 		default:
+@@ -346,18 +144,11 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
+ 			}
+ 			rep.report(detail)
+ 			if detail.State.Finished() || detail.State == watchd.SessionPaused {
+-				if detail.IsFactory() {
+-					return finishFactory(ctx, streams, detail, jsonOut)
+-				}
+-				return finishSession(streams, detail, jsonOut)
++				return finishFactory(ctx, streams, detail, jsonOut)
+ 			}
+ 		}
+ 		select {
+ 		case <-ctx.Done():
+-			if !cancelOnInterrupt {
+-				streams.ErrPrintf("Detached. Session %s keeps running on the daemon (chunk session attach %s, or cancel %s).\n", id, id, id)
+-				return nil
+-			}
+ 			if err := watchd.CancelSession(id); err != nil {
+ 				return sessionError(err)
+ 			}
+@@ -370,38 +161,6 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
+ 	}
+ }
+ 
+-// finishSession prints where a session ended up and maps failure to an error.
+-func finishSession(streams iostream.Streams, detail watchd.SessionDetail, jsonOut bool) error {
+-	if jsonOut {
+-		return iostream.PrintJSON(streams.Out, detail)
+-	}
+-	switch detail.State {
+-	case watchd.SessionPaused:
+-		streams.Printf("Paused: %s\n", detail.PauseReason)
+-		streams.Printf("Continue with 'chunk session resume %s' (reviews your files as they are now), or 'chunk session cancel %s'.\n", detail.ID, detail.ID)
+-	case watchd.SessionCancelled:
+-		return newUserError("The session was cancelled.").withoutDetail()
+-	case watchd.SessionFailed:
+-		return &userError{msg: "The session failed: " + detail.Error, hideDetail: true, errMsg: "session failed"}
+-	case watchd.SessionRunning, watchd.SessionDone:
+-		// Summarised below.
+-	}
+-	for _, r := range detail.Rounds {
+-		streams.Printf("round %d: %d finding(s), %d worth changing%s%s\n", r.Number, r.Findings, r.Worth, fixSummary(r), roundNote(r))
+-	}
+-	if rp := detail.Restore; rp != nil && !rp.Restored {
+-		streams.Printf("Undo everything this session changed with: chunk session restore %s\n", detail.ID)
+-	}
+-	return nil
+-}
+-
+-func fixSummary(r watchd.Round) string {
+-	if r.Fix == nil || r.Fix.State != watchd.FixApplied {
+-		return ""
+-	}
+-	return fmt.Sprintf(", fixed %d file(s) (+%d -%d)", len(r.Fix.Files), r.Fix.Insertions, r.Fix.Deletions)
+-}
+-
+ func roundNote(r watchd.Round) string {
+ 	if r.Note == "" {
+ 		return ""
+diff --git a/internal/cmd/session_test.go b/internal/cmd/factoryfollow_test.go
+similarity index 63%
+rename from internal/cmd/session_test.go
+rename to internal/cmd/factoryfollow_test.go
+index 98dc63fc..b1cbc0b9 100644
+--- a/internal/cmd/session_test.go
++++ b/internal/cmd/factoryfollow_test.go
+@@ -1,10 +1,8 @@
+ package cmd
+ 
+ import (
+-	"bytes"
+ 	"context"
+ 	"encoding/json"
+-	"errors"
+ 	"fmt"
+ 	"os"
+ 	"os/exec"
+@@ -24,8 +22,6 @@ import (
+ 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+ )
+ 
+-// fakeSessionConfig is a daemon setup that boots no sandboxes and calls no API:
+-// every command answers with output.
+ // reviewResult is claude's JSON result for a review that says prose and has
+ // no findings. A reviewer that prints anything else has failed.
+ func reviewResult(prose string) string {
+@@ -38,6 +34,8 @@ func reviewResult(prose string) string {
+ 	return string(raw)
+ }
+ 
++// fakeSessionConfig is a daemon setup that boots no sandboxes and calls no API:
++// every command answers with output.
+ func fakeSessionConfig(output string) watchd.ReviewConfig {
+ 	var next atomic.Int32
+ 	return watchd.ReviewConfig{
+@@ -115,99 +113,6 @@ func sessionProject(t *testing.T) string {
+ 	return dir
+ }
+ 
+-func runSessionCmd(t *testing.T, args ...string) (string, error) {
+-	t.Helper()
+-	cmd := newSessionCmd()
+-	var out, errOut bytes.Buffer
+-	cmd.SetOut(&out)
+-	cmd.SetErr(&errOut)
+-	cmd.SetArgs(args)
+-	cmd.SetContext(t.Context())
+-	err := cmd.Execute()
+-	return out.String(), err
+-}
+-
+-func TestSessionStartDetachThenAttachShowsTheFinishedSession(t *testing.T) {
+-	isolateConfig(t)
+-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+-	startSessionDaemon(t, fakeSessionConfig("fine"))
+-	project := sessionProject(t)
+-
+-	out, err := runSessionCmd(t, "start", "--detach", "--json", "--project", project)
+-	assert.NilError(t, err)
+-	var started map[string]string
+-	assert.NilError(t, json.Unmarshal([]byte(out), &started))
+-	assert.Assert(t, started["id"] != "")
+-
+-	out, err = runSessionCmd(t, "attach", started["id"], "--json")
+-	assert.NilError(t, err)
+-	var detail watchd.SessionDetail
+-	assert.NilError(t, json.Unmarshal([]byte(out), &detail))
+-	assert.Equal(t, detail.State, watchd.SessionDone)
+-	assert.Equal(t, len(detail.Rounds[0].Reviews), 2)
+-
+-	out, err = runSessionCmd(t, "list")
+-	assert.NilError(t, err)
+-	assert.Assert(t, bytes.Contains([]byte(out), []byte(started["id"])))
+-}
+-
+-func TestSessionCommandsExplainTheirFailures(t *testing.T) {
+-	isolateConfig(t)
+-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+-	startSessionDaemon(t, fakeSessionConfig("x"))
+-
+-	_, err := runSessionCmd(t, "cancel", "no-such-session")
+-	assert.ErrorContains(t, err, "no such session")
+-
+-	_, err = runSessionCmd(t, "start", "--detach", "--project", t.TempDir())
+-	assert.ErrorContains(t, err, "not inside a git repository")
+-
+-	// A session works on this machine's files, so a remote daemon is refused.
+-	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "127.0.0.1:1")
+-	_, err = runSessionCmd(t, "list")
+-	var ue *userError
+-	assert.Assert(t, errors.As(err, &ue))
+-	assert.Equal(t, ue.exitCode, ExitBadArgs)
+-}
+-
+-func TestSessionStartWithoutAnOriginRemoteFailsBeforeAnySandboxWork(t *testing.T) {
+-	isolateConfig(t)
+-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+-	// No daemon is running: the check must come before the daemon is needed.
+-	project := sessionProject(t)
+-	c := exec.Command("git", "remote", "remove", "origin")
+-	c.Dir = project
+-	out, err := c.CombinedOutput()
+-	assert.NilError(t, err, string(out))
+-
+-	_, err = runSessionCmd(t, "start", "--detach", "--project", project)
+-	var ue *userError
+-	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+-	assert.Assert(t, strings.Contains(ue.UserMessage(), "origin"))
+-	assert.Assert(t, strings.Contains(ue.Suggestion(), "git remote add origin"))
+-	assert.Equal(t, ue.exitCode, ExitBadArgs)
+-}
+-
+-func TestSessionRestoreAndResumeExplainWhyTheyCannotRun(t *testing.T) {
+-	isolateConfig(t)
+-	t.Setenv(config.EnvXDGDataHome, t.TempDir())
+-	startSessionDaemon(t, fakeSessionConfig("Looks good."))
+-	project := sessionProject(t)
+-	out, err := runSessionCmd(t, "start", "--detach", "--json", "--project", project)
+-	assert.NilError(t, err)
+-	var started map[string]string
+-	assert.NilError(t, json.Unmarshal([]byte(out), &started))
+-	_, err = runSessionCmd(t, "attach", started["id"], "--json")
+-	assert.NilError(t, err)
+-
+-	// Nothing was found, so nothing was changed and there is nothing to restore.
+-	_, err = runSessionCmd(t, "restore", started["id"])
+-	assert.ErrorContains(t, err, "did not change any files")
+-	// And a session that is not paused cannot be resumed.
+-	_, err = runSessionCmd(t, "resume", started["id"])
+-	assert.ErrorContains(t, err, "not paused")
+-}
+-
+ // reportedLines follows a session through snapshots and returns what was
+ // said, one string per line.
+ func reportedLines(snapshots ...watchd.SessionDetail) []string {
+diff --git a/internal/cmd/root.go b/internal/cmd/root.go
+index a9ebd7b9..13106197 100644
+--- a/internal/cmd/root.go
++++ b/internal/cmd/root.go
+@@ -115,7 +115,6 @@ Configuration:
+ 	rootCmd.AddCommand(newMutateCmd())
+ 	rootCmd.AddCommand(newReviewCmd())
+ 	rootCmd.AddCommand(newFactoryCmd())
+-	rootCmd.AddCommand(newSessionCmd())
+ 	rootCmd.AddCommand(newHookCmd())
+ 	rootCmd.AddCommand(newConflictsCmd())
+ 	rootCmd.AddCommand(newUpgradeCmd())
+diff --git a/internal/ui/watch/session.go b/internal/ui/watch/session.go
+index da16adce..e6b8f3d2 100644
+--- a/internal/ui/watch/session.go
++++ b/internal/ui/watch/session.go
+@@ -461,7 +461,7 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
+ 	lines = append(lines, fmt.Sprintf(" ▶ %s  %s  %s  %s",
+ 		m.sessionStateIcon(st, s.State), st.emphasis(sessionTitle(info)), st.muted(string(s.State)), st.dim(ui.FormatDuration(sessionElapsed(s)))))
+ 	if rp := s.Restore; rp != nil {
+-		note := fmt.Sprintf("restore point saved · %d file%s changed · undo with: chunk session restore %s", len(rp.Paths), plural(len(rp.Paths)), s.ID[:min(8, len(s.ID))])
++		note := fmt.Sprintf("restore point saved · %d file%s changed", len(rp.Paths), plural(len(rp.Paths)))
+ 		if rp.Restored {
+ 			note = "restored: everything the session changed has been put back"
+ 		}
+@@ -498,7 +498,7 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
+ // round stays on screen.
+ func (m Model) renderSessionBody(st watchStyles, height int) []string {
+ 	if len(m.sessions) == 0 {
+-		lines := []string{"", "  " + st.muted("No sessions yet."), "  " + st.dim("Start one with: chunk session start")}
++		lines := []string{"", "  " + st.muted("No sessions yet."), "  " + st.dim("Start one with: chunk factory")}
+ 		if m.reviewAuthErr != "" {
+ 			lines = append(lines, "", "  "+st.warning(ui.IconWarn+" "+m.reviewAuthErr))
+ 		}
+diff --git a/internal/ui/watch/session_test.go b/internal/ui/watch/session_test.go
+index de00920c..eb17e70c 100644
+--- a/internal/ui/watch/session_test.go
++++ b/internal/ui/watch/session_test.go
+@@ -95,7 +95,7 @@ func TestSessionViewShowsTheTimelineFixesAndPauseAndFitsTheScreen(t *testing.T)
+ 			continue
+ 		}
+ 		assert.Equal(t, strings.Count(out, "not built yet"), 4, "rebase, CI, approval and PR are shown as not built:\n%s", out)
+-		for _, want := range []string{"mine.txt", "app.go", "Round 1", "Round 2", "bugs", "chunk session restore sess-1"} {
++		for _, want := range []string{"mine.txt", "app.go", "Round 1", "Round 2", "bugs", "restore point saved"} {
+ 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
+ 		}
+ 	}

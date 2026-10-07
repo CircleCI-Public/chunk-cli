@@ -1,0 +1,141 @@
+package cmd
+
+// Hidden acceptance tests for the config-duplicate-commands eval task. The
+// harness copies this file in after the agent has finished, so the agent never
+// sees it. Every assertion traces to a sentence of the task's instruction.md;
+// anything the instruction leaves open is not checked.
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"gotest.tools/v3/assert"
+
+	"github.com/CircleCI-Public/chunk-cli/internal/config"
+)
+
+const (
+	hiddenEvalDuplicateConfig = `{"commands":[{"name":"test","run":"go test ./..."},{"name":"lint","run":"golangci-lint run"},{"name":"test","run":"task test"}]}`
+	hiddenEvalMalformedConfig = `{"commands":[{"name":"test","run":"go test ./..."}`
+)
+
+// hiddenEvalIsolate keeps the run away from the developer's own config and
+// credentials, and from any real endpoint.
+func hiddenEvalIsolate(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	t.Setenv(config.EnvXDGConfigHome, filepath.Join(home, ".config"))
+	t.Setenv(config.EnvXDGDataHome, filepath.Join(home, ".local", "share"))
+	t.Setenv(config.EnvChunkSessionID, "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	// Short, because the daemon socket lives here and macOS caps socket paths.
+	watchdDir, err := os.MkdirTemp("", "wd")
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(watchdDir) })
+	t.Setenv("CHUNK_WATCHD_DIR", watchdDir)
+	t.Setenv(config.EnvCircleCIBaseURL, "http://127.0.0.1:1")
+	t.Setenv(config.EnvAnthropicBaseURL, "http://127.0.0.1:1")
+	t.Setenv(config.EnvGitHubAPIURL, "http://127.0.0.1:1")
+}
+
+func hiddenEvalProjectWith(t *testing.T, data string) string {
+	t.Helper()
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".chunk", "config.json"), []byte(data), 0o644))
+	return dir
+}
+
+func hiddenEvalValidate(t *testing.T, dir string, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	root := NewRootCmd("test")
+	_ = root.PersistentFlags().Set("insecure-storage", "true")
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+	root.SetIn(strings.NewReader(""))
+	root.SetArgs(append([]string{"validate", "--project", dir}, args...))
+	root.SetContext(t.Context())
+	err = root.Execute()
+	return out.String(), errOut.String(), err
+}
+
+// "chunk validate must refuse such a config with a non-zero exit, including
+// --dry-run and --list (with or without --json)."
+func TestHiddenEvalValidateRefusesDuplicateNames(t *testing.T) {
+	hiddenEvalIsolate(t)
+	dir := hiddenEvalProjectWith(t, hiddenEvalDuplicateConfig)
+	for _, args := range [][]string{{"--dry-run"}, {"--dry-run", "test"}, {"--list"}, {"--list", "--json"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			stdout, stderr, err := hiddenEvalValidate(t, dir, args...)
+			assert.Assert(t, err != nil, "stdout=%q stderr=%q", stdout, stderr)
+		})
+	}
+}
+
+// "it must fail instead and print nothing on stdout" for a config that is
+// malformed or invalid.
+func TestHiddenEvalValidateListFailsOnUnloadableConfig(t *testing.T) {
+	hiddenEvalIsolate(t)
+	for name, data := range map[string]string{
+		"malformed":        hiddenEvalMalformedConfig,
+		"duplicate":        hiddenEvalDuplicateConfig,
+		"negative timeout": `{"commands":[{"name":"test","run":"go test ./...","timeout":-1}]}`,
+	} {
+		dir := hiddenEvalProjectWith(t, data)
+		for _, args := range [][]string{{"--list"}, {"--list", "--json"}} {
+			t.Run(name+" "+strings.Join(args, " "), func(t *testing.T) {
+				stdout, stderr, err := hiddenEvalValidate(t, dir, args...)
+				assert.Assert(t, err != nil, "stderr=%q", stderr)
+				assert.Equal(t, stdout, "")
+			})
+		}
+	}
+}
+
+// "With no config file at all, --list keeps its current output."
+func TestHiddenEvalValidateListWithoutConfig(t *testing.T) {
+	hiddenEvalIsolate(t)
+	dir := t.TempDir()
+
+	stdout, _, err := hiddenEvalValidate(t, dir, "--list", "--json")
+	assert.NilError(t, err)
+	assert.Equal(t, stdout, "[]\n")
+
+	stdout, stderr, err := hiddenEvalValidate(t, dir, "--list")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(stdout+stderr, "No commands configured."), "stdout=%q stderr=%q", stdout, stderr)
+}
+
+// "Configs that are valid today must keep loading unchanged."
+func TestHiddenEvalValidateListValidConfig(t *testing.T) {
+	hiddenEvalIsolate(t)
+	dir := hiddenEvalProjectWith(t, `{"commands":[{"name":"test","run":"go test ./..."},{"name":"Test","run":"task test"}]}`)
+	stdout, _, err := hiddenEvalValidate(t, dir, "--list", "--json")
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(stdout, `"go test ./..."`), stdout)
+	assert.Assert(t, strings.Contains(stdout, `"task test"`), stdout)
+}
+
+// "config.SaveCommand (used by chunk validate --cmd ... --save) ... must return
+// an error and leave the file byte-for-byte unchanged."
+func TestHiddenEvalValidateSaveLeavesInvalidConfig(t *testing.T) {
+	hiddenEvalIsolate(t)
+	for name, data := range map[string]string{
+		"malformed": hiddenEvalMalformedConfig,
+		"duplicate": hiddenEvalDuplicateConfig,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := hiddenEvalProjectWith(t, data)
+			_, stderr, err := hiddenEvalValidate(t, dir, "fmt", "--cmd", "true", "--save", "--local")
+			assert.Assert(t, err != nil, "stderr=%q", stderr)
+			got, readErr := os.ReadFile(filepath.Join(dir, ".chunk", "config.json"))
+			assert.NilError(t, readErr)
+			assert.Equal(t, string(got), data)
+		})
+	}
+}
