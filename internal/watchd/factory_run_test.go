@@ -306,7 +306,7 @@ func TestStartFactoryRefusesABadRequest(t *testing.T) {
 func TestFeedKeepsTheLatestLinesAndCountsThemAll(t *testing.T) {
 	var f Feed
 	for i := range maxFeedLines + 5 {
-		f.add(iostream.LevelInfo, fmt.Sprint(i))
+		addFeedLine(&f, iostream.LevelInfo, fmt.Sprint(i))
 	}
 	assert.Equal(t, f.Total, maxFeedLines+5)
 	assert.Equal(t, len(f.Lines), maxFeedLines)

@@ -134,9 +134,11 @@ func (l *livenessChecker) fetch(ctx context.Context, org string) {
 }
 
 // reconcile marks each sidecar the API has confirmed as Verified and drops the
-// ones it has confirmed gone. Everything else is kept unverified. A nil checker
-// keeps everything.
-func (l *livenessChecker) reconcile(sidecars []SidecarState) []SidecarState {
+// ones it has confirmed gone. Everything else is kept unverified. inferredOrg
+// holds the IDs whose OrgID is the project's current org rather than one their
+// state file recorded (see fillMissingOrg); those can be confirmed but never
+// dropped. A nil checker keeps everything.
+func (l *livenessChecker) reconcile(sidecars []SidecarState, inferredOrg map[string]bool) []SidecarState {
 	if l == nil {
 		return sidecars
 	}
@@ -153,7 +155,7 @@ func (l *livenessChecker) reconcile(sidecars []SidecarState) []SidecarState {
 			// Nothing to judge it against.
 		case list.ids[sc.ID]:
 			sc.Verified = true
-		case sc.orgInferred:
+		case inferredOrg[sc.ID]:
 			// Possibly the wrong org's list; absence from it proves nothing.
 		case list.fetchedAt.After(sc.FileMtime):
 			// Gone. A list older than the state file may simply predate the

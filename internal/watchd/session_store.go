@@ -51,7 +51,7 @@ func cloneSession(s Session) Session {
 	if s.Factory != nil {
 		f := *s.Factory
 		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
-		f.Progress = s.Factory.Progress.clone()
+		f.Progress = cloneFeed(s.Factory.Progress)
 		out.Factory = &f
 	}
 	if s.EndedAt != nil {

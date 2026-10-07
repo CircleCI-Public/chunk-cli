@@ -206,7 +206,7 @@ func (r *factoryRecorder) progress(level iostream.Level, msg string) {
 	e := r.entry
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.s.Factory.Progress.add(level, msg)
+	addFeedLine(&e.s.Factory.Progress, level, msg)
 }
 
 // round returns the record's index for a factory round, beginning it if it

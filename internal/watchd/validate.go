@@ -95,9 +95,9 @@ type ValidateRequest struct {
 	SidecarImage string `json:"sidecar_image,omitempty"`
 }
 
-// runArgs is the command line the run is given: the caller's args, plus
+// validateRunArgs is the command line the run is given: the caller's args, plus
 // whatever the request carries as fields that the run takes as flags.
-func (req ValidateRequest) runArgs() []string {
+func validateRunArgs(req ValidateRequest) []string {
 	if !req.HookCodex {
 		return req.Args
 	}
@@ -216,7 +216,7 @@ func (d *daemon) startValidateTask(req ValidateRequest, risk *RiskSummary, onDon
 		env = append(append([]string(nil), env...), "CIRCLE_TOKEN="+req.CircleCIToken)
 	}
 	sessionID := session.IDFromSlice(req.Env)
-	args := req.runArgs()
+	args := validateRunArgs(req)
 	// Taken before the run, because this is the state the run is about to
 	// validate. A tree that cannot be captured at all just means the next change
 	// is measured against HEAD instead.
@@ -430,7 +430,7 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 	writeValidateJSON(w, resp)
 }
 
-// sidecarImage returns the image to boot the run's sidecar from: the one the
+// validateSidecarImage returns the image to boot the run's sidecar from: the one the
 // caller sent, or else the project's configured snapshot, or "" when there is
 // neither. The sidecar the daemon creates is handed to the subprocess by ID, so
 // the subprocess never gets to pick an image itself: without this, a daemon run
@@ -439,7 +439,7 @@ func (d *daemon) handleValidate(w http.ResponseWriter, r *http.Request) {
 // A project with no config file has no snapshot. A config that exists but
 // cannot be loaded is an error: booting the bare image instead would fail later
 // with a missing toolchain and nothing to explain why.
-func (req ValidateRequest) sidecarImage() (string, error) {
+func validateSidecarImage(req ValidateRequest) (string, error) {
 	if req.SidecarImage != "" {
 		return req.SidecarImage, nil
 	}
@@ -486,10 +486,10 @@ func (d *daemon) runValidateNow(ctx context.Context, req ValidateRequest, risk *
 	d.validateMu.Lock()
 	defer d.validateMu.Unlock()
 
-	args := req.runArgs()
+	args := validateRunArgs(req)
 	if d.prov != nil && req.OrgID != "" {
 		name := fmt.Sprintf("validate-%x", time.Now().UnixNano())
-		image, err := req.sidecarImage()
+		image, err := validateSidecarImage(req)
 		if err != nil {
 			return ValidateResponse{ExitCode: 1, Stderr: err.Error()}
 		}

@@ -45,12 +45,12 @@ func TestReconcileDropsSidecarsTheListOmits(t *testing.T) {
 	}
 
 	// Before any list has landed there is nothing to judge against.
-	before := l.reconcile(append([]SidecarState(nil), sidecars...))
+	before := l.reconcile(append([]SidecarState(nil), sidecars...), nil)
 	assert.DeepEqual(t, ids(before), []string{"live", "gone"})
 	assert.Check(t, !before[0].Verified)
 
 	l.fetch(context.Background(), "org")
-	after := l.reconcile(append([]SidecarState(nil), sidecars...))
+	after := l.reconcile(append([]SidecarState(nil), sidecars...), nil)
 	assert.DeepEqual(t, ids(after), []string{"live"})
 	assert.Check(t, after[0].Verified)
 }
@@ -63,7 +63,7 @@ func TestReconcileKeepsStateNewerThanTheList(t *testing.T) {
 	// Written after the list was fetched: the sidecar may have been created
 	// since, so its absence proves nothing yet.
 	fresh := SidecarState{ID: "new", OrgID: "org", FileMtime: time.Now().Add(time.Second)}
-	got := l.reconcile([]SidecarState{fresh})
+	got := l.reconcile([]SidecarState{fresh}, nil)
 	assert.DeepEqual(t, ids(got), []string{"new"})
 	assert.Check(t, !got[0].Verified)
 }
@@ -73,14 +73,14 @@ func TestReconcileKeepsSidecarsWithoutAnOrg(t *testing.T) {
 	l := newLivenessChecker(staticList(&calls))
 	l.fetch(context.Background(), "org")
 
-	got := l.reconcile([]SidecarState{{ID: "orphan", FileMtime: time.Now().Add(-time.Hour)}})
+	got := l.reconcile([]SidecarState{{ID: "orphan", FileMtime: time.Now().Add(-time.Hour)}}, nil)
 	assert.DeepEqual(t, ids(got), []string{"orphan"})
 }
 
 func TestReconcileNilCheckerKeepsEverything(t *testing.T) {
 	var l *livenessChecker
 	l.maybeRefresh(context.Background(), []SidecarState{{ID: "a", OrgID: "org"}})
-	got := l.reconcile([]SidecarState{{ID: "a", OrgID: "org"}})
+	got := l.reconcile([]SidecarState{{ID: "a", OrgID: "org"}}, nil)
 	assert.DeepEqual(t, ids(got), []string{"a"})
 }
 
@@ -100,7 +100,7 @@ func TestFetchFailureKeepsThePreviousList(t *testing.T) {
 	got := l.reconcile([]SidecarState{
 		{ID: "live", OrgID: "org", FileMtime: written},
 		{ID: "gone", OrgID: "org", FileMtime: written},
-	})
+	}, nil)
 	assert.DeepEqual(t, ids(got), []string{"live"})
 	assert.Check(t, got[0].Verified)
 }
@@ -176,7 +176,7 @@ func TestReconcileDistrustsAListThatHasGoneStale(t *testing.T) {
 	got := l.reconcile([]SidecarState{
 		{ID: "live", OrgID: "org", FileMtime: time.Now().Add(-time.Hour)},
 		{ID: "gone", OrgID: "org", FileMtime: time.Now().Add(-time.Hour)},
-	})
+	}, nil)
 	assert.DeepEqual(t, ids(got), []string{"live", "gone"})
 	assert.Check(t, !got[0].Verified)
 }
@@ -190,9 +190,9 @@ func TestReconcileKeepsSidecarsWhoseOrgWasInferred(t *testing.T) {
 	// can vouch for one but not rule the other out.
 	written := time.Now().Add(-time.Hour)
 	got := l.reconcile([]SidecarState{
-		{ID: "live", OrgID: "org", orgInferred: true, FileMtime: written},
-		{ID: "elsewhere", OrgID: "org", orgInferred: true, FileMtime: written},
-	})
+		{ID: "live", OrgID: "org", FileMtime: written},
+		{ID: "elsewhere", OrgID: "org", FileMtime: written},
+	}, map[string]bool{"live": true, "elsewhere": true})
 	assert.DeepEqual(t, ids(got), []string{"live", "elsewhere"})
 	assert.Check(t, got[0].Verified)
 	assert.Check(t, !got[1].Verified)
@@ -202,9 +202,8 @@ func TestFillMissingOrgKeepsRecordedOrgs(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CIRCLECI_ORG_ID", "env-org")
 	sidecars := []SidecarState{{ID: "a", OrgID: "recorded"}, {ID: "b"}}
-	fillMissingOrg(sidecars, root)
+	inferred := fillMissingOrg(sidecars, root)
 	assert.Equal(t, sidecars[0].OrgID, "recorded")
-	assert.Check(t, !sidecars[0].orgInferred)
 	assert.Equal(t, sidecars[1].OrgID, "env-org")
-	assert.Check(t, sidecars[1].orgInferred)
+	assert.DeepEqual(t, inferred, map[string]bool{"b": true})
 }

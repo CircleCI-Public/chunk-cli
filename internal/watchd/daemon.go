@@ -380,11 +380,11 @@ func (d *daemon) updateProject(ps *projectState) {
 	}
 
 	sidecars := loadSidecars(ps.dataDir, ps.root, snapName)
-	fillMissingOrg(sidecars, ps.root)
+	inferredOrg := fillMissingOrg(sidecars, ps.root)
 	// Same background context as the PR fetch below: the list must survive this
 	// poll returning.
 	d.live.maybeRefresh(context.Background(), sidecars)
-	sidecars = d.live.reconcile(sidecars)
+	sidecars = d.live.reconcile(sidecars, inferredOrg)
 	annotateActivity(sidecars, ps.events)
 	d.res.annotate(sidecars)
 
@@ -474,10 +474,12 @@ func (d *daemon) withSessions(root string, p ProjectSnapshot) ProjectSnapshot {
 	return p
 }
 
-// fillMissingOrg gives sidecars whose state recorded no org the project's org.
-// The config is only read when one needs it: it is a disk read, and this runs
-// every poll.
-func fillMissingOrg(sidecars []SidecarState, root string) {
+// fillMissingOrg gives sidecars whose state recorded no org the project's org,
+// and returns the IDs of the ones it filled in. The org setting may have
+// changed since those were created, so the list for that org can confirm them
+// but never prove them gone; see livenessChecker.reconcile. The config is only
+// read when one needs it: it is a disk read, and this runs every poll.
+func fillMissingOrg(sidecars []SidecarState, root string) (inferred map[string]bool) {
 	orgID := ""
 	resolved := false
 	for i := range sidecars {
@@ -489,9 +491,13 @@ func fillMissingOrg(sidecars []SidecarState, root string) {
 			resolved = true
 		}
 		if orgID == "" {
-			return
+			return inferred
 		}
 		sidecars[i].OrgID = orgID
-		sidecars[i].orgInferred = true
+		if inferred == nil {
+			inferred = map[string]bool{}
+		}
+		inferred[sidecars[i].ID] = true
 	}
+	return inferred
 }

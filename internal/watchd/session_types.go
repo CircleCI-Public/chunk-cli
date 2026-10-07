@@ -1,7 +1,6 @@
 package watchd
 
 import (
-	"slices"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -94,7 +93,7 @@ type RoundImplement struct {
 
 // Feed is the latest lines of a stream that can run long, such as a run's
 // progress, and how many lines there have been, so a follower can tell which
-// it has not seen. Only the last maxFeedLines are kept.
+// it has not seen. Only the latest lines are kept.
 type Feed struct {
 	Lines []FeedLine `json:"lines,omitempty"`
 	Total int        `json:"total,omitempty"`
@@ -119,25 +118,6 @@ const (
 	FeedError FeedLevel = "error"
 )
 
-// maxFeedLines is how many lines a Feed keeps.
-const maxFeedLines = 100
-
-// feedLevel spells out an iostream level.
-func feedLevel(l iostream.Level) FeedLevel {
-	switch l {
-	case iostream.LevelStep:
-		return FeedStep
-	case iostream.LevelWarn:
-		return FeedWarn
-	case iostream.LevelDone:
-		return FeedDone
-	case iostream.LevelError:
-		return FeedError
-	case iostream.LevelInfo:
-	}
-	return FeedInfo
-}
-
 // Level is the line's iostream level. An unknown value reads as info: it
 // comes from a daemon that may be newer than this client.
 func (l FeedLevel) Level() iostream.Level {
@@ -155,23 +135,11 @@ func (l FeedLevel) Level() iostream.Level {
 	return iostream.LevelInfo
 }
 
-func (f *Feed) add(level iostream.Level, text string) {
-	f.Lines = append(f.Lines, FeedLine{Level: feedLevel(level), Text: text})
-	if over := len(f.Lines) - maxFeedLines; over > 0 {
-		f.Lines = slices.Delete(f.Lines, 0, over)
-	}
-	f.Total++
-}
-
 // Since returns the lines added after the first seen, as many as are still
 // kept.
 func (f Feed) Since(seen int) []FeedLine {
 	n := min(max(f.Total-seen, 0), len(f.Lines))
 	return f.Lines[len(f.Lines)-n:]
-}
-
-func (f Feed) clone() Feed {
-	return Feed{Lines: slices.Clone(f.Lines), Total: f.Total}
 }
 
 // RoundCheck is one validation command a factory round ran.
