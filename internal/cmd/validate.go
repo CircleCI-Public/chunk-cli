@@ -234,6 +234,7 @@ func runMarkRemote(workDir, name string, streams iostream.Streams) error {
 	if err != nil || !cfg.HasCommands() {
 		return &userError{
 			msg:        msgValidateNotConfigured,
+			blocked:    true,
 			suggestion: suggestionValidateNotConfigured,
 			errMsg:     errNoValidateCommands,
 			hideDetail: true,
@@ -841,6 +842,7 @@ func prepareValidateConfig(workDir string, hook *hookContext, opts *validateOpts
 		}
 		return nil, false, &userError{
 			msg:        msgValidateNotConfigured,
+			blocked:    true,
 			suggestion: suggestionValidateNotConfigured,
 			errMsg:     errNoValidateCommands,
 			hideDetail: true,
@@ -1825,6 +1827,7 @@ func mapValidateError(r validate.Result, err error) (validate.Result, error) {
 	if errors.Is(err, validate.ErrNotConfigured) {
 		return r, &userError{
 			msg:        msgValidateNotConfigured,
+			blocked:    true,
 			suggestion: suggestionValidateNotConfigured,
 			hideDetail: true,
 			err:        err,

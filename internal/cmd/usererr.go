@@ -12,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
@@ -231,6 +232,7 @@ type userError struct {
 	errMsg     string // used only when err == nil
 	err        error  // when set, Error() delegates to err.Error()
 	hideDetail bool   // suppress the detail line entirely, see withoutDetail
+	blocked    bool   // the user cannot proceed until they fix something, see TelemetryOutcome
 }
 
 // newUserError creates a userError with the given user-facing message.
@@ -251,6 +253,18 @@ func (e *userError) wrapMsg(msg string) *userError       { e.errMsg = msg; retur
 // wrapped error, which leaks Go-level wrapping like "exec: 410 Gone — ..." and,
 // when the message was translated from that same error, repeats itself.
 func (e *userError) withoutDetail() *userError { e.hideDetail = true; return e }
+
+// TelemetryOutcome satisfies telemetry.Classified. An error the user can fix
+// (bad arguments, auth, a missing resource, or a project that is not set up)
+// is a blocked run, not a chunk failure; API and unclassified errors stay
+// failures.
+func (e *userError) TelemetryOutcome() string {
+	switch {
+	case e.blocked, e.exitCode == ExitBadArgs, e.exitCode == ExitAuthError, e.exitCode == ExitNotFound:
+		return telemetry.OutcomeBlocked
+	}
+	return telemetry.OutcomeFailure
+}
 
 func (e *userError) Error() string {
 	if e.err != nil {

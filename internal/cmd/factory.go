@@ -99,7 +99,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			}
 			cfg, err := config.LoadProjectConfig(root)
 			if err != nil {
-				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err}
+				return &userError{msg: msgValidateNotConfigured, suggestion: suggestionRunInit, err: err, blocked: true}
 			}
 			// The daemon loads these itself; loading them here first explains a
 			// mistake before anything starts.
@@ -279,9 +279,10 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 			msg:        "Nothing to check the implementer's work with.",
 			suggestion: fmt.Sprintf("Add review prompts to %s, or validation commands with 'chunk init'.", review.DefaultDir),
 			hideDetail: true,
+			blocked:    true,
 		}
 	case errors.Is(err, review.ErrNoPrompts):
-		return nil, nil, &userError{msg: fmt.Sprintf("No review prompts found in %s.", reviewsDir), suggestion: "Add one .md or .txt file per review.", err: err}
+		return nil, nil, &userError{msg: fmt.Sprintf("No review prompts found in %s.", reviewsDir), suggestion: "Add one .md or .txt file per review.", err: err, blocked: true}
 	}
 	return nil, nil, &userError{msg: fmt.Sprintf("Could not read review prompts from %s.", reviewsDir), err: err}
 }

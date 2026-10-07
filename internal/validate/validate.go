@@ -15,6 +15,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 )
 
 func formatElapsed(d time.Duration) string {
@@ -207,7 +208,7 @@ func runRemote(ctx context.Context, execFn func(ctx context.Context, script stri
 		if exitCode != 0 {
 			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, commandutil.FormatElapsed(elapsed)))
 			commandutil.SkipRemaining(status, commands[i+1:], maxWidth)
-			return Result{Passed: i, Total: len(commands)}, fmt.Errorf("remote %s failed with exit code %d", c.Name, exitCode)
+			return Result{Passed: i, Total: len(commands)}, &CheckFailedError{Name: c.Name, Remote: true, Code: exitCode}
 		}
 		status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", maxWidth, c.Name, commandutil.FormatElapsed(elapsed)))
 	}
@@ -244,7 +245,7 @@ func runRemoteInline(ctx context.Context, execFn func(ctx context.Context, scrip
 	}
 	if exitCode != 0 {
 		status(iostream.LevelError, fmt.Sprintf("%s  %s", name, commandutil.FormatElapsed(elapsed)))
-		return fmt.Errorf("remote %s failed with exit code %d", name, exitCode)
+		return &CheckFailedError{Name: name, Remote: true, Code: exitCode}
 	}
 	status(iostream.LevelDone, fmt.Sprintf("%s  %s", name, commandutil.FormatElapsed(elapsed)))
 	return nil
@@ -302,13 +303,31 @@ func runCommand(ctx context.Context, workDir, name, command string, timeoutSec, 
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() != 0 {
 			status(iostream.LevelError, fmt.Sprintf("%-*s  %s", nameWidth, name, formatElapsed(elapsed)))
-			return fmt.Errorf("%s command failed with exit code %d", name, exitErr.ExitCode())
+			return &CheckFailedError{Name: name, Code: exitErr.ExitCode()}
 		}
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	status(iostream.LevelDone, fmt.Sprintf("%-*s  %s", nameWidth, name, formatElapsed(elapsed)))
 	return nil
 }
+
+// CheckFailedError reports a validate command that ran and exited non-zero:
+// the project's own check failing, not chunk.
+type CheckFailedError struct {
+	Name   string
+	Remote bool
+	Code   int
+}
+
+func (e *CheckFailedError) Error() string {
+	if e.Remote {
+		return fmt.Sprintf("remote %s failed with exit code %d", e.Name, e.Code)
+	}
+	return fmt.Sprintf("%s command failed with exit code %d", e.Name, e.Code)
+}
+
+// TelemetryOutcome satisfies telemetry.Classified.
+func (e *CheckFailedError) TelemetryOutcome() string { return telemetry.OutcomeCheckFailed }
 
 // HookExitError signals a specific process exit code without printing
 // additional error output. All output must be written before this error

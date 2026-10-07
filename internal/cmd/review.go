@@ -97,6 +97,7 @@ A prompts directory named "results" must be passed as ./results, since
 			if err != nil {
 				return &userError{
 					msg:        msgValidateNotConfigured,
+					blocked:    true,
 					suggestion: suggestionRunInit,
 					err:        err,
 				}
