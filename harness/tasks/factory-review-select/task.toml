@@ -1,0 +1,45 @@
+description = "Add a repeatable --review <name> flag to `chunk factory` that runs only the named review prompts, enforced by both the CLI and the watch daemon's API"
+tags = ["go", "cli", "daemon", "small"]
+
+[repo]
+url = "https://github.com/CircleCI-Public/chunk-cli.git"
+ref = "main"
+revision = "d48d143f02be1cba5992bcabfecb85cf0e5fe913"
+recorded_utc = "2026-10-06T20:14:22Z"
+
+[good_looks_like]
+requirements = "--review is repeatable and selects by prompt name without extension from the directory the run uses; duplicates select once; validation and --no-validate are unaffected; the reviewer count and the run's record follow the selection; an unknown name (including when there are no prompts) is refused up front with exit code 2 naming it and listing what is available; the daemon's POST /factory takes review_names and refuses unknown names with a 400 without starting a run. Nothing else changes."
+validation = "Every configured validation command passes."
+implementation = "The selection is applied once, where the daemon loads the prompts, so the run's prompts, the reviewer count and the session record all see it; the CLI's up-front check reuses the same selection logic rather than a second copy. No independently confirmed high or medium defect remains; tests exercise the command and the daemon request."
+convergence = "The factory result passes within the configured attempt budget; exhausted or stuck runs cannot win."
+reviews = "High precision and coverage for actionable high or medium defects (e.g. filtering only in the CLI so the daemon ignores the names, a duplicate name running a review twice, reviewers counted from all prompts, an unknown name that is silently dropped or refused with exit 1, the missing-reviews-dir case slipping through), with little duplication or scope drift."
+efficiency = "Prefer lower wall time and reviewer-seconds only after quality is comparable."
+
+# The command's selection, refusals and exit code, and the daemon's
+# review_names, against a real daemon with a fake factory run.
+[[verifier.checks]]
+name = "hidden"
+kind = "hidden"
+command = "go test -race -count=1 ./internal/cmd -run '^TestHiddenEval'"
+timeout = 600
+
+# "document the flag in docs/CLI.md"
+[[verifier.checks]]
+name = "hidden-docs"
+kind = "hidden"
+command = "grep -qE -- '--review( |=|$|`)' docs/CLI.md"
+timeout = 30
+
+# Unit tests only. acceptance/ has wall-clock timeouts that fail when several
+# trials verify at once, which would score agents on machine load.
+[[verifier.checks]]
+name = "suite-test"
+kind = "suite"
+command = "go test -race -count=1 -skip '^TestHiddenEval' $(go list ./... | grep -v /acceptance)"
+timeout = 1200
+
+[[verifier.checks]]
+name = "suite-lint"
+kind = "suite"
+command = "go tool golangci-lint run --allow-parallel-runners ./..."
+timeout = 600

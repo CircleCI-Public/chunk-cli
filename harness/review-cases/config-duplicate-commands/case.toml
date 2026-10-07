@@ -1,0 +1,81 @@
+# Seeded defects in the config-duplicate-commands reference solution. Each mutant
+# is an exact find/replace on the solution-applied tree; `defect` is what a
+# matching review finding has to identify. None is caught by the hidden checks.
+task = "config-duplicate-commands"
+
+[[mutants]]
+name = "duplicates-compared-trimmed"
+file = "internal/config/project.go"
+defect = "Duplicate names are compared after trimming whitespace rather than exactly, so a config with `test` and `test ` (which loads today and whose commands are distinct) is now rejected as a duplicate, breaking every `chunk validate` in that project."
+find = """
+		if seen[command.Name] {
+			return fmt.Errorf("duplicate command name %q", command.Name)
+		}
+		seen[command.Name] = true
+"""
+replace = """
+		key := strings.TrimSpace(command.Name)
+		if seen[key] {
+			return fmt.Errorf("duplicate command name %q", key)
+		}
+		seen[key] = true
+"""
+
+[[mutants]]
+name = "empty-run-rejected"
+file = "internal/config/project.go"
+defect = "validateCommands also rejects a command whose `run` is empty, which the request does not ask for: a config with such a command loads today and now fails to load, so `chunk validate`, `--list` and `--save` all stop working for that project."
+find = """
+		if command.Timeout < 0 {
+			return fmt.Errorf("command %q has a negative timeout (%d)", command.Name, command.Timeout)
+		}
+"""
+replace = """
+		if command.Timeout < 0 {
+			return fmt.Errorf("command %q has a negative timeout (%d)", command.Name, command.Timeout)
+		}
+		if strings.TrimSpace(command.Run) == "" {
+			return fmt.Errorf("command %q has nothing to run", command.Name)
+		}
+"""
+
+[[mutants]]
+name = "inline-cmd-ignores-bad-config"
+file = "internal/cmd/validate.go"
+defect = "prepareValidateConfig no longer refuses an unloadable config when an inline `--cmd` is given, so `chunk validate --cmd ...` (and `--cmd ... --dry-run`) on a malformed config or one with duplicate names runs and exits 0 instead of failing."
+find = """
+	cfg, err := config.LoadProjectConfig(workDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, false, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
+	}
+	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
+"""
+replace = """
+	cfg, err := config.LoadProjectConfig(workDir)
+	// An inline command does not need the project's commands, so a config that
+	// does not load is no reason to refuse it.
+	if err != nil && !errors.Is(err, os.ErrNotExist) && opts.inlineCmd == "" {
+		return nil, false, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
+	}
+	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
+"""
+
+[[mutants]]
+name = "hook-skips-bad-config"
+file = "internal/cmd/validate.go"
+defect = "When `chunk validate` runs as an agent hook, a config that exists but does not load (malformed, duplicate names, negative timeout) is skipped silently with success, as if there were no config, so the hook never reports the problem and validation quietly stops running."
+find = """
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, false, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
+	}
+	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
+"""
+replace = """
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if hook != nil {
+			return nil, true, nil // a hook must not block on a config problem
+		}
+		return nil, false, &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
+	}
+	if (err != nil || !cfg.HasCommands()) && opts.inlineCmd == "" {
+"""

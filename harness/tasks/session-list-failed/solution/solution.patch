@@ -1,0 +1,120 @@
+diff --git a/docs/CLI.md b/docs/CLI.md
+index 898d57af..509150b4 100644
+--- a/docs/CLI.md
++++ b/docs/CLI.md
+@@ -169,6 +169,7 @@ chunk
+ │   ├── restore <id>                # Undo everything the session changed in your working tree
+ │   │   --force                     # Also overwrite files you edited after the session changed them
+ │   └── list                        # List the daemon's sessions
++│       --failed                    # Show only failed sessions
+ │
+ ├── watch [dir...]                  # Live TUI dashboard for active pools and recent activity
+ │   --focus                         # Watch only the current directory instead of all known projects
+diff --git a/internal/cmd/session.go b/internal/cmd/session.go
+index 2813f955..cd0522cf 100644
+--- a/internal/cmd/session.go
++++ b/internal/cmd/session.go
+@@ -192,7 +192,7 @@ not overwritten unless you pass --force. If the daemon has lost the session
+ }
+ 
+ func newSessionListCmd() *cobra.Command {
+-	var jsonOut bool
++	var jsonOut, failedOnly bool
+ 	cmd := &cobra.Command{
+ 		Use:          "list",
+ 		Short:        "List the daemon's sessions",
+@@ -206,6 +206,9 @@ func newSessionListCmd() *cobra.Command {
+ 			if err != nil {
+ 				return sessionError(err)
+ 			}
++			if failedOnly {
++				sessions = failedSessions(sessions)
++			}
+ 			streams := iostream.FromCmd(cmd)
+ 			if jsonOut {
+ 				return iostream.PrintJSON(streams.Out, sessions)
+@@ -216,10 +219,22 @@ func newSessionListCmd() *cobra.Command {
+ 			return nil
+ 		},
+ 	}
++	cmd.Flags().BoolVar(&failedOnly, "failed", false, "Show only failed sessions")
+ 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+ 	return cmd
+ }
+ 
++// failedSessions keeps the sessions that failed, in the order listed.
++func failedSessions(sessions []watchd.Session) []watchd.Session {
++	failed := []watchd.Session{}
++	for _, s := range sessions {
++		if s.State == watchd.SessionFailed {
++			failed = append(failed, s)
++		}
++	}
++	return failed
++}
++
+ // requireLocalDaemon refuses to run when the environment points at a remote
+ // daemon. A session works on files on this machine, so it belongs to the local
+ // daemon; a remote daemon would be reviewing a different checkout.
+diff --git a/internal/cmd/session_test.go b/internal/cmd/session_test.go
+index 98dc63fc..69b6a763 100644
+--- a/internal/cmd/session_test.go
++++ b/internal/cmd/session_test.go
+@@ -260,3 +260,57 @@ func TestSessionReporterLeavesAReviewSessionsNotesToItsSummary(t *testing.T) {
+ 	}}
+ 	assert.DeepEqual(t, reportedLines(d), []string{"round 1: done"})
+ }
++
++// TestSessionListFailedFiltersBothOutputs leaves the daemon with one finished
++// and one failed session and checks --failed keeps only the failed one.
++func TestSessionListFailedFiltersBothOutputs(t *testing.T) {
++	isolateConfig(t)
++	t.Setenv(config.EnvXDGDataHome, t.TempDir())
++	cfg := fakeSessionConfig("fine")
++	var failing atomic.Bool
++	stream := cfg.Stream
++	cfg.Stream = func(ctx context.Context, e *sidecar.PoolEntry, id string, on circleci.OutputFn) (int, error) {
++		if failing.Load() {
++			on(circleci.StreamStdout, []byte("this is not a claude result"))
++			return 0, nil
++		}
++		return stream(ctx, e, id, on)
++	}
++	startSessionDaemon(t, cfg)
++
++	start := func() string {
++		out, err := runSessionCmd(t, "start", "--detach", "--json", "--project", sessionProject(t))
++		assert.NilError(t, err)
++		var started map[string]string
++		assert.NilError(t, json.Unmarshal([]byte(out), &started))
++		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
++			d, err := watchd.FetchSession(started["id"])
++			assert.NilError(t, err)
++			if d.State.Finished() {
++				return started["id"]
++			}
++			assert.Assert(t, time.Now().Before(deadline), "session did not finish")
++		}
++	}
++	done := start()
++	failing.Store(true)
++	failed := start()
++
++	out, err := runSessionCmd(t, "list", "--failed")
++	assert.NilError(t, err)
++	assert.Assert(t, strings.Contains(out, failed), out)
++	assert.Assert(t, !strings.Contains(out, done), out)
++	assert.Equal(t, strings.Count(out, "\n"), 1, out)
++
++	out, err = runSessionCmd(t, "list", "--failed", "--json")
++	assert.NilError(t, err)
++	var listed []watchd.Session
++	assert.NilError(t, json.Unmarshal([]byte(out), &listed))
++	assert.Equal(t, len(listed), 1)
++	assert.Equal(t, listed[0].ID, failed)
++	assert.Equal(t, listed[0].State, watchd.SessionFailed)
++
++	out, err = runSessionCmd(t, "list")
++	assert.NilError(t, err)
++	assert.Assert(t, strings.Contains(out, done) && strings.Contains(out, failed), out)
++}

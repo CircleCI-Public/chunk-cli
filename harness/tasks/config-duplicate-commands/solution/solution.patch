@@ -1,0 +1,185 @@
+diff --git a/internal/cmd/validate.go b/internal/cmd/validate.go
+index 50344d92..10ad03b2 100644
+--- a/internal/cmd/validate.go
++++ b/internal/cmd/validate.go
+@@ -210,8 +210,11 @@ func mayRunInBackground(hook *hookContext) bool {
+ 
+ func runValidateList(workDir string, jsonOut bool, streams iostream.Streams, statusFn iostream.StatusFunc) error {
+ 	cfg, err := config.LoadProjectConfig(workDir)
+-	if err != nil {
++	switch {
++	case errors.Is(err, os.ErrNotExist):
+ 		cfg = &config.ProjectConfig{}
++	case err != nil:
++		return &userError{msg: msgCouldNotLoadConfig, suggestion: configFilePermHint, err: err}
+ 	}
+ 	if jsonOut {
+ 		cmds := cfg.Commands
+diff --git a/internal/cmd/validate_test.go b/internal/cmd/validate_test.go
+index f58dd985..5725368a 100644
+--- a/internal/cmd/validate_test.go
++++ b/internal/cmd/validate_test.go
+@@ -1675,3 +1675,26 @@ func TestRunValidationPlanRunsAutofixFirst(t *testing.T) {
+ 	assert.NilError(t, err)
+ 	assert.Equal(t, string(data), "format\nlint\ntest\n")
+ }
++
++// --list must not report an empty list for a config that exists but does not
++// load: that reads as "nothing configured" when the commands are just invisible.
++func TestValidateListRejectsInvalidConfig(t *testing.T) {
++	isolateConfig(t)
++	dir := t.TempDir()
++	chunkDir := filepath.Join(dir, ".chunk")
++	assert.NilError(t, os.MkdirAll(chunkDir, 0o755))
++	assert.NilError(t, os.WriteFile(filepath.Join(chunkDir, "config.json"),
++		[]byte(`{"commands":[{"name":"test","run":"a"},{"name":"test","run":"b"}]}`), 0o644))
++
++	for _, args := range [][]string{{"--list"}, {"--list", "--json"}} {
++		var outBuf, errBuf bytes.Buffer
++		root := newTestRootCmd()
++		root.SetOut(&outBuf)
++		root.SetErr(&errBuf)
++		root.SetIn(strings.NewReader(""))
++		root.SetArgs(append([]string{"validate", "--project", dir}, args...))
++		err := root.Execute()
++		assert.ErrorContains(t, err, `duplicate command name "test"`)
++		assert.Equal(t, outBuf.String(), "", "args %v", args)
++	}
++}
+diff --git a/internal/config/project.go b/internal/config/project.go
+index 7e266160..84fce587 100644
+--- a/internal/config/project.go
++++ b/internal/config/project.go
+@@ -227,10 +227,8 @@ func (c *ProjectConfig) validate() error {
+ 	if c == nil {
+ 		return nil
+ 	}
+-	for _, command := range c.Commands {
+-		if command.Local && command.Remote {
+-			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
+-		}
++	if err := validateCommands(c.Commands); err != nil {
++		return err
+ 	}
+ 	// Trimmed before the checks below rather than after, so the entry validated
+ 	// and the entry stored are the one somebody meant.
+@@ -253,6 +251,29 @@ func (c *ProjectConfig) validate() error {
+ 	return nil
+ }
+ 
++// validateCommands rejects commands that cannot be told apart or cannot run.
++// Commands are looked up by name, so a second command with a name already in
++// use would never be the one that runs, and nothing would say so.
++func validateCommands(commands []Command) error {
++	seen := make(map[string]bool, len(commands))
++	for i, command := range commands {
++		if strings.TrimSpace(command.Name) == "" {
++			return fmt.Errorf("command %d has no name", i+1)
++		}
++		if seen[command.Name] {
++			return fmt.Errorf("duplicate command name %q", command.Name)
++		}
++		seen[command.Name] = true
++		if command.Local && command.Remote {
++			return fmt.Errorf("command %q cannot be both local and remote", command.Name)
++		}
++		if command.Timeout < 0 {
++			return fmt.Errorf("command %q has a negative timeout (%d)", command.Name, command.Timeout)
++		}
++	}
++	return nil
++}
++
+ // trimPathRules strips surrounding whitespace from an inert or blocking list,
+ // in place.
+ //
+@@ -320,11 +341,16 @@ var knownExtensions = map[string]bool{
+ 	"yml": true, "zsh": true,
+ }
+ 
+-// SaveCommand upserts a command in .chunk/config.json.
++// SaveCommand upserts a command in .chunk/config.json, creating the file when
++// there is none. A config that exists but cannot be loaded is left alone:
++// starting from an empty one would discard everything it holds.
+ func SaveCommand(workDir, name, command string) error {
+ 	cfg, err := LoadProjectConfig(workDir)
+-	if err != nil {
++	switch {
++	case errors.Is(err, os.ErrNotExist):
+ 		cfg = &ProjectConfig{}
++	case err != nil:
++		return err
+ 	}
+ 
+ 	found := false
+diff --git a/internal/config/project_test.go b/internal/config/project_test.go
+index 54a06a25..e71dfaef 100644
+--- a/internal/config/project_test.go
++++ b/internal/config/project_test.go
+@@ -245,3 +245,66 @@ func TestSaveProjectConfigTrimsPathRules(t *testing.T) {
+ 	assert.NilError(t, err)
+ 	assert.DeepEqual(t, cfg.AsyncValidateInert, []string{".sql"})
+ }
++
++func TestLoadProjectConfigRejectsAmbiguousCommands(t *testing.T) {
++	tests := []struct {
++		name string
++		json string
++		want string
++	}{
++		{"duplicate name", `{"commands":[{"name":"test","run":"a"},{"name":"lint","run":"b"},{"name":"test","run":"c"}]}`, `duplicate command name "test"`},
++		{"empty name", `{"commands":[{"name":"test","run":"a"},{"name":"","run":"b"}]}`, "command 2 has no name"},
++		{"blank name", `{"commands":[{"name":"  ","run":"a"}]}`, "command 1 has no name"},
++		{"negative timeout", `{"commands":[{"name":"lint","run":"a","timeout":-5}]}`, `command "lint" has a negative timeout`},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			dir := t.TempDir()
++			writeProjectConfig(t, dir, tt.json)
++			_, err := LoadProjectConfig(dir)
++			assert.ErrorContains(t, err, tt.want)
++		})
++	}
++}
++
++func TestLoadProjectConfigAllowsDistinctCommandNames(t *testing.T) {
++	dir := t.TempDir()
++	writeProjectConfig(t, dir, `{"commands":[{"name":"test","run":"a","timeout":0},{"name":"Test","run":"b"}]}`)
++	cfg, err := LoadProjectConfig(dir)
++	assert.NilError(t, err)
++	assert.Equal(t, len(cfg.Commands), 2)
++}
++
++func TestSaveProjectConfigRejectsDuplicateCommandNames(t *testing.T) {
++	dir := t.TempDir()
++	err := SaveProjectConfig(dir, &ProjectConfig{Commands: []Command{{Name: "test", Run: "a"}, {Name: "test", Run: "b"}}})
++	assert.ErrorContains(t, err, `duplicate command name "test"`)
++	_, statErr := os.Stat(filepath.Join(dir, ".chunk", "config.json"))
++	assert.Assert(t, errors.Is(statErr, os.ErrNotExist))
++}
++
++func TestSaveCommandCreatesMissingConfig(t *testing.T) {
++	dir := t.TempDir()
++	assert.NilError(t, SaveCommand(dir, "test", "go test ./..."))
++	cfg, err := LoadProjectConfig(dir)
++	assert.NilError(t, err)
++	assert.Equal(t, cfg.FindCommand("test").Run, "go test ./...")
++}
++
++// A config that exists but does not load holds commands nobody can see;
++// starting from an empty one would throw them away.
++func TestSaveCommandLeavesUnloadableConfigAlone(t *testing.T) {
++	for name, data := range map[string]string{
++		"malformed": `{"commands":[{"name":"test","run":"a"}`,
++		"invalid":   `{"commands":[{"name":"test","run":"a"},{"name":"test","run":"b"}]}`,
++	} {
++		t.Run(name, func(t *testing.T) {
++			dir := t.TempDir()
++			writeProjectConfig(t, dir, data)
++			assert.Assert(t, SaveCommand(dir, "lint", "golangci-lint run") != nil)
++			got, err := os.ReadFile(filepath.Join(dir, ".chunk", "config.json"))
++			assert.NilError(t, err)
++			assert.Equal(t, string(got), data)
++		})
++	}
++}

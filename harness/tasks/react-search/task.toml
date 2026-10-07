@@ -1,0 +1,50 @@
+description = "Add a URL-synchronized (?q=), accessible search filter to the Baby Hippo Gram React gallery"
+tags = ["javascript", "react", "frontend"]
+# Appended to the agent's implementer instructions: environment facts the implementer needs, not hints about the solution.
+implementer_context = "Install dependencies if needed."
+
+[repo]
+url = "https://github.com/CircleCI-Public/circleci-demo-javascript-react-app.git"
+ref = "hanabel/chunk-demo"
+revision = "97ffe7343545ddced2829e1d9339ff726c6b43bb"
+recorded_utc = "2026-10-05T19:43:00Z"
+
+[good_looks_like]
+requirements = "Every behavior in the task is implemented without broadening the feature or changing unrelated gallery behavior."
+validation = "Tests, lint, formatting, and the production build all pass."
+implementation = "URL and React state remain synchronized without losing unrelated search parameters or the hash; listeners are cleaned up; tests exercise behavior through the DOM."
+convergence = "At least one actionable high or medium finding appears in the first review round, is fixed, and a later round passes within three attempts."
+reviews = "Reviewers report all demonstrated high and medium issues in their first pass, respect the literal task, avoid speculative requirements, and do not drip-feed related concerns."
+efficiency = "Prefer two-round convergence with bounded, non-duplicative reviews."
+
+[[verifier.checks]]
+name = "hidden"
+kind = "hidden"
+command = "(command -v pnpm >/dev/null || corepack enable) && pnpm install --frozen-lockfile && pnpm exec vitest run src/App.hidden-eval.test.tsx"
+timeout = 600
+
+# The suite checks mirror .chunk/config.json; the hidden test file is excluded from the test run
+# but is still linted, format-checked and type-checked (it is kept clean for that).
+[[verifier.checks]]
+name = "suite-test"
+kind = "suite"
+command = "(command -v pnpm >/dev/null || corepack enable) && pnpm install --frozen-lockfile && pnpm exec vitest run --coverage --exclude '**/*hidden-eval*'"
+timeout = 900
+
+[[verifier.checks]]
+name = "suite-lint"
+kind = "suite"
+command = "(command -v pnpm >/dev/null || corepack enable) && pnpm install --frozen-lockfile && pnpm lint"
+timeout = 600
+
+[[verifier.checks]]
+name = "suite-format"
+kind = "suite"
+command = "(command -v pnpm >/dev/null || corepack enable) && pnpm install --frozen-lockfile && pnpm format:check"
+timeout = 600
+
+[[verifier.checks]]
+name = "suite-build"
+kind = "suite"
+command = "(command -v pnpm >/dev/null || corepack enable) && pnpm install --frozen-lockfile && pnpm build"
+timeout = 900

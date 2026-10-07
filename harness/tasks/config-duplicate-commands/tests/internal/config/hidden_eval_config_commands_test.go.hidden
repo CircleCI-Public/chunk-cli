@@ -1,0 +1,141 @@
+package config
+
+// Hidden acceptance tests for the config-duplicate-commands eval task. The
+// harness copies this file in after the agent has finished, so the agent never
+// sees it. Every assertion traces to a sentence of the task's instruction.md;
+// anything the instruction leaves open is not checked.
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"gotest.tools/v3/assert"
+)
+
+func hiddenEvalConfigPath(dir string) string {
+	return filepath.Join(dir, ".chunk", "config.json")
+}
+
+func hiddenEvalWriteConfig(t *testing.T, data string) string {
+	t.Helper()
+	dir := t.TempDir()
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, ".chunk"), 0o755))
+	assert.NilError(t, os.WriteFile(hiddenEvalConfigPath(dir), []byte(data), 0o644))
+	return dir
+}
+
+func hiddenEvalRead(t *testing.T, dir string) string {
+	t.Helper()
+	data, err := os.ReadFile(hiddenEvalConfigPath(dir))
+	assert.NilError(t, err)
+	return string(data)
+}
+
+const (
+	hiddenEvalDuplicate = `{"commands":[{"name":"test","run":"go test ./..."},{"name":"lint","run":"golangci-lint run"},{"name":"test","run":"task test"}]}`
+	hiddenEvalMalformed = `{"commands":[{"name":"test","run":"go test ./..."}`
+)
+
+// "Loading ... must fail when two commands have the same name ... the error
+// must include the command's name in double quotes"
+func TestHiddenEvalLoadRejectsDuplicateName(t *testing.T) {
+	dir := hiddenEvalWriteConfig(t, hiddenEvalDuplicate)
+	_, err := LoadProjectConfig(dir)
+	assert.ErrorContains(t, err, `"test"`)
+}
+
+// "when a command's name is empty or only whitespace"
+func TestHiddenEvalLoadRejectsMissingName(t *testing.T) {
+	for name, data := range map[string]string{
+		"empty":      `{"commands":[{"name":"test","run":"go test ./..."},{"name":"","run":"task lint"}]}`,
+		"absent":     `{"commands":[{"run":"task lint"}]}`,
+		"whitespace": `{"commands":[{"name":"   ","run":"task lint"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadProjectConfig(hiddenEvalWriteConfig(t, data))
+			assert.Assert(t, err != nil, "a command without a name must be rejected")
+		})
+	}
+}
+
+// "when a command's timeout is negative ... the error must include the
+// command's name in double quotes"
+func TestHiddenEvalLoadRejectsNegativeTimeout(t *testing.T) {
+	dir := hiddenEvalWriteConfig(t, `{"commands":[{"name":"test","run":"go test ./..."},{"name":"lint","run":"task lint","timeout":-1}]}`)
+	_, err := LoadProjectConfig(dir)
+	assert.ErrorContains(t, err, `"lint"`)
+}
+
+// "compared exactly, so test and Test are different commands" and "Configs
+// that are valid today must keep loading unchanged."
+func TestHiddenEvalLoadAcceptsDistinctNames(t *testing.T) {
+	dir := hiddenEvalWriteConfig(t, `{"commands":[{"name":"test","run":"go test ./...","timeout":0},{"name":"Test","run":"task test","timeout":60},{"name":"lint","run":"task lint"}]}`)
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(cfg.Commands), 3)
+	assert.Equal(t, cfg.Commands[0].Name, "test")
+	assert.Equal(t, cfg.Commands[0].Run, "go test ./...")
+	assert.Equal(t, cfg.Commands[1].Name, "Test")
+	assert.Equal(t, cfg.Commands[1].Timeout, 60)
+	assert.Equal(t, cfg.Commands[2].Name, "lint")
+}
+
+// "Loading or saving ... must fail" and "Saving an invalid config must not
+// write the file."
+func TestHiddenEvalSaveRejectsInvalidCommands(t *testing.T) {
+	cases := map[string]*ProjectConfig{
+		"duplicate": {Commands: []Command{{Name: "test", Run: "a"}, {Name: "test", Run: "b"}}},
+		"empty":     {Commands: []Command{{Name: "test", Run: "a"}, {Name: "", Run: "b"}}},
+		"blank":     {Commands: []Command{{Name: " \t", Run: "a"}}},
+		"timeout":   {Commands: []Command{{Name: "test", Run: "a", Timeout: -30}}},
+	}
+	for name, cfg := range cases {
+		t.Run(name+" with no file", func(t *testing.T) {
+			dir := t.TempDir()
+			assert.Assert(t, SaveProjectConfig(dir, cfg) != nil)
+			_, err := os.Stat(hiddenEvalConfigPath(dir))
+			assert.Assert(t, errors.Is(err, os.ErrNotExist), "config.json was written: %v", err)
+		})
+		t.Run(name+" over a valid file", func(t *testing.T) {
+			original := `{"commands":[{"name":"lint","run":"task lint"}]}`
+			dir := hiddenEvalWriteConfig(t, original)
+			assert.Assert(t, SaveProjectConfig(dir, cfg) != nil)
+			assert.Equal(t, hiddenEvalRead(t, dir), original)
+		})
+	}
+	t.Run("duplicate error names the command", func(t *testing.T) {
+		assert.ErrorContains(t, SaveProjectConfig(t.TempDir(), cases["duplicate"]), `"test"`)
+	})
+	t.Run("negative timeout error names the command", func(t *testing.T) {
+		assert.ErrorContains(t, SaveProjectConfig(t.TempDir(), cases["timeout"]), `"test"`)
+	})
+}
+
+// "When .chunk/config.json exists but is malformed or invalid, it must return
+// an error and leave the file byte-for-byte unchanged."
+func TestHiddenEvalSaveCommandLeavesUnloadableConfig(t *testing.T) {
+	for name, data := range map[string]string{
+		"malformed":        hiddenEvalMalformed,
+		"duplicate":        hiddenEvalDuplicate,
+		"negative timeout": `{"commands":[{"name":"test","run":"go test ./...","timeout":-1}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := hiddenEvalWriteConfig(t, data)
+			assert.Assert(t, SaveCommand(dir, "fmt", "gofmt -l .") != nil)
+			assert.Equal(t, hiddenEvalRead(t, dir), data)
+		})
+	}
+}
+
+// "When there is no config file it still creates one."
+func TestHiddenEvalSaveCommandCreatesConfig(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, SaveCommand(dir, "test", "go test ./..."))
+	cfg, err := LoadProjectConfig(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(cfg.Commands), 1)
+	assert.Equal(t, cfg.Commands[0].Name, "test")
+	assert.Equal(t, cfg.Commands[0].Run, "go test ./...")
+}

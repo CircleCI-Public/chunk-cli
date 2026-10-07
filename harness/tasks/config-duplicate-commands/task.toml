@@ -1,0 +1,39 @@
+description = "Reject duplicate, unnamed and negative-timeout commands in .chunk/config.json, and stop `validate --list` and `SaveCommand` from treating an unloadable config as empty"
+tags = ["go", "cli", "config", "small"]
+implementer_context = ""
+
+[repo]
+url = "https://github.com/CircleCI-Public/chunk-cli.git"
+ref = "main"
+revision = "d48d143f02be1cba5992bcabfecb85cf0e5fe913"
+recorded_utc = "2026-10-06T20:11:18Z"
+
+[good_looks_like]
+requirements = "LoadProjectConfig and SaveProjectConfig reject duplicate names (exact match), empty or whitespace names and negative timeouts, naming the command where it has one; valid configs load as before. `validate --list` (text and JSON) fails with nothing on stdout when config.json exists but does not load, and is unchanged with no file. SaveCommand refuses to overwrite an existing unloadable config and still creates a missing one. No unrelated behavior changes."
+validation = "Every configured validation command passes."
+implementation = "The checks live in the config's single validation path, so load and save agree and every caller benefits. Missing-file is distinguished from unloadable with errors.Is(err, os.ErrNotExist), not by treating every error alike. No independently confirmed high or medium defect remains; tests cover load, save, SaveCommand and the --list boundary."
+convergence = "The factory result passes within the configured attempt budget; exhausted or stuck runs cannot win."
+reviews = "High precision and coverage for actionable high or medium defects (e.g. SaveCommand still clobbering an unloadable config, --list still swallowing load errors or printing JSON before failing, a whitespace-only name accepted, duplicates checked case-insensitively, a missing config now treated as an error), with little duplication or scope drift."
+efficiency = "Prefer lower wall time and reviewer-seconds only after quality is comparable."
+
+# Load/save rejection, SaveCommand preservation, and `chunk validate`
+# --list/--dry-run/--save behaviour on invalid, malformed and missing configs.
+[[verifier.checks]]
+name = "hidden"
+kind = "hidden"
+command = "go test -race -count=1 ./internal/config ./internal/cmd -run '^TestHiddenEval'"
+timeout = 600
+
+# Unit tests only. acceptance/ has wall-clock timeouts that fail when several
+# trials verify at once, which would score agents on machine load.
+[[verifier.checks]]
+name = "suite-test"
+kind = "suite"
+command = "go test -race -count=1 -skip '^TestHiddenEval' $(go list ./... | grep -v /acceptance)"
+timeout = 1200
+
+[[verifier.checks]]
+name = "suite-lint"
+kind = "suite"
+command = "go tool golangci-lint run --allow-parallel-runners ./..."
+timeout = 600

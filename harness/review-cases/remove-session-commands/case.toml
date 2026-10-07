@@ -1,0 +1,48 @@
+# Seeded defects in the remove-session-commands reference solution. Each mutant
+# is an exact find/replace on the solution-applied tree; `defect` is what a
+# matching review finding has to identify. None is caught by the hidden checks.
+task = "remove-session-commands"
+
+[[mutants]]
+name = "docs-wrapped-session-resume"
+file = "docs/ARCHITECTURE.md"
+defect = "docs/ARCHITECTURE.md still tells the reader to continue a paused session with `chunk session resume <id>` (the mention is wrapped across two lines), a command that no longer exists; the request says no mention of `chunk session` may remain in docs/."
+find = """
+  `pause_reason`, `paused_paths`, stage `review_loop: paused`). `POST
+  /session/{id}/resume` (the dashboard's `c`) adopts the files as they are now and runs the
+"""
+replace = """
+  `pause_reason`, `paused_paths`, stage `review_loop: paused`). `chunk
+  session resume <id>` (or the dashboard's `c`) adopts the files as they are now and runs the
+"""
+
+[[mutants]]
+name = "watchd-restore-client-deleted"
+file = "internal/watchd/session_client.go"
+defect = "The change deletes watchd.RestoreSession, the client for POST /session/{id}/restore, because only the removed `session restore` command called it; the request says to leave the watch daemon's session API in internal/watchd alone, and other clients lose the way to undo a session's changes."
+find = """
+// RestoreSession undoes everything a session changed in the working tree.
+func RestoreSession(id string, force bool) (RestoreResult, error) {
+	var res RestoreResult
+	if err := sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/restore", RestoreRequest{Force: force}, &res); err != nil {
+		return RestoreResult{}, err
+	}
+	return res, nil
+}
+
+"""
+replace = ""
+
+[[mutants]]
+name = "interrupt-cancels-repeatedly"
+file = "internal/cmd/factoryfollow.go"
+defect = "After the first Ctrl-C, followSession keeps the cancelled context, so every later loop iteration takes the ctx.Done branch without waiting for the ticker: it hammers the daemon with FetchSession and CancelSession calls in a tight loop and prints \"Stopping <id>...\" over and over until the run winds down, unlike before."
+find = """
+			streams.ErrPrintf("Stopping %s...\\n", id)
+			// Only one interrupt: from here the session is followed until it
+			// ends, which is when its work has been put away.
+			ctx = context.WithoutCancel(ctx)
+"""
+replace = """
+			streams.ErrPrintf("Stopping %s...\\n", id)
+"""
