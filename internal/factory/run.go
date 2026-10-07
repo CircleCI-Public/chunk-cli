@@ -34,7 +34,8 @@ type RunOptions struct {
 	// Continue, when set, picks up the work of an earlier run instead of
 	// starting from the developer's files.
 	Continue *Continuation
-	// Attempts is the most rounds to check.
+	// Attempts is the most rounds to check. A continued run that checks the
+	// work first adds a round for that; see Continuation.Rounds.
 	Attempts int
 	// Reviewers is how many reviewer sidecars to run; see ReviewerCount.
 	Reviewers int
@@ -118,6 +119,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	request := opts.Prompt
 	if cont != nil {
 		opts.Prompt, request = cont.prompt(), cont.request()
+		opts.Attempts = cont.Rounds(opts.Attempts)
 	}
 	if opts.Verbose && opts.Log == "" {
 		opts.Log = LogDefault
@@ -134,7 +136,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	defer func() { lg.close(rep, err) }()
 	opts = lg.wrap(opts)
 	status := opts.Status
-	lg.start(rep.RunID, opts)
+	lg.start(rep.RunID, opts, request)
 
 	dataDir, err := config.ProjectDataDir(opts.Root)
 	if err != nil {
@@ -261,7 +263,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		if err := steps.Relay.Push(ctx, []*sidecar.PoolEntry{impl}); err != nil {
 			return rep, fmt.Errorf("bring the work of run %s to the implementer: %w", cont.From.RunID, err)
 		}
-		loop.CheckFirst, loop.Attempts = cont.checkFirst(), cont.Rounds(opts.Attempts)
+		loop.CheckFirst = cont.checkFirst()
 	}
 
 	// The record is kept once there is work to continue, and again with how
