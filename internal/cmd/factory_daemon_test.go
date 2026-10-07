@@ -24,7 +24,7 @@ import (
 // sidecars: they make the run's worktree for real, commit a file to it, and
 // end with result.
 func fakeFactoryConfig(t *testing.T, result factory.Result) watchd.ReviewConfig {
-	cfg := fakeSessionConfig("fine")
+	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1")
 		if err != nil {
@@ -195,7 +195,7 @@ func TestFactoryJSONWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 	factoryProject(t)
 	started := make(chan struct{})
-	cfg := fakeSessionConfig("fine")
+	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1")
 		if err != nil {

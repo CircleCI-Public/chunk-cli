@@ -14,11 +14,6 @@ import (
 // are evicted, so a live session is never lost.
 const MaxSessionsPerProject = 10
 
-// maxReviewOutput caps the prose kept for one review. Claude's own output is
-// already bounded by the review package; this is the daemon's separate bound on
-// how much of it stays in memory per finished round.
-const maxReviewOutput = 128 * 1024
-
 // sessionEntry is one session and the machinery that owns it.
 type sessionEntry struct {
 	mu      sync.Mutex
@@ -29,24 +24,15 @@ type sessionEntry struct {
 	// it is reported as cancelled rather than as whatever error the stop made.
 	cancelled bool
 	done      chan struct{}
-	// resume wakes a paused session. Buffered so a resume that arrives a moment
-	// before the session starts waiting is not lost.
-	resume chan struct{}
-	// leftTree is the user's working tree as the session last left it, after the
-	// most recent fix; loopNote is why the review loop ended, and loopFailed
-	// that it ran to its end without its work passing. All are internal: the
-	// record shows their consequences.
-	leftTree   string
+	// loopNote is why the loop ended, and loopFailed that it ran to its end
+	// without its work passing. Both are internal: the record shows their
+	// consequences.
 	loopNote   string
 	loopFailed bool
-	// sidecarReview maps a sandbox to the review currently running on it, so a
-	// command submitted there can be attributed to its review.
-	sidecarReview map[string]string
 }
 
 func cloneSession(s Session) Session {
 	out := s
-	out.PausedPaths = slices.Clone(s.PausedPaths)
 	out.Stages = slices.Clone(s.Stages)
 	out.Rounds = make([]Round, len(s.Rounds))
 	for i, r := range s.Rounds {
@@ -61,23 +47,12 @@ func cloneSession(s Session) Session {
 			impl := *r.Implement
 			out.Rounds[i].Implement = &impl
 		}
-		if r.Fix != nil {
-			fix := *r.Fix
-			fix.Files = slices.Clone(r.Fix.Files)
-			fix.FindingIDs = slices.Clone(r.Fix.FindingIDs)
-			out.Rounds[i].Fix = &fix
-		}
 	}
 	if s.Factory != nil {
 		f := *s.Factory
 		f.KeptSidecars = slices.Clone(s.Factory.KeptSidecars)
 		f.Progress = s.Factory.Progress.clone()
 		out.Factory = &f
-	}
-	if s.Restore != nil {
-		rp := *s.Restore
-		rp.Paths = slices.Clone(s.Restore.Paths)
-		out.Restore = &rp
 	}
 	if s.EndedAt != nil {
 		ended := *s.EndedAt
@@ -123,8 +98,8 @@ func (e *sessionEntry) stageLocked(id StageID) *Stage {
 }
 
 // sessionStore holds every session. Like the task store it lives in memory only:
-// a daemon restart forgets sessions. What a session changed in the user's files
-// is not forgotten: the restore point is a git ref.
+// a daemon restart forgets sessions. A factory run's work is not forgotten with
+// it: it is committed on the run's branch.
 type sessionStore struct {
 	parent context.Context
 
@@ -145,8 +120,7 @@ func newSessionStore(parent context.Context) *sessionStore {
 }
 
 // add creates a running entry for s. If the project already has a session that
-// has not ended — running, or paused and waiting — it creates nothing and says
-// why. One at a time per project: two sessions would fight over the same files.
+// has not ended it creates nothing and says why. One at a time per project.
 func (s *sessionStore) add(sess Session) (*sessionEntry, context.Context, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,15 +131,13 @@ func (s *sessionStore) add(sess Session) (*sessionEntry, context.Context, string
 	}
 	sess.ID = uuid.NewString()
 	sess.State = SessionRunning
-	sess.Stages = newStages(sess.loopStage())
+	sess.Stages = newStages()
 	sess.StartedAt = time.Now()
 	ctx, cancel := context.WithCancel(s.parent)
 	entry := &sessionEntry{
-		s:             sess,
-		cancel:        cancel,
-		done:          make(chan struct{}),
-		resume:        make(chan struct{}, 1),
-		sidecarReview: make(map[string]string),
+		s:      sess,
+		cancel: cancel,
+		done:   make(chan struct{}),
 	}
 	s.sessions[sess.ID] = entry
 	s.byProject[sess.ProjectRoot] = append(s.byProject[sess.ProjectRoot], sess.ID)
@@ -259,17 +231,4 @@ func (s *sessionStore) stopAll() {
 	for _, e := range entries {
 		<-e.done
 	}
-}
-
-// truncateOutput keeps at most maxReviewOutput bytes of a review's prose,
-// cutting on a rune boundary and saying so.
-func truncateOutput(s string) string {
-	if len(s) <= maxReviewOutput {
-		return s
-	}
-	cut := maxReviewOutput
-	for cut > 0 && (s[cut]&0xC0) == 0x80 {
-		cut--
-	}
-	return s[:cut] + "\n[review output truncated]"
 }

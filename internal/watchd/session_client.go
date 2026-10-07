@@ -74,16 +74,6 @@ func sessionCall(method, path string, in, out any) error {
 	return nil
 }
 
-// StartSession asks the daemon to start a session and returns its ID without
-// waiting for it.
-func StartSession(req SessionRequest) (string, error) {
-	var resp SessionStartResponse
-	if err := sessionCall(http.MethodPost, "/session", req, &resp); err != nil {
-		return "", err
-	}
-	return resp.ID, nil
-}
-
 // StartFactory asks the daemon to start a factory session and returns its ID
 // without waiting for it. It is followed and cancelled like any other session.
 func StartFactory(req FactoryRequest) (string, error) {
@@ -115,20 +105,6 @@ func ListSessions(root string) ([]Session, error) {
 		return nil, err
 	}
 	return list.Sessions, nil
-}
-
-// ResumeSession continues a paused session with the files as they are now.
-func ResumeSession(id string) error {
-	return sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/resume", nil, nil)
-}
-
-// RestoreSession undoes everything a session changed in the working tree.
-func RestoreSession(id string, force bool) (RestoreResult, error) {
-	var res RestoreResult
-	if err := sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/restore", RestoreRequest{Force: force}, &res); err != nil {
-		return RestoreResult{}, err
-	}
-	return res, nil
 }
 
 // CancelSession stops a session. It is the only thing that does: a viewer that

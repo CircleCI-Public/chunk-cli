@@ -8,39 +8,31 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
-// MaxRounds is how many review-and-fix rounds one session runs at most.
-const MaxRounds = 3
-
 // SessionState is where a whole session stands.
 type SessionState string
 
 // Session states.
 const (
-	SessionRunning SessionState = "running"
-	// SessionPaused means the session stopped on its own and is waiting for a
-	// person: the files changed underneath it. PauseReason says what.
-	SessionPaused    SessionState = "paused"
+	SessionRunning   SessionState = "running"
 	SessionDone      SessionState = "done"
 	SessionFailed    SessionState = "failed"
 	SessionCancelled SessionState = "cancelled"
 )
 
-// Finished reports whether the session has ended for good. A paused session has
-// not: it is waiting.
+// Finished reports whether the session has ended for good.
 func (s SessionState) Finished() bool {
-	return s != SessionRunning && s != SessionPaused
+	return s != SessionRunning
 }
 
 // StageID names one stage of the whole pre-PR flow.
 type StageID string
 
-// The stages, in order. Only the review loop is built; the rest are on the
+// The stages, in order. Only the factory loop is built; the rest are on the
 // record from the start so the dashboard can show where the flow is going, and
 // so building one is filling in its Stage and not changing the record's shape.
 const (
-	StageReviewLoop StageID = "review_loop"
-	// StageFactoryLoop is a factory run's loop, which takes the review loop's
-	// place: implement, then review and validate until the checks pass.
+	// StageFactoryLoop is a factory run's loop: implement, then review and
+	// validate until the checks pass.
 	StageFactoryLoop StageID = "factory_loop"
 	StageRebase      StageID = "rebase"
 	StageCI          StageID = "ci"
@@ -58,7 +50,6 @@ const (
 	StageNotBuilt StageState = "not_built"
 	StagePending  StageState = "pending"
 	StageRunning  StageState = "running"
-	StagePaused   StageState = "paused"
 	StageDone     StageState = "done"
 	StageFailed   StageState = "failed"
 	StageSkipped  StageState = "skipped"
@@ -77,34 +68,28 @@ type SessionKind string
 
 // Session kinds.
 const (
-	// KindReview reviews the user's files and applies the fixes to them. A
-	// session with no kind is one of these.
-	KindReview SessionKind = "review"
 	// KindFactory is a factory run: an implementer works in a worktree of its
 	// own, and reviews and validation check the work until it passes.
 	KindFactory SessionKind = "factory"
 )
 
-// RoundState is where one review-and-fix round stands.
+// RoundState is where one round stands.
 type RoundState string
 
 // Round states.
 const (
+	// RoundReviewing is a round that has begun and not yet said which half it
+	// is in.
 	RoundReviewing RoundState = "reviewing"
 	// RoundImplementing and RoundChecking are a factory round's halves: the
 	// implementer's turn, then the reviews and validation commands.
 	RoundImplementing RoundState = "implementing"
 	RoundChecking     RoundState = "checking"
-	RoundFixing       RoundState = "fixing"
-	RoundApplying     RoundState = "applying"
 	RoundDone         RoundState = "done"
 	RoundFailed       RoundState = "failed"
-	// RoundSuperseded marks a round abandoned because the files changed under it;
-	// the round is run again against the new files.
-	RoundSuperseded RoundState = "superseded"
 )
 
-// FixState is where the fix half of a round stands.
+// FixState is where a factory round's implementer turn stands.
 type FixState string
 
 // Fix states.
@@ -115,24 +100,6 @@ const (
 	FixEmpty  FixState = "empty"
 	FixFailed FixState = "failed"
 )
-
-// FileChange is one file a round's fixes changed in the working tree.
-type FileChange struct {
-	Path       string `json:"path"`
-	Insertions int    `json:"insertions"`
-	Deletions  int    `json:"deletions"`
-}
-
-// RoundFix is what a round's fixes did to the user's files.
-type RoundFix struct {
-	State      FixState     `json:"state"`
-	Files      []FileChange `json:"files,omitempty"`
-	Insertions int          `json:"insertions,omitempty"`
-	Deletions  int          `json:"deletions,omitempty"`
-	// FindingIDs are the findings the agent was asked to fix.
-	FindingIDs []string `json:"finding_ids,omitempty"`
-	Error      string   `json:"error,omitempty"`
-}
 
 // RoundImplement is a factory round's implementer turn.
 type RoundImplement struct {
@@ -320,16 +287,15 @@ func (s PromptRunState) Progress() review.PromptState {
 	return review.StateQueued
 }
 
-// Round is one pass of reviewing the work and fixing what the reviews found.
+// Round is one pass of implementing the work and checking it.
 type Round struct {
 	Number  int            `json:"number"`
 	State   RoundState     `json:"state"`
 	Reviews []ReviewPrompt `json:"reviews"`
 	// Findings counts every finding the round's reviews reported; Worth counts
 	// the ones worth changing (severity high or medium).
-	Findings int       `json:"findings"`
-	Worth    int       `json:"worth"`
-	Fix      *RoundFix `json:"fix,omitempty"`
+	Findings int `json:"findings"`
+	Worth    int `json:"worth"`
 	// Implement and Checks are a factory round's implementer turn and
 	// validation commands. Its reviews are in Reviews.
 	Implement *RoundImplement `json:"implement,omitempty"`
@@ -340,40 +306,22 @@ type Round struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// RestorePoint is the saved state a session can be undone to.
-type RestorePoint struct {
-	// Ref is the git ref that holds the snapshot, so it survives garbage
-	// collection and a daemon restart.
-	Ref     string    `json:"ref"`
-	HeadSHA string    `json:"head_sha"`
-	SavedAt time.Time `json:"saved_at"`
-	// Paths are the files the session's fixes changed: what a restore puts back.
-	Paths    []string `json:"paths,omitempty"`
-	Restored bool     `json:"restored,omitempty"`
-}
-
-// Session is the record of one pre-PR session: the review loop, and the stages
-// that will follow it. It holds state only; text is in SessionDetail.
+// Session is the record of one pre-PR session: a factory run's loop, and the
+// stages that will follow it. It holds state only; text is in SessionDetail.
 type Session struct {
 	ID string `json:"id"`
-	// Kind is what the session runs; empty means KindReview.
+	// Kind is what the session runs.
 	Kind        SessionKind `json:"kind,omitempty"`
 	ProjectRoot string      `json:"project_root"`
 	Branch      string      `json:"branch,omitempty"`
 	HeadSHA     string      `json:"head_sha,omitempty"`
 
 	State SessionState `json:"state"`
-	// PauseReason says why a paused session is waiting, and PausedPaths which
-	// files changed underneath it.
-	PauseReason string   `json:"pause_reason,omitempty"`
-	PausedPaths []string `json:"paused_paths,omitempty"`
-	Error       string   `json:"error,omitempty"`
+	Error string       `json:"error,omitempty"`
 
 	// Stages is always the full flow, in order.
 	Stages []Stage `json:"stages"`
 	Rounds []Round `json:"rounds"`
-	// Restore is nil until the first fix is about to change the user's files.
-	Restore *RestorePoint `json:"restore,omitempty"`
 	// Factory is set on a factory session.
 	Factory *FactoryRun `json:"factory,omitempty"`
 
@@ -384,19 +332,11 @@ type Session struct {
 // IsFactory reports whether the session is a factory run.
 func (s Session) IsFactory() bool { return s.Kind == KindFactory }
 
-// loopStage is the stage the session's loop is.
-func (s Session) loopStage() StageID {
-	if s.IsFactory() {
-		return StageFactoryLoop
-	}
-	return StageReviewLoop
-}
-
 // newStages returns the full flow for a session that is starting: its loop
 // running and every later stage not built.
-func newStages(loop StageID) []Stage {
+func newStages() []Stage {
 	return []Stage{
-		{ID: loop, State: StageRunning},
+		{ID: StageFactoryLoop, State: StageRunning},
 		{ID: StageRebase, State: StageNotBuilt},
 		{ID: StageCI, State: StageNotBuilt},
 		{ID: StageApproval, State: StageNotBuilt},
@@ -404,20 +344,16 @@ func newStages(loop StageID) []Stage {
 	}
 }
 
-// ReviewResult is one review's full output.
+// ReviewResult is what one review found.
 type ReviewResult struct {
-	Prompt    string `json:"prompt"`
-	SidecarID string `json:"sidecar_id,omitempty"`
-	// Output is Claude's prose, capped at maxReviewOutput.
-	Output     string `json:"output,omitempty"`
+	Prompt     string `json:"prompt"`
+	SidecarID  string `json:"sidecar_id,omitempty"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	// Findings are the structured findings the review gave, each with an ID
 	// unique within the round. Empty when it gave none or failed; Error tells
 	// the two apart.
 	Findings []review.Finding `json:"findings,omitempty"`
-	// FindingsDropped counts findings that were unusable or over the cap.
-	FindingsDropped int `json:"findings_dropped,omitempty"`
 	// Status is how a factory review came out as a check: "passed", "failed"
 	// or "errored", as factory.Status.
 	Status string `json:"status,omitempty"`
@@ -433,23 +369,6 @@ type RoundDetail struct {
 type SessionDetail struct {
 	Session
 	Details []RoundDetail `json:"details,omitempty"`
-}
-
-// SessionRequest starts a session.
-type SessionRequest struct {
-	// ProjectRoot is a project the daemon tracks. Required.
-	ProjectRoot string `json:"project_root"`
-	// PromptsDir is a directory of review prompts relative to the project root;
-	// empty means .chunk/reviews. Absolute paths and paths that leave the
-	// project are refused.
-	PromptsDir  string `json:"prompts_dir,omitempty"`
-	Parallelism int    `json:"parallelism,omitempty"`
-	Model       string `json:"model,omitempty"`
-	// TimeoutSeconds bounds each review; zero means review.DefaultTimeout.
-	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
-	// MaxRounds lowers the number of rounds; zero or more than MaxRounds means
-	// MaxRounds.
-	MaxRounds int `json:"max_rounds,omitempty"`
 }
 
 // FactoryRequest starts a factory session.
@@ -488,20 +407,7 @@ type FactoryRequest struct {
 	Verbose bool   `json:"verbose,omitempty"`
 }
 
-// RestoreRequest asks to undo a session's changes.
-type RestoreRequest struct {
-	// Force restores even files that were edited after the session changed them,
-	// discarding those edits.
-	Force bool `json:"force,omitempty"`
-}
-
-// RestoreResult lists the files a restore put back (or removed, if the session
-// had created them).
-type RestoreResult struct {
-	Paths []string `json:"paths"`
-}
-
-// SessionStartResponse answers an accepted POST /session.
+// SessionStartResponse answers an accepted POST /factory.
 type SessionStartResponse struct {
 	ID string `json:"id"`
 }

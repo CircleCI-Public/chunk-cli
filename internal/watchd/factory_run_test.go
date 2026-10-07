@@ -234,19 +234,11 @@ func TestFactorySessionCanBeCancelled(t *testing.T) {
 	assert.Equal(t, waitForSessionEnd(t, d, sess.ID).State, SessionCancelled)
 }
 
-// One session at a time per project, whatever its kind.
-func TestFactorySessionsAndReviewSessionsTakeTurns(t *testing.T) {
+// One session at a time per project.
+func TestFactorySessionsTakeTurns(t *testing.T) {
 	s := newSessionStore(context.Background())
-	_, _, busy := s.add(Session{Kind: KindReview, ProjectRoot: "/p"})
+	_, _, busy := s.add(Session{Kind: KindFactory, ProjectRoot: "/p", Factory: &FactoryRun{}})
 	assert.Equal(t, busy, "")
-	_, _, busy = s.add(Session{Kind: KindFactory, ProjectRoot: "/p", Factory: &FactoryRun{}})
-	assert.Assert(t, busy != "", "a factory run started beside a review session")
-
-	s = newSessionStore(context.Background())
-	_, _, busy = s.add(Session{Kind: KindFactory, ProjectRoot: "/p", Factory: &FactoryRun{}})
-	assert.Equal(t, busy, "")
-	_, _, busy = s.add(Session{Kind: KindReview, ProjectRoot: "/p"})
-	assert.Assert(t, busy != "", "a review session started beside a factory run")
 	_, _, busy = s.add(Session{Kind: KindFactory, ProjectRoot: "/p", Factory: &FactoryRun{}})
 	assert.Assert(t, busy != "", "two factory runs ran at once")
 }
