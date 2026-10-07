@@ -94,8 +94,6 @@ func newWatchStyles(hasDark bool) watchStyles {
 
 // ProjectEntry holds everything the watch model needs for one project.
 type ProjectEntry struct {
-	Log         *eventlog.Log
-	DataDir     string
 	ProjectRoot string
 }
 
@@ -144,7 +142,6 @@ type dataMsg struct {
 	projects []ProjectEntry
 	sidecars []sidecarInfo
 	events   [][]eventlog.Event // per-project; index matches Model.projects
-	offsets  []int64
 	branches []string
 	headRefs []string
 	commands [][]watchd.CommandState
@@ -159,7 +156,6 @@ type dataMsg struct {
 type Model struct {
 	loadFn   func(Model) tea.Msg
 	projects []ProjectEntry
-	offsets  []int64
 	branches []string // current branch per project, refreshed each poll
 	headRefs []string // HEAD SHA per project, refreshed each poll
 
@@ -247,7 +243,6 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 	return Model{
 		loadFn:        loadFromDaemon,
 		projects:      projects,
-		offsets:       make([]int64, len(projects)),
 		branches:      make([]string, len(projects)),
 		headRefs:      make([]string, len(projects)),
 		toggledInvocs: make(map[time.Time]bool),
@@ -402,7 +397,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.projects = msg.projects
 		m.sidecars = msg.sidecars
 		m.events = msg.events
-		m.offsets = msg.offsets
 		m.branches = msg.branches
 		m.headRefs = msg.headRefs
 		m.commands = msg.commands

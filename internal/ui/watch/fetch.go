@@ -32,22 +32,12 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 	projects := make([]ProjectEntry, 0, n)
 	branches := make([]string, 0, n)
 	headRefs := make([]string, 0, n)
-	offsets := make([]int64, n) // daemon owns offsets; TUI keeps zeros
 	allEventsByProject := make([][]eventlog.Event, 0, n)
 	allCommandsByProject := make([][]watchd.CommandState, 0, n)
 	var allSidecars []sidecarInfo
 
 	for i, p := range snap.Projects {
-		// Preserve the existing ProjectEntry when available so the Log handle
-		// stays open (used by tests and future local fallback paths).
-		entry := ProjectEntry{ProjectRoot: p.Root}
-		for _, e := range m.projects {
-			if e.ProjectRoot == p.Root {
-				entry = e
-				break
-			}
-		}
-		projects = append(projects, entry)
+		projects = append(projects, ProjectEntry{ProjectRoot: p.Root})
 		branches = append(branches, p.Branch)
 		headRefs = append(headRefs, p.HeadRef)
 		allEventsByProject = append(allEventsByProject, p.Events)
@@ -82,7 +72,6 @@ func convertSnapshot(snap watchd.Snapshot, m Model) dataMsg {
 		projects: projects,
 		sidecars: allSidecars,
 		events:   allEventsByProject,
-		offsets:  offsets,
 		branches: branches,
 		headRefs: headRefs,
 		commands: allCommandsByProject,
