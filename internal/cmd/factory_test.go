@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,12 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // TestFactoryChecksOnlyToleratesMissingDefaultReviews guards against a
@@ -110,12 +113,12 @@ func TestFactoryArgs(t *testing.T) {
 
 func TestKeepWorkHint(t *testing.T) {
 	// A branch that starts at the developer's HEAD merges.
-	clean := factory.Worktree{Branch: "chunk/factory/run-1", Baseline: "abc", Head: "abc"}
+	clean := &watchd.FactoryRun{Branch: "chunk/factory/run-1", Baseline: "abc", Head: "abc"}
 	assert.Equal(t, keepWorkHint(clean), "Merge it with: git merge chunk/factory/run-1")
 
 	// One that starts from their uncommitted work would collide with that work
 	// in their checkout, so only the run's own changes are applied.
-	dirty := factory.Worktree{Branch: "chunk/factory/run-1", Baseline: "def", Head: "abc"}
+	dirty := &watchd.FactoryRun{Branch: "chunk/factory/run-1", Baseline: "def", Head: "abc"}
 	assert.Equal(t, keepWorkHint(dirty), "Apply it with: git diff --binary def chunk/factory/run-1 | git apply")
 }
 
@@ -233,4 +236,20 @@ func TestLogTailKeepsSidecarOutputOffTheTerminal(t *testing.T) {
 	// The escape bytes and the carriage return are gone; text, tabs, newlines
 	// and non-ASCII letters stay.
 	assert.Equal(t, out.String(), "ok\tpkg ]0;title[31mFAIL[0m\n\u00e9\n")
+}
+
+func TestPrintFactoryLeftoversPointsOnlyAtAKeptWorktree(t *testing.T) {
+	collect := func(f *watchd.FactoryRun) []string {
+		var said []string
+		status := func(_ iostream.Level, msg string) { said = append(said, msg) }
+		printFactoryLeftovers(f, status, iostream.Streams{Out: io.Discard, Err: io.Discard})
+		return said
+	}
+
+	kept := collect(&watchd.FactoryRun{Worktree: "/wt/run-1"})
+	assert.DeepEqual(t, kept, []string{"The work was not committed. It is in the worktree /wt/run-1"})
+
+	// A run that failed before the implementer started had its empty worktree
+	// removed; pointing at it would send the reader to a path that is gone.
+	assert.Check(t, cmp.Len(collect(&watchd.FactoryRun{Worktree: "/wt/run-1", WorktreeRemoved: true}), 0))
 }

@@ -322,3 +322,20 @@ func TestFeedKeepsTheLatestLinesAndCountsThemAll(t *testing.T) {
 	assert.Equal(t, len(f.Since(0)), maxFeedLines)
 	assert.Equal(t, len(f.Since(f.Total+1)), 0)
 }
+
+// The session API spells out the factory's results and check statuses so a
+// client need not import the factory to read them. They must stay the same
+// strings, since the daemon passes the factory's values through as they are.
+func TestAPIResultsMatchTheFactorys(t *testing.T) {
+	for _, c := range [][2]string{
+		{watchd.ResultPassed, string(factory.ResultPassed)},
+		{watchd.ResultExhausted, string(factory.ResultExhausted)},
+		{watchd.ResultStuck, string(factory.ResultStuck)},
+		{watchd.ResultNoChange, string(factory.ResultNoChange)},
+		{watchd.CheckPassed, string(factory.StatusPassed)},
+		{watchd.CheckFailed, string(factory.StatusFailed)},
+		{watchd.CheckErrored, string(factory.StatusErrored)},
+	} {
+		assert.Equal(t, c[0], c[1])
+	}
+}

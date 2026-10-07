@@ -47,8 +47,9 @@ func fakeFactoryConfig(t *testing.T, result factory.Result) server.ReviewConfig 
 		}
 		opts.OnEvent(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: checks})
 		_, err = wt.Commit(ctx, "chunk factory: add a flag")
+		stat, statErr := wt.Stat(ctx)
 		return factory.Report{
-			RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil,
+			RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil, Stat: stat, StatErr: statErr,
 			Outcome: factory.Outcome{Result: result, Rounds: 1, Checks: checks},
 		}, nil
 	}
@@ -211,7 +212,8 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 		close(started)
 		<-ctx.Done()
 		_, err = wt.Commit(context.WithoutCancel(ctx), "chunk factory: add a flag")
-		return factory.Report{RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil}, ctx.Err()
+		stat, statErr := wt.Stat(context.WithoutCancel(ctx))
+		return factory.Report{RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil, Stat: stat, StatErr: statErr}, ctx.Err()
 	}
 	startSessionDaemon(t, cfg)
 

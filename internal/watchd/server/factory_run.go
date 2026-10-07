@@ -351,6 +351,11 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	defer e.mu.Unlock()
 	f := e.s.Factory
 	f.Committed = rep.Committed
+	f.Stat = rep.Stat
+	if rep.StatErr != nil {
+		f.StatError = rep.StatErr.Error()
+	}
+	f.WorktreeRemoved = rep.WorktreeRemoved
 	f.KeptSidecars = rep.KeptSidecars
 	f.Log = rep.Log
 	if rep.Started {

@@ -145,7 +145,7 @@ func (f Feed) Since(seen int) []FeedLine {
 // RoundCheck is one validation command a factory round ran.
 type RoundCheck struct {
 	Name string `json:"name"`
-	// Status is "passed", "failed" or "errored", as factory.Status.
+	// Status is one of the Check values.
 	Status     string `json:"status"`
 	SidecarID  string `json:"sidecar_id,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
@@ -172,12 +172,19 @@ type FactoryRun struct {
 	Branch   string `json:"branch,omitempty"`
 	Baseline string `json:"baseline,omitempty"`
 	Head     string `json:"head,omitempty"`
-	// Result is why the loop stopped, as factory.Result, once it has, and
-	// Rounds how many rounds were checked, as factory.Outcome.Rounds.
+	// Result is why the loop stopped, one of the Result values, once it has,
+	// and Rounds how many rounds were checked.
 	Result string `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
 	// Committed reports whether the work was committed on Branch.
 	Committed bool `json:"committed,omitempty"`
+	// Stat is the committed work's diff stat against Baseline, "" when there
+	// were no changes. StatError says why it could not be worked out instead.
+	Stat      string `json:"stat,omitempty"`
+	StatError string `json:"stat_error,omitempty"`
+	// WorktreeRemoved reports that the run ended before the implementer started
+	// and its worktree, holding nothing, was removed.
+	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
 	// KeptSidecars are the sidecars left running at the user's request.
 	KeptSidecars []string `json:"kept_sidecars,omitempty"`
 	// Log is the path of the run's log, once the run has ended, if it kept one.
@@ -186,6 +193,29 @@ type FactoryRun struct {
 	// ready and synced, and anything that went wrong cleaning up.
 	Progress Feed `json:"progress,omitzero"`
 }
+
+// Why a factory run's loop stopped, as FactoryRun.Result.
+const (
+	// ResultPassed means every check passed.
+	ResultPassed = "passed"
+	// ResultExhausted means checks still failed when attempts ran out.
+	ResultExhausted = "exhausted"
+	// ResultStuck means the implementer stopped changing the code with checks
+	// still failing.
+	ResultStuck = "stuck"
+	// ResultNoChange means the implementer's work is empty.
+	ResultNoChange = "no_change"
+)
+
+// How a check came out, as ReviewResult.Status and RoundCheck.Status.
+const (
+	// CheckPassed means the check ran and found nothing to fix.
+	CheckPassed = "passed"
+	// CheckFailed means the check ran and found something to fix.
+	CheckFailed = "failed"
+	// CheckErrored means the check could not run.
+	CheckErrored = "errored"
+)
 
 // ReviewPrompt is one review's progress inside a round. It carries state only:
 // what the review said is fetched on demand through SessionDetail, the way
@@ -267,8 +297,8 @@ type ReviewResult struct {
 	// unique within the round. Empty when it gave none or failed; Error tells
 	// the two apart.
 	Findings []Finding `json:"findings,omitempty"`
-	// Status is how a factory review came out as a check: "passed", "failed"
-	// or "errored", as factory.Status.
+	// Status is how a factory review came out as a check, one of the Check
+	// values.
 	Status string `json:"status,omitempty"`
 }
 

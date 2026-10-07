@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -106,7 +105,7 @@ func printLostFactoryWork(streams iostream.Streams, f *watchd.FactoryRun) {
 		return
 	}
 	streams.ErrPrintf("The factory run was working in %s on %s; the daemon commits what it did there as it stops.\n  %s\n",
-		f.Worktree, f.Branch, keepWorkHint(factory.Worktree{Path: f.Worktree, Branch: f.Branch, Baseline: f.Baseline, Head: f.Head}))
+		f.Worktree, f.Branch, keepWorkHint(f))
 }
 
 // followSession polls a factory session, reporting what changes, until it
@@ -140,7 +139,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 			}
 			rep.report(detail)
 			if detail.State.Finished() {
-				return finishFactory(ctx, streams, detail, jsonOut)
+				return finishFactory(streams, detail, jsonOut)
 			}
 		}
 		select {
@@ -283,12 +282,12 @@ func roundResults(d watchd.SessionDetail, n int) []watchd.ReviewResult {
 // implementer is asked to fix next, or what is left when the run ends.
 func (r *sessionReporter) reportFindings(results []watchd.ReviewResult) {
 	for _, res := range results {
-		switch factory.Status(res.Status) {
-		case factory.StatusPassed:
+		switch res.Status {
+		case watchd.CheckPassed:
 			r.status(iostream.LevelDone, fmt.Sprintf("review %s: no findings worth changing", res.Prompt))
-		case factory.StatusFailed:
+		case watchd.CheckFailed:
 			r.status(iostream.LevelError, fmt.Sprintf("review %s: %d finding(s)", res.Prompt, len(res.Findings)))
-		case factory.StatusErrored:
+		case watchd.CheckErrored:
 			r.status(iostream.LevelWarn, fmt.Sprintf("review %s could not run: %s", res.Prompt, res.Error))
 			continue
 		}
@@ -304,10 +303,10 @@ const failedOutputLines = 20
 
 // reportCheck says how a factory round's validation command came out.
 func (r *sessionReporter) reportCheck(c watchd.RoundCheck) {
-	switch factory.Status(c.Status) {
-	case factory.StatusPassed:
+	switch c.Status {
+	case watchd.CheckPassed:
 		r.status(iostream.LevelDone, fmt.Sprintf("  %s passed in %s", c.Name, msDuration(c.DurationMS)))
-	case factory.StatusFailed:
+	case watchd.CheckFailed:
 		r.status(iostream.LevelError, fmt.Sprintf("  %s failed in %s", c.Name, msDuration(c.DurationMS)))
 		if c.Output == "" {
 			return
@@ -316,7 +315,7 @@ func (r *sessionReporter) reportCheck(c watchd.RoundCheck) {
 		for _, l := range lines[max(len(lines)-failedOutputLines, 0):] {
 			r.status(iostream.LevelInfo, "    "+l)
 		}
-	case factory.StatusErrored:
+	case watchd.CheckErrored:
 		r.status(iostream.LevelWarn, fmt.Sprintf("  %s could not run: %s", c.Name, c.Error))
 	}
 }
