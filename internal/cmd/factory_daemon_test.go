@@ -170,6 +170,7 @@ func TestFactoryWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
 	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("[high] flag.go:1 unused")), stderr)
+	assert.Assert(t, bytes.Contains([]byte(stderr), []byte("Keep working on it with: chunk factory --continue run-1")), stderr)
 }
 
 // --json prints the run's record, and the exit code still says whether its
@@ -292,5 +293,71 @@ func TestFactoryRejectsAttemptsBelowOne(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "--attempts must be at least 1.")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+}
+
+// writeFactoryRecord leaves the record a finished run keeps, as if run runID
+// had run in project.
+func writeFactoryRecord(t *testing.T, project, runID string) {
+	t.Helper()
+	dataDir, err := config.ProjectDataDir(project)
+	assert.NilError(t, err)
+	rec := factory.Record{RunID: runID, Prompt: "add a --verbose flag", Branch: "chunk/factory/" + runID, Result: factory.ResultExhausted, Rounds: 3}
+	b, err := json.Marshal(rec)
+	assert.NilError(t, err)
+	assert.NilError(t, os.MkdirAll(filepath.Join(dataDir, "factory"), 0o700))
+	assert.NilError(t, os.WriteFile(filepath.Join(dataDir, "factory", runID+".json"), b, 0o600))
+}
+
+// --continue reaches the run as the earlier run's record, with the prompt, if
+// any, as guidance, and the daemon's record says which run it continues.
+func TestFactoryContinueReachesTheRun(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		args         []string
+		wantGuidance string
+		wantAttempts int
+	}{
+		{name: "by ID, without guidance", args: []string{"--continue", "run-0"}, wantAttempts: 4},
+		{name: "by branch, with guidance", args: []string{"--continue", "chunk/factory/run-0", "you may update the test"},
+			wantGuidance: "you may update the test", wantAttempts: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := factoryProject(t)
+			writeFactoryRecord(t, project, "run-0")
+			cfg := fakeFactoryConfig(t, factory.ResultPassed)
+			got := make(chan factory.RunOptions, 1)
+			run := cfg.RunFactory
+			cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+				got <- opts
+				return run(ctx, opts)
+			}
+			startSessionDaemon(t, cfg)
+
+			stdout, stderr, err := runFactoryCmd(t, append(tc.args, "--json")...)
+			assert.NilError(t, err, stderr)
+
+			opts := <-got
+			assert.Assert(t, opts.Continue != nil, "the run was not told to continue")
+			assert.Equal(t, opts.Continue.From.RunID, "run-0")
+			assert.Equal(t, opts.Continue.From.Prompt, "add a --verbose flag")
+			assert.Equal(t, opts.Continue.Guidance, tc.wantGuidance)
+			var detail watchd.SessionDetail
+			assert.NilError(t, json.Unmarshal([]byte(stdout), &detail))
+			assert.Equal(t, detail.Factory.ContinuesRunID, "run-0")
+			assert.Equal(t, detail.Factory.Prompt, "add a --verbose flag")
+			assert.Equal(t, detail.Factory.Guidance, tc.wantGuidance)
+			assert.Equal(t, detail.Factory.Attempts, tc.wantAttempts)
+		})
+	}
+}
+
+func TestFactoryContinueRefusesAnUnknownRun(t *testing.T) {
+	factoryProject(t)
+
+	_, _, err := runFactoryCmd(t, "--continue", "nope")
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), "No factory run nope to continue in this project.")
 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 }

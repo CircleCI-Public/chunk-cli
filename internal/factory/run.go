@@ -28,8 +28,12 @@ type RunOptions struct {
 	// Root is the developer's repository root. The run's worktree is made from
 	// it, and the pool's state is kept in it, where the dashboard finds it.
 	Root string
-	// Prompt is what the implementer is asked to do.
+	// Prompt is what the implementer is asked to do. A continued run makes its
+	// own from Continue, and ignores this.
 	Prompt string
+	// Continue, when set, picks up the work of an earlier run instead of
+	// starting from the developer's files.
+	Continue *Continuation
 	// Attempts is the most rounds to check.
 	Attempts int
 	// Reviewers is how many reviewer sidecars to run; see ReviewerCount.
@@ -110,6 +114,11 @@ func ReviewerCount(requested int, prompts []review.Prompt) int {
 // started, so it is not lost with the sidecars.
 func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	rep.RunID = time.Now().UTC().Format("20060102-150405")
+	cont := opts.Continue
+	request := opts.Prompt
+	if cont != nil {
+		opts.Prompt, request = cont.prompt(), cont.request()
+	}
 	if opts.Verbose && opts.Log == "" {
 		opts.Log = LogDefault
 	}
@@ -131,21 +140,59 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if err != nil {
 		return rep, fmt.Errorf("find chunk's data directory for the project: %w", err)
 	}
-	wt, err := CreateWorktree(ctx, opts.Root, filepath.Join(dataDir, "factory", rep.RunID), rep.RunID)
-	if err != nil {
-		return rep, fmt.Errorf("create the run's worktree: %w", err)
+	var wt Worktree
+	if cont == nil {
+		wt, err = CreateWorktree(ctx, opts.Root, filepath.Join(dataDir, "factory", rep.RunID), rep.RunID)
+		if err != nil {
+			return rep, fmt.Errorf("create the run's worktree: %w", err)
+		}
+	} else {
+		status(iostream.LevelInfo, fmt.Sprintf("Continuing run %s on %s", cont.From.RunID, cont.From.Branch))
+		wt, err = openWorktree(ctx, opts.Root, cont.From, rep.RunID)
+		if err != nil {
+			return rep, fmt.Errorf("open the worktree of run %s: %w", cont.From.RunID, err)
+		}
 	}
 	rep.Worktree = wt
 	if opts.OnStart != nil {
 		opts.OnStart(rep.RunID, wt)
 	}
-	// Until the implementer starts, the worktree holds nothing the developer
-	// does not already have. The defers set rep, so it is a named result.
+	rec := Record{
+		RunID: rep.RunID, Prompt: request,
+		Worktree: wt.Path, Branch: wt.Branch, Baseline: wt.Baseline, Head: wt.Head,
+	}
+	if cont != nil {
+		rec.Prompt, rec.ContinuesRunID = cont.From.Prompt, cont.From.RunID
+	}
+	// Until the implementer starts, a new worktree holds nothing the developer
+	// does not already have. A continued run's worktree holds the earlier
+	// run's work, so it stays. The defers set rep, so it is a named result.
 	defer func() {
-		if !rep.Started {
+		if !rep.Started && cont == nil {
 			removeWorktree(ctx, opts.Root, wt, status)
 		}
 	}()
+	defer func() {
+		if rep.Started {
+			rec.Result, rec.Rounds = rep.Outcome.Result, rep.Outcome.Rounds
+			keepRecord(dataDir, rec, status)
+		}
+	}()
+	// A continued run's sidecars are synced from the baseline's files, and
+	// the work is laid on the implementer's afterwards, so the reviewers see
+	// the whole change rather than only what this run adds.
+	showingBaseline := false
+	if cont != nil {
+		if err := wt.showBaseline(ctx); err != nil {
+			return rep, err
+		}
+		showingBaseline = true
+		defer func() {
+			if showingBaseline {
+				restoreWorktree(ctx, wt, status)
+			}
+		}()
+	}
 
 	status(iostream.LevelStep, fmt.Sprintf("Preparing an implementer sidecar and %d reviewer sidecar(s)...", opts.Reviewers))
 	pool, err := sidecar.NewPool(ctx, opts.Client, sidecar.PoolOptions{
@@ -164,6 +211,12 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	defer func() { rep.KeptSidecars = closePool(ctx, pool, opts.KeepSidecars, status) }()
 	if err := pool.WaitSynced(ctx); err != nil {
 		return rep, fmt.Errorf("get the run's sidecars ready: %w", err)
+	}
+	if showingBaseline {
+		showingBaseline = false
+		if err := wt.restoreWork(ctx); err != nil {
+			return rep, err
+		}
 	}
 	// The implementer holds its member for the whole run; reviews are handed
 	// the rest.
@@ -187,7 +240,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		Release:   pool.Release,
 		Reviewers: Members(impl, pool.IDs()),
 		Relay:     NewRelay(opts.Client, wt.Path, status),
-		Request:   opts.Prompt,
+		Request:   request,
 		Prompts:   opts.Prompts,
 		Review: review.Options{
 			Credential: opts.Credential, BaseURL: opts.BaseURL, Model: opts.Model, Timeout: opts.ReviewTimeout,
@@ -203,12 +256,43 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	if err := steps.Prepare(ctx); err != nil {
 		return rep, fmt.Errorf("set up the implementer's workspace: %w", err)
 	}
-
-	rep.Started = true
 	loop := Loop{Attempts: opts.Attempts, OnEvent: opts.OnEvent}
+	if cont != nil {
+		if err := steps.Relay.Push(ctx, []*sidecar.PoolEntry{impl}); err != nil {
+			return rep, fmt.Errorf("bring the work of run %s to the implementer: %w", cont.From.RunID, err)
+		}
+		loop.CheckFirst, loop.Attempts = cont.checkFirst(), cont.Rounds(opts.Attempts)
+	}
+
+	// The record is kept once there is work to continue, and again with how
+	// the run ended, so a run whose daemon died can still be continued.
+	keepRecord(dataDir, rec, status)
+	rep.Started = true
 	rep.Outcome, err = loop.Run(ctx, steps, opts.Prompt)
-	rep.Committed = commitWork(ctx, steps, wt, CommitMessage(opts.Prompt, rep.RunID, rep.Outcome), status)
+	message := CommitMessage(opts.Prompt, rep.RunID, rep.Outcome)
+	if cont != nil {
+		message = cont.commitMessage(rep.RunID, rep.Outcome)
+	}
+	rep.Committed = commitWork(ctx, steps, wt, message, status)
 	return rep, err
+}
+
+// keepRecord saves the run's record, so a later run can continue it. A run
+// that cannot save one still runs; it just cannot be continued.
+func keepRecord(dataDir string, rec Record, status iostream.StatusFunc) {
+	if err := saveRecord(dataDir, rec); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("this run cannot be continued later: %v", err))
+	}
+}
+
+// restoreWorktree puts the work's files back in a continued run's worktree
+// when the run ends before its sidecars were synced from the baseline's.
+func restoreWorktree(ctx context.Context, wt Worktree, status iostream.StatusFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	if err := wt.restoreWork(ctx); err != nil {
+		status(iostream.LevelWarn, fmt.Sprintf("%v; run git read-tree -u --reset HEAD in %s to get them back", err, wt.Path))
+	}
 }
 
 // removeWorktree removes the worktree of a run that ended before the

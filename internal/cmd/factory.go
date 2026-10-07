@@ -26,7 +26,7 @@ import (
 func newFactoryCmd() *cobra.Command {
 	var attempts, reviewers int
 	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
-	var orgID, image, model, reviewsDir, logFile, implementerInstructions string
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions, continueRun string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
@@ -51,6 +51,15 @@ With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory < prompt.md or chunk factory - < prompt.md.
 A prompt argument with a file on stdin is refused rather than drop the file.
 
+--continue RUN picks up the work a finished run left on its branch, such as
+one whose checks still failed when its attempts ran out. RUN is the run's ID
+or its branch, chunk/factory/<run id>. The run works in the same worktree and
+adds a commit to the same branch, and its reviewers see the whole change. A
+prompt is optional and adds to the original request: with one, the
+implementer starts on it; without one, the work is checked first and the
+implementer is sent what failed, in a round that does not count toward
+--attempts.
+
 With --log, the run keeps a plain-text log in
 ~/.chunk/factory/run-<start time>.log, with its full context whatever the
 display leaves out: every prompt the implementer is sent and what it did and
@@ -73,9 +82,15 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
-			prompt, err := factoryPrompt(cmd.InOrStdin(), args, logOn && logFile == "")
-			if err != nil {
-				return err
+			var prompt string
+			var err error
+			// A continued run needs no prompt, so stdin is only read for one when
+			// asked for or redirected from a file.
+			if continueRun == "" || len(args) > 0 || redirectedFile(cmd.InOrStdin()) {
+				prompt, err = factoryPrompt(cmd.InOrStdin(), args, logOn && logFile == "")
+				if err != nil {
+					return err
+				}
 			}
 			if cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "" {
 				return newUserError("--log-file needs a file.").
@@ -106,6 +121,11 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if _, _, err := factoryChecks(root, reviewsDir, cfg, noValidate); err != nil {
 				return err
 			}
+			if continueRun != "" {
+				if err := checkFactoryContinue(root, continueRun); err != nil {
+					return err
+				}
+			}
 			relReviews, err := factoryReviewsDir(root, reviewsDir)
 			if err != nil {
 				return err
@@ -124,6 +144,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			id, err := watchd.StartFactory(watchd.FactoryRequest{
 				ProjectRoot:             root,
 				Prompt:                  prompt,
+				Continue:                continueRun,
 				ReviewsDir:              relReviews,
 				NoValidate:              noValidate,
 				Attempts:                attempts,
@@ -155,6 +176,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 	}
 
 	cmd.Flags().IntVar(&attempts, "attempts", 3, "most rounds of review and validation")
+	cmd.Flags().StringVar(&continueRun, "continue", "", "pick up the work of an earlier run, by its ID or branch")
 	cmd.Flags().IntVar(&reviewers, "reviewers", 0, "reviewer sidecars (0: one per review prompt)")
 	cmd.Flags().StringVar(&reviewsDir, "reviews", "", fmt.Sprintf("directory of review prompts (default: %s)", review.DefaultDir))
 	cmd.Flags().BoolVar(&noValidate, "no-validate", false, "skip the project's validation commands")
@@ -260,6 +282,23 @@ func missingFactoryPromptError() error {
 		withSuggestion(`chunk factory "add a --verbose flag", or chunk factory < prompt.md`).
 		withExitCode(ExitBadArgs).
 		withoutDetail()
+}
+
+// checkFactoryContinue explains a run that cannot be continued before anything
+// starts. The daemon loads the run's record itself.
+func checkFactoryContinue(root, run string) error {
+	_, err := factory.LoadRecord(root, factory.ParseRunID(run))
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, factory.ErrNoRecord):
+		return newUserError(fmt.Sprintf("No factory run %s to continue in this project.", factory.ParseRunID(run))).
+			withCode("command.invalid_args").
+			withSuggestion("Pass the run ID from the end of the run's output, or its branch: chunk/factory/<run id>. Runs made before chunk could continue them have no record and cannot be continued.").
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	return &userError{msg: fmt.Sprintf("Could not read factory run %s.", factory.ParseRunID(run)), err: err}
 }
 
 // factoryChecks loads what the implementer's work is checked with: the review
@@ -458,6 +497,7 @@ func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.
 		status = func(iostream.Level, string) {}
 	} else {
 		printFactoryLeftovers(ctx, f, status, streams)
+		printFactoryContinueHint(f, status)
 	}
 	printFactoryTotals(detail, status)
 	switch detail.State {
@@ -501,6 +541,17 @@ func printFactoryLeftovers(ctx context.Context, f *watchd.FactoryRun, status ios
 			status(iostream.LevelWarn, "The work was not committed. It is in the worktree "+f.Worktree)
 		}
 	}
+}
+
+// printFactoryContinueHint says how to carry on a run whose committed work
+// still fails its checks. The branch names the run whose record a continued
+// run reads, the first in a chain of them.
+func printFactoryContinueHint(f *watchd.FactoryRun, status iostream.StatusFunc) {
+	failing := f.Result == string(factory.ResultExhausted) || f.Result == string(factory.ResultStuck)
+	if !failing || !f.Committed || f.Branch == "" {
+		return
+	}
+	status(iostream.LevelInfo, fmt.Sprintf(`Keep working on it with: chunk factory --continue %s ["what to do differently"]`, factory.ParseRunID(f.Branch)))
 }
 
 // reportOutcome says why the loop stopped and returns an error unless every

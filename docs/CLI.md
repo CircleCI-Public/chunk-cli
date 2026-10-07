@@ -155,6 +155,7 @@ chunk
 │
 ├── factory [prompt|-]              # Implement a prompt on a sidecar, then review and validate it until it passes
 │   --attempts <n>                  # Most rounds of review and validation (default: 3)
+│   --continue <run id|branch>      # Pick up the work of an earlier run; the prompt becomes optional guidance
 │   --reviewers <n>                 # Reviewer sidecars (0: one per review prompt)
 │   --reviews <dir>                 # Directory of review prompts (default: .chunk/reviews)
 │   --no-validate                   # Skip the project's validation commands
@@ -371,6 +372,24 @@ chunk
   terminal as the run writes it, and implies `--log`.
   `--implementer-instructions` appends run-specific guidance to the implementer's
   fixed safety prompt, which is useful for controlled harness experiments.
+- **`factory --continue` picks up a finished run's work.** A run whose checks
+  still fail when it ends (exhausted or stuck) prints
+  `chunk factory --continue <run id>`. The continued run reopens the earlier
+  run's worktree (adding it back from its branch if it was removed, and first
+  committing any edits made in it by hand), adds a commit to the same branch,
+  and measures the work from the same baseline, so reviewers see the whole
+  change rather than only what the continuation adds: the sidecars are synced
+  from the baseline's files and the work is then laid on the implementer's as
+  uncommitted changes. The implementer is a new Claude session and is told the
+  original request and where the work is. A prompt is optional and adds to the
+  request, for the implementer and the reviewers alike. With one, the
+  implementer starts on it; without one, the run checks the work as it is
+  first and sends the implementer what failed, and that round does not count
+  toward `--attempts`. Each run keeps a record (its request, worktree, branch
+  and baseline) in the project's data directory beside its worktree, which is
+  what `--continue` reads, so a run can be continued after the daemon
+  restarts; runs from before records were kept cannot be continued. The
+  session's record names the run it continues as `continues_run_id`.
 - **`watch` shows the daemon's sessions live.** The header notes a session running
   or paused, and `r` opens the session view: a timeline of the whole flow — the
   review loop with each round (its reviews, drawn by the same renderer as

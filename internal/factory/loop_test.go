@@ -139,3 +139,51 @@ func TestLoopEmitsEventsInOrder(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, kinds, []EventKind{EventImplementing, EventImplemented, EventCollected, EventChecking, EventChecked})
 }
+
+// Work that already passes ends a loop that checks first without a turn.
+func TestLoopCheckFirstPassesWithoutATurn(t *testing.T) {
+	steps := &fakeSteps{current: change(1), checks: [][]Check{{pass}}}
+	out, err := Loop{Attempts: 3, CheckFirst: true}.Run(context.Background(), steps, "pick up the work")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Equal(t, out.Rounds, 1)
+	assert.Equal(t, len(steps.prompts), 0)
+}
+
+// The first turn after checking first is sent the prompt with what failed.
+func TestLoopCheckFirstSendsThePromptWithWhatFailed(t *testing.T) {
+	steps := &fakeSteps{current: change(1), changes: []Change{change(2)}, checks: [][]Check{{fail}, {pass}}}
+	out, err := Loop{Attempts: 3, CheckFirst: true}.Run(context.Background(), steps, "pick up the work")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.Equal(t, out.Rounds, 2)
+	assert.DeepEqual(t, steps.prompts, []string{"pick up the work\n\n" + Feedback([]Check{fail})})
+}
+
+// A check that could not run is checked again before the prompt is sent, and
+// the prompt still goes with the first feedback.
+func TestLoopCheckFirstHoldsThePromptUntilThereIsFeedback(t *testing.T) {
+	steps := &fakeSteps{current: change(1), changes: []Change{change(2)}, checks: [][]Check{{errored}, {fail}, {pass}}}
+	out, err := Loop{Attempts: 4, CheckFirst: true}.Run(context.Background(), steps, "pick up the work")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultPassed)
+	assert.DeepEqual(t, steps.prompts, []string{"pick up the work\n\n" + Feedback([]Check{fail})})
+}
+
+func TestLoopCheckFirstWithNoWork(t *testing.T) {
+	steps := &fakeSteps{}
+	out, err := Loop{Attempts: 3, CheckFirst: true}.Run(context.Background(), steps, "pick up the work")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultNoChange)
+	assert.Equal(t, steps.checked, 0, "nothing to check")
+}
+
+// An implementer that changes nothing after checking first is stuck, as in
+// any other round.
+func TestLoopCheckFirstThenNoChangeIsStuck(t *testing.T) {
+	steps := &fakeSteps{current: change(1), changes: []Change{change(1)}, checks: [][]Check{{fail}}}
+	out, err := Loop{Attempts: 3, CheckFirst: true}.Run(context.Background(), steps, "pick up the work")
+	assert.NilError(t, err)
+	assert.Equal(t, out.Result, ResultStuck)
+	assert.Equal(t, out.Rounds, 1)
+}

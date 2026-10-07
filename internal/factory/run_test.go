@@ -49,6 +49,38 @@ func TestRunThatFailsBeforeTheImplementerLeavesNothingBehind(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(statErr), "the worktree was left behind")
 	assert.Equal(t, gitOutput(t, root, "branch", "--list", rep.Worktree.Branch), "")
 	assert.Equal(t, gitOutput(t, root, "status", "--porcelain"), before)
+	_, err = LoadRecord(root, rep.RunID)
+	assert.ErrorIs(t, err, ErrNoRecord, "a run with no work left a record to continue")
+}
+
+// A continued run that fails before the implementer starts keeps the earlier
+// run's worktree, with the work's files back in it, and its branch.
+func TestContinuedRunThatFailsBeforeTheImplementerKeepsTheWork(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	root, rec := finishedRun(t)
+	tip := gitOutput(t, root, "rev-parse", rec.Branch)
+
+	cci := fakes.NewFakeCircleCI()
+	cci.CreateStatusCode = http.StatusInternalServerError
+	api := httptest.NewServer(cci)
+	t.Cleanup(api.Close)
+	client, err := circleci.NewClient(circleci.Config{Token: "fake-token", BaseURL: api.URL})
+	assert.NilError(t, err)
+
+	rep, err := Run(context.Background(), RunOptions{
+		Root:     root,
+		Continue: &Continuation{From: rec},
+		Attempts: 1,
+		Client:   client,
+		OrgID:    "org-1",
+		Status:   func(iostream.Level, string) {},
+	})
+
+	assert.ErrorContains(t, err, "create the run's sidecars: ")
+	assert.Equal(t, rep.Worktree.Path, rec.Worktree)
+	assert.Equal(t, readFile(t, rec.Worktree, "flag.go"), "package main\n", "the work's files were not put back")
+	assert.Equal(t, gitOutput(t, rec.Worktree, "status", "--porcelain"), "")
+	assert.Equal(t, gitOutput(t, root, "rev-parse", rec.Branch), tip)
 }
 
 func TestReviewerCount(t *testing.T) {
