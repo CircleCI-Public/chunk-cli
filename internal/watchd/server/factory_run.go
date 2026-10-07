@@ -47,7 +47,10 @@ func (d *daemon) startFactory(req watchd.FactoryRequest) (watchd.Session, error)
 	}
 	ps := d.lookupProject(req.ProjectRoot)
 	if ps == nil {
-		return watchd.Session{}, apiErr(http.StatusNotFound, "the watch daemon is not tracking %q", req.ProjectRoot)
+		ps = d.adoptProject(req.ProjectRoot)
+	}
+	if ps == nil {
+		return watchd.Session{}, apiErr(http.StatusNotFound, "the watch daemon is not tracking %q, and it is not the top of a git repository", req.ProjectRoot)
 	}
 	var cont *factory.Continuation
 	record := &watchd.FactoryRun{Prompt: prompt}

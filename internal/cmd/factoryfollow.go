@@ -14,7 +14,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/gitremote"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
@@ -42,7 +41,7 @@ func requireLocalDaemon() error {
 }
 
 // sessionProjectRoot names the project to work on: the git repository
-// containing the working directory, registered so the daemon can find it.
+// containing the working directory.
 func sessionProjectRoot(ctx context.Context) (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -57,7 +56,7 @@ func sessionProjectRoot(ctx context.Context) (string, error) {
 	}
 	// The sandbox pool works out which repository to clone from the origin
 	// remote. Without one it fails deep inside pool setup with a git exit code,
-	// so say so here, before anything is registered or started.
+	// so say so here, before anything is started.
 	if _, err := gitremote.URL(ctx, top, "origin"); err != nil {
 		return "", newUserError("This project has no git remote named origin.").
 			withSuggestion("Add one with: git remote add origin <url>").
@@ -65,16 +64,9 @@ func sessionProjectRoot(ctx context.Context) (string, error) {
 			withExitCode(ExitBadArgs).
 			wrap(err)
 	}
-	root := config.CanonicalProjectRoot(top)
-	dataDir, err := config.ProjectDataDir(root)
-	if err != nil {
-		return "", fmt.Errorf("data dir for %s: %w", root, err)
-	}
-	// Registration is how the daemon learns a project exists.
-	if err := sidecar.RegisterProjectRoot(dataDir, root); err != nil {
-		return "", fmt.Errorf("register project %s: %w", root, err)
-	}
-	return root, nil
+	// The daemon adopts a project it has not seen when asked to work on it, so
+	// there is nothing to register here.
+	return config.CanonicalProjectRoot(top), nil
 }
 
 // sessionError renders a failure talking to the session API.

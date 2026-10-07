@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
+	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
@@ -108,6 +110,30 @@ func (d *daemon) lookupProject(root string) *projectState {
 		return ps
 	}
 	return nil
+}
+
+// adoptProject starts tracking root, a project the daemon has not been told
+// about, so that a client asking for work on it need not register it first:
+// the registry is the daemon's to keep. Only the top of a git repository is
+// adopted, the root the client is expected to send; anything else is nil.
+func (d *daemon) adoptProject(root string) *projectState {
+	if root == "" || !filepath.IsAbs(root) {
+		return nil
+	}
+	top := gitutil.TopLevelCtx(context.Background(), root)
+	if top == "" || canonicalRoot(top) != canonicalRoot(root) {
+		return nil
+	}
+	canon := config.CanonicalProjectRoot(top)
+	dataDir, err := config.ProjectDataDir(canon)
+	if err != nil {
+		return nil
+	}
+	if err := sidecar.RegisterProjectRoot(dataDir, canon); err != nil {
+		log.Printf("watchd: register %s: %v", canon, err)
+		return nil
+	}
+	return d.lookupProject(canon)
 }
 
 // sessionPromptsDir resolves the prompts directory inside the project. The

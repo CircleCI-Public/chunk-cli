@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -338,4 +339,33 @@ func TestAPIResultsMatchTheFactorys(t *testing.T) {
 	} {
 		assert.Equal(t, c[0], c[1])
 	}
+}
+
+// A client asking for work on a project the daemon has never seen need not
+// register it first: the daemon adopts the top of a git repository itself, and
+// remembers it as any registered project.
+func TestStartFactoryAdoptsAnUnregisteredRepository(t *testing.T) {
+	d, _ := newFactoryDaemon(t, scriptedRun(factory.ResultPassed))
+	other := initRepo(t)
+	cfg := `{"orgID":"org-1","commands":[{"name":"test","run":"go test ./..."}]}`
+	assert.NilError(t, os.MkdirAll(filepath.Join(other, ".chunk"), 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(other, ".chunk", "config.json"), []byte(cfg), 0o644))
+	root, err := filepath.EvalSymlinks(other)
+	assert.NilError(t, err)
+
+	s, err := d.startFactory(watchd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	assert.NilError(t, err)
+	assert.Equal(t, s.ProjectRoot, root)
+
+	known, err := sidecar.AllProjectRoots()
+	assert.NilError(t, err)
+	assert.Check(t, cmp.Contains(known, root), "the adopted project is registered")
+
+	// A directory inside the repository is not the project, and is not adopted.
+	sub := filepath.Join(root, "sub")
+	assert.NilError(t, os.MkdirAll(sub, 0o755))
+	_, err = d.startFactory(watchd.FactoryRequest{ProjectRoot: sub, Prompt: "add a flag"})
+	var ae *apiError
+	assert.Assert(t, errors.As(err, &ae), "got %v", err)
+	assert.Equal(t, ae.status, http.StatusNotFound)
 }
