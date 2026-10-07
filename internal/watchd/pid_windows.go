@@ -14,7 +14,7 @@ import (
 // Signal(0) is unsupported on Windows, so we open a process handle and check
 // its exit code instead.
 func IsRunning(path string) (bool, int, error) {
-	p, err := readPID(path)
+	p, err := ReadPID(path)
 	if os.IsNotExist(err) {
 		return false, 0, nil
 	}

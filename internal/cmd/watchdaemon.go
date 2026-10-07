@@ -15,7 +15,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
 // newWatchDaemonCmd returns the hidden _daemon subcommand invoked by EnsureRunning
@@ -52,8 +52,8 @@ func newWatchDaemonCmd() *cobra.Command {
 				})
 			}
 
-			return watchd.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner(), ghClient,
-				watchd.WithReview(daemonReviewConfig(fullRC, rcErr)))
+			return server.RunDaemon(cmd.Context(), client, authMessage(err), makeValidateRunner(), ghClient,
+				server.WithReview(daemonReviewConfig(fullRC, rcErr)))
 		},
 	}
 }
@@ -63,15 +63,15 @@ func newWatchDaemonCmd() *cobra.Command {
 // through the snapshot rather than prompted for, and the credential itself goes
 // no further than the environment of a Claude command: it is never logged and
 // never part of any response.
-func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) watchd.ReviewConfig {
+func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) server.ReviewConfig {
 	if rcErr != nil {
-		return watchd.ReviewConfig{AuthError: "could not read configuration — factory runs unavailable: " + rcErr.Error()}
+		return server.ReviewConfig{AuthError: "could not read configuration — factory runs unavailable: " + rcErr.Error()}
 	}
 	cred, _, credErr := reviewCredential(rc)
 	if credErr != nil {
-		return watchd.ReviewConfig{AuthError: "no Claude credential — factory runs unavailable (run: chunk auth set anthropic-oauth, then restart the daemon)"}
+		return server.ReviewConfig{AuthError: "no Claude credential — factory runs unavailable (run: chunk auth set anthropic-oauth, then restart the daemon)"}
 	}
-	return watchd.ReviewConfig{Credential: cred, BaseURL: rc.AnthropicBaseURL}
+	return server.ReviewConfig{Credential: cred, BaseURL: rc.AnthropicBaseURL}
 }
 
 // authMessage renders a credential-resolution failure for the dashboard. An
@@ -93,7 +93,7 @@ func authMessage(err error) string {
 // makeValidateRunner returns a ValidateRunner that executes validate commands
 // in-process by running a fresh cobra root command with the caller's env and
 // session ID seeded into the context.
-func makeValidateRunner() watchd.ValidateRunner {
+func makeValidateRunner() server.ValidateRunner {
 	return func(ctx context.Context, projectRoot, workDir string, args []string, env []string, stdout, stderr io.Writer) int {
 		// Seed the context with the caller's session ID before cobra's
 		// PersistentPreRunE runs, so IDFromEnv (which reads the daemon's own env)

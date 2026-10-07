@@ -257,12 +257,6 @@ type Session struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// newStages returns the stages of a session that is starting: its loop,
-// running.
-func newStages() []Stage {
-	return []Stage{{ID: StageFactoryLoop, State: StageRunning}}
-}
-
 // ReviewResult is what one review found.
 type ReviewResult struct {
 	Prompt     string `json:"prompt"`

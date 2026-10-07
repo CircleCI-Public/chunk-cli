@@ -18,12 +18,13 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
 // fakeFactoryConfig is a daemon whose factory runs do one round without
 // sidecars: they make the run's worktree for real, commit a file to it, and
 // end with result.
-func fakeFactoryConfig(t *testing.T, result factory.Result) watchd.ReviewConfig {
+func fakeFactoryConfig(t *testing.T, result factory.Result) server.ReviewConfig {
 	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1")

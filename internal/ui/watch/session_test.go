@@ -17,6 +17,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
 func liveSession(id string, state watchd.SessionState, started time.Time) sessionInfo {
@@ -148,7 +149,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	assert.NilError(t, sidecar.RegisterProjectRoot(dataDir, project))
 	root := config.CanonicalProjectRoot(project)
 
-	cfg := watchd.ReviewConfig{
+	cfg := server.ReviewConfig{
 		Credential: review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: "sk-test"},
 		// A run that never finishes on its own.
 		RunFactory: func(ctx context.Context, _ factory.RunOptions) (factory.Report, error) {
@@ -158,7 +159,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- watchd.RunDaemon(ctx, nil, "", nil, nil, watchd.WithReview(cfg)) }()
+	go func() { errCh <- server.RunDaemon(ctx, nil, "", nil, nil, server.WithReview(cfg)) }()
 	t.Cleanup(func() {
 		cancel()
 		select {

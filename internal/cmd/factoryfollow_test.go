@@ -16,18 +16,19 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
 // fakeSessionConfig is a daemon setup with a Claude credential and nothing
 // else. Tests set RunFactory, so no sandbox is booted and no API is called.
-func fakeSessionConfig() watchd.ReviewConfig {
-	return watchd.ReviewConfig{
+func fakeSessionConfig() server.ReviewConfig {
+	return server.ReviewConfig{
 		Credential: review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: "sk-test"},
 	}
 }
 
 // startSessionDaemon runs a real daemon on a Unix socket with a fake backend.
-func startSessionDaemon(t *testing.T, cfg watchd.ReviewConfig) {
+func startSessionDaemon(t *testing.T, cfg server.ReviewConfig) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
@@ -36,7 +37,7 @@ func startSessionDaemon(t *testing.T, cfg watchd.ReviewConfig) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- watchd.RunDaemon(ctx, nil, "", nil, nil, watchd.WithReview(cfg)) }()
+	go func() { errCh <- server.RunDaemon(ctx, nil, "", nil, nil, server.WithReview(cfg)) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
