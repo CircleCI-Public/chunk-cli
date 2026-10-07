@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"golang.org/x/term"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
@@ -24,8 +25,8 @@ import (
 
 func newFactoryCmd() *cobra.Command {
 	var attempts, reviewers int
-	var keepSidecars, noValidate, jsonOut, verbose bool
-	var orgID, image, model, reviewsDir, logPath, implementerInstructions string
+	var keepSidecars, noValidate, jsonOut, logOn, verbose bool
+	var orgID, image, model, reviewsDir, logFile, implementerInstructions string
 	var implementTimeout, reviewTimeout time.Duration
 
 	cmd := &cobra.Command{
@@ -48,14 +49,16 @@ the worktree is kept so you can look at it or carry on in it.
 
 With no prompt argument, the prompt is read from redirected stdin. A - prompt
 selects stdin explicitly: chunk factory < prompt.md or chunk factory - < prompt.md.
+A prompt argument with a file on stdin is refused rather than drop the file.
 
-With --log, the run keeps a plain-text log, by default
-~/.chunk/factory/run-<start time>.log, with its full context whatever the display
-leaves out: every prompt the implementer is sent and what it did and said,
-each review's findings in full, and each validation command's output when it
-failed. --verbose adds the review prompts, the output of commands that passed,
-and a check each round that every reviewer has the implementer's change, and
-also shows the log here as the run writes it; it implies --log.`,
+With --log, the run keeps a plain-text log in
+~/.chunk/factory/run-<start time>.log, with its full context whatever the
+display leaves out: every prompt the implementer is sent and what it did and
+said, each review's findings in full, and each validation command's output
+when it failed. --log-file FILE keeps the log in FILE instead, and on its own
+turns the log on. --verbose adds the review prompts, the output of commands
+that passed, and a check each round that every reviewer has the implementer's
+change, and also shows the log here as the run writes it; it implies --log.`,
 		SilenceUsage: true,
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 || len(args) == 1 && strings.TrimSpace(args[0]) != "" {
@@ -70,9 +73,16 @@ also shows the log here as the run writes it; it implies --log.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			streams := iostream.FromCmd(cmd)
-			prompt, err := factoryPrompt(cmd.InOrStdin(), args)
+			prompt, err := factoryPrompt(cmd.InOrStdin(), args, logOn && logFile == "")
 			if err != nil {
 				return err
+			}
+			if cmd.Flags().Changed("log-file") && strings.TrimSpace(logFile) == "" {
+				return newUserError("--log-file needs a file.").
+					withCode("command.invalid_flags").
+					withSuggestion("Write --log-file FILE, or --log to log to ~/.chunk/factory.").
+					withExitCode(ExitBadArgs).
+					withoutDetail()
 			}
 			if attempts < 1 {
 				return newUserError("--attempts must be at least 1.").
@@ -100,7 +110,7 @@ also shows the log here as the run writes it; it implies --log.`,
 			if err != nil {
 				return err
 			}
-			logArg, err := factoryLogPath(logPath, verbose, time.Now())
+			logArg, err := factoryLogPath(logFile, logOn || verbose, time.Now())
 			if err != nil {
 				return err
 			}
@@ -156,18 +166,50 @@ also shows the log here as the run writes it; it implies --log.`,
 	cmd.Flags().DurationVar(&implementTimeout, "implement-timeout", factory.DefaultImplementTimeout, "max time for each implementer turn")
 	cmd.Flags().DurationVar(&reviewTimeout, "review-timeout", review.DefaultTimeout, "max time for each review")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
-	cmd.Flags().StringVar(&logPath, "log", "", "keep a log of the run's full context in this file (alone: ~/.chunk/factory/run-<start time>.log)")
-	cmd.Flags().Lookup("log").NoOptDefVal = factory.LogDefault
+	cmd.Flags().BoolVar(&logOn, "log", false, "keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log")
+	cmd.Flags().StringVar(&logFile, "log-file", "", "keep the log in this file instead (implies --log)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "log more: review prompts, passing commands' output, reviewer checks; also show the log here (implies --log)")
+	cmd.SetFlagErrorFunc(factoryFlagError)
 	return cmd
+}
+
+// factoryFlagError points --log=FILE, which named the log's file before
+// --log-file did, at --log-file instead of pflag's error about parsing a
+// bool. Other flag errors go to the parent's handler.
+func factoryFlagError(cmd *cobra.Command, err error) error {
+	var invalid *pflag.InvalidValueError
+	if errors.As(err, &invalid) && invalid.GetFlag().Name == "log" {
+		file := invalid.GetValue()
+		if file == "" {
+			file = "FILE"
+		}
+		return newUserError("--log takes no file.").
+			withCode("command.invalid_flags").
+			withSuggestion(fmt.Sprintf("Write --log-file %s.", file)).
+			withExitCode(ExitBadArgs).
+			withoutDetail()
+	}
+	if cmd.HasParent() {
+		return cmd.Parent().FlagErrorFunc()(cmd, err)
+	}
+	return err
 }
 
 // factoryPrompt is the prompt the implementer is sent: the sole argument when
 // it is not -, and stdin otherwise. With no argument, terminal stdin is refused
 // rather than waited on, since a missing redirect is the likelier mistake. An
 // explicit - may read a terminal because the caller asked for stdin.
-func factoryPrompt(in io.Reader, args []string) (string, error) {
+//
+// An argument with a file redirected to stdin is refused too: the argument
+// would win and the file's prompt be silently dropped. It is usually a word
+// meant for a flag, as in --log run.log < prompt.md; bareLog says --log was
+// given without --log-file, to point at that. Only a non-empty regular file
+// counts, since a pipe or /dev/null is what scripts often inherit as stdin.
+func factoryPrompt(in io.Reader, args []string, bareLog bool) (string, error) {
 	if len(args) == 1 && args[0] != "-" {
+		if redirectedFile(in) {
+			return "", promptTwiceError(args[0], bareLog)
+		}
 		return args[0], nil
 	}
 	if len(args) == 0 {
@@ -187,6 +229,29 @@ func factoryPrompt(in io.Reader, args []string) (string, error) {
 			withoutDetail()
 	}
 	return prompt, nil
+}
+
+// redirectedFile reports whether in is a regular file with something in it,
+// as stdin is under < prompt.md.
+func redirectedFile(in io.Reader) bool {
+	f, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
+}
+
+func promptTwiceError(arg string, bareLog bool) error {
+	suggestion := `Pass the prompt as the argument or on stdin, not both.`
+	if bareLog {
+		suggestion = fmt.Sprintf("--log takes no file. To log to %s, write --log-file %s.", arg, arg)
+	}
+	return newUserError(fmt.Sprintf("Got the prompt %q as an argument and another prompt on stdin.", arg)).
+		withCode("command.invalid_args").
+		withSuggestion(suggestion).
+		withExitCode(ExitBadArgs).
+		withoutDetail()
 }
 
 func missingFactoryPromptError() error {
@@ -360,15 +425,16 @@ func plainText(b []byte) []byte {
 	}, b)
 }
 
-// factoryLogPath is --log as the daemon is told it, or "" for no log. It is
-// absolute, since the daemon does not share this process's working directory,
-// and settled here, so this command knows where the log is to show it. A
-// default log is named for now, the run's start; --verbose implies one.
-func factoryLogPath(path string, verbose bool, now time.Time) (string, error) {
+// factoryLogPath is the log as the daemon is told it, or "" for no log: path
+// when --log-file names one, else the default when on, as --log and --verbose
+// turn it. It is absolute, since the daemon does not share this process's
+// working directory, and settled here, so this command knows where the log is
+// to show it. A default log is named for now, the run's start.
+func factoryLogPath(path string, on bool, now time.Time) (string, error) {
 	switch {
-	case path == "" && !verbose:
+	case path == "" && !on:
 		return "", nil
-	case path == "" || path == factory.LogDefault:
+	case path == "":
 		return factory.DefaultLogPath(now.UTC().Format("20060102-150405"))
 	}
 	abs, err := filepath.Abs(path)

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,7 @@ func TestFactoryPrompt(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := factoryPrompt(strings.NewReader(tc.stdin), tc.args)
+			got, err := factoryPrompt(strings.NewReader(tc.stdin), tc.args, false)
 			if tc.wantErr != "" {
 				assert.ErrorContains(t, err, tc.wantErr)
 				return
@@ -60,6 +61,42 @@ func TestFactoryPrompt(t *testing.T) {
 			assert.Equal(t, got, tc.want)
 		})
 	}
+}
+
+// A prompt argument with a file redirected to stdin would silently drop the
+// file's prompt, as in --log run.log < prompt.md, so it is refused. Empty files
+// and non-files are what scripts inherit as stdin, so they are not.
+func TestFactoryPromptRefusesAnArgumentAndARedirectedFile(t *testing.T) {
+	dir := t.TempDir()
+	promptFile := filepath.Join(dir, "prompt.md")
+	assert.NilError(t, os.WriteFile(promptFile, []byte("# Task\n\nadd a flag\n"), 0o644))
+	emptyFile := filepath.Join(dir, "empty")
+	assert.NilError(t, os.WriteFile(emptyFile, nil, 0o644))
+	open := func(path string) *os.File {
+		f, err := os.Open(path)
+		assert.NilError(t, err)
+		t.Cleanup(func() { _ = f.Close() })
+		return f
+	}
+
+	_, err := factoryPrompt(open(promptFile), []string{"/tmp/run.log"}, true)
+	var ue *userError
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.UserMessage(), `Got the prompt "/tmp/run.log" as an argument and another prompt on stdin.`)
+	assert.Equal(t, ue.Suggestion(), "--log takes no file. To log to /tmp/run.log, write --log-file /tmp/run.log.")
+	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
+
+	_, err = factoryPrompt(open(promptFile), []string{"add a flag"}, false)
+	assert.Assert(t, errors.As(err, &ue), "got %v", err)
+	assert.Equal(t, ue.Suggestion(), "Pass the prompt as the argument or on stdin, not both.")
+
+	got, err := factoryPrompt(open(promptFile), []string{"-"}, false)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "# Task\n\nadd a flag\n")
+
+	got, err = factoryPrompt(open(emptyFile), []string{"add a flag"}, true)
+	assert.NilError(t, err)
+	assert.Equal(t, got, "add a flag")
 }
 
 func TestFactoryArgs(t *testing.T) {
@@ -88,19 +125,19 @@ func TestFactoryLogPath(t *testing.T) {
 	now := time.Date(2026, 10, 2, 15, 4, 5, 0, time.UTC)
 	byTime := filepath.Join(home, ".chunk", "factory", "run-20261002-150405.log")
 	for _, tc := range []struct {
-		name    string
-		path    string
-		verbose bool
-		want    string
+		name string
+		path string
+		on   bool
+		want string
 	}{
 		{name: "no log", want: ""},
 		// The default is named here, so this command can show the log.
-		{name: "default", path: factory.LogDefault, want: byTime},
-		{name: "verbose implies the default", verbose: true, want: byTime},
-		{name: "absolute kept", path: "/tmp/run.log", want: "/tmp/run.log"},
+		{name: "default", on: true, want: byTime},
+		{name: "file without the switch", path: "/tmp/run.log", want: "/tmp/run.log"},
+		{name: "file with the switch", path: "/tmp/run.log", on: true, want: "/tmp/run.log"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := factoryLogPath(tc.path, tc.verbose, now)
+			got, err := factoryLogPath(tc.path, tc.on, now)
 			assert.NilError(t, err)
 			assert.Equal(t, got, tc.want)
 		})
@@ -115,6 +152,20 @@ func TestFactoryLogPath(t *testing.T) {
 	assert.Equal(t, got, filepath.Join(wd, "run.log"))
 }
 
+// TestFactoryLogFileTakesTheNextWord guards --log-file FILE, which an optional
+// value would have read as a log at the default path and a prompt of FILE.
+func TestFactoryLogFileTakesTheNextWord(t *testing.T) {
+	for _, args := range [][]string{
+		{"--log-file", "run.log", "add a flag"},
+		{"--log-file=run.log", "add a flag"},
+	} {
+		cmd := newFactoryCmd()
+		assert.NilError(t, cmd.ParseFlags(args), "args %q", args)
+		assert.Equal(t, cmd.Flags().Lookup("log-file").Value.String(), "run.log", "args %q", args)
+		assert.DeepEqual(t, cmd.Flags().Args(), []string{"add a flag"})
+	}
+}
+
 // TestTailLogCopiesTheWholeLogByTheTimeItStops guards --verbose's last lines:
 // what the run wrote just before it ended is shown, not lost with the tail.
 func TestTailLogCopiesTheWholeLogByTheTimeItStops(t *testing.T) {
@@ -127,7 +178,7 @@ func TestTailLogCopiesTheWholeLogByTheTimeItStops(t *testing.T) {
 	assert.Equal(t, out.String(), "start\nend\n")
 }
 
-// TestTailLogSkipsWhatTheLogHeldBeforeTheRun guards --log=<existing file>: the
+// TestTailLogSkipsWhatTheLogHeldBeforeTheRun guards --log-file <existing file>: the
 // run appends to it, and the earlier runs' lines are not shown again.
 func TestTailLogSkipsWhatTheLogHeldBeforeTheRun(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.log")

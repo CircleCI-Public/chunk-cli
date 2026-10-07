@@ -117,6 +117,50 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err))
 }
 
+// TestFactoryLogFlagsReachTheDaemon guards how --log, --log-file and --verbose
+// become the log the daemon is told to keep: any of them turns it on, and
+// --log-file says where it goes.
+func TestFactoryLogFlagsReachTheDaemon(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "run.log")
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		wantLog     string // "default" is the run-<time>.log in the home directory
+		wantVerbose bool
+	}{
+		{name: "no log"},
+		{name: "--log", args: []string{"--log"}, wantLog: "default"},
+		{name: "--verbose implies the log", args: []string{"--verbose"}, wantLog: "default", wantVerbose: true},
+		{name: "--log-file implies the log", args: []string{"--log-file", logFile}, wantLog: logFile},
+		{name: "--log-file names where --log goes", args: []string{"--log", "--log-file", logFile}, wantLog: logFile},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			factoryProject(t)
+			started := make(chan factory.RunOptions, 1)
+			cfg := fakeFactoryConfig(t, factory.ResultPassed)
+			run := cfg.RunFactory
+			cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
+				started <- opts
+				return run(ctx, opts)
+			}
+			startSessionDaemon(t, cfg)
+
+			_, stderr, err := runFactoryCmd(t, append(tc.args, "add a flag")...)
+			assert.NilError(t, err, stderr)
+			got := <-started
+			assert.Equal(t, got.Verbose, tc.wantVerbose)
+			if tc.wantLog != "default" {
+				assert.Equal(t, got.Log, tc.wantLog)
+				return
+			}
+			home, err := os.UserHomeDir()
+			assert.NilError(t, err)
+			assert.Equal(t, filepath.Dir(got.Log), filepath.Join(home, ".chunk", "factory"))
+			assert.Assert(t, strings.HasPrefix(filepath.Base(got.Log), "run-") && strings.HasSuffix(got.Log, ".log"), got.Log)
+		})
+	}
+}
+
 func TestFactoryWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	factoryProject(t)
 	startSessionDaemon(t, fakeFactoryConfig(t, factory.ResultExhausted))
@@ -213,6 +257,29 @@ func TestFactoryRequiresAPrompt(t *testing.T) {
 		var ue *userError
 		assert.Assert(t, errors.As(err, &ue), "args %q: got %v", tc.args, err)
 		assert.Equal(t, ue.UserMessage(), tc.want, "args %q", tc.args)
+		assert.Equal(t, ue.UserExitCode(), ExitBadArgs, "args %q", tc.args)
+	}
+}
+
+// --log=FILE named the log's file before --log-file did, and an empty
+// --log-file would silently log nothing, so both are refused with a pointer
+// to what to write instead.
+func TestFactoryRefusesLogFlagMisuse(t *testing.T) {
+	factoryProject(t)
+	for _, tc := range []struct {
+		args           []string
+		wantMsg, wantS string
+	}{
+		{args: []string{"--log=run.log", "add a flag"}, wantMsg: "--log takes no file.", wantS: "Write --log-file run.log."},
+		{args: []string{"--log=", "add a flag"}, wantMsg: "--log takes no file.", wantS: "Write --log-file FILE."},
+		{args: []string{"--log-file", "", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
+		{args: []string{"--log-file=", "add a flag"}, wantMsg: "--log-file needs a file.", wantS: "Write --log-file FILE, or --log to log to ~/.chunk/factory."},
+	} {
+		_, _, err := runFactoryCmd(t, tc.args...)
+		var ue *userError
+		assert.Assert(t, errors.As(err, &ue), "args %q: got %v", tc.args, err)
+		assert.Equal(t, ue.UserMessage(), tc.wantMsg, "args %q", tc.args)
+		assert.Equal(t, ue.Suggestion(), tc.wantS, "args %q", tc.args)
 		assert.Equal(t, ue.UserExitCode(), ExitBadArgs, "args %q", tc.args)
 	}
 }

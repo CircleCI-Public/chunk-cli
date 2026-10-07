@@ -164,7 +164,8 @@ chunk
 │   --model <name>                  # Claude model (default: Claude Code's default)
 │   --implement-timeout <duration>  # Max time for each implementer turn
 │   --review-timeout <duration>     # Max time for each review
-│   --log[=path]                    # Keep a log of the run's full context (default: ~/.chunk/factory/run-<start time>.log)
+│   --log                           # Keep a log of the run's full context in ~/.chunk/factory/run-<start time>.log
+│   --log-file <path>               # Keep the log in this file instead (implies --log)
 │   --verbose                       # Log review prompts, passing output and reviewer checks, and show the log here (implies --log)
 │   --json                          # Output as JSON
 │
@@ -341,7 +342,8 @@ chunk
   a daemon restart loses the record. In-process `chunk review` is unchanged.
 - **`factory` runs on the local daemon too.** `chunk factory "<prompt>"` (or
   `chunk factory < prompt.md`; `chunk factory - < prompt.md` is the explicit
-  form) checks
+  form; a prompt argument with a non-empty file on stdin is refused, so a
+  stray word such as `--log run.log < prompt.md` cannot drop the file) checks
   the project's review prompts and validation commands, registers the project,
   starts the daemon if needed, and starts a factory session; it follows the run
   until it ends. Ctrl-C stops the run and waits for it to commit the work done
@@ -356,8 +358,10 @@ chunk
   command's output.
   When the run ends it prints the work committed on `chunk/factory/<run id>`,
   how to keep it, how long the run took and what the implementer cost, and
-  exits non-zero unless every check passed. `--log[=path]` has the run keep a plain-text log, by default
-  `~/.chunk/factory/run-<start time>.log`, with the full context the display leaves
+  exits non-zero unless every check passed. `--log` has the run keep a
+  plain-text log in `~/.chunk/factory/run-<start time>.log`, and
+  `--log-file <path>` keeps it in a file of your choosing instead (it implies
+  `--log`), with the full context the display leaves
   out — each prompt the implementer is sent, what it did and said, every
   review's findings and prose, and failed commands' output — for a person or an
   agent to judge the run and its prompts by. The daemon writes it, so a
