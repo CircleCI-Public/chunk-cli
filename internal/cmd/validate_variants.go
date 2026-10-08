@@ -58,6 +58,7 @@ func newValidateVariantsCmd() *cobra.Command {
 			if err != nil {
 				return &userError{
 					msg:        msgValidateNotConfigured,
+					blocked:    true,
 					suggestion: suggestionRunInit,
 					err:        err,
 				}

@@ -228,6 +228,13 @@ install UUID is sent as `AnonymousId` (not `UserId`) to avoid mixing machine
 identifiers with real user IDs in shared event counts. When the user has
 authenticated, their CircleCI user UUID is also sent as `UserId`.
 
+The event's `outcome` is one of `success`, `blocked` (the user could not
+proceed: bad args, not authenticated, not configured, not found),
+`check_failed` (chunk ran and the project's own checks exited non-zero), or
+`failure` (an actual error: API failure, internal error, anything
+unclassified). Errors choose their outcome by implementing
+`telemetry.Classified`; an error that does not is a `failure`.
+
 When an auth flow validates a token, it persists the user UUID
 (`config.SaveUserID`) and calls `telemetry.IdentifyUser`. That attaches the
 user ID to the rest of the current run, and sends a Segment `identify` joining

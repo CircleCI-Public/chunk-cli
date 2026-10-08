@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,6 +12,37 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
+
+// Outcomes a command_invocation event can report. Only success and the three
+// failure kinds exist so a dashboard can tell a run that never got going
+// (blocked) or whose checks did not pass (check_failed) from chunk itself
+// going wrong (failure).
+const (
+	OutcomeSuccess     = "success"
+	OutcomeBlocked     = "blocked"      // the user could not proceed: bad args, not authed, not configured, not found
+	OutcomeCheckFailed = "check_failed" // chunk worked, but the project's own checks did not pass
+	OutcomeFailure     = "failure"      // an actual error: API failure, internal error, anything unclassified
+)
+
+// Classified is implemented by errors that know which outcome they represent.
+// Commands live above this package, so errors describe themselves rather than
+// RecordNow importing their types.
+type Classified interface {
+	TelemetryOutcome() string
+}
+
+// outcomeOf returns the outcome to report for err: success for nil, the
+// outcome of the first Classified error in its chain, else failure.
+func outcomeOf(err error) string {
+	if err == nil {
+		return OutcomeSuccess
+	}
+	var c Classified
+	if errors.As(err, &c) {
+		return c.TelemetryOutcome()
+	}
+	return OutcomeFailure
+}
 
 type senderKey struct{}
 
@@ -70,7 +102,7 @@ func record(cmd *cobra.Command) {
 
 // RecordNow reports a command_invocation event immediately: the full command
 // path, the sorted comma-joined names (never values) of flags the user set,
-// the outcome ("success" or "failure"), the wall-clock duration in
+// the outcome (see the Outcome constants), the wall-clock duration in
 // milliseconds, and on failure the Go type of the error. The error's
 // message is deliberately never sent: this codebase's error-wrapping
 // convention (fmt.Errorf("...: %w", err)) means messages routinely embed
@@ -89,15 +121,10 @@ func RecordNow(cmd *cobra.Command, err error, duration time.Duration) {
 	})
 	slices.Sort(flags)
 
-	outcome := "success"
-	if err != nil {
-		outcome = "failure"
-	}
-
 	props := map[string]any{
 		"command":     cmd.CommandPath(),
 		"flags":       strings.Join(flags, ","),
-		"outcome":     outcome,
+		"outcome":     outcomeOf(err),
 		"duration_ms": duration.Milliseconds(),
 	}
 	if err != nil {

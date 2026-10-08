@@ -11,6 +11,7 @@ import (
 
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 )
 
 // The API being behind this binary must not be reported as "upgrade chunk":
@@ -148,4 +149,24 @@ func TestSSHSessionErrorEncryptedKey(t *testing.T) {
 	assert.Check(t, strings.Contains(ue.msg, keyPath), "the message should name the key: %q", ue.msg)
 	assert.Check(t, strings.Contains(ue.suggestion, "ssh-keygen -p"),
 		"the suggestion should say how to strip the passphrase: %q", ue.suggestion)
+}
+
+func TestUserError_TelemetryOutcome(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *userError
+		want string
+	}{
+		{"bad args", newUserError("x").withExitCode(ExitBadArgs), telemetry.OutcomeBlocked},
+		{"auth", newUserError("x").withExitCode(ExitAuthError), telemetry.OutcomeBlocked},
+		{"not found", newUserError("x").withExitCode(ExitNotFound), telemetry.OutcomeBlocked},
+		{"not configured", &userError{msg: msgValidateNotConfigured, blocked: true}, telemetry.OutcomeBlocked},
+		{"api error", newUserError("x").withExitCode(ExitAPIError), telemetry.OutcomeFailure},
+		{"unclassified", newUserError("x"), telemetry.OutcomeFailure},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.err.TelemetryOutcome(), tt.want)
+		})
+	}
 }

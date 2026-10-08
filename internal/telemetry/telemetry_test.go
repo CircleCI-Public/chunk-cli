@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -375,4 +376,28 @@ func TestIdentifyUser_SetsUserIDOnCommandInvocation(t *testing.T) {
 
 func TestIdentifyUser_NoSenderInContext(t *testing.T) {
 	IdentifyUser(context.Background(), uuid.New())
+}
+
+type classifiedErr string
+
+func (e classifiedErr) Error() string            { return "classified" }
+func (e classifiedErr) TelemetryOutcome() string { return string(e) }
+
+func TestOutcomeOf(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, OutcomeSuccess},
+		{"unclassified", errors.New("boom"), OutcomeFailure},
+		{"blocked", classifiedErr(OutcomeBlocked), OutcomeBlocked},
+		{"check failed", classifiedErr(OutcomeCheckFailed), OutcomeCheckFailed},
+		{"wrapped", fmt.Errorf("ctx: %w", classifiedErr(OutcomeBlocked)), OutcomeBlocked},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, outcomeOf(tt.err), tt.want)
+		})
+	}
 }
