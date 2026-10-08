@@ -316,6 +316,14 @@ func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
 	return nil
 }
 
+// warnGitignoreEntries runs ensureGitignoreEntries, warning rather than
+// failing init when .gitignore cannot be updated.
+func warnGitignoreEntries(workDir string, streams iostream.Streams) {
+	if err := ensureGitignoreEntries(workDir, streams); err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
+	}
+}
+
 func installSkillsStep(workDir string, streams iostream.Streams) {
 	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, "chunk-sidecar", "chunk-sidecar-setup", "chunk-validate-config") {
 		if r.Skipped {
@@ -607,9 +615,7 @@ hook config files.`,
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
 					// Still ensure pool state is gitignored for projects
 					// initialized before this pattern existed.
-					if err := ensureGitignoreEntries(workDir, streams); err != nil {
-						streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
-					}
+					warnGitignoreEntries(workDir, streams)
 					return nil
 				}
 			}
@@ -672,9 +678,7 @@ hook config files.`,
 			}
 			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
 
-			if err := ensureGitignoreEntries(workDir, streams); err != nil {
-				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
-			}
+			warnGitignoreEntries(workDir, streams)
 
 			// Step 4: Write hook config files for supported agents.
 			if !skipHooks {
