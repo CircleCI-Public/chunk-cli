@@ -559,6 +559,61 @@ func detectVCS(ctx context.Context, workDir string, streams iostream.Streams, cf
 	return nil
 }
 
+// locateProject resolves the project directory (defaulting to the current
+// directory) and the git common directory, erroring if it is not a git repo.
+func locateProject(ctx context.Context, projectDir string) (workDir, gitCommonDir string, err error) {
+	workDir = projectDir
+	if workDir == "" {
+		workDir, err = os.Getwd()
+		if err != nil {
+			return "", "", &userError{msg: msgCouldNotDetermineWorkDir, err: err}
+		}
+	}
+
+	git := gitexec.Runner{Dir: workDir}
+	if err := git.Run(ctx, "rev-parse", "--git-dir"); err != nil {
+		return "", "", &userError{msg: "Not a git repository.", suggestion: suggestionGitRepo, err: err}
+	}
+
+	commonDirOut, err := git.Output(ctx, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", "", &userError{msg: "Could not determine git directory.", err: fmt.Errorf("git rev-parse --git-common-dir: %w", err)}
+	}
+	gitCommonDir = strings.TrimSpace(string(commonDirOut))
+	if !filepath.IsAbs(gitCommonDir) {
+		gitCommonDir = filepath.Join(workDir, gitCommonDir)
+	}
+	return workDir, gitCommonDir, nil
+}
+
+// detectValidateCommands detects the project's validate commands and stores
+// them on cfg. Detection failures are reported as warnings, not errors.
+func detectValidateCommands(ctx context.Context, rc config.ResolvedConfig, workDir string, streams iostream.Streams, cfg *config.ProjectConfig) {
+	claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
+	det, err := validate.DetectCommands(ctx, claude, workDir)
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", err)))
+		return
+	}
+	printDetectionSource(det, streams)
+	allCommands := []config.Command{}
+	// Detection may already have found an install command — a
+	// CircleCI config names one directly. Only fall back to
+	// guessing from the lock file when it did not.
+	if !hasInstallCommand(det.Commands) {
+		pm := validate.DetectPackageManager(workDir)
+		if pm != nil {
+			streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
+			allCommands = append(allCommands, config.Command{Name: config.CmdInstall, Run: pm.InstallCommand})
+		}
+	}
+	allCommands = append(allCommands, det.Commands...)
+	cfg.Commands = allCommands
+	for _, c := range det.Commands {
+		streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
+	}
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID bool
 	var projectDir string
@@ -575,27 +630,9 @@ hook config files.`,
 			ctx := cmd.Context()
 			insecureStorage, _ := cmd.Flags().GetBool("insecure-storage")
 
-			workDir := projectDir
-			if workDir == "" {
-				var err error
-				workDir, err = os.Getwd()
-				if err != nil {
-					return &userError{msg: msgCouldNotDetermineWorkDir, err: err}
-				}
-			}
-
-			git := gitexec.Runner{Dir: workDir}
-			if err := git.Run(ctx, "rev-parse", "--git-dir"); err != nil {
-				return &userError{msg: "Not a git repository.", suggestion: suggestionGitRepo, err: err}
-			}
-
-			commonDirOut, err := git.Output(ctx, "rev-parse", "--git-common-dir")
+			workDir, gitCommonDir, err := locateProject(ctx, projectDir)
 			if err != nil {
-				return &userError{msg: "Could not determine git directory.", err: fmt.Errorf("git rev-parse --git-common-dir: %w", err)}
-			}
-			gitCommonDir := strings.TrimSpace(string(commonDirOut))
-			if !filepath.IsAbs(gitCommonDir) {
-				gitCommonDir = filepath.Join(workDir, gitCommonDir)
+				return err
 			}
 
 			// Guard: exit cleanly if config exists and --force not set
@@ -632,29 +669,7 @@ hook config files.`,
 
 			// Step 2: Validate command detection
 			if !skipValidate {
-				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
-				det, detectErr := validate.DetectCommands(ctx, claude, workDir)
-				if detectErr != nil {
-					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", detectErr)))
-				} else {
-					printDetectionSource(det, streams)
-					allCommands := []config.Command{}
-					// Detection may already have found an install command — a
-					// CircleCI config names one directly. Only fall back to
-					// guessing from the lock file when it did not.
-					if !hasInstallCommand(det.Commands) {
-						pm := validate.DetectPackageManager(workDir)
-						if pm != nil {
-							streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
-							allCommands = append(allCommands, config.Command{Name: config.CmdInstall, Run: pm.InstallCommand})
-						}
-					}
-					allCommands = append(allCommands, det.Commands...)
-					cfg.Commands = allCommands
-					for _, c := range det.Commands {
-						streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
-					}
-				}
+				detectValidateCommands(ctx, rc, workDir, streams, cfg)
 			}
 
 			// Step 3: CircleCI org ID
