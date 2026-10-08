@@ -656,17 +656,35 @@ func (m Model) reviewRow(st watchStyles, p chunkd.ReviewPrompt) runRow {
 		row.icon = m.spinner(st)
 		row.detail = st.running("↪ " + p.SidecarID[:min(8, len(p.SidecarID))])
 	case chunkd.PromptDone:
-		row.icon = st.success(ui.IconOK)
-		row.detail = st.dim(ui.FormatDuration(time.Duration(p.DurationMS) * time.Millisecond))
-		if p.Findings > 0 {
-			row.icon = st.warning(ui.IconWarn)
-			row.detail += "  " + st.warning(fmt.Sprintf("%d finding%s", p.Findings, plural(p.Findings)))
-		}
+		row.icon, row.detail = reviewOutcome(st, p)
+		row.detail = st.dim(ui.FormatDuration(time.Duration(p.DurationMS)*time.Millisecond)) + row.detail
 	case chunkd.PromptFailed:
 		row.icon = st.err(ui.IconFail)
 		row.detail = st.err(truncate(strings.Join(strings.Fields(p.Error), " "), 80))
 	}
 	return row
+}
+
+// reviewOutcome is the icon and the note after the duration for a finished
+// review. A factory review is a check, and passes unless it found something
+// worth changing, so findings that are not worth changing do not fail it.
+// Until its status is known, any finding is worth a second look.
+func reviewOutcome(st watchStyles, p chunkd.ReviewPrompt) (icon, note string) {
+	switch p.Status {
+	case chunkd.CheckPassed:
+		if p.Findings == 0 {
+			return st.success(ui.IconOK), ""
+		}
+		return st.success(ui.IconOK), "  " + st.dim(fmt.Sprintf("%d finding%s, none worth changing", p.Findings, plural(p.Findings)))
+	case chunkd.CheckFailed:
+		return st.err(ui.IconFail), "  " + st.err(fmt.Sprintf("%d worth changing", p.Worth))
+	case chunkd.CheckErrored:
+		return st.err(ui.IconFail), "  " + st.err(truncate(strings.Join(strings.Fields(p.Error), " "), 80))
+	}
+	if p.Findings > 0 {
+		return st.warning(ui.IconWarn), "  " + st.warning(fmt.Sprintf("%d finding%s", p.Findings, plural(p.Findings)))
+	}
+	return st.success(ui.IconOK), ""
 }
 
 func roundStateText(st watchStyles, r chunkd.Round) string {

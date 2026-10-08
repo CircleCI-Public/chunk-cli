@@ -230,8 +230,14 @@ type ReviewPrompt struct {
 	CommandID  string `json:"command_id,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	Error      string `json:"error,omitempty"`
-	// Findings counts the structured findings parsed from this review's output.
+	// Findings counts the structured findings parsed from this review's output,
+	// and Worth the ones worth changing (severity high or medium).
 	Findings int `json:"findings,omitempty"`
+	Worth    int `json:"worth,omitempty"`
+	// Status is how the review came out as a check, one of the Check values:
+	// passed unless it found something worth changing, failed if it did,
+	// errored if it could not run. Empty until it is known.
+	Status string `json:"status,omitempty"`
 }
 
 // PromptRunState is where one review of a round stands. The values are

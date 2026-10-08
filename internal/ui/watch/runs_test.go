@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 )
 
 func liveSession(id string, state chunkd.SessionState, started time.Time) sessionInfo {
@@ -411,3 +413,25 @@ func TestTextPaneWrapsAndScrollsWithinTheScreen(t *testing.T) {
 	}
 	assert.Assert(t, strings.Contains(m.render(), "word3"), "the start of the text is still shown:\n%s", m.render())
 }
+
+// A factory review passes as a check unless it found something worth
+// changing, so its row says whether it failed the round, not only how many
+// findings it had.
+func TestFactoryReviewRowsSayWhetherTheReviewPassed(t *testing.T) {
+	st := newWatchStyles(false)
+	m := sessModel()
+	row := func(p chunkd.ReviewPrompt) string {
+		p.Name, p.State = "bugs", chunkd.PromptDone
+		r := m.reviewRow(st, p)
+		return stripANSI(r.icon + " " + r.detail)
+	}
+
+	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "passed"}), ui.IconOK+" 0ms")
+	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "passed", Findings: 2}), ui.IconOK+" 0ms  2 findings, none worth changing")
+	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "failed", Findings: 3, Worth: 1}), ui.IconFail+" 0ms  1 worth changing")
+	assert.Equal(t, row(chunkd.ReviewPrompt{Status: "errored", Error: "timed out"}), ui.IconFail+" 0ms  timed out")
+	// Until its status is known, any finding is flagged.
+	assert.Equal(t, row(chunkd.ReviewPrompt{Findings: 2}), ui.IconWarn+" 0ms  2 findings")
+}
+
+func stripANSI(s string) string { return regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(s, "") }

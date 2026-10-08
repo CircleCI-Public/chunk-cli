@@ -132,6 +132,12 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	}
 	assert.Equal(t, byName["bugs"].State, chunkd.PromptDone)
 	assert.Equal(t, byName["bugs"].Findings, 1)
+	// How each review came out as a check is in the snapshot, not only the
+	// detail, so a dashboard can tell a review that failed the round from one
+	// that found nothing worth changing.
+	assert.Equal(t, byName["bugs"].Worth, 1)
+	assert.Equal(t, byName["bugs"].Status, "failed")
+	assert.Equal(t, byName["style"].Status, "passed")
 	assert.Assert(t, byName["bugs"].CommandID != "", "the review's command was not tied to it")
 	assert.Equal(t, byName["style"].CommandID, "")
 	assert.Equal(t, len(detail.Details[0].Results), 2)

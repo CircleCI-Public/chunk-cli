@@ -366,14 +366,17 @@ chunk
   and where its work is (prompt, worktree, branch, log), then each round: the
   implementer's turn (duration, cost, diff stat), each validation command, and
   each review with its findings, followed by the run's latest progress and its
-  sidecars. A factory run's own sidecars are shown there rather than as rows of
-  their own. `→` moves into the pane, `↑/↓` picks a row and `Enter` opens it: a
-  review's live log, a failed check's output, or the implementer's summary. The
-  summary and a check's output are word-wrapped to the screen; a log keeps one
-  line per line of output. The footer only lists keys that do something for what
-  is selected, so `x` is gone once a run has ended. **`q` only detaches**: the
-  run belongs to the daemon and carries on. The one key that stops it is `x`,
-  and it needs a second `x` on the same run to confirm.
+  sidecars. A factory review is a check: it passes unless it found something
+  worth changing (high or medium severity), so its row shows ✓ with any lesser
+  findings noted, or ✗ with how many are worth changing. A factory run's own
+  sidecars are shown there rather than as rows of their own. `→` moves into
+  the pane, `↑/↓` picks a row and `Enter` opens it: a review's live log, a
+  failed check's output, or the implementer's summary. The summary and a
+  check's output are word-wrapped to the screen; a log keeps one line per line
+  of output. The footer only lists keys that do something for what is
+  selected, so `x` is gone once a run has ended. **`q` only detaches**: the run
+  belongs to the daemon and carries on. The one key that stops it is `x`, and it
+  needs a second `x` on the same run to confirm.
 - `watch` requires a TTY — it exits with an error if stdout is not a terminal. It polls sidecar state every 5 seconds and keeps an in-memory window of the 300 most recent event log entries. Use `j`/`k` or `↑`/`↓` to select a sidecar, `q` or `Esc` to quit. By default it watches every project it knows about; pass `--focus` to watch only the current directory. Running `watch` in a project also registers that project so future runs find it. `--all` is deprecated — it is now the default.
 - **Run results are read from disk, not sent to the daemon.** Every `validate` run
   writes its events to the project's event log and registers the project (a
