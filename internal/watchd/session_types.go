@@ -242,7 +242,12 @@ type RoundCheck struct {
 
 // FactoryRun is what a factory session works on and where its work is.
 type FactoryRun struct {
-	Prompt string `json:"prompt"`
+	// Prompt is the request. A continued run's is the earlier run's, and
+	// Guidance is what the user added to it, if anything.
+	Prompt   string `json:"prompt"`
+	Guidance string `json:"guidance,omitempty"`
+	// ContinuesRunID is the run whose work this one picked up, if it did.
+	ContinuesRunID string `json:"continues_run_id,omitempty"`
 	// Attempts is the most rounds the run checks.
 	Attempts int    `json:"attempts,omitempty"`
 	RunID    string `json:"run_id,omitempty"`
@@ -451,8 +456,12 @@ type SessionRequest struct {
 type FactoryRequest struct {
 	// ProjectRoot is a project the daemon tracks. Required.
 	ProjectRoot string `json:"project_root"`
-	// Prompt is what the implementer is asked to do. Required.
+	// Prompt is what the implementer is asked to do. Required unless Continue
+	// is set, when it is optional guidance added to the earlier run's request.
 	Prompt string `json:"prompt"`
+	// Continue is the ID of an earlier run to pick up the work of, or empty to
+	// start from the project's files.
+	Continue string `json:"continue,omitempty"`
 	// ReviewsDir is a directory of review prompts relative to the project
 	// root; empty means .chunk/reviews, which may be missing when validation
 	// commands are enough.

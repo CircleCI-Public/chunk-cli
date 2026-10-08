@@ -71,7 +71,12 @@ type Loop struct {
 	// Attempts is the most rounds to check. Each round after the first starts
 	// with an implementer turn fixing the previous round's failures.
 	Attempts int
-	OnEvent  func(Event)
+	// CheckFirst checks the work already there before the implementer's first
+	// turn, which is then sent the prompt with what failed. Work that passes
+	// as it is ends the loop without a turn. The first round counts as one of
+	// the attempts.
+	CheckFirst bool
+	OnEvent    func(Event)
 }
 
 // Run implements prompt, then checks the work and feeds failures back until
@@ -91,6 +96,22 @@ func (l Loop) Run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 	}
 
 	var out Outcome
+	// lead is held back from the implementer until there is feedback to send
+	// with it, when the loop checks first.
+	var lead string
+	if l.CheckFirst {
+		change, err := steps.Collect(ctx)
+		if err != nil {
+			return out, fmt.Errorf("round 1: %w", err)
+		}
+		emit(Event{Kind: EventCollected, Round: 1, Change: change})
+		if change.Empty() {
+			out.Result, out.Change = ResultNoChange, change
+			return out, nil
+		}
+		out.Change = change
+		lead, prompt = prompt, ""
+	}
 	for round := 1; ; round++ {
 		// An empty prompt means the last round failed only on checks that could
 		// not run: there is nothing to fix, so the same code is checked again.
@@ -136,5 +157,8 @@ func (l Loop) Run(ctx context.Context, steps Steps, prompt string) (Outcome, err
 			return out, nil
 		}
 		prompt = Feedback(checks)
+		if lead != "" && prompt != "" {
+			prompt, lead = lead+"\n\n"+prompt, ""
+		}
 	}
 }

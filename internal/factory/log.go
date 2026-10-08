@@ -95,8 +95,10 @@ func chain[T any](first, next func(T)) func(T) {
 	}
 }
 
-// start records what the run is about to do.
-func (l *runLog) start(runID string, opts RunOptions) {
+// start records what the run is about to do. request is what the reviewers
+// check the work against, which for a continued run is not the implementer's
+// prompt.
+func (l *runLog) start(runID string, opts RunOptions, request string) {
 	if l == nil {
 		return
 	}
@@ -121,7 +123,7 @@ func (l *runLog) start(runID string, opts RunOptions) {
 	// every turn, and each review gets the original request and the location of
 	// the change under review.
 	l.block("implementer system prompt", implementerSystemPrompt(opts.ImplementerInstructions))
-	for _, p := range scopePrompts(opts.Prompt, opts.Prompts) {
+	for _, p := range scopePrompts(request, opts.Prompts) {
 		l.block("review prompt "+p.Name, p.Body)
 	}
 }

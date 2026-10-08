@@ -2,6 +2,7 @@ package watchd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -40,12 +41,25 @@ func (d *daemon) startFactory(req FactoryRequest) (Session, error) {
 		return Session{}, apiErr(http.StatusServiceUnavailable, "%s", msg)
 	}
 	prompt := strings.TrimSpace(req.Prompt)
-	if prompt == "" {
+	if prompt == "" && req.Continue == "" {
 		return Session{}, apiErr(http.StatusBadRequest, "prompt required")
 	}
 	ps := d.lookupProject(req.ProjectRoot)
 	if ps == nil {
 		return Session{}, apiErr(http.StatusNotFound, "the watch daemon is not tracking %q", req.ProjectRoot)
+	}
+	var cont *factory.Continuation
+	record := &FactoryRun{Prompt: prompt}
+	if req.Continue != "" {
+		from, err := factory.LoadRecord(ps.root, factory.ParseRunID(req.Continue))
+		if errors.Is(err, factory.ErrNoRecord) {
+			return Session{}, apiErr(http.StatusNotFound, "%v", err)
+		}
+		if err != nil {
+			return Session{}, apiErr(http.StatusBadRequest, "%v", err)
+		}
+		cont = &factory.Continuation{From: from, Guidance: prompt}
+		record = &FactoryRun{Prompt: from.Prompt, Guidance: prompt, ContinuesRunID: from.RunID}
 	}
 	cfg, err := loadProjectConfig(ps.root)
 	if err != nil {
@@ -81,13 +95,17 @@ func (d *daemon) startFactory(req FactoryRequest) (Session, error) {
 	if attempts <= 0 {
 		attempts = DefaultAttempts
 	}
+	record.Attempts = attempts
+	if cont != nil {
+		record.Attempts = cont.Rounds(attempts)
+	}
 
 	entry, ctx, busy := d.sessions.add(Session{
 		Kind:        KindFactory,
 		ProjectRoot: ps.root,
 		Branch:      currentBranch(ps.root),
 		HeadSHA:     headRef(ps.root),
-		Factory:     &FactoryRun{Prompt: prompt, Attempts: attempts},
+		Factory:     record,
 	})
 	if busy != "" {
 		return Session{}, apiErr(http.StatusConflict, "%s", busy)
@@ -95,6 +113,7 @@ func (d *daemon) startFactory(req FactoryRequest) (Session, error) {
 	opts := factory.RunOptions{
 		Root:                    ps.root,
 		Prompt:                  prompt,
+		Continue:                cont,
 		Attempts:                attempts,
 		Reviewers:               factory.ReviewerCount(req.Reviewers, prompts),
 		Prompts:                 prompts,

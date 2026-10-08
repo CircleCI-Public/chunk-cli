@@ -102,7 +102,7 @@ func TestLogRecordsWhatTheDisplayLeavesOut(t *testing.T) {
 // worth changing or not, were not sent.
 func TestLogDoesNotSayTheLastRoundsFindingsWereSent(t *testing.T) {
 	lg, path := newTestLog(t, false)
-	lg.start("20261002-150405", RunOptions{Prompt: "p", Attempts: 2})
+	lg.start("20261002-150405", RunOptions{Prompt: "p", Attempts: 2}, "p")
 	checks := []Check{{Name: "bugs", Kind: KindReview, Status: StatusFailed, SidecarID: "rev-1", Findings: []review.Finding{
 		{File: "a.go", Line: 3, Severity: "high", Body: "nil deref"},
 	}}}
@@ -125,7 +125,7 @@ func TestLogVerboseAddsPromptsAndPassingOutput(t *testing.T) {
 	}
 	for _, verbose := range []bool{false, true} {
 		lg, path := newTestLog(t, verbose)
-		lg.start("20261002-150405", opts)
+		lg.start("20261002-150405", opts, opts.Prompt)
 		lg.check(Check{Name: "test", Kind: KindValidate, Status: StatusPassed, SidecarID: "impl", Output: "ok pkg"})
 		lg.close(Report{Started: true, Committed: true, Outcome: Outcome{Result: ResultPassed, Rounds: 1}, Worktree: Worktree{Branch: "chunk/factory/1"}}, nil)
 		got := readLog(t, path)
@@ -202,7 +202,26 @@ func TestLogOffRecordsNothing(t *testing.T) {
 	opts := lg.wrap(RunOptions{Status: func(iostream.Level, string) { called = true }})
 	assert.Assert(t, opts.OnEvent == nil && opts.OnCheck == nil)
 	opts.Status(iostream.LevelInfo, "x")
-	lg.start("id", RunOptions{Prompt: "p"})
+	lg.start("id", RunOptions{Prompt: "p"}, "p")
 	lg.close(Report{}, nil)
 	assert.Assert(t, called)
+}
+
+// A continued run's reviewers check the work against the request, not the
+// implementer's prompt, and the verbose log shows the review prompts they get.
+func TestLogVerboseShowsTheReviewersRequest(t *testing.T) {
+	lg, path := newTestLog(t, true)
+	opts := RunOptions{
+		Prompt:   "You are continuing a change...",
+		Attempts: 2, Reviewers: 1,
+		Prompts: []review.Prompt{{Name: "hippo", Body: "Check for hippos."}},
+	}
+	lg.start("id", opts, "add a note\n\nFollow-up from the developer:\n\nmention hippos")
+	lg.close(Report{}, nil)
+	got := readLog(t, path)
+
+	_, review, ok := strings.Cut(got, "review prompt hippo:")
+	assert.Assert(t, ok, got)
+	assert.Assert(t, strings.Contains(review, "Follow-up from the developer:"), got)
+	assert.Assert(t, !strings.Contains(review, "You are continuing a change"), got)
 }
