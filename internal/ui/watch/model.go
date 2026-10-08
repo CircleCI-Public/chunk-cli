@@ -12,11 +12,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 const (
@@ -122,7 +122,7 @@ type sidecarInfo struct {
 	lastOp       eventlog.Op
 	lastResult   string // how the last validate or review run ended: levelDone, levelError, or "" for none
 	// resources is the latest resource sample, nil when the daemon has none.
-	resources *watchd.Resources
+	resources *chunkd.Resources
 }
 
 // pane identifies which side of the split layout has keyboard focus.
@@ -144,7 +144,7 @@ type dataMsg struct {
 	events   [][]eventlog.Event // per-project; index matches Model.projects
 	branches []string
 	headRefs []string
-	commands [][]watchd.CommandState
+	commands [][]chunkd.CommandState
 	authErr  string
 	// sessions are the daemon's pre-PR sessions, and reviewAuthErr its reason for
 	// being unable to start one.
@@ -202,7 +202,7 @@ type Model struct {
 
 	// commands is every command the daemon is buffering output for, per project;
 	// index matches projects. Used to resolve an invocation to a command ID.
-	commands [][]watchd.CommandState
+	commands [][]chunkd.CommandState
 
 	// output is the open scrollback pane, nil when none is open.
 	output *outputPane
@@ -216,7 +216,7 @@ type Model struct {
 
 	// conn is the daemon this dashboard talks to, shown in the header next to
 	// whether the last poll reached it.
-	conn watchd.Connection
+	conn chunkd.Connection
 
 	// sessions are the daemon's pre-PR sessions across projects, and sessionView
 	// the open session view, nil when the dashboard is showing sidecars.
@@ -250,7 +250,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 		watchAll:      watchAll,
 		ownSession:    session.IDFromEnv(),
 		hasDarkBG:     lipgloss.HasDarkBackground(os.Stdin, os.Stdout),
-		conn:          watchd.CurrentConnection(),
+		conn:          chunkd.CurrentConnection(),
 		spinning:      true, // Init starts the first chain
 	}
 }
@@ -258,7 +258,7 @@ func New(projects []ProjectEntry, watchAll bool) Model {
 // WithConnection returns a copy of m that reports conn as the daemon it talks
 // to. New reads it from the environment; this is for callers and tests that
 // already know.
-func (m Model) WithConnection(conn watchd.Connection) Model {
+func (m Model) WithConnection(conn chunkd.Connection) Model {
 	m.conn = conn
 	return m
 }

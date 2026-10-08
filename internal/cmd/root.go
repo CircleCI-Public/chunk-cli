@@ -11,12 +11,13 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/upgrade"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 type updateCheckKey struct{}
@@ -49,6 +50,9 @@ func NewRootCmd(version string) *cobra.Command {
 			}
 			if err := setupTelemetry(cmd, version); err != nil {
 				return err
+			}
+			for _, msg := range chunkd.DeprecatedEnv() {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), ui.ErrWarning(msg))
 			}
 			startUpdateCheck(cmd)
 			return maybeAutoLaunchDaemon(cmd)
@@ -127,8 +131,8 @@ Configuration:
 	rootCmd.PersistentFlags().Bool("insecure-storage", false, "do not use the system's secure storage for storing tokens")
 	_ = rootCmd.PersistentFlags().MarkHidden("insecure-storage")
 
-	rootCmd.PersistentFlags().Bool("daemon", false, "auto-launch the watch daemon for this run even if autoLaunchDaemon is disabled")
-	rootCmd.PersistentFlags().Bool("no-daemon", false, "skip the watch daemon for this run even if autoLaunchDaemon is enabled")
+	rootCmd.PersistentFlags().Bool("daemon", false, "auto-launch the chunk daemon for this run even if autoLaunchDaemon is disabled")
+	rootCmd.PersistentFlags().Bool("no-daemon", false, "skip the chunk daemon for this run even if autoLaunchDaemon is enabled")
 
 	telemetry.RecordForSubcommands(rootCmd)
 
@@ -255,7 +259,7 @@ var noUpdateCheckCommands = map[string]bool{
 	"receive-telemetry":             true,
 	"upgrade":                       true,
 	watchCmdName:                    true,
-	watchd.DaemonSubcommand:         true,
+	chunkd.DaemonSubcommand:         true,
 }
 
 // skipUpdateCheck reports whether cmd, or any command it is nested under, is
@@ -291,10 +295,10 @@ var noAutoLaunchCommands = map[string]bool{
 	"completion":                    true,
 	"receive-telemetry":             true,
 	watchCmdName:                    true,
-	watchd.DaemonSubcommand:         true,
+	chunkd.DaemonSubcommand:         true,
 }
 
-// shouldAutoLaunch reports whether the watch daemon should be auto-launched
+// shouldAutoLaunch reports whether the chunk daemon should be auto-launched
 // for cmd. It checks (in order): the skip list, --no-daemon, --daemon, and
 // finally the autoLaunchDaemon user setting.
 func shouldAutoLaunch(cmd *cobra.Command) bool {
@@ -316,7 +320,7 @@ func shouldAutoLaunch(cmd *cobra.Command) bool {
 	return cfg.AutoLaunchDaemon
 }
 
-// maybeAutoLaunchDaemon starts the watch daemon if autoLaunchDaemon is
+// maybeAutoLaunchDaemon starts the chunk daemon if autoLaunchDaemon is
 // configured (or --daemon is passed) and the command is not excluded. When
 // --daemon was passed explicitly, a startup failure is returned so the user
 // sees it; otherwise errors are silently ignored because the daemon is an
@@ -325,12 +329,12 @@ func maybeAutoLaunchDaemon(cmd *cobra.Command) error {
 	if !shouldAutoLaunch(cmd) {
 		return nil
 	}
-	err := watchd.EnsureRunning()
+	err := chunkd.EnsureRunning()
 	if err == nil {
 		return nil
 	}
 	if daemon, flagErr := cmd.Flags().GetBool("daemon"); flagErr == nil && daemon {
-		return fmt.Errorf("start watch daemon: %w", err)
+		return fmt.Errorf("start chunk daemon: %w", err)
 	}
 	return nil
 }

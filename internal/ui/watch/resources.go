@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
 
 // renderResources formats one resource sample for the sidecar pane, or "" when
@@ -13,7 +13,7 @@ import (
 // A stale sample is dimmed rather than dropped. A sampler whose connection died
 // would otherwise leave the row looking like an idle sidecar, which is the wrong
 // conclusion from the same evidence — the numbers are real, they are just old.
-func renderResources(st watchStyles, r *watchd.Resources) string {
+func renderResources(st watchStyles, r *chunkd.Resources) string {
 	if r == nil || r.SampledAt.IsZero() {
 		return ""
 	}
@@ -44,7 +44,7 @@ func renderResources(st watchStyles, r *watchd.Resources) string {
 // stale reports whether a sample is old enough that it should not be presented as
 // current.
 func stale(at time.Time) bool {
-	return time.Since(at) > watchd.StaleSamples*watchd.SampleInterval
+	return time.Since(at) > chunkd.StaleSamples*chunkd.SampleInterval
 }
 
 // humanBytes formats a byte count in the largest unit that keeps it under 1024.

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/claudeauth"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
@@ -17,7 +18,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/oauth"
 	"github.com/CircleCI-Public/chunk-cli/internal/telemetry"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 const (
@@ -434,9 +434,9 @@ func saveCircleCIToken(ctx context.Context, token string, streams iostream.Strea
 			err:        fmt.Errorf("save token: %w", err),
 		}
 	}
-	// The watch daemon resolves its client once at startup, so one running from
+	// The chunk daemon resolves its client once at startup, so one running from
 	// before this login cannot see the new token.
-	watchd.StopForCredentialChange()
+	chunkd.StopForCredentialChange()
 	if userID != uuid.Nil {
 		if err := config.SaveUserID(userID); err != nil {
 			streams.ErrPrintln(ui.Dim(fmt.Sprintf("note: could not persist CircleCI user ID for telemetry: %v", err)))

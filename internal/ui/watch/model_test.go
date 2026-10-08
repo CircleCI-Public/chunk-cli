@@ -11,8 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // groupEvents tests
@@ -399,11 +399,11 @@ func TestRender_daemonErrorIsVisibleAndStillFitsTheTerminal(t *testing.T) {
 		m.width = 100
 		m.height = height
 		m.selectedIdx = 0
-		m.daemonErr = errors.New("connect to watch daemon: no such file")
+		m.daemonErr = errors.New("connect to chunk daemon: no such file")
 
 		out := m.render()
 
-		assert.Assert(t, strings.Contains(out, "daemon unavailable: connect to watch daemon"),
+		assert.Assert(t, strings.Contains(out, "daemon unavailable: connect to chunk daemon"),
 			"height %d: message missing:\n%s", height, out)
 		assert.Assert(t, strings.Count(out, "\n") <= height,
 			"height %d: rendered %d lines, which would clip the message", height, strings.Count(out, "\n"))
@@ -607,7 +607,7 @@ func tallSidecars(n int) []sidecarInfo {
 		sidecars[i] = sidecarInfo{
 			id: fmt.Sprintf("s%d", i), repoName: fmt.Sprintf("repo-%d", i), branch: "main",
 			snapshotName: "snap", lastActivity: now,
-			resources: &watchd.Resources{SampledAt: now, CPUPercent: 5},
+			resources: &chunkd.Resources{SampledAt: now, CPUPercent: 5},
 		}
 	}
 	return sidecars
@@ -885,11 +885,11 @@ func TestRenderActivityPane_namesTheSelectedSession(t *testing.T) {
 
 func TestConvertSnapshot_carriesSessionID(t *testing.T) {
 	now := time.Now()
-	snap := watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
 		Root:     "/tmp/repo",
 		Branch:   "main",
 		RepoName: "repo",
-		Sidecars: []watchd.SidecarState{
+		Sidecars: []chunkd.SidecarState{
 			{ID: "id1", Name: "sc-1", SessionID: "sessA", LastActivity: now},
 			{ID: "id2", Name: "sc-2", SessionID: "sessB", LastActivity: now},
 		},
@@ -927,7 +927,7 @@ func TestConvertSnapshot_localRunGetsNoRow(t *testing.T) {
 
 func TestConvertSnapshot_projectWithOnlyLocalRunsIsEmpty(t *testing.T) {
 	now := time.Now()
-	snap := watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
 		Root: "/repo", Branch: "main", RepoName: "repo",
 		Events: []eventlog.Event{{Ts: now, Op: eventlog.OpValidate, Level: levelDone}},
 	}}}
@@ -945,9 +945,9 @@ func TestConvertSnapshot_resultComesFromTheLastValidateRun(t *testing.T) {
 	ev := func(ago time.Duration, id string, op eventlog.Op, level string, final bool) eventlog.Event {
 		return eventlog.Event{Ts: now.Add(-ago), SidecarID: id, Op: op, Level: level, Final: final}
 	}
-	snap := watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
 		Root: "/repo", Branch: "main", RepoName: "repo",
-		Sidecars: []watchd.SidecarState{
+		Sidecars: []chunkd.SidecarState{
 			{ID: "failed-then-synced", Verified: true, LastActivity: now},
 			{ID: "only-synced", Verified: true, LastActivity: now},
 			{ID: "passed", Verified: true, LastActivity: now},
@@ -979,15 +979,15 @@ func TestConvertSnapshot_resultComesFromTheLastValidateRun(t *testing.T) {
 
 func TestConvertSnapshot_carriesVerifiedAndRunningCommands(t *testing.T) {
 	now := time.Now()
-	snap := watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+	snap := chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
 		Root: "/repo", Branch: "main", RepoName: "repo",
-		Sidecars: []watchd.SidecarState{
+		Sidecars: []chunkd.SidecarState{
 			{ID: "busy", Verified: true, LastActivity: now},
 			{ID: "quiet", Verified: true, LastActivity: now},
 		},
 		// The event log has gone quiet, but the daemon is still streaming a
 		// command on busy, so busy is running.
-		Commands: []watchd.CommandState{
+		Commands: []chunkd.CommandState{
 			{CommandID: "c1", SidecarID: "busy", Running: true},
 			{CommandID: "c2", SidecarID: "quiet", Running: false},
 		},
@@ -1005,7 +1005,7 @@ func TestConvertSnapshot_carriesVerifiedAndRunningCommands(t *testing.T) {
 
 // twoSessionSnapshot builds a daemon snapshot for one worktree driven by two
 // sessions. localAt, when non-zero, adds a local (non-sidecar) validate run.
-func twoSessionSnapshot(aAt, bAt, localAt time.Time) watchd.Snapshot {
+func twoSessionSnapshot(aAt, bAt, localAt time.Time) chunkd.Snapshot {
 	ev := func(ts time.Time, sidecarID string) eventlog.Event {
 		return eventlog.Event{Ts: ts, SidecarID: sidecarID, Op: eventlog.OpValidate,
 			Level: levelDone, Msg: "1/1 passed"}
@@ -1014,11 +1014,11 @@ func twoSessionSnapshot(aAt, bAt, localAt time.Time) watchd.Snapshot {
 	if !localAt.IsZero() {
 		events = append(events, ev(localAt, ""))
 	}
-	return watchd.Snapshot{Projects: []watchd.ProjectSnapshot{{
+	return chunkd.Snapshot{Projects: []chunkd.ProjectSnapshot{{
 		Root:     "/repo",
 		Branch:   "main",
 		RepoName: "repo",
-		Sidecars: []watchd.SidecarState{
+		Sidecars: []chunkd.SidecarState{
 			{ID: "idA", Name: "repo-sessA", SessionID: "sessA", RepoName: "repo", LastActivity: aAt},
 			{ID: "idB", Name: "repo-sessB", SessionID: "sessB", RepoName: "repo", LastActivity: bAt},
 		},

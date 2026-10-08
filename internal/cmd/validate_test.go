@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
@@ -32,7 +33,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/fakes"
 	"github.com/CircleCI-Public/chunk-cli/internal/testing/gitrepo"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // hookPayload is the JSON Claude Code sends to Stop hooks via stdin.
@@ -285,9 +285,9 @@ func TestOpenAPIExecPassesEnvVars(t *testing.T) {
 	assert.NilError(t, err)
 
 	// Point the daemon socket at an empty dir. Without this the command
-	// registration would reach a watch daemon actually running on the developer's
+	// registration would reach a chunk daemon actually running on the developer's
 	// machine, which is neither hermetic nor polite.
-	t.Setenv("CHUNK_WATCHD_DIR", t.TempDir())
+	t.Setenv("CHUNK_DAEMON_DIR", t.TempDir())
 
 	envVars := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	streams := iostream.Streams{Out: io.Discard, Err: io.Discard}
@@ -416,7 +416,7 @@ func TestValidateLocalFlagOverridesRemoteConfig(t *testing.T) {
 }
 
 // A run with no sidecar is the only record of itself: nothing is streamed to the
-// watch daemon, which reads this same on-disk log. Registering the project is
+// chunk daemon, which reads this same on-disk log. Registering the project is
 // what tells the daemon the log exists at all, so a run that skips it leaves
 // results nothing will ever show.
 func TestValidateLocalRunRegistersProjectForTheDaemon(t *testing.T) {
@@ -1183,7 +1183,7 @@ func TestReportDelegatedValidateAnnouncesABackgroundRun(t *testing.T) {
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	err := reportDelegatedValidate(watchd.ValidateResponse{
+	err := reportDelegatedValidate(chunkd.ValidateResponse{
 		TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
 		Reason: "small change, 42 lines",
 		// Ignored: a released run has not produced these, and a daemon that
@@ -1206,7 +1206,7 @@ func TestReportDelegatedValidateExplainsAHeldRun(t *testing.T) {
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	err := reportDelegatedValidate(watchd.ValidateResponse{
+	err := reportDelegatedValidate(chunkd.ValidateResponse{
 		Reason:   "large change, 912 lines, over the 500-line limit",
 		ExitCode: 2,
 		Stdout:   "on stdout",
@@ -1226,7 +1226,7 @@ func TestReportDelegatedValidateSaysNothingWhenThereWasNoDecision(t *testing.T) 
 	var outBuf, errBuf bytes.Buffer
 	streams := iostream.Streams{Out: &outBuf, Err: &errBuf}
 
-	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{Stderr: "1/1 passed"}, nil, streams))
+	assert.NilError(t, reportDelegatedValidate(chunkd.ValidateResponse{Stderr: "1/1 passed"}, nil, streams))
 	assert.Equal(t, errBuf.String(), "1/1 passed")
 }
 
@@ -1268,18 +1268,18 @@ func TestDetectHookReadsTheEventName(t *testing.T) {
 // there is any.
 func TestReportDelegatedValidatePrintsRiskOnlyWhenItMatters(t *testing.T) {
 	var quiet bytes.Buffer
-	assert.NilError(t, reportDelegatedValidate(watchd.ValidateResponse{
-		Risk: &watchd.RiskSummary{Score: 12, Band: watchd.BandLow, Parts: []string{"12 lines (1)"}},
+	assert.NilError(t, reportDelegatedValidate(chunkd.ValidateResponse{
+		Risk: &chunkd.RiskSummary{Score: 12, Band: chunkd.BandLow, Parts: []string{"12 lines (1)"}},
 	}, nil, iostream.Streams{Out: &quiet, Err: &quiet}))
 	assert.Equal(t, quiet.String(), "", "a low-risk change was narrated")
 
 	var loud bytes.Buffer
-	err := reportDelegatedValidate(watchd.ValidateResponse{
+	err := reportDelegatedValidate(chunkd.ValidateResponse{
 		Reason:   "large change, 2000 lines, over the 500-line limit",
 		ExitCode: 1,
-		Risk: &watchd.RiskSummary{
+		Risk: &chunkd.RiskSummary{
 			Score:  92,
-			Band:   watchd.BandHigh,
+			Band:   chunkd.BandHigh,
 			Parts:  []string{"2000 lines (60)", "3 files (6)"},
 			Advice: "committing it in parts would get each piece checked sooner",
 		},
@@ -1442,31 +1442,31 @@ func TestDetectHookRecognisesCodex(t *testing.T) {
 
 // fakeValidateDaemon stands up a Unix socket answering /ping with build and
 // /validate with a pass, and returns a channel of the validate requests it got.
-func fakeValidateDaemon(t *testing.T, build string) <-chan watchd.ValidateRequest {
+func fakeValidateDaemon(t *testing.T, build string) <-chan chunkd.ValidateRequest {
 	t.Helper()
 	// Not t.TempDir(): a unix socket path is capped at 104 bytes on darwin.
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_WATCHD_DIR", dir)
-	t.Setenv("CHUNK_WATCHD_REMOTE_ADDR", "")
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
+	t.Setenv("CHUNK_DAEMON_REMOTE_ADDR", "")
 
-	reqs := make(chan watchd.ValidateRequest, 4)
+	reqs := make(chan chunkd.ValidateRequest, 4)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, build)
 	})
 	mux.HandleFunc("/validate", func(w http.ResponseWriter, r *http.Request) {
-		var req watchd.ValidateRequest
+		var req chunkd.ValidateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		reqs <- req
-		_ = json.NewEncoder(w).Encode(watchd.ValidateResponse{})
+		_ = json.NewEncoder(w).Encode(chunkd.ValidateResponse{})
 	})
 
-	ln, err := net.Listen("unix", filepath.Join(dir, "watchd.sock"))
+	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
 	assert.NilError(t, err)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
@@ -1477,7 +1477,7 @@ func fakeValidateDaemon(t *testing.T, build string) <-chan watchd.ValidateReques
 // The daemon boots the run's sidecar before the subprocess starts, so the image
 // a --no-daemon run would use has to travel in the request.
 func TestRunValidateViaDaemonForwardsSidecarImage(t *testing.T) {
-	reqs := fakeValidateDaemon(t, watchd.BuildID())
+	reqs := fakeValidateDaemon(t, chunkd.BuildID())
 
 	var outBuf, errBuf bytes.Buffer
 	err := runValidateViaDaemon(t.TempDir(), []string{"validate", "test"}, "", "org-1", "snap-test", nil,
@@ -1501,7 +1501,7 @@ func TestRunValidateViaDaemonForwardsCodex(t *testing.T) {
 		"codex":  {hook: &hookContext{sessionID: "abc", event: hookEventStop, codex: true}, codex: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			reqs := fakeValidateDaemon(t, watchd.BuildID())
+			reqs := fakeValidateDaemon(t, chunkd.BuildID())
 
 			var outBuf, errBuf bytes.Buffer
 			err := runValidateViaDaemon(t.TempDir(), []string{"validate"}, "", "", "", tc.hook,
@@ -1537,7 +1537,7 @@ func TestReportDelegatedValidateTellsTheHookAboutABackgroundRun(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var outBuf, errBuf bytes.Buffer
-			err := reportDelegatedValidate(watchd.ValidateResponse{
+			err := reportDelegatedValidate(chunkd.ValidateResponse{
 				TaskID: "0192cf6e-1b9f-7c3e-8a11-2b3c4d5e6f70",
 				Reason: "small change, 42 lines",
 			}, hook, iostream.Streams{Out: &outBuf, Err: &errBuf})

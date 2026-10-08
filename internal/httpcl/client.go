@@ -89,7 +89,7 @@ type Config struct {
 	//
 	// This is deliberately a reload and not a refresh: there is no refresh grant
 	// to call, so the only way a token can improve is if something else stored a
-	// new one. It exists for long-lived processes — a watch daemon holds one
+	// new one. It exists for long-lived processes — a chunk daemon holds one
 	// client for its whole life, and without this a `chunk auth login` in
 	// another terminal never reaches it.
 	ReloadToken func() (string, error)

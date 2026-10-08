@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
 
 // tailInterval is how often an open output pane asks the daemon for more bytes.
@@ -27,7 +27,7 @@ const maxPaneLines = 5000
 // outputMsg carries a chunk of command output back to the model.
 type outputMsg struct {
 	commandID string
-	chunk     watchd.OutputChunk
+	chunk     chunkd.OutputChunk
 	err       error
 }
 
@@ -209,7 +209,7 @@ func (p *outputPane) scrollBy(delta, height int) {
 // fetchOutput asks the daemon for more of a command's output.
 func fetchOutput(commandID string, offset int64) tea.Cmd {
 	return func() tea.Msg {
-		chunk, err := watchd.FetchOutput(commandID, offset)
+		chunk, err := chunkd.FetchOutput(commandID, offset)
 		return outputMsg{commandID: commandID, chunk: chunk, err: err}
 	}
 }

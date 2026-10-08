@@ -201,7 +201,7 @@ func pruneRekeyedState(dir, keep string, sidecarIDs []string) {
 }
 
 // projectRootFile names the breadcrumb that maps a project data directory back
-// to the project it holds state for. It is the only way the watch daemon
+// to the project it holds state for. It is the only way the chunk daemon
 // discovers projects, so a data directory without one is invisible to it
 // however much it holds.
 const projectRootFile = "project-root"
@@ -216,7 +216,7 @@ func ProjectRootPath(dataDir string) string {
 }
 
 // RegisterProjectRoot writes the breadcrumb that makes root discoverable by
-// AllProjectRoots, and so by the watch daemon and its dashboard. dataDir must be
+// AllProjectRoots, and so by the chunk daemon and its dashboard. dataDir must be
 // the data directory for root, since the daemon derives one from the other.
 //
 // Every write of project state should call this, not just sidecar state: a

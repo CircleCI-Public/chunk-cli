@@ -12,25 +12,25 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
-func liveSession(id string, state watchd.SessionState, started time.Time) sessionInfo {
-	return sessionInfo{label: "repo", s: watchd.Session{
+func liveSession(id string, state chunkd.SessionState, started time.Time) sessionInfo {
+	return sessionInfo{label: "repo", s: chunkd.Session{
 		ID: id, State: state, StartedAt: started, Branch: "feature", HeadSHA: "0123456789abcdef",
-		Stages: []watchd.Stage{
-			{ID: watchd.StageFactoryLoop, State: watchd.StageRunning},
+		Stages: []chunkd.Stage{
+			{ID: chunkd.StageFactoryLoop, State: chunkd.StageRunning},
 		},
 	}}
 }
 
 func sessModel(sessions ...sessionInfo) Model {
-	m := New(nil, true).WithConnection(watchd.Connection{})
+	m := New(nil, true).WithConnection(chunkd.Connection{})
 	m.width, m.height = 110, 40
 	m.sessions = sessions
 	return m
@@ -51,13 +51,13 @@ func press(m Model, codes ...rune) (Model, tea.Cmd) {
 func TestCollectSessionsPutsLiveOnesFirstThenNewest(t *testing.T) {
 	now := time.Now()
 	ended := now
-	done := watchd.Session{ID: "done-new", State: watchd.SessionDone, StartedAt: now, EndedAt: &ended}
-	old := watchd.Session{ID: "done-old", State: watchd.SessionDone, StartedAt: now.Add(-time.Hour), EndedAt: &ended}
-	running := watchd.Session{ID: "running", State: watchd.SessionRunning, StartedAt: now.Add(-2 * time.Hour)}
+	done := chunkd.Session{ID: "done-new", State: chunkd.SessionDone, StartedAt: now, EndedAt: &ended}
+	old := chunkd.Session{ID: "done-old", State: chunkd.SessionDone, StartedAt: now.Add(-time.Hour), EndedAt: &ended}
+	running := chunkd.Session{ID: "running", State: chunkd.SessionRunning, StartedAt: now.Add(-2 * time.Hour)}
 
-	got := collectSessions([]watchd.ProjectSnapshot{
-		{Root: "/a", RepoName: "a", Sessions: []watchd.Session{old, done}},
-		{Root: "/b", Sessions: []watchd.Session{running}},
+	got := collectSessions([]chunkd.ProjectSnapshot{
+		{Root: "/a", RepoName: "a", Sessions: []chunkd.Session{old, done}},
+		{Root: "/b", Sessions: []chunkd.Session{running}},
 	})
 
 	assert.Equal(t, got[0].s.ID, "running", "a live session comes first")
@@ -68,13 +68,13 @@ func TestCollectSessionsPutsLiveOnesFirstThenNewest(t *testing.T) {
 
 // The view must show the whole flow, with the factory loop's rounds inside it.
 func TestSessionViewShowsTheTimelineAndRoundsAndFitsTheScreen(t *testing.T) {
-	s := liveSession("sess-1", watchd.SessionRunning, time.Now().Add(-time.Minute))
-	s.s.Rounds = []watchd.Round{{
-		Number: 1, State: watchd.RoundDone, Findings: 3, Worth: 1, Note: "1 of 3 checks passed",
-		Reviews: []watchd.ReviewPrompt{{Name: "bugs", State: watchd.PromptDone}, {Name: "style", State: watchd.PromptDone}},
+	s := liveSession("sess-1", chunkd.SessionRunning, time.Now().Add(-time.Minute))
+	s.s.Rounds = []chunkd.Round{{
+		Number: 1, State: chunkd.RoundDone, Findings: 3, Worth: 1, Note: "1 of 3 checks passed",
+		Reviews: []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptDone}, {Name: "style", State: chunkd.PromptDone}},
 	}, {
-		Number: 2, State: watchd.RoundChecking,
-		Reviews: []watchd.ReviewPrompt{{Name: "bugs", State: watchd.PromptRunning, SidecarID: "sc-1"}},
+		Number: 2, State: chunkd.RoundChecking,
+		Reviews: []chunkd.ReviewPrompt{{Name: "bugs", State: chunkd.PromptRunning, SidecarID: "sc-1"}},
 	}}
 	for _, height := range []int{14, 24, 50} {
 		m := sessModel(s)
@@ -94,8 +94,8 @@ func TestSessionViewShowsTheTimelineAndRoundsAndFitsTheScreen(t *testing.T) {
 
 func TestSessionViewKeysQuitDetachesCancelNeedsConfirmation(t *testing.T) {
 	m := sessModel(
-		liveSession("run-1", watchd.SessionRunning, time.Now()),
-		liveSession("run-2", watchd.SessionRunning, time.Now().Add(-time.Minute)),
+		liveSession("run-1", chunkd.SessionRunning, time.Now()),
+		liveSession("run-2", chunkd.SessionRunning, time.Now().Add(-time.Minute)),
 	)
 	m, _ = press(m, 'r')
 	assert.Assert(t, m.sessionView != nil)
@@ -126,7 +126,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	sockDir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
-	t.Setenv("CHUNK_WATCHD_DIR", sockDir)
+	t.Setenv("CHUNK_DAEMON_DIR", sockDir)
 
 	project := t.TempDir()
 	run := func(args ...string) {
@@ -168,12 +168,12 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 			t.Error("daemon did not shut down")
 		}
 	})
-	waitForCond(t, "daemon", watchd.IsDaemonRunning)
+	waitForCond(t, "daemon", chunkd.IsDaemonRunning)
 
-	id, err := watchd.StartFactory(watchd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
+	id, err := chunkd.StartFactory(chunkd.FactoryRequest{ProjectRoot: root, Prompt: "add a flag"})
 	assert.NilError(t, err)
-	state := func() watchd.SessionState {
-		d, fetchErr := watchd.FetchSession(id)
+	state := func() chunkd.SessionState {
+		d, fetchErr := chunkd.FetchSession(id)
 		assert.NilError(t, fetchErr)
 		return d.State
 	}
@@ -196,7 +196,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	_, isQuit := quitCmd().(tea.QuitMsg)
 	assert.Assert(t, isQuit)
 	time.Sleep(100 * time.Millisecond)
-	assert.Equal(t, state(), watchd.SessionRunning)
+	assert.Equal(t, state(), chunkd.SessionRunning)
 
 	// The confirmed cancel key stops it.
 	m, cmd := press(m, 'x', 'x')
@@ -204,7 +204,7 @@ func TestQuittingTheDashboardDetachesAndOnlyConfirmedCancelStopsTheSession(t *te
 	res, ok := cmd().(sessionActionMsg)
 	assert.Assert(t, ok)
 	assert.NilError(t, res.err)
-	waitForCond(t, "session cancelled", func() bool { return state() == watchd.SessionCancelled })
+	waitForCond(t, "session cancelled", func() bool { return state() == chunkd.SessionCancelled })
 }
 
 func waitForCond(t *testing.T, what string, ok func() bool) {

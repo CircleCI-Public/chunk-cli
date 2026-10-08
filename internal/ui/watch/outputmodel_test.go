@@ -11,13 +11,13 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // modelWithInvocation builds a model holding one sidecar, one invocation, and
 // optionally a buffered command matching it.
-func modelWithInvocation(t *testing.T, cmds []watchd.CommandState) Model {
+func modelWithInvocation(t *testing.T, cmds []chunkd.CommandState) Model {
 	t.Helper()
 	start := time.Now().Add(-time.Minute)
 	events := []eventlog.Event{
@@ -32,14 +32,14 @@ func modelWithInvocation(t *testing.T, cmds []watchd.CommandState) Model {
 			projectIdx: 0,
 		}},
 		events:      [][]eventlog.Event{events},
-		commands:    [][]watchd.CommandState{cmds},
+		commands:    [][]chunkd.CommandState{cmds},
 		focusedPane: paneRight,
 	}
 }
 
 func TestCommandForInvocationMatchesOnSidecarAndTime(t *testing.T) {
 	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	m := modelWithInvocation(t, []watchd.CommandState{{
+	m := modelWithInvocation(t, []chunkd.CommandState{{
 		CommandID:   "cmd-1",
 		SidecarID:   "sc-1",
 		SubmittedAt: submitted,
@@ -54,7 +54,7 @@ func TestCommandForInvocationMatchesOnSidecarAndTime(t *testing.T) {
 
 func TestCommandForInvocationIgnoresOtherSidecar(t *testing.T) {
 	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	m := modelWithInvocation(t, []watchd.CommandState{{
+	m := modelWithInvocation(t, []chunkd.CommandState{{
 		CommandID:   "cmd-other",
 		SidecarID:   "sc-2",
 		SubmittedAt: submitted,
@@ -66,7 +66,7 @@ func TestCommandForInvocationIgnoresOtherSidecar(t *testing.T) {
 }
 
 func TestCommandForInvocationIgnoresCommandOutsideSpan(t *testing.T) {
-	m := modelWithInvocation(t, []watchd.CommandState{{
+	m := modelWithInvocation(t, []chunkd.CommandState{{
 		CommandID:   "cmd-old",
 		SidecarID:   "sc-1",
 		SubmittedAt: time.Now().Add(-2 * time.Hour),
@@ -79,7 +79,7 @@ func TestCommandForInvocationIgnoresCommandOutsideSpan(t *testing.T) {
 
 func TestCommandForInvocationPrefersLatestMatch(t *testing.T) {
 	base := time.Now().Add(-time.Minute)
-	m := modelWithInvocation(t, []watchd.CommandState{
+	m := modelWithInvocation(t, []chunkd.CommandState{
 		{CommandID: "cmd-first", SidecarID: "sc-1", SubmittedAt: base.Add(time.Second)},
 		{CommandID: "cmd-second", SidecarID: "sc-1", SubmittedAt: base.Add(3 * time.Second)},
 	})
@@ -100,7 +100,7 @@ func TestOpenSelectedOutputRequiresACommand(t *testing.T) {
 func TestOpenSelectedOutputSetsUpPane(t *testing.T) {
 	submitted := time.Now().Add(-time.Minute).Add(time.Second)
 	exit := 1
-	m := modelWithInvocation(t, []watchd.CommandState{{
+	m := modelWithInvocation(t, []chunkd.CommandState{{
 		CommandID:   "cmd-1",
 		SidecarID:   "sc-1",
 		Name:        "go test ./...",
@@ -120,7 +120,7 @@ func TestOpenSelectedOutputSetsUpPane(t *testing.T) {
 
 func TestOpenSelectedOutputFallsBackToInvocationLabel(t *testing.T) {
 	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	m := modelWithInvocation(t, []watchd.CommandState{{
+	m := modelWithInvocation(t, []chunkd.CommandState{{
 		CommandID:   "cmd-1",
 		SidecarID:   "sc-1",
 		SubmittedAt: submitted,
@@ -187,7 +187,7 @@ func TestWithOutputChunkIgnoresChunkForAnotherCommand(t *testing.T) {
 
 	next, _ := m.Update(outputMsg{
 		commandID: "cmd-stale",
-		chunk:     watchd.OutputChunk{Found: true, Data: []byte("wrong output"), NextOffset: 12},
+		chunk:     chunkd.OutputChunk{Found: true, Data: []byte("wrong output"), NextOffset: 12},
 	})
 	nm, ok := next.(Model)
 	assert.Assert(t, ok)
@@ -199,7 +199,7 @@ func TestWithOutputChunkReportsMissingCommand(t *testing.T) {
 	m := modelWithInvocation(t, nil)
 	m.output = &outputPane{commandID: "cmd-1"}
 
-	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: watchd.OutputChunk{Found: false}})
+	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{Found: false}})
 	nm, ok := next.(Model)
 	assert.Assert(t, ok)
 	assert.Check(t, nm.output.err != nil, "a forgotten command must be reported, not shown as empty")
@@ -210,7 +210,7 @@ func TestWithOutputChunkAdvancesOffsetAndState(t *testing.T) {
 	m.output = &outputPane{commandID: "cmd-1", pinned: true}
 	exit := 2
 
-	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: watchd.OutputChunk{
+	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{
 		Found: true, Data: []byte("line\n"), NextOffset: 5, Running: false, ExitCode: &exit, Truncated: true,
 	}})
 	nm, ok := next.(Model)
@@ -228,7 +228,7 @@ func TestWithOutputChunkKeepsTruncatedLatched(t *testing.T) {
 	m := modelWithInvocation(t, nil)
 	m.output = &outputPane{commandID: "cmd-1", truncated: true}
 
-	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: watchd.OutputChunk{
+	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{
 		Found: true, Data: []byte("more\n"), NextOffset: 5, Running: true,
 	}})
 	nm, ok := next.(Model)
@@ -241,7 +241,7 @@ func TestWithOutputChunkSurfacesStreamError(t *testing.T) {
 	m := modelWithInvocation(t, nil)
 	m.output = &outputPane{commandID: "cmd-1"}
 
-	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: watchd.OutputChunk{
+	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{
 		Found: true, Data: []byte("partial\n"), NextOffset: 8,
 		Error: "400 Bad Request — Invalid command ID",
 	}})
@@ -260,13 +260,13 @@ func TestWithOutputChunkClearsStreamErrorWhenItResolves(t *testing.T) {
 	m := modelWithInvocation(t, nil)
 	m.output = &outputPane{commandID: "cmd-1"}
 
-	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: watchd.OutputChunk{
+	next, _ := m.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{
 		Found: true, Running: true, Error: "transient",
 	}})
 	nm := next.(Model)
 	assert.Assert(t, nm.output.err != nil)
 
-	next, _ = nm.Update(outputMsg{commandID: "cmd-1", chunk: watchd.OutputChunk{
+	next, _ = nm.Update(outputMsg{commandID: "cmd-1", chunk: chunkd.OutputChunk{
 		Found: true, Running: true,
 	}})
 	nm2 := next.(Model)
@@ -359,7 +359,7 @@ func TestOutputTickStopsOnceTheCommandFinishes(t *testing.T) {
 	code := 0
 	next, _ := m.Update(outputMsg{
 		commandID: "cmd-1",
-		chunk:     watchd.OutputChunk{Found: true, Running: false, ExitCode: &code},
+		chunk:     chunkd.OutputChunk{Found: true, Running: false, ExitCode: &code},
 	})
 	nm, ok := next.(Model)
 	assert.Assert(t, ok)
@@ -378,7 +378,7 @@ func TestOutputTickStopsWhenTheBufferWasEvicted(t *testing.T) {
 
 	next, _ := m.Update(outputMsg{
 		commandID: "cmd-1",
-		chunk:     watchd.OutputChunk{Found: false},
+		chunk:     chunkd.OutputChunk{Found: false},
 	})
 	nm, ok := next.(Model)
 	assert.Assert(t, ok)
@@ -447,7 +447,7 @@ func TestVisibleLinesDoesNotWriteIntoTheScrollback(t *testing.T) {
 // wrong row and returned a command that never produced that output.
 func TestCommandForInvocationUsesTheSidecarItIsGiven(t *testing.T) {
 	submitted := time.Now().Add(-time.Minute).Add(time.Second)
-	m := modelWithInvocation(t, []watchd.CommandState{{
+	m := modelWithInvocation(t, []chunkd.CommandState{{
 		CommandID:   "cmd-1",
 		SidecarID:   "sc-1",
 		SubmittedAt: submitted,

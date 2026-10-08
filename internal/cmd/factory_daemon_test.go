@@ -13,12 +13,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/factory"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
 // fakeFactoryConfig is a daemon whose factory runs do one round without
@@ -96,7 +96,7 @@ func TestFactoryRunsOnTheDaemonAndReportsTheWork(t *testing.T) {
 	assert.NilError(t, err, stderr)
 
 	for _, want := range []string{
-		"started on the watch daemon",
+		"started on the chunk daemon",
 		// The run ends before the first poll, so only where it ended shows,
 		// out of the default attempts.
 		"round 1/3: done — 1 of 1 checks passed",
@@ -185,7 +185,7 @@ func TestFactoryJSONWhoseChecksStillFailExitsWithAnError(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "Checks still failed after 1 round(s).")
-	var detail watchd.SessionDetail
+	var detail chunkd.SessionDetail
 	assert.NilError(t, json.Unmarshal([]byte(stdout), &detail), stdout)
 	assert.Equal(t, detail.Factory.Result, "exhausted")
 	// Progress still goes to stderr, but the closing report is the JSON.
@@ -345,7 +345,7 @@ func TestFactoryContinueReachesTheRun(t *testing.T) {
 			assert.Equal(t, opts.Continue.From.RunID, "run-0")
 			assert.Equal(t, opts.Continue.From.Prompt, "add a --verbose flag")
 			assert.Equal(t, opts.Continue.Guidance, tc.wantGuidance)
-			var detail watchd.SessionDetail
+			var detail chunkd.SessionDetail
 			assert.NilError(t, json.Unmarshal([]byte(stdout), &detail))
 			assert.Equal(t, detail.Factory.ContinuesRunID, "run-0")
 			assert.Equal(t, detail.Factory.Prompt, "add a --verbose flag")

@@ -6,10 +6,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // newSidecarLogsCmd prints a remote command's output.
@@ -19,7 +19,7 @@ import (
 // ran validate and wants to know why it failed can pipe this, where it cannot
 // drive a dashboard.
 //
-// It prefers the watch daemon's buffer and falls back to the API, so it works
+// It prefers the chunk daemon's buffer and falls back to the API, so it works
 // whether or not a daemon is running.
 func newSidecarLogsCmd() *cobra.Command {
 	var follow bool
@@ -29,7 +29,7 @@ func newSidecarLogsCmd() *cobra.Command {
 		Short: "Print the output of a command that ran on a sidecar",
 		Long: "Print the output of a command that ran on a sidecar.\n\n" +
 			"Command IDs appear in the chunk watch dashboard. Output is read from the\n" +
-			"watch daemon's buffer when it has it, and from the CircleCI API otherwise.\n\n" +
+			"chunk daemon's buffer when it has it, and from the CircleCI API otherwise.\n\n" +
 			"Exits non-zero only when reading failed. A command that itself exited\n" +
 			"non-zero is reported on stderr as \"exit status N\" and does not change this\n" +
 			"command's own status, so a failing remote command is not a failing read.",
@@ -41,7 +41,7 @@ func newSidecarLogsCmd() *cobra.Command {
 
 			// The daemon first: it needs no network round trip and it holds output
 			// for commands whose submitting process has long since exited.
-			if chunk, err := watchd.FetchOutput(commandID, 0); err == nil && chunk.Found {
+			if chunk, err := chunkd.FetchOutput(commandID, 0); err == nil && chunk.Found {
 				if chunk.Truncated {
 					io.ErrPrintln("warning: earlier output was dropped from the buffer")
 				}
@@ -104,15 +104,15 @@ func followFromDaemon(cmd *cobra.Command, commandID string, offset int64, io ios
 			return ctx.Err()
 		case <-time.After(followInterval):
 		}
-		chunk, err := watchd.FetchOutput(commandID, offset)
+		chunk, err := chunkd.FetchOutput(commandID, offset)
 		if err != nil {
-			return &userError{msg: "Lost contact with the watch daemon while following output.", err: err}
+			return &userError{msg: "Lost contact with the chunk daemon while following output.", err: err}
 		}
 		if !chunk.Found {
 			// The daemon evicted the command mid-follow. Report what happened
 			// rather than exiting 0 as though the command had passed.
 			return &userError{
-				msg:    fmt.Sprintf("The watch daemon dropped output for command %s while following it.", commandID),
+				msg:    fmt.Sprintf("The chunk daemon dropped output for command %s while following it.", commandID),
 				errMsg: "command output evicted",
 			}
 		}

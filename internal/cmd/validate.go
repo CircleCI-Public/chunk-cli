@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
@@ -32,7 +33,6 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/validate"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 const (
@@ -346,7 +346,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.projectDir, "project", "", "Override project directory")
 	cmd.Flags().StringArrayVarP(&opts.envVarsFlag, "env", "e", nil, "KEY=VALUE pairs to set in remote sidecar session (repeatable)")
 	cmd.Flags().StringVar(&opts.envFile, "env-file", defaultEnvFile, "Env file to load (default: .env.local; pass a path to override)")
-	cmd.Flags().BoolVar(&opts.async, "async", false, "Run in the background via the watch daemon and report on a later run")
+	cmd.Flags().BoolVar(&opts.async, "async", false, "Run in the background via the chunk daemon and report on a later run")
 	cmd.Flags().BoolVar(&opts.noDaemon, "no-daemon", false, "")
 	_ = cmd.Flags().MarkHidden("no-daemon")
 	cmd.Flags().StringVar(&opts.attributeTo, "attribute-to", "", "")
@@ -465,12 +465,12 @@ func resolveWorkDir(opts *validateOpts) (string, error) {
 }
 
 // shouldUseDaemon reports whether this validate run should be delegated to the
-// watch daemon. Hook runs always run inline (stdin consumed, per-session attempt
+// chunk daemon. Hook runs always run inline (stdin consumed, per-session attempt
 // tracking). --no-daemon skips this to avoid re-delegation when the daemon calls
 // us in-process. Delegation is skipped for daemons from a different build since
 // they may not support the /validate endpoint.
 func shouldUseDaemon(hook *hookContext, noDaemon bool) bool {
-	return hook == nil && !noDaemon && watchd.IsDaemonCompatible()
+	return hook == nil && !noDaemon && chunkd.IsDaemonCompatible()
 }
 
 // resolveHookRun completes the hook context read from stdin and settles the
@@ -933,7 +933,7 @@ func wrapEventLogStatusFn(statusFn iostream.StatusFunc, sidecarID string, active
 		op = eventlog.OpHook
 	}
 	// Register the project alongside the log about to be written to it. A run's
-	// results are never sent to the watch daemon — it reads this same log off
+	// results are never sent to the chunk daemon — it reads this same log off
 	// disk — and only saving sidecar state used to register a project, so a run
 	// with no sidecar logged its results where no daemon would ever look for
 	// them. Registered remote commands were reached the same way: the daemon
@@ -1088,7 +1088,7 @@ func validateEnvFlag(envVarsFlag []string) error {
 	return nil
 }
 
-// runValidateViaDaemon delegates a validate run to the watch daemon and writes
+// runValidateViaDaemon delegates a validate run to the chunk daemon and writes
 // its captured output to streams. When hook is non-nil its context is forwarded
 // to the subprocess via hidden flags so it runs as a hook invocation.
 //
@@ -1112,7 +1112,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 			reqArgs = append(reqArgs, "--stop-hook-active")
 		}
 	}
-	req := watchd.ValidateRequest{
+	req := chunkd.ValidateRequest{
 		Args:         reqArgs,
 		ProjectRoot:  workDir,
 		WorkDir:      workDir,
@@ -1124,13 +1124,13 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 	// Forward local credentials only over the Unix socket (isolated to the local
 	// filesystem). Over TCP the remote daemon runs with its own credentials and
 	// can provision its own sidecar when an org ID is provided.
-	if watchd.TCPRemoteAddr() == "" {
+	if chunkd.TCPRemoteAddr() == "" {
 		req.CircleCIToken = circleCIToken
 		req.Env = os.Environ()
 	} else {
 		req.OrgID = orgID
 	}
-	resp, err := watchd.RunValidate(req)
+	resp, err := chunkd.RunValidate(req)
 	if err != nil {
 		return fmt.Errorf("daemon validate: %w", err)
 	}
@@ -1151,7 +1151,7 @@ func runValidateViaDaemon(workDir string, args []string, circleCIToken, orgID, i
 // says so in its hook response; otherwise the user sees the hook finish with
 // nothing to show whether it checked anything. That is written under Codex
 // too, where it shows as a warning: work still outstanding is worth one.
-func reportDelegatedValidate(resp watchd.ValidateResponse, hook *hookContext, streams iostream.Streams) error {
+func reportDelegatedValidate(resp chunkd.ValidateResponse, hook *hookContext, streams iostream.Streams) error {
 	if resp.TaskID != "" {
 		streams.ErrPrintf("  %s\n", ui.ErrDim(fmt.Sprintf(
 			"validating in the background: %s (%s)", shortTaskID(resp.TaskID), resp.Reason)))
@@ -1180,11 +1180,11 @@ func reportDelegatedValidate(resp watchd.ValidateResponse, hook *hookContext, st
 // expects, and a score printed on every turn is how a number stops being read
 // at all. Advice is printed whenever there is any, since advice exists only
 // where there is something to act on.
-func reportRisk(risk *watchd.RiskSummary, streams iostream.Streams) {
+func reportRisk(risk *chunkd.RiskSummary, streams iostream.Streams) {
 	if risk == nil {
 		return
 	}
-	if risk.Band != watchd.BandLow {
+	if risk.Band != chunkd.BandLow {
 		streams.ErrPrintf("  %s\n", ui.ErrDim(risk.String()))
 	}
 	if risk.Advice != "" {
@@ -1203,7 +1203,7 @@ func reportRisk(risk *watchd.RiskSummary, streams iostream.Streams) {
 // daemon's build cannot be checked, which is why a new piece of hook context
 // goes in a request field (see ValidateRequest.HookCodex) rather than a flag.
 func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDaemon bool, streams iostream.Streams) (bool, error) {
-	if hook == nil || noDaemon || !watchd.IsDaemonCompatible() {
+	if hook == nil || noDaemon || !chunkd.IsDaemonCompatible() {
 		return false, nil
 	}
 	// If hooks are disabled in this environment, don't delegate — the daemon
@@ -1217,13 +1217,13 @@ func tryHookDelegate(cmd *cobra.Command, hook *hookContext, workDir string, noDa
 		return false, nil // fall back to inline; inline path handles auth
 	}
 	err = runValidateViaDaemon(workDir, os.Args[1:], rc.CircleCIToken, "", "", hook, streams)
-	if errors.Is(err, watchd.ErrDaemonUnavailable) {
+	if errors.Is(err, chunkd.ErrDaemonUnavailable) {
 		return false, nil // daemon disappeared between check and POST; run inline
 	}
 	return true, err
 }
 
-// delegateToDaemon hands the run to the watch daemon when it should be, and
+// delegateToDaemon hands the run to the chunk daemon when it should be, and
 // reports whether it did. A caller told false runs the commands inline.
 //
 // Async and synchronous delegation are decided together because they are the
@@ -1243,7 +1243,7 @@ func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCITo
 		// the IsDaemonCompatible check and the POST (connection refused), and the
 		// daemon lacks the /validate endpoint because it is from an older build
 		// (404). Both fall through to inline execution.
-		if !errors.Is(err, watchd.ErrDaemonUnavailable) {
+		if !errors.Is(err, chunkd.ErrDaemonUnavailable) {
 			return true, err
 		}
 	}
@@ -1259,20 +1259,20 @@ func delegateToDaemon(opts *validateOpts, hook *hookContext, workDir, circleCITo
 // the time it finished. Running inline is the honest fallback — the answer is
 // slower to arrive but reaches the caller while it is still true.
 func tryAsyncDelegate(workDir, circleCIToken string, streams iostream.Streams) (bool, error) {
-	if !watchd.IsDaemonCompatible() {
-		streams.ErrPrintln(ui.ErrDim("chunk validate: no watch daemon, running inline"))
+	if !chunkd.IsDaemonCompatible() {
+		streams.ErrPrintln(ui.ErrDim("chunk validate: no chunk daemon, running inline"))
 		return false, nil
 	}
-	taskID, err := watchd.StartAsyncValidate(workDir, os.Args[1:], circleCIToken)
+	taskID, err := chunkd.StartAsyncValidate(workDir, os.Args[1:], circleCIToken)
 	switch {
-	case errors.Is(err, watchd.ErrAsyncRefused):
+	case errors.Is(err, chunkd.ErrAsyncRefused):
 		// The daemon's own words: it refuses for more than one reason, and a
 		// developer told the wrong one goes looking in the wrong place.
-		reason := strings.TrimPrefix(err.Error(), watchd.ErrAsyncRefused.Error()+": ")
+		reason := strings.TrimPrefix(err.Error(), chunkd.ErrAsyncRefused.Error()+": ")
 		streams.ErrPrintln(ui.ErrDim("chunk validate: " + reason + ", running inline"))
 		return false, nil
-	case errors.Is(err, watchd.ErrDaemonUnavailable):
-		streams.ErrPrintln(ui.ErrDim("chunk validate: watch daemon unavailable, running inline"))
+	case errors.Is(err, chunkd.ErrDaemonUnavailable):
+		streams.ErrPrintln(ui.ErrDim("chunk validate: chunk daemon unavailable, running inline"))
 		return false, nil
 	case err != nil:
 		return true, err
@@ -1327,12 +1327,12 @@ func newValidateResultsCmd() *cobra.Command {
 // stdout is the channel by which a background result reaches the agent that
 // caused it. Progress and warnings stay on stderr.
 func runResults(workDir string, streams iostream.Streams) error {
-	tasks, err := watchd.CollectValidateResults(workDir)
+	tasks, err := chunkd.CollectValidateResults(workDir)
 	if err != nil {
 		// Nothing to collect is the common case, not a failure: no daemon means
 		// no background runs. Reporting it as an error on a hook path would put
 		// noise in front of the agent on every turn.
-		if errors.Is(err, watchd.ErrDaemonUnavailable) {
+		if errors.Is(err, chunkd.ErrDaemonUnavailable) {
 			return nil
 		}
 		return err
@@ -1344,7 +1344,7 @@ func runResults(workDir string, streams iostream.Streams) error {
 // printResults writes what background runs concluded. Split from runResults so
 // the wording can be tested directly: what an agent is told is the whole point
 // of the feature, and driving it through a socket to find out is a poor trade.
-func printResults(streams iostream.Streams, tasks []watchd.TaskState) {
+func printResults(streams iostream.Streams, tasks []chunkd.TaskState) {
 	for _, t := range tasks {
 		// A live-tree run the tree has moved past reports no verdict, only that it
 		// was discarded. The daemon strips the exit code and output of such a task
@@ -1554,7 +1554,7 @@ func onValidateCommandSubmitted(sidecarID, projectRoot, commandName string, setC
 		if setCommandID != nil {
 			setCommandID(commandID)
 		}
-		watchd.RegisterCommand(watchd.CommandReg{
+		chunkd.RegisterCommand(chunkd.CommandReg{
 			CommandID:   commandID,
 			SidecarID:   sidecarID,
 			ProjectRoot: projectRoot,

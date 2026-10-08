@@ -111,7 +111,7 @@ func TestCanonicalProjectRoot_FallsBackToClean(t *testing.T) {
 // reaches here untouched. EvalSymlinks leaves it relative, so without an
 // absolute step "." survives canonicalisation — and "." is not a name for any
 // one project. It names whichever directory the reader happens to be standing
-// in, which for the watch daemon is its own.
+// in, which for the chunk daemon is its own.
 func TestCanonicalProjectRoot_MakesRelativeRootsAbsolute(t *testing.T) {
 	project := filepath.Join(t.TempDir(), "project")
 	assert.NilError(t, os.MkdirAll(project, 0o755))

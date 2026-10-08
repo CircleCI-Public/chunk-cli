@@ -316,7 +316,7 @@ get a row.
 
 #### Reading a command's output
 
-An invocation marked `▤` in the activity pane has output the watch daemon still
+An invocation marked `▤` in the activity pane has output the chunk daemon still
 holds. Press `Enter` on it to open a scrollback view: a command that is still
 running tails live, and one that has already finished is replayed from the
 buffer. This is the answer to "the hook ran validate, it failed, and the output

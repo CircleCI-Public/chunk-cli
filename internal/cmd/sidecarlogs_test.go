@@ -15,8 +15,8 @@ import (
 	"gotest.tools/v3/assert"
 	"gotest.tools/v3/assert/cmp"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 func TestReportExitCode(t *testing.T) {
@@ -68,18 +68,18 @@ func TestSidecarLogsIsRegistered(t *testing.T) {
 	assert.Check(t, found, "sidecar logs should be registered as a subcommand")
 }
 
-// fakeWatchd serves /output over a unix socket at the daemon's expected path,
+// fakeChunkd serves /output over a unix socket at the daemon's expected path,
 // returning the supplied chunks in order.
-func fakeWatchd(t *testing.T, chunks []watchd.OutputChunk) {
+func fakeChunkd(t *testing.T, chunks []chunkd.OutputChunk) {
 	t.Helper()
 	// Not t.TempDir(): a unix socket path is capped near 104 bytes and macOS
 	// temp dirs are long enough to blow that on their own.
-	dir, err := os.MkdirTemp("/tmp", "watchd")
+	dir, err := os.MkdirTemp("/tmp", "chunkd")
 	assert.NilError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	t.Setenv("CHUNK_WATCHD_DIR", dir)
+	t.Setenv("CHUNK_DAEMON_DIR", dir)
 
-	ln, err := net.Listen("unix", filepath.Join(dir, "watchd.sock"))
+	ln, err := net.Listen("unix", filepath.Join(dir, "daemon.sock"))
 	assert.NilError(t, err)
 
 	var mu sync.Mutex
@@ -102,7 +102,7 @@ func fakeWatchd(t *testing.T, chunks []watchd.OutputChunk) {
 // A stream that dies mid-follow leaves no exit code, so reporting only the code
 // would end the follow silently at exit 0 as though the command had finished.
 func TestFollowReportsAStreamThatEndedEarly(t *testing.T) {
-	fakeWatchd(t, []watchd.OutputChunk{
+	fakeChunkd(t, []chunkd.OutputChunk{
 		{Found: true, Running: true, Data: []byte("first\n"), NextOffset: 6},
 		{Found: true, Running: false, NextOffset: 6, Error: "connection reset"},
 	})

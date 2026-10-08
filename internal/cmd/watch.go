@@ -9,13 +9,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui"
 	"github.com/CircleCI-Public/chunk-cli/internal/ui/watch"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
 )
 
 // watchCmdName is the name of the watch command, referenced by the update-check
@@ -38,11 +38,11 @@ func newWatchCmd() *cobra.Command {
 				return fmt.Errorf("watch requires a TTY")
 			}
 
-			if watchd.CurrentConnection().Remote != "" {
+			if chunkd.CurrentConnection().Remote != "" {
 				return runRemoteWatch(cmd, focus, args)
 			}
 
-			if err := watchd.EnsureRunning(); err != nil {
+			if err := chunkd.EnsureRunning(); err != nil {
 				iostream.FromCmd(cmd).ErrPrintf("chunk watch: daemon unavailable, running without background updates: %v\n", err)
 			}
 
@@ -102,12 +102,29 @@ func newWatchCmd() *cobra.Command {
 	// The daemon used to run as `chunk watch _daemon`. A dashboard opened before
 	// an upgrade still relaunches it that way, against the new binary, so the old
 	// spelling stays as a hidden alias.
-	cmd.AddCommand(newDaemonCmd())
+	cmd.AddCommand(newLegacyDaemonCmd())
+	return cmd
+}
+
+// newLegacyDaemonCmd is `chunk watch _daemon`, which starts a daemon only when
+// none is answering. A dashboard opened before the daemon moved to
+// ~/.chunk/daemon/ polls the old socket, never finds the new daemon, and
+// relaunches through here on every poll; starting a daemon each time would take
+// the socket from the one already serving.
+func newLegacyDaemonCmd() *cobra.Command {
+	cmd := newDaemonCmd()
+	run := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if chunkd.IsDaemonRunning() {
+			return nil
+		}
+		return run(cmd, args)
+	}
 	return cmd
 }
 
 // runRemoteWatch runs the dashboard against a daemon on another machine
-// (CHUNK_WATCHD_REMOTE_ADDR).
+// (CHUNK_DAEMON_REMOTE_ADDR).
 //
 // Nothing about the local machine is used to pick what to show. The daemon
 // tracks its own projects at its own paths, so this machine's working directory,
@@ -116,13 +133,13 @@ func newWatchCmd() *cobra.Command {
 // quiet one. The default is therefore everything the daemon tracks. Paths given
 // as arguments are taken as paths on the daemon's host and sent as typed.
 func runRemoteWatch(cmd *cobra.Command, focus bool, args []string) error {
-	if watchd.TCPToken() == "" {
+	if chunkd.TCPToken() == "" {
 		// A daemon only listens on TCP with a token, so a client without one
 		// cannot be talking to a working daemon. Say so before the dashboard
 		// clears the screen and a 401 becomes an unexplained red header.
-		return newUserError("CHUNK_WATCHD_REMOTE_ADDR is set but CHUNK_WATCHD_TCP_TOKEN is not.").
+		return newUserError("CHUNK_DAEMON_REMOTE_ADDR is set but CHUNK_DAEMON_TCP_TOKEN is not.").
 			withCode("watch.remote_token_missing").
-			withSuggestion("Set CHUNK_WATCHD_TCP_TOKEN to the token the remote daemon was started with.").
+			withSuggestion("Set CHUNK_DAEMON_TCP_TOKEN to the token the remote daemon was started with.").
 			withoutDetail()
 	}
 	if focus && len(args) == 0 {

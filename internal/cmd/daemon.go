@@ -9,22 +9,22 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/authprompt"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
+	"github.com/CircleCI-Public/chunk-cli/internal/chunkd/server"
 	"github.com/CircleCI-Public/chunk-cli/internal/circleci"
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
 	"github.com/CircleCI-Public/chunk-cli/internal/envctx"
 	"github.com/CircleCI-Public/chunk-cli/internal/github"
 	"github.com/CircleCI-Public/chunk-cli/internal/session"
 	"github.com/CircleCI-Public/chunk-cli/internal/version"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
-	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
-// newDaemonCmd returns the hidden command the watch daemon runs as. Its name is
-// watchd's, because watchd is what launches it.
+// newDaemonCmd returns the hidden command the chunk daemon runs as. Its name is
+// chunkd's, because chunkd is what launches it.
 func newDaemonCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:    watchd.DaemonSubcommand,
-		Short:  "Run the watch daemon (internal use only)",
+		Use:    chunkd.DaemonSubcommand,
+		Short:  "Run the chunk daemon (internal use only)",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Resolved here, once, rather than on demand inside the daemon:
@@ -78,7 +78,7 @@ func daemonReviewConfig(rc config.ResolvedConfig, rcErr error) server.ReviewConf
 // authMessage renders a credential-resolution failure for the dashboard. An
 // empty logs pane with no explanation sends people hunting the wrong fault.
 //
-// It lives here rather than in watchd because ErrNeedsAuth is authprompt's, and
+// It lives here rather than in chunkd because ErrNeedsAuth is authprompt's, and
 // the daemon has no business importing the auth flow to tell one failure from
 // another — this is the layer that already holds the error.
 func authMessage(err error) string {

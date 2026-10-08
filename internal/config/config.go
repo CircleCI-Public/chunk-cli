@@ -134,7 +134,7 @@ type UserConfig struct {
 	Notifications bool `json:"notifications,omitempty"`
 
 	// AutoLaunchDaemon controls whether chunk commands automatically start the
-	// watch daemon when it is not running. false (zero value / default) means
+	// chunk daemon when it is not running. false (zero value / default) means
 	// the daemon must be started explicitly with `chunk watch`.
 	AutoLaunchDaemon bool `json:"autoLaunchDaemon,omitempty"`
 
