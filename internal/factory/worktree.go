@@ -121,12 +121,16 @@ func (w Worktree) Stat(ctx context.Context) (string, error) {
 }
 
 // CommitMessage is the work's commit message: the prompt's first line as the
-// subject, the prompt in full below it, and how the run ended.
+// subject, the rest of the prompt below it, and how the run ended.
 func CommitMessage(prompt, runID string, o Outcome) string {
-	prompt = strings.TrimSpace(prompt)
-	subject := strings.SplitN(prompt, "\n", 2)[0]
+	subject, rest, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
+	subject = strings.TrimSuffix(subject, "\r")
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n%s\n\nWritten by chunk factory run %s", subject, prompt, runID)
+	fmt.Fprintf(&b, "%s\n\n", subject)
+	if rest = strings.Trim(rest, "\r\n"); rest != "" {
+		fmt.Fprintf(&b, "%s\n\n", rest)
+	}
+	fmt.Fprintf(&b, "Written by chunk factory run %s", runID)
 	if o.Result != "" {
 		fmt.Fprintf(&b, " (%s after %d round(s))", o.Result, o.Rounds)
 	}

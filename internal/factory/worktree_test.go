@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -78,7 +77,8 @@ func TestWorktreeCommitKeepsTheWorktree(t *testing.T) {
 
 	assert.Equal(t, gitOutput(t, root, "rev-parse", wt.Branch), commit)
 	assert.Equal(t, gitOutput(t, root, "log", "-1", "--format=%s", wt.Branch), "add a main")
-	assert.Assert(t, strings.Contains(gitOutput(t, root, "log", "-1", "--format=%b", wt.Branch), "(passed after 2 round(s))"))
+	assert.Equal(t, gitOutput(t, root, "log", "-1", "--format=%b", wt.Branch),
+		"with detail\n\nWritten by chunk factory run run-1 (passed after 2 round(s)).", "the subject is not repeated in the body")
 	stat, err := wt.Stat(ctx)
 	assert.NilError(t, err)
 	assert.Equal(t, stat, "2 files changed, 2 insertions(+), 1 deletion(-)")
@@ -97,4 +97,13 @@ func TestWorktreeRemove(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err))
 	assert.Equal(t, gitOutput(t, root, "branch", "--list", wt.Branch), "")
 	assert.Equal(t, readFile(t, root, "mine.go"), "package main\n", "the developer's own files are untouched")
+}
+
+func TestCommitMessageDoesNotRepeatTheSubject(t *testing.T) {
+	assert.Equal(t, CommitMessage("  add a flag\n", "run-1", Outcome{}),
+		"add a flag\n\nWritten by chunk factory run run-1.\n")
+	assert.Equal(t, CommitMessage("add a flag\n\nso users can opt out\n", "run-1", Outcome{Result: ResultPassed, Rounds: 1}),
+		"add a flag\n\nso users can opt out\n\nWritten by chunk factory run run-1 (passed after 1 round(s)).\n")
+	assert.Equal(t, CommitMessage("add a flag\r\n\r\n    go test ./...\r\n", "run-1", Outcome{}),
+		"add a flag\n\n    go test ./...\n\nWritten by chunk factory run run-1.\n")
 }
