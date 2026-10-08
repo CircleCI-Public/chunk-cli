@@ -559,6 +559,40 @@ func detectVCS(ctx context.Context, workDir string, streams iostream.Streams, cf
 	return nil
 }
 
+// gitignoreStep ensures pool state files are gitignored, warning on failure.
+func gitignoreStep(workDir string, streams iostream.Streams) {
+	if err := ensureGitignoreEntries(workDir, streams); err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
+	}
+}
+
+// detectCommandsStep detects validate commands and stores them in cfg,
+// warning rather than failing when detection does not succeed.
+func detectCommandsStep(ctx context.Context, rc config.ResolvedConfig, workDir string, streams iostream.Streams, cfg *config.ProjectConfig) {
+	claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
+	det, err := validate.DetectCommands(ctx, claude, workDir)
+	if err != nil {
+		streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", err)))
+		return
+	}
+	printDetectionSource(det, streams)
+	allCommands := []config.Command{}
+	// Detection may already have found an install command — a
+	// CircleCI config names one directly. Only fall back to
+	// guessing from the lock file when it did not.
+	if !hasInstallCommand(det.Commands) {
+		if pm := validate.DetectPackageManager(workDir); pm != nil {
+			streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
+			allCommands = append(allCommands, config.Command{Name: config.CmdInstall, Run: pm.InstallCommand})
+		}
+	}
+	allCommands = append(allCommands, det.Commands...)
+	cfg.Commands = allCommands
+	for _, c := range det.Commands {
+		streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
+	}
+}
+
 func newInitCmd() *cobra.Command {
 	var force, skipHooks, skipGitHook, skipValidate, skipCompletions, skipSkills, skipTestSuites, skipOrgID bool
 	var projectDir string
@@ -607,9 +641,7 @@ hook config files.`,
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
 					// Still ensure pool state is gitignored for projects
 					// initialized before this pattern existed.
-					if err := ensureGitignoreEntries(workDir, streams); err != nil {
-						streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
-					}
+					gitignoreStep(workDir, streams)
 					return nil
 				}
 			}
@@ -632,29 +664,7 @@ hook config files.`,
 
 			// Step 2: Validate command detection
 			if !skipValidate {
-				claude, _ := anthropic.New(anthropic.Config{APIKey: rc.AnthropicAPIKey, BaseURL: rc.AnthropicBaseURL})
-				det, detectErr := validate.DetectCommands(ctx, claude, workDir)
-				if detectErr != nil {
-					streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not detect commands: %v", detectErr)))
-				} else {
-					printDetectionSource(det, streams)
-					allCommands := []config.Command{}
-					// Detection may already have found an install command — a
-					// CircleCI config names one directly. Only fall back to
-					// guessing from the lock file when it did not.
-					if !hasInstallCommand(det.Commands) {
-						pm := validate.DetectPackageManager(workDir)
-						if pm != nil {
-							streams.ErrPrintf("Detected package manager: %s\n", ui.Bold(pm.Name))
-							allCommands = append(allCommands, config.Command{Name: config.CmdInstall, Run: pm.InstallCommand})
-						}
-					}
-					allCommands = append(allCommands, det.Commands...)
-					cfg.Commands = allCommands
-					for _, c := range det.Commands {
-						streams.ErrPrintf("Detected command: %s (%s)\n", ui.Bold(c.Name), ui.Gray(c.Run))
-					}
-				}
+				detectCommandsStep(ctx, rc, workDir, streams, cfg)
 			}
 
 			// Step 3: CircleCI org ID
@@ -672,9 +682,7 @@ hook config files.`,
 			}
 			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
 
-			if err := ensureGitignoreEntries(workDir, streams); err != nil {
-				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
-			}
+			gitignoreStep(workDir, streams)
 
 			// Step 4: Write hook config files for supported agents.
 			if !skipHooks {
