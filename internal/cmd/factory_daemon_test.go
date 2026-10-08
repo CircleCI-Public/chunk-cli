@@ -362,5 +362,6 @@ func TestFactoryContinueRefusesAnUnknownRun(t *testing.T) {
 	var ue *userError
 	assert.Assert(t, errors.As(err, &ue), "got %v", err)
 	assert.Equal(t, ue.UserMessage(), "No factory run nope to continue in this project.")
+	assert.Equal(t, ue.Suggestion(), "Pass the run ID from the end of the run's output, or its branch: chunk/factory/<run id>.")
 	assert.Equal(t, ue.UserExitCode(), ExitBadArgs)
 }
