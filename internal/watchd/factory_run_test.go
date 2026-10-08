@@ -87,7 +87,6 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 		ImplementerInstructions: "keep the change small",
 	})
 	assert.NilError(t, err)
-	assert.Equal(t, sess.Kind, KindFactory)
 	detail := waitForSessionEnd(t, d, sess.ID)
 
 	// The run was asked for what the request and the project say.
@@ -117,7 +116,7 @@ func TestFactorySessionRecordsTheRun(t *testing.T) {
 	assert.Equal(t, round.State, RoundDone)
 	assert.Equal(t, round.Note, "2 of 3 checks passed")
 	assert.DeepEqual(t, *round.Implement, RoundImplement{
-		State: FixApplied, DurationMS: 60000, CostUSD: 0.5, Summary: "added it", Stat: "1 file changed",
+		State: ImplementApplied, DurationMS: 60000, CostUSD: 0.5, Summary: "added it", Stat: "1 file changed",
 	})
 	assert.DeepEqual(t, round.Checks, []RoundCheck{
 		{Name: "test", Status: "passed", SidecarID: "sc-1", DurationMS: 2000},
@@ -217,7 +216,7 @@ func TestFactorySessionWhoseImplementerFailsRecordsTheTurnFailed(t *testing.T) {
 	assert.Equal(t, detail.State, SessionFailed)
 	round := detail.Rounds[0]
 	assert.Equal(t, round.State, RoundFailed)
-	assert.Equal(t, round.Implement.State, FixFailed)
+	assert.Equal(t, round.Implement.State, ImplementFailed)
 	assert.Assert(t, strings.Contains(round.Implement.Error, "claude exited 1"), round.Implement.Error)
 }
 
@@ -234,20 +233,12 @@ func TestFactorySessionCanBeCancelled(t *testing.T) {
 	assert.Equal(t, waitForSessionEnd(t, d, sess.ID).State, SessionCancelled)
 }
 
-// One session at a time per project, whatever its kind.
-func TestFactorySessionsAndReviewSessionsTakeTurns(t *testing.T) {
+// One session at a time per project.
+func TestFactorySessionsTakeTurns(t *testing.T) {
 	s := newSessionStore(context.Background())
-	_, _, busy := s.add(Session{Kind: KindReview, ProjectRoot: "/p"})
+	_, _, busy := s.add(Session{ProjectRoot: "/p", Factory: &FactoryRun{}})
 	assert.Equal(t, busy, "")
-	_, _, busy = s.add(Session{Kind: KindFactory, ProjectRoot: "/p", Factory: &FactoryRun{}})
-	assert.Assert(t, busy != "", "a factory run started beside a review session")
-
-	s = newSessionStore(context.Background())
-	_, _, busy = s.add(Session{Kind: KindFactory, ProjectRoot: "/p", Factory: &FactoryRun{}})
-	assert.Equal(t, busy, "")
-	_, _, busy = s.add(Session{Kind: KindReview, ProjectRoot: "/p"})
-	assert.Assert(t, busy != "", "a review session started beside a factory run")
-	_, _, busy = s.add(Session{Kind: KindFactory, ProjectRoot: "/p", Factory: &FactoryRun{}})
+	_, _, busy = s.add(Session{ProjectRoot: "/p", Factory: &FactoryRun{}})
 	assert.Assert(t, busy != "", "two factory runs ran at once")
 }
 

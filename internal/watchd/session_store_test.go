@@ -23,7 +23,7 @@ func TestSessionStoreAllowsOneActiveSessionPerProject(t *testing.T) {
 
 	first, _, busy := store.add(Session{ProjectRoot: "/p"})
 	assert.Equal(t, busy, "")
-	assert.Equal(t, len(first.snapshot().Stages), len(newStages(StageReviewLoop)))
+	assert.Equal(t, len(first.snapshot().Stages), len(newStages()))
 
 	_, _, busy = store.add(Session{ProjectRoot: "/p"})
 	assert.Assert(t, busy != "", "a second session on the same project must be refused")
@@ -69,7 +69,7 @@ func TestSessionAPIListsGetsAndCancels(t *testing.T) {
 		finish(entry, SessionCancelled)
 	}()
 
-	resp, err := http.Get(srv.URL + "/session/" + id)
+	resp, err := http.Get(srv.URL + "/factory/" + id)
 	assert.NilError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, resp.StatusCode, http.StatusOK)
@@ -77,13 +77,13 @@ func TestSessionAPIListsGetsAndCancels(t *testing.T) {
 	assert.NilError(t, json.NewDecoder(resp.Body).Decode(&detail))
 	assert.Equal(t, detail.ID, id)
 
-	missing, err := http.Get(srv.URL + "/session/nope")
+	missing, err := http.Get(srv.URL + "/factory/nope")
 	assert.NilError(t, err)
 	defer func() { _ = missing.Body.Close() }()
 	assert.Equal(t, missing.StatusCode, http.StatusNotFound)
 
 	for range 2 { // cancelling twice is not an error
-		cancel, err := http.Post(srv.URL+"/session/"+id+"/cancel", "", nil)
+		cancel, err := http.Post(srv.URL+"/factory/"+id+"/cancel", "", nil)
 		assert.NilError(t, err)
 		_ = cancel.Body.Close()
 		assert.Equal(t, cancel.StatusCode, http.StatusAccepted)

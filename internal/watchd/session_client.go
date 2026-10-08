@@ -74,16 +74,6 @@ func sessionCall(method, path string, in, out any) error {
 	return nil
 }
 
-// StartSession asks the daemon to start a session and returns its ID without
-// waiting for it.
-func StartSession(req SessionRequest) (string, error) {
-	var resp SessionStartResponse
-	if err := sessionCall(http.MethodPost, "/session", req, &resp); err != nil {
-		return "", err
-	}
-	return resp.ID, nil
-}
-
 // StartFactory asks the daemon to start a factory session and returns its ID
 // without waiting for it. It is followed and cancelled like any other session.
 func StartFactory(req FactoryRequest) (string, error) {
@@ -97,7 +87,7 @@ func StartFactory(req FactoryRequest) (string, error) {
 // FetchSession returns one session with the text of its reviews.
 func FetchSession(id string) (SessionDetail, error) {
 	var detail SessionDetail
-	if err := sessionCall(http.MethodGet, "/session/"+neturl.PathEscape(id), nil, &detail); err != nil {
+	if err := sessionCall(http.MethodGet, "/factory/"+neturl.PathEscape(id), nil, &detail); err != nil {
 		return SessionDetail{}, err
 	}
 	return detail, nil
@@ -106,7 +96,7 @@ func FetchSession(id string) (SessionDetail, error) {
 // ListSessions returns the daemon's sessions, newest first per project. An empty
 // root lists every project's.
 func ListSessions(root string) ([]Session, error) {
-	path := "/session"
+	path := "/factory"
 	if root != "" {
 		path += "?root=" + neturl.QueryEscape(root)
 	}
@@ -117,22 +107,8 @@ func ListSessions(root string) ([]Session, error) {
 	return list.Sessions, nil
 }
 
-// ResumeSession continues a paused session with the files as they are now.
-func ResumeSession(id string) error {
-	return sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/resume", nil, nil)
-}
-
-// RestoreSession undoes everything a session changed in the working tree.
-func RestoreSession(id string, force bool) (RestoreResult, error) {
-	var res RestoreResult
-	if err := sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/restore", RestoreRequest{Force: force}, &res); err != nil {
-		return RestoreResult{}, err
-	}
-	return res, nil
-}
-
 // CancelSession stops a session. It is the only thing that does: a viewer that
 // quits merely detaches.
 func CancelSession(id string) error {
-	return sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/cancel", nil, nil)
+	return sessionCall(http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/cancel", nil, nil)
 }

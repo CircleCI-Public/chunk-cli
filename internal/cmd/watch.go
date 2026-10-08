@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/config"
-	"github.com/CircleCI-Public/chunk-cli/internal/eventlog"
 	"github.com/CircleCI-Public/chunk-cli/internal/gitutil"
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/sidecar"
@@ -92,16 +91,7 @@ func newWatchCmd() *cobra.Command {
 				// Register this project so future runs discover it.
 				_ = sidecar.RegisterProjectRoot(dataDir, abs)
 
-				el, err := eventlog.Open(dataDir)
-				if err != nil {
-					return fmt.Errorf("watch: event log for %s: %w", abs, err)
-				}
-
-				entries = append(entries, watch.ProjectEntry{
-					Log:         el,
-					DataDir:     dataDir,
-					ProjectRoot: abs,
-				})
+				entries = append(entries, watch.ProjectEntry{ProjectRoot: abs})
 			}
 
 			m := watch.New(entries, !focus).WithDaemonArgs(daemonArgs)

@@ -108,7 +108,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if err := requireLocalDaemon(); err != nil {
 				return err
 			}
-			root, err := sessionProjectRoot(ctx, "")
+			root, err := sessionProjectRoot(ctx)
 			if err != nil {
 				return err
 			}
@@ -171,7 +171,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			if verbose && !jsonOut {
 				defer tailLog(logArg, logFrom, streams.Err)()
 			}
-			return followSession(ctx, streams, id, jsonOut, true)
+			return followSession(ctx, streams, id, jsonOut)
 		},
 	}
 
@@ -505,7 +505,7 @@ func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.
 		return newUserError("The factory run was cancelled.").withoutDetail()
 	case watchd.SessionFailed:
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
-	case watchd.SessionRunning, watchd.SessionPaused, watchd.SessionDone:
+	case watchd.SessionRunning, watchd.SessionDone:
 	}
 	return reportOutcome(status, factory.Outcome{Result: factory.Result(f.Result), Rounds: f.Rounds})
 }
@@ -520,7 +520,7 @@ func printFactoryTotals(detail watchd.SessionDetail, status iostream.StatusFunc)
 	var cost float64
 	turns := 0
 	for _, r := range detail.Rounds {
-		if impl := r.Implement; impl != nil && impl.State != watchd.FixRunning {
+		if impl := r.Implement; impl != nil && impl.State != watchd.ImplementRunning {
 			cost += impl.CostUSD
 			turns++
 		}

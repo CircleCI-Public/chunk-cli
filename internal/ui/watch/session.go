@@ -25,9 +25,8 @@ type sessionInfo struct {
 // sessionPane is the dashboard's view of the daemon's sessions.
 //
 // The sessions belong to the daemon, not to this dashboard. Quitting the
-// dashboard detaches from them and they carry on; the only things that change a
-// session are the explicit keys here: resume (safe: it only continues) and the
-// confirmed cancel.
+// dashboard detaches from them and they carry on; the only thing here that
+// changes a session is the confirmed cancel.
 type sessionPane struct {
 	sel    int // index into Model.sessions
 	round  int // round under the cursor
@@ -39,19 +38,10 @@ type sessionPane struct {
 	note string
 }
 
-// sessionActionMsg reports the outcome of a resume or cancel request.
+// sessionActionMsg reports the outcome of a cancel request.
 type sessionActionMsg struct {
 	note string
 	err  error
-}
-
-func resumeSessionCmd(id string) tea.Cmd {
-	return func() tea.Msg {
-		if err := watchd.ResumeSession(id); err != nil {
-			return sessionActionMsg{err: err}
-		}
-		return sessionActionMsg{note: "resumed: reviewing your files as they are now"}
-	}
 }
 
 func cancelSessionCmd(id string) tea.Cmd {
@@ -130,8 +120,6 @@ func (m Model) updateSessionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if msg.Mod == tea.ModCtrl {
 			return m, tea.Quit
 		}
-		m.sessionView = &p
-		return m.resumeSelected(&p, sel)
 	case tea.KeyEscape, 'r':
 		m.sessionView = nil
 		return m, nil
@@ -154,9 +142,6 @@ func (m Model) updateSessionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.sessionView = &p
 		return m.openReviewOutput()
-	case 'f':
-		m.sessionView = &p
-		return m.openFixOutput()
 	case 'x':
 		m.sessionView = &p
 		return m.requestSessionCancel(&p, sel, wasConfirm)
@@ -170,15 +155,6 @@ func lastRound(sessions []sessionInfo, i int) int {
 		return 0
 	}
 	return max(len(sessions[i].s.Rounds)-1, 0)
-}
-
-// resumeSelected continues a paused session. It does nothing for any other.
-func (m Model) resumeSelected(p *sessionPane, sel *sessionInfo) (tea.Model, tea.Cmd) {
-	if sel == nil || sel.s.State != watchd.SessionPaused {
-		return m, nil
-	}
-	p.note = "resuming…"
-	return m, resumeSessionCmd(sel.s.ID)
 }
 
 // requestSessionCancel implements the two-press cancel. The first press asks,
@@ -215,29 +191,6 @@ func (m Model) openReviewOutput() (tea.Model, tea.Cmd) {
 	return m.openOutput(rv.CommandID, fmt.Sprintf("round %d review: %s", sel.s.Rounds[p.round].Number, rv.Name), rv.State == watchd.PromptRunning)
 }
 
-// openFixOutput opens the log of the round's fixing agent, found among the
-// project's buffered commands by name.
-func (m Model) openFixOutput() (tea.Model, tea.Cmd) {
-	sel := m.selectedSession()
-	p := m.sessionView
-	if sel == nil || p.round >= len(sel.s.Rounds) || sel.projectIdx >= len(m.commands) {
-		return m, nil
-	}
-	name := fmt.Sprintf("round %d fix", sel.s.Rounds[p.round].Number)
-	var found *watchd.CommandState
-	for i := range m.commands[sel.projectIdx] {
-		c := &m.commands[sel.projectIdx][i]
-		if c.Name == name && (found == nil || c.SubmittedAt.After(found.SubmittedAt)) {
-			found = c
-		}
-	}
-	if found == nil {
-		p.note = "no fix output for this round"
-		return m, nil
-	}
-	return m.openOutput(found.CommandID, name, found.Running)
-}
-
 // openOutput opens the output pane for a buffered command.
 func (m Model) openOutput(commandID, name string, running bool) (tea.Model, tea.Cmd) {
 	m.output = &outputPane{commandID: commandID, name: name, pinned: true, running: running}
@@ -245,7 +198,7 @@ func (m Model) openOutput(commandID, name string, running bool) (tea.Model, tea.
 	return m, tea.Batch(fetchOutput(commandID, 0), outputTick(m.outputSeq))
 }
 
-// withSessionAction folds a resume or cancel result into the view's note.
+// withSessionAction folds a cancel result into the view's note.
 func (m Model) withSessionAction(msg sessionActionMsg) Model {
 	if m.sessionView == nil {
 		return m
@@ -260,13 +213,9 @@ func (m Model) withSessionAction(msg sessionActionMsg) Model {
 
 // ---- rendering --------------------------------------------------------------
 
-// stageLabels name the stages of the flow for display.
+// stageLabels name a session's stages for display.
 var stageLabels = map[watchd.StageID]string{
-	watchd.StageReviewLoop: "Review loop",
-	watchd.StageRebase:     "Rebase onto main",
-	watchd.StageCI:         "CI run",
-	watchd.StageApproval:   "Your approval",
-	watchd.StagePR:         "Open pull request",
+	watchd.StageFactoryLoop: "Factory loop",
 }
 
 // sessionTag is the header's note of a session in flight, so one started
@@ -274,8 +223,6 @@ var stageLabels = map[watchd.StageID]string{
 func (m Model) sessionTag(st watchStyles) string {
 	for _, s := range m.sessions {
 		switch s.s.State {
-		case watchd.SessionPaused:
-			return st.warning(ui.IconWarn+" session paused") + "  "
 		case watchd.SessionRunning:
 			return st.running(spinFrames[m.spinIdx%len(spinFrames)]+" session running") + "  "
 		case watchd.SessionDone, watchd.SessionFailed, watchd.SessionCancelled:
@@ -289,8 +236,6 @@ func (m Model) sessionStateIcon(st watchStyles, s watchd.SessionState) string {
 	switch s {
 	case watchd.SessionRunning:
 		return st.running(spinFrames[m.spinIdx%len(spinFrames)])
-	case watchd.SessionPaused:
-		return st.warning(ui.IconWarn)
 	case watchd.SessionDone:
 		return st.success(ui.IconOK)
 	case watchd.SessionFailed:
@@ -309,22 +254,14 @@ func (m Model) stageIcon(st watchStyles, s watchd.StageState) string {
 		return st.success(ui.IconOK)
 	case watchd.StageFailed:
 		return st.err(ui.IconFail)
-	case watchd.StagePaused:
-		return st.warning(ui.IconWarn)
-	case watchd.StageNotBuilt, watchd.StagePending, watchd.StageSkipped:
-		return st.vdim("·")
 	}
 	return st.vdim("·")
 }
 
 func stageText(st watchStyles, s watchd.Stage) string {
 	switch s.State {
-	case watchd.StageNotBuilt:
-		return st.vdim("not built yet")
 	case watchd.StageFailed:
 		return st.err(truncate(strings.Join(strings.Fields(s.Note), " "), 90))
-	case watchd.StagePaused:
-		return st.warning("paused")
 	case watchd.StageRunning:
 		return st.muted("running")
 	case watchd.StageDone:
@@ -332,8 +269,6 @@ func stageText(st watchStyles, s watchd.Stage) string {
 			return st.muted("done · " + s.Note)
 		}
 		return st.muted("done")
-	case watchd.StagePending, watchd.StageSkipped:
-		return st.muted(string(s.State))
 	}
 	return ""
 }
@@ -373,28 +308,22 @@ func reviewRows(round watchd.Round) []reviewprogress.Row {
 
 func roundStateText(st watchStyles, r watchd.Round) string {
 	switch r.State {
-	case watchd.RoundReviewing:
-		return st.running("reviewing")
-	case watchd.RoundFixing:
-		return st.running("fixing")
+	case watchd.RoundStarted:
+		return st.running("starting")
 	case watchd.RoundImplementing:
 		return st.running("implementing")
 	case watchd.RoundChecking:
 		return st.running("reviewing and validating")
-	case watchd.RoundApplying:
-		return st.running("applying fixes to your files")
 	case watchd.RoundDone:
 		return st.muted("done")
 	case watchd.RoundFailed:
 		return st.err("failed")
-	case watchd.RoundSuperseded:
-		return st.warning("abandoned: your files changed")
 	}
 	return string(r.State)
 }
 
-// renderRound draws one round: its header, its reviews with the shared row
-// renderer, and what its fixes changed.
+// renderRound draws one round: its header and its reviews with the shared row
+// renderer.
 func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, reviewSel int) []string {
 	rst := reviewprogress.NewStyles(m.hasDarkBG)
 	head := fmt.Sprintf("    Round %d  %s", r.Number, roundStateText(st, r))
@@ -413,38 +342,10 @@ func (m Model) renderRound(st watchStyles, r watchd.Round, selected bool, review
 		lines = append(lines, line)
 	}
 
-	if f := r.Fix; f != nil {
-		lines = append(lines, "        "+m.fixLine(st, f))
-		const showFiles = 5
-		for i, file := range f.Files {
-			if i == showFiles {
-				lines = append(lines, "          "+st.vdim(fmt.Sprintf("… and %d more", len(f.Files)-showFiles)))
-				break
-			}
-			lines = append(lines, "          "+st.muted(file.Path)+"  "+st.success(fmt.Sprintf("+%d", file.Insertions))+" "+st.err(fmt.Sprintf("−%d", file.Deletions)))
-		}
-		if f.Error != "" {
-			lines = append(lines, "          "+st.err(truncate(strings.Join(strings.Fields(f.Error), " "), 100)))
-		}
-	}
-	if r.Note != "" && r.State != watchd.RoundSuperseded {
+	if r.Note != "" {
 		lines = append(lines, "        "+st.vdim(r.Note))
 	}
 	return lines
-}
-
-func (m Model) fixLine(st watchStyles, f *watchd.RoundFix) string {
-	switch f.State {
-	case watchd.FixRunning:
-		return st.running(spinFrames[m.spinIdx%len(spinFrames)]) + " " + st.muted("fixing the findings worth changing")
-	case watchd.FixApplied:
-		return st.success(ui.IconOK) + " " + st.muted(fmt.Sprintf("fixes applied to your files: %d file%s, +%d −%d", len(f.Files), plural(len(f.Files)), f.Insertions, f.Deletions))
-	case watchd.FixEmpty:
-		return st.muted("the agent made no changes")
-	case watchd.FixFailed:
-		return st.err(ui.IconFail + " fix not applied")
-	}
-	return ""
 }
 
 func plural(n int) string {
@@ -454,25 +355,12 @@ func plural(n int) string {
 	return "s"
 }
 
-// renderSessionLines draws the selected session: header, restore point, pause
-// banner, and the timeline of stages with the review loop's rounds inside.
+// renderSessionLines draws the selected session: header and the timeline of
+// stages with the factory loop's rounds inside.
 func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRound, reviewSel int) (lines []string, selStart, selEnd int) {
 	s := info.s
 	lines = append(lines, fmt.Sprintf(" ▶ %s  %s  %s  %s",
 		m.sessionStateIcon(st, s.State), st.emphasis(sessionTitle(info)), st.muted(string(s.State)), st.dim(ui.FormatDuration(sessionElapsed(s)))))
-	if rp := s.Restore; rp != nil {
-		note := fmt.Sprintf("restore point saved · %d file%s changed · undo with: chunk session restore %s", len(rp.Paths), plural(len(rp.Paths)), s.ID[:min(8, len(s.ID))])
-		if rp.Restored {
-			note = "restored: everything the session changed has been put back"
-		}
-		lines = append(lines, "   "+st.vdim(note))
-	}
-	if s.State == watchd.SessionPaused {
-		lines = append(lines, "",
-			"   "+st.warning(ui.IconWarn+" Paused: "+truncate(s.PauseReason, 110)),
-			"   "+st.muted("Your files changed while the session was working, so it stopped instead of overwriting them."),
-			"   "+st.vdim("c")+" "+st.dim("continue with your files as they are now")+"  "+st.vdim("·")+"  "+st.vdim("x x")+" "+st.dim("cancel the session"))
-	}
 	if s.Error != "" {
 		lines = append(lines, "   "+st.err(truncate(strings.Join(strings.Fields(s.Error), " "), 110)))
 	}
@@ -480,7 +368,7 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
 
 	for _, stage := range s.Stages {
 		lines = append(lines, fmt.Sprintf("   %s %-18s %s", m.stageIcon(st, stage.State), stageLabels[stage.ID], stageText(st, stage)))
-		if stage.ID != watchd.StageReviewLoop {
+		if stage.ID != watchd.StageFactoryLoop {
 			continue
 		}
 		for i, r := range s.Rounds {
@@ -498,7 +386,7 @@ func (m Model) renderSessionLines(st watchStyles, info sessionInfo, selectedRoun
 // round stays on screen.
 func (m Model) renderSessionBody(st watchStyles, height int) []string {
 	if len(m.sessions) == 0 {
-		lines := []string{"", "  " + st.muted("No sessions yet."), "  " + st.dim("Start one with: chunk session start")}
+		lines := []string{"", "  " + st.muted("No sessions yet."), "  " + st.dim("Start one with: chunk factory")}
 		if m.reviewAuthErr != "" {
 			lines = append(lines, "", "  "+st.warning(ui.IconWarn+" "+m.reviewAuthErr))
 		}
@@ -525,7 +413,6 @@ func (m Model) renderSessionFooter(st watchStyles) string {
 		{"Tab", "round"},
 		{"←/→", "review"},
 		{"Enter", "output"},
-		{"f", "fix output"},
 		{"x", "cancel"},
 		{"Esc", "back"},
 		{"q", "detach"},

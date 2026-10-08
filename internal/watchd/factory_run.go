@@ -101,7 +101,6 @@ func (d *daemon) startFactory(req FactoryRequest) (Session, error) {
 	}
 
 	entry, ctx, busy := d.sessions.add(Session{
-		Kind:        KindFactory,
 		ProjectRoot: ps.root,
 		Branch:      currentBranch(ps.root),
 		HeadSHA:     headRef(ps.root),
@@ -233,10 +232,10 @@ func (r *factoryRecorder) event(ev factory.Event) {
 	switch ev.Kind {
 	case factory.EventImplementing:
 		round.State = RoundImplementing
-		round.Implement = &RoundImplement{State: FixRunning}
+		round.Implement = &RoundImplement{State: ImplementRunning}
 	case factory.EventImplemented:
 		if impl := round.Implement; impl != nil {
-			impl.State = FixApplied
+			impl.State = ImplementApplied
 			impl.DurationMS = ev.Turn.Duration.Milliseconds()
 			impl.CostUSD = ev.Turn.CostUSD
 			impl.Summary = ev.Turn.Summary
@@ -245,7 +244,7 @@ func (r *factoryRecorder) event(ev factory.Event) {
 		if impl := round.Implement; impl != nil {
 			impl.Stat = ev.Change.Stat
 			if ev.Change.Empty() {
-				impl.State = FixEmpty
+				impl.State = ImplementEmpty
 			}
 		}
 	case factory.EventChecking:
@@ -359,8 +358,8 @@ func (r *factoryRecorder) finish(rep factory.Report, err error) {
 	now := time.Now()
 	for i := range e.s.Rounds {
 		round := &e.s.Rounds[i]
-		if impl := round.Implement; impl != nil && impl.State == FixRunning {
-			impl.State = FixFailed
+		if impl := round.Implement; impl != nil && impl.State == ImplementRunning {
+			impl.State = ImplementFailed
 			if err != nil {
 				impl.Error = friendlyReviewError(err)
 			}

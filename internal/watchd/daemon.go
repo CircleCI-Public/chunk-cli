@@ -442,7 +442,7 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 		// Map iteration is random; sort by root so project rows stay stable
 		// between polls when watchAll mode requests all projects.
 		sort.Slice(projects, func(i, j int) bool { return projects[i].Root < projects[j].Root })
-		return Snapshot{Projects: projects, AuthError: d.authError, ReviewAuthError: d.reviewAuthError()}
+		return Snapshot{Projects: projects, AuthError: d.authError, ReviewAuthError: d.factoryAuthError()}
 	}
 
 	ordered := make([]ProjectSnapshot, 0, len(roots))
@@ -457,7 +457,7 @@ func (d *daemon) snapshot(roots []string) Snapshot {
 			break
 		}
 	}
-	return Snapshot{Projects: ordered, AuthError: d.authError, ReviewAuthError: d.reviewAuthError()}
+	return Snapshot{Projects: ordered, AuthError: d.authError, ReviewAuthError: d.factoryAuthError()}
 }
 
 // withSessions attaches the project's sessions to a snapshot. It is done when a
