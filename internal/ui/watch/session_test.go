@@ -21,13 +21,9 @@ import (
 
 func liveSession(id string, state watchd.SessionState, started time.Time) sessionInfo {
 	return sessionInfo{label: "repo", s: watchd.Session{
-		ID: id, Kind: watchd.KindFactory, State: state, StartedAt: started, Branch: "feature", HeadSHA: "0123456789abcdef",
+		ID: id, State: state, StartedAt: started, Branch: "feature", HeadSHA: "0123456789abcdef",
 		Stages: []watchd.Stage{
 			{ID: watchd.StageFactoryLoop, State: watchd.StageRunning},
-			{ID: watchd.StageRebase, State: watchd.StageNotBuilt},
-			{ID: watchd.StageCI, State: watchd.StageNotBuilt},
-			{ID: watchd.StageApproval, State: watchd.StageNotBuilt},
-			{ID: watchd.StagePR, State: watchd.StageNotBuilt},
 		},
 	}}
 }
@@ -89,7 +85,6 @@ func TestSessionViewShowsTheTimelineAndRoundsAndFitsTheScreen(t *testing.T) {
 		if height < 50 {
 			continue
 		}
-		assert.Equal(t, strings.Count(out, "not built yet"), 4, "rebase, CI, approval and PR are shown as not built:\n%s", out)
 		for _, want := range []string{"Factory loop", "Round 1", "1 of 3 checks passed", "Round 2", "reviewing and validating", "bugs", "style"} {
 			assert.Assert(t, strings.Contains(out, want), "missing %q:\n%s", want, out)
 		}

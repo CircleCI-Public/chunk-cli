@@ -205,7 +205,7 @@ func (d *daemon) execerFor(root string, attribute func(sidecarID, commandID stri
 func (e *sessionEntry) beginRound(prompts []review.Prompt) int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	r := Round{Number: e.nextNumberLocked(), State: RoundReviewing, StartedAt: time.Now()}
+	r := Round{Number: e.nextNumberLocked(), State: RoundStarted, StartedAt: time.Now()}
 	for _, p := range prompts {
 		r.Reviews = append(r.Reviews, ReviewPrompt{Name: p.Name, State: PromptQueued})
 	}

@@ -135,7 +135,7 @@ func followSession(ctx context.Context, streams iostream.Streams, id string, jso
 			}
 		default:
 			failures = 0
-			if detail.IsFactory() && detail.Factory != nil && detail.Factory.Worktree != "" {
+			if detail.Factory != nil && detail.Factory.Worktree != "" {
 				lastFactory = detail.Factory
 			}
 			rep.report(detail)
@@ -251,16 +251,16 @@ func (r *sessionReporter) reportImplement(i int, impl watchd.RoundImplement) {
 	r.implement[i] = impl
 	if impl.State != prev.State {
 		switch impl.State {
-		case watchd.FixApplied:
+		case watchd.ImplementApplied:
 			r.status(iostream.LevelDone, fmt.Sprintf("implementer finished in %s ($%.2f)", msDuration(impl.DurationMS), impl.CostUSD))
 			if impl.Summary != "" {
 				r.status(iostream.LevelInfo, oneLineSummary(impl.Summary))
 			}
-		case watchd.FixEmpty:
+		case watchd.ImplementEmpty:
 			r.status(iostream.LevelWarn, "no changes")
-		case watchd.FixFailed:
+		case watchd.ImplementFailed:
 			r.status(iostream.LevelWarn, "implementer failed: "+impl.Error)
-		case watchd.FixRunning:
+		case watchd.ImplementRunning:
 			// The round's own state line says so.
 		}
 	}

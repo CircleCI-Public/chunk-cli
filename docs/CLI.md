@@ -359,11 +359,10 @@ chunk
   restarts; runs from before records were kept cannot be continued. The
   session's record names the run it continues as `continues_run_id`.
 - **`watch` shows the daemon's factory runs live.** The header notes a run in
-  progress, and `r` opens the session view: a timeline of the whole flow — the
-  factory loop with each round (its reviews, drawn by the same renderer as
-  `chunk review`, the findings and how many are worth changing, and how the
-  round's checks went), then Rebase, CI, Approval and Open pull request, shown
-  as "not built yet". `Enter` opens a review's live log, `Tab` picks the round,
+  progress, and `r` opens the session view: the factory loop with each round
+  (its reviews, drawn by the same renderer as `chunk review`, the findings and
+  how many are worth changing, and how the round's checks went). `Enter` opens
+  a review's live log, `Tab` picks the round,
   `↑/↓` the run. **`q` only detaches**: the run belongs to the daemon and
   carries on. The one key that stops it is `x`, and it needs a second `x` on
   the same run to confirm.

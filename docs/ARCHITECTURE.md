@@ -395,9 +395,9 @@ Design constraints worth preserving:
 
 ### Pre-PR sessions
 
-A session is the daemon's record of one pre-PR run for a project. The only
-kind is a factory run (`kind: factory`): an implementer works in a worktree of
-its own, and reviews and validation commands check the work until it passes.
+A session is the daemon's record of one factory run for a project: an
+implementer works in a worktree of its own, and reviews and validation commands
+check the work until it passes.
 The daemon is the **local** one (Unix socket); a run works from files on this
 machine. `chunk factory` starts and follows one, and `chunk watch` shows it
 live.
@@ -408,9 +408,9 @@ POST /factory              {project_root, prompt, reviews_dir?, no_validate?, at
                             review_timeout_seconds?, keep_sidecars?, org_id?, image?, log?, verbose?}
                            → 202 {id}   (409 a session is active, 404 unknown project,
                                          400 bad request or nothing to check, 503 no credential)
-GET  /session[?root=<path>] → {sessions: [Session...]}, newest first
-GET  /session/{id}         → SessionDetail: the session plus each round's review findings
-POST /session/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
+GET  /factory[?root=<path>] → {sessions: [Session...]}, newest first
+GET  /factory/{id}         → SessionDetail: the session plus each round's review findings
+POST /factory/{id}/cancel  → 202 (idempotent; the only thing that stops a session)
 GET  /snapshot             → each project carries `sessions` (state only), and the
                              top level a `review_auth_error`
 ```
@@ -425,16 +425,15 @@ with a `failed` stage. Only the reviews' commands are registered with the
 output store. The implementer's raw stream-json and the validation commands are
 not yet.
 
-**The record.** `Session` holds `stages` (always the full flow, in order:
-`factory_loop`, `rebase`, `ci`, `approval`, `pr`) and `rounds`. Stage states
-are `not_built | pending | running | done | failed | skipped`; only
-`factory_loop` is implemented, the rest are `not_built` and shown as "not built
-yet". Building a later stage means filling in its `Stage` — the record does not
-change shape. A `Round` carries its reviews (the same `ReviewPrompt` rows
-`chunk review` draws), finding counts, and a note on how it went.
+**The record.** `Session` holds `stages` and `rounds`. The only stage is
+`factory_loop`, whose state is `running | done | failed` and whose note says
+why the loop stopped. A `Round` carries its implementer turn (`implement`, in
+state `running | applied | empty | failed`), its reviews (the same
+`ReviewPrompt` rows `chunk review` draws), finding counts, and a note on how it
+went.
 
 - **State in snapshots, text on demand.** Snapshots hold state only; review
-  findings are in `GET /session/{id}`, as command output is in `/output`.
+  findings are in `GET /factory/{id}`, as command output is in `/output`.
 - **Credentials.** `cmd/watchdaemon.go` resolves the Claude credential once at
   start (`daemonReviewConfig`) and passes it in with `watchd.WithReview`. It is
   put only in the environment of a Claude command; it is not logged and not in

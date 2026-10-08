@@ -213,13 +213,9 @@ func (m Model) withSessionAction(msg sessionActionMsg) Model {
 
 // ---- rendering --------------------------------------------------------------
 
-// stageLabels name the stages of the flow for display.
+// stageLabels name a session's stages for display.
 var stageLabels = map[watchd.StageID]string{
 	watchd.StageFactoryLoop: "Factory loop",
-	watchd.StageRebase:      "Rebase onto main",
-	watchd.StageCI:          "CI run",
-	watchd.StageApproval:    "Your approval",
-	watchd.StagePR:          "Open pull request",
 }
 
 // sessionTag is the header's note of a session in flight, so one started
@@ -258,16 +254,12 @@ func (m Model) stageIcon(st watchStyles, s watchd.StageState) string {
 		return st.success(ui.IconOK)
 	case watchd.StageFailed:
 		return st.err(ui.IconFail)
-	case watchd.StageNotBuilt, watchd.StagePending, watchd.StageSkipped:
-		return st.vdim("·")
 	}
 	return st.vdim("·")
 }
 
 func stageText(st watchStyles, s watchd.Stage) string {
 	switch s.State {
-	case watchd.StageNotBuilt:
-		return st.vdim("not built yet")
 	case watchd.StageFailed:
 		return st.err(truncate(strings.Join(strings.Fields(s.Note), " "), 90))
 	case watchd.StageRunning:
@@ -277,8 +269,6 @@ func stageText(st watchStyles, s watchd.Stage) string {
 			return st.muted("done · " + s.Note)
 		}
 		return st.muted("done")
-	case watchd.StagePending, watchd.StageSkipped:
-		return st.muted(string(s.State))
 	}
 	return ""
 }
@@ -318,8 +308,8 @@ func reviewRows(round watchd.Round) []reviewprogress.Row {
 
 func roundStateText(st watchStyles, r watchd.Round) string {
 	switch r.State {
-	case watchd.RoundReviewing:
-		return st.running("reviewing")
+	case watchd.RoundStarted:
+		return st.running("starting")
 	case watchd.RoundImplementing:
 		return st.running("implementing")
 	case watchd.RoundChecking:

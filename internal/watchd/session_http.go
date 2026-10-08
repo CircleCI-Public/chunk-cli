@@ -16,14 +16,14 @@ const maxRequestBytes = 64 * 1024
 // demands the bearer token.
 //
 //	POST /factory              start a factory session
-//	GET  /session[?root=<path>] list sessions (newest first), optionally one project's
-//	GET  /session/{id}         one session with its review findings
-//	POST /session/{id}/cancel  stop a session
+//	GET  /factory[?root=<path>] list sessions (newest first), optionally one project's
+//	GET  /factory/{id}         one session with its review findings
+//	POST /factory/{id}/cancel  stop a session
 func registerSessionRoutes(mux *http.ServeMux, d *daemon) {
 	mux.HandleFunc("POST /factory", d.handleFactoryStart)
-	mux.HandleFunc("GET /session", d.handleSessionList)
-	mux.HandleFunc("GET /session/{id}", d.handleSessionGet)
-	mux.HandleFunc("POST /session/{id}/cancel", d.handleSessionCancel)
+	mux.HandleFunc("GET /factory", d.handleSessionList)
+	mux.HandleFunc("GET /factory/{id}", d.handleSessionGet)
+	mux.HandleFunc("POST /factory/{id}/cancel", d.handleSessionCancel)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

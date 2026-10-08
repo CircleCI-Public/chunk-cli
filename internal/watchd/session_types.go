@@ -24,20 +24,14 @@ func (s SessionState) Finished() bool {
 	return s != SessionRunning
 }
 
-// StageID names one stage of the whole pre-PR flow.
+// StageID names one stage of a session.
 type StageID string
 
-// The stages, in order. Only the factory loop is built; the rest are on the
-// record from the start so the dashboard can show where the flow is going, and
-// so building one is filling in its Stage and not changing the record's shape.
+// The stages.
 const (
 	// StageFactoryLoop is a factory run's loop: implement, then review and
 	// validate until the checks pass.
 	StageFactoryLoop StageID = "factory_loop"
-	StageRebase      StageID = "rebase"
-	StageCI          StageID = "ci"
-	StageApproval    StageID = "approval"
-	StagePR          StageID = "pr"
 )
 
 // StageState is where one stage stands.
@@ -45,17 +39,12 @@ type StageState string
 
 // Stage states.
 const (
-	// StageNotBuilt marks a stage the daemon has no implementation of yet. It is
-	// shown as "not built yet" and is never run.
-	StageNotBuilt StageState = "not_built"
-	StagePending  StageState = "pending"
-	StageRunning  StageState = "running"
-	StageDone     StageState = "done"
-	StageFailed   StageState = "failed"
-	StageSkipped  StageState = "skipped"
+	StageRunning StageState = "running"
+	StageDone    StageState = "done"
+	StageFailed  StageState = "failed"
 )
 
-// Stage is one stage of the flow and how it is going.
+// Stage is one stage of a session and how it is going.
 type Stage struct {
 	ID    StageID    `json:"id"`
 	State StageState `json:"state"`
@@ -63,24 +52,14 @@ type Stage struct {
 	Note string `json:"note,omitempty"`
 }
 
-// SessionKind is what a session runs.
-type SessionKind string
-
-// Session kinds.
-const (
-	// KindFactory is a factory run: an implementer works in a worktree of its
-	// own, and reviews and validation check the work until it passes.
-	KindFactory SessionKind = "factory"
-)
-
 // RoundState is where one round stands.
 type RoundState string
 
 // Round states.
 const (
-	// RoundReviewing is a round that has begun and not yet said which half it
+	// RoundStarted is a round that has begun and not yet said which half it
 	// is in.
-	RoundReviewing RoundState = "reviewing"
+	RoundStarted RoundState = "started"
 	// RoundImplementing and RoundChecking are a factory round's halves: the
 	// implementer's turn, then the reviews and validation commands.
 	RoundImplementing RoundState = "implementing"
@@ -89,23 +68,23 @@ const (
 	RoundFailed       RoundState = "failed"
 )
 
-// FixState is where a factory round's implementer turn stands.
-type FixState string
+// ImplementState is where a factory round's implementer turn stands.
+type ImplementState string
 
-// Fix states.
+// Implement states.
 const (
-	FixRunning FixState = "running"
-	FixApplied FixState = "applied"
-	// FixEmpty means the agent made no changes.
-	FixEmpty  FixState = "empty"
-	FixFailed FixState = "failed"
+	ImplementRunning ImplementState = "running"
+	ImplementApplied ImplementState = "applied"
+	// ImplementEmpty means the agent made no changes.
+	ImplementEmpty  ImplementState = "empty"
+	ImplementFailed ImplementState = "failed"
 )
 
 // RoundImplement is a factory round's implementer turn.
 type RoundImplement struct {
-	State      FixState `json:"state"`
-	DurationMS int64    `json:"duration_ms,omitempty"`
-	CostUSD    float64  `json:"cost_usd,omitempty"`
+	State      ImplementState `json:"state"`
+	DurationMS int64          `json:"duration_ms,omitempty"`
+	CostUSD    float64        `json:"cost_usd,omitempty"`
 	// Summary is the implementer's own account of the turn.
 	Summary string `json:"summary,omitempty"`
 	// Stat summarizes the work so far against the run's baseline.
@@ -306,42 +285,31 @@ type Round struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// Session is the record of one pre-PR session: a factory run's loop, and the
-// stages that will follow it. It holds state only; text is in SessionDetail.
+// Session is the record of one factory run. It holds state only; text is in
+// SessionDetail.
 type Session struct {
-	ID string `json:"id"`
-	// Kind is what the session runs.
-	Kind        SessionKind `json:"kind,omitempty"`
-	ProjectRoot string      `json:"project_root"`
-	Branch      string      `json:"branch,omitempty"`
-	HeadSHA     string      `json:"head_sha,omitempty"`
+	ID          string `json:"id"`
+	ProjectRoot string `json:"project_root"`
+	Branch      string `json:"branch,omitempty"`
+	HeadSHA     string `json:"head_sha,omitempty"`
 
 	State SessionState `json:"state"`
 	Error string       `json:"error,omitempty"`
 
-	// Stages is always the full flow, in order.
+	// Stages is the session's stages, in order. The only one is its factory loop.
 	Stages []Stage `json:"stages"`
 	Rounds []Round `json:"rounds"`
-	// Factory is set on a factory session.
+	// Factory is what the run works on and where its work is.
 	Factory *FactoryRun `json:"factory,omitempty"`
 
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// IsFactory reports whether the session is a factory run.
-func (s Session) IsFactory() bool { return s.Kind == KindFactory }
-
-// newStages returns the full flow for a session that is starting: its loop
-// running and every later stage not built.
+// newStages returns the stages of a session that is starting: its loop,
+// running.
 func newStages() []Stage {
-	return []Stage{
-		{ID: StageFactoryLoop, State: StageRunning},
-		{ID: StageRebase, State: StageNotBuilt},
-		{ID: StageCI, State: StageNotBuilt},
-		{ID: StageApproval, State: StageNotBuilt},
-		{ID: StagePR, State: StageNotBuilt},
-	}
+	return []Stage{{ID: StageFactoryLoop, State: StageRunning}}
 }
 
 // ReviewResult is what one review found.
@@ -412,7 +380,7 @@ type SessionStartResponse struct {
 	ID string `json:"id"`
 }
 
-// SessionList answers GET /session.
+// SessionList answers GET /factory.
 type SessionList struct {
 	Sessions []Session `json:"sessions"`
 }

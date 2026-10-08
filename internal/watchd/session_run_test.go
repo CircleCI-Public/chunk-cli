@@ -175,7 +175,6 @@ func TestSessionAPIRoundTripOverTheSocket(t *testing.T) {
 		return err == nil && detail.State.Finished()
 	})
 	assert.Equal(t, detail.State, SessionDone)
-	assert.Equal(t, detail.Kind, KindFactory)
 
 	all, err := ListSessions("")
 	assert.NilError(t, err)

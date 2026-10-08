@@ -121,7 +121,6 @@ func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
 	bug := review.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
 	output := strings.Repeat("ok\n", 30) + "--- FAIL: TestFlag"
 	checking := watchd.SessionDetail{Session: watchd.Session{
-		Kind:    watchd.KindFactory,
 		Factory: &watchd.FactoryRun{Attempts: 3},
 		Rounds: []watchd.Round{{
 			Number:  1,

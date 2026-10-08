@@ -87,7 +87,7 @@ func StartFactory(req FactoryRequest) (string, error) {
 // FetchSession returns one session with the text of its reviews.
 func FetchSession(id string) (SessionDetail, error) {
 	var detail SessionDetail
-	if err := sessionCall(http.MethodGet, "/session/"+neturl.PathEscape(id), nil, &detail); err != nil {
+	if err := sessionCall(http.MethodGet, "/factory/"+neturl.PathEscape(id), nil, &detail); err != nil {
 		return SessionDetail{}, err
 	}
 	return detail, nil
@@ -96,7 +96,7 @@ func FetchSession(id string) (SessionDetail, error) {
 // ListSessions returns the daemon's sessions, newest first per project. An empty
 // root lists every project's.
 func ListSessions(root string) ([]Session, error) {
-	path := "/session"
+	path := "/factory"
 	if root != "" {
 		path += "?root=" + neturl.QueryEscape(root)
 	}
@@ -110,5 +110,5 @@ func ListSessions(root string) ([]Session, error) {
 // CancelSession stops a session. It is the only thing that does: a viewer that
 // quits merely detaches.
 func CancelSession(id string) error {
-	return sessionCall(http.MethodPost, "/session/"+neturl.PathEscape(id)+"/cancel", nil, nil)
+	return sessionCall(http.MethodPost, "/factory/"+neturl.PathEscape(id)+"/cancel", nil, nil)
 }

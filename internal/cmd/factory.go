@@ -520,7 +520,7 @@ func printFactoryTotals(detail watchd.SessionDetail, status iostream.StatusFunc)
 	var cost float64
 	turns := 0
 	for _, r := range detail.Rounds {
-		if impl := r.Implement; impl != nil && impl.State != watchd.FixRunning {
+		if impl := r.Implement; impl != nil && impl.State != watchd.ImplementRunning {
 			cost += impl.CostUSD
 			turns++
 		}
