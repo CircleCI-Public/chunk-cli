@@ -343,6 +343,10 @@ The split is in the imports, not yet everywhere at runtime:
   `AllProjectRoots` reads, and the daemon finds projects by scanning them.
 - **The snapshot is the dashboard's view.** It carries each project's raw
   `eventlog.Event`s, and `chunk watch` works out from them what happened.
+- **`chunk factory` reads the daemon's files to check a request.** With
+  `--continue`, `checkFactoryContinue` loads the earlier run's record from the
+  project's data directory before asking the daemon, which loads it again.
+  This only works while the two share a filesystem.
 
 The daemon backs `chunk watch` and runs `chunk factory`. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
