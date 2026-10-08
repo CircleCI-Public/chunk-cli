@@ -331,6 +331,19 @@ if it has gone away but never replaces one that answers. `chunk watch _daemon`,
 the old spelling, stays as a hidden alias for dashboards opened before an
 upgrade; it starts a daemon only when none is answering.
 
+The split is in the imports, not yet everywhere at runtime:
+
+- **Validation still runs through the CLI.** `/validate` takes the caller's
+  command line (`ValidateRequest.Args`) and answers with the output a terminal
+  would have shown. The daemon runs it by executing the cobra command tree
+  in-process, through the `ValidateRunner` that `cmd/daemon.go` passes in, so
+  the code doing the work lives in `cmd/validate.go`.
+- **Projects are registered by writing a file, not by asking the daemon.**
+  `chunk watch`, `chunk validate` and `chunk review` write the breadcrumbs
+  `AllProjectRoots` reads, and the daemon finds projects by scanning them.
+- **The snapshot is the dashboard's view.** It carries each project's raw
+  `eventlog.Event`s, and `chunk watch` works out from them what happened.
+
 The daemon backs `chunk watch` and runs `chunk factory`. It polls every
 registered project every 5 s, tailing each project's `events.jsonl` by byte
 offset, and serves snapshots as JSON over a Unix socket at
