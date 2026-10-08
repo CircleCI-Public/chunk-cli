@@ -263,6 +263,59 @@ func writeSettingsExample(dir string, data []byte, streams iostream.Streams) err
 	return nil
 }
 
+// poolGitignoreEntries are machine-local pool state files under .chunk/.
+// config.json and other project config must stay tracked.
+var poolGitignoreEntries = []string{
+	".chunk/*-pool.json",
+}
+
+// ensureGitignoreEntries appends validate pool patterns to .gitignore if they
+// are not already present. Does not ignore .chunk/config.json.
+func ensureGitignoreEntries(workDir string, streams iostream.Streams) error {
+	path := filepath.Join(workDir, ".gitignore")
+
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read .gitignore: %w", err)
+	}
+
+	content := string(existing)
+	var toAdd []string
+	for _, entry := range poolGitignoreEntries {
+		if !strings.Contains(content, entry) {
+			toAdd = append(toAdd, entry)
+		}
+	}
+	if len(toAdd) == 0 {
+		return nil
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open .gitignore: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		if _, err := f.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+
+	if _, err := f.WriteString("\n# chunk local pool state\n"); err != nil {
+		return err
+	}
+	for _, entry := range toAdd {
+		if _, err := f.WriteString(entry + "\n"); err != nil {
+			return err
+		}
+	}
+
+	streams.ErrPrintln(ui.Success("Updated .gitignore with local pool state patterns"))
+	streams.ErrPrintln(ui.Dim("  Machine-local sidecar pool IDs; not for commit. Keeps .chunk/config.json tracked."))
+	return nil
+}
+
 func installSkillsStep(workDir string, streams iostream.Streams) {
 	for _, r := range skills.InstallByName(skills.ScopeProject, workDir, "chunk-sidecar", "chunk-sidecar-setup", "chunk-validate-config") {
 		if r.Skipped {
@@ -552,6 +605,11 @@ hook config files.`,
 				if hasData {
 					streams.ErrPrintln("Config already exists at .chunk/config.json")
 					streams.ErrPrintln(ui.Dim("To overwrite: chunk init --force"))
+					// Still ensure pool state is gitignored for projects
+					// initialized before this pattern existed.
+					if err := ensureGitignoreEntries(workDir, streams); err != nil {
+						streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
+					}
 					return nil
 				}
 			}
@@ -613,6 +671,10 @@ hook config files.`,
 				}
 			}
 			streams.ErrPrintln(ui.Success("Wrote .chunk/config.json"))
+
+			if err := ensureGitignoreEntries(workDir, streams); err != nil {
+				streams.ErrPrintf("%s\n", ui.Warning(fmt.Sprintf("Could not update .gitignore: %v", err)))
+			}
 
 			// Step 4: Write hook config files for supported agents.
 			if !skipHooks {

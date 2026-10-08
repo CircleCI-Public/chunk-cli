@@ -452,6 +452,70 @@ func TestWriteGitHookAppendsToExisting(t *testing.T) {
 	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated .git/hooks/pre-commit")))
 }
 
+func TestEnsureGitignoreEntriesCreatesNew(t *testing.T) {
+	dir := t.TempDir()
+	streams, _, errOut := testStreams()
+
+	err := ensureGitignoreEntries(dir, streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+	content := string(data)
+	for _, entry := range poolGitignoreEntries {
+		assert.Assert(t, strings.Contains(content, entry), "missing %s", entry)
+	}
+	assert.Assert(t, !strings.Contains(content, ".chunk/config.json"), "must not ignore config.json")
+	assert.Assert(t, bytes.Contains(errOut.Bytes(), []byte("Updated .gitignore")))
+}
+
+func TestEnsureGitignoreEntriesAppendsToExisting(t *testing.T) {
+	dir := t.TempDir()
+	existing := "node_modules/\n.env\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644))
+
+	streams, _, _ := testStreams()
+	err := ensureGitignoreEntries(dir, streams)
+	assert.NilError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+	content := string(data)
+	assert.Assert(t, strings.HasPrefix(content, existing))
+	for _, entry := range poolGitignoreEntries {
+		assert.Assert(t, strings.Contains(content, entry), "missing %s", entry)
+	}
+}
+
+func TestEnsureGitignoreEntriesIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	streams, _, _ := testStreams()
+
+	assert.NilError(t, ensureGitignoreEntries(dir, streams))
+	first, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+
+	assert.NilError(t, ensureGitignoreEntries(dir, streams))
+	second, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+
+	assert.Equal(t, string(first), string(second))
+}
+
+func TestEnsureGitignoreEntriesAddsMissingNewline(t *testing.T) {
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules/"), 0o644))
+
+	streams, _, _ := testStreams()
+	assert.NilError(t, ensureGitignoreEntries(dir, streams))
+
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	assert.NilError(t, err)
+	content := string(data)
+	assert.Assert(t, strings.HasPrefix(content, "node_modules/\n"), "missing newline before append")
+	assert.Assert(t, strings.Contains(content, ".chunk/*-pool.json"))
+}
+
 func TestWriteGitHookSymlinkSkipped(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("symlink test not meaningful as root")

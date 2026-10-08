@@ -88,6 +88,36 @@ func TestInitWritesVCSConfig(t *testing.T) {
 	assert.Equal(t, vcs["repo"], "my-repo", "expected repo=my-repo, got: %v", vcs["repo"])
 }
 
+func TestInitGitignoresPoolState(t *testing.T) {
+	workDir := gitrepo.SetupGitRepo(t, "my-org", "my-repo")
+
+	env := testenv.NewTestEnv(t)
+	env.AnthropicKey = ""
+	env.CircleToken = ""
+
+	result := binary.RunCLI(t, []string{
+		"init", "--skip-hooks", "--skip-validate",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	gitignore, err := os.ReadFile(filepath.Join(workDir, ".gitignore"))
+	assert.NilError(t, err, "expected .gitignore to exist")
+	assert.Assert(t, strings.Contains(string(gitignore), ".chunk/*-pool.json"),
+		"expected .chunk/*-pool.json in .gitignore, got: %s", string(gitignore))
+
+	// Re-run init when config already exists — still ensures the ignore entry.
+	assert.NilError(t, os.WriteFile(filepath.Join(workDir, ".gitignore"), []byte("node_modules/\n"), 0o644))
+	result = binary.RunCLI(t, []string{
+		"init", "--skip-hooks", "--skip-validate",
+	}, env, workDir)
+	assert.Equal(t, result.ExitCode, 0, "stdout: %s\nstderr: %s", result.Stdout, result.Stderr)
+
+	gitignore, err = os.ReadFile(filepath.Join(workDir, ".gitignore"))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(gitignore), ".chunk/*-pool.json"),
+		"expected re-init to restore pool gitignore, got: %s", string(gitignore))
+}
+
 func TestInitSkipAllWritesOnlyVCS(t *testing.T) {
 	workDir := gitrepo.SetupGitRepo(t, "test-org", "test-repo")
 
