@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -116,8 +117,9 @@ func invocLabel(g invocationGroup) string {
 // updateOutputKey handles keys while the output pane is open.
 func (m Model) updateOutputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	height := m.outputHeight()
-	switch msg.Code {
-	case tea.KeyEscape, 'q':
+	k := newOutputKeyMap()
+	switch {
+	case key.Matches(msg, k.Close):
 		// Closing returns to the dashboard rather than quitting it. Quitting from
 		// here would make Esc mean two different things depending on state.
 		//
@@ -126,23 +128,21 @@ func (m Model) updateOutputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// chains polling, doubling the rate on every open/close.
 		m.output = nil
 		return m, nil
-	case tea.KeyDown, 'j', 's':
+	case key.Matches(msg, k.ScrollDn):
 		m.output.scrollBy(1, height)
-	case tea.KeyUp, 'k', 'w':
+	case key.Matches(msg, k.ScrollUp):
 		m.output.scrollBy(-1, height)
-	case tea.KeyPgDown:
+	case key.Matches(msg, k.PageDown):
 		m.output.scrollBy(height, height)
-	case tea.KeyPgUp:
+	case key.Matches(msg, k.PageUp):
 		m.output.scrollBy(-height, height)
-	case 'g':
+	case key.Matches(msg, k.Top):
 		m.output.scroll = 0
 		m.output.pinned = false
-	case 'G':
+	case key.Matches(msg, k.Follow):
 		m.output.pinned = true
-	case 'c':
-		if msg.Mod == tea.ModCtrl {
-			return m, tea.Quit
-		}
+	case key.Matches(msg, k.ForceQuit):
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -206,6 +206,8 @@ func (m Model) renderOutputPane(st watchStyles) string {
 
 	var status string
 	switch {
+	case p.text != "":
+		// Text has no command behind it, so no exit to report.
 	case p.err != nil:
 		status = st.err("error")
 	case p.running:
@@ -222,7 +224,11 @@ func (m Model) renderOutputPane(st watchStyles) string {
 	if p.truncated {
 		title += "  " + st.warning("(earlier output dropped)")
 	}
-	if !atEnd {
+	switch {
+	case atEnd:
+	case p.text != "":
+		title += "  " + st.vdim("↓ more")
+	default:
 		title += "  " + st.vdim("↑ scrolled")
 	}
 
@@ -239,9 +245,12 @@ func (m Model) renderOutputPane(st watchStyles) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString(st.vdim("esc") + st.muted(" back  ") +
-		st.vdim("↑/↓") + st.muted(" scroll  ") +
-		st.vdim("g/G") + st.muted(" top/follow  ") +
-		st.vdim("ctrl-c") + st.muted(" quit") + "\n")
+	k := newOutputKeyMap()
+	if p.text != "" {
+		k.Top.SetHelp("g/G", "top/end") // fixed text has no tail to follow
+	}
+	// Clipped as well as fitted: help adds a hint that overflows when there is
+	// no room left for its ellipsis.
+	b.WriteString(clip(newHelp(st, m.width).View(k), m.width) + "\n")
 	return b.String()
 }

@@ -1096,3 +1096,19 @@ func TestOutcomeOf(t *testing.T) {
 		})
 	}
 }
+
+// A key the footer does not offer does nothing: Enter and Space only act on
+// the right pane, and ← only leaves it.
+func TestDisabledKeysDoNothing(t *testing.T) {
+	m := New(nil, false)
+	for _, code := range []rune{tea.KeyEnter, tea.KeySpace, tea.KeyLeft} {
+		next, cmd := m.Update(tea.KeyPressMsg{Code: code})
+		assert.Assert(t, cmd == nil, "%q in the left pane", code)
+		assert.Equal(t, next.(Model).focusedPane, paneLeft)
+		assert.Equal(t, len(next.(Model).toggledInvocs), 0)
+	}
+	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyPressMsg{Code: 'l'})
+	assert.Equal(t, next.(Model).focusedPane, paneRight, "→ is a no-op once the right pane has focus")
+}

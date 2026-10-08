@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/chunkd"
 )
@@ -57,6 +58,24 @@ type outputPane struct {
 	exitCode  *int
 	truncated bool
 	err       error
+
+	// text is set when the pane shows text the snapshot already held, such as
+	// an implementer's summary, rather than a command's output. It is short and
+	// fixed, and often prose, so lines holds it word-wrapped to the pane rather
+	// than clipped, and wrap redoes that when the width changes. A command's
+	// output is not wrapped: it grows while it is shown, and a log reads best
+	// one line per line.
+	text string
+}
+
+// wrap fills lines with the pane's text wrapped to width, keeping the view
+// at the top.
+func (p *outputPane) wrap(width int) {
+	if p.text == "" || width < 1 {
+		return
+	}
+	p.lines = strings.Split(lipgloss.Wrap(p.text, width, ""), "\n")
+	p.scroll, p.pinned = 0, false
 }
 
 // feed appends raw output bytes, resolving carriage returns into line rewrites.
