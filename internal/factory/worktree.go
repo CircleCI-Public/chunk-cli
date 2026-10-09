@@ -13,6 +13,7 @@ import (
 // branchPrefix is where factory branches live.
 const branchPrefix = "chunk/factory/"
 
+// maxBranchSlugLen keeps branch names short enough to read in listings.
 const maxBranchSlugLen = 48
 
 // Worktree is a run's local checkout: a git worktree of the developer's
@@ -84,33 +85,23 @@ func branchName(prompt, runID string) string {
 // ID remains the stable identifier used for records, logs, and continuation.
 func branchSlug(prompt string) string {
 	subject, _, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
-	subject = strings.TrimSpace(strings.TrimLeft(strings.TrimSuffix(subject, "\r"), "#"))
+	words := strings.FieldsFunc(strings.ToLower(subject), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	if len(words) == 0 {
+		return "change"
+	}
 
-	var b strings.Builder
-	separator := false
-	for _, r := range strings.ToLower(subject) {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			if b.Len() == maxBranchSlugLen {
-				break
-			}
-			if separator && b.Len() < maxBranchSlugLen {
-				b.WriteByte('-')
-			}
-			if b.Len() == maxBranchSlugLen {
-				break
-			}
-			b.WriteRune(r)
-			separator = false
-			continue
+	// Stop at the last whole word that fits; only a single word too long to
+	// fit on its own is cut.
+	slug := words[0][:min(len(words[0]), maxBranchSlugLen)]
+	for _, w := range words[1:] {
+		if len(slug)+1+len(w) > maxBranchSlugLen {
+			break
 		}
-		if b.Len() > 0 {
-			separator = true
-		}
+		slug += "-" + w
 	}
-	if slug := strings.TrimRight(b.String(), "-"); slug != "" {
-		return slug
-	}
-	return "change"
+	return slug
 }
 
 // Remove deletes the worktree and its branch, for a run that ended before the

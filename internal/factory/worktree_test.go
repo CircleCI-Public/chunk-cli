@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -118,6 +119,8 @@ func TestBranchSlug(t *testing.T) {
 		{prompt: "  Spaces, punctuation & CAPS!  ", want: "spaces-punctuation-caps"},
 		{prompt: "!!!", want: "change"},
 		{prompt: "Make this deliberately long branch name stop at a readable boundary eventually", want: "make-this-deliberately-long-branch-name-stop-at"},
+		{prompt: "Make this deliberately long branch name stop atop a word", want: "make-this-deliberately-long-branch-name-stop"},
+		{prompt: strings.Repeat("a", 60), want: strings.Repeat("a", 48)},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			assert.Equal(t, branchSlug(tc.prompt), tc.want)
