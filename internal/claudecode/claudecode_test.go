@@ -163,6 +163,20 @@ func TestRunTimesOut(t *testing.T) {
 	assert.Error(t, err, "timed out after 10ms")
 }
 
+func TestRunTimesOutOnTheCallersDeadline(t *testing.T) {
+	exec := func(ctx context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, _ circleci.OutputFn, _ func(string)) (int, error) {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := Run(ctx, exec, entry, "hi", Options{})
+
+	assert.Assert(t, errors.Is(err, context.DeadlineExceeded), "got %v", err)
+	assert.Error(t, err, "timed out: context deadline exceeded")
+}
+
 func TestRunStructuredResultOverTheCapFailsWithAClearError(t *testing.T) {
 	exec := func(_ context.Context, _ *sidecar.PoolEntry, _ string, _ map[string]string, out circleci.OutputFn, _ func(string)) (int, error) {
 		out(circleci.StreamStdout, []byte(`{"type":"result","result":"`))

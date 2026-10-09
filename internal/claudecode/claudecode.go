@@ -163,14 +163,18 @@ func ParseResult(output string) (Result, error) {
 }
 
 // RunError explains how a claude run on a sidecar ended, or returns nil when it
-// exited 0. ctx is the run's own context, bounded by timeout; code and execErr
-// are what the Execer returned, and stdout and stderr what claude wrote. Every
-// caller running claude classifies its end here, so a missing binary or a
-// rejected credential reads the same whatever ran.
+// exited 0. ctx is the run's own context, bounded by timeout when it is
+// positive; code and execErr are what the Execer returned, and stdout and
+// stderr what claude wrote. Every caller running claude classifies its end
+// here, so a missing binary or a rejected credential reads the same whatever
+// ran.
 func RunError(ctx context.Context, timeout time.Duration, code int, execErr error, stdout, stderr string) error {
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
-		return fmt.Errorf("timed out after %s", timeout)
+		if timeout > 0 {
+			return fmt.Errorf("timed out after %s", timeout)
+		}
+		return fmt.Errorf("timed out: %w", ctx.Err())
 	case execErr != nil:
 		return fmt.Errorf("exec: %w", execErr)
 	case code == ExitMissing:
