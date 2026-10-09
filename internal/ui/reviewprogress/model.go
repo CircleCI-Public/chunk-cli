@@ -1,6 +1,4 @@
-// Package reviewprogress implements the BubbleTea TUI for chunk review passes,
-// and the row rendering that other views (the watch dashboard's session view)
-// share with it.
+// Package reviewprogress implements the BubbleTea TUI for chunk review passes.
 package reviewprogress
 
 import (
@@ -13,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/promptrows"
 )
 
 const spinInterval = 160 * time.Millisecond
@@ -27,7 +26,7 @@ type spinMsg struct{}
 
 // Model is the BubbleTea model for review progress.
 type Model struct {
-	rows      []Row
+	rows      []promptrows.Row
 	byName    map[string]int
 	cancelFn  func()
 	RunErr    error
@@ -39,10 +38,10 @@ type Model struct {
 
 // New creates a Model ready to run for the given prompts and pool size.
 func New(prompts []review.Prompt, poolSize int, cancelFn func()) Model {
-	rows := make([]Row, len(prompts))
+	rows := make([]promptrows.Row, len(prompts))
 	byName := make(map[string]int, len(prompts))
 	for i, p := range prompts {
-		rows[i] = Row{Name: p.Name, State: review.StateQueued}
+		rows[i] = promptrows.Row{Name: p.Name, State: promptrows.Queued}
 		byName[p.Name] = i
 	}
 	return Model{
@@ -81,7 +80,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ProgressMsg:
 		e := review.ProgressEvent(msg)
 		if idx, ok := m.byName[e.Prompt]; ok {
-			m.rows[idx].State = e.State
+			m.rows[idx].State = rowState(e.State)
 			m.rows[idx].SidecarID = e.SidecarID
 			m.rows[idx].Duration = e.Duration
 			m.rows[idx].Err = e.Error
@@ -93,8 +92,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// settle them so the final frame doesn't show them still in flight.
 		if msg.Err != nil {
 			for i := range m.rows {
-				if r := &m.rows[i]; r.State == review.StateQueued || r.State == review.StateRunning {
-					r.State = review.StateFailed
+				if r := &m.rows[i]; r.State == promptrows.Queued || r.State == promptrows.Running {
+					r.State = promptrows.Failed
 					r.Err = msg.Err.Error()
 				}
 			}
@@ -103,7 +102,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinMsg:
 		m.spinIdx++
-		if Active(m.rows) {
+		if promptrows.Active(m.rows) {
 			return m, doSpin()
 		}
 	}
@@ -115,7 +114,7 @@ func (m Model) View() tea.View {
 }
 
 func (m Model) render() string {
-	st := NewStyles(m.hasDarkBG)
+	st := promptrows.NewStyles(m.hasDarkBG)
 
 	w := m.width
 	if w < 40 {
@@ -135,16 +134,16 @@ func (m Model) render() string {
 	b.WriteString(st.VDim.Render(strings.Repeat("─", w)))
 	b.WriteByte('\n')
 
-	nameWidth := NameWidth(m.rows)
+	nameWidth := promptrows.NameWidth(m.rows)
 	for _, r := range m.rows {
-		b.WriteString(RenderRow(st, r, nameWidth, m.spinIdx))
+		b.WriteString(promptrows.RenderRow(st, r, nameWidth, m.spinIdx))
 		b.WriteByte('\n')
 	}
 
 	b.WriteString(st.VDim.Render(strings.Repeat("─", w)))
 	b.WriteByte('\n')
 
-	bar := RenderSummary(st, m.rows)
+	bar := promptrows.RenderSummary(st, m.rows)
 	hint := st.VDim.Render("q") + " " + st.Dim.Render("quit")
 	gap := max(w-lipgloss.Width(bar)-lipgloss.Width(hint)-2, 2)
 	b.WriteString("  ")
@@ -154,6 +153,20 @@ func (m Model) render() string {
 	b.WriteByte('\n')
 
 	return b.String()
+}
+
+// rowState is a review prompt's state as the row renderer shows it.
+func rowState(s review.PromptState) promptrows.State {
+	switch s {
+	case review.StateRunning:
+		return promptrows.Running
+	case review.StateDone:
+		return promptrows.Done
+	case review.StateFailed:
+		return promptrows.Failed
+	case review.StateQueued:
+	}
+	return promptrows.Queued
 }
 
 func doSpin() tea.Cmd {

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -138,7 +137,7 @@ change, and also shows the log here as the run writes it; it implies --log.`,
 			// starts after whatever the file holds before the run is started.
 			logFrom := logSize(logArg)
 
-			if err := watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd}); err != nil {
+			if err := watchd.EnsureRunning(); err != nil {
 				return &userError{msg: "Could not start the watch daemon.", err: err}
 			}
 			id, err := watchd.StartFactory(watchd.FactoryRequest{
@@ -327,22 +326,19 @@ func factoryChecks(workDir, reviewsDir string, cfg *config.ProjectConfig, noVali
 }
 
 // printFactoryWork summarizes the work committed on the run's branch and says
-// how to keep it.
-func printFactoryWork(ctx context.Context, wt factory.Worktree, status iostream.StatusFunc, streams iostream.Streams) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-	defer cancel()
-	stat, err := wt.Stat(ctx)
-	if err != nil {
-		status(iostream.LevelWarn, fmt.Sprintf("could not summarize the work on %s: %v", wt.Branch, err))
-		streams.ErrPrintf("  Worktree: %s\n", wt.Path)
+// how to keep it. The daemon worked out the summary as the run ended.
+func printFactoryWork(f *watchd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
+	if f.StatError != "" {
+		status(iostream.LevelWarn, fmt.Sprintf("could not summarize the work on %s: %s", f.Branch, f.StatError))
+		streams.ErrPrintf("  Worktree: %s\n", f.Worktree)
 		return
 	}
-	if stat == "" {
-		status(iostream.LevelInfo, "No changes to keep. The worktree is at "+wt.Path)
+	if f.Stat == "" {
+		status(iostream.LevelInfo, "No changes to keep. The worktree is at "+f.Worktree)
 		return
 	}
-	status(iostream.LevelDone, fmt.Sprintf("Committed %s to %s", stat, wt.Branch))
-	streams.ErrPrintf("  Worktree: %s\n  %s\n", wt.Path, keepWorkHint(wt))
+	status(iostream.LevelDone, fmt.Sprintf("Committed %s to %s", f.Stat, f.Branch))
+	streams.ErrPrintf("  Worktree: %s\n  %s\n", f.Worktree, keepWorkHint(f))
 }
 
 // keepWorkHint says how to bring the run's work into the developer's checkout.
@@ -350,11 +346,11 @@ func printFactoryWork(ctx context.Context, wt factory.Worktree, status iostream.
 // their uncommitted work committed as the baseline, a merge would collide with
 // that same work still uncommitted in their checkout, so they apply the run's
 // own changes on top of it instead.
-func keepWorkHint(wt factory.Worktree) string {
-	if wt.Baseline == wt.Head {
-		return "Merge it with: git merge " + wt.Branch
+func keepWorkHint(f *watchd.FactoryRun) string {
+	if f.Baseline == f.Head {
+		return "Merge it with: git merge " + f.Branch
 	}
-	return fmt.Sprintf("Apply it with: git diff --binary %s %s | git apply", wt.Baseline, wt.Branch)
+	return fmt.Sprintf("Apply it with: git diff --binary %s %s | git apply", f.Baseline, f.Branch)
 }
 
 // factoryReviewsDir is the --reviews directory relative to the project root,
@@ -486,7 +482,7 @@ func factoryLogPath(path string, on bool, now time.Time) (string, error) {
 
 // finishFactory prints where a factory run ended up and maps anything short of
 // every check passing to an error.
-func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.SessionDetail, jsonOut bool) error {
+func finishFactory(streams iostream.Streams, detail watchd.SessionDetail, jsonOut bool) error {
 	status := newStatusFunc(streams)
 	f := detail.Factory
 	if jsonOut {
@@ -496,7 +492,7 @@ func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.
 		// The JSON is the report; the exit code still says whether it passed.
 		status = func(iostream.Level, string) {}
 	} else {
-		printFactoryLeftovers(ctx, f, status, streams)
+		printFactoryLeftovers(f, status, streams)
 		printFactoryContinueHint(f, status)
 	}
 	printFactoryTotals(detail, status)
@@ -507,7 +503,7 @@ func finishFactory(ctx context.Context, streams iostream.Streams, detail watchd.
 		return &userError{msg: "The factory run failed: " + detail.Error, hideDetail: true, errMsg: "factory run failed"}
 	case watchd.SessionRunning, watchd.SessionDone:
 	}
-	return reportOutcome(status, factory.Outcome{Result: factory.Result(f.Result), Rounds: f.Rounds})
+	return reportOutcome(status, f.Result, f.Rounds)
 }
 
 // printFactoryTotals says how long the run took and what the implementer's
@@ -531,15 +527,13 @@ func printFactoryTotals(detail watchd.SessionDetail, status iostream.StatusFunc)
 // printFactoryLeftovers says what a run left behind: its committed work, or
 // where its uncommitted work still is. Sidecars kept running were said in the
 // run's progress.
-func printFactoryLeftovers(ctx context.Context, f *watchd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
+func printFactoryLeftovers(f *watchd.FactoryRun, status iostream.StatusFunc, streams iostream.Streams) {
 	switch {
 	case f.Committed:
-		printFactoryWork(ctx, factory.Worktree{Path: f.Worktree, Branch: f.Branch, Baseline: f.Baseline, Head: f.Head}, status, streams)
-	case f.Worktree != "":
+		printFactoryWork(f, status, streams)
+	case f.Worktree != "" && !f.WorktreeRemoved:
 		// A worktree removed after an early failure held no work.
-		if _, err := os.Stat(f.Worktree); err == nil {
-			status(iostream.LevelWarn, "The work was not committed. It is in the worktree "+f.Worktree)
-		}
+		status(iostream.LevelWarn, "The work was not committed. It is in the worktree "+f.Worktree)
 	}
 }
 
@@ -556,18 +550,18 @@ func printFactoryContinueHint(f *watchd.FactoryRun, status iostream.StatusFunc) 
 
 // reportOutcome says why the loop stopped and returns an error unless every
 // check passed. How each round's checks came out was said as it was checked.
-func reportOutcome(status iostream.StatusFunc, o factory.Outcome) error {
-	switch o.Result {
-	case factory.ResultPassed:
-		status(iostream.LevelDone, fmt.Sprintf("All checks passed after %d round(s).", o.Rounds))
+func reportOutcome(status iostream.StatusFunc, result string, rounds int) error {
+	switch result {
+	case watchd.ResultPassed:
+		status(iostream.LevelDone, fmt.Sprintf("All checks passed after %d round(s).", rounds))
 		return nil
-	case factory.ResultNoChange:
+	case watchd.ResultNoChange:
 		return &userError{msg: "The implementer made no changes.", hideDetail: true, errMsg: "no changes"}
-	case factory.ResultStuck:
-		return &userError{msg: fmt.Sprintf("The implementer stopped changing the code after round %d, with checks still failing.", o.Rounds), hideDetail: true, errMsg: "stuck"}
-	case factory.ResultExhausted:
+	case watchd.ResultStuck:
+		return &userError{msg: fmt.Sprintf("The implementer stopped changing the code after round %d, with checks still failing.", rounds), hideDetail: true, errMsg: "stuck"}
+	case watchd.ResultExhausted:
 	}
-	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", o.Rounds), hideDetail: true, errMsg: "attempts exhausted"}
+	return &userError{msg: fmt.Sprintf("Checks still failed after %d round(s).", rounds), hideDetail: true, errMsg: "attempts exhausted"}
 }
 
 // oneLineSummary collapses text to one line short enough for a status line.

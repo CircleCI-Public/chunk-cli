@@ -1,11 +1,10 @@
 package watchd
 
 import (
-	"slices"
+	"fmt"
 	"time"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
-	"github.com/CircleCI-Public/chunk-cli/internal/review"
 )
 
 // SessionState is where a whole session stands.
@@ -94,7 +93,7 @@ type RoundImplement struct {
 
 // Feed is the latest lines of a stream that can run long, such as a run's
 // progress, and how many lines there have been, so a follower can tell which
-// it has not seen. Only the last maxFeedLines are kept.
+// it has not seen. Only the latest lines are kept.
 type Feed struct {
 	Lines []FeedLine `json:"lines,omitempty"`
 	Total int        `json:"total,omitempty"`
@@ -119,25 +118,6 @@ const (
 	FeedError FeedLevel = "error"
 )
 
-// maxFeedLines is how many lines a Feed keeps.
-const maxFeedLines = 100
-
-// feedLevel spells out an iostream level.
-func feedLevel(l iostream.Level) FeedLevel {
-	switch l {
-	case iostream.LevelStep:
-		return FeedStep
-	case iostream.LevelWarn:
-		return FeedWarn
-	case iostream.LevelDone:
-		return FeedDone
-	case iostream.LevelError:
-		return FeedError
-	case iostream.LevelInfo:
-	}
-	return FeedInfo
-}
-
 // Level is the line's iostream level. An unknown value reads as info: it
 // comes from a daemon that may be newer than this client.
 func (l FeedLevel) Level() iostream.Level {
@@ -155,14 +135,6 @@ func (l FeedLevel) Level() iostream.Level {
 	return iostream.LevelInfo
 }
 
-func (f *Feed) add(level iostream.Level, text string) {
-	f.Lines = append(f.Lines, FeedLine{Level: feedLevel(level), Text: text})
-	if over := len(f.Lines) - maxFeedLines; over > 0 {
-		f.Lines = slices.Delete(f.Lines, 0, over)
-	}
-	f.Total++
-}
-
 // Since returns the lines added after the first seen, as many as are still
 // kept.
 func (f Feed) Since(seen int) []FeedLine {
@@ -170,14 +142,10 @@ func (f Feed) Since(seen int) []FeedLine {
 	return f.Lines[len(f.Lines)-n:]
 }
 
-func (f Feed) clone() Feed {
-	return Feed{Lines: slices.Clone(f.Lines), Total: f.Total}
-}
-
 // RoundCheck is one validation command a factory round ran.
 type RoundCheck struct {
 	Name string `json:"name"`
-	// Status is "passed", "failed" or "errored", as factory.Status.
+	// Status is one of the Check values.
 	Status     string `json:"status"`
 	SidecarID  string `json:"sidecar_id,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
@@ -204,12 +172,19 @@ type FactoryRun struct {
 	Branch   string `json:"branch,omitempty"`
 	Baseline string `json:"baseline,omitempty"`
 	Head     string `json:"head,omitempty"`
-	// Result is why the loop stopped, as factory.Result, once it has, and
-	// Rounds how many rounds were checked, as factory.Outcome.Rounds.
+	// Result is why the loop stopped, one of the Result values, once it has,
+	// and Rounds how many rounds were checked.
 	Result string `json:"result,omitempty"`
 	Rounds int    `json:"rounds,omitempty"`
 	// Committed reports whether the work was committed on Branch.
 	Committed bool `json:"committed,omitempty"`
+	// Stat is the committed work's diff stat against Baseline, "" when there
+	// were no changes. StatError says why it could not be worked out instead.
+	Stat      string `json:"stat,omitempty"`
+	StatError string `json:"stat_error,omitempty"`
+	// WorktreeRemoved reports that the run ended before the implementer started
+	// and its worktree, holding nothing, was removed.
+	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
 	// KeptSidecars are the sidecars left running at the user's request.
 	KeptSidecars []string `json:"kept_sidecars,omitempty"`
 	// Log is the path of the run's log, once the run has ended, if it kept one.
@@ -218,6 +193,29 @@ type FactoryRun struct {
 	// ready and synced, and anything that went wrong cleaning up.
 	Progress Feed `json:"progress,omitzero"`
 }
+
+// Why a factory run's loop stopped, as FactoryRun.Result.
+const (
+	// ResultPassed means every check passed.
+	ResultPassed = "passed"
+	// ResultExhausted means checks still failed when attempts ran out.
+	ResultExhausted = "exhausted"
+	// ResultStuck means the implementer stopped changing the code with checks
+	// still failing.
+	ResultStuck = "stuck"
+	// ResultNoChange means the implementer's work is empty.
+	ResultNoChange = "no_change"
+)
+
+// How a check came out, as ReviewResult.Status and RoundCheck.Status.
+const (
+	// CheckPassed means the check ran and found nothing to fix.
+	CheckPassed = "passed"
+	// CheckFailed means the check ran and found something to fix.
+	CheckFailed = "failed"
+	// CheckErrored means the check could not run.
+	CheckErrored = "errored"
+)
 
 // ReviewPrompt is one review's progress inside a round. It carries state only:
 // what the review said is fetched on demand through SessionDetail, the way
@@ -236,9 +234,9 @@ type ReviewPrompt struct {
 	Findings int `json:"findings,omitempty"`
 }
 
-// PromptRunState is where one review of a round stands. The values match
-// review.PromptState one for one, spelled out so they read in JSON and survive
-// the enum being reordered.
+// PromptRunState is where one review of a round stands. The values are
+// spelled out so they read in JSON and survive the daemon's own enum being
+// reordered.
 type PromptRunState string
 
 // Review states.
@@ -248,23 +246,6 @@ const (
 	PromptDone    PromptRunState = "done"
 	PromptFailed  PromptRunState = "failed"
 )
-
-// Progress maps the state onto the review package's own, which is what the row
-// renderers shared with `chunk review` are written against. An unknown value
-// reads as queued: it comes from a daemon that may be newer than this client.
-func (s PromptRunState) Progress() review.PromptState {
-	switch s {
-	case PromptRunning:
-		return review.StateRunning
-	case PromptDone:
-		return review.StateDone
-	case PromptFailed:
-		return review.StateFailed
-	case PromptQueued:
-		return review.StateQueued
-	}
-	return review.StateQueued
-}
 
 // Round is one pass of implementing the work and checking it.
 type Round struct {
@@ -306,12 +287,6 @@ type Session struct {
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
-// newStages returns the stages of a session that is starting: its loop,
-// running.
-func newStages() []Stage {
-	return []Stage{{ID: StageFactoryLoop, State: StageRunning}}
-}
-
 // ReviewResult is what one review found.
 type ReviewResult struct {
 	Prompt     string `json:"prompt"`
@@ -321,10 +296,36 @@ type ReviewResult struct {
 	// Findings are the structured findings the review gave, each with an ID
 	// unique within the round. Empty when it gave none or failed; Error tells
 	// the two apart.
-	Findings []review.Finding `json:"findings,omitempty"`
-	// Status is how a factory review came out as a check: "passed", "failed"
-	// or "errored", as factory.Status.
+	Findings []Finding `json:"findings,omitempty"`
+	// Status is how a factory review came out as a check, one of the Check
+	// values.
 	Status string `json:"status,omitempty"`
+}
+
+// Finding is one problem a review reported.
+type Finding struct {
+	// ID is unique within a round.
+	ID string `json:"id,omitempty"`
+	// Prompt names the review that reported it.
+	Prompt string `json:"prompt,omitempty"`
+	// File is a repository-relative path with forward slashes.
+	File string `json:"file"`
+	// Line is the 1-based line the finding is about; zero means the file as a
+	// whole or a line the reviewer did not give.
+	Line     int    `json:"line,omitempty"`
+	Severity string `json:"severity"`
+	Body     string `json:"body"`
+	// Patch is an optional unified diff that would fix the finding.
+	Patch string `json:"patch,omitempty"`
+}
+
+// Location is where the finding is, as file:line, or the file alone when the
+// finding has no line.
+func (f Finding) Location() string {
+	if f.Line > 0 {
+		return fmt.Sprintf("%s:%d", f.File, f.Line)
+	}
+	return f.File
 }
 
 // RoundDetail is the text of one round.

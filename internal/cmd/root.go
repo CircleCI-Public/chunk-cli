@@ -120,6 +120,7 @@ Configuration:
 	rootCmd.AddCommand(newUpgradeCmd())
 	rootCmd.AddCommand(newReceiveTelemetryCmd())
 	rootCmd.AddCommand(newWatchCmd())
+	rootCmd.AddCommand(newDaemonCmd())
 
 	rootCmd.AddCommand(newCommandsCmd())
 
@@ -245,7 +246,8 @@ func setupTelemetry(cmd *cobra.Command, version string) error {
 // Completion helpers run on every TAB press and receive-telemetry is re-execed
 // by every chunk invocation, so checking there would burn through GitHub's
 // unauthenticated rate limit; upgrade would compare against the version it is
-// replacing; and watch renders its own notice in the TUI footer.
+// replacing; watch renders its own notice in the TUI footer; and the daemon
+// has no terminal to print one to.
 var noUpdateCheckCommands = map[string]bool{
 	cobra.ShellCompRequestCmd:       true,
 	cobra.ShellCompNoDescRequestCmd: true,
@@ -253,6 +255,7 @@ var noUpdateCheckCommands = map[string]bool{
 	"receive-telemetry":             true,
 	"upgrade":                       true,
 	watchCmdName:                    true,
+	watchd.DaemonSubcommand:         true,
 }
 
 // skipUpdateCheck reports whether cmd, or any command it is nested under, is
@@ -288,7 +291,7 @@ var noAutoLaunchCommands = map[string]bool{
 	"completion":                    true,
 	"receive-telemetry":             true,
 	watchCmdName:                    true,
-	watchDaemonSubcmd:               true,
+	watchd.DaemonSubcommand:         true,
 }
 
 // shouldAutoLaunch reports whether the watch daemon should be auto-launched
@@ -322,7 +325,7 @@ func maybeAutoLaunchDaemon(cmd *cobra.Command) error {
 	if !shouldAutoLaunch(cmd) {
 		return nil
 	}
-	err := watchd.EnsureRunning([]string{watchCmdName, watchDaemonSubcmd})
+	err := watchd.EnsureRunning()
 	if err == nil {
 		return nil
 	}

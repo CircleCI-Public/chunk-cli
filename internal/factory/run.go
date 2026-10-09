@@ -88,7 +88,14 @@ type Report struct {
 	Started bool
 	// Committed reports whether the work was committed on Worktree.Branch.
 	Committed bool
-	Outcome   Outcome
+	// Stat is the committed work's diff stat against Worktree.Baseline, "" for
+	// no changes. StatErr says why it could not be worked out.
+	Stat    string
+	StatErr error
+	// WorktreeRemoved reports that the run ended before the implementer started
+	// and its worktree, holding nothing, was removed.
+	WorktreeRemoved bool
+	Outcome         Outcome
 	// KeptSidecars are the sidecars left running with KeepSidecars.
 	KeptSidecars []string
 	// Log is the path of the run's log, if it kept one.
@@ -171,7 +178,7 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 	// run's work, so it stays. The defers set rep, so it is a named result.
 	defer func() {
 		if !rep.Started && cont == nil {
-			removeWorktree(ctx, opts.Root, wt, status)
+			rep.WorktreeRemoved = removeWorktree(ctx, opts.Root, wt, status)
 		}
 	}()
 	defer func() {
@@ -276,6 +283,9 @@ func Run(ctx context.Context, opts RunOptions) (rep Report, err error) {
 		message = cont.commitMessage(rep.RunID, rep.Outcome)
 	}
 	rep.Committed = commitWork(ctx, steps, wt, message, status)
+	if rep.Committed {
+		rep.Stat, rep.StatErr = workStat(ctx, wt)
+	}
 	return rep, err
 }
 
@@ -298,13 +308,22 @@ func restoreWorktree(ctx context.Context, wt Worktree, status iostream.StatusFun
 }
 
 // removeWorktree removes the worktree of a run that ended before the
-// implementer started.
-func removeWorktree(ctx context.Context, root string, wt Worktree, status iostream.StatusFunc) {
+// implementer started, and reports whether it did.
+func removeWorktree(ctx context.Context, root string, wt Worktree, status iostream.StatusFunc) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
 	if err := wt.Remove(ctx, root); err != nil {
 		status(iostream.LevelWarn, fmt.Sprintf("could not remove the run's worktree %s: %v", wt.Path, err))
+		return false
 	}
+	return true
+}
+
+// workStat summarizes the committed work, after the run has ended.
+func workStat(ctx context.Context, wt Worktree) (string, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	return wt.Stat(ctx)
 }
 
 // commitWork brings the implementer's last work into the worktree and commits

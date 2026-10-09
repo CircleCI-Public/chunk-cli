@@ -10,6 +10,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
+	"github.com/CircleCI-Public/chunk-cli/internal/ui/promptrows"
 )
 
 func basePrompts() []review.Prompt {
@@ -32,9 +33,9 @@ func TestNewModelInitialState(t *testing.T) {
 
 	assert.Equal(t, len(m.rows), 2)
 	assert.Equal(t, m.rows[0].Name, "api-design")
-	assert.Equal(t, m.rows[0].State, review.StateQueued)
+	assert.Equal(t, m.rows[0].State, promptrows.Queued)
 	assert.Equal(t, m.rows[1].Name, "error-handling")
-	assert.Equal(t, m.rows[1].State, review.StateQueued)
+	assert.Equal(t, m.rows[1].State, promptrows.Queued)
 }
 
 func TestProgressMsgUpdatesRow(t *testing.T) {
@@ -45,9 +46,9 @@ func TestProgressMsgUpdatesRow(t *testing.T) {
 		ProgressMsg(review.ProgressEvent{Prompt: "error-handling", SidecarID: "sb-def456", State: review.StateFailed, Error: "claude exited 1"}),
 	)
 
-	assert.Equal(t, m.rows[0].State, review.StateDone)
+	assert.Equal(t, m.rows[0].State, promptrows.Done)
 	assert.Equal(t, m.rows[0].Duration, 3*time.Second)
-	assert.Equal(t, m.rows[1].State, review.StateFailed)
+	assert.Equal(t, m.rows[1].State, promptrows.Failed)
 	assert.Equal(t, m.rows[1].Err, "claude exited 1")
 }
 
@@ -64,7 +65,7 @@ func TestDoneMsgWithErrorSettlesUnfinishedRows(t *testing.T) {
 	)
 
 	for _, r := range m.rows {
-		assert.Equal(t, r.State, review.StateFailed, "row %s", r.Name)
+		assert.Equal(t, r.State, promptrows.Failed, "row %s", r.Name)
 		assert.Equal(t, r.Err, review.ErrClaudeMissing.Error())
 	}
 	assert.Assert(t, !strings.Contains(m.render(), "running"))

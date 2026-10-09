@@ -18,12 +18,13 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
 // fakeFactoryConfig is a daemon whose factory runs do one round without
 // sidecars: they make the run's worktree for real, commit a file to it, and
 // end with result.
-func fakeFactoryConfig(t *testing.T, result factory.Result) watchd.ReviewConfig {
+func fakeFactoryConfig(t *testing.T, result factory.Result) server.ReviewConfig {
 	cfg := fakeSessionConfig()
 	cfg.RunFactory = func(ctx context.Context, opts factory.RunOptions) (factory.Report, error) {
 		wt, err := factory.CreateWorktree(ctx, opts.Root, filepath.Join(t.TempDir(), "wt"), "run-1")
@@ -46,8 +47,9 @@ func fakeFactoryConfig(t *testing.T, result factory.Result) watchd.ReviewConfig 
 		}
 		opts.OnEvent(factory.Event{Kind: factory.EventChecked, Round: 1, Checks: checks})
 		_, err = wt.Commit(ctx, "chunk factory: add a flag")
+		stat, statErr := wt.Stat(ctx)
 		return factory.Report{
-			RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil,
+			RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil, Stat: stat, StatErr: statErr,
 			Outcome: factory.Outcome{Result: result, Rounds: 1, Checks: checks},
 		}, nil
 	}
@@ -210,7 +212,8 @@ func TestFactoryInterruptCancelsTheRunAndReportsTheWork(t *testing.T) {
 		close(started)
 		<-ctx.Done()
 		_, err = wt.Commit(context.WithoutCancel(ctx), "chunk factory: add a flag")
-		return factory.Report{RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil}, ctx.Err()
+		stat, statErr := wt.Stat(context.WithoutCancel(ctx))
+		return factory.Report{RunID: "run-1", Worktree: wt, Started: true, Committed: err == nil, Stat: stat, StatErr: statErr}, ctx.Err()
 	}
 	startSessionDaemon(t, cfg)
 

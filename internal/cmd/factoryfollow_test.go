@@ -16,18 +16,19 @@ import (
 	"github.com/CircleCI-Public/chunk-cli/internal/iostream"
 	"github.com/CircleCI-Public/chunk-cli/internal/review"
 	"github.com/CircleCI-Public/chunk-cli/internal/watchd"
+	"github.com/CircleCI-Public/chunk-cli/internal/watchd/server"
 )
 
 // fakeSessionConfig is a daemon setup with a Claude credential and nothing
 // else. Tests set RunFactory, so no sandbox is booted and no API is called.
-func fakeSessionConfig() watchd.ReviewConfig {
-	return watchd.ReviewConfig{
+func fakeSessionConfig() server.ReviewConfig {
+	return server.ReviewConfig{
 		Credential: review.Credential{EnvVar: config.EnvAnthropicAPIKey, Value: "sk-test"},
 	}
 }
 
 // startSessionDaemon runs a real daemon on a Unix socket with a fake backend.
-func startSessionDaemon(t *testing.T, cfg watchd.ReviewConfig) {
+func startSessionDaemon(t *testing.T, cfg server.ReviewConfig) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "wd")
 	assert.NilError(t, err)
@@ -36,7 +37,7 @@ func startSessionDaemon(t *testing.T, cfg watchd.ReviewConfig) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	go func() { errCh <- watchd.RunDaemon(ctx, nil, "", nil, nil, watchd.WithReview(cfg)) }()
+	go func() { errCh <- server.RunDaemon(ctx, nil, "", nil, nil, server.WithReview(cfg)) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -118,7 +119,7 @@ func reportedLines(snapshots ...watchd.SessionDetail) []string {
 }
 
 func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
-	bug := review.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
+	bug := watchd.Finding{File: "main.go", Line: 3, Severity: "high", Body: "nil deref"}
 	output := strings.Repeat("ok\n", 30) + "--- FAIL: TestFlag"
 	checking := watchd.SessionDetail{Session: watchd.Session{
 		Factory: &watchd.FactoryRun{Attempts: 3},
@@ -132,7 +133,7 @@ func TestSessionReporterSaysHowEachRoundWent(t *testing.T) {
 	done := checking
 	done.Rounds = []watchd.Round{checking.Rounds[0]}
 	done.Rounds[0].State, done.Rounds[0].Note = watchd.RoundDone, "0 of 2 checks passed"
-	done.Details = []watchd.RoundDetail{{Number: 1, Results: []watchd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []review.Finding{bug}}}}}
+	done.Details = []watchd.RoundDetail{{Number: 1, Results: []watchd.ReviewResult{{Prompt: "bugs", Status: "failed", Findings: []watchd.Finding{bug}}}}}
 
 	// The round is seen done twice; its findings are said once.
 	lines := reportedLines(checking, done, done)

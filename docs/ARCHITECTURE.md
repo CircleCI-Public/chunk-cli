@@ -48,7 +48,8 @@ chunk-cli/
     ├── ui/                    # Colors, formatting, spinner
     ├── upgrade/               # CLI self-upgrade
     ├── validate/              # Validation command logic
-    └── watchd/                # chunk watch background daemon, its Unix-socket API, and client
+    └── watchd/                # The daemon's API: wire types, client, paths, lifecycle
+        └── server/            # The daemon itself: poll loop, stores, handlers, factory runs
 ```
 
 ## Layering Rules
@@ -310,7 +311,25 @@ refused as a key, since a config-only key would stay stable across code changes;
 it, because a repo that never caches is otherwise silent about why. See
 **[docs/HOOKS.md](HOOKS.md#result-caching)** for the user-facing behaviour.
 
-## Watch Daemon (`internal/watchd/`)
+## Watch Daemon (`internal/watchd/`, `internal/watchd/server/`)
+
+The daemon is split in two. `internal/watchd` is its API: the types that go over
+the wire, the HTTP client, the socket and pid paths, and starting the process.
+It depends on nothing heavier than `eventlog`. `internal/watchd/server` is the
+daemon itself and imports `watchd` for the types it serves. Clients — `chunk
+watch`, `chunk factory`, hooks, `chunk validate` — import `watchd` only, so they
+depend on the daemon's API and never on the factory loop, the review runner or
+the sidecar pool behind it. Only `cmd/daemon.go`, which runs the daemon,
+imports `server` (and tests that start a real one).
+
+Starting the daemon belongs to `watchd` too. It is this binary re-executed as
+the hidden `chunk _daemon` (`watchd.DaemonSubcommand`, which `cmd` registers
+under that name); callers only say when they need one, with `EnsureRunning` at
+startup, which also replaces a daemon from another build. A dashboard that
+keeps polling opts into `FetchSnapshotRelaunching`, which starts a daemon again
+if it has gone away but never replaces one that answers. `chunk watch _daemon`,
+the old spelling, stays as a hidden alias for dashboards opened before an
+upgrade.
 
 The daemon backs `chunk watch`. It polls every registered project every 5 s,
 tailing each project's `events.jsonl` by byte offset, and serves snapshots as
@@ -434,8 +453,8 @@ went.
 
 - **State in snapshots, text on demand.** Snapshots hold state only; review
   findings are in `GET /factory/{id}`, as command output is in `/output`.
-- **Credentials.** `cmd/watchdaemon.go` resolves the Claude credential once at
-  start (`daemonReviewConfig`) and passes it in with `watchd.WithReview`. It is
+- **Credentials.** `cmd/daemon.go` resolves the Claude credential once at
+  start (`daemonReviewConfig`) and passes it in with `server.WithReview`. It is
   put only in the environment of a Claude command; it is not logged and not in
   any snapshot or session detail. A missing one is reported as
   `Snapshot.ReviewAuthError` and refuses `POST /factory` with 503.

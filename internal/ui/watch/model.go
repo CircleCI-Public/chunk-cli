@@ -189,10 +189,10 @@ type Model struct {
 	updateAvailable string // non-empty tag (e.g. "v1.2.3") when an update is available
 	upgradeCmd      string // "chunk upgrade" or "brew upgrade chunk"
 
-	// daemonArgs is the argv that starts the watch daemon, empty when the caller
-	// did not supply one. Held so a poll that finds the daemon gone can start
-	// another instead of freezing on the last snapshot.
-	daemonArgs []string
+	// relaunch is set when a poll that finds the daemon gone should start
+	// another instead of freezing on the last snapshot. Only the caller knows
+	// whether the daemon is one this machine runs.
+	relaunch bool
 
 	// ownSession is the session running this dashboard, empty when a human ran
 	// `chunk watch` from a plain shell. When it matches a row's session that row
@@ -263,11 +263,10 @@ func (m Model) WithConnection(conn watchd.Connection) Model {
 	return m
 }
 
-// WithDaemonArgs returns a copy of m that can relaunch the watch daemon when a
-// poll finds it gone. subArgs is the argv the daemon is started with, the same
-// one passed to watchd.EnsureRunning.
-func (m Model) WithDaemonArgs(subArgs []string) Model {
-	m.daemonArgs = subArgs
+// WithRelaunch returns a copy of m that starts the daemon again when a poll
+// finds it gone.
+func (m Model) WithRelaunch() Model {
+	m.relaunch = true
 	return m
 }
 

@@ -40,11 +40,6 @@ type SidecarState struct {
 	// OrgID is the org the sidecar lives in: the one its state file records, or
 	// the project's org for state written before that was recorded.
 	OrgID string `json:"org_id,omitempty"`
-	// orgInferred reports that OrgID is the project's current org rather than
-	// one the state file recorded. The org setting may have changed since the
-	// sidecar was created, so the list for it can confirm the sidecar but never
-	// prove it gone.
-	orgInferred bool
 	// Verified reports that the API's sidecar list confirmed this sidecar
 	// exists. Sidecars the list has confirmed gone never reach a snapshot, so
 	// false means only that nothing has confirmed it yet.
